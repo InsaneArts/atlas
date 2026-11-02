@@ -14,19 +14,19 @@ use crate::{
     host_session::{
         Key,
         names::{name_of, names},
+        reading::{SessionFacts, SessionReading},
         record::Seen,
         store::Store,
     },
     overview::{READ_DEADLINE, late},
-    setup::Title,
+    setup::{Title, asked_real_name},
 };
 use axum::{body::Body, response::Response};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
-    time::Duration,
 };
 
 /// The most activity rows and screenshots one read lists: what the app's
@@ -38,10 +38,6 @@ impl Viewer {
     /// The helper's status and overview as the app shows them, with
     /// whether control is held.
     pub(super) async fn status(self: &Arc<Self>) -> Value {
-        self.status_reading().await.value
-    }
-
-    async fn status_reading(self: &Arc<Self>) -> crate::overview::Reading {
         // Reading waits on the helper, for a few seconds at most, following
         // the settings included.
         let until = tokio::time::Instant::now() + READ_DEADLINE;
@@ -53,8 +49,7 @@ impl Viewer {
         // Ending control waits on the helper too: it finishes by itself
         // when that takes longer than a moment.
         if !doctor.diagnosis.ready {
-            let ending = self.release_in_background();
-            let _ = tokio::time::timeout(Duration::from_secs(1), ending).await;
+            self.release_shortly().await;
         }
 
         let active = self.lease.lock().await.active();
@@ -82,15 +77,11 @@ impl Viewer {
         crate::overview::add_host_sessions(&mut status, &client, now).await;
 
         if let Some(name) = status.value["overview"]["account"].as_str() {
-            status.value["overview"]["accountName"] = json!(self.account_title(name).await);
+            let title = account_title(&self.account_name, name, asked_real_name).await;
+            status.value["overview"]["accountName"] = json!(title);
         }
 
-        status
-    }
-
-    /// The helper account `name`'s full name, as people know it.
-    async fn account_title(&self, name: &str) -> Option<String> {
-        account_title(&self.account_name, name, crate::setup::asked_real_name).await
+        status.value
     }
 
     /// What was done in the helper lately, newest first, as the app lists
@@ -105,8 +96,8 @@ impl Viewer {
             Ok::<_, std::io::Error>((rows, Store::at(&directory).recent()))
         })
         .await
-        .map_err(|_| unreadable())?
-        .map_err(|_| unreadable())?;
+        .map_err(|error| unreadable().with_source(error))?
+        .map_err(|error| unreadable().with_source(error))?;
 
         let now = crate::time::timestamp();
         let rows = rows
@@ -127,13 +118,10 @@ impl Viewer {
         // A folder that can't be read is said, never shown as no sessions.
         client.output_dir()?;
         let now = crate::time::timestamp();
-        let facts = crate::host_session::reading::SessionFacts::local(&client.controller, now);
+        let facts = SessionFacts::local(&client.controller, now);
         let reading_client = client.clone();
         let reading = tokio::task::spawn_blocking(move || {
-            crate::host_session::reading::SessionReading::collect(
-                reading_client.output_dir().ok(),
-                &reading_client.controller,
-            )
+            SessionReading::collect(reading_client.output_dir().ok(), &reading_client.controller)
         })
         .await
         .ok()
@@ -152,10 +140,9 @@ impl Viewer {
             let store = Store::at(output);
             // The records status reads share: only those with copies left
             // are looked at again, for which app each copy is.
-            let seen = reading.as_ref().map_or_else(
-                || store.recent(),
-                |reading| std::sync::Arc::clone(&reading.seen),
-            );
+            let seen = reading
+                .as_ref()
+                .map_or_else(|| store.recent(), |reading| Arc::clone(&reading.seen));
             let records: Vec<_> = seen.iter().map(|seen| seen.record.clone()).collect();
             let rows = crate::activity_log::recent(output, ACTIVITY_ROWS);
             let captures = helper_info::captures(output, SHOTS)
@@ -208,14 +195,12 @@ impl Viewer {
     pub(super) async fn apps(&self) -> Result<Value> {
         let client = self.client();
         let read = async {
-            let apps = client.apps().await?;
-            let filter = crate::agent::WindowFilter {
-                app: None,
-                title: None,
-                all: false,
-            };
+            let running = client.running_apps().await?;
+            let filter = crate::agent::WindowFilter::default();
             let windows = crate::agent::list(&client, &filter).await?;
-            Ok::<_, Error>((listed_apps(&apps["apps"], &windows["windows"])?, apps))
+            let apps = running.clone().project();
+            let listed = listed_apps(&apps["apps"], &windows["windows"])?;
+            Ok::<_, Error>((listed, running))
         };
         let (mut apps, running) = tokio::time::timeout(READ_DEADLINE, read)
             .await
@@ -229,7 +214,7 @@ impl Viewer {
             let tasks = crate::task::store::Store::at(output).recent();
             let rows = crate::activity_log::recent(output, ACTIVITY_ROWS);
             let copies = Path::new(crate::handoff::ROOT);
-            let origins = super::origins::origins(&running["apps"], &tasks, &rows, copies);
+            let origins = super::origins::origins(&running, &tasks, &rows, copies);
             (origins, Store::at(output).recent())
         });
         let (origins, records) = opened
@@ -245,13 +230,7 @@ impl Viewer {
             .collect();
         let sessions = sessions_named(&client, &records, opened_by.iter()).await;
 
-        for app in apps.iter_mut().take(helper_info::ICON_CACHE) {
-            if let Some(bundle) = app["bundle"].as_str().map(PathBuf::from)
-                && let Some(icon) = self.icons.get(bundle).await
-            {
-                app["icon"] = json!(icon);
-            }
-        }
+        self.icons.add(&mut apps, helper_info::ICON_CACHE).await;
 
         Ok(json!({"ok": true, "apps": apps, "sessions": sessions}))
     }
@@ -340,19 +319,15 @@ impl Viewer {
             let (thumbnail, _, _) = helper_info::jpeg(&png, helper_info::THUMB)?;
             Ok((thumbnail, "image/jpeg"))
         })
-        .await;
+        .await
+        .unwrap_or_else(|error| {
+            Err(Error::new(Code::Capture, "The screenshot could not be read").with_source(error))
+        });
 
         match read {
-            Ok(Ok((bytes, mime))) => response(200, mime, Body::from(bytes), &[]),
-            Ok(Err(error)) if error.code == Code::BadRequest => json_response(404, json!(error)),
-            Ok(Err(error)) => json_response(500, json!(error)),
-            Err(_) => json_response(
-                500,
-                json!(Error::new(
-                    Code::Capture,
-                    "The screenshot could not be read"
-                )),
-            ),
+            Ok((bytes, mime)) => response(200, mime, Body::from(bytes), &[]),
+            Err(error) if error.code == Code::BadRequest => json_response(404, json!(error)),
+            Err(error) => json_response(500, json!(error)),
         }
     }
 
@@ -373,15 +348,11 @@ impl Viewer {
             && native.control_active != Some(true)
             && native.held_input != Some(true)
             && session.accessibility == crate::session::PermissionObservation::Allowed;
-        let Some(hidden) = starts
+        let hidden = starts
             .then(|| session.require_hidden(client.config.helper_uid).ok())
             .flatten()
-            .filter(|hidden| !hidden.input)
-        else {
-            return;
-        };
-
-        let Some(daemon) = session.capture_pid else {
+            .filter(|hidden| !hidden.input);
+        let (Some(hidden), Some(daemon)) = (hidden, session.capture_pid) else {
             return;
         };
 
@@ -426,7 +397,7 @@ impl Viewer {
 /// Account `name`'s full name, as `ask` finds it, kept in `known`. It is
 /// asked once per account (off the runtime, as it asks directory services),
 /// also when it has none, but again after an ask that had no answer.
-pub(super) async fn account_title(
+async fn account_title(
     known: &std::sync::Mutex<Option<(String, Title)>>,
     name: &str,
     ask: fn(&str) -> Title,
@@ -457,31 +428,24 @@ pub(super) async fn account_title(
 /// titles, which the log never keeps either.
 pub(super) fn activity_row(row: &crate::activity_log::Row, now: u128) -> Value {
     let shown = crate::overview::shown(row, now);
-    json!({
-        "id": shown.id,
-        "logicalId": row.logical_id(),
-        // When it started, in milliseconds since 1970, so its time never
-        // moves between readings.
-        "startedAt": row.at_ms(),
-        "says": shown.says,
-        "ok": shown.ok,
-        "started": shown.started,
-        "actor": shown.actor,
-        "ageSeconds": shown.age_seconds,
-        "reason": shown.reason,
-        "operation": shown.operation,
-        "count": shown.action_count,
-        "session": shown.session,
-        "capture": shown.capture,
-        "verb": shown.verb,
-        "app": shown.app,
-        "label": shown.label,
-        "bundleId": shown.bundle_id,
-        "keys": shown.keys(),
-        "nothingSent": shown.nothing_sent,
-        "partial": shown.partial,
-        "uncertain": shown.uncertain,
-    })
+    let keys = shown.keys();
+    let mut fields = json!(shown);
+    rename(&mut fields, "actionCount", "count");
+    fields["logicalId"] = json!(row.logical_id());
+    // When it started, in milliseconds since 1970, so its time never moves
+    // between readings.
+    fields["startedAt"] = json!(row.at_ms());
+    fields["keys"] = json!(keys);
+    fields
+}
+
+/// `value` with its member `from` called `to`.
+fn rename(value: &mut Value, from: &str, to: &str) {
+    if let Some(fields) = value.as_object_mut()
+        && let Some(member) = fields.remove(from)
+    {
+        fields.insert(to.to_owned(), member);
+    }
 }
 
 /// Each host session `keys` name that a record still names, as the app
@@ -498,25 +462,33 @@ async fn sessions_named<'a>(
     tokio::task::spawn_blocking(move || {
         let records = || seen.iter().map(|seen| &seen.record);
         let named = names(records());
-        let reading = crate::host_session::reading::SessionReading::collect(client.output_dir().ok(), &client.controller);
+        let reading = SessionReading::collect(client.output_dir().ok(), &client.controller);
         let processes = reading.as_ref().map(|reading| &reading.processes);
-        let now = crate::host_session::now_ms();
-        let facts = crate::host_session::reading::SessionFacts::local(&client.controller, u128::from(now) * 1_000_000);
+        let now = crate::time::now_ms();
+        let facts = SessionFacts::local(&client.controller, u128::from(now) * 1_000_000);
         let sessions: Map<String, Value> = records()
             .filter(|record| wanted.contains(record.key.as_str()))
             .map(|record| {
-                let work = reading.as_ref().is_some_and(|reading| reading.work(&record.key, facts));
+                let work = reading
+                    .as_ref()
+                    .is_some_and(|reading| reading.work(&record.key, facts));
+                let ended = record.ended.or_else(|| {
+                    processes.and_then(|processes| processes.lifetime(record, now, work).ended)
+                });
                 let session = json!({
                     "name": name_of(&named, &record.key, Some(record.host)),
                     "host": record.host,
                     "hostLabel": record.host.label(),
                     "started": record.started,
-                    "ended": record.ended.or_else(|| processes.and_then(|processes| processes.lifetime(record, now, work).ended)),
+                    "ended": ended,
                 });
                 (record.key.to_string(), session)
-            }).collect();
+            })
+            .collect();
         Value::Object(sessions)
-    }).await.unwrap_or_else(|_| json!({}))
+    })
+    .await
+    .unwrap_or_else(|_| json!({}))
 }
 
 /// Which host session took each screenshot the records list: the first
@@ -538,17 +510,12 @@ fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
 pub(super) fn listed_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
     Ok(helper_info::open_apps(apps, windows)?
         .into_iter()
-        .map(|app| {
-            json!({
-                "pid": app["pid"],
-                "name": app["name"],
-                "bundle": app["bundle"],
-                "bundleId": app["bundleId"],
-                "front": app["active"],
-                "hidden": app["hidden"],
-                "launchedAt": app["launchedAt"],
-                "windows": app["windows"],
-            })
+        .map(|mut app| {
+            rename(&mut app, "active", "front");
+            app
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests;

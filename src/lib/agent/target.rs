@@ -1,9 +1,8 @@
 //! Which process a command about an app is for: a process ID, or a name
 //! found among the helper's windows and running apps.
-use super::windows::{DockRead, window_snapshot};
 use crate::{
     actions::Expect,
-    client::{AppList, AppRow, Client, Verified},
+    client::{AppList, AppRow, Client, Verified, WINDOW_LOOKUP},
     error::{Code, Error, Result},
     name::same_text,
     process::{Instance, Start},
@@ -11,14 +10,10 @@ use crate::{
 };
 use std::collections::BTreeMap;
 
-/// Bind the target to the identity read with its helper snapshot. Older
-/// helpers omit identities: the input service then pins at admission.
-/// A current snapshot without this PID must never adopt its replacement.
-pub(super) fn snapshot_expect(pid: i64, starts: Option<&BTreeMap<i64, Start>>) -> Result<Expect> {
-    let expect = Expect::new(pid)?;
-    let Some(starts) = starts else {
-        return Ok(expect);
-    };
+/// Bind the target to the identity read with its helper snapshot. A
+/// snapshot without this PID must never adopt its replacement.
+pub(super) fn snapshot_expect(pid: i64, starts: &BTreeMap<i64, Start>) -> Result<Expect> {
+    Expect::new(pid)?;
     let start = starts
         .get(&pid)
         .copied()
@@ -59,24 +54,20 @@ pub enum Target {
 /// window: ordinary ones first, then floating panels and alerts, then open
 /// menus. An app showing only one of those is found by it.
 pub(super) fn app_pids(windows: &[Window], name: &str) -> Vec<i64> {
-    let candidates: Vec<&Window> = windows
-        .iter()
-        .filter(|window| {
-            window.is_apps_or_menu()
-                && window
-                    .owner
-                    .as_deref()
-                    .is_some_and(|owner| same_text(owner, name))
-        })
-        .collect();
+    let candidates = windows.iter().filter(|window| {
+        window.is_apps_or_menu()
+            && window
+                .owner
+                .as_deref()
+                .is_some_and(|owner| same_text(owner, name))
+    });
     let tier = |window: &Window| match window.layer {
         0 => 0,
         MENU_LAYER => 2,
         _ => 1,
     };
-    let best = candidates.iter().map(|window| tier(window)).min();
+    let best = candidates.clone().map(tier).min();
     let mut pids: Vec<i64> = candidates
-        .into_iter()
         .filter(|window| Some(tier(window)) == best)
         .map(|window| window.pid)
         .collect();
@@ -109,7 +100,11 @@ pub(super) async fn target_expect(
 ) -> Result<Expect> {
     let listed = match target {
         Target::Pid(_) => None,
-        Target::Name(_) => Some(window_snapshot(client, verified, DockRead::Skip).await?),
+        Target::Name(_) => Some(
+            client
+                .windows_in(Some(verified), false, WINDOW_LOOKUP)
+                .await?,
+        ),
     };
     target_among(client, verified, target, listed.as_ref()).await
 }
@@ -126,7 +121,7 @@ pub(super) async fn target_among(
     {
         let pids = app_pids(&listed.windows, name);
         if !pids.is_empty() {
-            return snapshot_expect(one_pid(name, &pids)?, listed.starts.as_ref());
+            return snapshot_expect(one_pid(name, &pids)?, &listed.starts);
         }
     }
 
@@ -134,16 +129,16 @@ pub(super) async fn target_among(
     let starts = apps.starts()?;
     let rows = apps.rows();
     let name = match target {
-        Target::Pid(pid) => {
-            if !rows.iter().any(|app| app.pid() as i64 == *pid) {
-                return Err(Error::new(
-                    Code::Elements,
-                    format!(
-                        "No app in the helper has the process ID {pid}; run atlas apps to see them"
-                    ),
-                ));
-            }
+        Target::Pid(pid) if rows.iter().any(|app| app.pid() as i64 == *pid) => {
             return snapshot_expect(*pid, starts);
+        }
+        Target::Pid(pid) => {
+            return Err(Error::new(
+                Code::Elements,
+                format!(
+                    "No app in the helper has the process ID {pid}; run atlas apps to see them"
+                ),
+            ));
         }
         Target::Name(name) => name,
     };

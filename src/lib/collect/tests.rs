@@ -1,11 +1,9 @@
 use super::*;
 use crate::{
-    daemon::{
-        protocol::{self, Request},
-        read::{self, Places},
-    },
+    daemon::read::{self, Places},
     doing::Doing,
     host_session::{Host, HostSession},
+    protocol::{self, Request},
     task::Task,
 };
 use std::{
@@ -16,6 +14,11 @@ use std::{
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::UnixListener,
+};
+
+const PIN: SessionPin = SessionPin {
+    security_session_id: 42,
+    display_id: 7,
 };
 
 /// The helper's home and the person's output folder, both private.
@@ -142,7 +145,7 @@ impl Place {
 
     async fn collect(&self, files: &[&str], max_size: u64) -> Value {
         let files: Vec<String> = files.iter().map(|file| (*file).to_owned()).collect();
-        collected(&self.client, None, &files, max_size, Instant::now())
+        collected(&self.client, PIN, &files, max_size, Instant::now())
             .await
             .unwrap()
     }
@@ -359,7 +362,7 @@ async fn a_linked_receipt_folder_is_refused() {
     fs::create_dir(&elsewhere).unwrap();
     std::os::unix::fs::symlink(&elsewhere, output.join(COLLECTED)).unwrap();
     let files = ["a.bin".to_owned()];
-    let error = collected(&place.client, None, &files, 1024, Instant::now())
+    let error = collected(&place.client, PIN, &files, 1024, Instant::now())
         .await
         .unwrap_err();
     assert_eq!(error.code, "state");
@@ -408,7 +411,7 @@ async fn nothing_is_scavenged_through_a_linked_collected_folder() {
     std::os::unix::fs::symlink(&elsewhere, output.join(COLLECTED)).unwrap();
 
     let files = ["a.bin".to_owned()];
-    let error = collected(&place.client, None, &files, 1024, Instant::now())
+    let error = collected(&place.client, PIN, &files, 1024, Instant::now())
         .await
         .unwrap_err();
     assert_eq!(error.code, "state");

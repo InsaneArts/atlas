@@ -1,6 +1,6 @@
 //! Reads of what the whole login shows rather than one app's tree: the
 //! application with keyboard focus, and where the Dock takes clicks.
-use super::{batch::Source, ffi, scan::Scan};
+use super::{Frame, Status, batch::Source, ffi, scan::Scan};
 use crate::{
     error::{Code, Error, Result},
     native::windows as native_windows,
@@ -16,27 +16,30 @@ use std::time::{Duration, Instant};
 /// input service uses for nothing else.
 pub(in crate::native) fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     let unreadable = || Error::new(Code::Native, "The focused app could not be read");
+    let failed = |status| unreadable().with_source(Status(status));
 
     let system = ffi::system_wide().ok_or_else(unreadable)?;
     // The system-wide element sets this process's global messaging timeout,
     // which covers the read below. A read without it could wait on an
     // unresponsive app for far longer.
-    if ffi::set_timeout(&system, timeout) != AXError::Success {
-        return Err(unreadable());
+    let bounded = ffi::set_timeout(&system, timeout);
+    if bounded != AXError::Success {
+        return Err(failed(bounded));
     }
 
     let name = CFString::from_static_str("AXFocusedApplication");
     let focused = match ffi::copy(&system, &name) {
         Ok(focused) => focused.ok_or_else(unreadable)?,
         Err(AXError::NoValue) => return Ok(None),
-        Err(_) => return Err(unreadable()),
+        Err(status) => return Err(failed(status)),
     };
     let app = focused
         .downcast_ref::<AXUIElement>()
         .ok_or_else(unreadable)?;
     match ffi::owner(app) {
         Ok(pid) if pid > 0 => Ok(Some(pid.into())),
-        _ => Err(unreadable()),
+        Ok(_) => Err(unreadable()),
+        Err(status) => Err(failed(status)),
     }
 }
 
@@ -89,12 +92,7 @@ pub(crate) fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
         let Some(frame) = scan.frame(Source::Element(&child)) else {
             return Dock::Unread;
         };
-        lists.push(windows::Bounds {
-            x: frame.x,
-            y: frame.y,
-            width: frame.width,
-            height: frame.height,
-        });
+        lists.push(bounds(frame));
     }
 
     if scan.incomplete {
@@ -165,62 +163,19 @@ fn launchable(subrole: Option<&str>) -> bool {
     )
 }
 
-fn pressable_at(frame: Option<super::Frame>, supported: bool, x: f64, y: f64) -> bool {
-    supported
-        && frame.is_some_and(|f| x >= f.x && y >= f.y && x < f.x + f.width && y < f.y + f.height)
+fn pressable_at(frame: Option<Frame>, supported: bool, x: f64, y: f64) -> bool {
+    supported && frame.is_some_and(|frame| bounds(frame).contains(x, y))
+}
+
+/// An element's frame as the window list states bounds.
+pub(super) fn bounds(frame: Frame) -> windows::Bounds {
+    windows::Bounds {
+        x: frame.x,
+        y: frame.y,
+        width: frame.width,
+        height: frame.height,
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dock_gaps_and_separators_are_not_pressable() {
-        let frame = || {
-            Some(super::super::Frame {
-                x: 1120.0,
-                y: 920.0,
-                width: 16.0,
-                height: 40.0,
-            })
-        };
-        assert!(pressable_at(frame(), true, 1128.0, 940.0));
-        assert!(
-            !pressable_at(frame(), true, 1138.0, 940.0),
-            "gap beside an item"
-        );
-        assert!(
-            !pressable_at(frame(), false, 1128.0, 940.0),
-            "separator without AXPress"
-        );
-        assert!(!pressable_at(None, true, 1138.0, 940.0));
-    }
-
-    #[test]
-    fn only_launchable_dock_subroles_are_pressable_even_with_axpress() {
-        for (subrole, expected) in [
-            (Some("AXApplicationDockItem"), true),
-            (Some("AXDocumentDockItem"), true),
-            (Some("AXFolderDockItem"), true),
-            (Some("AXMinimizedWindowDockItem"), true),
-            (Some("AXURLDockItem"), true),
-            (Some("AXSeparatorDockItem"), false),
-            (Some("AXTrashDockItem"), false),
-            (Some("AXDockExtraDockItem"), false),
-            (Some("AXUnknownDockItem"), false),
-            (None, false),
-        ] {
-            let frame = Some(super::super::Frame {
-                x: 1120.0,
-                y: 920.0,
-                width: 40.0,
-                height: 40.0,
-            });
-            assert_eq!(
-                launchable(subrole) && pressable_at(frame, true, 1138.0, 940.0),
-                expected,
-                "{subrole:?}"
-            );
-        }
-    }
-}
+mod tests;

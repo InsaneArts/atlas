@@ -21,6 +21,14 @@ unsafe extern "C-unwind" {
     fn AXUIElementCreateSystemWide() -> Option<NonNull<AXUIElement>>;
 }
 
+fn check(status: AXError) -> Result<(), AXError> {
+    if status == AXError::Success {
+        Ok(())
+    } else {
+        Err(status)
+    }
+}
+
 /// Take over the reference a successful Copy wrote to `slot`, if any.
 ///
 /// # Safety
@@ -28,6 +36,15 @@ unsafe extern "C-unwind" {
 unsafe fn adopt<T: objc2_core_foundation::Type>(slot: *const T) -> Option<CFRetained<T>> {
     // SAFETY: per contract; ownership of the one reference moves here.
     NonNull::new(slot.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) })
+}
+
+/// Adopt a Copy result whose array members are CoreFoundation objects.
+///
+/// # Safety
+/// `slot` must be null or an owned CFArray from a successful AX Copy call.
+unsafe fn adopt_array(slot: *const CFArray) -> Option<CFRetained<CFArray<CFType>>> {
+    // SAFETY: per contract; each member is checked by its reader before use.
+    unsafe { adopt(slot).map(|array| CFRetained::cast_unchecked(array)) }
 }
 
 /// The element of the application `pid`; None when there is none.
@@ -58,9 +75,7 @@ pub(super) fn settable(element: &AXUIElement, name: &CFString) -> Result<bool, A
     let mut value = 0u8;
     // SAFETY: a live element and string, and a valid Boolean output slot.
     let status = unsafe { element.is_attribute_settable(name, NonNull::from(&mut value)) };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     Ok(value != 0)
 }
 
@@ -78,14 +93,9 @@ pub(super) fn actions(
     let mut array: *const CFArray = std::ptr::null();
     // SAFETY: a live element and a valid output slot for the owned Copy result.
     let status = unsafe { element.copy_action_names(NonNull::from(&mut array)) };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     // SAFETY: a successful Copy supplied an owned array or null.
-    Ok(unsafe { adopt(array) }.map(|array| {
-        // SAFETY: CFArray members are CF objects; callers check each type.
-        unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(array) }
-    }))
+    Ok(unsafe { adopt_array(array) })
 }
 
 /// Request an action already checked for support.
@@ -104,9 +114,7 @@ pub(super) fn copy(
     // SAFETY: a valid output slot; on success the Copy hands over one owned
     // reference, adopted below.
     let status = unsafe { element.copy_attribute_value(name, NonNull::from(&mut value)) };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     // SAFETY: a successful Copy wrote an owned reference (or null).
     Ok(unsafe { adopt(value) })
 }
@@ -128,15 +136,9 @@ pub(super) fn copy_many(
             NonNull::from(&mut values),
         )
     };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     // SAFETY: a successful Copy wrote an owned array (or null).
-    Ok(unsafe { adopt(values) }.map(|values| {
-        // SAFETY: every element of a CFArray is a CF object, each checked
-        // before use.
-        unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(values) }
-    }))
+    Ok(unsafe { adopt_array(values) })
 }
 
 /// At most `wanted` values of `element`'s array attribute `name`, from the
@@ -151,15 +153,9 @@ pub(super) fn copy_values(
     // array, adopted below.
     let status =
         unsafe { element.copy_attribute_values(name, 0, wanted, NonNull::from(&mut array)) };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     // SAFETY: a successful Copy wrote an owned array (or null).
-    Ok(unsafe { adopt(array) }.map(|array| {
-        // SAFETY: every element of a CFArray is a CF object; each is checked
-        // before use.
-        unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(array) }
-    }))
+    Ok(unsafe { adopt_array(array) })
 }
 
 /// How many values `element`'s array attribute `name` holds.
@@ -167,9 +163,7 @@ pub(super) fn count(element: &AXUIElement, name: &CFString) -> Result<CFIndex, A
     let mut count: CFIndex = 0;
     // SAFETY: a valid output slot for the count.
     let status = unsafe { element.attribute_value_count(name, NonNull::from(&mut count)) };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     Ok(count)
 }
 
@@ -185,9 +179,7 @@ pub(super) fn copy_for(
     let status = unsafe {
         element.copy_parameterized_attribute_value(name, parameter, NonNull::from(&mut value))
     };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     // SAFETY: a successful Copy wrote an owned reference (or null).
     Ok(unsafe { adopt(value) })
 }
@@ -202,9 +194,7 @@ pub(super) fn element_at(
     // SAFETY: a valid output slot; on success the Copy hands over one owned
     // element, adopted below.
     let status = unsafe { app.copy_element_at_position(x, y, NonNull::from(&mut hit)) };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     // SAFETY: a successful Copy wrote an owned reference (or null).
     Ok(unsafe { adopt(hit) })
 }
@@ -214,9 +204,7 @@ pub(super) fn owner(element: &AXUIElement) -> Result<libc::pid_t, AXError> {
     let mut pid: libc::pid_t = 0;
     // SAFETY: a valid `pid_t` slot for the element's process.
     let status = unsafe { element.pid(NonNull::from(&mut pid)) };
-    if status != AXError::Success {
-        return Err(status);
-    }
+    check(status)?;
     Ok(pid)
 }
 
@@ -321,24 +309,4 @@ pub(super) mod made {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn null_references_are_never_owned() {
-        // SAFETY: null is never adopted.
-        assert!(unsafe { adopt::<CFType>(std::ptr::null()) }.is_none());
-    }
-
-    #[test]
-    fn a_text_is_cut_only_inside_it() {
-        let text = CFString::from_str("abc");
-        assert_eq!(composed_start(&text, 1), Some(1));
-        assert_eq!(composed_start(&text, 3), None);
-        assert_eq!(composed_start(&text, -1), None);
-        let part = |location, length| substring(&text, CFRange { location, length });
-        assert_eq!(part(0, 2).unwrap().to_string(), "ab");
-        assert!(part(2, 2).is_none());
-        assert!(part(-1, 1).is_none());
-    }
-}
+mod tests;

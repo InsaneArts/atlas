@@ -312,7 +312,7 @@ fn six_waiters_take_the_lock_in_the_order_they_began() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let held = controller.acquire(false).unwrap();
-    let since = crate::host_session::now_ms();
+    let since = crate::time::now_ms();
     let (send, acquired) = std::sync::mpsc::channel();
     let waiters: Vec<_> = (0..6)
         .map(|index| {
@@ -388,7 +388,7 @@ fn a_dead_or_stale_waiters_note_is_skipped() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let this = Instance::current().unwrap();
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     let dead = waiter_note(
         &controller,
         Instance::new(i32::MAX, [1, 0]),
@@ -449,7 +449,7 @@ fn a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait() {
     let ahead = waiter_note(
         &controller,
         this,
-        crate::host_session::now_ms() - 1000,
+        crate::time::now_ms() - 1000,
         Duration::ZERO,
     );
     for stop in [false, true] {
@@ -542,10 +542,7 @@ fn entry_attachment_does_not_wait_for_a_held_marker_lock_or_lose_pending_attribu
     let directory = tempfile::tempdir().unwrap();
     let mut client = crate::test_support::client(directory.path());
     let pid = nix::unistd::getppid().as_raw();
-    let process = Instance::new(
-        pid,
-        crate::host_session::ancestry::process(pid).unwrap().start,
-    );
+    let process = Instance::new(pid, crate::host::ancestry::process(pid).unwrap().start);
     let own = session("owner")
         .run_by(Some(process))
         .in_folder(Some("parent"));

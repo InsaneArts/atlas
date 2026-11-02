@@ -1,6 +1,9 @@
 //! Views of what was done in the helper: input, typing, commands, opening,
 //! waiting and recovery.
-use super::{Rendered, advised_card, card, element_name, failed, style, text, with_sessions};
+use super::{
+    Rendered, advised_card, card, element_name, failed, items, numbered, printable_strings,
+    strings, style, text, with_sessions,
+};
 use crate::error::Code;
 use serde_json::Value;
 
@@ -120,6 +123,34 @@ pub(super) fn run(value: &Value) -> Rendered {
     rendered
 }
 
+/// What was opened. The copies made for it are said either way: a failed
+/// launch leaves them where close removes them.
+pub(super) fn opened(what: &str, value: &Value) -> Rendered {
+    let copied = if value["copied"]
+        .as_array()
+        .is_some_and(|copied| !copied.is_empty())
+    {
+        format!(
+            "\n  {}",
+            style::dim(format!(
+                "copied first to {}, where the helper can read it",
+                crate::handoff::ROOT
+            ))
+        )
+    } else {
+        String::new()
+    };
+
+    match failed(value) {
+        Some(failure) => Rendered::err(format!("{}{copied}", failure.err)),
+        None => Rendered::out(format!(
+            "{} Opened {}{copied}",
+            style::ok(),
+            text::printable(what)
+        )),
+    }
+}
+
 pub(super) fn wait(value: &Value, gone: bool) -> String {
     let after = value["waitedMs"]
         .as_f64()
@@ -178,20 +209,13 @@ pub(super) fn start_input(value: &Value) -> String {
 
 pub(super) fn install(value: &Value) -> String {
     let path = value["path"].as_str().map(text::tilde).unwrap_or_default();
-
-    if value["alreadyInstalled"] == true {
-        format!(
-            "{} The shared command is current  {}",
-            style::ok(),
-            style::dim(path)
-        )
+    let said = if value["alreadyInstalled"] == true {
+        "The shared command is current"
     } else {
-        format!(
-            "{} Installed the shared command  {}",
-            style::ok(),
-            style::dim(path)
-        )
-    }
+        "Installed the shared command"
+    };
+
+    format!("{} {said}  {}", style::ok(), style::dim(path))
 }
 
 /// The copies into the helper `environment list` found: each plan's ID,
@@ -235,10 +259,7 @@ fn plan_table(plans: &[Value]) -> String {
     let rows: Vec<Vec<String>> = plans
         .iter()
         .map(|plan| {
-            let targets: Vec<String> = plan["files"]
-                .as_array()
-                .into_iter()
-                .flatten()
+            let targets: Vec<String> = items(&plan["files"])
                 .filter_map(|file| file["target"].as_str())
                 .map(|target| text::printable(target).into_owned())
                 .collect();
@@ -270,7 +291,7 @@ fn plan_state(state: &str) -> &str {
 /// and the one command that comes next.
 pub(super) fn environment(value: &Value) -> Rendered {
     let Some(files) = value["files"].as_array() else {
-        return failed(value).unwrap_or_else(|| Rendered::out(super::generic(value)));
+        return super::checked(value, super::generic);
     };
 
     let id = value["planId"].as_str().unwrap_or("ID");
@@ -403,11 +424,7 @@ fn environment_interrupted(value: &Value, id: &str) -> Option<Rendered> {
 /// Undo and undo-preview share target formatting and keep different follow-up words.
 fn environment_rollback(value: &Value, id: &str) -> Vec<String> {
     let targets = |key: &str| -> Vec<String> {
-        value[key]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
+        strings(&value[key])
             .map(|target| format!("  ~/{}", text::printable(target)))
             .collect()
     };
@@ -466,12 +483,8 @@ fn environment_next(what: &str, command: String) -> String {
 /// An app closed in the helper, and whether its copy went with it.
 pub(super) fn close(value: &Value) -> String {
     // `close --all` names every app it quit.
-    if let Some(apps) = value["apps"].as_array() {
-        let names: Vec<String> = apps
-            .iter()
-            .filter_map(Value::as_str)
-            .map(|name| text::printable(name).into_owned())
-            .collect();
+    if value["apps"].is_array() {
+        let names = printable_strings(&value["apps"]);
         let mut line = if names.is_empty() {
             format!("{} No apps were open", style::ok())
         } else {
@@ -485,16 +498,11 @@ pub(super) fn close(value: &Value) -> String {
             line.push_str(&style::dim(" · removed Atlas's copies"));
         }
 
-        if let Some(skipped) = value["skipped"]
+        if value["skipped"]
             .as_array()
-            .filter(|skipped| !skipped.is_empty())
+            .is_some_and(|skipped| !skipped.is_empty())
         {
-            let skipped: Vec<String> = skipped
-                .iter()
-                .filter_map(Value::as_str)
-                .map(|name| text::printable(name).into_owned())
-                .collect();
-
+            let skipped = printable_strings(&value["skipped"]);
             line.push_str(&format!(
                 "\n{} Left {}: it changed before it could be quit",
                 style::warn(),
@@ -528,10 +536,7 @@ pub(super) fn close(value: &Value) -> String {
 /// What a close left of Atlas's copies: those another session made, and
 /// those that could not be removed.
 fn copies_left(value: &Value) -> String {
-    let copies = |count: u64| match count {
-        1 => "1 copy".to_owned(),
-        count => format!("{count} copies"),
-    };
+    let copies = |count: u64| text::amount(count, "copy", "copies");
     let mut said = String::new();
     if let Some(others) = value["keptOthers"].as_u64().filter(|count| *count > 0) {
         said.push_str(&style::dim(format!(
@@ -556,7 +561,7 @@ fn copies_left(value: &Value) -> String {
 pub(super) fn discover(value: &Value) -> String {
     let mut rows: Vec<Vec<String>> = Vec::new();
 
-    for item in value["selections"].as_array().into_iter().flatten() {
+    for item in items(&value["selections"]) {
         let name = text::printable(item["name"].as_str().unwrap_or("?")).into_owned();
         let here = item["host"]
             .as_str()
@@ -564,10 +569,7 @@ pub(super) fn discover(value: &Value) -> String {
             .unwrap_or_else(|| "not found".to_owned());
 
         let helper = match item["kind"].as_str() {
-            Some("tool") => item["helperCandidates"]
-                .as_array()
-                .into_iter()
-                .flatten()
+            Some("tool") => items(&item["helperCandidates"])
                 .find(|candidate| candidate["access"]["executable"] == true)
                 .and_then(|candidate| candidate["path"].as_str())
                 .map(|path| text::printable(path).into_owned())
@@ -580,7 +582,7 @@ pub(super) fn discover(value: &Value) -> String {
         rows.push(vec![format!("{mark} {name}"), here, helper]);
     }
 
-    for variable in value["environment"].as_array().into_iter().flatten() {
+    for variable in items(&value["environment"]) {
         let yes = |key: &str| {
             if variable[key] == true {
                 "set"
@@ -606,7 +608,7 @@ pub(super) fn discover(value: &Value) -> String {
         ]);
     }
 
-    for reference in value["references"].as_array().into_iter().flatten() {
+    for reference in items(&value["references"]) {
         let access = |side: &Value| {
             match (side["readable"] == true, side["writable"] == true) {
                 (true, true) => "read and write",
@@ -643,12 +645,7 @@ pub(super) fn discover(value: &Value) -> String {
 
 /// `setup` without --apply: whether anything needs doing.
 pub(super) fn setup_preview(value: &Value) -> String {
-    let steps: Vec<&str> = value["nextSteps"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
+    let steps = numbered(&value["nextSteps"]);
     if steps.is_empty() {
         return format!("{} The helper's setup is current", style::ok());
     }
@@ -657,10 +654,6 @@ pub(super) fn setup_preview(value: &Value) -> String {
         "{} The helper's setup needs attention:",
         style::unknown()
     )];
-
-    for (number, step) in steps.iter().enumerate() {
-        lines.push(format!("  {}. {}", number + 1, text::printable(step)));
-    }
-
+    lines.extend(steps);
     lines.join("\n")
 }

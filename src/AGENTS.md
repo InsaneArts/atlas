@@ -19,8 +19,10 @@ grammar and attended interaction in `src/bin`, and release tooling in `xtask`.
   `onboarding` orchestrates its workflow. Terminal prompts belong in `src/bin`.
 - `viewer` owns its HTTP service and personal-control lifetime; `mcp` adapts its
   declared tools. `ui` formats output; domain authority must not depend on it.
-- Shared names, errors and time belong in their existing leaf modules. Keep
-  observation, wire projections and durable recovery models distinct.
+- Shared names, errors and time belong in their existing leaf modules; wire
+  types in `protocol`, host identity in `host`, accounts in `account`. A leaf
+  never reaches up to `client`, `setup` or a domain owner. Keep observation,
+  wire projections and durable recovery models distinct.
 
 Use the narrowest visibility that real binary, tooling or supported library
 callers require. Tests alone do not justify a shipping forwarding adapter.
@@ -102,7 +104,7 @@ recovery ordering and real target delivery still need review and helper proof.
 
 ### Daemon request
 
-Add its variant/parser in `lib/daemon/protocol.rs`, complete request policy,
+Add its variant/parser in `lib/protocol.rs`, complete request policy,
 execution in `lib/daemon/serve.rs`, and verified client producer and result decoder.
 Keep fresh off-console and session-pin checks around the operation. Mutations
 also choose typed completion proof and pending ownership. Use an in-daemon read
@@ -110,33 +112,36 @@ when it suffices; do not introduce another worker executable by default.
 
 ### Native operation
 
-Add the typed wire variant in `lib/native/service.rs`, its exhaustive decode and
-dispatch choices, complete handler and client request. Decide cancellation,
-cleanup and registered-work lifetime first. Preserve deferred field failures
-where existing guards must precede them. Advertise a capability and require it
-on the client together when compatibility needs it. Verify no input on refusal
-and retain unknown outcomes through dropped requests and replies.
+Add the typed wire variant and its decode in `lib/native/service/request.rs`, its
+exhaustive dispatch choices and complete handler in `lib/native/service.rs`, and
+the client request. Decide cancellation, cleanup and registered-work lifetime
+first. Preserve deferred field failures where existing guards must precede them.
+Advertise a capability and require it on the client together when compatibility
+needs it. Verify no input on refusal and retain unknown outcomes through dropped
+requests and replies.
 
 ### MCP tool
 
 Declare identity, catalog and exposure/authority policy together in
-`lib/mcp/resources.rs`; add exhaustive execution and the concrete handler in
-`lib/mcp/mod.rs`. Add a payload type only for actual fields. Verify the complete
+`lib/mcp/resources.rs`; add exhaustive execution in `lib/mcp.rs` and the
+concrete handler beside its kind: `reads.rs` for what looks, `control.rs` for
+the view's lease. Add a payload type only for actual fields. Verify the complete
 catalog fixture, model/app visibility, guarded calls, privacy and real dispatch.
 Declaring a tool is not proof that its app-control lifetime is correct.
 
 ### Viewer route
 
-Edit route identity, path decoding, execution and the semantic method in
-`lib/viewer/http.rs` and its owning control/read module. Add validated mutation
-fields and make `Route::urgent` choose explicitly. Reuse origin, body, changing
-guard and outcome boundaries. The urgency match is exhaustive; method/path
-registration, owner-scoped cleanup and Stop/release under load still need tests.
+Declare its identity and path together in `routes!` in `lib/viewer/http.rs`, then
+add execution and the semantic method in its owning control/read module. Add
+validated mutation fields and make `Route::urgent` choose explicitly. Reuse
+origin, body, changing guard and outcome boundaries. The execution and urgency
+matches are exhaustive; owner-scoped cleanup and Stop/release under load still
+need tests.
 
 ### Agent host
 
 Add metadata in `lib/agents.rs`, host-specific assets/integration, identity and
-ordered sources in `lib/host_session/mod.rs`, ancestry/PID decisions and CLI
+ordered sources in `lib/host.rs`, ancestry/PID decisions and CLI
 selection. Compiler errors cover closed identity choices; review complete lists,
 host workflows and generated resources explicitly. Test install, removal,
 refresh, ownership preservation and nested or ambiguous host sessions.
@@ -144,7 +149,8 @@ refresh, ownership preservation and nested or ambiguous host sessions.
 ### Error code or reply field
 
 Add a code and stable word together in `lib/error.rs`, exhaustive advice in
-`lib/error/advice.rs`, its emission, an independent stable-word fixture and docs.
+`lib/error/advice.rs`, its lease reading in `lib/viewer/control.rs`, its emission,
+an independent stable-word fixture and docs.
 For a reply field, update its typed schema/producer and each intended consumer
 and privacy projection. Inspect both `lib/transport.rs` and
 `lib/client/input.rs` refusal decoders. Unknown future fields need an explicit
@@ -169,6 +175,10 @@ require explicit review; the compiler cannot prove them. Test crash/restart and
 preservation of unknown ownership. Keep recovery records separate from public replies.
 
 ## Checks
+
+Unit tests of private code live in a `tests.rs` beside their module, behind
+`#[cfg(test)] mod tests;`. Tests through the public API live in `tests/it/`,
+which builds as one binary. Modules are `foo.rs` plus `foo/`, never `foo/mod.rs`.
 
 Run `cargo fmt --all --check`, `cargo clippy --all-targets -- -D warnings`,
 `cargo test`, `cargo +1.88.0 check --workspace --all-targets --locked`,

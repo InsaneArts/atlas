@@ -7,18 +7,19 @@ use super::*;
 /// Returns configuration or onboarding-state failures. Status may perform the existing
 /// receipt or listener repair; it never invents successful consent.
 pub async fn status(config_path: &Path) -> Result<Value> {
-    let (uid, name, real) = me()?;
-    let me = json!({"uid": uid, "name": name, "realName": real});
+    let account = this_account()?;
+    let uid = account.uid;
+    let me = json!({
+        "uid": uid,
+        "name": account.name,
+        "realName": setup::real_name(&account.name),
+    });
     let app = app();
-    let absent = matches!(
-        fs::symlink_metadata(config_path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    );
 
     // Atlas opened in an account another one chose as its helper (an
     // account with Atlas settings of its own is a controller, whatever a
     // shared file says).
-    if absent {
+    if setup::configuration::absent(config_path) {
         let pairing = request().filter(|pairing| pairing.helper_uid == uid);
         if pairing.is_some() || helper_job_here(uid) {
             return Ok(json!({
@@ -30,40 +31,39 @@ pub async fn status(config_path: &Path) -> Result<Value> {
             }));
         }
 
-        let (leftovers, blockers) = logins(None);
-        return Ok(json!({
-            "ok": true,
-            "role": "controller",
-            "me": me,
-            "app": app,
-            "configured": false,
-            "candidates": candidates()?,
-            "menubarLogin": crate::menubar::login_decided(),
-            "leftoverLogins": leftovers,
-            "blockers": blockers,
-        }));
+        return choosing(me, app, false, logins(None));
     }
 
     configured(config_path, uid, me, app).await
 }
 
-/// Observe the configured controller and its helper without repeating role selection.
+/// The controller with no helper to look at: the window offers the accounts.
+fn choosing(
+    me: Value,
+    app: Value,
+    configured: bool,
+    (leftovers, blockers): (Value, Value),
+) -> Result<Value> {
+    Ok(json!({
+        "ok": true,
+        "role": "controller",
+        "me": me,
+        "app": app,
+        "configured": configured,
+        "candidates": candidates(None)?,
+        "menubarLogin": crate::menubar::login_decided(),
+        "leftoverLogins": leftovers,
+        "blockers": blockers,
+    }))
+}
+
 async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Result<Value> {
     let config = Config::load(config_path)?;
     let (leftovers, blockers) = logins(Some(config.helper_uid));
     let Some(helper) = setup::account_with_uid(config.helper_uid)? else {
-        return Ok(json!({
-            "ok": true,
-            "role": "controller",
-            "me": me,
-            "app": app,
-            "configured": true,
-            "helper": {"exists": false, "uid": config.helper_uid},
-            "candidates": candidates()?,
-            "menubarLogin": crate::menubar::login_decided(),
-            "leftoverLogins": leftovers,
-            "blockers": blockers,
-        }));
+        let mut reply = choosing(me, app, true, (leftovers, blockers))?;
+        reply["helper"] = json!({"exists": false, "uid": config.helper_uid});
+        return Ok(reply);
     };
 
     let admin = setup::administrator(&helper.name);
@@ -97,13 +97,8 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
     let only_choice = !paired && !answering && prepared(&helper);
     let candidates = if paired || answering {
         Vec::new()
-    } else if only_choice {
-        candidates()?
-            .into_iter()
-            .filter(|candidate| candidate["uid"] == helper.uid)
-            .collect()
     } else {
-        candidates()?
+        candidates(only_choice.then_some(helper.uid))?
     };
 
     // Asked by this window but never answered: the request may be taken
@@ -136,10 +131,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
             "answering": answering,
             "onConsole": reply["session"]["onConsole"] == true,
             "hidden": hidden,
-            "permissions": {
-                "screenCapture": reply["permissions"]["screenCapture"] == true,
-                "accessibility": reply["permissions"]["accessibility"] == true,
-            },
+            "permissions": permissions_from(Some(&reply)),
         },
         "setupProblem": acceptance["error"].as_str().map(|error| format!("{error}. Open Atlas in the helper, then return here to retry. Any unfinished setup stays pending until recovery.")),
         "acceptance": acceptance,
@@ -153,7 +145,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
 /// The logins of deleted accounts that are still open, and what would hold
 /// up a new login now, as the window reads them; `helper` is the configured
 /// helper. Both are empty when the process list could not be read.
-pub(super) fn logins(helper: Option<u32>) -> (Value, Value) {
+fn logins(helper: Option<u32>) -> (Value, Value) {
     match crate::session::sessions(helper) {
         Some(sessions) => (json!(sessions.leftovers()), json!(sessions.blockers)),
         None => (json!([]), json!([])),
@@ -163,13 +155,13 @@ pub(super) fn logins(helper: Option<u32>) -> (Value, Value) {
 /// The helper's side of the status: who asked (unknown when `atlas init`
 /// set it up), whether its job runs here, and its permissions as that job,
 /// the process that uses them, reports them.
-pub(super) async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
-    let layout = home().map(|home| Layout::new(uid, home));
+async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
+    let layout = this_account().map(|account| Layout::new(uid, account.home));
 
     // Installed for the account asking now: a job left by an earlier Atlas
     // (another app, another account) needs Allow again.
     let installed = layout.as_ref().is_ok_and(|layout| {
-        let current = read_text(&layout.agent_plist(LABEL), 64 * 1024);
+        let current = read_text(&layout.agent_plist(LABEL), MAX_RECORD);
         match (current, pairing) {
             (None, _) => false,
             (Some(_), None) => true,
@@ -194,18 +186,20 @@ pub(super) async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     // the job's answer tells what Atlas itself may do here. Without one (not
     // running, or restarting to pick up Screen Recording) they are unknown,
     // not off.
-    let mut hello = None;
-    if let (true, Ok(layout)) = (running, &layout) {
-        let transport = crate::transport::Transport {
-            path: layout.socket(),
-            timeout: Duration::from_secs(3),
-            peer_uid: uid,
-        };
-        hello = transport.call(&json!({"op": "hello"})).await.ok();
-    }
+    let hello = match &layout {
+        Ok(layout) if running => {
+            let transport = crate::transport::Transport {
+                path: layout.socket(),
+                timeout: Duration::from_secs(3),
+                peer_uid: uid,
+            };
+            transport.call(&json!({"op": "hello"})).await.ok()
+        }
+        _ => None,
+    };
     let permissions = permissions_from(hello.as_ref());
 
-    let controller = pairing.map_or(json!(null), |pairing| {
+    let controller = pairing.map(|pairing| {
         json!({
             "uid": pairing.controller_uid,
             "name": pairing.controller_name,
@@ -233,10 +227,11 @@ pub(super) fn permissions_from(hello: Option<&Value>) -> Value {
     })
 }
 
-/// Standard accounts that could be the helper.
-pub(super) fn candidates() -> Result<Vec<Value>> {
+/// Standard accounts that could be the helper: only user ID `only`, if given.
+fn candidates(only: Option<u32>) -> Result<Vec<Value>> {
     Ok(crate::switch::standard_accounts()?
         .into_iter()
+        .filter(|account| only.is_none_or(|uid| account.uid == uid))
         .map(|account| {
             json!({"name": account.name, "uid": account.uid, "realName": account.real_name})
         })
@@ -245,7 +240,7 @@ pub(super) fn candidates() -> Result<Vec<Value>> {
 
 /// The app this runs from, whether it is signed by Atlas's developer, and
 /// whether `atlas` in a terminal reaches it.
-pub(super) fn app() -> Value {
+fn app() -> Value {
     match setup::installed_app::app_executable() {
         Ok(executable) => {
             let link = config::home()
@@ -268,6 +263,6 @@ pub(super) fn app() -> Value {
 
 /// Whether Atlas is set up in this account as someone's helper already
 /// (its background job is installed here, as `atlas init` leaves it).
-pub(super) fn helper_job_here(uid: u32) -> bool {
-    home().is_ok_and(|home| Layout::new(uid, home).agent_plist(LABEL).exists())
+fn helper_job_here(uid: u32) -> bool {
+    this_account().is_ok_and(|account| Layout::new(uid, account.home).agent_plist(LABEL).exists())
 }

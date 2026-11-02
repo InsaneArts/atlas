@@ -136,11 +136,12 @@ impl Hands for Fake {
             .collect())
     }
 
-    async fn remove_install(&self, install: &Token) -> Result<Value> {
+    async fn remove_install(&self, install: &Token) -> Result<crate::environment::RemovalReply> {
         self.log.borrow_mut().push(format!("remove {install}"));
-        Ok(self.removals.borrow_mut().remove(install).unwrap_or_else(
+        let reply = self.removals.borrow_mut().remove(install).unwrap_or_else(
             || json!({"ok": true, "outcome": "held", "heldPath": held_path(install)}),
-        ))
+        );
+        Ok(crate::environment::RemovalReply::read(reply))
     }
 
     async fn quit(&self, processes: &[Process], _: &[String], _: &[Token]) -> Result<Quitted> {
@@ -187,10 +188,7 @@ impl Hands for Fake {
             .unwrap_or_default()
     }
 
-    async fn job(
-        &self,
-        id: &crate::daemon::protocol::JobId,
-    ) -> Result<crate::daemon::protocol::Shown> {
+    async fn job(&self, id: &crate::protocol::JobId) -> Result<crate::protocol::Shown> {
         self.job_reads.set(self.job_reads.get() + 1);
         let shown = self
             .jobs
@@ -214,12 +212,13 @@ impl Hands for Fake {
             .collect())
     }
 
-    async fn stop_job(&self, _: &Key, id: &crate::daemon::protocol::JobId) -> Result<Value> {
+    async fn stop_job(&self, _: &Key, id: &crate::protocol::JobId) -> Result<run::JobEnd> {
         self.log.borrow_mut().push(format!("stop job {id}"));
         self.job_stops
             .borrow_mut()
             .remove(id.as_str())
             .unwrap_or_else(|| Ok(json!({"ok": true, "id": id, "state": "ended", "left": []})))
+            .map(|reply| run::JobEnd::read(&reply))
     }
 
     fn stopped(&self) -> bool {
@@ -386,12 +385,12 @@ fn held_path(install: &Token) -> String {
 }
 
 /// Note in `task`'s record a job it started, still running.
-fn job_started(place: &Place, task: &Task, name: &str) -> crate::daemon::protocol::JobId {
+fn job_started(place: &Place, task: &Task, name: &str) -> crate::protocol::JobId {
     use crate::{
-        daemon::protocol::{Expected, JobState},
+        protocol::{Expected, JobState},
         task::record::JobEntry,
     };
-    let id = crate::daemon::protocol::JobId::new();
+    let id = crate::protocol::JobId::new();
     let entry = JobEntry {
         id: id.clone(),
         name: name.into(),
@@ -419,7 +418,7 @@ fn job_started(place: &Place, task: &Task, name: &str) -> crate::daemon::protoco
 /// Note in `task`'s record a collection it made.
 fn collected(place: &Place, task: &Task) -> crate::collect::ReceiptId {
     let receipt: crate::collect::ReceiptId =
-        serde_json::from_value(json!(format!("{}-a1b2c3", crate::host_session::now_ms()))).unwrap();
+        serde_json::from_value(json!(format!("{}-a1b2c3", crate::time::now_ms()))).unwrap();
     let entry = crate::task::record::OutputEntry {
         receipt: receipt.clone(),
         at: 1,

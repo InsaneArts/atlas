@@ -49,6 +49,87 @@ type Execute = unsafe extern "C" fn(
 /// An authorization, its rights given up when dropped.
 struct Authorization(AuthorizationRef);
 
+impl Authorization {
+    fn new() -> Result<Self, Refusal> {
+        let mut reference: AuthorizationRef = null();
+        // SAFETY: no rights or environment yet; `reference` is writable.
+        let status = unsafe {
+            AuthorizationCreate(null(), null(), AuthorizationFlags::Defaults, &mut reference)
+        };
+        if status != 0 || reference.is_null() {
+            return Err(Refusal::Failed(format!(
+                "macOS could not start an approval ({status})"
+            )));
+        }
+        Ok(Self(reference))
+    }
+
+    fn approve(&self, prompt: &CString) -> Result<(), Refusal> {
+        let mut right = AuthorizationItem {
+            name: c"system.privilege.admin".as_ptr(),
+            valueLength: 0,
+            value: null_mut(),
+            flags: 0,
+        };
+        let mut rights = AuthorizationItemSet {
+            count: 1,
+            items: &mut right,
+        };
+        let mut message = AuthorizationItem {
+            name: c"prompt".as_ptr(),
+            valueLength: prompt.as_bytes().len(),
+            value: prompt.as_ptr().cast_mut().cast(),
+            flags: 0,
+        };
+        let environment = AuthorizationItemSet {
+            count: 1,
+            items: &mut message,
+        };
+        let flags = AuthorizationFlags::InteractionAllowed
+            | AuthorizationFlags::ExtendRights
+            | AuthorizationFlags::PreAuthorize;
+        // SAFETY: the right, the prompt and the sets pointing at them all outlive
+        // the call; no authorized rights are asked back.
+        let status = unsafe {
+            AuthorizationCopyRights(
+                self.0,
+                NonNull::from(&mut rights),
+                &environment,
+                flags,
+                null_mut(),
+            )
+        };
+        match status {
+            0 => Ok(()),
+            cancelled if cancelled == errAuthorizationCanceled => Err(Refusal::Cancelled),
+            other => Err(Refusal::Failed(format!(
+                "macOS did not give the approval ({other})"
+            ))),
+        }
+    }
+
+    fn run(
+        &self,
+        execute: Execute,
+        program: &CString,
+        argv: &[*mut c_char],
+    ) -> Result<UnixStream, Refusal> {
+        let mut pipe: *mut libc::FILE = null_mut();
+        // SAFETY: program and the NULL-terminated argv outlive the call;
+        // pipe is writable and self holds the approval just given.
+        let status = unsafe {
+            execute(
+                self.0,
+                program.as_ptr(),
+                AuthorizationFlags::Defaults,
+                argv.as_ptr(),
+                &mut pipe,
+            )
+        };
+        execution_started(status, NonNull::new(pipe).map(Pipe))?.stream()
+    }
+}
+
 impl Drop for Authorization {
     fn drop(&mut self) {
         // SAFETY: the reference came from AuthorizationCreate and is freed once.
@@ -115,132 +196,49 @@ pub(crate) fn run(program: &Path, arguments: &[&str], prompt: &str) -> Result<Un
         .collect();
     let prompt = text(prompt.as_bytes())?;
 
-    let mut reference: AuthorizationRef = null();
-    // SAFETY: no rights or environment yet; `reference` is writable.
-    let status = unsafe {
-        AuthorizationCreate(null(), null(), AuthorizationFlags::Defaults, &mut reference)
-    };
-    if status != 0 || reference.is_null() {
-        return Err(Refusal::Failed(format!(
-            "macOS could not start an approval ({status})"
-        )));
-    }
-    let authorization = Authorization(reference);
-
-    let mut right = AuthorizationItem {
-        name: c"system.privilege.admin".as_ptr(),
-        valueLength: 0,
-        value: null_mut(),
-        flags: 0,
-    };
-    let mut rights = AuthorizationItemSet {
-        count: 1,
-        items: &mut right,
-    };
-    let mut message = AuthorizationItem {
-        name: c"prompt".as_ptr(),
-        valueLength: prompt.as_bytes().len(),
-        value: prompt.as_ptr().cast_mut().cast(),
-        flags: 0,
-    };
-    let environment = AuthorizationItemSet {
-        count: 1,
-        items: &mut message,
-    };
-    let flags = AuthorizationFlags::InteractionAllowed
-        | AuthorizationFlags::ExtendRights
-        | AuthorizationFlags::PreAuthorize;
-    // SAFETY: the right, the prompt and the sets pointing at them all outlive
-    // the call; no authorized rights are asked back.
-    let status = unsafe {
-        AuthorizationCopyRights(
-            authorization.0,
-            NonNull::from(&mut rights),
-            &environment,
-            flags,
-            null_mut(),
-        )
-    };
-    match status {
-        0 => {}
-        cancelled if cancelled == errAuthorizationCanceled => return Err(Refusal::Cancelled),
-        other => {
-            return Err(Refusal::Failed(format!(
-                "macOS did not give the approval ({other})"
-            )));
-        }
-    }
-
-    let mut pipe: *mut libc::FILE = null_mut();
-    // SAFETY: the program and the NULL-terminated argument vector outlive the
-    // call, and `pipe` is writable; the reference holds the approval just given.
-    let status = unsafe {
-        execute(
-            authorization.0,
-            program.as_ptr(),
-            AuthorizationFlags::Defaults,
-            argv.as_ptr(),
-            &mut pipe,
-        )
-    };
-    if let Err(error) = execution_started(status, !pipe.is_null()) {
-        if !pipe.is_null() {
-            // SAFETY: a stream returned by this call, closed once before
-            // returning the execution failure.
-            unsafe { libc::fclose(pipe) };
-        }
-        return Err(error);
-    }
-
-    // SAFETY: `pipe` is the open stream macOS gave; its descriptor is copied
-    // (closed on exec, so no other child inherits the channel) before the
-    // stream, and with it the original descriptor, is closed.
-    let descriptor = unsafe {
-        let descriptor = libc::fcntl(libc::fileno(pipe), libc::F_DUPFD_CLOEXEC, 0);
-        libc::fclose(pipe);
-        descriptor
-    };
-    if descriptor < 0 {
-        return Err(Refusal::Failed(
-            "Atlas could not talk to the approved step".into(),
-        ));
-    }
-
-    // SAFETY: a fresh descriptor nothing else owns.
-    Ok(UnixStream::from(unsafe {
-        OwnedFd::from_raw_fd(descriptor)
-    }))
+    let authorization = Authorization::new()?;
+    authorization.approve(&prompt)?;
+    authorization.run(execute, &program, &argv)
 }
 
-/// Once approval was requested, failure must stop the attempt instead of
-/// offering another authorization mechanism.
-fn execution_started(status: i32, has_pipe: bool) -> Result<(), Refusal> {
-    if status != 0 || !has_pipe {
-        Err(Refusal::Failed(format!(
-            "macOS could not run the approved step ({status}); no further approval was requested"
-        )))
-    } else {
-        Ok(())
+/// The stream macOS returned, closed once even when execution failed.
+struct Pipe(NonNull<libc::FILE>);
+
+impl Pipe {
+    fn stream(&self) -> Result<UnixStream, Refusal> {
+        // SAFETY: self owns an open stream. Copy its descriptor with close-on-exec
+        // before Drop closes the original, so no later child inherits the channel.
+        let descriptor =
+            unsafe { libc::fcntl(libc::fileno(self.0.as_ptr()), libc::F_DUPFD_CLOEXEC, 0) };
+        if descriptor < 0 {
+            return Err(Refusal::Failed(
+                "Atlas could not talk to the approved step".into(),
+            ));
+        }
+        // SAFETY: fcntl returned a fresh descriptor nothing else owns.
+        Ok(UnixStream::from(unsafe {
+            OwnedFd::from_raw_fd(descriptor)
+        }))
     }
+}
+
+impl Drop for Pipe {
+    fn drop(&mut self) {
+        // SAFETY: this is the stream returned by macOS, owned and closed once.
+        unsafe { libc::fclose(self.0.as_ptr()) };
+    }
+}
+
+/// `pipe`, the channel to the step macOS started. Once approval was requested,
+/// failure must stop the attempt instead of offering another authorization
+/// mechanism. A pipe that came with a failure is dropped here.
+fn execution_started<T>(status: i32, pipe: Option<T>) -> Result<T, Refusal> {
+    pipe.filter(|_| status == 0).ok_or_else(|| {
+        Refusal::Failed(format!(
+            "macOS could not run the approved step ({status}); no further approval was requested"
+        ))
+    })
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn execution_failure_after_approval_never_allows_another_approval() {
-        for (status, has_pipe) in [(-60031, false), (-60031, true), (0, false)] {
-            assert!(matches!(
-                execution_started(status, has_pipe),
-                Err(Refusal::Failed(_))
-            ));
-        }
-        assert_eq!(execution_started(0, true), Ok(()));
-    }
-
-    #[test]
-    fn this_macos_still_has_the_call_that_starts_the_approved_step() {
-        assert!(execute().is_some());
-    }
-}
+mod tests;

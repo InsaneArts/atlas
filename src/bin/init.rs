@@ -1,18 +1,20 @@
 //! Terminal choices, progress and waiting for attended setup.
+use super::prompt;
+use atlas::onboarding::{close_attended, create_helper};
 use atlas::setup::{FULL_NAME, missing, validate_account_name as valid_account_name};
 use atlas::setup::{
-    close_leftovers, configure_helper, create_helper, first_login_setup, prepare_helper,
-    refresh_helper, restart_helper,
+    configure_helper, first_login_setup, prepare_helper, refresh_helper, restart_helper,
 };
 use atlas::{
     client::Client,
     config::{self, Config},
     error::{Code, Error, Result},
+    menubar::LoginItem,
     setup::{self, helper::LABEL},
     ui::{
         self,
         progress::{Spinner, done, heading, say, skipped},
-        prompt, style, text,
+        style, text,
     },
 };
 use serde_json::{Value, json};
@@ -133,14 +135,22 @@ async fn wait_for<T>(what: &str, mut ready: impl AsyncFnMut() -> Option<T>) -> R
 }
 
 /// The closing steps, which never fail a setup that worked: the menu bar at
-/// login, and teaching the installed agents. The menu bar is turned on at
-/// login only by the first setup (a later run leaves the person's choice
-/// alone), and only for the default settings, the ones the login item uses.
+/// login, and teaching the installed agents.
 fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
-    let default = config::installed_path().ok().as_deref() == Some(settings);
+    open_at_login(done_steps, settings);
+    teach_agents(done_steps)
+}
+
+/// Turn the menu bar on at login, only by the first setup (a later run
+/// leaves the person's choice alone) and only for the default settings,
+/// the ones the login item uses.
+fn open_at_login(done_steps: &mut Vec<Value>, settings: &Path) {
     // Until it is decided once (here, or by the person), never again after.
-    let first = !atlas::menubar::login_decided();
-    if first && !default {
+    if atlas::menubar::login_decided() {
+        return;
+    }
+
+    if config::installed_path().ok().as_deref() != Some(settings) {
         skipped(
             "Menu bar",
             &format!(
@@ -148,80 +158,76 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
                 text::tilde(settings)
             ),
         );
-    } else if first {
-        let status = atlas::menubar::login("status").unwrap_or_default();
-        if status["enabled"] == true {
-            atlas::menubar::decide_login();
-        } else if status["available"] == true {
-            match atlas::menubar::login("on") {
-                Ok(login) if login["enabled"] == true => {
-                    atlas::menubar::decide_login();
-                    done(
-                        "Menu bar",
-                        "opens at login (atlas menubar --login off turns it off)",
-                    );
-                    done_steps.push(json!({"step": "menubar", "login": login}));
-                }
-                _ => skipped(
-                    "Menu bar",
-                    "turn on Open Atlas at login in Atlas › Settings › General later",
-                ),
-            }
-        }
+        return;
     }
 
-    let agents = atlas::agents::status();
-    let found: Vec<atlas::agents::Agent> = agents["agents"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        // Only agents that answered and are not connected yet.
-        .filter(|agent| agent["installed"] == true && agent["connected"] == false)
-        .filter_map(|agent| {
-            agent["agent"]
-                .as_str()
-                .and_then(atlas::agents::Agent::named)
-        })
+    let status = atlas::menubar::login("status")
+        .map(|reply| LoginItem::decode(&reply))
+        .unwrap_or_default();
+    if status.enabled {
+        atlas::menubar::decide_login();
+    } else if status.available {
+        match atlas::menubar::login("on") {
+            Ok(login) if LoginItem::decode(&login).enabled => {
+                atlas::menubar::decide_login();
+                done(
+                    "Menu bar",
+                    "opens at login (atlas menubar --login off turns it off)",
+                );
+                done_steps.push(json!({"step": "menubar", "login": login}));
+            }
+            _ => skipped(
+                "Menu bar",
+                "turn on Open Atlas at login in Atlas › Settings › General later",
+            ),
+        }
+    }
+}
+
+/// Offer to connect the agents here that answered and are not connected
+/// yet, the Claude app beside them.
+fn teach_agents(done_steps: &mut Vec<Value>) -> Result<()> {
+    let atlas::agents::Unconnected { agents, app } = atlas::agents::unconnected();
+    let mut names: Vec<String> = agents
+        .iter()
+        .map(|agent| agent.display_name().to_owned())
         .collect();
-    // The Claude app is offered beside them when it is here and not yet
-    // connected.
-    let app = agents["agents"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .any(|agent| {
-            agent["agent"] == atlas::claude_app::ID
-                && agent["installed"] == true
-                && agent["connected"] == false
-        });
-    let mut names: Vec<&str> = found.iter().map(|agent| agent.display_name()).collect();
     if app {
-        names.push("the Claude app");
+        names.push("the Claude app".to_owned());
     }
     if !names.is_empty()
         && prompt::confirm(
-            &format!("Teach {} to use Atlas? (adds a plugin)", listed(&names)),
+            &format!(
+                "Teach {} to use Atlas? (adds a plugin)",
+                text::listed(&names)
+            ),
             true,
             "run atlas agents install later",
         )?
     {
         // Setup is already done; this step can only be skipped, never fail it.
-        let connected = {
+        let (ok, connected) = {
             let _spinner = Spinner::new("Connecting…");
-            atlas::agents::change_these(
-                &found,
+            let changed = atlas::agents::change_these(
+                &agents,
                 atlas::agents::Covering {
                     every_agent: false,
                     app,
                 },
                 atlas::agents::Change::Connect,
-            )
-            .unwrap_or_else(|error| json!({"ok": false, "error": error.error}))
+            );
+            match changed {
+                Ok(changed) => (changed.ok, changed.report),
+                Err(error) => (false, json!({"ok": false, "error": error.error})),
+            }
         };
-        if connected["ok"] == true {
+        if ok {
             done(
                 "Agents",
-                &format!("{} connected", atlas::doing::capitalized(&listed(&names))),
+                &format!(
+                    "{} connected",
+                    atlas::doing::capitalized(&text::listed(&names))
+                ),
             );
         } else {
             skipped(
@@ -234,15 +240,6 @@ fn finish(done_steps: &mut Vec<Value>, settings: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Names as a sentence lists them: "A", "A and B", "A, B and C".
-fn listed(names: &[&str]) -> String {
-    match names {
-        [] => String::new(),
-        [one] => (*one).to_owned(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
 }
 
 /// The closing lines: ready, and what to try.
@@ -307,6 +304,7 @@ fn mark_since_lock(step: &str) {
 
 /// Guide the person from an installed app to a ready helper.
 pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value> {
+    super::dispatch::as_yourself("init")?;
     if !ui::interactive() {
         return Err(problem("init is a guided setup; run it in a terminal"));
     }
@@ -391,7 +389,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 /// Adapt the account choice and configuration operation to terminal progress.
 fn helper_step(config_path: &Path) -> Result<(Config, setup::Account, setup::identity::Identity)> {
     let (config, helper, identity) = configure_helper(config_path, choose_helper, say)?;
-    if close_leftovers(helper.uid, Some(&identity), || {
+    if close_attended(helper.uid, Some(&identity), || {
         heading("A deleted account is still logged in");
         say(
             "  macOS kept a login open for an account that was deleted. Close it before you go on,\n  or the next login can stall.",
@@ -448,6 +446,18 @@ async fn daemon_answers_within(client: &Client, uid: u32, pause: Duration) -> bo
     false
 }
 
+/// Ask for administrator rights once in a run, to install the helper's job.
+fn job_rights(granted: &mut bool) -> Result<()> {
+    if !*granted {
+        administrator_rights(
+            "  macOS asks for your password once, to install the helper's background job.",
+        )?;
+        *granted = true;
+    }
+
+    Ok(())
+}
+
 /// Bring up a helper daemon that does not answer: the person signs the
 /// helper in, and (unless an earlier setup's job starts by itself) Atlas
 /// installs the helper's background job with administrator rights.
@@ -458,67 +468,17 @@ async fn start_helper(
     done_steps: &mut Vec<Value>,
     expected: &setup::identity::Identity,
 ) -> Result<()> {
-    let name = &helper.name;
     // Set up before: the helper's job is installed and starts by itself
     // once the helper signs in (after a restart, say). No password then.
     let installed = setup::migrate::settled(helper.uid);
-
-    let mut sudo_ready = false;
-    let admin = |sudo_ready: &mut bool| -> Result<()> {
-        if *sudo_ready {
-            return Ok(());
-        }
-
-        administrator_rights(
-            "  macOS asks for your password once, to install the helper's background job.",
-        )?;
-        *sudo_ready = true;
-
-        Ok(())
-    };
+    let mut rights = false;
 
     if !installed {
-        admin(&mut sudo_ready)?;
+        job_rights(&mut rights)?;
     }
 
-    let logged_in = || atlas::session::logged_in(helper.uid) == Some(true);
-    if !logged_in() {
-        // A helper never set up skips macOS's setup questions at its first
-        // login. Only a convenience: a refusal leaves them to the person,
-        // and the step says what came of it.
-        if !installed {
-            let step = match first_login_setup(client, helper, expected) {
-                Ok(reply) => json!({"step": "firstLogin", "answered": reply["answered"]}),
-                Err(error) => json!({"step": "firstLogin", "error": error.error}),
-            };
-            done_steps.push(step);
-        }
-
-        heading(&format!("Log in to {name} once"));
-
-        if installed {
-            say(&format!(
-                "  {name} is logged out (after a restart or a log-out). Switch to {name}, log in,\n  \
-                     then switch back here."
-            ));
-        } else {
-            say(&format!(
-                "  Switch to {name} and log in. If macOS asks you to set anything up, choose\n  \
-                     Set Up Later. If it asks about Accessibility or Screen Recording for Atlas,\n  \
-                     turn Atlas on. Then switch back here."
-            ));
-        }
-
-        offer_lock(name, helper.uid)?;
-
-        {
-            let _spinner = Spinner::new(format!(
-                "Waiting for {name} to log in… (Ctrl-C to stop; run atlas init again later)"
-            ));
-            wait_for("the helper to log in", async || logged_in().then_some(())).await?;
-        }
-
-        done(&format!("{name} logged in"), "");
+    if atlas::session::logged_in(helper.uid) != Some(true) {
+        log_in_once(client, helper, expected, installed, done_steps).await?;
     }
 
     let mut started = false;
@@ -532,41 +492,101 @@ async fn start_helper(
     }
 
     if !started {
-        admin(&mut sudo_ready)?;
-
-        // The rights may have lapsed during a long wait: ask again then.
-        if !setup::administrator_rights_current() {
-            say("  Your administrator rights expired while Atlas waited.");
-            attended(
-                "/usr/bin/sudo",
-                &["-v"],
-                "Administrator rights were not granted",
-            )?;
-        }
-
-        let spinner = Spinner::new("Installing the helper's background job…");
-        let log = prepare_helper(client, helper, expected).await?;
-
-        spinner.set("Starting the helper…");
-        let answered =
-            daemon_answers_within(client, config.helper_uid, Duration::from_secs(1)).await;
-        drop(spinner);
-        if answered {
-            mark_since_lock("answering");
-        }
-
-        if !answered {
-            return Err(problem(format!(
-                "The helper's background job was installed but did not start. Its log is \
-                     {} in {name}'s account; run atlas init again after checking it.",
-                log.display()
-            )));
-        }
-
-        done("Helper job", "installed and running");
+        job_rights(&mut rights)?;
+        install_job(client, config, helper, expected).await?;
         done_steps.push(json!({"step": "daemon", "label": LABEL}));
     }
 
+    Ok(())
+}
+
+/// Have the person log in to the helper, offering to lock the screen so
+/// they can switch to it, and wait until they have.
+async fn log_in_once(
+    client: &Client,
+    helper: &setup::Account,
+    expected: &setup::identity::Identity,
+    installed: bool,
+    done_steps: &mut Vec<Value>,
+) -> Result<()> {
+    let name = &helper.name;
+
+    // A helper never set up skips macOS's setup questions at its first
+    // login. Only a convenience: a refusal leaves them to the person,
+    // and the step says what came of it.
+    if !installed {
+        let step = match first_login_setup(client, helper, expected) {
+            Ok(reply) => json!({"step": "firstLogin", "answered": reply["answered"]}),
+            Err(error) => json!({"step": "firstLogin", "error": error.error}),
+        };
+        done_steps.push(step);
+    }
+
+    heading(&format!("Log in to {name} once"));
+
+    if installed {
+        say(&format!(
+            "  {name} is logged out (after a restart or a log-out). Switch to {name}, log in,\n  \
+                 then switch back here."
+        ));
+    } else {
+        say(&format!(
+            "  Switch to {name} and log in. If macOS asks you to set anything up, choose\n  \
+                 Set Up Later. If it asks about Accessibility or Screen Recording for Atlas,\n  \
+                 turn Atlas on. Then switch back here."
+        ));
+    }
+
+    offer_lock(name, helper.uid)?;
+
+    {
+        let _spinner = Spinner::new(format!(
+            "Waiting for {name} to log in… (Ctrl-C to stop; run atlas init again later)"
+        ));
+        wait_for("the helper to log in", async || {
+            (atlas::session::logged_in(helper.uid) == Some(true)).then_some(())
+        })
+        .await?;
+    }
+
+    done(&format!("{name} logged in"), "");
+    Ok(())
+}
+
+/// Install the helper's background job and wait for its daemon to answer.
+async fn install_job(
+    client: &Client,
+    config: &Config,
+    helper: &setup::Account,
+    expected: &setup::identity::Identity,
+) -> Result<()> {
+    // The rights may have lapsed during a long wait: ask again then.
+    if !setup::administrator_rights_current() {
+        say("  Your administrator rights expired while Atlas waited.");
+        attended(
+            "/usr/bin/sudo",
+            &["-v"],
+            "Administrator rights were not granted",
+        )?;
+    }
+
+    let spinner = Spinner::new("Installing the helper's background job…");
+    let log = prepare_helper(client, helper, expected).await?;
+
+    spinner.set("Starting the helper…");
+    let answered = daemon_answers_within(client, config.helper_uid, Duration::from_secs(1)).await;
+    drop(spinner);
+    if !answered {
+        return Err(problem(format!(
+            "The helper's background job was installed but did not start. Its log is \
+                 {} in {}'s account; run atlas init again after checking it.",
+            log.display(),
+            helper.name
+        )));
+    }
+
+    mark_since_lock("answering");
+    done("Helper job", "installed and running");
     Ok(())
 }
 

@@ -172,19 +172,6 @@ impl Lease {
         self.expire_at(now);
     }
 
-    /// Undo an acquire for `owner` that did not go through, unless `owner`
-    /// is no longer the live token, an input is in flight or a release has
-    /// begun: a late failure never ends a later viewer's control.
-    pub fn abandon_acquire(&mut self, owner: &str) {
-        self.abandon_acquire_at(owner, Instant::now());
-    }
-
-    fn abandon_acquire_at(&mut self, owner: &str, now: Instant) {
-        if self.require_at(owner, now).is_ok() && !self.inflight && !self.cleaning {
-            self.release_at(now);
-        }
-    }
-
     /// Begin ending control: the live or retired token, which `requested`
     /// must name when given, is taken and answered, and the lock stays
     /// held until [`Lease::end_release`]. None when there is nothing left
@@ -262,10 +249,10 @@ impl Lease {
 }
 
 /// A [`Lease`] as the viewer's tasks share it.
-pub type SharedLease = Arc<Mutex<Lease>>;
+pub(crate) type SharedLease = Arc<Mutex<Lease>>;
 
 /// Holds the controller flock until an acknowledged or uncertain operation settles.
-pub struct ActionPermit {
+pub(crate) struct ActionPermit {
     lease: SharedLease,
 }
 
@@ -278,7 +265,7 @@ impl ActionPermit {
     ///
     /// Refuses an invalid or expired token and another input already in flight. The returned
     /// permit retains exclusion through its operation.
-    pub async fn begin(lease: SharedLease, token: &str) -> Result<Self> {
+    pub(crate) async fn begin(lease: SharedLease, token: &str) -> Result<Self> {
         {
             let mut state = lease.lock().await;
             state.require(token)?;

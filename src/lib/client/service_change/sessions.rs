@@ -7,6 +7,7 @@ use crate::{
         reading::{SESSION_ROWS, SessionFacts, SessionReading, unrecorded},
         store::Store,
     },
+    process::State,
     session_view,
 };
 
@@ -72,7 +73,6 @@ pub(crate) fn service_blocker_with(
             "Atlas could not read every waiting command; a command may still be active.".into(),
         );
     };
-    let now_ms = u64::try_from(now / 1_000_000).unwrap_or(u64::MAX);
     let holder = client.controller.holder_note().filter(|note| {
         !(note.process.is_this_one() && note.session.as_ref().map(|key| key.as_str()) == own)
     });
@@ -81,9 +81,8 @@ pub(crate) fn service_blocker_with(
         agent_holds: false,
         now,
     };
-    let Some(activity) =
-        activity_log::checked_since(output, now_ms.saturating_sub(crate::time::ms(SERVICE_IDLE)))
-    else {
+    let since = milliseconds(now).saturating_sub(crate::time::ms(SERVICE_IDLE));
+    let Some(activity) = activity_log::checked_since(output, since) else {
         return Some(
             "Atlas could not read every activity row; another session may still be active.".into(),
         );
@@ -99,9 +98,8 @@ pub(crate) fn service_blocker_with(
         processes: Snapshot::default(),
     }
     .sample(output, sample);
-    let remains = |note: &crate::control::Note| {
-        reading.processes.state(note.process) != crate::process::State::Gone
-    };
+    let remains =
+        |note: &crate::control::Note| reading.processes.state(note.process) != State::Gone;
     reading.holder = reading.holder.filter(remains);
     reading.waiting.retain(remains);
     reading.running.retain(remains);
@@ -117,12 +115,15 @@ fn blocker(
     recovering_own: bool,
     activity: &[activity_log::Row],
 ) -> Option<String> {
-    let now_ms = u64::try_from(facts.now / 1_000_000).unwrap_or(u64::MAX);
+    let now_ms = milliseconds(facts.now);
+    let recent = |last_seen: u64| now_ms.saturating_sub(last_seen) <= crate::time::ms(SERVICE_IDLE);
+    let active = |name: &str| format!("{name} is active in the helper.");
+
     if reading
         .holder
         .iter()
         .chain(&reading.running)
-        .any(|note| reading.processes.state(note.process) == crate::process::State::Unknown)
+        .any(|note| reading.processes.state(note.process) == State::Unknown)
     {
         return Some(
             "Atlas could not check whether a command is still active in the helper.".into(),
@@ -139,54 +140,54 @@ fn blocker(
             || session_view::TERMINAL.to_owned(),
             |key| name_of(&names, key, note.host),
         );
-        return Some(format!("{name} is active in the helper."));
+        return Some(active(&name));
     }
-    reading
-        .live(facts)
-        .into_iter()
-        .find(|listed| {
-            let key = (!listed.key.is_empty()).then_some(listed.key.as_str());
-            listed.shown.holds_helper
-                || listed.running_command
-                || (!recovering_own
-                    && key != own
-                    && listed.ended.is_none()
-                    && now_ms.saturating_sub(listed.last_seen) <= crate::time::ms(SERVICE_IDLE))
-        })
-        .map(|listed| {
-            let name = &listed.name;
-            if listed.running_command {
-                return format!("{name} has a command still running in the helper.");
-            }
-            format!("{name} is active in the helper.")
-        })
-        .or_else(|| {
-            // An unknown or budget-limited host sample cannot establish idle.
-            // Display relevance may omit it, but recent work still defers replacement.
-            if recovering_own {
-                return None;
-            }
-            let seen = reading.seen.iter().find(|seen| {
-                let record = &seen.record;
-                Some(record.key.as_str()) != own
-                    && record.ended.is_none()
-                    && now_ms.saturating_sub(record.last_seen) <= crate::time::ms(SERVICE_IDLE)
-                    && record.host_process.is_some_and(|process| {
-                        reading.processes.state(process) == crate::process::State::Unknown
-                    })
-            })?;
-            let names = names_with_left(reading.seen.iter().map(|seen| &seen.record), [], []);
-            let name = name_of(&names, &seen.record.key, Some(seen.record.host));
-            Some(format!("{name} is active in the helper."))
-        })
-        .or_else(|| {
-            // The display omits unnamed rows older than the first named row.
-            // Service replacement must still respect their recent activity.
-            (!recovering_own
-                && own.is_some()
-                && activity
-                    .iter()
-                    .any(|row| row.session.is_none() && row.actor() != "viewer"))
-            .then(|| format!("{} is active in the helper.", session_view::TERMINAL))
-        })
+
+    let busy = reading.live(facts).into_iter().find(|listed| {
+        let key = (!listed.key.is_empty()).then_some(listed.key.as_str());
+        listed.shown.holds_helper
+            || listed.running_command
+            || (!recovering_own && key != own && listed.ended.is_none() && recent(listed.last_seen))
+    });
+    if let Some(listed) = busy {
+        let name = &listed.name;
+        return Some(if listed.running_command {
+            format!("{name} has a command still running in the helper.")
+        } else {
+            active(name)
+        });
+    }
+    if recovering_own {
+        return None;
+    }
+
+    // An unknown or budget-limited host sample cannot establish idle.
+    // Display relevance may omit it, but recent work still defers replacement.
+    let unsampled = reading.seen.iter().find(|seen| {
+        let record = &seen.record;
+        Some(record.key.as_str()) != own
+            && record.ended.is_none()
+            && recent(record.last_seen)
+            && record
+                .host_process
+                .is_some_and(|process| reading.processes.state(process) == State::Unknown)
+    });
+    if let Some(seen) = unsampled {
+        let names = names_with_left(reading.seen.iter().map(|seen| &seen.record), [], []);
+        let name = name_of(&names, &seen.record.key, Some(seen.record.host));
+        return Some(active(&name));
+    }
+
+    // The display omits unnamed rows older than the first named row.
+    // Service replacement must still respect their recent activity.
+    (own.is_some()
+        && activity
+            .iter()
+            .any(|row| row.session.is_none() && row.actor() != "viewer"))
+    .then(|| active(session_view::TERMINAL))
+}
+
+/// `nanoseconds` since 1970 in milliseconds, as session records keep time.
+fn milliseconds(nanoseconds: u128) -> u64 {
+    u64::try_from(nanoseconds / 1_000_000).unwrap_or(u64::MAX)
 }

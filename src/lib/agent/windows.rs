@@ -2,10 +2,10 @@
 //! through its daemon, listed, and waited for until one appears or
 //! none is left.
 use crate::{
-    client::{Client, Verified, WINDOW_LOOKUP as PROBE_LIMIT},
+    client::{Client, WINDOW_LOOKUP},
     error::{Code, Error, Result},
     name::same_text,
-    screen::windows::{Shown, Window},
+    screen::windows::Window,
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -39,35 +39,14 @@ impl WindowFilter {
                     .is_some_and(|own| own.to_lowercase().contains(&title.to_lowercase()))
             })
     }
-}
 
-/// The window list alone, with the daemon read bounded by `limit`.
-async fn window_list(client: &Client, limit: Duration) -> Result<Vec<Window>> {
-    Ok(client.windows_in(None, false, limit).await?.windows)
-}
-
-/// The window list and where the Dock takes clicks, to judge a point by.
-pub(super) async fn pointer_view(client: &Client) -> Result<Shown> {
-    client.windows_in(None, true, PROBE_LIMIT).await
-}
-
-/// The windows and process identities read together inside the helper.
-pub(super) async fn window_snapshot(
-    client: &Client,
-    verified: &Verified,
-    dock: DockRead,
-) -> Result<Shown> {
-    client
-        .windows_in(Some(verified), matches!(dock, DockRead::Read), PROBE_LIMIT)
-        .await
-}
-
-/// Whether a window read also reads where the Dock takes clicks, which
-/// only a check of a point needs.
-#[derive(Clone, Copy)]
-pub(super) enum DockRead {
-    Skip,
-    Read,
+    /// The windows among `windows` this filter selects.
+    fn selected(&self, windows: Vec<Window>) -> Vec<Window> {
+        windows
+            .into_iter()
+            .filter(|window| self.matches(window))
+            .collect()
+    }
 }
 
 /// List the helper windows selected by `filter`, retaining their observed routing facts.
@@ -79,18 +58,16 @@ pub(super) enum DockRead {
 pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
     let windows = if client.host_session.is_some() {
         let verified = client.verify().await?;
-        let snapshot = window_snapshot(client, &verified, DockRead::Read).await?;
+        let snapshot = client
+            .windows_in(Some(&verified), true, WINDOW_LOOKUP)
+            .await?;
         client.remember_look(&verified, Some(&snapshot))?;
         snapshot.windows
     } else {
-        window_list(client, PROBE_LIMIT).await?
+        client.windows_in(None, false, WINDOW_LOOKUP).await?.windows
     };
-    let matching: Vec<_> = windows
-        .into_iter()
-        .filter(|window| filter.matches(window))
-        .collect();
 
-    Ok(json!({ "ok": true, "windows": matching }))
+    Ok(json!({ "ok": true, "windows": filter.selected(windows) }))
 }
 
 /// Poll the window list until a matching window appears (or, with `gone`,
@@ -123,16 +100,13 @@ pub async fn wait(
         // timeout is exactly one observation.
         let remaining = deadline.saturating_duration_since(Instant::now());
         let budget = if timeout.is_zero() {
-            PROBE_LIMIT
+            WINDOW_LOOKUP
         } else {
             probe_budget(remaining)
         };
 
-        let matching: Vec<_> = window_list(client, budget)
-            .await?
-            .into_iter()
-            .filter(|window| filter.matches(window))
-            .collect();
+        let listed = client.windows_in(None, false, budget).await?;
+        let matching = filter.selected(listed.windows);
 
         if matching.is_empty() == gone {
             return Ok(json!({

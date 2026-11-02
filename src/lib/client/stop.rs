@@ -4,14 +4,14 @@
 //! under way hears of it from either side's saved marker.
 use super::{Actor, Client};
 use crate::{
-    daemon::protocol::JobReply,
     error::{Code, Error, Result},
+    protocol::JobReply,
     session::{HOLD, has_capability},
     transport::Transport,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 impl Client {
     /// Stop agents in the helper (`on`), or let them go on. Stopping ends
@@ -77,10 +77,9 @@ impl Client {
                 };
                 let left = jobs.refused.len() + jobs.unknown.len() + jobs.unresolved.len();
                 let warning = (left > 0).then(|| {
+                    let (plural, them) = if left == 1 { ("", "it") } else { ("s", "them") };
                     format!(
-                        "The helper did not stop {}, as it could not tell they are still Atlas's; atlas job list --all shows {}",
-                        crate::ui::text::count(left, "background job"),
-                        if left == 1 { "it" } else { "them" }
+                        "The helper did not stop {left} background job{plural}, as it could not tell they are still Atlas's; atlas job list --all shows {them}"
                     )
                 });
                 (Some(json!(jobs)), warning)
@@ -120,13 +119,7 @@ impl Client {
 
         let unreachable = |why: &str| {
             if !on {
-                if !matches!(
-                    self.config
-                        .input_socket
-                        .with_extension("stopped")
-                        .try_exists(),
-                    Ok(false)
-                ) {
+                if !matches!(self.stop_marker().try_exists(), Ok(false)) {
                     return Err(Error::new(
                         Code::Stopped,
                         format!("{why} Recover input before agents can resume."),
@@ -180,10 +173,9 @@ impl Client {
 
     /// Once the person stops agents: either side's saved marker appears.
     pub(super) async fn stopped_while_running(&self) {
-        let marker = self.config.input_socket.with_extension("stopped");
         loop {
             tokio::time::sleep(Duration::from_millis(300)).await;
-            if marker.exists() || self.controller.stop_noted() {
+            if self.stop_marked() {
                 return;
             }
         }
@@ -217,6 +209,11 @@ impl Client {
     /// Whether a Stop is saved on either side: the input service's own
     /// marker, or the person's note.
     pub(crate) fn stop_marked(&self) -> bool {
-        self.config.input_socket.with_extension("stopped").exists() || self.controller.stop_noted()
+        self.stop_marker().exists() || self.controller.stop_noted()
+    }
+
+    /// Where the input service saves a Stop.
+    fn stop_marker(&self) -> PathBuf {
+        self.config.input_socket.with_extension("stopped")
     }
 }

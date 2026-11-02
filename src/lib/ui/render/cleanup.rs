@@ -1,7 +1,7 @@
 //! Views of what a task installs and cleans up: an install, a cleanup's
 //! preview, the steps a run took, and what was kept on purpose apart from
 //! what failed.
-use super::{Rendered, failed, style, text};
+use super::{Rendered, beside_failure, items, printable_strings, style, text};
 use serde_json::Value;
 
 /// A cleanup's preview or run: one line per step, then the apps opened by
@@ -26,10 +26,7 @@ pub(super) fn cleanup(value: &Value) -> Rendered {
         lines.extend(steps.iter().map(step));
     }
 
-    let left: Vec<String> = value["left"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let left: Vec<String> = items(&value["left"])
         .filter_map(|left| left["app"].as_str())
         .map(|app| text::printable(app).into_owned())
         .collect();
@@ -40,14 +37,7 @@ pub(super) fn cleanup(value: &Value) -> Rendered {
         )));
     }
 
-    let out = lines.join("\n");
-    match failed(value) {
-        Some(failure) => Rendered {
-            out,
-            err: failure.err,
-        },
-        None => Rendered::out(out),
-    }
+    beside_failure(lines.join("\n"), value)
 }
 
 /// An app installed into the helper: where it went, whether it opens by
@@ -78,10 +68,7 @@ fn step(step: &Value) -> String {
     let n = step["n"].as_u64().unwrap_or(0);
     let what = match step["do"].as_str() {
         Some("quit") => {
-            let apps: Vec<String> = step["apps"]
-                .as_array()
-                .into_iter()
-                .flatten()
+            let apps: Vec<String> = items(&step["apps"])
                 .map(|app| {
                     format!(
                         "{} ({})",
@@ -97,13 +84,7 @@ fn step(step: &Value) -> String {
             }
         }
         Some("undo-plan") => {
-            let targets: Vec<String> = step["targets"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(|target| text::printable(target).into_owned())
-                .collect();
+            let targets = printable_strings(&step["targets"]);
             let id = step["planId"].as_str().unwrap_or("?");
             if targets.is_empty() {
                 format!("Roll back copy {id} into the helper")
@@ -161,7 +142,7 @@ fn step(step: &Value) -> String {
         _ => String::new(),
     };
     let mut line = format!("{mark} {n}. {what}{}", style::dim(said));
-    for file in step["notKept"].as_array().into_iter().flatten() {
+    for file in items(&step["notKept"]) {
         let source = match file["source"].as_str().filter(|source| !source.is_empty()) {
             Some(source) => text::printable(source).into_owned(),
             None => "files a collection whose receipt is gone kept".to_owned(),

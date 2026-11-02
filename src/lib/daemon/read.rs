@@ -11,8 +11,8 @@
 //! a login nobody watches. No link is followed anywhere in the path. The
 //! session is checked again before the file is opened and between parts,
 //! so nothing is read once the helper has come on screen.
-use super::protocol::{FileIdentity, READ_RANGE_MAX, ReadRefusal, ReadRequest, failure};
 use crate::error::Code;
+use crate::protocol::{FileIdentity, READ_RANGE_MAX, ReadRefusal, ReadRequest, failure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -74,10 +74,11 @@ impl Places {
         })
     }
 
-    fn roots(&self) -> Vec<&Path> {
-        let mut roots = vec![self.home.as_path(), Path::new(SHARED_TEMPORARY)];
-        roots.extend(self.temporary.as_deref());
-        roots
+    fn contains(&self, path: &Path) -> bool {
+        let inside = |root: &Path| path.starts_with(root) && path != root;
+        inside(&self.home)
+            || inside(Path::new(SHARED_TEMPORARY))
+            || self.temporary.as_deref().is_some_and(inside)
     }
 }
 
@@ -120,18 +121,8 @@ fn own_temporary() -> Option<PathBuf> {
 /// whether the client still takes them; once it does not, nothing more is
 /// read. `guard` says whether the helper may still be read, as before the
 /// request was taken: it is asked before the file is opened, before each
-/// part and before the digest, and its refusal is the reply.
-pub(super) fn read(
-    request: &ReadRequest,
-    places: &Places,
-    uid: u32,
-    guard: &dyn Fn() -> Result<(), Value>,
-    events: &mut dyn FnMut(Value) -> bool,
-) -> Value {
-    read_at(request, places, uid, guard, events, SystemTime::now())
-}
-
-/// [`read`] as of `now`, which decides whether a file is still.
+/// part and before the digest, and its refusal is the reply. `now` decides
+/// whether a file is still.
 pub(crate) fn read_at(
     request: &ReadRequest,
     places: &Places,
@@ -159,6 +150,12 @@ impl From<ReadRefusal> for Stop {
     }
 }
 
+impl From<Value> for Stop {
+    fn from(refusal: Value) -> Self {
+        Self::Guard(refusal)
+    }
+}
+
 fn served(
     request: &ReadRequest,
     places: &Places,
@@ -168,7 +165,7 @@ fn served(
     now: SystemTime,
 ) -> Result<Value, Stop> {
     let path = locate(&request.path, places)?;
-    guard().map_err(Stop::Guard)?;
+    guard()?;
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK)
@@ -184,7 +181,7 @@ fn served(
     let identity = readable(
         &metadata,
         &real,
-        &places.roots(),
+        places,
         uid,
         request.expect.as_ref(),
         request.max_size,
@@ -207,7 +204,7 @@ fn served(
     });
 
     if request.digest {
-        guard().map_err(Stop::Guard)?;
+        guard()?;
         reply["sha256"] = json!(digest(&file, identity.size, guard)?);
         reply["length"] = json!(0);
     } else {
@@ -224,7 +221,7 @@ fn served(
     if identity_of(&after) != identity {
         return Err(ReadRefusal::Changing.into());
     }
-    guard().map_err(Stop::Guard)?;
+    guard()?;
     Ok(reply)
 }
 
@@ -263,12 +260,7 @@ fn locate(path: &str, places: &Places) -> Result<PathBuf, ReadRefusal> {
         refuse_inside(inside, home)?;
         return Ok(located);
     }
-    let shared = located.starts_with(SHARED_TEMPORARY) && located != Path::new(SHARED_TEMPORARY);
-    let own = places
-        .temporary
-        .as_deref()
-        .is_some_and(|temporary| located.starts_with(temporary) && located != temporary);
-    if shared || own {
+    if places.contains(&located) {
         Ok(located)
     } else {
         Err(ReadRefusal::Outside)
@@ -358,21 +350,18 @@ fn opened(error: &std::io::Error) -> ReadRefusal {
 
 /// Whether a file opened at `real`, as `metadata` says it is, may be read
 /// now, and what it is: a regular file whose contents are here, of the
-/// account `uid`, in one of `roots`, no larger than `max_size`, and either
+/// account `uid`, in one of `places`, no larger than `max_size`, and either
 /// what an earlier part found (`expect`) or untouched for two seconds.
 fn readable(
     metadata: &Metadata,
     real: &Path,
-    roots: &[&Path],
+    places: &Places,
     uid: u32,
     expect: Option<&FileIdentity>,
     max_size: u64,
     now: SystemTime,
 ) -> Result<FileIdentity, ReadRefusal> {
-    if !roots
-        .iter()
-        .any(|root| real.starts_with(root) && real != *root)
-    {
+    if !places.contains(real) {
         return Err(ReadRefusal::Outside);
     }
     if !metadata.is_file() {
@@ -429,7 +418,7 @@ fn send(
     let mut buffer = vec![0_u8; CHUNK];
     let mut sent = 0;
     while sent < length {
-        guard().map_err(Stop::Guard)?;
+        guard()?;
         let want = usize::try_from(length - sent).map_or(CHUNK, |left| left.min(CHUNK));
         let mut filled = 0;
         while filled < want {
@@ -458,7 +447,7 @@ fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Resu
     let mut buffer = vec![0_u8; 1024 * 1024];
     let mut read = 0;
     while read < size {
-        guard().map_err(Stop::Guard)?;
+        guard()?;
         let count = file
             .read_at(&mut buffer, read)
             .map_err(|_| ReadRefusal::Unreadable)?;

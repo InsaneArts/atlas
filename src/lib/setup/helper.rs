@@ -2,15 +2,11 @@
 //! Every action inspects before it acts, fails closed when inspection fails,
 //! and is safe to repeat. Plists are only moved into the private backup
 //! directory, never deleted, and only when their bytes are the expected ones.
-use super::account_with_uid;
+use super::{Account, account_with_uid, identity::Identity, problem};
 use crate::{
-    acl::Acl,
+    acl::{acl_lines, acl_policy},
     digest::file_sha256,
     error::{Error, Result},
-};
-use crate::{
-    client::Client,
-    setup::{self, executor::setup_transaction_held},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -26,8 +22,8 @@ use std::{
 /// Private Atlas directory in the helper home and its entries.
 pub(crate) const ROOT: &str = ".atlas";
 /// Where the helper daemon's socket lives.
-pub(crate) const DAEMON: &str = "helper";
-pub(crate) const INPUT: &str = "input";
+const DAEMON: &str = "helper";
+const INPUT: &str = "input";
 const LOGS: &str = "logs";
 const BACKUP: &str = "backup";
 /// Label of the managed LaunchAgent running Atlas's own helper daemon.
@@ -41,6 +37,23 @@ pub(crate) struct Agent {
     pub(crate) uid: u32,
     pub(crate) controller_uid: u32,
     pub(crate) socket: PathBuf,
+}
+
+impl Agent {
+    /// The managed job running `program` for `controller_uid` in `layout`.
+    pub(crate) fn managed(layout: &Layout, program: PathBuf, controller_uid: u32) -> Self {
+        Self {
+            label: LABEL.to_owned(),
+            program,
+            uid: layout.uid,
+            controller_uid,
+            socket: layout.socket(),
+        }
+    }
+
+    pub(crate) fn plist_sha256(&self, logs: &Path) -> String {
+        text_sha256(&plist(self, logs))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,9 +111,37 @@ impl Request {
             Self::Install { agent } => agent.uid,
         }
     }
-}
 
-use super::problem;
+    /// Whether running this needs an executor claim: everything but a look.
+    pub(crate) fn requires_claim(&self) -> bool {
+        match self {
+            Self::Inspect { .. } => false,
+            Self::Prepare { .. }
+            | Self::Install { .. }
+            | Self::Retire { .. }
+            | Self::CheckRetire { .. }
+            | Self::Restore { .. }
+            | Self::FirstLogin { .. }
+            | Self::ForgetOpener { .. }
+            | Self::Kickstart { .. } => true,
+        }
+    }
+
+    /// Whether the acceptance worker may run this for the requesting account.
+    pub(crate) fn allowed_in_acceptance(&self) -> bool {
+        match self {
+            Self::FirstLogin { .. } => false,
+            Self::Inspect { .. }
+            | Self::Prepare { .. }
+            | Self::Install { .. }
+            | Self::Retire { .. }
+            | Self::CheckRetire { .. }
+            | Self::Restore { .. }
+            | Self::ForgetOpener { .. }
+            | Self::Kickstart { .. } => true,
+        }
+    }
+}
 
 /// A refusal that changed nothing, as the worker reports it: `unchanged`
 /// tells the caller it is certain, so no pending marker waits on it.
@@ -108,9 +149,54 @@ fn refused(message: impl Into<String>) -> Value {
     json!({ "ok": false, "code": "setup", "error": message.into(), "unchanged": true })
 }
 
+/// Why a finished worker's reply does not acknowledge its request.
+#[derive(Debug)]
+pub(crate) enum Unfinished {
+    /// It printed no JSON (with the decoding failure), or only null.
+    Silent(Option<serde_json::Error>),
+    /// A refusal it says changed nothing, so the outcome is certain.
+    Unchanged(Option<String>),
+    /// Any other reply: it may have changed state part way.
+    Uncertain(Option<String>),
+}
+
+impl Unfinished {
+    pub(crate) fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Silent(_) => None,
+            Self::Unchanged(why) | Self::Uncertain(why) => why.as_deref(),
+        }
+    }
+
+    /// `error`, keeping the decoding failure behind a silent worker.
+    pub(crate) fn behind(self, error: Error) -> Error {
+        match self {
+            Self::Silent(Some(cause)) => error.with_source(cause),
+            Self::Silent(None) | Self::Unchanged(_) | Self::Uncertain(_) => error,
+        }
+    }
+}
+
+/// A worker's reply, decoded once: `Ok` only when it says `ok: true`. The
+/// result fields stay in the reply, each action's own.
+pub(crate) fn acknowledged(reply: Value) -> std::result::Result<Value, Unfinished> {
+    if reply["ok"] == true {
+        return Ok(reply);
+    }
+
+    let why = reply["error"].as_str().map(str::to_owned);
+    Err(if reply.is_null() {
+        Unfinished::Silent(None)
+    } else if reply["ok"] == false && reply["unchanged"] == true {
+        Unfinished::Unchanged(why)
+    } else {
+        Unfinished::Uncertain(why)
+    })
+}
+
 /// launchd labels and account names stay within a conservative charset; they
 /// become file names and launchctl service targets.
-pub(crate) fn valid_name(name: &str) -> bool {
+fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
         && !name.starts_with(['.', '-'])
@@ -137,11 +223,20 @@ fn require_sha256(value: &str) -> Result<()> {
     }
 }
 
-/// Escape text for a plist `<string>`.
 pub(super) fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+/// The common XML envelope; callers own the dictionary's exact entries.
+pub(super) fn document(body: &str) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+         <plist version=\"1.0\">\n<dict>\n{body}</dict>\n</plist>\n"
+    )
 }
 
 /// The LaunchAgent definition that runs the helper daemon `agent` describes.
@@ -162,27 +257,21 @@ pub(crate) fn plist(agent: &Agent, logs: &Path) -> String {
     .collect::<String>();
     let log = logs.join(format!("{}.log", agent.label));
 
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
-         \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-         <plist version=\"1.0\">\n<dict>\n\
-         \t<key>Label</key>\n\t{label}\n\
+    document(&format!(
+        "\t<key>Label</key>\n\t{label}\n\
          \t<key>ProgramArguments</key>\n\t<array>\n{arguments}\t</array>\n\
          \t<key>RunAtLoad</key>\n\t<true/>\n\
          \t<key>KeepAlive</key>\n\t<dict>\n\t\t<key>SuccessfulExit</key>\n\t\t<false/>\n\t</dict>\n\
          \t<key>LimitLoadToSessionType</key>\n\t<string>Aqua</string>\n\
          \t<key>ProcessType</key>\n\t<string>Interactive</string>\n\
          \t<key>StandardOutPath</key>\n\t{log}\n\
-         \t<key>StandardErrorPath</key>\n\t{log}\n\
-         </dict>\n</plist>\n",
+         \t<key>StandardErrorPath</key>\n\t{log}\n",
         label = string(&agent.label),
         log = string(&log.to_string_lossy()),
-    )
+    ))
 }
 
-/// SHA-256 of text, as recorded for plists.
-pub(crate) fn text_sha256(text: &str) -> String {
+pub(super) fn text_sha256(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
@@ -235,7 +324,6 @@ impl Layout {
         self.root().join(DAEMON)
     }
 
-    /// The input service's socket, which the configuration names.
     pub(crate) fn input_socket(&self) -> PathBuf {
         self.root().join(INPUT).join("input.sock")
     }
@@ -246,7 +334,6 @@ impl Layout {
         self.input_socket().with_extension("stopped")
     }
 
-    /// The managed daemon's socket.
     pub(crate) fn socket(&self) -> PathBuf {
         self.daemon().join(format!("{}.sock", self.uid))
     }
@@ -271,15 +358,18 @@ impl Layout {
 /// What a request checks of its own account before it does anything.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Guard {
-    /// The required identity, recorded or established by legacy provenance.
-    pub account: Option<super::identity::Identity>,
+    /// The required identity, as recorded.
+    pub account: Option<Identity>,
     /// The account must be logged out: no loginwindow and no Dock.
     pub logged_out: bool,
 }
 
+/// An account as directory services show it, and its persistent identity.
+type Observed = (Account, Option<Identity>);
+
 /// Read the account, its home, and its persistent identity.
 /// A changed directory mapping is refused, rather than joining two accounts' facts.
-fn observe(uid: u32) -> Result<(super::Account, Option<super::identity::Identity>)> {
+fn observe(uid: u32) -> Result<Observed> {
     let account = account_with_uid(uid)?.ok_or_else(|| problem("Helper account not found"))?;
     let identity = super::identity::current(&account)
         .ok_or_else(|| problem("macOS could not read the helper's account identity"))?;
@@ -293,14 +383,14 @@ fn observe(uid: u32) -> Result<(super::Account, Option<super::identity::Identity
 /// processes once more. No identity or home captured before the wait is trusted.
 fn checked_account(
     guard: &Guard,
-    mut read: impl FnMut() -> Result<(super::Account, Option<super::identity::Identity>)>,
+    mut read: impl FnMut() -> Result<Observed>,
     wait: impl FnOnce() -> bool,
     out_now: impl FnOnce() -> bool,
-) -> Result<super::Account> {
+) -> Result<Account> {
     let expected = guard.account.as_ref().ok_or_else(|| {
         problem("setup-helper requires an expected account identity; nothing was changed")
     })?;
-    let check = |account: &super::Account, identity: &Option<super::identity::Identity>| {
+    let check = |account: &Account, identity: &Option<Identity>| {
         if identity.as_ref() != Some(expected)
             || account.uid != expected.uid
             || account.name != expected.name
@@ -339,12 +429,13 @@ fn checked_account(
 /// executor claim.
 pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
     let request: Request = serde_json::from_str(request)?;
+    let uid = nix::unistd::getuid().as_raw();
     run_guarded_with(
         request,
         guard,
-        || observe(nix::unistd::getuid().as_raw()),
-        || crate::session::confirm_gone(&[nix::unistd::getuid().as_raw()]),
-        || crate::session::logged_out(nix::unistd::getuid().as_raw()) == Some(true),
+        || observe(uid),
+        || crate::session::confirm_gone(&[uid]),
+        || crate::session::logged_out(uid) == Some(true),
         execute,
     )
 }
@@ -352,7 +443,7 @@ pub fn run_guarded(request: &str, guard: &Guard) -> Result<Value> {
 fn run_guarded_with(
     request: Request,
     guard: &Guard,
-    read: impl FnMut() -> Result<(super::Account, Option<super::identity::Identity>)>,
+    read: impl FnMut() -> Result<Observed>,
     wait: impl FnOnce() -> bool,
     out_now: impl FnOnce() -> bool,
     execute: impl FnOnce(Request, &Layout) -> Result<Value>,
@@ -395,32 +486,93 @@ fn execute(request: Request, layout: &Layout) -> Result<Value> {
             sha256,
             missing_ok,
             ..
-        } => {
-            retirement_with(layout, &label, &sha256, missing_ok, || job(layout, &label))?;
-            Ok(json!({"ok": true}))
-        }
+        } => check_retire(layout, &label, &sha256, missing_ok),
         Request::Restore { label, sha256, .. } => restore(layout, &label, &sha256),
         Request::FirstLogin { opener, .. } => super::first_login::first_login(layout, opener),
         Request::ForgetOpener { .. } => super::first_login::forget_opener(layout),
-        Request::Kickstart { uid } => {
-            layout.check()?;
-            let output = Command::new("/bin/launchctl")
-                .args(["kickstart", &format!("gui/{uid}/{LABEL}")])
-                .output()?;
-            if !output.status.success() {
-                return Err(
-                    problem("The helper job did not start; reopen Atlas in the helper").uncertain(),
-                );
-            }
-            Ok(json!({"ok":true}))
-        }
+        Request::Kickstart { uid } => kickstart(layout, uid),
     }
+}
+
+/// Start the managed job launchd has not started on its own.
+fn kickstart(layout: &Layout, uid: u32) -> Result<Value> {
+    layout.check()?;
+    let output = Command::new("/bin/launchctl")
+        .args(["kickstart", &format!("gui/{uid}/{LABEL}")])
+        .output()?;
+    if !output.status.success() {
+        return Err(
+            problem("The helper job did not start; reopen Atlas in the helper").uncertain(),
+        );
+    }
+    Ok(json!({"ok":true}))
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Job {
     Absent,
     Loaded { pid: Option<u32>, path: PathBuf },
+}
+
+/// The worker's inspection projection. Missing and mistyped facts remain unknown;
+/// decoding from Value retains its last-member-wins compatibility policy.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct JobReport {
+    pub(crate) loaded: Option<bool>,
+    pub(crate) pid: Option<u64>,
+    pub(crate) path: Option<String>,
+    pub(crate) plist: Option<String>,
+    pub(crate) sha256: Option<String>,
+    pub(crate) definition: Definition,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Definition {
+    Absent,
+    Regular,
+    Other,
+}
+
+impl From<&Value> for JobReport {
+    fn from(value: &Value) -> Self {
+        let text = |key: &str| value[key].as_str().map(str::to_owned);
+        Self {
+            loaded: value["loaded"].as_bool(),
+            pid: value["pid"].as_u64(),
+            path: text("path"),
+            plist: text("plist"),
+            sha256: text("plistSha256"),
+            definition: match value["plistKind"].as_str() {
+                Some("absent") => Definition::Absent,
+                Some("regular") => Definition::Regular,
+                _ => Definition::Other,
+            },
+        }
+    }
+}
+
+impl JobReport {
+    /// Whether its definition is a file another version of Atlas wrote, not
+    /// the `expected` one.
+    pub(crate) fn outdated(&self, expected: &str) -> bool {
+        match self.definition {
+            Definition::Regular => self.sha256.as_deref() != Some(expected),
+            Definition::Absent | Definition::Other => false,
+        }
+    }
+
+    pub(crate) fn defined_at(&self, path: &Path) -> bool {
+        self.path.as_deref() == Some(&*path.to_string_lossy())
+    }
+
+    /// Whether launchd runs it from the regular definition in its place.
+    pub(crate) fn running(&self) -> bool {
+        self.loaded == Some(true)
+            && self.pid.is_some_and(|pid| pid > 1)
+            && self.path.is_some()
+            && self.path == self.plist
+            && self.definition == Definition::Regular
+    }
 }
 
 /// Parse `launchctl print` for a job: its pid, if running, and the definition
@@ -475,14 +627,17 @@ pub(crate) fn job_pid(layout: &Layout, label: &str) -> Option<u32> {
     }
 }
 
-fn launchctl(arguments: &[&str]) -> Result<()> {
-    let output = Command::new("/bin/launchctl").args(arguments).output()?;
+fn launchctl(operation: &str, arguments: &[&str]) -> Result<()> {
+    let output = Command::new("/bin/launchctl")
+        .arg(operation)
+        .args(arguments)
+        .output()?;
     if output.status.success() {
         Ok(())
     } else {
         Err(problem(format!(
             "launchctl {} failed: {}",
-            arguments[0],
+            operation,
             String::from_utf8_lossy(&output.stderr).trim()
         )))
     }
@@ -509,7 +664,6 @@ fn wait_for<T>(
     }
 }
 
-/// A loaded job's pid and definition path.
 fn as_loaded(job: Job) -> Option<(Option<u32>, PathBuf)> {
     match job {
         Job::Loaded { pid, path } => Some((pid, path)),
@@ -569,44 +723,6 @@ fn inspect(layout: &Layout, labels: &[String]) -> Result<Value> {
     }
 
     Ok(json!({ "ok": true, "home": layout.home, "jobs": jobs }))
-}
-
-/// ACL rights a controller entry may carry: traversal only, no inheritance.
-fn search_only(rights: &str) -> bool {
-    rights
-        .split(',')
-        .all(|right| matches!(right, "search" | "execute"))
-}
-
-/// Check an ACL against the policy: shared directories may hold one
-/// search-only allow entry for `controller`; private ones hold none. Returns
-/// whether the controller entry is present; anything else is refused.
-pub(crate) fn acl_policy(
-    lines: &[String],
-    controller: Option<u32>,
-) -> std::result::Result<bool, String> {
-    let mut granted = false;
-
-    for line in lines {
-        let fields: Vec<&str> = line.split(':').collect();
-        match (fields.as_slice(), controller) {
-            (["user", _, _, id, "allow", rights], Some(controller))
-                if id.parse() == Ok(controller) && search_only(rights) && !granted =>
-            {
-                granted = true;
-            }
-            _ => return Err(format!("unexpected access entry {line}")),
-        }
-    }
-
-    Ok(granted)
-}
-
-pub(crate) fn acl_lines(path: &Path) -> Result<Vec<String>> {
-    Ok(match Acl::of_path(path)? {
-        None => Vec::new(),
-        Some(acl) => acl.text()?.lines().skip(1).map(str::to_owned).collect(),
-    })
 }
 
 fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
@@ -713,11 +829,11 @@ fn install(layout: &Layout, agent: &Agent) -> Result<Value> {
             layout.check()?;
             fs::create_dir_all(path.parent().unwrap_or(&layout.home))?;
             layout.check()?;
-            crate::config::write_atomic(&path, text.as_bytes(), 0o644)?;
+            crate::files::write_atomic(&path, text.as_bytes(), 0o644)?;
         }
         // An earlier Atlas's definition is replaced only from outside the
         // daemon it runs: atlas init does that, with a backup.
-        _ => {
+        File::Regular(_) | File::Other => {
             return Ok(refused(format!(
                 "The helper's background job was set up by another version of Atlas, so {} \
                  was not changed. Run atlas init to replace it.",
@@ -737,7 +853,7 @@ pub(super) fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option
         Some(loaded) => loaded,
         None => {
             layout.check()?;
-            launchctl(&["bootstrap", &layout.domain(), &path.to_string_lossy()])?;
+            launchctl("bootstrap", &[&layout.domain(), &path.to_string_lossy()])?;
             wait_for(layout, label, "loaded", as_loaded)?
         }
     };
@@ -752,17 +868,20 @@ pub(super) fn loaded(layout: &Layout, label: &str, path: &Path) -> Result<Option
     Ok(pid)
 }
 
-/// Unload `label` if launchd has it, whatever its definition.
 pub(super) fn unload(layout: &Layout, label: &str) -> Result<()> {
     if job(layout, label)? != Job::Absent {
-        layout.check()?;
-        launchctl(&["bootout", &format!("{}/{label}", layout.domain())])?;
-        wait_for(layout, label, "unloaded", |job| {
-            (job == Job::Absent).then_some(())
-        })?;
+        bootout(layout, label)?;
     }
 
     Ok(())
+}
+
+fn bootout(layout: &Layout, label: &str) -> Result<()> {
+    layout.check()?;
+    launchctl("bootout", &[&format!("{}/{label}", layout.domain())])?;
+    wait_for(layout, label, "unloaded", |job| {
+        (job == Job::Absent).then_some(())
+    })
 }
 
 pub(super) fn retirement_with(
@@ -804,6 +923,11 @@ pub(super) fn retirement_with(
     Ok((plist, job))
 }
 
+fn check_retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {
+    retirement_with(layout, label, sha256, missing_ok, || job(layout, label))?;
+    Ok(json!({"ok": true}))
+}
+
 fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {
     let (plist, observed) =
         retirement_with(layout, label, sha256, missing_ok, || job(layout, label))?;
@@ -821,11 +945,7 @@ fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Resul
             )));
         }
 
-        layout.check()?;
-        launchctl(&["bootout", &format!("{}/{label}", layout.domain())])?;
-        wait_for(layout, label, "unloaded", |job| {
-            (job == Job::Absent).then_some(())
-        })?;
+        bootout(layout, label)?;
     }
 
     if let File::Regular(_) = plist {
@@ -873,1241 +993,5 @@ fn restore(layout: &Layout, label: &str, sha256: &str) -> Result<Value> {
     Ok(json!({ "ok": true, "plist": path, "pid": pid }))
 }
 
-/// The helper's background job as this Atlas writes it, for `helper` and
-/// the app's `executable`, with the layout it lives in.
-pub(crate) fn helper_agent(helper: &setup::Account, executable: &Path) -> Result<(Agent, Layout)> {
-    let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
-        .ok_or_else(|| setup::account::problem("This account cannot be resolved"))?;
-    let layout = Layout::new(helper.uid, helper.home.clone());
-
-    let agent = Agent {
-        label: LABEL.to_owned(),
-        program: executable.to_path_buf(),
-        uid: helper.uid,
-        controller_uid: controller.uid,
-        socket: layout.socket(),
-    };
-
-    Ok((agent, layout))
-}
-
-/// Run one setup-helper request as the helper, inside its own login, with
-/// the administrator rights init holds.
-pub(crate) fn as_helper(
-    executable: &Path,
-    helper: &setup::Account,
-    request: &Request,
-    expected: &setup::identity::Identity,
-) -> Result<Value> {
-    let (succeeded, reply) = setup::request_as_helper(
-        executable,
-        helper,
-        request,
-        setup::Invocation::CachedLogin,
-        expected,
-    )?;
-    if !succeeded || reply["ok"] != true {
-        return Err(setup::account::problem(format!(
-            "Setting up the helper failed: {}",
-            reply["error"].as_str().unwrap_or("no reply")
-        )));
-    }
-
-    Ok(reply)
-}
-
-/// Install the helper's background job `agent` through `run`, which runs one
-/// setup-helper request as the helper. An earlier Atlas's job (another app,
-/// another account, an older version) is set aside first, its definition
-/// kept as a backup, and comes back when the new one cannot go in.
-pub(crate) fn install_job(
-    run: impl Fn(&Request) -> Result<Value>,
-    uid: u32,
-    agent: Agent,
-    logs: &Path,
-) -> Result<Value> {
-    let inspected = run(&Request::Inspect {
-        uid,
-        labels: vec![LABEL.to_owned()],
-    })?;
-    let earlier = &inspected["jobs"][LABEL];
-    let expected = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
-    let retired = earlier["plistSha256"]
-        .as_str()
-        .filter(|sha| *sha != expected)
-        .map(str::to_owned);
-    if let Some(sha256) = &retired {
-        run(&Request::Retire {
-            uid,
-            label: LABEL.to_owned(),
-            sha256: sha256.clone(),
-            missing_ok: false,
-        })?;
-    }
-
-    let mut error = match run(&Request::Install { agent }) {
-        Ok(installed) => return Ok(installed),
-        Err(error) => error,
-    };
-
-    let Some(sha256) = retired else {
-        return Err(error);
-    };
-
-    // The earlier job comes back when the new one cannot go in. The new
-    // definition install may have written goes first, or it would block
-    // that return.
-    let restored = run(&Request::Retire {
-        uid,
-        label: LABEL.to_owned(),
-        sha256: expected,
-        missing_ok: true,
-    })
-    .and_then(|_| {
-        run(&Request::Restore {
-            uid,
-            label: LABEL.to_owned(),
-            sha256,
-        })
-    });
-
-    if let Err(lost) = restored {
-        error.error = format!(
-            "{}; the earlier helper job could not be put back: {}",
-            error.error, lost.error
-        );
-    }
-
-    Err(error)
-}
-
-/// Prepare and install under one claim, including rollback dispatches.
-pub(crate) async fn prepare_and_install(
-    client: &Client,
-    controller_name: &str,
-    agent: Agent,
-    logs: &Path,
-    run: impl Fn(&Request) -> Result<Value>,
-) -> Result<Value> {
-    let _ownership = client.service_change(true).await?;
-    setup_transaction_held(&client.controller, || {
-        run(&Request::Prepare {
-            uid: agent.uid,
-            controller: controller_name.to_owned(),
-        })?;
-        install_job(run, agent.uid, agent, logs)
-    })
-}
-
-/// Restart the helper daemon (launchd starts a fresh process) and wait for
-/// the new one to answer. No other controller may act meanwhile, and the
-/// restart stays pending until a new daemon is seen; if that never happens
-/// it is left for recovery, like any action of unknown outcome.
-///
-/// # Errors
-///
-/// Returns identity, ownership, restart or readiness failures. A timeout does not
-/// acknowledge unfinished helper work.
-pub async fn restart_helper(client: &Client) -> Result<()> {
-    let _exclusion = client.service_change(true).await?;
-    let before = client.status().await["daemon"]["pid"].clone();
-    let transport = crate::transport::Transport {
-        path: client.config.socket_path.clone(),
-        timeout: Duration::from_secs(10),
-        peer_uid: client.config.helper_uid,
-    };
-
-    let pending = client.controller.quarantine()?;
-    let reply = transport.call(&json!({"op": "restart"})).await?;
-    if reply["ok"] != true {
-        // A refusal changed nothing, unless the helper says it may have.
-        let uncertain = reply["uncertain"] == true;
-        if !uncertain {
-            client.controller.clear_if(&pending)?;
-        }
-
-        let error = setup::account::problem(format!(
-            "The helper did not restart: {}",
-            reply["error"].as_str().unwrap_or("no reason given")
-        ));
-
-        return Err(if uncertain { error.uncertain() } else { error });
-    }
-
-    if !new_daemon_answers(client, &before).await {
-        // The restart stays pending: its outcome is unknown.
-        return Err(setup::account::problem(
-            "The helper did not start again after a restart. Run atlas doctor.",
-        )
-        .uncertain());
-    }
-
-    client.controller.clear_if(&pending)?;
-    Ok(())
-}
-
-/// Whether a daemon other than the one whose pid was `before` answers
-/// within 30 seconds.
-async fn new_daemon_answers(client: &Client, before: &Value) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(30);
-
-    loop {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let pid = client.status().await["daemon"]["pid"].clone();
-        if pid.is_number() && pid != *before {
-            return true;
-        }
-
-        if Instant::now() >= deadline {
-            return false;
-        }
-    }
-}
-
-/// Replace the helper's background job an earlier Atlas wrote with this
-/// version's, from outside the daemon it runs (through sudo, as installing
-/// it does): the earlier definition is kept as a backup, and comes back if
-/// the new one cannot go in. Pending until a new daemon answers, like a
-/// restart.
-async fn replace_job(
-    client: &Client,
-    helper: &setup::Account,
-    agent: Agent,
-    layout: &Layout,
-    run: impl Fn(&Request) -> Result<Value>,
-) -> Result<()> {
-    let _exclusion = client.service_change(true).await?;
-    let before = client.status().await["daemon"]["pid"].clone();
-    let pending = client.controller.quarantine()?;
-
-    {
-        let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
-        install_job(run, helper.uid, agent, &layout.logs()).map_err(Error::uncertain)?;
-    }
-
-    if !new_daemon_answers(client, &before).await {
-        return Err(setup::account::problem(format!(
-            "The helper's background job was replaced but the helper did not start again. Its \
-             log is {} in {}'s account; run atlas init again after checking it.",
-            layout.logs().join(format!("{LABEL}.log")).display(),
-            helper.name
-        ))
-        .uncertain());
-    }
-
-    client.controller.clear_if(&pending)?;
-    Ok(())
-}
-
-/// Put the helper's daemon on this version before checking it: its
-/// background job replaced when another version of Atlas wrote it, else
-/// the daemon restarted when it still runs an earlier build (an update
-/// whose handover did not finish).
-///
-/// # Errors
-///
-/// Returns account-identity, installed-build, ownership or helper-refresh failures.
-/// Unacknowledged privileged changes retain their claim.
-pub async fn refresh_helper(
-    client: &Client,
-    helper: &setup::Account,
-    expected: &setup::identity::Identity,
-    mut progress: impl FnMut(setup::Progress<'_>) -> Result<()>,
-) -> Result<Option<Value>> {
-    let executable = Path::new(setup::installed_app::EXECUTABLE);
-    let (agent, layout) = helper_agent(helper, executable)?;
-    let expected_hash = setup::helper::text_sha256(&setup::helper::plist(&agent, &layout.logs()));
-    let job = setup::migrate::managed_job(client).await?;
-
-    if outdated_job(&job, &expected_hash) {
-        progress(setup::Progress::Administrator(
-            "  macOS asks for your password once, to replace the helper's background job with \
-             this version's.",
-        ))?;
-
-        progress(setup::Progress::Waiting(
-            "Replacing the helper's background job…",
-        ))?;
-        replace_job(client, helper, agent, &layout, |request| {
-            as_helper(executable, helper, request, expected)
-        })
-        .await?;
-        progress(setup::Progress::Done(
-            "Helper job",
-            "replaced with this version's",
-        ))?;
-        return Ok(Some(
-            json!({"step": "daemon", "label": LABEL, "replaced": true}),
-        ));
-    }
-
-    let pid = client.status().await["daemon"]["pid"]
-        .as_u64()
-        .and_then(|pid| u32::try_from(pid).ok());
-    if pid.is_some_and(|pid| !setup::runs_current(pid, executable)) {
-        progress(setup::Progress::Waiting(
-            "Restarting the helper on this version…",
-        ))?;
-        client.restart().await?;
-        progress(setup::Progress::Done("Helper", "restarted on this version"))?;
-        return Ok(Some(json!({"step": "restart"})));
-    }
-
-    Ok(None)
-}
-
-/// Whether the managed job's definition, as inspected (`job`), is a file
-/// another version of Atlas wrote, not the `expected` one.
-fn outdated_job(job: &Value, expected: &str) -> bool {
-    job["plistKind"] == "regular" && job["plistSha256"].as_str() != Some(expected)
-}
-
-/// Prepare and install the chosen helper under exclusion and one executor claim.
-/// Refusals and missing acknowledgements preserve the pending generation.
-///
-/// # Errors
-///
-/// Returns account, identity, installation or helper-layout preparation failures. Work
-/// already completed remains available to the recovery workflow.
-pub async fn prepare_helper(
-    client: &Client,
-    helper: &setup::Account,
-    expected: &setup::identity::Identity,
-) -> Result<PathBuf> {
-    let executable = Path::new(setup::installed_app::EXECUTABLE);
-    let controller = setup::account_with_uid(nix::unistd::getuid().as_raw())?
-        .ok_or_else(|| setup::account::problem("This account cannot be resolved"))?;
-    let (agent, layout) = helper_agent(helper, executable)?;
-    prepare_and_install(client, &controller.name, agent, &layout.logs(), |request| {
-        as_helper(executable, helper, request, expected)
-    })
-    .await?;
-    Ok(layout.logs().join(format!("{LABEL}.log")))
-}
-
-/// Ready first-login preferences only while the chosen helper is logged out.
-/// An incomplete reply retains its executor-bound pending mutation.
-///
-/// # Errors
-///
-/// Returns account-identity, privileged-executor or helper-installation failures. An
-/// executor whose exit is unknown retains ownership.
-pub fn first_login_setup(
-    client: &Client,
-    helper: &setup::Account,
-    expected: &setup::identity::Identity,
-) -> Result<Value> {
-    let executable = Path::new(setup::installed_app::EXECUTABLE);
-    setup::executor::setup_transaction(&client.controller, || {
-        let request = Request::FirstLogin {
-            uid: helper.uid,
-            opener: false,
-        };
-        let (succeeded, reply) = setup::request_as_helper(
-            executable,
-            helper,
-            &request,
-            setup::Invocation::BeforeLogin,
-            expected,
-        )?;
-        if !succeeded || reply["ok"] != true {
-            return Err(setup::account::problem(
-                "The helper did not acknowledge first-login setup",
-            )
-            .uncertain());
-        }
-        Ok(reply)
-    })
-}
-
 #[cfg(test)]
-mod tests {
-    use crate::error::Code;
-    #[test]
-    fn an_expected_identity_is_checked_again_even_without_a_logout_wait() {
-        let identity = super::super::identity::Identity {
-            uid: 7001,
-            name: "helper".into(),
-            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
-        };
-        let account = super::super::Account {
-            uid: identity.uid,
-            name: identity.name.clone(),
-            home: "/Users/helper".into(),
-        };
-        let guard = Guard {
-            account: Some(identity.clone()),
-            logged_out: false,
-        };
-        for observed in [
-            None,
-            Some(super::super::identity::Identity {
-                generated_uid: "11111111-2222-3333-4444-555555555555".into(),
-                ..identity.clone()
-            }),
-        ] {
-            let mut reads = 0;
-            let error = checked_account(
-                &guard,
-                || {
-                    reads += 1;
-                    Ok((
-                        account.clone(),
-                        if reads == 1 {
-                            Some(identity.clone())
-                        } else {
-                            observed.clone()
-                        },
-                    ))
-                },
-                || panic!("no logout wait was requested"),
-                || panic!("no logout check was requested"),
-            )
-            .unwrap_err();
-            assert_eq!(reads, 2);
-            assert!(!error.uncertain);
-        }
-        assert!(
-            checked_account(
-                &Guard {
-                    logged_out: true,
-                    ..guard
-                },
-                || Ok((account.clone(), Some(identity.clone()))),
-                || false,
-                || panic!("a failed logout wait refuses immediately"),
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn a_missing_identity_refuses_before_account_lookup_or_logout_waits() {
-        for logged_out in [false, true] {
-            let error = checked_account(
-                &Guard {
-                    account: None,
-                    logged_out,
-                },
-                || panic!("a missing identity must refuse before account lookup"),
-                || panic!("a missing identity must refuse before waiting"),
-                || panic!("a missing identity must refuse before session inspection"),
-            )
-            .unwrap_err();
-            assert!(
-                error
-                    .error
-                    .contains("requires an expected account identity")
-            );
-            assert!(!error.uncertain);
-        }
-    }
-
-    #[test]
-    fn every_worker_request_without_an_identity_refuses_before_dispatch() {
-        let uid = nix::unistd::getuid().as_raw();
-        let dir = tempfile::tempdir().unwrap();
-        let layout = Layout::new(uid, dir.path().into());
-        for request in [
-            Request::Prepare {
-                uid,
-                controller: "controller".into(),
-            },
-            Request::Install {
-                agent: Agent {
-                    label: LABEL.into(),
-                    program: "/bin/sh".into(),
-                    uid,
-                    controller_uid: uid + 1,
-                    socket: layout.socket(),
-                },
-            },
-            Request::Retire {
-                uid,
-                label: "old".into(),
-                sha256: "a".repeat(64),
-                missing_ok: false,
-            },
-            Request::Restore {
-                uid,
-                label: "old".into(),
-                sha256: "a".repeat(64),
-            },
-            Request::FirstLogin { uid, opener: true },
-            Request::ForgetOpener { uid },
-            Request::Kickstart { uid },
-            Request::Inspect {
-                uid,
-                labels: vec![LABEL.into()],
-            },
-            Request::CheckRetire {
-                uid,
-                label: "old".into(),
-                sha256: "a".repeat(64),
-                missing_ok: false,
-            },
-        ] {
-            for logged_out in [false, true] {
-                let guard = Guard {
-                    account: None,
-                    logged_out,
-                };
-                let error = run_guarded_with(
-                    request.clone(),
-                    &guard,
-                    || {
-                        Ok((
-                            super::super::Account {
-                                uid,
-                                name: "helper".into(),
-                                home: dir.path().into(),
-                            },
-                            None,
-                        ))
-                    },
-                    || true,
-                    || true,
-                    |_, layout| {
-                        fs::write(layout.home.join("mutation"), b"changed").unwrap();
-                        panic!("no filesystem or launchd action may be dispatched")
-                    },
-                )
-                .unwrap_err();
-                assert!(
-                    error
-                        .error
-                        .contains("requires an expected account identity"),
-                    "{request:?}: {error}"
-                );
-                assert!(!error.uncertain);
-                let guarded = Layout {
-                    guard: Some(guard),
-                    ..Layout::new(uid, dir.path().into())
-                };
-                assert!(guarded.check().is_err());
-            }
-        }
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn setup_refuses_an_account_replaced_while_authorization_or_login_was_pending() {
-        let identity = super::super::identity::Identity {
-            uid: 7001,
-            name: "helper".into(),
-            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
-        };
-        let account = super::super::Account {
-            uid: identity.uid,
-            name: identity.name.clone(),
-            home: "/Users/helper".into(),
-        };
-        let replacement = super::super::identity::Identity {
-            generated_uid: "11111111-2222-3333-4444-555555555555".into(),
-            ..identity.clone()
-        };
-        let guard = Guard {
-            account: Some(identity),
-            logged_out: false,
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let result = checked_account(
-            &guard,
-            || Ok((account.clone(), Some(replacement.clone()))),
-            || unreachable!(),
-            || unreachable!(),
-        );
-        if result.is_ok() {
-            fs::write(dir.path().join("mutation"), b"changed").unwrap();
-        }
-        assert!(result.is_err());
-        assert!(!dir.path().join("mutation").exists());
-    }
-
-    #[test]
-    fn logout_verification_refreshes_identity_and_home_before_a_write() {
-        use std::cell::Cell;
-        let identity = super::super::identity::Identity {
-            uid: 7001,
-            name: "helper".into(),
-            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
-        };
-        let guard = Guard {
-            account: Some(identity.clone()),
-            logged_out: true,
-        };
-        let dir = tempfile::tempdir().unwrap();
-        let account = super::super::Account {
-            uid: identity.uid,
-            name: identity.name.clone(),
-            home: dir.path().join("original"),
-        };
-        let waited = Cell::new(false);
-        let result = checked_account(
-            &guard,
-            || {
-                let mut now = identity.clone();
-                let mut account = account.clone();
-                if waited.get() {
-                    now.generated_uid = "11111111-2222-3333-4444-555555555555".into();
-                    account.home = dir.path().join("replacement");
-                }
-                Ok((account, Some(now)))
-            },
-            || {
-                waited.set(true);
-                true
-            },
-            || true,
-        );
-        if let Ok(account) = &result {
-            fs::write(&account.home, b"changed").unwrap();
-        }
-        assert!(result.is_err());
-        assert!(!account.home.exists());
-        assert!(!dir.path().join("replacement").exists());
-
-        let fresh = checked_account(
-            &guard,
-            || {
-                let mut account = account.clone();
-                if waited.get() {
-                    account.home = dir.path().join("fresh-home");
-                }
-                Ok((account, Some(identity.clone())))
-            },
-            || true,
-            || true,
-        )
-        .unwrap();
-        assert_eq!(fresh.home, dir.path().join("fresh-home"));
-        assert!(
-            checked_account(
-                &guard,
-                || Ok((account.clone(), Some(identity.clone()))),
-                || true,
-                || false
-            )
-            .is_err(),
-            "a login starting during the final account lookup is observed"
-        );
-    }
-
-    use super::*;
-
-    #[test]
-    fn first_login_requests_read_back_as_written() {
-        for request in [
-            Request::FirstLogin {
-                uid: 502,
-                opener: false,
-            },
-            Request::ForgetOpener { uid: 502 },
-        ] {
-            let text = serde_json::to_string(&request).unwrap();
-            assert_eq!(serde_json::from_str::<Request>(&text).unwrap(), request);
-        }
-    }
-
-    #[test]
-    fn names_are_conservative() {
-        for name in ["dev.atlas.capture", "theiskaa", "a_b-c.1"] {
-            assert!(valid_name(name), "{name}");
-        }
-
-        for name in [
-            "",
-            ".hidden",
-            "-flag",
-            "a/b",
-            "a b",
-            "../x",
-            "a\nb",
-            &"x".repeat(129),
-        ] {
-            assert!(!valid_name(name), "{name:?}");
-        }
-    }
-
-    #[test]
-    fn plist_is_valid_and_escapes_text() {
-        let agent = Agent {
-            label: LABEL.into(),
-            program: "/Users/Shared/A&B <x>/sessiond".into(),
-            uid: 502,
-            controller_uid: 501,
-            socket: "/Users/h/.atlas/helper/502.sock".into(),
-        };
-        let text = plist(&agent, Path::new("/Users/h/.atlas/logs"));
-        assert!(text.contains("<string>/Users/Shared/A&amp;B &lt;x&gt;/sessiond</string>"));
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("agent.plist");
-        fs::write(&path, &text).unwrap();
-        assert_eq!(file(&path).unwrap(), File::Regular(text_sha256(&text)));
-
-        let lint = Command::new("/usr/bin/plutil")
-            .arg("-lint")
-            .arg(&path)
-            .output()
-            .unwrap();
-        assert!(lint.status.success());
-
-        let json = Command::new("/usr/bin/plutil")
-            .args(["-convert", "json", "-o", "-"])
-            .arg(&path)
-            .output()
-            .unwrap();
-        let parsed: Value = serde_json::from_slice(&json.stdout).unwrap();
-        assert_eq!(parsed["Label"], LABEL);
-        assert_eq!(
-            parsed["ProgramArguments"][0],
-            "/Users/Shared/A&B <x>/sessiond"
-        );
-        assert_eq!(parsed["ProgramArguments"][1], "helper-serve");
-        assert_eq!(parsed["ProgramArguments"][3], "502");
-        assert_eq!(parsed["ProgramArguments"][5], "501");
-        assert_eq!(
-            parsed["ProgramArguments"][7],
-            "/Users/h/.atlas/helper/502.sock"
-        );
-        assert_eq!(parsed["ProcessType"], "Interactive");
-        assert_eq!(parsed["KeepAlive"]["SuccessfulExit"], false);
-        assert_eq!(parsed["LimitLoadToSessionType"], "Aqua");
-    }
-
-    #[test]
-    fn files_distinguish_absent_regular_and_everything_else() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("p");
-        assert_eq!(file(&path).unwrap(), File::Absent);
-
-        fs::write(&path, "abc").unwrap();
-        assert!(matches!(file(&path).unwrap(), File::Regular(_)));
-
-        let link = dir.path().join("l");
-        std::os::unix::fs::symlink(&path, &link).unwrap();
-        assert_eq!(file(&link).unwrap(), File::Other);
-
-        let dangling = dir.path().join("d");
-        std::os::unix::fs::symlink(dir.path().join("missing"), &dangling).unwrap();
-        assert_eq!(file(&dangling).unwrap(), File::Other);
-        assert_eq!(file(dir.path()).unwrap(), File::Other);
-    }
-
-    #[test]
-    fn launchctl_print_needs_a_definition_path() {
-        let text = "gui/502/x = {\n\tpath = /Users/h/Library/LaunchAgents/x.plist\n\
-                    \tstate = running\n\tpid = 42\n}";
-        assert_eq!(
-            parse_job(text).unwrap(),
-            Job::Loaded {
-                pid: Some(42),
-                path: "/Users/h/Library/LaunchAgents/x.plist".into()
-            }
-        );
-        assert!(parse_job("gui/502/x = {\n\tstate = waiting\n}").is_err());
-        assert!(parse_job("\tpath = relative.plist\n").is_err());
-    }
-
-    #[test]
-    fn acl_policy_allows_only_one_search_grant_for_the_controller() {
-        let entry = |id: u32, kind: &str, rights: &str| format!("user:U:n:{id}:{kind}:{rights}");
-        assert_eq!(acl_policy(&[], Some(501)), Ok(false));
-        assert_eq!(
-            acl_policy(&[entry(501, "allow", "search")], Some(501)),
-            Ok(true)
-        );
-        assert_eq!(
-            acl_policy(&[entry(501, "allow", "execute")], Some(501)),
-            Ok(true)
-        );
-
-        for lines in [
-            vec![entry(501, "allow", "list")],
-            vec![entry(501, "allow", "search,list")],
-            vec![entry(501, "allow", "search,file_inherit")],
-            vec![entry(501, "deny", "search")],
-            vec![entry(503, "allow", "search")],
-            vec![entry(501, "allow", "search"), entry(501, "allow", "search")],
-            vec!["group:U:everyone:12:allow:search".to_owned()],
-        ] {
-            assert!(acl_policy(&lines, Some(501)).is_err(), "{lines:?}");
-        }
-
-        assert!(acl_policy(&[entry(501, "allow", "search")], None).is_err());
-    }
-
-    #[test]
-    fn requests_are_typed_and_strict() {
-        let request: Request = serde_json::from_str(
-            r#"{"action":"retire","uid":502,"label":"dev.atlas.live-sessiond","sha256":"00","missing_ok":false}"#,
-        )
-        .unwrap();
-        assert_eq!(request.uid(), 502);
-        assert!(
-            serde_json::from_str::<Request>(r#"{"action":"retire","uid":502,"label":"x"}"#)
-                .is_err()
-        );
-        assert!(serde_json::from_str::<Request>(r#"{"action":"delete","uid":502}"#).is_err());
-        assert!(require_sha256("00").is_err());
-        assert!(require_sha256(&"a".repeat(64)).is_ok());
-    }
-
-    #[test]
-    fn the_worker_refuses_another_account() {
-        let other = nix::unistd::getuid().as_raw() + 1;
-        let request = json!({"action": "inspect", "uid": other, "labels": []}).to_string();
-        assert_eq!(
-            run_guarded(&request, &Guard::default()).unwrap_err().code,
-            "setup"
-        );
-    }
-
-    #[test]
-    fn install_accepts_only_the_managed_agent() {
-        let layout = Layout::new(nix::unistd::getuid().as_raw(), "/nonexistent-home".into());
-
-        let agent = |label: &str, socket: PathBuf| Agent {
-            label: label.into(),
-            program: "/bin/sh".into(),
-            uid: layout.uid,
-            controller_uid: 0,
-            socket,
-        };
-        for agent in [
-            agent("other.label", layout.socket()),
-            agent(LABEL, layout.root().join("helper/../elsewhere.sock")),
-            agent(LABEL, layout.daemon().join("other.sock")),
-            agent(LABEL, "/tmp/x".into()),
-        ] {
-            let reply = install(&layout, &agent).unwrap();
-            assert_eq!(reply["ok"], false);
-            assert_eq!(
-                reply["unchanged"], true,
-                "a refusal before acting is certain"
-            );
-        }
-    }
-
-    /// A definition with other bytes (an earlier Atlas's) is refused
-    /// certainly, left as it was, and the refusal says what replaces it.
-    #[test]
-    fn install_refuses_another_definition_without_changing_it() {
-        let (_dir, layout, _) = sandbox();
-        let agent = Agent {
-            label: LABEL.into(),
-            program: "/bin/sh".into(),
-            uid: layout.uid,
-            controller_uid: 0,
-            socket: layout.socket(),
-        };
-
-        let path = layout.agent_plist(LABEL);
-        fs::write(&path, "an earlier definition").unwrap();
-
-        let reply = install(&layout, &agent).unwrap();
-        assert_eq!(reply["ok"], false);
-        assert_eq!(reply["unchanged"], true);
-        assert!(
-            reply["error"].as_str().unwrap().contains("atlas init"),
-            "{reply}"
-        );
-        assert_eq!(fs::read_to_string(&path).unwrap(), "an earlier definition");
-    }
-
-    fn sandbox() -> (tempfile::TempDir, Layout, String) {
-        let dir = tempfile::tempdir().unwrap();
-        let layout = Layout::new(
-            nix::unistd::getuid().as_raw(),
-            fs::canonicalize(dir.path()).unwrap(),
-        );
-        fs::create_dir_all(layout.home.join("Library/LaunchAgents")).unwrap();
-        // A label launchd has never seen: inspection is real and read-only.
-        let label = format!("dev.atlas.test.{}", &crate::files::token()[..12]);
-
-        (dir, layout, label)
-    }
-
-    #[test]
-    fn retirement_preflight_and_retire_share_the_same_definition_and_backup_rules() {
-        let dir = tempfile::tempdir().unwrap();
-        let layout = Layout::new(60001, dir.path().into());
-        let label = "old.helper";
-        let sha256 = text_sha256("definition");
-        let path = layout.agent_plist(label);
-        let backup = layout.backup(label, &sha256);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::create_dir_all(backup.parent().unwrap()).unwrap();
-        let check =
-            |missing_ok| retirement_with(&layout, label, &sha256, missing_ok, || Ok(Job::Absent));
-        assert!(check(false).is_err());
-        assert!(check(true).is_ok());
-        fs::write(&backup, "definition").unwrap();
-        assert!(check(false).is_ok());
-        fs::write(&path, "definition").unwrap();
-        assert!(check(false).is_ok());
-        fs::write(&backup, "other contents").unwrap();
-        assert!(
-            check(false).is_err(),
-            "a conflicting backup refuses before unloading"
-        );
-        fs::remove_file(&backup).unwrap();
-        assert!(check(false).is_ok());
-        std::os::unix::fs::symlink(&path, &backup).unwrap();
-        assert!(check(false).is_err(), "a backup link is never followed");
-        fs::remove_file(&backup).unwrap();
-        assert!(
-            retirement_with(&layout, label, &sha256, false, || Ok(Job::Loaded {
-                pid: Some(123),
-                path: dir.path().join("foreign.plist")
-            }))
-            .is_err()
-        );
-        assert_eq!(fs::read_to_string(path).unwrap(), "definition");
-    }
-
-    #[test]
-    fn retire_backs_up_exactly_the_expected_plist_and_repeats_its_receipt() {
-        let (_dir, layout, label) = sandbox();
-        prepare(&layout, "root").unwrap();
-        let path = layout.agent_plist(&label);
-        fs::write(&path, "definition").unwrap();
-        let sha256 = text_sha256("definition");
-
-        assert!(retire(&layout, &label, &"0".repeat(64), false).is_err());
-        assert!(path.exists(), "a mismatched plist is left in place");
-
-        let first = retire(&layout, &label, &sha256, false).unwrap();
-        assert!(!path.exists());
-        assert_eq!(
-            fs::read_to_string(first["backup"].as_str().unwrap()).unwrap(),
-            "definition"
-        );
-        assert_eq!(retire(&layout, &label, &sha256, false).unwrap(), first);
-
-        let other = format!("{label}.other");
-        assert!(
-            retire(&layout, &other, &sha256, false).is_err(),
-            "the original must be preserved"
-        );
-        assert_eq!(
-            retire(&layout, &other, &sha256, true).unwrap()["absent"],
-            true
-        );
-    }
-
-    #[test]
-    fn retire_and_restore_never_touch_symlinks_or_other_contents() {
-        let (_dir, layout, label) = sandbox();
-        prepare(&layout, "root").unwrap();
-        let path = layout.agent_plist(&label);
-        let target = layout.home.join("real.plist");
-        fs::write(&target, "definition").unwrap();
-        std::os::unix::fs::symlink(&target, &path).unwrap();
-        let sha256 = text_sha256("definition");
-
-        assert!(retire(&layout, &label, &sha256, true).is_err());
-        assert!(restore(&layout, &label, &sha256).is_err());
-        assert!(
-            fs::symlink_metadata(&path)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-
-        fs::remove_file(&path).unwrap();
-        assert!(
-            restore(&layout, &label, &sha256).is_err(),
-            "no backup to restore"
-        );
-
-        fs::write(&path, "changed").unwrap();
-        assert!(restore(&layout, &label, &sha256).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "changed");
-    }
-
-    #[test]
-    fn prepare_creates_repairs_and_refuses_foreign_access() {
-        let (_dir, layout, _) = sandbox();
-        prepare(&layout, "root").unwrap();
-        let capture = layout.daemon();
-        let mode = |path: &Path| fs::metadata(path).unwrap().mode() & 0o777;
-        assert_eq!(mode(&capture), 0o700);
-        assert_eq!(acl_policy(&acl_lines(&capture).unwrap(), Some(0)), Ok(true));
-        assert!(acl_lines(&layout.logs()).unwrap().is_empty());
-
-        fs::set_permissions(&capture, fs::Permissions::from_mode(0o755)).unwrap();
-        let repaired = prepare(&layout, "root").unwrap();
-        assert_eq!(repaired["changed"], json!([capture]));
-        assert_eq!(mode(&capture), 0o700);
-        assert_eq!(
-            acl_lines(&capture).unwrap().len(),
-            1,
-            "the grant is not duplicated"
-        );
-
-        let user = std::env::var("USER").unwrap();
-        Command::new("/bin/chmod")
-            .args(["+a", &format!("user:{user} allow list")])
-            .arg(layout.logs())
-            .status()
-            .unwrap();
-        fs::set_permissions(&capture, fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(prepare(&layout, "root").is_err());
-        assert_eq!(
-            mode(&capture),
-            0o755,
-            "nothing changes when validation fails"
-        );
-    }
-
-    #[test]
-    fn replacing_a_job_keeps_its_executor_claim_after_the_caller_dies() {
-        if !crate::test_support::isolated(
-            "setup::helper::tests::replacing_a_job_keeps_its_executor_claim_after_the_caller_dies",
-        ) {
-            return;
-        }
-        for mode in ["retire", "install", "restore"] {
-            crate::test_support::interrupted_executor(
-                "setup::helper::tests::a_job_installation_test_caller",
-                mode,
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn helper_installation_and_restarts_defer_before_dispatching_active_work() {
-        use crate::host_session::{Host, HostSession, store::Store};
-
-        let directory = tempfile::tempdir().unwrap();
-        let client = crate::test_support::client(directory.path());
-        let host = HostSession::new(Host::Named, "worker").unwrap();
-        Store::at(client.output_dir().unwrap())
-            .update(
-                &host,
-                crate::host_session::now_ms(),
-                &client.controller,
-                |_| {},
-            )
-            .unwrap();
-        let helper = setup::Account {
-            uid: 7001,
-            name: "helper".into(),
-            home: directory.path().join("home"),
-        };
-        let layout = Layout::new(helper.uid, helper.home.clone());
-        let agent = Agent {
-            label: LABEL.into(),
-            program: directory.path().join("atlas"),
-            uid: helper.uid,
-            controller_uid: nix::unistd::getuid().as_raw(),
-            socket: layout.socket(),
-        };
-        let checked = async {
-            let error =
-                prepare_and_install(&client, "controller", agent.clone(), &layout.logs(), |_| {
-                    panic!("dispatched setup while active")
-                })
-                .await
-                .unwrap_err();
-            assert_eq!(error.error, "worker is active in the helper.");
-            let error = replace_job(&client, &helper, agent, &layout, |_| {
-                panic!("replaced a job while active")
-            })
-            .await
-            .unwrap_err();
-            assert_eq!(error.code, Code::Busy);
-            assert_eq!(restart_helper(&client).await.unwrap_err().code, Code::Busy);
-        };
-        tokio::time::timeout(Duration::from_secs(1), checked)
-            .await
-            .unwrap();
-        assert!(client.controller.pending().unwrap().is_empty());
-    }
-
-    #[test]
-    fn preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies() {
-        if !crate::test_support::isolated(
-            "setup::helper::tests::preparing_and_installing_a_helper_excludes_teardown_after_the_caller_dies",
-        ) {
-            return;
-        }
-        for mode in ["prepare", "fresh-install"] {
-            crate::test_support::interrupted_executor(
-                "setup::helper::tests::a_job_installation_test_caller",
-                mode,
-            );
-        }
-    }
-
-    /// A subprocess entry point; all effects stay in its explicit temporary directory.
-    #[tokio::test]
-    async fn a_job_installation_test_caller() {
-        let Some(directory) = crate::test_support::directory() else {
-            return;
-        };
-        let client = crate::test_support::client(&directory);
-        let helper = setup::Account {
-            uid: 7001,
-            name: "helper".into(),
-            home: directory.join("home"),
-        };
-        let layout = Layout::new(helper.uid, helper.home.clone());
-        let agent = Agent {
-            label: LABEL.into(),
-            program: directory.join("atlas"),
-            uid: helper.uid,
-            controller_uid: nix::unistd::getuid().as_raw(),
-            socket: layout.socket(),
-        };
-        let mode = std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap();
-        let run = |request: &Request| {
-            let pause = matches!(
-                (mode.as_str(), request),
-                ("retire", Request::Retire { .. })
-                    | ("install" | "fresh-install", Request::Install { .. })
-                    | ("restore", Request::Restore { .. })
-                    | ("prepare", Request::Prepare { .. })
-            );
-            if pause {
-                crate::test_support::pause_executor(&directory);
-            }
-            if mode == "restore" && matches!(request, Request::Install { .. }) {
-                return Err(setup::account::problem("installation was refused"));
-            }
-            Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "b".repeat(64)}}}))
-        };
-        if matches!(mode.as_str(), "prepare" | "fresh-install") {
-            let _ = prepare_and_install(&client, "controller", agent, &layout.logs(), run).await;
-        } else {
-            let _ = replace_job(&client, &helper, agent, &layout, run).await;
-        }
-    }
-
-    #[test]
-    fn installation_acknowledgements_settle_only_their_own_setup_mutations() {
-        if !crate::test_support::isolated(
-            "setup::helper::tests::installation_acknowledgements_settle_only_their_own_setup_mutations",
-        ) {
-            return;
-        }
-        let directory = tempfile::tempdir().unwrap();
-        let client = crate::test_support::client(directory.path());
-        let controller = &client.controller;
-        let other = controller.quarantine().unwrap();
-        drop(other);
-        setup_transaction(controller, || Ok(())).unwrap();
-        assert_eq!(controller.pending().unwrap().len(), 1);
-        let outcome: Result<()> = setup_transaction(controller, || {
-            Err(setup::account::problem("reply lost").uncertain())
-        });
-        assert!(outcome.is_err());
-        assert_eq!(controller.pending().unwrap().len(), 2);
-    }
-
-    use setup::executor::setup_transaction;
-
-    /// An earlier job is retired only when its definition differs, and
-    /// restored when the new one cannot go in.
-    #[test]
-    fn an_earlier_job_is_set_aside_and_restored_on_failure() {
-        let agent = Agent {
-            label: LABEL.to_owned(),
-            program: "/Applications/Atlas.app/Contents/MacOS/atlas".into(),
-            uid: 503,
-            controller_uid: 501,
-            socket: "/Users/atlas/.atlas/helper/503.sock".into(),
-        };
-        let logs = Path::new("/Users/atlas/.atlas/logs");
-        let ours = setup::helper::text_sha256(&setup::helper::plist(&agent, logs));
-
-        let attempt_with = |earlier: Option<&str>, install_fails: bool, restore_fails: bool| {
-            let actions = std::cell::RefCell::new(Vec::new());
-            let run = |request: &Request| -> Result<Value> {
-                let action = serde_json::to_value(request).unwrap()["action"].clone();
-                actions
-                    .borrow_mut()
-                    .push(action.as_str().unwrap().to_owned());
-
-                match request {
-                    Request::Inspect { .. } => {
-                        Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": earlier}}}))
-                    }
-                    Request::Install { .. } if install_fails => {
-                        Err(setup::account::problem("refused"))
-                    }
-                    Request::Restore { .. } if restore_fails => {
-                        Err(setup::account::problem("no backup"))
-                    }
-                    _ => Ok(json!({"ok": true})),
-                }
-            };
-            let outcome = install_job(run, 503, agent.clone(), logs);
-            (outcome.map_err(|error| error.error), actions.into_inner())
-        };
-        let attempt = |earlier: Option<&str>, install_fails: bool| {
-            let (outcome, actions) = attempt_with(earlier, install_fails, false);
-            (outcome.is_ok(), actions)
-        };
-
-        assert_eq!(
-            attempt(None, false),
-            (true, vec!["inspect".into(), "install".into()])
-        );
-        assert_eq!(
-            attempt(Some(&ours), false),
-            (true, vec!["inspect".into(), "install".into()])
-        );
-
-        let other = "0".repeat(64);
-        assert_eq!(
-            attempt(Some(&other), false),
-            (
-                true,
-                vec!["inspect".into(), "retire".into(), "install".into()]
-            )
-        );
-        assert_eq!(
-            attempt(Some(&other), true),
-            (
-                false,
-                vec![
-                    "inspect".into(),
-                    "retire".into(),
-                    "install".into(),
-                    "retire".into(),
-                    "restore".into()
-                ]
-            )
-        );
-
-        // A job that cannot be put back is said, not dropped.
-        let (outcome, _) = attempt_with(Some(&other), true, true);
-        let error = outcome.unwrap_err();
-        assert!(error.starts_with("refused;"), "{error}");
-        assert!(
-            error.ends_with("could not be put back: no backup"),
-            "{error}"
-        );
-    }
-
-    /// Only a definition file with other bytes is replaced; none there (a
-    /// job from an older label) or the expected one is left alone.
-    #[test]
-    fn only_another_versions_definition_is_replaced() {
-        let ours = "a".repeat(64);
-        let earlier = "b".repeat(64);
-        let job = |kind: &str, sha: Option<&str>| json!({"plistKind": kind, "plistSha256": sha});
-
-        assert!(outdated_job(&job("regular", Some(&earlier)), &ours));
-        assert!(!outdated_job(&job("regular", Some(&ours)), &ours));
-        assert!(!outdated_job(&job("absent", None), &ours));
-        assert!(
-            !outdated_job(&job("other", None), &ours),
-            "a link is never replaced"
-        );
-        assert!(!outdated_job(&Value::Null, &ours));
-    }
-}
+mod tests;

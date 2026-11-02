@@ -157,7 +157,7 @@ fn activity_lists_this_sessions_rows_screenshots_copies_and_plans_only() {
     let (claude, codex, plan) = two_sessions(&client);
 
     let reply = list(&client, Some(&claude), Scope::Own, 10).unwrap();
-    assert_eq!(reply["session"]["key"], claude.key.as_str());
+    assert_eq!(reply["session"]["key"], claude.key().as_str());
     assert_eq!(reply["session"]["this"], true);
     assert_eq!(reply["session"]["hostSession"], "left");
     assert_eq!(
@@ -179,7 +179,7 @@ fn activity_lists_this_sessions_rows_screenshots_copies_and_plans_only() {
     assert!(reply.get("next").is_none());
 
     let text = reply.to_string();
-    assert!(!text.contains(codex.key.as_str()));
+    assert!(!text.contains(codex.key().as_str()));
     assert!(!text.contains(&capture(2)));
     assert!(!text.contains("right"));
 }
@@ -188,20 +188,14 @@ fn activity_lists_this_sessions_rows_screenshots_copies_and_plans_only() {
 fn activity_after_compaction_finds_the_same_session() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
-    let before = HostSession {
-        process: Some(Instance::new(i32::MAX, [1, 0])),
-        ..session(Host::Claude, "left")
-    };
+    let before = session(Host::Claude, "left").run_by(Some(Instance::new(i32::MAX, [1, 0])));
     act(&client, &before, "click", json!({"ok": true}));
     shot(&client, &before, &capture(1));
 
-    let after = HostSession {
-        process: Instance::current(),
-        ..session(Host::Claude, "left")
-    };
+    let after = session(Host::Claude, "left").run_by(Instance::current());
     let earlier = list(&client, Some(&before), Scope::Own, 10).unwrap();
     let reply = list(&client, Some(&after), Scope::Own, 10).unwrap();
-    assert_eq!(after.key, before.key);
+    assert_eq!(after.key(), before.key());
     for field in ["counts", "recent", "screenshots"] {
         assert_eq!(reply[field], earlier[field], "{field}");
     }
@@ -216,12 +210,12 @@ fn all_lists_every_session_with_counts_but_no_paths_or_host_ids() {
     let reply = list(&client, Some(&claude), Scope::Everyone, 10).unwrap();
     assert_eq!(
         reply["session"]["key"],
-        claude.key.as_str(),
+        claude.key().as_str(),
         "it finds itself"
     );
     let sessions = reply["sessions"].as_array().unwrap();
     assert_eq!(sessions.len(), 2);
-    assert_eq!(sessions[0]["key"], codex.key.as_str(), "newest first");
+    assert_eq!(sessions[0]["key"], codex.key().as_str(), "newest first");
     assert_eq!(sessions[1]["leftovers"]["plans"], 1);
     assert_eq!(sessions[1]["screenshots"], 1);
     assert_eq!(sessions[0]["active"], true);
@@ -260,9 +254,9 @@ fn an_unknown_key_is_refused_with_input() {
     assert_eq!(refused.code, "input");
     assert!(refused.error.contains("atlas activity --all"));
 
-    let other = list(&client, None, Scope::Session(&codex.key), 10).unwrap();
+    let other = list(&client, None, Scope::Session(codex.key()), 10).unwrap();
     assert_eq!(other["session"]["this"], false);
-    assert_eq!(other["session"]["key"], codex.key.as_str());
+    assert_eq!(other["session"]["key"], codex.key().as_str());
 }
 
 #[test]
@@ -371,7 +365,7 @@ fn activity_works_while_another_controller_holds_the_lock_and_after_a_stop() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|session| session["key"] == claude.key.as_str())
+        .find(|session| session["key"] == claude.key().as_str())
         .unwrap()
         .clone();
     assert_eq!(holding["holdsHelper"], true);
@@ -383,16 +377,13 @@ fn a_previous_session_with_leftovers_is_mentioned_and_one_without_is_not() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());
     let process = Instance::current().unwrap();
-    let labelled = |id: &str| HostSession {
-        process: Some(process),
-        ..session(Host::Claude, id)
-    };
+    let labelled = |id: &str| session(Host::Claude, id).run_by(Some(process));
 
     let (first, second, third) = (labelled("first"), labelled("second"), labelled("third"));
     applied(&client, &first);
     act(&client, &second, "click", json!({"ok": true}));
     let reply = list(&client, Some(&second), Scope::Own, 10).unwrap();
-    assert_eq!(reply["previous"]["key"], first.key.as_str());
+    assert_eq!(reply["previous"]["key"], first.key().as_str());
     assert_eq!(reply["previous"]["plans"], 1);
 
     act(&client, &third, "click", json!({"ok": true}));
@@ -403,7 +394,7 @@ fn a_previous_session_with_leftovers_is_mentioned_and_one_without_is_not() {
 #[test]
 fn a_sessions_jobs_and_collections_are_listed_without_their_names_or_arguments() {
     use crate::{
-        daemon::protocol::{Expected, JobId, JobState},
+        protocol::{Expected, JobId, JobState},
         task::{
             Task,
             record::{JobEntry, OutputEntry},
@@ -529,7 +520,7 @@ fn an_apps_only_host_has_an_ended_session_after_exit() {
         .touch(
             &own,
             Some(process),
-            super::super::now_ms(),
+            crate::time::now_ms(),
             &client.controller,
         )
         .unwrap();

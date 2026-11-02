@@ -153,7 +153,7 @@ async fn a_job_only_the_helpers_record_knows_is_stopped_too() {
     let task = default_task(&key);
     place.claim(&task, Owned::Plan { id: Token::new() });
     let fake = Fake::at(&place.root);
-    let id = crate::daemon::protocol::JobId::new();
+    let id = crate::protocol::JobId::new();
     fake.daemon_jobs.borrow_mut().push(plan::Job {
         id: id.clone(),
         task: task.key().clone(),
@@ -174,7 +174,7 @@ async fn a_job_list_that_cannot_be_read_holds_every_removal_back_until_it_can() 
     let known = job_started(&place, &task, "web");
     let fake = Fake::at(&place.root);
     fake.unlisted.set(true);
-    let unknown = crate::daemon::protocol::JobId::new();
+    let unknown = crate::protocol::JobId::new();
     fake.daemon_jobs.borrow_mut().push(plan::Job {
         id: unknown.clone(),
         task: task.key().clone(),

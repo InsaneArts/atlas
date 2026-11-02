@@ -2,15 +2,12 @@
 //! stopped, the jobs of a task, the end of a job's output, and the copies
 //! a collection kept. Processes Atlas left running and files it did not
 //! collect are always said.
-use super::{Rendered, failed, style, text};
+use super::{Rendered, beside_failure, failed, items, observe::warnings, style, text};
 use serde_json::Value;
 
 /// A job that was started or stopped: its ID and how far it got, then the
 /// processes that left its group, which still run.
-pub(super) fn job(value: &Value) -> Rendered {
-    if let Some(failure) = failed(value) {
-        return failure;
-    }
+pub(super) fn job(value: &Value) -> String {
     let id = value["id"].as_str().unwrap_or("?");
     let mut lines = vec![match value["state"].as_str() {
         Some("ended") => match value["how"].as_str() {
@@ -27,14 +24,11 @@ pub(super) fn job(value: &Value) -> Rendered {
     }];
     lines.extend(left(value));
     lines.extend(warnings(value));
-    Rendered::out(lines.join("\n"))
+    lines.join("\n")
 }
 
 /// A task's jobs, one a line, with what each left running.
-pub(super) fn jobs(value: &Value) -> Rendered {
-    if let Some(failure) = failed(value) {
-        return failure;
-    }
+pub(super) fn jobs(value: &Value) -> String {
     let jobs = value["jobs"].as_array().map_or(&[][..], Vec::as_slice);
     let mut lines = Vec::new();
     if jobs.is_empty() {
@@ -67,7 +61,7 @@ pub(super) fn jobs(value: &Value) -> Rendered {
         lines.extend(left(job));
     }
     lines.extend(warnings(value));
-    Rendered::out(lines.join("\n"))
+    lines.join("\n")
 }
 
 /// The end of a job's output, as it is, and whether more came before it.
@@ -89,7 +83,7 @@ pub(super) fn log(value: &Value) -> Rendered {
 /// What a collection kept, one copy a line, and what it did not.
 pub(super) fn collect(value: &Value) -> Rendered {
     let mut lines = Vec::new();
-    for kept in value["collected"].as_array().into_iter().flatten() {
+    for kept in items(&value["collected"]) {
         lines.push(format!(
             "{} {} ({} bytes, SHA-256 {})",
             style::ok(),
@@ -98,21 +92,14 @@ pub(super) fn collect(value: &Value) -> Rendered {
             kept["sha256"].as_str().unwrap_or("?")
         ));
     }
-    for file in value["failed"].as_array().into_iter().flatten() {
+    for file in items(&value["failed"]) {
         lines.push(format!(
             "{} {}",
             style::fail(),
             text::printable(file["error"].as_str().unwrap_or("not collected"))
         ));
     }
-    let out = lines.join("\n");
-    match failed(value) {
-        Some(failure) => Rendered {
-            out,
-            err: failure.err,
-        },
-        None => Rendered::out(out),
-    }
+    beside_failure(lines.join("\n"), value)
 }
 
 /// How a job ended, in words.
@@ -133,15 +120,4 @@ fn how_said(how: &str) -> &str {
 /// The processes `value` says still run outside the job, never signalled.
 fn left(value: &Value) -> Option<String> {
     super::remaining_processes(&value["left"]).map(|left| format!("  {}", style::dim(left)))
-}
-
-/// The warnings `value` carries, each on a line.
-fn warnings(value: &Value) -> Vec<String> {
-    value["warnings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(|warning| format!("{} {}", style::warn(), text::printable(warning)))
-        .collect()
 }

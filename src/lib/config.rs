@@ -6,8 +6,6 @@ use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
-    io::{Read, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -40,11 +38,9 @@ pub fn effective(given: Option<PathBuf>) -> PathBuf {
     let installed = std::env::current_exe()
         .and_then(fs::canonicalize)
         .ok()
-        .and_then(|executable| crate::update::app_of(&executable))
+        .and_then(|executable| crate::app_bundle::app_of(&executable))
         .is_some();
-    // A legacy JSON twin keeps the local name, so loading reports it.
-    let local = path.exists() || path.with_extension("json").exists();
-    if installed || !local {
+    if installed || !path.exists() {
         return installed_path().unwrap_or(path);
     }
 
@@ -71,11 +67,12 @@ fn default_output() -> PathBuf {
 /// Parse user-authored TOML. Unknown keys are rejected by the target type and
 /// errors name the file and the offending line.
 pub(crate) fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T> {
-    let text = std::str::from_utf8(bytes).map_err(|_| {
+    let text = std::str::from_utf8(bytes).map_err(|error| {
         Error::new(
             Code::Config,
             format!("{} is not UTF-8 text", origin.display()),
         )
+        .with_source(error)
     })?;
 
     toml::from_str(text).map_err(|error| {
@@ -83,6 +80,7 @@ pub(crate) fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Re
             Code::Config,
             format!("{}: {}", origin.display(), error.to_string().trim_end()),
         )
+        .with_source(error)
     })
 }
 
@@ -120,16 +118,17 @@ impl Config {
             if fs::symlink_metadata(path)
                 .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
             {
-                missing(path)
+                missing(path).with_source(error)
             } else {
                 Error::new(
                     Code::ConfigInvalid,
                     format!(
                         "Atlas could not read its settings in {}: {error}. Repair or remove that \
                          file, then run atlas init.",
-                        crate::ui::text::tilde(path)
+                        tilde(path)
                     ),
                 )
+                .with_source(error)
             }
         })?;
 
@@ -140,36 +139,21 @@ impl Config {
                 Code::ConfigInvalid,
                 format!(
                     "Atlas could not read its settings in {}: {}",
-                    crate::ui::text::tilde(&path),
+                    tilde(&path),
                     error.error
                 ),
             )
+            .with_source(error)
         })
     }
 
     fn read(path: &Path) -> Result<Self> {
-        // A legacy JSON twin may still drive an older running process. Refuse
-        // to let new invocations silently diverge from it.
-        let legacy = path.with_extension("json");
-        if path.extension().is_some_and(|ext| ext == "toml") && legacy.exists() {
-            return Err(Error::new(
-                Code::Config,
-                format!(
-                    "Both {} and the legacy {} exist. JSON configuration is no longer read; \
-                     confirm the TOML matches, stop processes started with the JSON file, \
-                     then remove it.",
-                    path.display(),
-                    legacy.display()
-                ),
-            ));
-        }
-
-        let mut bytes = Vec::new();
-        fs::File::open(path)
-            .map_err(|error| Error::new(Code::Io, format!("Open settings: {error}")))?
-            .take(LIMIT + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| Error::new(Code::Io, format!("Read settings: {error}")))?;
+        let file = fs::File::open(path).map_err(|error| {
+            Error::new(Code::Io, format!("Open settings: {error}")).with_source(error)
+        })?;
+        let bytes = crate::files::read_up_to(file, LIMIT + 1).map_err(|error| {
+            Error::new(Code::Io, format!("Read settings: {error}")).with_source(error)
+        })?;
 
         if bytes.len() as u64 > LIMIT {
             return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
@@ -228,29 +212,32 @@ impl Config {
     /// Returns a configuration error if the current settings cannot be serialized as TOML. This
     /// does not write a settings file.
     pub fn to_toml(&self) -> Result<String> {
-        toml::to_string(self).map_err(|error| Error::new(Code::Config, error.to_string()))
+        toml::to_string(self)
+            .map_err(|error| Error::new(Code::Config, error.to_string()).with_source(error))
     }
 }
 
 fn missing(path: &Path) -> Error {
-    let legacy = path.with_extension("json");
-    let hint = if legacy.exists() {
-        format!(
-            " Configuration is TOML; {} is no longer read. Copy its values into the TOML file \
-             (atlas setup --helper NAME shows the key names with default values).",
-            legacy.display()
-        )
-    } else {
-        String::new()
-    };
-
     Error::new(
         Code::Config,
         format!(
-            "Atlas is not set up yet (no {}). Run atlas init.{hint}",
-            crate::ui::text::tilde(path)
+            "Atlas is not set up yet (no {}). Run atlas init.",
+            tilde(path)
         ),
     )
+}
+
+/// A path with the home directory written as `~`.
+pub fn tilde(path: impl AsRef<Path>) -> String {
+    let path = path.as_ref();
+    match std::env::var_os("HOME").map(PathBuf::from) {
+        Some(home) if !home.as_os_str().is_empty() => match path.strip_prefix(&home) {
+            Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
+            Ok(rest) => format!("~/{}", rest.display()),
+            Err(_) => path.display().to_string(),
+        },
+        _ => path.display().to_string(),
+    }
 }
 
 /// This process's home: where its own settings, caches and records live.
@@ -267,79 +254,6 @@ pub(crate) fn home() -> Result<PathBuf> {
     account
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| Error::new(Code::Config, "HOME is unavailable"))
-}
-
-/// Write a fresh file beside `path` (created with `mode`, never through a
-/// link), flush it to disk, then put it in place with `place`, which is
-/// given the temporary path. The temporary file never outlives the call.
-pub(crate) fn write_beside(
-    path: &Path,
-    mode: u32,
-    write: impl FnOnce(&mut fs::File) -> Result<()>,
-    place: impl FnOnce(&Path) -> Result<()>,
-) -> Result<()> {
-    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
-        return Err(Error::new(
-            Code::Config,
-            format!("{} is not a file path", path.display()),
-        ));
-    };
-
-    let temporary = parent.join(format!(
-        ".{}.{}",
-        name.to_string_lossy(),
-        crate::files::token()
-    ));
-
-    let result = (|| -> Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(mode)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&temporary)
-            .map_err(context("Create replacement for", path))?;
-        write(&mut file).map_err(context("Write replacement for", path))?;
-        file.sync_all()
-            .map_err(context("Sync replacement for", path))?;
-
-        place(&temporary)
-    })();
-    let _ = fs::remove_file(&temporary);
-
-    result
-}
-
-/// Replace `path` with `bytes` in one rename, so readers see the old file
-/// or the new one, never part of either. The file gets exactly `mode`:
-/// the umask would otherwise narrow it, and a file shared with the helper
-/// (such as the onboarding request) must stay readable there.
-pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    write_beside(
-        path,
-        mode,
-        |file| {
-            file.set_permissions(fs::Permissions::from_mode(mode))?;
-            Ok(file.write_all(bytes)?)
-        },
-        |temporary| fs::rename(temporary, path).map_err(context("Place replacement at", path)),
-    )
-}
-
-/// [`write_atomic`] for a file only this account may read, making its
-/// missing folders private (0700) first.
-pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)
-            .map_err(context("Create private directory", parent))?;
-    }
-
-    write_atomic(path, bytes, 0o600)
 }
 
 /// Resolve the directory holding `path`, keeping its final entry as named.
@@ -365,139 +279,4 @@ pub(crate) fn resolve_path(path: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_output_placement_preserves_the_helper_on_reload() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let original = crate::test_support::client_in(directory.path()).config;
-        let moved = Config {
-            output_dir: directory.path().join("elsewhere"),
-            ..original.clone()
-        };
-        assert!(original.same_helper(&moved));
-        assert_ne!(original, moved);
-        for changed in [
-            Config {
-                helper_uid: original.helper_uid + 1,
-                ..original.clone()
-            },
-            Config {
-                socket_path: directory.path().join("another-daemon"),
-                ..original.clone()
-            },
-            Config {
-                identity_probe: directory.path().join("another-probe"),
-                ..original.clone()
-            },
-            Config {
-                input_socket: directory.path().join("another-input"),
-                ..original.clone()
-            },
-        ] {
-            assert!(!original.same_helper(&changed), "{changed:?}");
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn a_settings_open_failure_names_only_the_step_and_cause() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("missing.toml");
-        let cause = fs::File::open(&path).unwrap_err();
-        let error = Config::read(&path).unwrap_err();
-        assert_eq!(error.code, Code::Io);
-        assert!(!error.uncertain);
-        assert_eq!(error.error, format!("Open settings: {cause}"));
-    }
-
-    #[test]
-    fn a_settings_read_failure_names_the_path_once_and_keeps_the_cause() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = fs::canonicalize(directory.path()).unwrap();
-        let cause = fs::read(&path).unwrap_err();
-        let error = Config::load(&path).unwrap_err();
-        assert_eq!(error.code, Code::ConfigInvalid);
-        assert!(!error.uncertain);
-        assert_eq!(
-            error.error,
-            format!(
-                "Atlas could not read its settings in {}: Read settings: {cause}",
-                crate::ui::text::tilde(&path)
-            )
-        );
-    }
-
-    /// A probe that is a link keeps its own path, so install replaces the
-    /// link and never the executable it points to.
-    #[test]
-    fn the_probe_path_is_not_followed_through_a_link() {
-        let dir = tempfile::tempdir().unwrap();
-        let real = dir.path().join("App/atlas");
-        fs::create_dir_all(real.parent().unwrap()).unwrap();
-        fs::write(&real, b"").unwrap();
-        let link = dir.path().join("shared/atlas");
-        fs::create_dir_all(link.parent().unwrap()).unwrap();
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-
-        let text = format!(
-            "helper_uid = 502\nsocket_path = \"s.sock\"\nidentity_probe = \"{}\"\n\
-             input_socket = \"i.sock\"\noutput_dir = \"out\"\n",
-            link.display()
-        );
-        let config = Config::parse(text.as_bytes(), &dir.path().join("c.toml")).unwrap();
-        let shared = fs::canonicalize(link.parent().unwrap()).unwrap();
-        assert_eq!(config.identity_probe, shared.join("atlas"));
-    }
-
-    #[test]
-    fn atomic_writes_replace_whole_files_and_leave_nothing_behind() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("deep/record.json");
-        save_private(&path, b"first").unwrap();
-        save_private(&path, b"second").unwrap();
-        assert_eq!(fs::read(&path).unwrap(), b"second");
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-
-        let error = write_beside(
-            &path,
-            0o600,
-            |_| Err(std::io::Error::from_raw_os_error(libc::EACCES).into()),
-            |_| unreachable!("nothing is placed after a failed write"),
-        )
-        .unwrap_err();
-        assert_eq!(error.code, Code::Io);
-        assert!(!error.uncertain);
-        assert!(error.error.starts_with("Write replacement for"), "{error}");
-        assert!(error.error.contains(&path.display().to_string()), "{error}");
-        assert!(error.error.contains("os error 13"), "{error}");
-        assert_eq!(fs::read(&path).unwrap(), b"second");
-        let entries = fs::read_dir(path.parent().unwrap()).unwrap().count();
-        assert_eq!(entries, 1, "no temporary file is left behind");
-    }
-
-    /// The umask (022 at least, in tests) never narrows the mode asked for.
-    #[test]
-    fn atomic_writes_get_exactly_the_mode_asked_for() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("shared.json");
-        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
-
-        write_atomic(&path, b"{}", 0o666).unwrap();
-        assert_eq!(mode(&path), 0o666);
-
-        write_atomic(&path, b"{}", 0o644).unwrap();
-        assert_eq!(mode(&path), 0o644);
-
-        write_atomic(&path, b"{}", 0o600).unwrap();
-        assert_eq!(mode(&path), 0o600, "a private file stays private");
-    }
-}
+mod tests;

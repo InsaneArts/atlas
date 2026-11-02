@@ -1,22 +1,20 @@
-use super::resources::{APP_MIME, SCREEN, SCREEN_SCRIPT, VERSIONS};
+use super::control::{ACTIONS, LEASE, LeaseRequest, checked};
+use super::presentation::{only_title_and_size, own_session, said, summary};
+use super::resources::{APP_MIME, FRAME_META, SCREEN, SCREEN_SCRIPT, VERSIONS};
 use super::*;
+use crate::{helper_info::open_apps, host_session::Key};
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 pub(super) fn server(dir: &std::path::Path) -> Server {
     // The controller's notes (a Stop among them) stay in this test's folder.
-    Server {
-        client: crate::test_support::client_in(dir),
-        config: dir.join("u.toml"),
-        port: 1,
-        read_only: false,
-        app_views: OnceLock::new(),
-        views: AtomicBool::new(false),
-        last: Mutex::new(None),
-        framed: Mutex::new(None),
-        shared: Mutex::new(None),
-        held: Mutex::new(None),
-        icons: Icons::default(),
-        host_session: None,
-    }
+    Server::new(
+        crate::test_support::client_in(dir),
+        dir.join("u.toml"),
+        1,
+        false,
+        None,
+    )
 }
 
 async fn ask(server: &Server, method: &str, params: Value) -> Value {
@@ -953,14 +951,13 @@ async fn taking_control_returns_its_picture_and_input_keeps_the_displayed_frames
         at: Instant::now(),
     });
     let click = json!([{"type": "pointer", "phase": "down", "x": 1, "y": 1}]);
-    server.send_input(&picture["key"], &click).await.unwrap();
+    server
+        .send_input(picture["key"].as_str(), &click)
+        .await
+        .unwrap();
     assert_eq!(received.lock().await["frame"], "shown");
     assert_eq!(
-        server
-            .send_input(&Value::Null, &click)
-            .await
-            .unwrap_err()
-            .code,
+        server.send_input(None, &click).await.unwrap_err().code,
         "stale-frame"
     );
     serving.abort();
@@ -977,18 +974,26 @@ async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
     ));
 
     *server.held.lock().await = Some(held("b", now));
-    server.settle(&held("a", now), &lost, true).await;
+    server
+        .settle(&held("a", now), &lost, LeaseRequest::Renew)
+        .await;
     assert_eq!(server.held.lock().await.as_ref().unwrap().lease, "b");
 
     server
-        .settle(&held("b", now), &Err(Error::new(Code::Busy, "busy")), true)
+        .settle(
+            &held("b", now),
+            &Err(Error::new(Code::Busy, "busy")),
+            LeaseRequest::Renew,
+        )
         .await;
     assert!(
         server.held.lock().await.is_some(),
         "a busy helper ends nothing"
     );
     let unanswered = Err(Error::new(Code::Menubar, "Atlas's menu bar didn't answer"));
-    server.settle(&held("b", now), &unanswered, true).await;
+    server
+        .settle(&held("b", now), &unanswered, LeaseRequest::Renew)
+        .await;
     assert!(
         server.held.lock().await.is_some(),
         "an answer that never came ends nothing"
@@ -997,7 +1002,7 @@ async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
     let long_ago = now - Duration::from_secs(5);
     *server.held.lock().await = Some(held("b", long_ago));
     server
-        .settle(&held("b", long_ago), &Ok(json!({})), false)
+        .settle(&held("b", long_ago), &Ok(json!({})), LeaseRequest::Input)
         .await;
     assert_eq!(
         server.held.lock().await.as_ref().unwrap().kept,
@@ -1005,14 +1010,16 @@ async fn a_late_failure_on_older_control_never_ends_control_taken_since() {
         "input keeps nothing"
     );
     server
-        .settle(&held("b", long_ago), &Ok(json!({})), true)
+        .settle(&held("b", long_ago), &Ok(json!({})), LeaseRequest::Renew)
         .await;
     assert!(
         server.held.lock().await.as_ref().unwrap().kept > long_ago,
         "a renewal keeps it"
     );
 
-    server.settle(&held("b", now), &lost, true).await;
+    server
+        .settle(&held("b", now), &lost, LeaseRequest::Renew)
+        .await;
     assert!(
         server.held.lock().await.is_none(),
         "its own failure ends it"
@@ -1354,7 +1361,7 @@ async fn representative_reads_keep_their_helper_request_counts() {
                     |request| {
                         let op = request["op"].as_str().unwrap();
                         operations.push(op.to_owned());
-                        Some(json!({"ok":true, op:fixture["input"][op]}))
+                        Some(json!({"ok":true, op:fixture["input"][op], "starts":{}}))
                     },
                 )
                 .await;

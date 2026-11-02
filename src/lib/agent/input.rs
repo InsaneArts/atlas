@@ -136,14 +136,14 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
         Some(expected) => Some(expected.resolve(client, &verified).await?),
         None => None,
     };
-    let epoch = verified.session().epoch.clone();
+    let epoch = &verified.session().epoch;
 
     let send = async |actions: &Value| {
         client
             .input_owned(
                 &ownership,
                 crate::actions::Batch::decode(actions),
-                Some((&epoch, Instant::now())),
+                Some((epoch, Instant::now())),
                 check.clone(),
             )
             .await
@@ -205,8 +205,7 @@ pub(super) async fn type_recorded(
         .await
         .is_err()
     {
-        report["warnings"] =
-            json!(["Operation result is valid; local metadata could not be recorded"]);
+        report["warnings"] = json!([crate::client::NOT_RECORDED]);
     }
     report
 }
@@ -262,17 +261,11 @@ impl Unconfirmed {
     /// when busy and on what was found instead of the app, so those are
     /// kept; nothing else of the reply is.
     pub(super) fn from_reply(reply: &Value) -> Self {
-        let code = reply["code"]
-            .as_str()
-            .and_then(crate::error::Code::parse)
-            .unwrap_or(Code::Input);
-        let message = reply["error"]
-            .as_str()
-            .unwrap_or("The helper did not confirm the text");
-        let mut error = Error::new(code, message);
-        if reply["uncertain"] == true {
-            error = error.uncertain();
-        }
+        let mut error = Error::refused(
+            Code::of_reply(reply, Code::Input),
+            reply,
+            "The helper did not confirm the text",
+        );
         if let Some(holder) = reply["holder"].as_str().and_then(Holder::parse) {
             error = error.held_by(holder);
         }

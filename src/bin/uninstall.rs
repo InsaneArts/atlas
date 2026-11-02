@@ -1,26 +1,20 @@
 //! Terminal questions and progress for the owned teardown operation.
+use super::{cli::Uninstall, prompt};
 use atlas::{
     error::Result,
-    ui::{
-        progress::{done, say, skipped},
-        prompt,
-    },
+    ui::progress::{done, say, skipped},
     uninstall::{self, Progress, Question},
 };
 use serde_json::Value;
 use std::path::Path;
 
-pub(super) async fn run(
-    config: &Path,
-    keep_config: bool,
-    yes: bool,
-    remove_helper: bool,
-) -> Result<Value> {
+pub(super) async fn run(config: &Path, args: Uninstall) -> Result<Value> {
+    super::dispatch::as_yourself("uninstall")?;
     uninstall::run(
         config,
-        keep_config,
-        yes,
-        remove_helper,
+        args.keep_config,
+        args.yes,
+        args.remove_helper,
         &|question| {
             prompt::confirm(
                 match question {

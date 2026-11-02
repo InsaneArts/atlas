@@ -14,16 +14,16 @@ pub(crate) use receipt::{Intact, Kept, ReadSpan, ReceiptId, intact};
 
 use crate::{
     client::Client,
-    daemon::protocol::{
-        FileIdentity, READ, READ_PATH_MAX, READ_RANGE_MAX, READ_SIZE_MAX, ReadRefusal, SessionPin,
-    },
     error::{Code, Error, Result},
     files::write_private,
-    host_session::now_ms,
+    protocol::{
+        FileIdentity, READ, READ_PATH_MAX, READ_RANGE_MAX, READ_SIZE_MAX, ReadRefusal, SessionPin,
+    },
     task::{record::OutputEntry, store::Store},
-    transport::{OutputError, append_event},
+    time::now_ms,
+    transport::{OutputError, append_event, refusal},
 };
-use receipt::{Receipt, VERSION};
+use receipt::{Receipt, VERSION, owner_folder};
 use scavenge::remove_abandoned;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -59,50 +59,10 @@ struct Failure {
 
 impl Failure {
     fn new(reason: ReadRefusal, source: &str) -> Self {
-        let error = match reason {
-            ReadRefusal::Outside => format!(
-                "{source} is not in the helper's home, its temporary folder or /tmp, so it was not collected"
-            ),
-            ReadRefusal::Protected => format!(
-                "{source} is in a folder macOS guards, such as Documents or Library, so it was not collected"
-            ),
-            ReadRefusal::Symlink => format!(
-                "{source} goes through a link, which Atlas never follows; collect the file itself"
-            ),
-            ReadRefusal::NotRegular => {
-                format!("{source} is not a regular file; archive a folder first with ditto -c -k")
-            }
-            ReadRefusal::Dataless => format!("{source}'s contents are not on this Mac yet"),
-            ReadRefusal::Owner => format!("{source} does not belong to the helper"),
-            ReadRefusal::TooLarge => format!(
-                "{source} is larger than allowed: pass --max-size (at most 1G), and collect at most 1 GiB a call"
-            ),
-            ReadRefusal::Changing => format!(
-                "{source} changed in the last 2 seconds, or while it was read, so it was not collected; wait until whatever writes it is done"
-            ),
-            ReadRefusal::Missing => format!("There is no {source} in the helper"),
-            ReadRefusal::Name => format!("{source} has no name that can be a file here"),
-            ReadRefusal::Exists => {
-                format!("A file named like {source} was already collected in this call")
-            }
-            ReadRefusal::Space => format!("There is not enough room here for {source}"),
-            ReadRefusal::SessionChanged => {
-                "The helper changed since Atlas checked it, so this file was not collected".into()
-            }
-            ReadRefusal::OnConsole => {
-                "The helper came on screen, so this file was not collected".into()
-            }
-            ReadRefusal::Unreadable | ReadRefusal::Gone => format!("{source} could not be read"),
-        };
-        Self { reason, error }
-    }
-
-    /// Whether the helper itself changed, so no later file is read either.
-    fn ends_the_call(&self) -> bool {
-        matches!(
-            self.reason,
-            ReadRefusal::SessionChanged | ReadRefusal::OnConsole
-        )
+        Self {
+            reason,
+            error: format!("{source}: {}", reason.said()),
+        }
     }
 }
 
@@ -139,7 +99,7 @@ pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result
     }
 
     let verified = client.verify_offering(READ, OLDER).await?;
-    collected(client, verified.pin(), files, max_size, started).await
+    collected(client, verified.pin()?, files, max_size, started).await
 }
 
 /// [`collect`] once the helper is verified, every read pinned to the
@@ -147,7 +107,7 @@ pub async fn collect(client: &Client, files: &[String], max_size: u64) -> Result
 /// so a helper that changed between two files has the rest refused.
 async fn collected(
     client: &Client,
-    pin: Option<SessionPin>,
+    pin: SessionPin,
     files: &[String],
     max_size: u64,
     started: Instant,
@@ -159,20 +119,14 @@ async fn collected(
 
     let at = now_ms();
     let receipt = ReceiptId::new(at);
-    let owner = client
-        .task
-        .as_ref()
-        .map_or_else(|| UNLABELLED.to_owned(), |task| task.key().to_string());
+    let owner = owner_folder(client.task.as_ref().map(|task| task.key()));
     let folder = private_folders(output, &[COLLECTED, &owner, receipt.as_str()])?;
     let copies = private_folders(&folder, &["files"])?;
 
-    let Copied {
-        kept,
-        failed,
-        total,
-    } = copy_each(client, pin, files, max_size, &folder, &copies).await;
+    let (kept, failed) = copy_each(client, pin, files, max_size, &folder, &copies).await;
+    let total: u64 = kept.iter().map(|file| file.size).sum();
     let receipt = write_receipt(client, &folder, receipt, at, &kept)?;
-    let warnings = note_output(client, output, receipt.as_ref(), at, &kept, total);
+    let warning = note_output(client, output, receipt.as_ref(), at, &kept, total);
 
     let _ = client
         .record(
@@ -183,28 +137,20 @@ async fn collected(
         )
         .await;
 
-    Ok(reply(files.len(), receipt, kept, failed, &warnings))
-}
-
-/// What a call's files came to: the copies kept, the files that failed
-/// and why, and the bytes kept, every copy together.
-struct Copied {
-    kept: Vec<Kept>,
-    failed: Vec<(String, Failure)>,
-    total: u64,
+    Ok(reply(files.len(), receipt, kept, failed, warning))
 }
 
 /// Collect each of `files` in turn, its partial file in `folder` and its
-/// copy in `copies`. Once the helper itself changed, every later file is
-/// refused unread.
+/// copy in `copies`: the copies kept, and the files that failed and why.
+/// Once the helper itself changed, every later file is refused unread.
 async fn copy_each(
     client: &Client,
-    pin: Option<SessionPin>,
+    pin: SessionPin,
     files: &[String],
     max_size: u64,
     folder: &Path,
     copies: &Path,
-) -> Copied {
+) -> (Vec<Kept>, Vec<(String, Failure)>) {
     let mut kept: Vec<Kept> = Vec::new();
     let mut failed: Vec<(String, Failure)> = Vec::new();
     let mut total = 0;
@@ -235,16 +181,12 @@ async fn copy_each(
                 kept.push(file);
             }
             Err(failure) => {
-                changed |= failure.ends_the_call();
+                changed |= failure.reason.ends_the_call();
                 failed.push((source.clone(), failure));
             }
         }
     }
-    Copied {
-        kept,
-        failed,
-        total,
-    }
+    (kept, failed)
 }
 
 /// Write the receipt of the copies `kept` into `folder`, made at `at`: the
@@ -271,8 +213,8 @@ fn write_receipt(
     Ok(Some(receipt))
 }
 
-/// Note the collection `receipt` in its task's record in `output`: the
-/// warnings, when it could not be.
+/// Note the collection `receipt` in its task's record in `output`: a
+/// warning, when it could not be.
 fn note_output(
     client: &Client,
     output: &Path,
@@ -280,25 +222,22 @@ fn note_output(
     at: u64,
     kept: &[Kept],
     total: u64,
-) -> Vec<&'static str> {
-    let mut warnings = Vec::new();
-    if let (Some(receipt), Some(task)) = (receipt, &client.task) {
-        let entry = OutputEntry {
-            receipt: receipt.clone(),
-            at,
-            files: kept.len(),
-            bytes: total,
-            later: Map::new(),
-        };
-        let noted = Store::at(output).update(task, now_ms(), |record| {
-            record.noted_output(entry);
-            Ok(())
-        });
-        if noted.is_err() {
-            warnings.push("Atlas could not note this collection in the task's record");
-        }
-    }
-    warnings
+) -> Option<&'static str> {
+    let (receipt, task) = (receipt?, client.task.as_ref()?);
+    let entry = OutputEntry {
+        receipt: receipt.clone(),
+        at,
+        files: kept.len(),
+        bytes: total,
+        later: Map::new(),
+    };
+    let noted = Store::at(output).update(task, now_ms(), |record| {
+        record.noted_output(entry);
+        Ok(())
+    });
+    noted
+        .is_err()
+        .then_some("Atlas could not note this collection in the task's record")
 }
 
 /// The reply to a call that asked for `asked` files: its receipt, the
@@ -308,7 +247,7 @@ fn reply(
     receipt: Option<ReceiptId>,
     kept: Vec<Kept>,
     failed: Vec<(String, Failure)>,
-    warnings: &[&str],
+    warning: Option<&str>,
 ) -> Value {
     let mut reply = json!({
         "ok": failed.is_empty(),
@@ -331,8 +270,8 @@ fn reply(
             })
             .collect();
     }
-    if !warnings.is_empty() {
-        reply["warnings"] = json!(warnings);
+    if let Some(warning) = warning {
+        reply["warnings"] = json!([warning]);
     }
     reply
 }
@@ -381,15 +320,47 @@ struct Received {
     in_home: Option<String>,
 }
 
+/// A read's final reply. A field absent or of another type is none here, and
+/// each step decides what that means for it.
+struct ReadReply {
+    file: Option<Received>,
+    length: Option<u64>,
+    sha256: Option<String>,
+}
+
 impl One<'_> {
+    fn fail(&self, reason: ReadRefusal) -> Failure {
+        Failure::new(reason, self.source)
+    }
+
+    fn decoded(&self, reply: &Value) -> ReadReply {
+        let file = &reply["file"];
+        let identity: Option<FileIdentity> = serde_json::from_value(json!({
+            "dev": file["dev"],
+            "ino": file["ino"],
+            "size": file["size"],
+            "mtime": file["mtime"],
+            "ctime": file["ctime"],
+        }))
+        .ok();
+        ReadReply {
+            file: identity.map(|identity| Received {
+                identity,
+                real: file["path"].as_str().unwrap_or(self.source).to_owned(),
+                in_home: file["inHome"].as_str().map(str::to_owned),
+            }),
+            length: reply["length"].as_u64(),
+            sha256: reply["sha256"].as_str().map(str::to_owned),
+        }
+    }
+
     /// Collect it, removing whatever was begun when it fails.
     async fn collect(
         &self,
         client: &Client,
-        pin: Option<SessionPin>,
+        pin: SessionPin,
     ) -> std::result::Result<Kept, Failure> {
         let collected = async {
-            let fail = |reason| Failure::new(reason, self.source);
             let name = self.name()?;
 
             let started = now_ms();
@@ -399,7 +370,7 @@ impl One<'_> {
                 .mode(0o600)
                 .custom_flags(libc::O_NOFOLLOW)
                 .open(&self.partial)
-                .map_err(|_| fail(ReadRefusal::Space))?;
+                .map_err(|_| self.fail(ReadRefusal::Space))?;
             let mut hasher = Sha256::new();
             let Received {
                 identity,
@@ -409,7 +380,9 @@ impl One<'_> {
             let sha256 = crate::name::hex(&hasher.finalize());
             self.confirm(client, pin, identity, &mut partial, &sha256)
                 .await?;
-            partial.sync_all().map_err(|_| fail(ReadRefusal::Space))?;
+            partial
+                .sync_all()
+                .map_err(|_| self.fail(ReadRefusal::Space))?;
             drop(partial);
 
             let path = self.link(name)?;
@@ -433,20 +406,19 @@ impl One<'_> {
     /// The name its copy takes: the source's own, when it can be a file
     /// here and no file collected before it in this call has it.
     fn name(&self) -> std::result::Result<&str, Failure> {
-        let fail = |reason| Failure::new(reason, self.source);
         let name = Path::new(self.source)
             .file_name()
             .and_then(|name| name.to_str())
             .filter(|name| {
                 !name.is_empty() && name.len() <= NAME_MAX && !name.chars().any(char::is_control)
             })
-            .ok_or_else(|| fail(ReadRefusal::Name))?;
+            .ok_or_else(|| self.fail(ReadRefusal::Name))?;
         if self
             .taken
             .iter()
             .any(|taken| taken.eq_ignore_ascii_case(name))
         {
-            return Err(fail(ReadRefusal::Exists));
+            return Err(self.fail(ReadRefusal::Exists));
         }
         Ok(name)
     }
@@ -457,14 +429,11 @@ impl One<'_> {
     async fn receive(
         &self,
         client: &Client,
-        pin: Option<SessionPin>,
+        pin: SessionPin,
         partial: &mut File,
         hasher: &mut Sha256,
     ) -> std::result::Result<Received, Failure> {
-        let fail = |reason| Failure::new(reason, self.source);
-        let mut identity: Option<FileIdentity> = None;
-        let mut real = String::new();
-        let mut in_home = None;
+        let mut first: Option<Received> = None;
         let mut offset = 0;
         loop {
             let mut request = json!({
@@ -474,56 +443,38 @@ impl One<'_> {
                 "length": READ_RANGE_MAX,
                 "maxSize": self.max_size,
             });
-            if let Some(expect) = &identity {
-                request["expect"] = json!(expect);
+            if let Some(first) = &first {
+                request["expect"] = json!(first.identity);
             }
-            if let Some(pin) = pin {
-                request["session"] = json!(pin);
+            request["session"] = json!(pin);
+            let (reply, received) = self.read_part(client, &request, partial, hasher).await?;
+            let file = reply
+                .file
+                .ok_or_else(|| self.fail(ReadRefusal::Unreadable))?;
+            if reply.length != Some(received) {
+                return Err(self.fail(ReadRefusal::Changing));
             }
-            let (reply, received) = read_part(client, &request, partial, hasher).await?;
-            let file: FileIdentity = serde_json::from_value(json!({
-                "dev": reply["file"]["dev"],
-                "ino": reply["file"]["ino"],
-                "size": reply["file"]["size"],
-                "mtime": reply["file"]["mtime"],
-                "ctime": reply["file"]["ctime"],
-            }))
-            .map_err(|_| fail(ReadRefusal::Unreadable))?;
-            if reply["length"].as_u64() != Some(received) {
-                return Err(fail(ReadRefusal::Changing));
-            }
-            if identity.is_none() {
-                if file.size > self.room {
-                    return Err(fail(ReadRefusal::TooLarge));
+            let size = file.identity.size;
+            if let Some(first) = &first {
+                if first.identity != file.identity {
+                    return Err(self.fail(ReadRefusal::Changing));
                 }
-                if !room_for(self.copies, file.size) {
-                    return Err(fail(ReadRefusal::Space));
+            } else {
+                if size > self.room {
+                    return Err(self.fail(ReadRefusal::TooLarge));
                 }
-                real = reply["file"]["path"]
-                    .as_str()
-                    .unwrap_or(self.source)
-                    .to_owned();
-                in_home = reply["file"]["inHome"].as_str().map(str::to_owned);
-            } else if identity != Some(file) {
-                return Err(fail(ReadRefusal::Changing));
+                if !room_for(self.copies, size) {
+                    return Err(self.fail(ReadRefusal::Space));
+                }
+                first = Some(file);
             }
-            identity = Some(file);
             offset += received;
-            if offset >= file.size || received == 0 {
-                break;
+            if offset >= size || received == 0 {
+                return first
+                    .filter(|first| offset == first.identity.size)
+                    .ok_or_else(|| self.fail(ReadRefusal::Changing));
             }
         }
-        let Some(identity) = identity else {
-            return Err(fail(ReadRefusal::Unreadable));
-        };
-        if offset != identity.size {
-            return Err(fail(ReadRefusal::Changing));
-        }
-        Ok(Received {
-            identity,
-            real,
-            in_home,
-        })
     }
 
     /// Check that the helper's digest of the version `identity` is
@@ -531,7 +482,7 @@ impl One<'_> {
     async fn confirm(
         &self,
         client: &Client,
-        pin: Option<SessionPin>,
+        pin: SessionPin,
         identity: FileIdentity,
         partial: &mut File,
         sha256: &str,
@@ -544,12 +495,12 @@ impl One<'_> {
             "maxSize": self.max_size,
             "expect": identity,
         });
-        if let Some(pin) = pin {
-            request["session"] = json!(pin);
-        }
-        let (reply, _) = read_part(client, &request, partial, &mut Sha256::new()).await?;
-        if reply["sha256"].as_str() != Some(sha256) {
-            return Err(Failure::new(ReadRefusal::Changing, self.source));
+        request["session"] = json!(pin);
+        let (reply, _) = self
+            .read_part(client, &request, partial, &mut Sha256::new())
+            .await?;
+        if reply.sha256.as_deref() != Some(sha256) {
+            return Err(self.fail(ReadRefusal::Changing));
         }
         Ok(())
     }
@@ -557,84 +508,84 @@ impl One<'_> {
     /// Link the finished partial file into the copies folder as `name`,
     /// never over anything: the copy's path.
     fn link(&self, name: &str) -> std::result::Result<PathBuf, Failure> {
-        let fail = |reason| Failure::new(reason, self.source);
         let path = self.copies.join(name);
         match fs::hard_link(&self.partial, &path) {
             Ok(()) => Ok(path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(fail(ReadRefusal::Exists))
+                Err(self.fail(ReadRefusal::Exists))
             }
-            Err(_) => Err(fail(ReadRefusal::Space)),
+            Err(_) => Err(self.fail(ReadRefusal::Space)),
         }
+    }
+
+    /// Send one read `request` and write the bytes of its `data` events to
+    /// `partial` as they arrive, hashing them: the final reply, and how many
+    /// bytes came. A refusal is the reason it gives.
+    async fn read_part(
+        &self,
+        client: &Client,
+        request: &Value,
+        partial: &mut File,
+        hasher: &mut Sha256,
+    ) -> std::result::Result<(ReadReply, u64), Failure> {
+        let mut buffer = Vec::new();
+        let mut received = 0_u64;
+        let mut written = Ok(());
+        let reply = async {
+            let pending = client.transport.connect().await?.dispatch(request).await?;
+            pending
+                .finish_each(&mut |event| {
+                    if event["event"] != "data" {
+                        return Ok(());
+                    }
+                    buffer.clear();
+                    append_event(&event, &mut buffer, READ_RANGE_MAX as usize).map_err(bad_part)?;
+                    received += buffer.len() as u64;
+                    if received > READ_RANGE_MAX {
+                        return Err(bad_part(OutputError::Oversized));
+                    }
+                    hasher.update(&buffer);
+                    if let Err(error) = partial.write_all(&buffer) {
+                        written = Err(error);
+                        return Err(Error::new(Code::Io, "The copy could not be written"));
+                    }
+                    Ok(())
+                })
+                .await
+        }
+        .await;
+        if written.is_err() {
+            return Err(self.fail(ReadRefusal::Space));
+        }
+        let reply = reply.map_err(|error| self.fail(helper_changed(error.code)))?;
+        if reply["ok"] != true {
+            let reason =
+                ReadRefusal::of(&reply).unwrap_or_else(|| helper_changed(refusal(&reply).code));
+            return Err(self.fail(reason));
+        }
+        Ok((self.decoded(&reply), received))
     }
 }
 
-/// Send one read `request` and write the bytes of its `data` events to
-/// `partial` as they arrive, hashing them: the final reply, and how many
-/// bytes came. A refusal is the reason it gives.
-async fn read_part(
-    client: &Client,
-    request: &Value,
-    partial: &mut File,
-    hasher: &mut Sha256,
-) -> std::result::Result<(Value, u64), Failure> {
-    let source = request["path"].as_str().unwrap_or_default();
-    let fail = |reason| Failure::new(reason, source);
-    let mut buffer = Vec::new();
-    let mut received = 0_u64;
-    let mut written = Ok(());
-    let reply = async {
-        let pending = client.transport.connect().await?.dispatch(request).await?;
-        pending
-            .finish_each(&mut |event| {
-                if event["event"] != "data" {
-                    return Ok(());
-                }
-                buffer.clear();
-                append_event(&event, &mut buffer, READ_RANGE_MAX as usize).map_err(|error| {
-                    Error::new(
-                        Code::Protocol,
-                        match error {
-                            OutputError::Malformed => "A part of the file came back malformed",
-                            OutputError::Oversized => "A part of the file came back too large",
-                        },
-                    )
-                })?;
-                received += buffer.len() as u64;
-                if received > READ_RANGE_MAX {
-                    return Err(Error::new(
-                        Code::Protocol,
-                        "A part of the file came back too large",
-                    ));
-                }
-                hasher.update(&buffer);
-                if let Err(error) = partial.write_all(&buffer) {
-                    written = Err(error);
-                    return Err(Error::new(Code::Io, "The copy could not be written"));
-                }
-                Ok(())
-            })
-            .await
+/// The protocol failure of a part that could not be taken.
+fn bad_part(error: OutputError) -> Error {
+    Error::new(
+        Code::Protocol,
+        match error {
+            OutputError::Malformed => "A part of the file came back malformed",
+            OutputError::Oversized => "A part of the file came back too large",
+        },
+    )
+}
+
+/// The reason a read that failed with `code` was not served: the helper
+/// itself changed, which ends the call, or the file could not be read.
+fn helper_changed(code: Code) -> ReadRefusal {
+    match code {
+        Code::SessionChanged => ReadRefusal::SessionChanged,
+        Code::OnConsole => ReadRefusal::OnConsole,
+        _ => ReadRefusal::Unreadable,
     }
-    .await;
-    if written.is_err() {
-        return Err(fail(ReadRefusal::Space));
-    }
-    let reply = reply.map_err(|error| match error.code {
-        Code::SessionChanged => fail(ReadRefusal::SessionChanged),
-        Code::OnConsole => fail(ReadRefusal::OnConsole),
-        _ => fail(ReadRefusal::Unreadable),
-    })?;
-    if reply["ok"] != true {
-        let reason = match (ReadRefusal::of(&reply), reply["code"].as_str()) {
-            (Some(reason), _) => reason,
-            (None, Some("session-changed")) => ReadRefusal::SessionChanged,
-            (None, Some("on-console")) => ReadRefusal::OnConsole,
-            (None, _) => ReadRefusal::Unreadable,
-        };
-        return Err(fail(reason));
-    }
-    Ok((reply, received))
 }
 
 /// Whether the volume of `folder` has room for `size` bytes and

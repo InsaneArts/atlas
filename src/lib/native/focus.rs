@@ -12,10 +12,10 @@ use crate::{
     screen::{
         elements::Element,
         select::{ElementFilter, shown_name},
-        windows::{self, Bounds, Dock, Kind, Listed, Screen, Window},
+        windows::{self, Bounds, Dock, Listed, Screen, Window},
     },
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::time::{Duration, Instant};
 
@@ -59,12 +59,12 @@ const CONTAINERS: [&str; 9] = [
 ];
 
 /// How every refusal ends: nothing of the refused action was posted.
-const NOT_SENT: &str = "so this action and the rest were not sent";
+const NOT_SENT: &str = "this action and the rest were not sent";
 
 /// The neutral action destination, used here for focus admission.
-pub(crate) use crate::actions::Target as Need;
+pub(super) use crate::actions::Target as Need;
 
-/// Where on its way a pointer action is checked, as a refusal names it.
+/// Where on its way a pointer action is checked.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Spot {
     /// Where it presses, scrolls or moves.
@@ -73,19 +73,10 @@ enum Spot {
     Drop,
 }
 
-impl Spot {
-    fn words(self) -> &'static str {
-        match self {
-            Self::At => "that point",
-            Self::Drop => "the drop point",
-        }
-    }
-}
-
 /// Why an action was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum Reason {
+pub(super) enum Reason {
     /// Another app, or none, has keyboard focus.
     App,
     /// Another app's window, or none, is on top at the point.
@@ -102,6 +93,44 @@ enum Reason {
     /// What is in front could not be told; `unread` says why when the app
     /// was.
     Unreadable,
+}
+
+impl Reason {
+    /// What is wrong and what to do about it.
+    fn said(self) -> &'static str {
+        match self {
+            Self::App => "The target app is not in front or has quit, so bring it to the front",
+            Self::Point => {
+                "The app's window is not on top at that point, so bring it there or pick another \
+                 point"
+            }
+            Self::Window => {
+                "The named window is not in front, so bring it to the front or look again"
+            }
+            Self::Sheet => "A sheet or dialog is over the target window, so answer it first",
+            Self::Field => {
+                "The named field does not have keyboard focus or cannot be told apart, so click \
+                 it or give its exact name"
+            }
+            Self::Disabled => "That field is disabled, so enable it or name another field",
+            Self::Unreadable => {
+                "Atlas could not tell what is in front, so click where the app shows and try again"
+            }
+        }
+    }
+
+    /// Why `error` refused the action, when it says.
+    pub(super) fn of(error: &Error) -> Option<Self> {
+        Self::deserialize(error.details.get("reason")?).ok()
+    }
+
+    /// Whether a focus request may yet end this refusal by taking effect.
+    pub(super) fn may_settle(self) -> bool {
+        match self {
+            Self::App | Self::Point | Self::Window | Self::Field => true,
+            Self::Sheet | Self::Disabled | Self::Unreadable => false,
+        }
+    }
 }
 
 /// The focused element found where the expected field should have been:
@@ -212,12 +241,7 @@ impl Live {
 
     /// The time left to look, or an error once it is spent.
     fn left(&self) -> Result<Duration> {
-        let left = self.deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err(Unread::Slow.error());
-        }
-
-        Ok(left)
+        ax::remaining(self.deadline, Instant::now())
     }
 }
 
@@ -226,7 +250,7 @@ impl Look for Live {
     /// focused app is read from.
     fn focused(&mut self) -> Result<Option<i64>> {
         let left = self.left()?;
-        super::ax::focused_pid(left.min(FOCUS_TIMEOUT))
+        ax::focused_pid(left.min(FOCUS_TIMEOUT))
     }
 
     fn app_focused(&mut self, pid: i64) -> Result<bool> {
@@ -253,21 +277,20 @@ impl Look for Live {
     /// The Dock as Accessibility reports it, from the Dock that owns a
     /// window in the list, in what time is left once the list is read.
     fn dock(&mut self) -> Dock {
-        if self.dock.is_none() {
-            let deadline = self.deadline;
-            let dock = match self.windows() {
-                Ok(listed) => match deadline.checked_duration_since(Instant::now()) {
-                    Some(left) if !left.is_zero() => {
-                        super::ax::dock(listed, left.min(super::ax::DOCK_TIMEOUT))
-                    }
-                    _ => Dock::Unread,
-                },
-                Err(_) => Dock::Unread,
-            };
-            self.dock = Some(dock);
+        if let Some(dock) = &self.dock {
+            return dock.clone();
         }
 
-        self.dock.clone().unwrap_or_default()
+        let deadline = self.deadline;
+        let dock = self
+            .windows()
+            .and_then(|listed| {
+                let left = ax::remaining(deadline, Instant::now())?;
+                Ok(ax::dock(listed, left.min(ax::DOCK_TIMEOUT)))
+            })
+            .unwrap_or(Dock::Unread);
+        self.dock = Some(dock.clone());
+        dock
     }
 }
 
@@ -333,14 +356,11 @@ fn require(
             .and_then(|()| point(expect, to, Spot::Drop, display, look))
             .map(|()| None),
     };
-    let unread = outcome.as_ref().is_err_and(|error| {
-        error
-            .details
-            .get("reason")
-            .is_some_and(|why| why == "unreadable")
-    });
+    let unread = outcome
+        .as_ref()
+        .is_err_and(|error| Reason::of(error) == Some(Reason::Unreadable));
     if (outcome.is_ok() || unread) && look.now() >= deadline {
-        return Err(unreadable().with("unread", json!(Unread::Slow)));
+        return Err(refused(Reason::Unreadable).with("unread", json!(Unread::Slow)));
     }
 
     outcome
@@ -348,27 +368,19 @@ fn require(
 
 /// Prove the target app is active, independently of its window focus.
 fn active(expect: &Expect, look: &mut impl Look) -> Result<()> {
-    let focused = look.focused().map_err(|_| unreadable())?;
+    let focused = look.focused().map_err(unreadable_from)?;
     if focused.is_none() && look.app_focused(expect.pid()).map_err(unread_by)? {
         return Ok(());
     }
     let Some(pid) = focused else {
-        return Err(refused(
-            Reason::App,
-            format!("No app has keyboard focus, {NOT_SENT}"),
-            None,
-        ));
+        return Err(refused(Reason::App));
     };
     if pid == expect.pid() {
         return Ok(());
     }
 
     let found = Found::named(pid, look.windows().unwrap_or_default());
-    let message = match &found.app {
-        Some(name) => format!("{name} has keyboard focus, not the app this was for, {NOT_SENT}"),
-        None => format!("Another app has keyboard focus, {NOT_SENT}"),
-    };
-    Err(refused(Reason::App, message, Some(found)))
+    Err(refused_with(Reason::App, found))
 }
 
 /// With the app in focus, the window and the field it names, judged from
@@ -386,7 +398,7 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>>
     let keyboard = look.keyboard(expect.pid(), judged).map_err(unread_by)?;
     let verdict = match expect.window() {
         Some(wanted) => {
-            let listed = look.windows().map_err(|_| unreadable())?;
+            let listed = look.windows().map_err(unreadable_from)?;
             in_window(wanted, expect.pid(), &keyboard, listed)
         }
         None => Verdict::Pass,
@@ -396,11 +408,11 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>>
         None => Verdict::Pass,
     });
 
-    let (reason, message) = match verdict {
+    let reason = match verdict {
         Verdict::Pass if expect.field().is_some() => return Ok(field_role(&keyboard)),
         Verdict::Pass => return Ok(None),
         Verdict::Unknown(why) => return Err(unread_by(why.error())),
-        Verdict::Refused(reason, message) => (reason, message),
+        Verdict::Refused(reason) => reason,
     };
     let listed = look.windows().unwrap_or_default();
     let mut found = Found::named(expect.pid(), listed);
@@ -416,11 +428,7 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>>
         .focused
         .as_ref()
         .map(|focused| Field::of(&focused.element));
-    Err(refused(
-        reason,
-        format!("{message}, {NOT_SENT}"),
-        Some(found),
-    ))
+    Err(refused_with(reason, found))
 }
 
 /// The role of the field with keyboard focus, as [`FIELDS`] spells it,
@@ -435,8 +443,8 @@ fn field_role(keyboard: &Keyboard) -> Option<&'static str> {
 enum Verdict {
     /// What it checks is in place.
     Pass,
-    /// It is not, for this reason, said in these words.
-    Refused(Reason, String),
+    /// It is not, for this reason.
+    Refused(Reason),
     /// Whether it is could not be told, for this reason.
     Unknown(Unread),
 }
@@ -446,7 +454,7 @@ impl Verdict {
     fn or_else(self, next: impl FnOnce() -> Self) -> Self {
         match self {
             Self::Pass => next(),
-            other => other,
+            other @ (Self::Refused(..) | Self::Unknown(_)) => other,
         }
     }
 }
@@ -459,10 +467,7 @@ impl Verdict {
 /// other.
 fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window]) -> Verdict {
     let Some(window) = &keyboard.window else {
-        return Verdict::Refused(
-            Reason::Window,
-            "No window of the app has keyboard focus".to_owned(),
-        );
+        return Verdict::Refused(Reason::Window);
     };
     // The app itself in place of its window: it withholds its windows, as
     // apps do while the Mac's screen is locked, and no list can show one.
@@ -474,35 +479,21 @@ fn in_window(wanted: i64, pid: i64, keyboard: &Keyboard, listed: &[Window]) -> V
     match number(listed, pid, window) {
         Listed::One(number) if number == wanted => {
             if keyboard.within == Within::Sheet {
-                return over(wanted);
+                return Verdict::Refused(Reason::Sheet);
             }
             if covered(listed, pid, number) {
-                return Verdict::Refused(
-                    Reason::Window,
-                    format!("Another window of the app is in front of window {wanted}"),
-                );
+                return Verdict::Refused(Reason::Window);
             }
             if keyboard.within == Within::Elsewhere {
                 return Verdict::Unknown(Unread::Failed);
             }
             Verdict::Pass
         }
-        _ if sheet => over(wanted),
-        Listed::One(number) => Verdict::Refused(
-            Reason::Window,
-            format!("Window {number} has keyboard focus, not window {wanted}"),
-        ),
+        _ if sheet => Verdict::Refused(Reason::Sheet),
+        Listed::One(_) => Verdict::Refused(Reason::Window),
         Listed::Missing => Verdict::Unknown(Unread::Unlisted),
         Listed::Several => Verdict::Unknown(Unread::Alike),
     }
-}
-
-/// The refusal for a sheet over window `wanted` that has keyboard focus.
-fn over(wanted: i64) -> Verdict {
-    Verdict::Refused(
-        Reason::Sheet,
-        format!("A sheet is open over window {wanted} and has keyboard focus"),
-    )
 }
 
 /// Whether the field named `name` has keyboard focus in app `pid`: the
@@ -510,32 +501,20 @@ fn over(wanted: i64) -> Verdict {
 /// (see [`FIELDS`]), says it is focused, matches the name as `atlas
 /// elements --name` would, and is enabled.
 fn in_field(name: &str, pid: i64, keyboard: &Keyboard) -> Verdict {
-    let no_field = || {
-        Verdict::Refused(
-            Reason::Field,
-            "No field of the app has keyboard focus".to_owned(),
-        )
-    };
     let Some(Focused {
         element,
         pid: owner,
     }) = &keyboard.focused
     else {
-        return no_field();
+        return Verdict::Refused(Reason::Field);
     };
-    if *owner != pid {
-        return Verdict::Refused(
-            Reason::Field,
-            "Keyboard focus is in a panel another process shows".to_owned(),
-        );
-    }
 
     let field = element
         .role
         .as_deref()
         .is_some_and(|role| FIELDS.contains(&role));
-    if !field || element.focused == Some(false) {
-        return no_field();
+    if *owner != pid || !field || element.focused == Some(false) {
+        return Verdict::Refused(Reason::Field);
     }
 
     let filter = ElementFilter {
@@ -543,31 +522,22 @@ fn in_field(name: &str, pid: i64, keyboard: &Keyboard) -> Verdict {
         name: Some(name.to_owned()),
     };
     if filter.match_of(element).is_none() {
-        return Verdict::Refused(
-            Reason::Field,
-            format!("The field with keyboard focus is not the one named {name}"),
-        );
+        return Verdict::Refused(Reason::Field);
     }
     if element.enabled == Some(false) {
-        return Verdict::Refused(Reason::Disabled, "That field is disabled".to_owned());
+        return Verdict::Refused(Reason::Disabled);
     }
 
     Verdict::Pass
 }
 
-/// Which listed window app `pid`'s focused `window` is: the one its frame,
-/// title and kind (by its subrole) leave, of every window of the app.
+/// Which listed window app `pid`'s focused `window` is, of every window of
+/// the app; a window with no frame is not listed.
 fn number(listed: &[Window], pid: i64, window: &Element) -> Listed {
-    let Some(frame) = &window.frame else {
-        return Listed::Missing;
-    };
-    windows::described(
-        listed,
-        pid,
-        frame,
-        window.title.as_deref(),
-        Kind::of(window.subrole.as_deref()),
-    )
+    match &window.frame {
+        Some(frame) => ax::described(window, frame, pid, listed),
+        None => Listed::Missing,
+    }
 }
 
 /// Whether a shown window of app `pid` is in front of window `number` and
@@ -600,7 +570,7 @@ fn point(
     look: &mut impl Look,
 ) -> Result<()> {
     let screen = Screen::new(display.clone(), look.dock());
-    let listed = look.windows().map_err(|_| unreadable())?;
+    let listed = look.windows().map_err(unreadable_from)?;
     if let (Spot::At, Some(wanted)) = (spot, expect.window()) {
         return at_window(expect.pid(), wanted, (x, y), listed, &screen);
     }
@@ -610,33 +580,16 @@ fn point(
         return Ok(());
     }
 
-    let at = spot.words();
     let Some(top) = top else {
-        return Err(refused(
-            Reason::Point,
-            format!("No window of the app is at {at}, {NOT_SENT}"),
-            None,
-        ));
+        return Err(refused(Reason::Point));
     };
-    if top.is_dock() && *screen.dock() == Dock::Unread {
-        return Err(refused(
-            Reason::Unreadable,
-            format!("Atlas could not read where the Dock takes clicks, {NOT_SENT}"),
-            None,
-        ));
-    }
+    readable_dock(top, &screen)?;
 
     let found = Found {
-        app: top.owner.clone(),
-        pid: top.pid,
         window: None,
-        field: None,
+        ..Found::at(top)
     };
-    let message = match &found.app {
-        Some(name) => format!("{name}'s window is at {at}, not the app's, {NOT_SENT}"),
-        None => format!("Another app's window is at {at}, {NOT_SENT}"),
-    };
-    Err(refused(Reason::Point, message, Some(found)))
+    Err(refused_with(Reason::Point, found))
 }
 
 /// A pointer action at a point goes ahead only where window `wanted`, one
@@ -652,78 +605,54 @@ fn at_window(
         .iter()
         .any(|window| window.number == wanted && window.pid == pid)
     {
-        return Err(refused(
-            Reason::Window,
-            format!("Window {wanted} of the app is not on screen, {NOT_SENT}"),
-            None,
-        ));
+        return Err(refused(Reason::Window));
     }
     if windows::unobstructed(listed, wanted, x, y, screen) {
         return Ok(());
     }
 
     let Some(top) = windows::top_at(listed, x, y, screen) else {
-        return Err(refused(
-            Reason::Window,
-            format!("Window {wanted} is not at that point, {NOT_SENT}"),
-            None,
-        ));
+        return Err(refused(Reason::Window));
     };
-    if top.is_dock() && *screen.dock() == Dock::Unread {
-        return Err(refused(
-            Reason::Unreadable,
-            format!("Atlas could not read where the Dock takes clicks, {NOT_SENT}"),
-            None,
-        ));
-    }
+    readable_dock(top, screen)?;
 
-    let (reason, whose) = match &top.owner {
-        _ if top.pid == pid => (Reason::Window, "The app's".to_owned()),
-        Some(owner) => (Reason::Point, format!("{owner}'s")),
-        None => (Reason::Point, "Another app's".to_owned()),
+    let reason = if top.pid == pid {
+        Reason::Window
+    } else {
+        Reason::Point
     };
-    Err(refused(
-        reason,
-        format!(
-            "{whose} window {} is at that point, not window {wanted}, {NOT_SENT}",
-            top.number
-        ),
-        Some(Found::at(top)),
-    ))
+    Err(refused_with(reason, Found::at(top)))
 }
 
-/// The refusal when what is in front could not be read in time.
-pub(super) fn unreadable() -> Error {
-    refused(
-        Reason::Unreadable,
-        format!("Atlas could not tell which app is in front, {NOT_SENT}"),
-        None,
-    )
+/// Refuse when the Dock is `top` and where it takes clicks could not be read.
+fn readable_dock(top: &Window, screen: &Screen) -> Result<()> {
+    if top.is_dock() && *screen.dock() == Dock::Unread {
+        return Err(refused(Reason::Unreadable));
+    }
+
+    Ok(())
+}
+
+fn unreadable_from(error: Error) -> Error {
+    refused(Reason::Unreadable).with_source(error)
 }
 
 /// The refusal for an app in front whose window or field could not be
-/// told, in the words of the read's `error` and naming why when it says.
+/// told, naming why when the read's `error` says.
 fn unread_by(error: Error) -> Error {
-    let why = error
-        .details
-        .get("unread")
-        .cloned()
-        .unwrap_or_else(|| json!(Unread::Failed));
-    refused(
-        Reason::Unreadable,
-        format!("{}, {NOT_SENT}", error.error),
-        None,
-    )
-    .with("unread", why)
+    let why = Unread::of(&error).unwrap_or(Unread::Failed);
+    unreadable_from(error).with("unread", json!(why))
 }
 
-/// A `focus-changed` refusal for `reason`, naming what was `found`.
-fn refused(reason: Reason, message: String, found: Option<Found>) -> Error {
-    let error = Error::new(Code::FocusChanged, message).with("reason", json!(reason));
-    match found {
-        Some(found) => error.with("found", json!(found)),
-        None => error,
-    }
+/// A `focus-changed` refusal for `reason`.
+pub(super) fn refused(reason: Reason) -> Error {
+    Error::new(Code::FocusChanged, format!("{}; {NOT_SENT}", reason.said()))
+        .with("reason", json!(reason))
+}
+
+/// [`refused`], naming what was `found` there.
+fn refused_with(reason: Reason, found: Found) -> Error {
+    refused(reason).with("found", json!(found))
 }
 
 #[cfg(test)]

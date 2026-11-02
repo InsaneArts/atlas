@@ -24,7 +24,8 @@ mod wait;
 
 pub(crate) use busy::seconds;
 pub(crate) use executor::{ExecutorClaims, record_executor};
-pub use lease::{ActionPermit, Lease, SharedLease};
+pub use lease::Lease;
+pub(crate) use lease::{ActionPermit, SharedLease};
 pub use notes::Note;
 pub(crate) use wait::poll;
 #[cfg(test)]
@@ -39,7 +40,7 @@ use crate::{
     config::home,
     error::{Code, Error, Result},
     files::{LockFile, open_lock, probe_write},
-    host_session::{HostSession, Key, Label},
+    host::{HostSession, Key, Label},
     interrupt::{Hold, Interrupt},
 };
 use sha2::{Digest, Sha256};
@@ -63,6 +64,9 @@ pub const CONTROL_WAIT_MAX: Duration = Duration::from_secs(600);
 /// The most commands agents started with `run` that may run at once, so
 /// the helper keeps connections free for reads and other actions.
 pub(crate) const RUNNING_COMMANDS_MAX: usize = 8;
+
+/// The most notes of commands read at once, each read a process lookup.
+pub(crate) const NOTES_READ: usize = 128;
 
 /// What an acquisition may go on beside.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -332,10 +336,16 @@ impl Controller {
     /// Whether this process may keep its locks and claims here at all. An
     /// agent's sandbox may forbid writing, and the error then says so.
     pub(crate) fn writable(&self) -> Result<()> {
+        self.refuse_linked_directory()?;
+        probe_write(&self.directory)
+    }
+
+    /// Refuse a state folder that is there but not a real one of this account.
+    fn refuse_linked_directory(&self) -> Result<()> {
         if fs::symlink_metadata(&self.directory).is_ok() {
             real_directory(&self.directory)?;
         }
-        probe_write(&self.directory)
+        Ok(())
     }
 
     /// The state folder, made if missing, and refused when it is a link:
@@ -376,10 +386,7 @@ impl Controller {
         if recovery {
             self.read_nothing_running()?;
         } else {
-            Self::require_unsettled_beside(
-                self.read_unsettled().unwrap_or(Unsettled::Unknown),
-                Beside::Nothing,
-            )?;
+            Self::require_unsettled_beside(self.read_unsettled(), Beside::Nothing)?;
         }
         Ok(self.owning(lock))
     }
@@ -476,7 +483,7 @@ impl Controller {
             .into_iter()
             .filter(|(generation, _)| self.running_command(&marked, generation))
             .map(|(_, note)| note)
-            .take(crate::host_session::liveness::BUDGET)
+            .take(NOTES_READ)
             .collect();
         notes.sort_by_key(|note| note.since);
         notes
@@ -545,9 +552,7 @@ impl Controller {
     ///
     /// Returns failures reading or updating this controller identity's private stop marker.
     pub fn note_stop(&self, on: bool) -> Result<()> {
-        if fs::symlink_metadata(&self.directory).is_ok() {
-            real_directory(&self.directory)?;
-        }
+        self.refuse_linked_directory()?;
         if on {
             self.make_directory()?;
             fs::write(&self.stopped, b"").map_err(|error| Error::writing(&self.directory, error))
@@ -591,21 +596,25 @@ impl Controller {
             return Ok(());
         }
 
-        // A marker that cannot be read is an unknown outcome.
-        Self::require_unsettled_beside(self.unsettled().unwrap_or(Unsettled::Unknown), beside)
+        Self::require_unsettled_beside(self.unsettled(), beside)
     }
 
-    /// Apply the acquisition rules to state read under the marker lock.
-    fn require_unsettled_beside(unsettled: Unsettled, beside: Beside) -> Result<()> {
-        match (unsettled, beside) {
-            (Unsettled::Nothing, _) | (Unsettled::Commands, Beside::Commands) => Ok(()),
-            (Unsettled::Commands, Beside::Nothing) => {
-                Err(busy_command(Purpose::Change(Beside::Nothing)))
-            }
-            (Unsettled::Unknown, _) => Err(Error::new(
+    /// Apply the acquisition rules to state read under the marker lock. A
+    /// marker that cannot be read is an unknown outcome.
+    fn require_unsettled_beside(unsettled: Result<Unsettled>, beside: Beside) -> Result<()> {
+        let unknown = || {
+            Error::new(
                 Code::Uncertain,
                 "The last action's outcome is unknown; Atlas waits until it is recovered.",
-            )),
+            )
+        };
+        match (unsettled, beside) {
+            (Ok(Unsettled::Nothing), _) | (Ok(Unsettled::Commands), Beside::Commands) => Ok(()),
+            (Ok(Unsettled::Commands), Beside::Nothing) => {
+                Err(busy_command(Purpose::Change(Beside::Nothing)))
+            }
+            (Ok(Unsettled::Unknown), _) => Err(unknown()),
+            (Err(cause), _) => Err(unknown().with_source(cause)),
         }
     }
 

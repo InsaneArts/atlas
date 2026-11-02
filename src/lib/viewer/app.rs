@@ -14,7 +14,7 @@ use crate::{
     menubar::{App, Line},
 };
 use serde_json::{Value, json};
-use std::{path::Path, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 impl Viewer {
     /// Pass `line` to the app this viewer serves.
@@ -52,7 +52,6 @@ pub async fn serve(
     let (listener, viewer) = match bind(client, port, Some(&program.config)).await {
         Ok(bound) => bound,
         Err(error) if error.code == Code::PortInUse => {
-            let output = output.clone();
             return blocking(move || already_running(&output, port, error)).await;
         }
         Err(error) => return Err(error),
@@ -83,27 +82,7 @@ pub async fn serve(
 
     ready(&shown);
 
-    let timer_view = viewer.clone();
-    let expiry = tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-
-            // Ending expired control is a change like any other; once
-            // shutdown began, its own release ends control.
-            let Some(_changing) = timer_view.changing().await else {
-                break;
-            };
-
-            let expired = {
-                let mut lease = timer_view.lease.lock().await;
-                lease.expire();
-                lease.expired()
-            };
-            if expired {
-                let _ = timer_view.release(None).await;
-            }
-        }
-    });
+    let expiry = expire_control(viewer.clone());
 
     // Changes in progress in the helper (taking control, input, recovery)
     // end first, however long the helper takes, and no more begin; then
@@ -134,6 +113,31 @@ pub async fn serve(
     Ok(Value::Null)
 }
 
+/// End control whose lease ran out, in a task of its own, until shutdown
+/// begins.
+fn expire_control(viewer: Arc<Viewer>) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+
+            // Ending expired control is a change like any other; once
+            // shutdown began, its own release ends control.
+            let Some(_changing) = viewer.changing().await else {
+                break;
+            };
+
+            let expired = {
+                let mut lease = viewer.lease.lock().await;
+                lease.expire();
+                lease.expired()
+            };
+            if expired {
+                let _ = viewer.release(None).await;
+            }
+        }
+    })
+}
+
 /// Run `work`, which waits on the local viewer's socket (for seconds at
 /// most), off the async runtime.
 async fn blocking<T: Send + 'static>(
@@ -141,7 +145,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T> {
     tokio::task::spawn_blocking(work)
         .await
-        .map_err(|_| unanswered())?
+        .map_err(|error| unanswered().with_source(error))?
 }
 
 /// The port is taken. When the menu bar holds it, that succeeds: it is
@@ -154,14 +158,20 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<Value> {
     Ok(json!({"ok": true, "alreadyRunning": true, "running": true, "pid": bar["pid"]}))
 }
 
+/// The private address of the menu bar's viewer, starting the menu bar
+/// first when it is not running.
+pub(crate) async fn launched_url(config: &Path, port: u16, output: &Path) -> Result<String> {
+    let (_, record) = crate::menubar::launch(config, port, output).await?;
+    record["url"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Error::new(Code::Menubar, "The menu bar's record names no viewer"))
+}
+
 /// Open the viewer window in the menu bar app, starting the menu bar first
 /// when it is not running. It prints nothing.
 pub(crate) async fn open_viewer(config: &Path, port: u16, output: &Path) -> Result<()> {
-    let (_, record) = crate::menubar::launch(config, port, output).await?;
-    let url = record["url"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| Error::new(Code::Menubar, "The menu bar's record names no viewer"))?;
+    let url = launched_url(config, port, output).await?;
     blocking(move || post_local(&url, "app/viewer", &json!({}))).await?;
     Ok(())
 }

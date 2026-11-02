@@ -48,16 +48,9 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
         until: Instant,
         look: impl FnOnce() -> T + Send + 'static,
     ) -> Option<T> {
-        let known = {
-            let mut kept = self.lock();
-            let last = kept.last.as_ref().filter(|(key, ..)| *key == uid);
-            let fresh = self.fresh_at(last.map(|(.., taken)| *taken), Instant::now());
-            let known = last.map(|(_, found, taken)| (found.clone(), *taken));
-            if fresh || kept.running {
-                return self.trusted(known);
-            }
-            kept.running = true;
-            known
+        let known = match self.begin(&uid) {
+            Ok(known) => known,
+            Err(known) => return known,
         };
 
         // The look ends as not running however it ends, even never started.
@@ -74,6 +67,20 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
             _ => self.trusted(known),
         }
     }
+
+    /// Reserve the only worker, or return the matching result that can still be trusted.
+    fn begin(&self, key: &K) -> Result<Option<(T, Instant)>, Option<T>> {
+        let mut kept = self.lock();
+        let last = kept.last.as_ref().filter(|(old, ..)| old == key);
+        let fresh = self.fresh_at(last.map(|(.., taken)| *taken), Instant::now());
+        let known = last.map(|(_, found, taken)| (found.clone(), *taken));
+        if fresh || kept.running {
+            return Err(self.trusted(known));
+        }
+        kept.running = true;
+        Ok(known)
+    }
+
     /// One bounded synchronous look, sharing running ownership with `get`.
     pub(crate) fn get_blocking(
         &'static self,
@@ -81,16 +88,9 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
         wait: Duration,
         look: impl FnOnce() -> T + Send + 'static,
     ) -> Option<T> {
-        let known = {
-            let mut kept = self.lock();
-            let last = kept.last.as_ref().filter(|(old, ..)| *old == key);
-            let fresh = self.fresh_at(last.map(|(.., taken)| *taken), Instant::now());
-            let known = last.map(|(_, found, taken)| (found.clone(), *taken));
-            if fresh || kept.running {
-                return self.trusted(known);
-            }
-            kept.running = true;
-            known
+        let known = match self.begin(&key) {
+            Ok(known) => known,
+            Err(known) => return known,
         };
         let ending = Ending(self);
         let (send, receive) = std::sync::mpsc::sync_channel(1);

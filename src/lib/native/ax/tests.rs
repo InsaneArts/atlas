@@ -6,11 +6,10 @@ use super::{
     elements, ffi,
     menus::{Step, judge, skip_nested_menu},
     scan::{SELECTORS, Scan},
-    telling,
     text::{TEXT_LIMIT, TEXT_ROLES, bounded_string, prefix_range, prefix_text},
     tree::{reachable, sheet_window, unreachable},
 };
-use crate::screen::elements::{Stop, why};
+use crate::screen::elements::{ABSENT as ABSENT_CODES, Stop, telling, why};
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{
     CFArray, CFBoolean, CFIndex, CFNumber, CFRetained, CFString, CFType, Type,
@@ -219,12 +218,15 @@ fn secure_values_never_reach_either_value_getter() {
 
 #[test]
 fn scan_stops_are_said_in_plain_words() {
-    for stop in Stop::ALL {
-        assert_eq!(Stop::parse(stop.word()), Some(stop));
-        assert_eq!(
-            serde_json::to_value(stop).unwrap(),
-            serde_json::json!(stop.word())
-        );
+    for (stop, word) in [
+        (Stop::Depth, "depth"),
+        (Stop::Count, "count"),
+        (Stop::Time, "time"),
+        (Stop::Unread, "unread"),
+        (Stop::Withheld, "withheld"),
+    ] {
+        assert_eq!(Stop::parse(word), Some(stop));
+        assert_eq!(serde_json::to_value(stop).unwrap(), serde_json::json!(word));
     }
 
     assert_eq!(why([Stop::Time]).as_deref(), Some("it ran out of time"));
@@ -245,6 +247,7 @@ fn scan_stops_are_said_in_plain_words() {
 
 #[test]
 fn only_failures_other_than_a_missing_attribute_are_telling() {
+    assert_eq!(ABSENT.map(|absent| absent.0), ABSENT_CODES);
     for absent in ABSENT {
         assert!(!telling(&format!("AXTitle:{}", absent.0)));
     }

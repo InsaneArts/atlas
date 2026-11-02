@@ -99,6 +99,20 @@ impl Request {
             | Request::RemoveApp { .. } => true,
         }
     }
+
+    /// Whether the worker's output is a command's own, not its JSON reply.
+    pub(super) fn command_output(&self) -> bool {
+        match self {
+            Request::Run { .. } => true,
+            Request::Preview { .. }
+            | Request::Apply { .. }
+            | Request::Rollback { .. }
+            | Request::Transactions { .. }
+            | Request::InstallApp { .. }
+            | Request::RemoveApp { .. }
+            | Request::Installs { .. } => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -166,21 +180,35 @@ impl Fingerprint {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub(super) enum Entry {
-    Legacy(String),
-    Managed {
-        generation: String,
-        fingerprint: Fingerprint,
-    },
+pub(super) struct Entry {
+    pub(super) generation: String,
+    pub(super) fingerprint: Fingerprint,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Ledger {
-    #[serde(default)]
     pub(super) version: u32,
     pub(super) files: BTreeMap<PathBuf, Entry>,
+}
+
+impl Default for Ledger {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            files: BTreeMap::new(),
+        }
+    }
+}
+
+impl Ledger {
+    /// Put back the entry `target` had, or none when it had none.
+    pub(super) fn restore(&mut self, target: &Path, previous: Option<Entry>) {
+        match previous {
+            Some(previous) => self.files.insert(target.to_owned(), previous),
+            None => self.files.remove(target),
+        };
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -211,6 +239,25 @@ pub(crate) enum Operation {
     Permissions,
     Unchanged,
     Conflict,
+}
+
+impl Operation {
+    /// Whether the plan puts a file of its own in place; one that finds the
+    /// file as selected only adopts it.
+    pub(super) fn places_a_copy(self) -> bool {
+        match self {
+            Self::Create | Self::Update | Self::Permissions | Self::Conflict => true,
+            Self::Unchanged => false,
+        }
+    }
+
+    /// Whether the plan brings contents new to a file that is already there.
+    pub(super) fn new_contents(self) -> bool {
+        match self {
+            Self::Update => true,
+            Self::Create | Self::Permissions | Self::Unchanged | Self::Conflict => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -250,7 +297,7 @@ impl Progress {
 
     fn valid(&self, file: &PlannedFile, phase: Phase) -> bool {
         if (self.kept && !self.restored)
-            || (self.applied && file.operation != Operation::Unchanged && self.prepared.is_none())
+            || (self.applied && file.operation.places_a_copy() && self.prepared.is_none())
             || (self.restore.is_some() && file.before.is_none())
             || (self.reverting && file.before.is_some() && self.restore.is_none())
             || (self.restored && !self.kept && !self.reverting && self.applied)
@@ -317,7 +364,8 @@ pub(super) fn validate_id(id: &str) -> Result<()> {
 
 pub(super) fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T> {
     // Serde errors can include selected values; do not expose them in logs.
-    serde_json::from_slice(bytes).map_err(|_| problem("Invalid environment record or schema"))
+    serde_json::from_slice(bytes)
+        .map_err(|cause| problem("Invalid environment record or schema").with_source(cause))
 }
 
 pub(super) fn file_report(plan: &Plan) -> Vec<FileReport> {
@@ -326,7 +374,7 @@ pub(super) fn file_report(plan: &Plan) -> Vec<FileReport> {
         .map(|file| FileReport {
             target: file.payload.target.clone(),
             operation: file.operation.into(),
-            legacy_previous: matches!(file.previous, Some(Entry::Legacy(_))),
+            legacy_previous: false,
         })
         .collect()
 }

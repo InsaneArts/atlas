@@ -1,6 +1,10 @@
 //! Explicit environment selections. Values are written only to a private file;
 //! reports contain names and readiness observations, never variable values.
-use super::{Selection, discovery, freeze, problem, selectable_variable};
+use super::{
+    Selection, discovery, freeze, problem,
+    runner::{ENVIRONMENT_TARGET, Environment},
+    selectable_variable,
+};
 use crate::{client::Client, error::Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -10,8 +14,6 @@ use std::{
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
 };
-
-const ENVIRONMENT_TARGET: &str = ".config/atlas/environment.json";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,16 +76,9 @@ fn validate(profile: &Profile) -> Result<()> {
     )
 }
 
-/// Freeze only the exported variables explicitly named by the profile. Commands
-/// launched with `environment run` consume them; existing GUI apps do not.
-///
-/// # Errors
-///
-/// Returns profile parsing, discovery, access-validation or staging failures. Applied
-/// selections can retain incomplete transactions and require recovery.
-pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
-    let path = fs::canonicalize(path)?;
-    let profile = load(&path)?;
+/// The environment file for the variables `profile` selects, with their
+/// values in this process.
+fn selected_environment(profile: &Profile) -> Result<Vec<u8>> {
     let mut variables = BTreeMap::new();
 
     for name in &profile.environment {
@@ -101,41 +96,67 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
         variables.insert(name.clone(), value);
     }
 
-    let bytes = serde_json::to_vec(&json!({"version":1,"variables":variables}))?;
+    let bytes = serde_json::to_vec(&Environment {
+        variables,
+        version: 1,
+    })?;
     if bytes.len() > 65536 {
         return Err(problem("Selected environment exceeds 64 KiB"));
     }
 
+    Ok(bytes)
+}
+
+/// What the helper offers of `profile`'s selections, before anything is
+/// copied: a reference it cannot use as selected is refused.
+async fn readiness(client: &Client, profile: &Profile) -> Result<Value> {
     let references = profile
         .references
         .iter()
         .map(|reference| reference.path.clone())
         .collect::<Vec<_>>();
-    let readiness = if profile.tools.is_empty()
+    if profile.tools.is_empty()
         && profile.applications.is_empty()
         && profile.environment.is_empty()
         && references.is_empty()
     {
-        json!({"ok":true,"readOnly":true,"selections":[],"environment":[],"references":[]})
-    } else {
-        let discovery = discovery::inspect(
-            client,
-            &profile.tools,
-            &profile.applications,
-            &profile.environment,
-            &references,
-        )
-        .await?;
-        for (reference, observed) in profile.references.iter().zip(&discovery.references) {
-            if !observed.helper.permits_reference(reference.writable) {
-                return Err(problem(format!(
-                    "Selected reference is not accessible to the helper with the requested permissions: {}",
-                    reference.path.display()
-                )));
-            }
+        return Ok(
+            json!({"ok":true,"readOnly":true,"selections":[],"environment":[],"references":[]}),
+        );
+    }
+
+    let discovery = discovery::inspect(
+        client,
+        &profile.tools,
+        &profile.applications,
+        &profile.environment,
+        &references,
+    )
+    .await?;
+    for (reference, observed) in profile.references.iter().zip(&discovery.references) {
+        if !observed.helper.permits_reference(reference.writable) {
+            return Err(problem(format!(
+                "Selected reference is not accessible to the helper with the requested permissions: {}",
+                reference.path.display()
+            )));
         }
-        discovery.report()
-    };
+    }
+
+    Ok(discovery.report())
+}
+
+/// Freeze only the exported variables explicitly named by the profile. Commands
+/// launched with `environment run` consume them; existing GUI apps do not.
+///
+/// # Errors
+///
+/// Returns profile parsing, discovery, access-validation or staging failures. Applied
+/// selections can retain incomplete transactions and require recovery.
+pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
+    let path = fs::canonicalize(path)?;
+    let profile = load(&path)?;
+    let bytes = selected_environment(&profile)?;
+    let readiness = readiness(client, &profile).await?;
 
     let temporary = fs::canonicalize(client.output_dir()?)?
         .join(format!("environment-profile-{}", crate::files::token()));
@@ -194,33 +215,4 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::environment::RESERVED_VARIABLES;
-
-    fn profile(value: Value) -> Profile {
-        serde_json::from_value(value).unwrap()
-    }
-
-    #[test]
-    fn profile_cannot_shadow_helper_identity_or_generated_state() {
-        for name in RESERVED_VARIABLES {
-            assert!(validate(&profile(json!({"version":2,"environment":[name]}))).is_err());
-        }
-
-        assert!(
-            validate(&profile(
-                json!({"version":2,"files":[{"source":"x","target":ENVIRONMENT_TARGET}]})
-            ))
-            .is_err()
-        );
-        assert!(validate(&profile(json!({"version":2,"environment":["KEY","KEY"]}))).is_err());
-        assert!(validate(&profile(json!({"version":2,"environment":["KEY=value"]}))).is_err());
-        assert!(
-            validate(&profile(
-                json!({"version":2,"environment":["OLLAMA_MODELS"]})
-            ))
-            .is_ok()
-        );
-    }
-}
+mod tests;

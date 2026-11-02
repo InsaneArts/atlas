@@ -595,12 +595,12 @@ fn a_commands_claims_go_to_its_own_tasks_record_and_nowhere_without_one() {
     assert_eq!(kept[0], (made, State::Made));
 }
 
-fn job_entry(id: &str, state: crate::daemon::protocol::JobState) -> record::JobEntry {
+fn job_entry(id: &str, state: crate::protocol::JobState) -> record::JobEntry {
     record::JobEntry {
-        id: crate::daemon::protocol::JobId::parse(id).unwrap(),
+        id: crate::protocol::JobId::parse(id).unwrap(),
         name: "web".into(),
         started_at: 1,
-        expected: crate::daemon::protocol::Expected {
+        expected: crate::protocol::Expected {
             boot: "B".into(),
             pid: 4312,
             start: [1, 2],
@@ -615,7 +615,7 @@ fn job_entry(id: &str, state: crate::daemon::protocol::JobState) -> record::JobE
 
 #[test]
 fn a_running_job_keeps_its_record_and_collections_do_not() {
-    use crate::daemon::protocol::JobState;
+    use crate::protocol::JobState;
 
     let mut record = Record::new(&task("jobs", None), 1);
     record.noted_output(record::OutputEntry {
@@ -645,7 +645,7 @@ fn a_running_job_keeps_its_record_and_collections_do_not() {
 
 #[test]
 fn a_job_that_may_still_run_is_never_forgotten_to_make_room() {
-    use crate::daemon::protocol::JobState;
+    use crate::protocol::JobState;
 
     let mut record = Record::new(&task("full", None), 1);
     for n in 0..64 {
@@ -669,14 +669,14 @@ fn a_job_that_may_still_run_is_never_forgotten_to_make_room() {
     );
     assert!(
         record
-            .job(&crate::daemon::protocol::JobId::parse("000000000000").unwrap())
+            .job(&crate::protocol::JobId::parse("000000000000").unwrap())
             .is_none()
     );
 }
 
 #[test]
 fn a_jobs_first_identity_is_kept_and_only_how_far_it_got_changes() {
-    use crate::daemon::protocol::JobState;
+    use crate::protocol::JobState;
 
     let mut record = Record::new(&task("identity", None), 1);
     record.noted_job(job_entry("7c2e91a04b3f", JobState::Running));
@@ -697,7 +697,7 @@ fn a_jobs_first_identity_is_kept_and_only_how_far_it_got_changes() {
 fn a_job_state_a_later_build_wrote_is_kept_and_never_taken_for_ended() {
     let mut written = serde_json::to_value(job_entry(
         "7c2e91a04b3f",
-        crate::daemon::protocol::JobState::Running,
+        crate::protocol::JobState::Running,
     ))
     .unwrap();
     written["state"] = json!("paused");

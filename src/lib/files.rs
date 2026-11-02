@@ -2,19 +2,22 @@
 //! when it is a plain file (and this account's, where that matters), and
 //! named by random tokens no person chose.
 use crate::{
+    context::context,
     error::{Code, Error, Result},
     name::{lower_hex, name_type, random_hex},
 };
 use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::Path,
     time::{Duration, Instant},
 };
 
+pub use crate::fs_move::exchange;
+
 /// Random bytes in a [`token`]; it is twice as many hexadecimal digits.
-pub const TOKEN_BYTES: usize = 24;
+pub(crate) const TOKEN_BYTES: usize = 24;
 
 /// A new random name: [`TOKEN_BYTES`] random bytes as lowercase
 /// hexadecimal digits.
@@ -52,7 +55,7 @@ impl Default for Token {
 
 /// How far a private file is written before the call returns.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Durability {
+pub(crate) enum Durability {
     /// To the disk itself: the file outlives a power cut.
     Disk,
     /// To the kernel, ordered before whatever is written next: the file
@@ -70,7 +73,7 @@ pub enum Durability {
 ///
 /// Returns path, ownership, write or synchronization failures. The owned file is truncated
 /// before writing, so an I/O failure can leave partial contents; this is not atomic replacement.
-pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     write_private_with(path, bytes, Durability::Disk)
 }
 
@@ -81,7 +84,7 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
 ///
 /// Returns path, ownership, write or synchronization failures for the requested durability.
 /// Writing starts only after ownership checks, but a later failure can leave partial contents.
-pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> Result<()> {
+pub(crate) fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> Result<()> {
     // Emptied only once it is known to be ours.
     let mut file = OpenOptions::new()
         .create(true)
@@ -106,6 +109,73 @@ pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> 
     Ok(())
 }
 
+/// Write a fresh file beside `path` (created with `mode`, never through a
+/// link), flush it to disk, then put it in place with `place`, which is
+/// given the temporary path. The temporary file never outlives the call.
+pub(crate) fn write_beside(
+    path: &Path,
+    mode: u32,
+    write: impl FnOnce(&mut fs::File) -> Result<()>,
+    place: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(Error::new(
+            Code::Config,
+            format!("{} is not a file path", path.display()),
+        ));
+    };
+
+    let temporary = parent.join(format!(".{}.{}", name.to_string_lossy(), token()));
+
+    let result = (|| -> Result<()> {
+        let mut file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(mode)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temporary)
+            .map_err(context("Create replacement for", path))?;
+        write(&mut file).map_err(context("Write replacement for", path))?;
+        file.sync_all()
+            .map_err(context("Sync replacement for", path))?;
+
+        place(&temporary)
+    })();
+    let _ = fs::remove_file(&temporary);
+
+    result
+}
+
+/// Replace `path` with `bytes` in one rename, so readers see the old file
+/// or the new one, never part of either. The file gets exactly `mode`:
+/// the umask would otherwise narrow it, and a file shared with the helper
+/// (such as the onboarding request) must stay readable there.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    write_beside(
+        path,
+        mode,
+        |file| {
+            file.set_permissions(fs::Permissions::from_mode(mode))?;
+            Ok(file.write_all(bytes)?)
+        },
+        |temporary| fs::rename(temporary, path).map_err(context("Place replacement at", path)),
+    )
+}
+
+/// [`write_atomic`] for a file only this account may read, making its
+/// missing folders private (0700) first.
+pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(context("Create private directory", parent))?;
+    }
+
+    write_atomic(path, bytes, 0o600)
+}
+
 /// Whether a new private file can be made in `directory` right now: one is
 /// created under a name of its own and removed again. Reopening a file that
 /// is already there would prove nothing about the next one.
@@ -114,7 +184,7 @@ pub fn write_private_with(path: &Path, bytes: &[u8], durability: Durability) -> 
 ///
 /// Returns private-storage or temporary-file write failures. This proves a local write at
 /// the time of the probe, not later mutation authority.
-pub fn probe_write(directory: &Path) -> Result<()> {
+pub(crate) fn probe_write(directory: &Path) -> Result<()> {
     fs::create_dir_all(directory).map_err(|error| Error::writing(directory, error))?;
 
     // A probe an interrupted run left behind is litter; one of a process
@@ -140,9 +210,7 @@ pub fn probe_write(directory: &Path) -> Result<()> {
         }
     }
 
-    let moment = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_nanos());
+    let moment = crate::time::timestamp();
     let path = directory.join(format!(".probe-{}-{moment}", std::process::id()));
     OpenOptions::new()
         .create_new(true)
@@ -160,18 +228,37 @@ pub fn probe_write(directory: &Path) -> Result<()> {
     }
 }
 
+/// How a lock file's descriptor is opened.
+#[derive(Clone, Copy)]
+pub(crate) enum LockOpen {
+    ReadWrite,
+    WriteOnly,
+    WriteNonblocking,
+}
+
+/// The lock file at `path`, made private when new and never through a
+/// symlink. Checking it and taking its lock stay with each caller.
+pub(crate) fn open_lock_file(path: &Path, access: LockOpen) -> std::io::Result<File> {
+    let (read, flags) = match access {
+        LockOpen::ReadWrite => (true, libc::O_NOFOLLOW),
+        LockOpen::WriteOnly => (false, libc::O_NOFOLLOW),
+        LockOpen::WriteNonblocking => (false, libc::O_NOFOLLOW | libc::O_NONBLOCK),
+    };
+    OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(read)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(flags)
+        .open(path)
+}
+
 /// The lock file at `path`, made private to this account when it is new,
 /// and refused unless it is a plain file of this account.
 pub(crate) fn open_lock(path: &Path) -> Result<LockFile> {
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|error| Error::writing(path, error))?;
+    let file =
+        open_lock_file(path, LockOpen::ReadWrite).map_err(|error| Error::writing(path, error))?;
     own_private(&file, path)?;
 
     Ok(LockFile(file))
@@ -194,9 +281,10 @@ pub(crate) enum Lock {
     Exclusive,
 }
 
-/// Another holder kept a lock past the patience given for it.
+/// Another holder kept a lock past the patience given for it, with what
+/// the last try said.
 #[derive(Debug)]
-pub(crate) struct Held;
+pub(crate) struct Held(pub(crate) std::io::Error);
 
 /// How often a lock that looks held is tried again.
 const LOCK_POLL: Duration = Duration::from_millis(5);
@@ -243,14 +331,11 @@ pub(crate) fn lock_retrying(
             Lock::Shared => fs2::FileExt::try_lock_shared(&file.0),
             Lock::Exclusive => fs2::FileExt::try_lock_exclusive(&file.0),
         };
-        if taken.is_ok() {
+        let Err(error) = taken else {
             return Ok(());
-        }
+        };
         #[cfg(test)]
-        if taken
-            .as_ref()
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
-        {
+        if error.kind() == std::io::ErrorKind::WouldBlock {
             NEXT_LOCK_CONTENTION.with(|next| {
                 if let Some(notice) = next.borrow_mut().take() {
                     // The fixture receiver may be gone after its outer watchdog fails.
@@ -259,7 +344,7 @@ pub(crate) fn lock_retrying(
             });
         }
         if !retry(deadline) {
-            return Err(Held);
+            return Err(Held(error));
         }
         std::thread::sleep(LOCK_POLL);
     }
@@ -287,7 +372,7 @@ fn own_private(file: &File, path: &Path) -> Result<()> {
 /// is made on the opened descriptor, so the file read is the file checked,
 /// and it never waits: a pipe in a screenshot's or the log's place does not
 /// hold the reader up.
-pub fn open_plain(path: &Path) -> Option<File> {
+pub(crate) fn open_plain(path: &Path) -> Option<File> {
     try_open_plain(path).ok().flatten()
 }
 
@@ -312,6 +397,20 @@ pub(crate) fn try_open_plain(path: &Path) -> std::io::Result<Option<File>> {
     Ok(Some(file))
 }
 
+/// What `reader` gives, up to exactly `count` bytes. Whether there was more,
+/// and what that means, is the caller's.
+pub(crate) fn read_up_to(reader: impl Read, count: u64) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.take(count).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// All `reader` gives, when it reads and is at most `limit` bytes.
+pub(crate) fn read_limited(reader: impl Read, limit: u64) -> Option<Vec<u8>> {
+    let bytes = read_up_to(reader, limit + 1).ok()?;
+    (bytes.len() as u64 <= limit).then_some(bytes)
+}
+
 /// What the plain file at `path` holds, when it is this account's and at
 /// most `limit` bytes: no link, pipe or other account's file is read.
 pub(crate) fn read_own(path: &Path, limit: u64) -> Option<Vec<u8>> {
@@ -319,9 +418,36 @@ pub(crate) fn read_own(path: &Path, limit: u64) -> Option<Vec<u8>> {
     if file.metadata().ok()?.uid() != nix::unistd::getuid().as_raw() {
         return None;
     }
-    let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes).ok()?;
-    (bytes.len() as u64 <= limit).then_some(bytes)
+    read_limited(file, limit)
+}
+
+/// `folder`, made private (0700, with any missing parents) when missing. One
+/// that exists is never re-permissioned: it must already be a private folder
+/// this account owns, and otherwise is refused with `code`.
+pub(crate) fn private_folder(folder: &Path, code: Code) -> Result<()> {
+    if !folder.exists() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(folder)
+            .map_err(|error| Error::writing(folder, error))?;
+    }
+
+    let metadata = fs::symlink_metadata(folder).map_err(context("Inspect folder", folder))?;
+    if !metadata.is_dir()
+        || metadata.uid() != nix::unistd::getuid().as_raw()
+        || metadata.mode() & 0o077 != 0
+    {
+        return Err(Error::new(
+            code,
+            format!(
+                "{} must be a private (0700) folder you own",
+                folder.display()
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Whether `folder` is a real folder of this account, not a link to one.
@@ -334,106 +460,4 @@ pub(crate) fn own_folder(folder: &Path) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{Held, Lock, lock_retrying, lock_within, open_lock};
-    use std::time::{Duration, Instant};
-
-    #[test]
-    #[allow(
-        unsafe_code,
-        reason = "The isolated fork child only calls async-signal-safe syscalls"
-    )]
-    fn a_lock_is_released_even_when_a_forked_child_inherits_it() {
-        use nix::{
-            sys::{
-                signal::{Signal, kill},
-                wait::{WaitPidFlag, WaitStatus, waitpid},
-            },
-            unistd::{ForkResult, alarm, fork, pause},
-        };
-
-        if !crate::test_support::isolated(
-            "files::tests::a_lock_is_released_even_when_a_forked_child_inherits_it",
-        ) {
-            return;
-        }
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("lock");
-        let held = open_lock(&path).unwrap();
-        lock_within(&held, Lock::Exclusive, Duration::ZERO).unwrap();
-        let next = open_lock(&path).unwrap();
-        // SAFETY: The child only calls async-signal-safe alarm and pause;
-        // it expires after five seconds even if the parent's cleanup fails.
-        let child = match unsafe { fork() }.unwrap() {
-            ForkResult::Parent { child } => child,
-            ForkResult::Child => {
-                alarm::set(5);
-                loop {
-                    pause();
-                }
-            }
-        };
-
-        let refused = lock_within(&next, Lock::Exclusive, Duration::ZERO);
-        drop(held);
-        let released = lock_within(&next, Lock::Exclusive, Duration::ZERO);
-
-        let killed = kill(child, Signal::SIGKILL);
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let reaped = loop {
-            match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
-                Ok(WaitStatus::StillAlive) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                status => break status,
-            }
-        };
-        killed.unwrap();
-        assert_eq!(
-            reaped.unwrap(),
-            WaitStatus::Signaled(child, Signal::SIGKILL, false)
-        );
-        assert!(matches!(refused, Err(Held)));
-        assert!(
-            released.is_ok(),
-            "the inherited descriptor kept the lock: {released:?}"
-        );
-    }
-
-    #[test]
-    fn a_held_lock_is_refused_once_its_patience_runs_out() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("lock");
-        let (first, second) = (open_lock(&path).unwrap(), open_lock(&path).unwrap());
-
-        lock_within(&first, Lock::Shared, Duration::ZERO).unwrap();
-        lock_within(&second, Lock::Shared, Duration::ZERO).expect("readers share it");
-        fs2::FileExt::unlock(&second.0).unwrap();
-
-        let base = Instant::now();
-        let deadline = base + Duration::from_millis(30);
-        for offset in [0, 29, 30, 31] {
-            let first_now = base + Duration::from_millis(offset);
-            let mut now = first_now;
-            let mut observed = Vec::new();
-            let refused = lock_retrying(&second, Lock::Exclusive, deadline, |until| {
-                assert_eq!(until, deadline, "all retries share the supplied deadline");
-                observed.push(now);
-                let retry = now < until;
-                now = until;
-                retry
-            });
-            assert!(matches!(refused, Err(Held)));
-            let expected = if first_now < deadline {
-                vec![first_now, deadline]
-            } else {
-                vec![first_now]
-            };
-            assert_eq!(observed, expected, "virtual offset {offset}ms");
-        }
-
-        fs2::FileExt::unlock(&first.0).unwrap();
-        lock_within(&second, Lock::Exclusive, Duration::ZERO)
-            .expect("a free lock is taken at once");
-    }
-}
+mod tests;

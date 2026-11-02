@@ -156,15 +156,31 @@ impl Cache {
     }
 }
 
+/// One row per command from the log in `directory`, newest first, at most
+/// `limit`. A command that acted in several steps (typing in batches,
+/// opening then waiting) is its newest step, and a run of the person's
+/// input through a viewer is its newest row, counting every action of the
+/// run. A line that does not read, or names no operation, is passed over.
+///
+/// Candidates are read from the end, within [`READ_LIMIT`] bytes across
+/// both logs. Each command's last appended step is selected before ordering
+/// by recorded time, grouping personal input and limiting. Buffered personal
+/// input can be appended after a newer action,
+/// including across rotation. Equal or missing times keep reverse append
+/// order; rows without a readable time follow those with one.
+///
 /// Synchronous consumers already reading off the runtime share this cache.
-pub(super) fn recent(directory: &Path, limit: usize) -> Vec<Row> {
+pub(crate) fn recent(directory: &Path, limit: usize) -> Vec<Row> {
     CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .recent(directory, limit)
 }
 
-pub(super) fn try_recent(directory: &Path, limit: usize) -> io::Result<Vec<Row>> {
+/// Like [`recent`], but reports an unreadable or refused log instead of
+/// returning only the rows that could be read. Missing logs are empty;
+/// malformed rows are still skipped within the same byte budget.
+pub(crate) fn try_recent(directory: &Path, limit: usize) -> io::Result<Vec<Row>> {
     CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

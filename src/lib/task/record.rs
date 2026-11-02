@@ -6,10 +6,11 @@
 use super::{Name, Task};
 use crate::{
     collect::ReceiptId,
-    daemon::protocol::{Expected, How, JobId, JobState},
     error::{Code, Error, Result},
     files::Token,
-    host_session::Key,
+    host::Key,
+    lenient::Lenient,
+    protocol::{Expected, How, JobId, JobState},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -249,7 +250,7 @@ impl Record {
             .enumerate()
             .filter_map(|(place, entry)| match entry {
                 Entry::Known(claim) if which(claim) => Some((claim.at, place)),
-                _ => None,
+                Entry::Known(_) | Entry::Later(_) => None,
             })
             .min()
             .map(|(_, place)| place)
@@ -274,14 +275,15 @@ impl Owned {
     /// Whether `self` and `other` are the same thing: one copy, plan or
     /// install by its ID, one app by its name in any case.
     pub(crate) fn same(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Copy { id }, Self::Copy { id: other }) => id == other,
-            (Self::Plan { id }, Self::Plan { id: other }) => id == other,
-            (Self::Install { id, .. }, Self::Install { id: other, .. }) => id == other,
-            (Self::Launch { app }, Self::Launch { app: other }) => {
-                crate::name::same_text(app, other)
+        match self {
+            Self::Copy { id } => matches!(other, Self::Copy { id: other } if id == other),
+            Self::Plan { id } => matches!(other, Self::Plan { id: other } if id == other),
+            Self::Install { id, .. } => {
+                matches!(other, Self::Install { id: other, .. } if id == other)
             }
-            _ => false,
+            Self::Launch { app } => {
+                matches!(other, Self::Launch { app: other } if crate::name::same_text(app, other))
+            }
         }
     }
 }
@@ -304,7 +306,10 @@ impl State {
     /// Whether what was claimed may still be in the helper: it is about to
     /// be made, or was made and not yet removed.
     pub(crate) fn live(self) -> bool {
-        matches!(self, Self::Intent | Self::Made)
+        match self {
+            Self::Intent | Self::Made => true,
+            Self::Gone | Self::Kept => false,
+        }
     }
 }
 
@@ -317,7 +322,10 @@ pub(crate) fn installs_of(tasks: &[Record], key: &Key) -> Vec<String> {
         .flat_map(Record::claims)
         .filter_map(|(owned, state)| match owned {
             Owned::Install { app, .. } if state.live() => Some(app),
-            _ => None,
+            Owned::Copy { .. }
+            | Owned::Plan { .. }
+            | Owned::Install { .. }
+            | Owned::Launch { .. } => None,
         })
         .collect()
 }
@@ -335,12 +343,7 @@ pub(crate) fn unfinished_cleanup_of(tasks: &[Record], key: &Key) -> Option<Clean
 
 /// One entry of `owned`: one this build reads, or one a later build wrote
 /// (another kind, or a state this build does not know), kept as it is.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum Entry {
-    Known(Claim),
-    Later(Value),
-}
+pub(crate) type Entry = Lenient<Claim>;
 
 /// A claim this build reads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -378,15 +381,12 @@ impl Claim {
 
     /// The thing claimed, when the claim names it as its kind should.
     fn owned(&self) -> Option<Owned> {
-        match (self.kind, &self.id, &self.app) {
-            (Kind::Copy, Some(id), None) => Some(Owned::Copy { id: id.clone() }),
-            (Kind::Plan, Some(id), None) => Some(Owned::Plan { id: id.clone() }),
-            (Kind::Install, Some(id), Some(app)) => Some(Owned::Install {
-                id: id.clone(),
-                app: app.clone(),
-            }),
-            (Kind::Launch, None, Some(app)) => Some(Owned::Launch { app: app.clone() }),
-            _ => None,
+        match (self.kind, self.id.clone(), self.app.clone()) {
+            (Kind::Copy, Some(id), None) => Some(Owned::Copy { id }),
+            (Kind::Plan, Some(id), None) => Some(Owned::Plan { id }),
+            (Kind::Install, Some(id), Some(app)) => Some(Owned::Install { id, app }),
+            (Kind::Launch, None, Some(app)) => Some(Owned::Launch { app }),
+            (Kind::Copy | Kind::Plan | Kind::Install | Kind::Launch, ..) => None,
         }
     }
 }
@@ -463,20 +463,6 @@ pub(crate) enum Noted {
     Disagrees,
     /// The record is full of jobs that may still run.
     Full,
-}
-
-/// A value this build knows, or one a later build wrote, kept as it was.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub(crate) enum Lenient<T> {
-    Known(T),
-    Later(Value),
-}
-
-impl<T> From<T> for Lenient<T> {
-    fn from(known: T) -> Self {
-        Self::Known(known)
-    }
 }
 
 /// One collection of files a task made: its receipt, when, and how many

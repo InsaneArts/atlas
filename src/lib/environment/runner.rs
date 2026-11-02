@@ -6,11 +6,16 @@ use std::{os::unix::process::CommandExt, process::Command};
 /// callers fall back to the helper's PATH on it.
 pub(crate) const NO_PROFILE: Code = Code::NoEnvironment;
 
-#[derive(Deserialize)]
+/// Where a helper's environment profile is, in its home.
+pub(super) const ENVIRONMENT_TARGET: &str = ".config/atlas/environment.json";
+
+/// The profile a command runs with. Its fields stay in the order the file
+/// has always been written in.
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Environment {
-    version: u32,
-    variables: BTreeMap<String, String>,
+pub(super) struct Environment {
+    pub(super) variables: BTreeMap<String, String>,
+    pub(super) version: u32,
 }
 
 pub(super) fn validate_argv(argv: &[String]) -> Result<()> {
@@ -29,8 +34,7 @@ pub(super) fn validate_argv(argv: &[String]) -> Result<()> {
 }
 
 fn load(home: &Path) -> Result<BTreeMap<String, String>> {
-    let path = home.join(".config/atlas/environment.json");
-    let file = open_regular(&path, false)?.ok_or_else(|| {
+    let file = open_regular(&home.join(ENVIRONMENT_TARGET), false)?.ok_or_else(|| {
         Error::new(
             NO_PROFILE,
             "No helper environment profile is installed. Use atlas run instead, or run \
@@ -81,66 +85,9 @@ pub(super) fn execute(
     Err(problem(format!(
         "Could not execute the helper command: {}",
         error.kind()
-    )))
+    ))
+    .with_source(error))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    #[test]
-    fn profile_file_is_private_bounded_and_never_evaluated_as_shell() {
-        let root = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(root.path()).unwrap();
-        let path = home.join(".config/atlas/environment.json");
-        let literal = "$(touch should-not-run); private value";
-        atomic_write(
-            &path,
-            &serde_json::to_vec(&json!({"version": 1, "variables": {"SELECTED": literal}}))
-                .unwrap(),
-            0o600,
-        )
-        .unwrap();
-
-        assert_eq!(load(&home).unwrap()["SELECTED"], literal);
-        assert!(!home.join("should-not-run").exists());
-
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(load(&home).is_err());
-
-        for name in [
-            "HOME", "USER", "LOGNAME", "SHELL", "PATH", "UID", "EUID", "TMPDIR", "1BAD", "BAD-NAME",
-        ] {
-            atomic_write(
-                &path,
-                &serde_json::to_vec(&json!({"version": 1, "variables": {name: "secret"}})).unwrap(),
-                0o600,
-            )
-            .unwrap();
-            let error = load(&home).unwrap_err();
-            assert!(!error.error.contains("secret"));
-        }
-
-        assert!(validate_argv(&[]).is_err());
-        assert!(validate_argv(&["tool\0name".into()]).is_err());
-    }
-
-    #[test]
-    fn identity_is_rechecked_after_loading_profile_before_exec() {
-        let root = tempfile::tempdir().unwrap();
-        let home = fs::canonicalize(root.path()).unwrap();
-        atomic_write(
-            &home.join(".config/atlas/environment.json"),
-            b"{\"version\":1,\"variables\":{}}",
-            0o600,
-        )
-        .unwrap();
-
-        let error = execute(&home, &["/usr/bin/true".into()], &|| {
-            Err(problem("session changed"))
-        })
-        .unwrap_err();
-        assert_eq!(error.error, "session changed");
-    }
-}
+mod tests;

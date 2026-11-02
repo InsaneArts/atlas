@@ -10,7 +10,7 @@ use crate::{
     client::{AppList, Client},
     error::{Code, Error, Result},
     host_session::{
-        Key, now_ms,
+        Key,
         record::{ACTIVE_FOR, Record as SessionRecord},
         store::{Read as SessionRead, Store as Sessions},
     },
@@ -19,6 +19,7 @@ use crate::{
         record::{CleanupState, Record as TaskRecord},
         store::Store as Tasks,
     },
+    time::now_ms,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -217,7 +218,7 @@ impl Loaded {
                         .find(|plan| plan.plan_id == *id)
                         .map(|plan| plan.at)
                 }),
-                _ => None,
+                Owned::Copy { .. } | Owned::Install { .. } | Owned::Launch { .. } => None,
             })
             .unwrap_or(0)
     }

@@ -6,7 +6,7 @@
 //! cleanup. Recording is best effort and never holds a command up: when
 //! another command is writing the records, this one's goes unrecorded.
 use super::{
-    Host, HostSession, Instance, Key, now_ms,
+    Host, HostSession, Instance, Key,
     record::{Leftovers, Record, Seen, VERSION},
 };
 use crate::{
@@ -20,6 +20,7 @@ use crate::{
     helper_info::Capture,
     record_folder::{Cached, LISTED, RecordFolder, Records},
     task::State,
+    time::now_ms,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -36,9 +37,6 @@ pub(crate) const MAX_RECORDS: usize = 64;
 /// session's last recorded action.
 pub(crate) const IDLE_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// The most folders looked at, from the working directory up, for the
-/// project a session works in.
-const FOLDER_DEPTH: usize = 32;
 /// How long the copy folders counted for status reads are trusted: they
 /// can go without any record changing.
 const COPIES_FRESH: Duration = Duration::from_secs(30);
@@ -62,7 +60,10 @@ impl Kind {
     /// Whether a command of this kind, doing `doing`, is recorded at all:
     /// one that acts in the helper, or asks about an environment plan.
     pub fn recorded(self, doing: Option<&Doing>) -> bool {
-        doing.is_some() || matches!(self, Self::Environment { .. })
+        match self {
+            Self::Environment { .. } => true,
+            Self::Screenshot | Self::Open | Self::Close | Self::Other => doing.is_some(),
+        }
     }
 }
 
@@ -394,55 +395,32 @@ impl Store {
     /// Cleanup acknowledgement requires a complete supported scan, successful
     /// writes and a complete read-back under the same session-store lock.
     pub(crate) fn forget_plan_checked(&self, plan_id: &Token) -> Result<()> {
-        let incomplete = |cause| incomplete_cleanup().with_source(cause);
-        let Some(identity) = self.folder.cleanup_identity().map_err(incomplete)? else {
-            return Ok(());
-        };
-        let _lock = self.folder.lock()?;
-        let mut selected = Vec::new();
-        self.folder
-            .visit_cleanup(identity, |key, bytes, modified| {
-                let record = cleanup_record(key, bytes)?;
-                if record.plans.iter().any(|plan| plan.plan_id == *plan_id) {
-                    selected.push((record.last_seen, modified, key.clone()));
+        let names_plan = |record: &Record| record.plans.iter().any(|plan| plan.plan_id == *plan_id);
+        self.folder.rewrite_complete(
+            cleanup_record,
+            |record, modified| {
+                names_plan(record).then_some((
+                    std::cmp::Reverse(record.last_seen),
+                    std::cmp::Reverse(modified),
+                ))
+            },
+            |record| {
+                if !record.forget_plan(plan_id) {
+                    return Err(incomplete_cleanup());
+                }
+                self.write(record)
+            },
+            |record| {
+                if names_plan(record) {
+                    return Err(Error::new(
+                        Code::State,
+                        "Session records still name the plan after cleanup",
+                    ));
                 }
                 Ok(())
-            })
-            .map_err(incomplete)?;
-        // scanned() stably sorts lastSeen after modification time; keep that write order.
-        selected.sort_by_key(|(seen, modified, _)| {
-            (std::cmp::Reverse(*seen), std::cmp::Reverse(*modified))
-        });
-        let mut remaining = self.folder.cleanup_bytes().map_err(incomplete)?;
-        for (_, _, key) in selected {
-            self.folder
-                .check_cleanup_identity(identity)
-                .map_err(incomplete)?;
-            let bytes = self
-                .folder
-                .read_cleanup(&key, &mut remaining)
-                .map_err(incomplete)?;
-            let mut record = cleanup_record(&key, &bytes)?;
-            if !record.forget_plan(plan_id) {
-                return Err(incomplete_cleanup());
-            }
-            self.write(&record)?;
-        }
-        let mut remaining_plan = false;
-        self.folder
-            .visit_cleanup(identity, |key, bytes, _| {
-                let record = cleanup_record(key, bytes)?;
-                remaining_plan |= record.plans.iter().any(|plan| plan.plan_id == *plan_id);
-                Ok(())
-            })
-            .map_err(incomplete)?;
-        if remaining_plan {
-            return Err(Error::new(
-                Code::State,
-                "Session records still name the plan after cleanup",
-            ));
-        }
-        Ok(())
+            },
+            incomplete_cleanup,
+        )
     }
 
     /// What `record` left in the helper: its copy folders still there, its
@@ -676,27 +654,6 @@ fn tokens<'a>(listed: &'a Value, field: &'a str) -> impl Iterator<Item = Token> 
             };
             handoff::token_of(path.as_str()?)
         })
-}
-
-/// The project a command works in: the name of the nearest folder from
-/// `directory` up that holds a `.git` entry, else of `directory` itself.
-/// None for the home folder and `/`, which name no project.
-pub(crate) fn project_folder(directory: &Path) -> Option<String> {
-    let project = directory
-        .ancestors()
-        .take(FOLDER_DEPTH)
-        .find(|folder| fs::symlink_metadata(folder.join(".git")).is_ok())
-        .unwrap_or(directory);
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    if home.as_deref() == Some(project) {
-        return None;
-    }
-
-    project
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(crate::doing::bounded)
-        .filter(|name| !name.is_empty())
 }
 
 #[cfg(test)]

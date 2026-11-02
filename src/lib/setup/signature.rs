@@ -51,7 +51,7 @@ pub(super) fn signature(path: &Path) -> Option<Signature> {
 pub const IDENTIFIER: &str = "com.insanearts.atlas";
 
 /// The Developer ID team that signs Atlas; consent follows it.
-pub(crate) const TEAM: &str = "A474HM679A";
+const TEAM: &str = "A474HM679A";
 
 /// The identifier the app's executable inside Atlas.app is signed as.
 pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
@@ -67,7 +67,6 @@ pub(crate) fn requirement_for(identifier: &str) -> String {
     )
 }
 
-/// Whether `target` validly satisfies the requirement for `identifier`.
 fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
     Command::new("/usr/bin/codesign")
         .args(["--verify", "--strict", "-R"])
@@ -91,7 +90,7 @@ pub(crate) fn app_signed(path: &Path) -> bool {
 /// Whether process `pid` runs Atlas signed by its Developer ID, and
 /// its loaded code is exactly the file now on disk. (`codesign -d` on a PID
 /// describes the file at its path, so only verification proves this.)
-pub(super) fn running_developer_id(pid: u32) -> bool {
+fn running_developer_id(pid: u32) -> bool {
     satisfies(pid.to_string().as_ref(), IDENTIFIER)
 }
 
@@ -99,9 +98,12 @@ pub(super) fn running_developer_id(pid: u32) -> bool {
 /// now. False for a daemon still running a build an update replaced: its
 /// file moved aside, or its loaded code no longer matches the file.
 pub(crate) fn runs_current(pid: u32, executable: &Path) -> bool {
-    let running = executable_of(pid).and_then(|path| fs::canonicalize(path).ok());
-
-    running.is_some() && running == fs::canonicalize(executable).ok() && running_developer_id(pid)
+    executable_of(pid)
+        .and_then(|path| fs::canonicalize(path).ok())
+        .is_some_and(|running| {
+            fs::canonicalize(executable).is_ok_and(|expected| running == expected)
+                && running_developer_id(pid)
+        })
 }
 
 #[allow(unsafe_code, reason = "FFI: proc_pidpath has no safe binding")]
@@ -138,9 +140,7 @@ pub(super) fn signed_daemon(program: &Path) -> Result<String> {
 pub(super) fn require_current(pid: u32, expected: &str) -> Result<()> {
     // The file it runs must be the planned build, and its loaded code
     // must be valid, Atlas's, and still that file.
-    let installed = executable_of(pid)
-        .and_then(|path| signature(&path))
-        .and_then(|signature| signature.cdhash);
+    let installed = executable_of(pid).and_then(|path| signature(&path)?.cdhash);
     if installed.as_deref() != Some(expected) {
         return Err(problem(
             "The helper is not running the signed Atlas build that was expected. Run \
@@ -159,62 +159,4 @@ pub(super) fn require_current(pid: u32, expected: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    /// The installer verifies downloads against exactly setup's requirement.
-    #[test]
-    fn the_installer_checks_the_same_requirement() {
-        let script = include_str!("../../../install.sh");
-        let line = script
-            .lines()
-            .find_map(|line| line.strip_prefix("REQUIREMENT=\""))
-            .and_then(|line| line.strip_suffix('"'))
-            .expect("install.sh sets REQUIREMENT");
-
-        let expanded = line
-            .replace("\\\"", "\"")
-            .replace("$IDENTIFIER", IDENTIFIER)
-            .replace("$TEAM", TEAM);
-        assert_eq!(expanded, requirement_for(IDENTIFIER));
-        assert!(script.contains(&format!("IDENTIFIER=\"{IDENTIFIER}\"")));
-        assert!(script.contains(&format!("TEAM=\"{TEAM}\"")));
-    }
-
-    /// Only Atlas signed by its own Developer ID team passes, as a file
-    /// or as a running process.
-    #[test]
-    fn signatures_are_checked_against_atlass_identity() {
-        assert!(
-            !developer_id(Path::new("/bin/ls")),
-            "Apple-signed, not ours"
-        );
-
-        let test = std::env::current_exe().unwrap();
-        assert!(!developer_id(&test), "ad-hoc signed test build");
-        assert!(
-            !running_developer_id(std::process::id()),
-            "this ad-hoc test process is not Atlas's Developer ID"
-        );
-        assert!(
-            !runs_current(std::process::id(), &test),
-            "only Atlas's own signed build is current"
-        );
-        assert!(!runs_current(std::process::id(), Path::new("/bin/ls")));
-    }
-
-    #[test]
-    fn codesign_diagnostics_parse_without_inventing_fields() {
-        let text = "Executable=/x\nIdentifier=com.example.sessiond\nCDHash=0c61eed3\n\
-                    Signature=adhoc\nTeamIdentifier=not set\n";
-        assert_eq!(
-            parse_signature(text),
-            Signature {
-                identifier: Some("com.example.sessiond".into()),
-                cdhash: Some("0c61eed3".into()),
-                kind: Some("adhoc".into()),
-                team: None,
-            }
-        );
-        assert_eq!(parse_signature(""), Signature::default());
-    }
-}
+mod tests;

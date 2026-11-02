@@ -5,18 +5,16 @@
 use super::{
     input::click,
     target::{Target, target_expect},
-    windows::pointer_view,
 };
 use crate::{
     actions::{Button, Expect},
-    client::{Client, Run, Verified},
-    daemon::protocol::{Crop, Region},
+    client::{Client, Run, Verified, WINDOW_LOOKUP},
     error::{Code, Error, Result},
-    native::ax,
-    screen::select::{ElementFilter, NameMatch, closeness, names, shown_name},
+    protocol::{Crop, Region},
     screen::{
-        elements::{Element, Frame, Stop, why},
-        windows::{Shown, Window, owning_window},
+        elements::{Element, Frame, Stop, telling, why},
+        select::{ElementFilter, NameMatch, closeness, names, shown_name},
+        windows::{MENU_LAYER, Window, owning_window},
     },
     transport::run_output,
 };
@@ -55,8 +53,9 @@ impl Scanned {
             ));
         }
 
-        let elements = serde_json::from_value(value["elements"].take())
-            .map_err(|_| Error::new(Code::Elements, "Malformed accessibility elements"))?;
+        let elements = serde_json::from_value(value["elements"].take()).map_err(|cause| {
+            Error::new(Code::Elements, "Malformed accessibility elements").with_source(cause)
+        })?;
 
         let mut reasons: Vec<Stop> = value["reasons"]
             .as_array()
@@ -72,7 +71,7 @@ impl Scanned {
             .as_object()
             .into_iter()
             .flatten()
-            .filter(|(key, _)| key.len() <= SCAN_ERROR_KEY && ax::telling(key))
+            .filter(|(key, _)| key.len() <= SCAN_ERROR_KEY && telling(key))
             .filter_map(|(key, count)| Some((key.clone(), usize::try_from(count.as_u64()?).ok()?)))
             .collect();
         errors.sort_by(|(a, first), (b, second)| second.cmp(first).then_with(|| a.cmp(b)));
@@ -140,10 +139,9 @@ async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
     let argv = vec![probe, "elements-info".into(), pid.to_string()];
     let reply = client.run(argv, Run::inspect().pinned(verified)).await?;
-    let value = run_output(&reply, 8 << 20)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .ok_or_else(|| Error::new(Code::Elements, "The accessibility probe returned no result"))?;
+    let missing = || Error::new(Code::Elements, "The accessibility probe returned no result");
+    let bytes = run_output(&reply, 8 << 20).map_err(|cause| missing().with_source(cause))?;
+    let value = serde_json::from_slice(&bytes).map_err(|cause| missing().with_source(cause))?;
 
     Scanned::from_probe(value)
 }
@@ -239,18 +237,7 @@ pub(super) fn listing(
         .iter()
         .filter(|element| filter.matches(element))
         .filter(|element| {
-            full || filter.name.is_some()
-                || filter.role.is_some()
-                || element.role.as_deref() != Some("AXGroup")
-                || shown_name(element).is_some()
-                || element.value.iter().any(|value| !value.is_empty())
-                || element.enabled == Some(false)
-                || element.focused == Some(true)
-                || element.selected == Some(true)
-                || element.menu
-                || element.mark.is_some()
-                || !element.unreadable.is_empty()
-                || !element.truncated.is_empty()
+            full || filter.name.is_some() || filter.role.is_some() || !plain_group(element)
         })
         .collect();
     let shown = &matching[..max.min(matching.len())];
@@ -304,22 +291,30 @@ pub(super) fn listing(
     listed
 }
 
+/// Whether `element` is a group with nothing to tell, which the default
+/// listing leaves out.
+fn plain_group(element: &Element) -> bool {
+    element.role.as_deref() == Some("AXGroup")
+        && shown_name(element).is_none()
+        && element.value.as_deref().is_none_or(str::is_empty)
+        && element.enabled != Some(false)
+        && element.focused != Some(true)
+        && element.selected != Some(true)
+        && !element.menu
+        && element.mark.is_none()
+        && element.unreadable.is_empty()
+        && element.truncated.is_empty()
+}
+
 /// An element as the default listing names it, with its window's place in
 /// `windows` (added when new).
 fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Frame>) -> Value {
-    let mut listed = json!({"index": element.index});
-    let name = shown_name(element);
-
-    if let Some(role) = &element.role {
-        listed["role"] = json!(role);
-    }
-    if let Some(name) = name {
-        listed["name"] = json!(name);
-    }
+    let mut listed = element_identity(element);
+    listed["index"] = json!(element.index);
     if let Some(value) = element
         .value
         .as_deref()
-        .filter(|value| !value.is_empty() && Some(*value) != name)
+        .filter(|value| !value.is_empty() && Some(*value) != listed["name"].as_str())
     {
         listed["value"] = json!(value);
     }
@@ -387,9 +382,6 @@ fn drawn(frame: &Frame) -> bool {
 /// might match too.
 pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Element> {
     let elements = in_play(elements);
-    // What is in play is either an open menu's items or no menu item at all.
-    let menu_open = elements.first().is_some_and(|element| element.menu);
-
     let matches: Vec<(&Element, NameMatch)> = elements
         .iter()
         .filter_map(|element| Some((*element, filter.match_of(element)?)))
@@ -415,35 +407,7 @@ pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Res
     };
 
     let [element] = matching.as_slice() else {
-        let candidates = candidates(&elements, &matching, filter);
-        let closest = if candidates.is_empty() {
-            ""
-        } else {
-            " The closest names are in candidates."
-        };
-        let error = Error::new(
-            Code::Elements,
-            match matching.len() {
-                0 if menu_open => format!(
-                    "No item of the open menu matches. Run atlas elements --app NAME to see it, \
-                     or press escape to close the menu.{closest}"
-                ),
-                0 => format!(
-                    "No visible element matches. Run atlas elements --app NAME to see what is \
-                     there.{closest}"
-                ),
-                count => format!(
-                    "{count} elements match. Run atlas elements with the same --name to \
-                     tell them apart, then add --role, or click the one you mean at its point."
-                ),
-            },
-        );
-
-        return Err(if candidates.is_empty() {
-            error
-        } else {
-            error.with("candidates", json!(candidates))
-        });
+        return Err(not_one(&elements, &matching, filter));
     };
 
     // An element whose selector attributes could not be read may be a
@@ -472,6 +436,42 @@ pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Res
     Ok(element)
 }
 
+/// The refusal when `matching`, of the `elements` in play, is not one
+/// element: what to do, and the candidates when there are any.
+fn not_one(elements: &[&Element], matching: &[&Element], filter: &ElementFilter) -> Error {
+    // What is in play is either an open menu's items or no menu item at all.
+    let menu_open = elements.first().is_some_and(|element| element.menu);
+    let candidates = candidates(elements, matching, filter);
+    let closest = if candidates.is_empty() {
+        ""
+    } else {
+        " The closest names are in candidates."
+    };
+    let error = Error::new(
+        Code::Elements,
+        match matching.len() {
+            0 if menu_open => format!(
+                "No item of the open menu matches. Run atlas elements --app NAME to see it, \
+                 or press escape to close the menu.{closest}"
+            ),
+            0 => format!(
+                "No visible element matches. Run atlas elements --app NAME to see what is \
+                 there.{closest}"
+            ),
+            count => format!(
+                "{count} elements match. Run atlas elements with the same --name to \
+                 tell them apart, then add --role, or click the one you mean at its point."
+            ),
+        },
+    );
+
+    if candidates.is_empty() {
+        error
+    } else {
+        error.with("candidates", json!(candidates))
+    }
+}
+
 /// The elements a name is judged against: while a menu is open, only its
 /// items (a click outside it just closes the menu).
 fn in_play(elements: &[Element]) -> Vec<&Element> {
@@ -486,17 +486,10 @@ fn in_play(elements: &[Element]) -> Vec<&Element> {
 /// name and click point: on several matches, those matches; on none, the
 /// visible elements whose names are closest to the name asked for.
 fn candidates(seen: &[&Element], matching: &[&Element], filter: &ElementFilter) -> Vec<Value> {
-    let at = |element: &Element| {
-        element
-            .frame
-            .as_ref()
-            .map(|frame| click_point(element.role.as_deref(), frame))
-    };
-
     if !matching.is_empty() {
         return matching
             .iter()
-            .filter_map(|element| Some(clicked(element, at(element)?)))
+            .filter_map(|element| Some(clicked(element, point_of(element)?)))
             .take(CANDIDATES)
             .collect();
     }
@@ -521,7 +514,7 @@ fn candidates(seen: &[&Element], matching: &[&Element], filter: &ElementFilter) 
 
     let mut listed: Vec<Value> = Vec::new();
     for (_, element, text) in close {
-        let Some(point) = at(element) else {
+        let Some(point) = point_of(element) else {
             continue;
         };
         let mut candidate = clicked(element, point);
@@ -567,21 +560,16 @@ pub async fn click_element(
     let expect = target_expect(client, &verified, target).await?;
     let pid = expect.pid();
     let scanned = app_elements(client, &verified, pid).await?;
-    let epoch = verified.session().epoch.clone();
     if scanned.incomplete {
         return Err(scanned.refusal());
     }
 
     let element = choose(&scanned.elements, filter)?;
-    let (x, y) = element
-        .frame
-        .as_ref()
-        .map(|frame| click_point(element.role.as_deref(), frame))
-        .unwrap_or_default();
+    let (x, y) = point_of(element).unwrap_or_default();
 
     // Resolve the element's owning window from a fresh list. Visibility is
     // checked after native preparation, under the same lock as the click.
-    let Shown { windows, .. } = pointer_view(client).await?;
+    let windows = client.windows_in(None, true, WINDOW_LOOKUP).await?.windows;
     let check = element_check(element, &windows, expect, (x, y))?;
 
     // The name it was found by is kept only as a control's caption: any
@@ -599,7 +587,7 @@ pub async fn click_element(
         .input_owned(
             &ownership,
             crate::actions::Batch::decode(&actions),
-            Some((&epoch, std::time::Instant::now())),
+            Some((&verified.session().epoch, std::time::Instant::now())),
             Some(check),
         )
         .await?;
@@ -616,33 +604,31 @@ pub(super) fn element_check(
     (x, y): (f64, f64),
 ) -> Result<Expect> {
     let pid = expect.pid();
-    let expect = if element.role.as_deref() == Some("AXMenuBarItem") {
+    if element.role.as_deref() == Some("AXMenuBarItem") {
         menu_bar_window(windows, x, y)
             .ok_or_else(|| Error::new(Code::Elements, "The menu bar is no longer on screen"))?;
-        expect
-    } else {
-        let number = element
-            .window
-            .as_ref()
-            .and_then(|frame| owning_window(windows, pid, frame))
-            .ok_or_else(|| {
-                Error::new(
-                    Code::Elements,
-                    "The element's window could not be selected uniquely",
-                )
-            })?;
-        let menu = element.menu
-            || windows.iter().any(|window| {
-                window.number == number && window.layer == crate::screen::windows::MENU_LAYER
-            });
-        if menu {
-            expect
-        } else {
-            expect.in_window(number)?
-        }
-    };
+        return Ok(expect);
+    }
 
-    Ok(expect)
+    let number = element
+        .window
+        .as_ref()
+        .and_then(|frame| owning_window(windows, pid, frame))
+        .ok_or_else(|| {
+            Error::new(
+                Code::Elements,
+                "The element's window could not be selected uniquely",
+            )
+        })?;
+    if element.menu
+        || windows
+            .iter()
+            .any(|window| window.number == number && window.layer == MENU_LAYER)
+    {
+        Ok(expect)
+    } else {
+        expect.in_window(number)
+    }
 }
 
 /// Where a click on an element lands: the middle of its frame, or for a
@@ -660,6 +646,12 @@ pub(super) fn click_point(role: Option<&str>, frame: &Frame) -> (f64, f64) {
     }
 }
 
+/// Where a click on `element` lands, when it has a frame.
+fn point_of(element: &Element) -> Option<(f64, f64)> {
+    let frame = element.frame.as_ref()?;
+    Some(click_point(element.role.as_deref(), frame))
+}
+
 /// A coordinate or length in whole points, as replies give them.
 fn whole(points: f64) -> i64 {
     points.round() as i64
@@ -667,7 +659,14 @@ fn whole(points: f64) -> i64 {
 
 /// A clicked element as its reply names it: role, name and the point clicked.
 pub(super) fn clicked(element: &Element, (x, y): (f64, f64)) -> Value {
-    let mut named = json!({"at": [whole(x), whole(y)]});
+    let mut named = element_identity(element);
+    named["at"] = json!([whole(x), whole(y)]);
+    named
+}
+
+/// What a reply calls an element: its role and name, each when it has one.
+fn element_identity(element: &Element) -> Value {
+    let mut named = json!({});
     if let Some(role) = &element.role {
         named["role"] = json!(role);
     }

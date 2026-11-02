@@ -9,16 +9,21 @@
 //! rolls back without blind replays. The job carrying a reply is never the one
 //! being unloaded, and only artifacts this migration created are undone.
 use super::{
-    Account, account_with_uid, endpoint,
-    helper::{Agent, LABEL, Layout, Request, plist, text_sha256},
+    Account, account_with_uid,
+    configuration::managed,
+    endpoint,
+    helper::{Agent, Definition, JobReport, LABEL, Layout, Request, Unfinished, acknowledged},
     helper_job,
+    identity::{self, Identity},
+    problem, reported_pid,
     signature::signed_daemon,
 };
 use crate::{
     client::{Client, Run, timestamp},
-    config::{Config, home, save_private},
+    config::{Config, home},
     control::Ownership,
     error::{Code, Error, Result},
+    files::save_private,
     session::{input_current, require_hidden},
     transport::run_output,
 };
@@ -28,7 +33,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,11 +44,7 @@ struct Plan {
     home: PathBuf,
     old_label: String,
     old_plist_sha256: String,
-    /// The managed label. Empty in logs from before the own daemon, whose
-    /// managed job ran the previous capture daemon.
-    #[serde(default)]
     label: String,
-    #[serde(default)]
     controller_uid: u32,
     program: PathBuf,
     cdhash: String,
@@ -52,7 +53,6 @@ struct Plan {
     new_config: String,
     /// A first setup (by `atlas init`): no earlier capture job, so
     /// nothing is moved or retired and there is nothing to roll back to.
-    #[serde(default)]
     fresh: bool,
 }
 
@@ -63,6 +63,15 @@ enum State {
     Applied,
     RollingBack,
     RolledBack,
+}
+
+impl State {
+    fn in_effect(self) -> bool {
+        match self {
+            Self::Applying | Self::Applied => true,
+            Self::RollingBack | Self::RolledBack => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,13 +86,28 @@ struct Log {
     history: Vec<(String, String)>,
 }
 
+impl Log {
+    fn new(plan: Plan) -> Self {
+        Self {
+            version: 1,
+            plan,
+            state: State::Applying,
+            pending: Vec::new(),
+            history: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Endpoint {
     Old,
     New,
 }
 
-use super::problem;
+const WORKER_PATIENCE: Duration = Duration::from_secs(20);
+
+const APP_CHANGED: &str =
+    "Atlas.app changed since setup was planned; run setup --rollback, then setup --apply again";
 
 fn log_path(uid: u32) -> Result<PathBuf> {
     Ok(home()?
@@ -101,7 +125,7 @@ pub fn in_effect(uid: u32) -> bool {
 
 fn carried_over(log: Result<Option<Log>>) -> bool {
     match log {
-        Ok(Some(log)) => matches!(log.state, State::Applying | State::Applied),
+        Ok(Some(log)) => log.state.in_effect(),
         Ok(None) => false,
         Err(_) => true,
     }
@@ -187,38 +211,10 @@ fn save_log(path: &Path, log: &Log) -> Result<()> {
     save_private(path, &serde_json::to_vec_pretty(log)?)
 }
 
-/// The configuration with sockets moved into the private layout.
-pub(crate) fn managed(config: &Config, layout: &Layout) -> Config {
-    Config {
-        socket_path: layout.socket(),
-        input_socket: layout.input_socket(),
-        ..config.clone()
-    }
-}
-
-/// A legacy helper needs provenance before its identity can guard workers.
-/// This does not persist an identity: only the person's selection does that.
-fn setup_identity(uid: u32, config_path: Option<&Path>) -> Result<super::identity::Identity> {
-    setup_identity_with(
-        super::identity::on_file(uid),
-        || super::identity::verified(uid),
-        || {
-            let account = account_with_uid(uid)?.ok_or_else(choose_helper)?;
-            let identity = super::identity::current(&account).ok_or_else(choose_helper)?;
-            let created = crate::session::account_created(&account.name);
-            let recorded = config_path
-                .and_then(|path| fs::metadata(path).ok())
-                .and_then(|metadata| metadata.created().ok());
-            let sessions = crate::session::sessions(Some(uid));
-            legacy_provenance(created, recorded, sessions.as_ref(), uid)?;
-            if account_with_uid(uid)?.as_ref() != Some(&account)
-                || super::identity::current(&account).as_ref() != Some(&identity)
-            {
-                return Err(choose_helper());
-            }
-            Ok(identity)
-        },
-    )
+/// The helper the person chose, while the account is still that one. Only
+/// the person's selection records an identity.
+fn setup_identity(uid: u32) -> Result<Identity> {
+    identity::verified(uid).ok_or_else(choose_helper)
 }
 
 fn choose_helper() -> Error {
@@ -227,76 +223,51 @@ fn choose_helper() -> Error {
     )
 }
 
-fn legacy_provenance(
-    created: Option<SystemTime>,
-    recorded: Option<SystemTime>,
-    sessions: Option<&crate::session::Sessions>,
-    uid: u32,
-) -> Result<()> {
-    let (Some(created), Some(recorded), Some(sessions)) = (created, recorded, sessions) else {
-        return Err(choose_helper());
-    };
-    let age = created.elapsed().map_err(|_| choose_helper())?;
-    if created >= recorded
-        || sessions.logins.iter().any(|(window, kind)| {
-            window.uid == uid
-                && (*kind == crate::session::Kind::HelperLeftover
-                    || window.age >= age + crate::session::REUSED_SLACK)
-        })
-    {
-        return Err(choose_helper());
-    }
-    Ok(())
-}
-
-fn setup_identity_with(
-    on_file: super::identity::OnFile,
-    verified: impl FnOnce() -> Option<super::identity::Identity>,
-    legacy: impl FnOnce() -> Result<super::identity::Identity>,
-) -> Result<super::identity::Identity> {
-    match on_file {
-        super::identity::OnFile::Nothing => legacy(),
-        _ => verified().ok_or_else(choose_helper),
-    }
-}
-
-fn helper_argv_with(
-    client: &Client,
-    request: &Request,
-    expected: super::identity::Identity,
-) -> Result<Vec<String>> {
-    let mut argv = vec![
+fn helper_argv(client: &Client, request: &Request, expected: &Identity) -> Result<Vec<String>> {
+    Ok(vec![
         client.config.identity_probe.to_string_lossy().into_owned(),
         "setup-helper".to_owned(),
         serde_json::to_string(request)?,
-    ];
-    argv.extend(["--account".into(), serde_json::to_string(&expected)?]);
-    Ok(argv)
+        "--account".to_owned(),
+        serde_json::to_string(expected)?,
+    ])
 }
 
-/// Whether a completed helper run is a refusal the worker says changed
-/// nothing, so its outcome is certain.
-fn refused_unchanged(reply: &Value) -> bool {
-    run_output(reply, 65536)
-        .ok()
-        .and_then(|output| serde_json::from_slice::<Value>(&output).ok())
-        .is_some_and(|value| value["ok"] == false && value["unchanged"] == true)
-}
-
-/// The worker's JSON result from a completed helper run.
-fn helper_result(reply: &Value) -> Result<Value> {
+fn helper_reply(reply: &Value) -> Result<Value> {
     let output = run_output(reply, 65536)
         .map_err(|_| problem("The helper setup command returned malformed output"))?;
-    let value: Value = serde_json::from_slice(&output)
-        .map_err(|_| problem("The helper setup command returned no result"))?;
-    if value["ok"] != true {
-        return Err(problem(format!(
-            "Helper setup refused: {}",
-            value["error"].as_str().unwrap_or("unknown error")
-        )));
-    }
+    serde_json::from_slice(&output)
+        .map_err(|error| problem("The helper setup command returned no result").with_source(error))
+}
 
-    Ok(value)
+/// A worker's reply as an outcome: only a refusal that says it changed
+/// nothing is certain.
+fn helper_result(reply: Value) -> Result<Value> {
+    acknowledged(reply).map_err(|unfinished| {
+        let error = problem(format!(
+            "Helper setup refused: {}",
+            unfinished.reason().unwrap_or("unknown error")
+        ));
+        match unfinished {
+            Unfinished::Unchanged(_) => error,
+            Unfinished::Silent(_) | Unfinished::Uncertain(_) => error.uncertain(),
+        }
+    })
+}
+
+/// Run one read-only request inside the helper as `expected`. Inspection
+/// changes nothing, so it needs no pending marker.
+async fn inspect(client: &Client, request: &Request, expected: &Identity) -> Result<Value> {
+    let reply = client
+        .run(
+            helper_argv(client, request, expected)?,
+            Run::pending().within(WORKER_PATIENCE),
+        )
+        .await?;
+
+    helper_reply(&reply)
+        .and_then(helper_result)
+        .map_err(Error::certain)
 }
 
 /// The PID of the input service answering on `client`'s input socket: None
@@ -320,9 +291,7 @@ async fn input_presence(client: &Client) -> Result<Option<u32>> {
         .await
         .map_err(|error| problem(format!("Input service state is unknown: {}", error.error)))?;
 
-    hello["pid"]
-        .as_u64()
-        .and_then(|pid| u32::try_from(pid).ok())
+    reported_pid(&hello["pid"])
         .filter(|_| hello["ok"] == true)
         .map(Some)
         .ok_or_else(|| problem("Input service state is unknown"))
@@ -332,6 +301,20 @@ async fn reachable(client: &Client) -> bool {
     require_hidden(&client.status().await, client.config.helper_uid).is_ok()
 }
 
+fn require_background(status: &Value, uid: u32) -> Result<()> {
+    require_hidden(status, uid).map(|_| ()).map_err(|_| {
+        problem(
+            "The helper is not running in the background. Switch back to your own account, then \
+             run atlas doctor.",
+        )
+    })
+}
+
+fn daemon_pid(status: &Value) -> Result<u32> {
+    reported_pid(&status["daemon"]["pid"])
+        .ok_or_else(|| problem("The helper did not say which process it is. Run atlas restart."))
+}
+
 async fn await_endpoint(client: &Client) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(15);
 
@@ -339,7 +322,7 @@ async fn await_endpoint(client: &Client) -> Result<()> {
         if Instant::now() >= deadline {
             return Err(problem(format!(
                 "The helper did not answer in time ({}). Run atlas doctor.",
-                crate::ui::text::tilde(&client.config.socket_path)
+                crate::config::tilde(&client.config.socket_path)
             )));
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -353,7 +336,7 @@ struct Migration {
     log: Log,
     old: Client,
     new: Client,
-    account: OnceLock<super::identity::Identity>,
+    account: OnceLock<Identity>,
 }
 
 impl Migration {
@@ -371,18 +354,18 @@ impl Migration {
         })
     }
 
-    fn argv(&self, through: Endpoint, request: &Request) -> Result<Vec<String>> {
-        let account = if let Some(account) = self.account.get() {
-            account
-        } else {
-            let identity = setup_identity(self.log.plan.uid, Some(&self.log.plan.config_path))?;
-            let account = account_with_uid(self.log.plan.uid)?.ok_or_else(choose_helper)?;
-            if account.home != self.log.plan.home {
-                return Err(choose_helper());
-            }
-            self.account.get_or_init(|| identity)
-        };
-        helper_argv_with(self.client(through), request, account.clone())
+    /// The helper's identity, established once for every worker of this pass.
+    fn account(&self) -> Result<&Identity> {
+        if let Some(account) = self.account.get() {
+            return Ok(account);
+        }
+
+        let identity = setup_identity(self.log.plan.uid)?;
+        let account = account_with_uid(self.log.plan.uid)?.ok_or_else(choose_helper)?;
+        if account.home != self.log.plan.home {
+            return Err(choose_helper());
+        }
+        Ok(self.account.get_or_init(|| identity))
     }
 
     fn client(&self, endpoint: Endpoint) -> &Client {
@@ -476,19 +459,20 @@ impl Migration {
     /// part way, so the generation stays pending for this migration to
     /// reconcile.
     async fn helper(&mut self, through: Endpoint, request: Request) -> Result<Value> {
-        let argv = self.argv(through, &request)?;
+        let argv = helper_argv(self.client(through), &request, self.account()?)?;
         let generation = self.begin()?;
 
         let outcome = match self
             .client(through)
-            .run(argv, Run::pending().within(Duration::from_secs(20)))
+            .run(argv, Run::pending().within(WORKER_PATIENCE))
             .await
         {
             Ok(reply) if reply["timedOut"] == true || !reply["signal"].is_null() => {
                 Err(problem("The helper setup command was interrupted").uncertain())
             }
-            Ok(reply) if refused_unchanged(&reply) => helper_result(&reply),
-            Ok(reply) => helper_result(&reply).map_err(Error::uncertain),
+            Ok(reply) => helper_reply(&reply)
+                .map_err(Error::uncertain)
+                .and_then(helper_result),
             Err(error) if !error.uncertain => {
                 // Never dispatched or refused by the daemon: nothing ran.
                 self.settle(&generation)?;
@@ -503,7 +487,6 @@ impl Migration {
         Ok(value)
     }
 
-    /// The first endpoint in `order` with a verified hidden helper.
     async fn reachable_endpoint(&self, order: [Endpoint; 2]) -> Result<Endpoint> {
         for endpoint in order {
             if reachable(self.client(endpoint)).await {
@@ -532,14 +515,7 @@ impl Migration {
 
         self.new.frame(Some(256)).await?;
 
-        let pid = status["daemon"]["pid"]
-            .as_u64()
-            .and_then(|pid| u32::try_from(pid).ok())
-            .ok_or_else(|| {
-                problem("The helper did not say which process it is. Run atlas restart.")
-            })?;
-
-        super::signature::require_current(pid, &self.log.plan.cdhash)?;
+        super::signature::require_current(daemon_pid(&status)?, &self.log.plan.cdhash)?;
 
         let controller = nix::unistd::getuid().as_raw();
         if endpoint(&self.new.config.socket_path, self.log.plan.uid, controller).private
@@ -555,9 +531,7 @@ impl Migration {
     async fn input_ready(&self, endpoint: Endpoint) -> bool {
         let client = self.client(endpoint);
         let status = client.status().await;
-        status["inputService"]["pid"]
-            .as_u64()
-            .and_then(|pid| u32::try_from(pid).ok())
+        reported_pid(&status["inputService"]["pid"])
             .is_some_and(|pid| input_current(&status, client.config.helper_uid, pid))
     }
 
@@ -653,25 +627,21 @@ impl Migration {
         self.note("configuration switched")
     }
 
-    /// Both labels as launchd reports them, inspected through `through`.
-    async fn jobs(&self, through: Endpoint) -> Result<Value> {
+    async fn jobs(&self, through: Endpoint) -> Result<(JobReport, JobReport)> {
         let request = Request::Inspect {
             uid: self.log.plan.uid,
             labels: vec![self.log.plan.old_label.clone(), self.log.plan.label.clone()],
         };
-        Ok(self.read_only(through, request).await?["jobs"].clone())
+        let inspected = self.read_only(through, &request).await?;
+        let jobs = &inspected["jobs"];
+        Ok((
+            JobReport::from(&jobs[&self.log.plan.old_label]),
+            JobReport::from(&jobs[&self.log.plan.label]),
+        ))
     }
 
-    async fn read_only(&self, through: Endpoint, request: Request) -> Result<Value> {
-        let argv = self.argv(through, &request)?;
-
-        // Inspection is read-only and needs no pending marker.
-        let reply = self
-            .client(through)
-            .run(argv, Run::pending().within(Duration::from_secs(20)))
-            .await?;
-
-        helper_result(&reply)
+    async fn read_only(&self, through: Endpoint, request: &Request) -> Result<Value> {
+        inspect(self.client(through), request, self.account()?).await
     }
 
     /// The same worker inspections update uses before any bundle swap.
@@ -690,9 +660,7 @@ impl Migration {
             && !self.log.plan.fresh
             && updated != self.log.plan.cdhash
         {
-            return Err(problem(
-                "Atlas.app changed since setup was planned; run setup --rollback, then setup --apply again",
-            ));
+            return Err(problem(APP_CHANGED));
         }
         let plan = &self.log.plan;
         let mut labels = vec![plan.label.clone()];
@@ -704,12 +672,15 @@ impl Migration {
             labels,
         })
         .await?;
-        let job = &observed["jobs"][&plan.label];
-        let expected = text_sha256(&plist(&self.agent(), &self.layout().logs()));
-        if !(job["plistKind"] == "absent"
-            || job["plistKind"] == "regular" && job["plistSha256"] == expected)
-            || job["loaded"] == true && job["path"] != json!(self.layout().agent_plist(&plan.label))
-        {
+        let job = JobReport::from(&observed["jobs"][&plan.label]);
+        let expected = self.agent().plist_sha256(&self.layout().logs());
+        let expected_definition = match job.definition {
+            Definition::Absent => true,
+            Definition::Regular => job.sha256.as_deref() == Some(expected.as_str()),
+            Definition::Other => false,
+        };
+        let elsewhere = !job.defined_at(&self.layout().agent_plist(&plan.label));
+        if !expected_definition || job.loaded == Some(true) && elsewhere {
             return Err(problem(
                 "The helper's background job differs from its setup; run atlas init to replace it",
             ));
@@ -745,8 +716,7 @@ impl Migration {
             return Err(problem(if plan.fresh {
                 "Atlas.app changed since setup was planned; run atlas init again"
             } else {
-                "Atlas.app changed since setup was planned; run setup --rollback, then \
-                 setup --apply again"
+                APP_CHANGED
             }));
         }
 
@@ -781,8 +751,8 @@ impl Migration {
             )
             .await?;
 
-            let jobs = self.jobs(Endpoint::New).await?;
-            if jobs[&plan.old_label]["loaded"] != false || jobs[&plan.label]["loaded"] != true {
+            let (old, new) = self.jobs(Endpoint::New).await?;
+            if old.loaded != Some(false) || new.loaded != Some(true) {
                 return Err(problem(
                     "launchd does not show the expected jobs after retiring",
                 ));
@@ -815,7 +785,7 @@ impl Migration {
 
         // Planning proved the managed label had no artifacts, so anything
         // there now was created by this migration.
-        let sha256 = text_sha256(&plist(&self.agent(), &self.layout().logs()));
+        let sha256 = self.agent().plist_sha256(&self.layout().logs());
         let label = plan.label.clone();
         self.helper(
             Endpoint::Old,
@@ -828,8 +798,8 @@ impl Migration {
         )
         .await?;
 
-        let jobs = self.jobs(Endpoint::Old).await?;
-        if jobs[&plan.old_label]["loaded"] != true || jobs[&plan.label]["loaded"] != false {
+        let (old, new) = self.jobs(Endpoint::Old).await?;
+        if old.loaded != Some(true) || new.loaded != Some(false) {
             return Err(problem(
                 "launchd does not show the original job after rollback",
             ));
@@ -873,50 +843,58 @@ fn basis(config_path: &Path) -> Result<Basis> {
     })
 }
 
+impl Basis {
+    /// The plan on this basis for the signed `program`: from `old` (the
+    /// earlier job's label and definition hash) to `new_config`, or without
+    /// one a first setup.
+    fn into_plan(
+        self,
+        program: PathBuf,
+        cdhash: String,
+        old: Option<(String, String)>,
+        new_config: String,
+    ) -> Plan {
+        let fresh = old.is_none();
+        let (old_label, old_plist_sha256) = old.unwrap_or_default();
+
+        Plan {
+            uid: self.config.helper_uid,
+            controller: self.controller.name,
+            home: self.account.home,
+            old_label,
+            old_plist_sha256,
+            label: LABEL.to_owned(),
+            controller_uid: self.controller.uid,
+            program,
+            cdhash,
+            config_path: self.config_path,
+            old_config: self.text,
+            new_config,
+            fresh,
+        }
+    }
+}
+
 /// Plan a first setup of the configuration at `config_path`, whose helper
 /// already runs the managed daemon (started by `atlas init`).
 async fn plan_fresh(config_path: &Path) -> Result<Plan> {
-    let Basis {
-        config_path,
-        config,
-        text,
-        account,
-        controller,
-        layout,
-    } = basis(config_path)?;
+    let base = basis(config_path)?;
+    let config = &base.config;
 
-    if config.socket_path != layout.socket() {
+    if config.socket_path != base.layout.socket() {
         return Err(problem(
             "The configuration does not use the managed private layout",
         ));
     }
 
     let status = Client::new(config.clone())?.status().await;
-    require_hidden(&status, config.helper_uid).map_err(|_| {
-        problem(
-            "The helper is not running in the background. Switch back to your own account, then \
-             run atlas doctor.",
-        )
-    })?;
+    require_background(&status, config.helper_uid)?;
 
     let program = super::installed_app::app_executable()?;
     let cdhash = signed_daemon(&program)?;
+    let new_config = base.text.clone();
 
-    Ok(Plan {
-        uid: config.helper_uid,
-        controller: controller.name,
-        home: account.home,
-        old_label: String::new(),
-        old_plist_sha256: String::new(),
-        label: LABEL.to_owned(),
-        controller_uid: controller.uid,
-        program,
-        cdhash,
-        config_path,
-        old_config: text.clone(),
-        new_config: text,
-        fresh: true,
-    })
+    Ok(base.into_plan(program, cdhash, None, new_config))
 }
 
 /// Where a pass starts from the recorded log.
@@ -942,38 +920,36 @@ fn rollback_unfinished(path: &Path) -> Error {
     ))
 }
 
-/// Where [`apply`] starts from `log`, recorded at `path`.
 fn apply_start(log: Option<Log>, path: &Path) -> Result<Start> {
-    match log {
-        Some(log) if log.version != 1 => Err(unknown_version(path)),
-        // Applied by an Atlas before its own daemon: plan the move to it.
-        Some(log) if log.plan.label.is_empty() && log.state == State::Applying => {
-            Err(problem(format!(
-                "A setup recorded by an older Atlas is unfinished; finish or roll it back \
-                 with that version ({})",
-                path.display()
-            )))
-        }
-        Some(log)
-            if matches!(log.state, State::Applying | State::Applied)
-                && !log.plan.label.is_empty() =>
-        {
-            Ok(Start::Resume(log))
-        }
-        Some(log) if log.state == State::RollingBack => Err(rollback_unfinished(path)),
-        previous => Ok(Start::Plan(previous)),
+    let Some(log) = log else {
+        return Ok(Start::Plan(None));
+    };
+    if log.version != 1 {
+        return Err(unknown_version(path));
+    }
+
+    match log.state {
+        State::Applying | State::Applied => Ok(Start::Resume(log)),
+        State::RollingBack => Err(rollback_unfinished(path)),
+        State::RolledBack => Ok(Start::Plan(Some(log))),
     }
 }
 
 /// Where [`apply_fresh`] starts from `log`, recorded at `path`; None for a
 /// migrated (not fresh) setup, which re-verifies the way it was made.
 fn fresh_start(log: Option<Log>, path: &Path) -> Result<Option<Start>> {
-    match log {
-        Some(log) if log.version != 1 => Err(unknown_version(path)),
-        Some(log) if log.state == State::RollingBack => Err(rollback_unfinished(path)),
-        Some(log) if !log.plan.label.is_empty() && !log.plan.fresh => Ok(None),
-        Some(log) if log.plan.fresh => Ok(Some(Start::Resume(log))),
-        previous => Ok(Some(Start::Plan(previous))),
+    let Some(log) = log else {
+        return Ok(Some(Start::Plan(None)));
+    };
+    if log.version != 1 {
+        return Err(unknown_version(path));
+    }
+
+    match log.state {
+        State::RollingBack => Err(rollback_unfinished(path)),
+        State::Applying | State::Applied | State::RolledBack => {
+            Ok(log.plan.fresh.then_some(Start::Resume(log)))
+        }
     }
 }
 
@@ -1000,20 +976,20 @@ async fn starting_log(
                 save_log(&archive, &previous)?;
             }
 
-            Ok(Log {
-                version: 1,
-                plan: plan.await?,
-                state: State::Applying,
-                pending: Vec::new(),
-                history: Vec::new(),
-            })
+            Ok(Log::new(plan.await?))
         }
     }
 }
 
+/// A finished pass: what it reports, and why it did not complete, if it did not.
+pub(crate) struct Pass {
+    report: Value,
+    pub(crate) failure: Option<String>,
+}
+
 /// Apply `log`, first recording an updated Atlas.app (still validly signed
 /// as Atlas) as the same setup when `recheck` is set.
-async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Value> {
+async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Pass> {
     let mut migration = Migration::new(path, log)?;
     migration.require_owned_pending()?;
 
@@ -1028,8 +1004,12 @@ async fn carry_out(path: PathBuf, log: Log, recheck: bool) -> Result<Value> {
     migration.log.state = State::Applying;
     save_log(&migration.path, &migration.log)?;
     let outcome = migration.apply().await;
+    let failure = outcome.as_ref().err().map(|error| error.error.clone());
 
-    Ok(report(&migration.log, &migration.path, outcome))
+    Ok(Pass {
+        report: report(&migration.log, &migration.path, outcome),
+        failure,
+    })
 }
 
 /// Record and verify a first setup (see [`plan_fresh`]). Re-running on an
@@ -1044,10 +1024,18 @@ pub async fn apply_fresh(
     client: &Client,
     ownership: &Ownership,
 ) -> Result<Value> {
+    Ok(fresh_pass(config_path, client, ownership).await?.report)
+}
+
+pub(crate) async fn fresh_pass(
+    config_path: &Path,
+    client: &Client,
+    ownership: &Ownership,
+) -> Result<Pass> {
     client.require_service_idle().await?;
     let (path, log) = recorded_log(config_path)?;
     let Some(start) = fresh_start(log, &path)? else {
-        return apply(config_path, client, ownership).await;
+        return applied(config_path, client, ownership).await;
     };
 
     let log = starting_log(&path, start, plan_fresh(config_path)).await?;
@@ -1060,39 +1048,25 @@ pub async fn apply_fresh(
 /// How launchd and the helper's LaunchAgents folder show the managed job,
 /// read through `client`'s daemon (read-only, so no pending marker): the
 /// worker's report for [`LABEL`] (`loaded`, `plistKind`, `plistSha256`...).
-pub(crate) async fn managed_job(client: &Client) -> Result<Value> {
+pub(crate) async fn managed_job(client: &Client) -> Result<JobReport> {
     let request = Request::Inspect {
         uid: client.config.helper_uid,
         labels: vec![LABEL.to_owned()],
     };
+    let expected = setup_identity(client.config.helper_uid)?;
 
-    let reply = client
-        .run(
-            helper_argv_with(
-                client,
-                &request,
-                setup_identity(client.config.helper_uid, None)?,
-            )?,
-            Run::pending().within(Duration::from_secs(20)),
-        )
-        .await?;
-
-    Ok(helper_result(&reply)?["jobs"][LABEL].clone())
+    Ok(JobReport::from(
+        &inspect(client, &request, &expected).await?["jobs"][LABEL],
+    ))
 }
 
 /// Plan from the live configuration. Reads only; refuses unless the managed
 /// label has no artifacts and the current job is a verified plain plist.
 async fn plan(config_path: &Path) -> Result<Plan> {
-    let Basis {
-        config_path,
-        config,
-        text: old_config,
-        account,
-        controller,
-        layout,
-    } = basis(config_path)?;
+    let base = basis(config_path)?;
+    let (config, layout) = (&base.config, &base.layout);
 
-    let target = managed(&config, &layout);
+    let target = managed(config, layout);
     if config.socket_path == target.socket_path {
         return Err(problem(
             "The configuration already uses the managed private layout",
@@ -1111,17 +1085,9 @@ async fn plan(config_path: &Path) -> Result<Plan> {
     }
 
     let status = client.status().await;
-    require_hidden(&status, config.helper_uid).map_err(|_| {
-        problem(
-            "The helper is not running in the background. Switch back to your own account, then \
-             run atlas doctor.",
-        )
-    })?;
+    require_background(&status, config.helper_uid)?;
 
-    let pid = status["daemon"]["pid"]
-        .as_u64()
-        .and_then(|pid| u32::try_from(pid).ok())
-        .ok_or_else(|| problem("The helper did not say which process it is. Run atlas restart."))?;
+    let pid = daemon_pid(&status)?;
     let program = super::installed_app::app_executable()?;
     let cdhash = signed_daemon(&program)?;
 
@@ -1140,54 +1106,37 @@ async fn plan(config_path: &Path) -> Result<Plan> {
         labels: vec![old_label.clone(), LABEL.to_owned()],
     };
 
-    // Inspection is read-only, so it needs no pending marker.
-    let reply = client
-        .run(
-            helper_argv_with(
-                &client,
-                &request,
-                setup_identity(config.helper_uid, Some(&config_path))?,
-            )?,
-            Run::pending().within(Duration::from_secs(20)),
-        )
-        .await?;
-    let jobs = helper_result(&reply)?["jobs"].clone();
+    let expected = setup_identity(config.helper_uid)?;
+    let inspected = inspect(&client, &request, &expected).await?;
+    let jobs = &inspected["jobs"];
 
-    let old = &jobs[&old_label];
-    let old_plist_sha256 = old["plistSha256"]
-        .as_str()
+    let old = JobReport::from(&jobs[&old_label]);
+    let old_plist_sha256 = old
+        .sha256
+        .clone()
         .filter(|_| {
-            old["loaded"] == true
-                && old["plistKind"] == "regular"
-                && old["path"] == json!(layout.agent_plist(&old_label))
+            old.loaded == Some(true)
+                && old.definition == Definition::Regular
+                && old.defined_at(&layout.agent_plist(&old_label))
         })
         .ok_or_else(|| {
             problem("The current capture job is not loaded from a plain plist in LaunchAgents")
-        })?
-        .to_owned();
+        })?;
 
-    let managed = &jobs[LABEL];
-    if managed["loaded"] != false || managed["plistKind"] != "absent" {
+    let managed = JobReport::from(&jobs[LABEL]);
+    if managed.loaded != Some(false) || managed.definition != Definition::Absent {
         return Err(problem(format!(
             "{LABEL} already exists in the helper; remove it before setup manages it"
         )));
     }
 
-    Ok(Plan {
-        uid: config.helper_uid,
-        controller: controller.name,
-        home: account.home,
-        old_label,
-        old_plist_sha256,
-        label: LABEL.to_owned(),
-        controller_uid: controller.uid,
+    let new_config = target.to_toml()?;
+    Ok(base.into_plan(
         program,
         cdhash,
-        config_path,
-        new_config: target.to_toml()?,
-        old_config,
-        fresh: false,
-    })
+        Some((old_label, old_plist_sha256)),
+        new_config,
+    ))
 }
 
 fn report(log: &Log, path: &Path, outcome: Result<()>) -> Value {
@@ -1218,7 +1167,11 @@ fn report(log: &Log, path: &Path, outcome: Result<()>) -> Value {
 ///
 /// Returns admission, account-identity, migration or settlement failures. Pending work is
 /// cleared only after the existing read-back proof succeeds.
-pub async fn apply(config_path: &Path, client: &Client, _ownership: &Ownership) -> Result<Value> {
+pub async fn apply(config_path: &Path, client: &Client, ownership: &Ownership) -> Result<Value> {
+    Ok(applied(config_path, client, ownership).await?.report)
+}
+
+async fn applied(config_path: &Path, client: &Client, _ownership: &Ownership) -> Result<Pass> {
     client.require_service_idle().await?;
     let (path, log) = recorded_log(config_path)?;
     let start = apply_start(log, &path)?;
@@ -1245,16 +1198,7 @@ pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Resu
     let start = apply_start(log, &path)?;
     let (log, resuming) = match start {
         Start::Resume(log) => (log, true),
-        Start::Plan(_) => (
-            Log {
-                version: 1,
-                plan: plan(config_path).await?,
-                state: State::Applying,
-                pending: Vec::new(),
-                history: Vec::new(),
-            },
-            false,
-        ),
+        Start::Plan(_) => (Log::new(plan(config_path).await?), false),
     };
     let migration = Migration::new(path, log)?;
     migration
@@ -1262,7 +1206,7 @@ pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Resu
             let through = migration
                 .reachable_endpoint([Endpoint::Old, Endpoint::New])
                 .await?;
-            migration.read_only(through, request).await
+            migration.read_only(through, &request).await
         })
         .await
 }
@@ -1282,12 +1226,6 @@ pub async fn rollback(
     client.require_service_idle().await?;
     let (path, log) = recorded_log(config_path)?;
     let log = log.ok_or_else(|| problem("No setup migration is recorded"))?;
-    if log.plan.label.is_empty() {
-        return Err(problem(
-            "This setup was recorded by an older Atlas; roll it back with that version",
-        ));
-    }
-
     if log.plan.fresh {
         return Err(problem(
             "This was a first setup: there is nothing earlier to roll back to",
@@ -1302,627 +1240,4 @@ pub async fn rollback(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_genuine_legacy_helper_proceeds_with_an_identity_on_every_worker() {
-        let recorded = super::super::identity::Identity {
-            uid: 502,
-            name: "helper".into(),
-            generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
-        };
-        let sessions = legacy_sessions(1000, 900);
-        let expected = setup_identity_with(
-            super::super::identity::OnFile::Nothing,
-            || panic!("no persistent identity exists"),
-            || {
-                legacy_provenance(Some(at(100)), Some(at(200)), Some(&sessions), 502)?;
-                Ok(recorded.clone())
-            },
-        )
-        .unwrap();
-        let client = Client::new(config()).unwrap();
-        for request in [
-            Request::Inspect {
-                uid: 502,
-                labels: vec![LABEL.into()],
-            },
-            Request::Prepare {
-                uid: 502,
-                controller: "c".into(),
-            },
-            Request::Install {
-                agent: Agent {
-                    label: LABEL.into(),
-                    program: "/Applications/Atlas.app/Contents/MacOS/Atlas".into(),
-                    uid: 502,
-                    controller_uid: 501,
-                    socket: "/Users/helper/.atlas/helper/502.sock".into(),
-                },
-            },
-            Request::Retire {
-                uid: 502,
-                label: "old".into(),
-                sha256: "a".repeat(64),
-                missing_ok: false,
-            },
-            Request::Restore {
-                uid: 502,
-                label: "old".into(),
-                sha256: "a".repeat(64),
-            },
-            Request::FirstLogin {
-                uid: 502,
-                opener: true,
-            },
-            Request::ForgetOpener { uid: 502 },
-            Request::Kickstart { uid: 502 },
-        ] {
-            let argv = helper_argv_with(&client, &request, expected.clone()).unwrap();
-            assert_eq!(argv[3], "--account");
-            assert_eq!(
-                serde_json::from_str::<super::super::identity::Identity>(&argv[4]).unwrap(),
-                recorded
-            );
-        }
-        assert!(
-            setup_identity_with(
-                super::super::identity::OnFile::Unreadable,
-                || None,
-                || panic!("unreadable is not legacy")
-            )
-            .is_err()
-        );
-        assert!(
-            setup_identity_with(
-                super::super::identity::OnFile::Recorded(recorded.clone()),
-                || None,
-                || panic!("a mismatched identity is not legacy"),
-            )
-            .is_err(),
-            "a mismatched or unreadable account still refuses"
-        );
-    }
-
-    fn at(seconds: u64) -> SystemTime {
-        std::time::UNIX_EPOCH + Duration::from_secs(seconds)
-    }
-
-    fn legacy_sessions(account_age: u64, login_age: u64) -> crate::session::Sessions {
-        crate::session::Sessions {
-            logins: crate::session::classify(
-                &[crate::session::Window {
-                    uid: 502,
-                    pid: 1234,
-                    age: Duration::from_secs(login_age),
-                }],
-                |_| crate::session::Record {
-                    passwd: true,
-                    directory: true,
-                    age: Some(Duration::from_secs(account_age)),
-                },
-                501,
-                Some(502),
-                Some(501),
-            ),
-            blockers: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn a_surviving_daemon_cannot_set_up_a_new_account_that_reused_the_helper_uid() {
-        let replacement = Account {
-            uid: 502,
-            name: "replacement".into(),
-            home: "/Users/replacement".into(),
-        };
-        assert_ne!(replacement.home, Path::new("/Users/helper"));
-        let sessions = legacy_sessions(60, 900);
-        let error = setup_identity_with(
-            super::super::identity::OnFile::Nothing,
-            || panic!("no persistent identity exists"),
-            || {
-                legacy_provenance(
-                    Some(at(300)),
-                    Some(at(200)),
-                    Some(&sessions),
-                    replacement.uid,
-                )?;
-                panic!("a replacement must be refused before dispatch")
-            },
-        )
-        .unwrap_err();
-        assert!(error.error.contains("Choose the helper again"));
-        // Even a configuration rewritten after UID reuse cannot bless the surviving login.
-        assert!(legacy_provenance(Some(at(300)), Some(at(400)), Some(&sessions), 502).is_err());
-        for (created, recorded, sessions) in [
-            (None, Some(at(200)), Some(&sessions)),
-            (Some(at(100)), None, Some(&sessions)),
-            (Some(at(100)), Some(at(200)), None),
-        ] {
-            assert!(legacy_provenance(created, recorded, sessions, 502).is_err());
-        }
-    }
-
-    #[tokio::test]
-    async fn update_preflight_refuses_a_missing_retirement_backup() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut migration = sandbox(dir.path());
-        migration.log.state = State::Applied;
-        migration.log.plan.home = dir.path().join("helper");
-        migration.log.plan.old_plist_sha256 = text_sha256("old definition");
-        let layout = migration.layout();
-        let backup = layout.root().join("backup").join(format!(
-            "{}-{}.plist",
-            migration.log.plan.old_label,
-            &migration.log.plan.old_plist_sha256[..16]
-        ));
-        fs::create_dir_all(backup.parent().unwrap()).unwrap();
-        let inspect = async |request| match request {
-            Request::Inspect { .. } => {
-                Ok(json!({"ok": true, "jobs": {LABEL: {"loaded": false, "plistKind": "absent"}}}))
-            }
-            Request::CheckRetire {
-                label,
-                sha256,
-                missing_ok,
-                ..
-            } => {
-                super::super::helper::retirement_with(
-                    &layout,
-                    &label,
-                    &sha256,
-                    missing_ok,
-                    || Ok(super::super::helper::Job::Absent),
-                )?;
-                Ok(json!({"ok": true}))
-            }
-            _ => panic!("preflight must only inspect"),
-        };
-        fs::write(&backup, "old definition").unwrap();
-        let program = Path::new("/updated/atlas");
-        let signed = |path: &Path| {
-            assert_eq!(path, program);
-            Ok("updated-hash".into())
-        };
-        migration
-            .preflight_with(true, program, signed, inspect)
-            .await
-            .unwrap();
-        fs::remove_file(&backup).unwrap();
-        let error = migration
-            .preflight_with(true, program, signed, inspect)
-            .await
-            .unwrap_err();
-        assert!(error.error.contains("not the expected definition"));
-        assert!(!layout.agent_plist(&migration.log.plan.old_label).exists());
-        assert!(
-            !migration.path.exists(),
-            "preflight writes no migration record"
-        );
-    }
-
-    fn config() -> Config {
-        Config {
-            helper_uid: 502,
-            socket_path: "/tmp/atlas-live-502/502.sock".into(),
-            identity_probe: "/Users/Shared/Atlas/atlas".into(),
-            input_socket: "/tmp/atlas-input-502/input.sock".into(),
-            output_dir: "/Users/c/runs".into(),
-        }
-    }
-
-    fn plan(config_path: PathBuf, text: &str) -> Plan {
-        Plan {
-            uid: 502,
-            controller: "c".into(),
-            home: "/Users/h".into(),
-            old_label: "dev.atlas.live-sessiond".into(),
-            old_plist_sha256: "a".repeat(64),
-            label: LABEL.into(),
-            controller_uid: 501,
-            program: "/x".into(),
-            cdhash: "ab".into(),
-            config_path,
-            old_config: text.into(),
-            new_config: text.into(),
-            fresh: false,
-        }
-    }
-
-    #[test]
-    fn the_managed_layout_only_moves_sockets() {
-        let layout = Layout::new(502, "/Users/atlastest".into());
-        let target = managed(&config(), &layout);
-        assert_eq!(
-            target.socket_path,
-            PathBuf::from("/Users/atlastest/.atlas/helper/502.sock")
-        );
-        assert_eq!(
-            target.input_socket,
-            PathBuf::from("/Users/atlastest/.atlas/input/input.sock")
-        );
-        assert_eq!(target.identity_probe, config().identity_probe);
-        assert_eq!(target.output_dir, config().output_dir);
-        assert!(target.socket_path.to_string_lossy().len() < 104);
-    }
-
-    /// A log from before the own daemon has no managed label; it reads, and
-    /// marks itself as one this version must not resume or roll back.
-    #[test]
-    fn logs_from_the_previous_daemon_are_recognised() {
-        let mut legacy = serde_json::to_value(Log {
-            version: 1,
-            plan: plan("/c/atlas.local.toml".into(), "a"),
-            state: State::Applied,
-            pending: Vec::new(),
-            history: Vec::new(),
-        })
-        .unwrap();
-
-        let fields = legacy["plan"].as_object_mut().unwrap();
-        fields.remove("label");
-        fields.remove("controllerUid");
-
-        let log: Log = serde_json::from_value(legacy).unwrap();
-        assert!(log.plan.label.is_empty());
-    }
-
-    /// A setup counts for the account at its home only: a record left by a
-    /// deleted account whose user ID was reused describes someone else.
-    #[test]
-    fn a_setup_is_in_effect_only_for_the_account_it_was_made_with() {
-        let log = |state| {
-            Ok(Some(Log {
-                version: 1,
-                plan: plan("/c/atlas.local.toml".into(), "a"),
-                state,
-                pending: Vec::new(),
-                history: Vec::new(),
-            }))
-        };
-        let home = Path::new("/Users/h");
-
-        assert!(in_effect_with(log(State::Applied), home));
-        assert!(in_effect_with(log(State::Applying), home));
-        assert!(!in_effect_with(log(State::RolledBack), home));
-        assert!(!in_effect_with(
-            log(State::Applied),
-            Path::new("/Users/new")
-        ));
-        assert!(!in_effect_with(Ok(None), home));
-        assert!(
-            in_effect_with(Err(problem("unreadable")), home),
-            "a record that cannot be read counts"
-        );
-    }
-
-    #[test]
-    fn logs_round_trip_privately() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("deep/setup-502.json");
-        let log = Log {
-            version: 1,
-            plan: plan("/c/atlas.local.toml".into(), "a"),
-            state: State::Applying,
-            pending: vec!["g".into()],
-            history: vec![("prepare".into(), "1".into())],
-        };
-
-        save_log(&path, &log).unwrap();
-        assert_eq!(load_log(&path).unwrap(), Some(log));
-        assert_eq!(
-            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        assert_eq!(load_log(&dir.path().join("missing.json")).unwrap(), None);
-    }
-
-    #[test]
-    fn plans_resolve_relative_configuration_against_the_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("atlas.local.toml");
-        let text = "helper_uid = 502\nsocket_path = \"s.sock\"\nidentity_probe = \"p\"\n\
-                    input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
-        let log = Log {
-            version: 1,
-            plan: plan(config_path, text),
-            state: State::Applying,
-            pending: Vec::new(),
-            history: Vec::new(),
-        };
-
-        let migration = Migration::new(dir.path().join("setup-502.json"), log).unwrap();
-        assert_eq!(
-            migration.old.config.socket_path,
-            fs::canonicalize(dir.path()).unwrap().join("s.sock")
-        );
-    }
-
-    /// Only a refusal the worker marks unchanged is certain; any other
-    /// failed result may have changed something.
-    #[test]
-    fn only_a_refusal_marked_unchanged_is_certain() {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-
-        let reply = |text: &str| {
-            json!({"ok": true, "exitCode": 1, "events": [
-                {"event": "output", "data": STANDARD.encode(text)}
-            ]})
-        };
-
-        assert!(refused_unchanged(&reply(
-            r#"{"ok":false,"error":"no","unchanged":true}"#
-        )));
-        assert!(!refused_unchanged(&reply(r#"{"ok":false,"error":"no"}"#)));
-        assert!(!refused_unchanged(&reply(
-            r#"{"ok":true,"unchanged":true}"#
-        )));
-        assert!(!refused_unchanged(&reply("garbage")));
-        assert!(!refused_unchanged(&json!({"ok": true})));
-    }
-
-    /// Uninstall archives the record of the setup it removed; the archive
-    /// is never read as a setup.
-    #[test]
-    fn an_archived_record_is_no_longer_a_setup() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("setup-502.json");
-        assert!(!archive_as(&path, "uninstalled").unwrap(), "nothing there");
-
-        let log = Log {
-            version: 1,
-            plan: plan("/c/atlas.toml".into(), "a"),
-            state: State::Applied,
-            pending: Vec::new(),
-            history: Vec::new(),
-        };
-        save_log(&path, &log).unwrap();
-        assert!(archive_as(&path, "uninstalled").unwrap());
-        assert_eq!(load_log(&path).unwrap(), None);
-
-        let names: Vec<String> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names.len(), 1);
-        let name = &names[0];
-        assert!(
-            name.starts_with("setup-502.") && name.ends_with(".uninstalled.json"),
-            "{name}"
-        );
-
-        // install.sh counts only setup-<digits>.json as a live record.
-        let uid = name
-            .strip_prefix("setup-")
-            .and_then(|rest| rest.strip_suffix(".json"))
-            .unwrap();
-        assert!(!uid.bytes().all(|byte| byte.is_ascii_digit()), "{uid}");
-    }
-
-    #[test]
-    fn helper_results_must_be_affirmative_json() {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-
-        let reply = |text: &str| {
-            json!({"ok": true, "exitCode": 0, "events": [
-                {"event": "output", "data": STANDARD.encode(text)}
-            ]})
-        };
-
-        assert_eq!(
-            helper_result(&reply(r#"{"ok":true,"x":1}"#)).unwrap()["x"],
-            1
-        );
-        assert!(helper_result(&reply(r#"{"ok":false,"error":"no"}"#)).is_err());
-        assert!(helper_result(&reply("garbage")).is_err());
-        assert!(helper_result(&json!({"ok": true, "exitCode": 0})).is_err());
-    }
-
-    const OLD: &str = "helper_uid = 60001\nsocket_path = \"a.sock\"\nidentity_probe = \"p\"\n\
-                       input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
-    const NEW: &str = "helper_uid = 60001\nsocket_path = \"b.sock\"\nidentity_probe = \"p\"\n\
-                       input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
-
-    /// A migration from OLD to NEW kept entirely in `dir`: its configuration
-    /// file, its log and its pending-mutation state.
-    fn sandbox(dir: &Path) -> Migration {
-        let config_path = dir.join("atlas.toml");
-        fs::write(&config_path, OLD).unwrap();
-        let mut planned = plan(config_path, OLD);
-        planned.new_config = NEW.into();
-
-        let log = Log {
-            version: 1,
-            plan: planned,
-            state: State::Applying,
-            pending: Vec::new(),
-            history: Vec::new(),
-        };
-
-        let mut migration = Migration::new(dir.join("setup.json"), log).unwrap();
-        let controller = crate::control::Controller::at(60001, &dir.join("state"));
-        migration.old.controller = controller.clone();
-        migration.new.controller = controller;
-
-        migration
-    }
-
-    #[test]
-    fn the_configuration_switches_only_from_known_contents() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut migration = sandbox(dir.path());
-        let path = migration.log.plan.config_path.clone();
-
-        migration.switch_config(OLD, NEW).unwrap();
-        assert_eq!(fs::read_to_string(&path).unwrap(), NEW);
-
-        migration.switch_config(OLD, NEW).unwrap();
-        assert_eq!(migration.log.history.len(), 1, "already switched");
-
-        fs::write(&path, "edited").unwrap();
-        assert!(migration.switch_config(NEW, OLD).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "edited");
-
-        // A link is never replaced, even with the expected contents behind it.
-        let real = dir.path().join("real.toml");
-        fs::write(&real, NEW).unwrap();
-        fs::remove_file(&path).unwrap();
-        std::os::unix::fs::symlink(&real, &path).unwrap();
-        assert!(migration.switch_config(NEW, OLD).is_err());
-        assert!(
-            fs::symlink_metadata(&path)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert_eq!(fs::read_to_string(&real).unwrap(), NEW);
-    }
-
-    #[test]
-    fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
-        if !crate::test_support::isolated(
-            "setup::migrate::tests::uncertain_outcomes_stay_pending_and_definitive_ones_settle",
-        ) {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let mut migration = sandbox(dir.path());
-        let step = |migration: &mut Migration| {
-            let claim = migration.begin().unwrap();
-            claim.to_string()
-        };
-
-        let uncertain = step(&mut migration);
-        let outcome = migration.conclude(&uncertain, Err::<(), _>(problem("lost").uncertain()));
-        assert!(outcome.unwrap_err().uncertain);
-
-        let definitive = step(&mut migration);
-        assert!(
-            migration
-                .conclude(&definitive, Err::<(), _>(problem("refused")))
-                .is_err()
-        );
-
-        let succeeded = step(&mut migration);
-        assert_eq!(migration.conclude(&succeeded, Ok(7)).unwrap(), 7);
-        assert_eq!(migration.log.pending, vec![uncertain.clone()]);
-        assert_eq!(
-            migration.old.controller.pending().unwrap(),
-            vec![uncertain.clone()]
-        );
-
-        let saved = load_log(&migration.path).unwrap().unwrap();
-        assert_eq!(saved.pending, vec![uncertain]);
-    }
-
-    #[test]
-    fn only_pending_actions_this_setup_owns_let_it_continue() {
-        if !crate::test_support::isolated(
-            "setup::migrate::tests::only_pending_actions_this_setup_owns_let_it_continue",
-        ) {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let mut migration = sandbox(dir.path());
-        migration.require_owned_pending().unwrap();
-
-        drop(migration.begin().unwrap());
-        migration.require_owned_pending().unwrap();
-
-        drop(migration.old.controller.quarantine().unwrap());
-        let error = migration.require_owned_pending().unwrap_err();
-        assert!(error.uncertain);
-        assert_eq!(error.code, "uncertain");
-    }
-
-    fn recorded(state: State, label: &str, fresh: bool, version: u32) -> Log {
-        let mut planned = plan("/c/atlas.toml".into(), "a");
-        planned.label = label.into();
-        planned.fresh = fresh;
-
-        Log {
-            version,
-            plan: planned,
-            state,
-            pending: Vec::new(),
-            history: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn apply_starts_only_from_a_log_it_can_continue() {
-        let path = Path::new("/x/setup-502.json");
-        assert_eq!(apply_start(None, path).unwrap(), Start::Plan(None));
-
-        for state in [State::Applying, State::Applied] {
-            let log = recorded(state, LABEL, false, 1);
-            assert_eq!(
-                apply_start(Some(log.clone()), path).unwrap(),
-                Start::Resume(log)
-            );
-        }
-
-        for refused in [
-            recorded(State::Applied, LABEL, false, 2),
-            recorded(State::Applying, "", false, 1),
-            recorded(State::RollingBack, LABEL, false, 1),
-        ] {
-            assert!(
-                apply_start(Some(refused.clone()), path).is_err(),
-                "{refused:?}"
-            );
-        }
-
-        for replanned in [
-            recorded(State::RolledBack, LABEL, false, 1),
-            recorded(State::Applied, "", false, 1),
-        ] {
-            assert_eq!(
-                apply_start(Some(replanned.clone()), path).unwrap(),
-                Start::Plan(Some(replanned))
-            );
-        }
-    }
-
-    #[test]
-    fn an_update_carries_over_only_a_setup_still_in_effect() {
-        for state in [State::Applying, State::Applied] {
-            assert!(carried_over(Ok(Some(recorded(state, LABEL, true, 1)))));
-        }
-
-        for state in [State::RollingBack, State::RolledBack] {
-            assert!(!carried_over(Ok(Some(recorded(state, LABEL, false, 1)))));
-        }
-
-        assert!(!carried_over(Ok(None)));
-        assert!(carried_over(Err(problem("unreadable"))));
-    }
-
-    #[test]
-    fn a_first_setup_resumes_its_own_log_and_defers_to_a_migration() {
-        let path = Path::new("/x/setup-502.json");
-        assert_eq!(fresh_start(None, path).unwrap(), Some(Start::Plan(None)));
-
-        let fresh = recorded(State::Applied, LABEL, true, 1);
-        assert_eq!(
-            fresh_start(Some(fresh.clone()), path).unwrap(),
-            Some(Start::Resume(fresh))
-        );
-
-        let migrated = recorded(State::Applied, LABEL, false, 1);
-        assert_eq!(fresh_start(Some(migrated), path).unwrap(), None);
-        assert!(fresh_start(Some(recorded(State::Applied, LABEL, true, 2)), path).is_err());
-        assert!(fresh_start(Some(recorded(State::RollingBack, LABEL, true, 1)), path).is_err());
-
-        // An unfinished setup by an older Atlas is archived and planned anew.
-        let legacy = recorded(State::Applying, "", false, 1);
-        assert_eq!(
-            fresh_start(Some(legacy.clone()), path).unwrap(),
-            Some(Start::Plan(Some(legacy)))
-        );
-    }
-}
+mod tests;

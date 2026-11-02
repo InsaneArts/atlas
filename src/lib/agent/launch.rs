@@ -3,14 +3,16 @@
 //! launchd still holds a finished job for the app or the app is known only
 //! by the task's own install.
 use crate::{
-    client::{Client, Run},
+    client::{Client, Finished},
     control::Ownership,
     error::{Code, Error, Result},
     handoff, task,
-    transport::{accepted, run_output},
 };
 use serde_json::{Value, json};
 use std::{path::Path, time::Instant};
+
+/// How much of what `open` and its cleanup print is read.
+const OUTPUT: usize = 4096;
 
 /// `open` inside the helper session: an app by name, files or URLs, or both.
 ///
@@ -72,9 +74,9 @@ pub(super) async fn open_in(
         argv.extend(given);
     }
 
-    let (reply, from_install) = launch(client, &ownership, app, argv, named_at).await?;
+    let (finished, from_install) = launch(client, &ownership, app, argv, named_at).await?;
 
-    let opened = reply["exitCode"] == 0;
+    let opened = finished.succeeded;
     // An app opened by name is only listed for its task: which of its
     // processes the launch started, nothing can tell. One opened from the
     // task's own install is quit by its cleanup, as the install's.
@@ -82,13 +84,13 @@ pub(super) async fn open_in(
         app.filter(|app| opened && !from_install && copied.is_empty() && !app.contains('/'))
     {
         let launch = task::Owned::Launch {
-            app: crate::doing::bounded(app),
+            app: crate::name::bounded(app),
         };
         let _ = task::Claims::of(client).claim(&launch, task::State::Made);
     }
 
     if !opened {
-        return Ok(json!(not_opened(&reply, &copied)));
+        return Ok(json!(not_opened(&finished, &copied)));
     }
 
     // A newly launched app was absent from the pre-launch list. Its
@@ -142,56 +144,56 @@ fn open_argv(environment: &[String]) -> Result<Vec<String>> {
 /// URL.
 fn wanted(app: Option<&str>, targets: &[String]) -> Vec<handoff::Target> {
     // A name is the helper's to look up; a path is this side's file.
-    let app_target = app.map(|app| {
+    let app = app.map(|app| {
         if app.contains('/') {
             handoff::resolve(app)
         } else {
             handoff::Target::Name(app.to_owned())
         }
     });
-    let mut wanted: Vec<handoff::Target> = app_target.into_iter().collect();
-    wanted.extend(targets.iter().map(|target| handoff::resolve(target)));
 
-    wanted
+    app.into_iter()
+        .chain(targets.iter().map(|target| handoff::resolve(target)))
+        .collect()
 }
 
 /// Run `open`'s `argv`, again once a finished job launchd still held for
 /// the app is removed, and from the task's own install when LaunchServices
-/// does not know the app named at `named_at`. Its last reply, and whether
-/// that launch was from the install.
+/// does not know the app named at `named_at`. How the last run ended, and
+/// whether that launch was from the install.
 async fn launch(
     client: &Client,
     ownership: &Ownership,
     app: Option<&str>,
     mut argv: Vec<String>,
     named_at: Option<usize>,
-) -> Result<(Value, bool)> {
-    let mut reply = accepted(client.run(argv.clone(), Run::owned(ownership)).await?)?;
+) -> Result<(Finished, bool)> {
+    let mut finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
 
-    if reply["exitCode"] != 0 && cleared_stale_launch(client, ownership, &reply).await? {
-        reply = accepted(client.run(argv.clone(), Run::owned(ownership)).await?)?;
+    if !finished.succeeded && cleared_stale_launch(client, ownership, &finished).await? {
+        finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
     }
 
     // An app this task installed that LaunchServices does not know by its
     // name yet opens from where the install is.
     if let (Some(app), Some(at)) = (app.filter(|app| !app.contains('/')), named_at)
-        && reply["exitCode"] != 0
-        && unknown_app(&reply)
+        && !finished.succeeded
+        && finished.said().contains("Unable to find application named")
         && let Some(path) = crate::install_app::installed_path(client, app).await
     {
         argv[at] = path;
-        reply = accepted(client.run(argv, Run::owned(ownership)).await?)?;
-        return Ok((reply, true));
+        let finished = client.run_finished(ownership, argv, OUTPUT).await?;
+        return Ok((finished, true));
     }
 
-    Ok((reply, false))
+    Ok((finished, false))
 }
 
 /// A launch that failed, said with its code and with the `copied` copies
 /// made for it, which stay reported: the launch may still be on its way (a
 /// Gatekeeper question, say), and close removes them.
-fn not_opened(reply: &Value, copied: &[crate::handoff::Copied]) -> Error {
-    let mut error = if reply["timedOut"] == true {
+fn not_opened(finished: &Finished, copied: &[crate::handoff::Copied]) -> Error {
+    let mut error = if finished.timed_out {
         Error::new(
             Code::WaitFailed,
             "macOS did not finish opening that in time; it may still be launching: \
@@ -199,16 +201,20 @@ fn not_opened(reply: &Value, copied: &[crate::handoff::Copied]) -> Error {
         )
         .with("timedOut", json!(true))
     } else {
-        let output = run_output(reply, 4096).unwrap_or_default();
-        let said = String::from_utf8_lossy(&output).trim().to_owned();
-        Error::new(
+        let said = finished.said();
+        let said = said.trim();
+        let error = Error::new(
             Code::SpawnFailed,
             if said.is_empty() {
-                "macOS could not open that in the helper".to_owned()
+                "macOS could not open that in the helper"
             } else {
                 said
             },
-        )
+        );
+        match finished.unread() {
+            Some(cause) => error.with_source(cause),
+            None => error,
+        }
     };
 
     error = error.with("opened", json!(false));
@@ -224,13 +230,6 @@ fn not_opened(reply: &Value, copied: &[crate::handoff::Copied]) -> Error {
     error
 }
 
-/// Whether a failed `open` said LaunchServices knows no app by the name
-/// it was given.
-fn unknown_app(reply: &Value) -> bool {
-    let output = run_output(reply, 4096).unwrap_or_default();
-    String::from_utf8_lossy(&output).contains("Unable to find application named")
-}
-
 /// After a failed `open`, remove the finished job launchd still holds for
 /// its app, when that is why it failed: an app opened again just as it quit
 /// can leave one, and every later launch fails until it is gone. Whether
@@ -238,11 +237,9 @@ fn unknown_app(reply: &Value) -> bool {
 async fn cleared_stale_launch(
     client: &Client,
     ownership: &Ownership,
-    reply: &Value,
+    failed: &Finished,
 ) -> Result<bool> {
-    let output = run_output(reply, 4096).unwrap_or_default();
-    let said = String::from_utf8_lossy(&output);
-
+    let said = failed.said();
     let Some(bundle) = stale_launch(&said) else {
         return Ok(false);
     };
@@ -254,9 +251,9 @@ async fn cleared_stale_launch(
         "sh".to_owned(),
         bundle.to_owned(),
     ];
-    let cleared = accepted(client.run(argv, Run::owned(ownership)).await?)?;
+    let cleared = client.run_finished(ownership, argv, OUTPUT).await?;
 
-    Ok(!run_output(&cleared, 4096).unwrap_or_default().is_empty())
+    Ok(!cleared.output().is_empty())
 }
 
 /// The app whose launch launchd refused because it still holds that app's
@@ -290,46 +287,4 @@ done
 exit 0"#;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{files::Token, handoff::Copied};
-    use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
-
-    #[test]
-    fn a_failed_launch_keeps_copied_paths_or_explicit_null_for_non_unicode_paths() {
-        let reply = json!({"timedOut": true});
-        for invalid in [None, Some("from"), Some("to")] {
-            let mut copied = vec![Copied {
-                from: PathBuf::from("/original/note.txt"),
-                to: PathBuf::from("/copies/note.txt"),
-                token: Token::new(),
-            }];
-            let expected = match invalid {
-                None => json!([{"from": "/original/note.txt", "to": "/copies/note.txt"}]),
-                Some(field) => {
-                    let path = PathBuf::from(OsString::from_vec(b"/note-\xff.txt".to_vec()));
-                    if field == "from" {
-                        copied[0].from = path;
-                    } else {
-                        copied[0].to = path;
-                    }
-                    Value::Null
-                }
-            };
-            let error = not_opened(&reply, &copied);
-            assert_eq!(
-                serde_json::to_value(error).unwrap(),
-                json!({"ok": false, "code": "wait-failed", "uncertain": false,
-                    "error": "macOS did not finish opening that in time; it may still be launching: \
-                              run atlas wait --app NAME, or look with atlas apps",
-                    "timedOut": true, "opened": false, "copied": expected})
-            );
-        }
-        assert!(
-            serde_json::to_value(not_opened(&reply, &[]))
-                .unwrap()
-                .get("copied")
-                .is_none()
-        );
-    }
-}
+mod tests;

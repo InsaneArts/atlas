@@ -1,8 +1,8 @@
-//! What each command is to the rest of Atlas, decided in one place: what
-//! it does in the helper as the activity log keeps it, whose work it is,
-//! whether it makes, changes or takes control of anything there, how a stop
-//! ends it, and who reads its result. A new command is described here.
-use super::cli::{AgentsCommand, ButtonArg, Command, EnvironmentCommand, JobCommand};
+//! What each command is to the rest of Atlas, decided in one place: what it
+//! does in the helper as the activity log keeps it, how it uses the helper,
+//! who runs it, how a stop ends it and how its result reads. A new command
+//! must choose a row.
+use super::cli::{self, AgentsCommand, Command, EnvironmentCommand, JobCommand};
 use atlas::{
     client::Actor,
     doing::Doing,
@@ -12,307 +12,363 @@ use atlas::{
 
 /// What a command is to the rest of Atlas.
 pub(super) struct Policy {
-    /// What it does in the helper, as the activity log keeps it; none for a
-    /// command that acts on nothing there.
+    /// What it does in the helper; none for a command that acts on nothing there.
     pub(super) doing: Option<Doing>,
     /// What its host session's record keeps of it.
     pub(super) kind: Kind,
-    /// Whether it is its host session's work.
-    attributed: bool,
-    /// Whether it makes something its task's record claims, or cleans it up.
-    pub(super) makes: bool,
-    /// Whether it changes the helper, so an agent's is refused while the
-    /// person has stopped agents.
-    pub(super) changes_helper: bool,
-    /// Whether it takes control of the helper.
-    pub(super) controls: bool,
-    /// Whether another Atlas process reads its result.
-    pub(super) machine_only: bool,
-    /// What Ctrl-C at a terminal says when it stops it; none for a command
-    /// a signal stops another way.
-    pub(super) interrupted: Option<&'static str>,
-    /// Whether it runs agent tools, which a stop ends with it.
-    pub(super) runs_agents: bool,
+    work: Work,
+    audience: Audience,
+    stop: Stop,
     /// How its result reads for a person.
     pub(super) view: View,
 }
 
-// Each row gives activity and record kind; attribution, task creation, helper
-// mutation, control, machine output and tool supervision; interrupt words; view.
-macro_rules! policies {
-    ($command:expr; $( $pattern:pat => ($doing:expr, $kind:expr;
-        attributed: $attributed:expr, makes: $makes:expr, changes: $changes:expr, controls: $controls:expr, machine: $machine:expr, runs_agents: $runs:expr;
-        $interrupted:expr; $view:expr) ),+ $(,)?) => {
-        match $command {
-            $( $pattern => Policy {
-                doing: $doing, kind: $kind, attributed: $attributed, makes: $makes,
-                changes_helper: $changes, controls: $controls, machine_only: $machine,
-                runs_agents: $runs, interrupted: $interrupted, view: $view,
-            }, )+
-        }
-    };
+/// How a command uses the helper. Collecting claims local output without
+/// changing the helper; inspecting takes control without changing it;
+/// service changes acquire their own control.
+enum Work {
+    Read,
+    Inspect,
+    Change,
+    Make,
+    Collect,
+    /// A plan's preview, or with `true` its application.
+    Environment(bool),
+    ServiceChange,
+}
+
+/// Whose work a command is and who reads its result.
+enum Audience {
+    /// Its host session's work.
+    Agent,
+    /// The person's, or a server's: no host session's work.
+    Local,
+    /// Another Atlas process reads its result.
+    Machine,
+    /// Another Atlas process reads the result of a host session's work.
+    AgentMachine,
+}
+
+/// How a signal ends a command.
+enum Stop {
+    Ordinary,
+    /// A person is asked things, and Ctrl-C says this.
+    Prompt(&'static str),
+    /// It runs agent tools, which a stop ends with it; Ctrl-C says this.
+    Tools(Option<&'static str>),
+}
+
+/// A point as a person reads it.
+fn at(x: f64, y: f64) -> String {
+    format!("{}, {}", text::number(x), text::number(y))
 }
 
 impl Policy {
-    /// Every command chooses all policy facts here; new variants cannot inherit them.
     pub(super) fn of(command: &Command) -> Self {
-        let at = |x: f64, y: f64| format!("{}, {}", text::number(x), text::number(y));
-        policies! { command;
-            Command::Screenshot { .. } => (
-                Some(Doing::new("screenshot")), Kind::Screenshot;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Capture
+        use Audience::{Agent, AgentMachine, Local, Machine};
+        use Stop::{Ordinary, Prompt, Tools};
+        use Work::{Change, Collect, Inspect, Make, Read, ServiceChange};
+
+        match command {
+            Command::Screenshot(_) => Self::helper(
+                Read,
+                View::Capture,
+                Some(Doing::new("screenshot")),
+                Kind::Screenshot,
             ),
-            Command::Click { target, name, button, count, x, y, .. } => (
-                Some(Doing::click(matches!(button, ButtonArg::Right), *count).app(target.app.as_deref()).label(name.as_deref())), Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Action(match (x, y) { (Some(x), Some(y)) => format!("Clicked at {}", at(*x, *y)), _ => "Clicked".into() })
+            Command::Click(click) => Self::work(
+                Change,
+                View::Action(match (click.x, click.y) {
+                    (Some(x), Some(y)) => format!("Clicked at {}", at(x, y)),
+                    _ => "Clicked".into(),
+                }),
+                Doing::click(click.button.into(), click.count)
+                    .app(click.target.app.as_deref())
+                    .label(click.name.as_deref()),
             ),
-            Command::Move { x, y } => (
-                Some(Doing::new("move")), Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Action(format!("Moved the pointer to {}", at(*x, *y)))
+            Command::Move { x, y } => Self::work(
+                Change,
+                View::Action(format!("Moved the pointer to {}", at(*x, *y))),
+                Doing::new("move"),
             ),
-            Command::Drag { target, from_x, from_y, to_x, to_y, .. } => (
-                Some(Doing::new("drag").app(target.app.as_deref())), Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Action(format!("Dragged from {} to {}", at(*from_x, *from_y), at(*to_x, *to_y)))
+            Command::Drag(drag) => Self::work(
+                Change,
+                View::Action(format!(
+                    "Dragged from {} to {}",
+                    at(drag.from_x, drag.from_y),
+                    at(drag.to_x, drag.to_y)
+                )),
+                Doing::new("drag").app(drag.target.app.as_deref()),
             ),
-            Command::Scroll { target, x, y, .. } => (
-                Some(Doing::new("scroll").app(target.app.as_deref())), Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Action(format!("Scrolled at {}", at(*x, *y)))
+            Command::Scroll(scroll) => Self::work(
+                Change,
+                View::Action(format!("Scrolled at {}", at(scroll.x, scroll.y))),
+                Doing::new("scroll").app(scroll.target.app.as_deref()),
             ),
-            Command::Type { target, field, .. } => (
-                Some(Doing::new("type").app(target.app.as_deref()).field(field.as_deref())), Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Type
+            Command::Type(typed) => Self::work(
+                Change,
+                View::Type,
+                Doing::new("type")
+                    .app(typed.target.app.as_deref())
+                    .field(typed.field.as_deref()),
             ),
-            Command::Key { keys, target, .. } => (
-                Some(Doing::keys(keys).app(target.app.as_deref())), Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Action(format!("Pressed {}", keys.join(" ")))
+            Command::Key(keys) => Self::work(
+                Change,
+                View::Action(format!("Pressed {}", keys.keys.join(" "))),
+                Doing::keys(&keys.keys).app(keys.target.app.as_deref()),
             ),
-            Command::Open { app, targets, .. } => (
-                Some(Doing::open(app.as_deref(), targets)), Kind::Open;
-                attributed: true, makes: true, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Open(app.iter().chain(targets).cloned().collect::<Vec<_>>().join(", "))
+            Command::Open(open) => Self::helper(
+                Make,
+                View::Open(
+                    open.app
+                        .iter()
+                        .chain(&open.targets)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                ),
+                Some(Doing::open(open.app.as_deref(), &open.targets)),
+                Kind::Open,
             ),
-            Command::Close { app, .. } => (
-                Some(Doing::new("close").app(app.as_deref())), Kind::Close;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Close
+            Command::Close { app, .. } => Self::helper(
+                Change,
+                View::Close,
+                Some(Doing::new("close").app(app.as_deref())),
+                Kind::Close,
             ),
-            Command::Cleanup { apply, .. } => (
-                apply.then(|| Doing::new("cleanup")), Kind::Other;
-                attributed: true, makes: true, changes: *apply, controls: *apply, machine: false, runs_agents: false;
-                None; View::Cleanup
+            Command::Cleanup(cleanup) if cleanup.apply => {
+                Self::work(Make, View::Cleanup, Doing::new("cleanup"))
+            }
+            Command::Cleanup(_) => Self::helper(Collect, View::Cleanup, None, Kind::Other),
+            Command::InstallApp { path } => Self::work(
+                Make,
+                View::InstallApp,
+                Doing::new("install").app(path.to_str()),
             ),
-            Command::InstallApp { path } => (
-                Some(Doing::new("install").app(path.to_str())), Kind::Other;
-                attributed: true, makes: true, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::InstallApp
+            Command::Run(_) => Self::work(Make, View::Run, Doing::new("run")),
+            Command::Job { command } => Self::job(command),
+            Command::Collect { .. } => Self::work(Collect, View::Collect, Doing::new("collect")),
+            Command::Environment(environment) => Self::environment(environment),
+            Command::Input { .. } => Self::helper(
+                Change,
+                View::Action("Performed the actions".into()),
+                None,
+                Kind::Other,
             ),
-            Command::Run { .. } | Command::Environment { command: Some(EnvironmentCommand::Run { .. }), .. } => (
-                Some(Doing::new("run")), Kind::Other;
-                attributed: true, makes: true, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Run
+            Command::Logout { yes, .. } => Self {
+                stop: Prompt("Stopped."),
+                ..Self::helper(
+                    if *yes { Change } else { ServiceChange },
+                    View::Logout,
+                    None,
+                    Kind::Other,
+                )
+            },
+            Command::VerifyNative { .. } => Self::helper(Change, View::Generic, None, Kind::Other),
+            Command::Install => Self::helper(Change, View::Install, None, Kind::Other),
+            Command::Restart => Self::helper(Inspect, View::Restart, None, Kind::Other),
+            Command::StartInput => Self::helper(Inspect, View::StartInput, None, Kind::Other),
+            Command::Readiness { .. } => Self::helper(Inspect, View::Readiness, None, Kind::Other),
+            Command::Setup(setup) if setup.apply || setup.rollback => Self {
+                work: ServiceChange,
+                ..Self::passive(Agent, Ordinary, View::Generic)
+            },
+            Command::Setup(_) => Self::local(View::SetupPreview),
+            Command::Doctor(doctor) if doctor.login_timing => Self::read(View::LoginTiming),
+            Command::Doctor(doctor) => Self::read(View::Doctor {
+                verbose: doctor.verbose,
+            }),
+            Command::Status => Self::read(View::Status),
+            Command::Activity(_) => Self::read(View::Activity),
+            Command::Config => Self::read(View::Config),
+            Command::Apps { .. } => Self::read(View::Apps),
+            Command::Windows { .. } => Self::read(View::Windows),
+            Command::Elements(_) => Self::read(View::Elements),
+            Command::Stop => Self::read(View::Action("Stopped the agent".into())),
+            Command::Resume => Self::read(View::Action("Resumed the agent".into())),
+            Command::Wait(wait) => Self::read(View::Wait { gone: wait.gone }),
+            Command::AgentGuide(_) => Self::read(View::Generic),
+            Command::Mcp(_) | Command::Watch { .. } => Self::local(View::Quiet),
+            Command::Menubar(menubar) if menubar.login.is_some() => Self::local(View::Login),
+            Command::Menubar(_) => Self::local(View::Menubar),
+            Command::Monitor { .. } => Self::local(View::Monitor),
+            Command::HelperServe(_)
+            | Command::JobLaunch { .. }
+            | Command::InputService(_)
+            | Command::EnvironmentWorker { .. }
+            | Command::SessionInfo
+            | Command::PermissionsInfo
+            | Command::ElementsInfo { .. }
+            | Command::SetupHelper(_)
+            | Command::Onboarding { .. } => Self::passive(Machine, Ordinary, View::Generic),
+            Command::Update(update) if update.check => Self::local(View::Generic),
+            Command::Update(_) => Self {
+                work: ServiceChange,
+                ..Self::passive(
+                    Agent,
+                    Prompt("Stopped. Run atlas update again to finish."),
+                    View::Update,
+                )
+            },
+            Command::UpdateFinish => Self::passive(AgentMachine, Tools(None), View::Generic),
+            Command::Switch(_) => Self::passive(Local, Prompt("Stopped."), View::Switch),
+            Command::Init => Self::passive(
+                Local,
+                Tools(Some("Stopped. Run atlas init again to continue.")),
+                View::Quiet,
             ),
-            Command::Job { command: JobCommand::Start { .. } } => (
-                Some(Doing::new("job-start")), Kind::Other;
-                attributed: true, makes: true, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Job
+            Command::Uninstall(_) => Self::passive(Local, Tools(Some("Stopped.")), View::Uninstall),
+            Command::Agents { action } => Self::passive(
+                Agent,
+                Tools(Some("Stopped.")),
+                match action {
+                    Some(AgentsCommand::Install { .. } | AgentsCommand::Remove { .. }) => {
+                        View::AgentsChange
+                    }
+                    Some(AgentsCommand::Project { .. } | AgentsCommand::Forget { .. }) => {
+                        View::AgentsProject
+                    }
+                    None
+                    | Some(AgentsCommand::Status { .. } | AgentsCommand::CursorHook { .. }) => {
+                        View::Agents
+                    }
+                },
             ),
-            Command::Job { command: JobCommand::Stop { .. } } => (
-                Some(Doing::new("job-stop")), Kind::Other;
-                attributed: true, makes: true, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Job
+        }
+    }
+
+    fn job(command: &JobCommand) -> Self {
+        match command {
+            JobCommand::Start { .. } => Self::work(Work::Make, View::Job, Doing::new("job-start")),
+            JobCommand::Stop { .. } => Self::work(Work::Make, View::Job, Doing::new("job-stop")),
+            JobCommand::List { .. } => Self::read(View::Jobs),
+            JobCommand::Log { .. } => Self::read(View::JobLog),
+        }
+    }
+
+    fn environment(environment: &cli::Environment) -> Self {
+        let plan = |apply: bool| {
+            Self::helper(
+                Work::Environment(apply),
+                View::Environment,
+                None,
+                Kind::Environment { changes: apply },
+            )
+        };
+
+        match &environment.command {
+            None => plan(environment.apply),
+            Some(
+                EnvironmentCommand::Rollback { apply, .. }
+                | EnvironmentCommand::Profile { apply, .. },
+            ) => plan(*apply),
+            Some(EnvironmentCommand::Apply { .. }) => Self::helper(
+                Work::Make,
+                View::Environment,
+                None,
+                Kind::Environment { changes: true },
             ),
-            Command::Job { command: JobCommand::List { .. } } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Jobs
-            ),
-            Command::Job { command: JobCommand::Log { .. } } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::JobLog
-            ),
-            Command::Collect { .. } => (
-                Some(Doing::new("collect")), Kind::Other;
-                attributed: true, makes: true, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Collect
-            ),
-            Command::Environment { apply, command: None, .. } => (
-                None, Kind::Environment { changes: *apply };
-                attributed: true, makes: true, changes: *apply, controls: true, machine: false, runs_agents: false;
-                None; View::Environment
-            ),
-            Command::Environment { command: Some(EnvironmentCommand::Apply { .. }), .. } => (
-                None, Kind::Environment { changes: true };
-                attributed: true, makes: true, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Environment
-            ),
-            Command::Environment { command: Some(EnvironmentCommand::Rollback { apply, .. } | EnvironmentCommand::Profile { apply, .. }), .. } => (
-                None, Kind::Environment { changes: *apply };
-                attributed: true, makes: true, changes: *apply, controls: true, machine: false, runs_agents: false;
-                None; View::Environment
-            ),
-            Command::Environment { command: Some(EnvironmentCommand::Discover { .. }), .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: true, machine: false, runs_agents: false;
-                None; View::Discover
-            ),
-            Command::Environment { command: Some(EnvironmentCommand::List { .. }), .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: true, machine: false, runs_agents: false;
-                None; View::Plans
-            ),
-            Command::Input { .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Action("Performed the actions".into())
-            ),
-            Command::Logout { yes, .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: true, controls: *yes, machine: false, runs_agents: false;
-                Some("Stopped."); View::Logout
-            ),
-            Command::VerifyNative { .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Generic
-            ),
-            Command::Install => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: true, controls: true, machine: false, runs_agents: false;
-                None; View::Install
-            ),
-            Command::Restart => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: true, machine: false, runs_agents: false;
-                None; View::Restart
-            ),
-            Command::StartInput => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: true, machine: false, runs_agents: false;
-                None; View::StartInput
-            ),
-            Command::Readiness { .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: true, machine: false, runs_agents: false;
-                None; View::Readiness
-            ),
-            Command::Setup { apply, rollback, .. } => (
-                None, Kind::Other;
-                attributed: *apply || *rollback, makes: false, changes: *apply || *rollback, controls: false, machine: false, runs_agents: false;
-                None; if *apply || *rollback { View::Generic } else { View::SetupPreview }
-            ),
-            Command::Doctor { verbose, login_timing } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; if *login_timing { View::LoginTiming } else { View::Doctor { verbose: *verbose } }
-            ),
-            Command::Status => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Status
-            ),
-            Command::Activity { .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Activity
-            ),
-            Command::Config => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Config
-            ),
-            Command::Apps { .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Apps
-            ),
-            Command::Windows { .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Windows
-            ),
-            Command::Elements { .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Elements
-            ),
-            Command::Stop => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Action("Stopped the agent".into())
-            ),
-            Command::Resume => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Action("Resumed the agent".into())
-            ),
-            Command::Wait { gone, .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Wait { gone: *gone }
-            ),
-            Command::AgentGuide { .. } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Generic
-            ),
-            Command::Mcp { .. } | Command::Watch { .. } => (
-                None, Kind::Other;
-                attributed: false, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Quiet
-            ),
-            Command::Menubar { login, .. } => (
-                None, Kind::Other;
-                attributed: false, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; if login.is_some() { View::Login } else { View::Menubar }
-            ),
-            Command::Monitor { .. } => (
-                None, Kind::Other;
-                attributed: false, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                None; View::Monitor
-            ),
-            Command::HelperServe { .. } | Command::JobLaunch { .. } | Command::InputService { .. } | Command::EnvironmentWorker { .. } | Command::SessionInfo | Command::PermissionsInfo | Command::ElementsInfo { .. } | Command::SetupHelper { .. } | Command::Onboarding { .. } => (
-                None, Kind::Other;
-                attributed: false, makes: false, changes: false, controls: false, machine: true, runs_agents: false;
-                None; View::Generic
-            ),
-            Command::Update { check, .. } => (
-                None, Kind::Other;
-                attributed: !*check, makes: false, changes: !*check, controls: false, machine: false, runs_agents: false;
-                if *check { None } else { Some("Stopped. Run atlas update again to finish.") }; if *check { View::Generic } else { View::Update }
-            ),
-            Command::UpdateFinish => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: true, runs_agents: true;
-                None; View::Generic
-            ),
-            Command::Switch { .. } => (
-                None, Kind::Other;
-                attributed: false, makes: false, changes: false, controls: false, machine: false, runs_agents: false;
-                Some("Stopped."); View::Switch
-            ),
-            Command::Init => (
-                None, Kind::Other;
-                attributed: false, makes: false, changes: false, controls: false, machine: false, runs_agents: true;
-                Some("Stopped. Run atlas init again to continue."); View::Quiet
-            ),
-            Command::Uninstall { .. } => (
-                None, Kind::Other;
-                attributed: false, makes: false, changes: false, controls: false, machine: false, runs_agents: true;
-                Some("Stopped."); View::Uninstall
-            ),
-            Command::Agents { action } => (
-                None, Kind::Other;
-                attributed: true, makes: false, changes: false, controls: false, machine: false, runs_agents: true;
-                Some("Stopped."); match action { Some(AgentsCommand::Install { .. } | AgentsCommand::Remove { .. }) => View::AgentsChange, Some(AgentsCommand::Project { .. } | AgentsCommand::Forget { .. }) => View::AgentsProject, None | Some(AgentsCommand::Status { .. } | AgentsCommand::CursorHook { .. }) => View::Agents }
-            ),
+            Some(EnvironmentCommand::Run(_)) => {
+                Self::work(Work::Make, View::Run, Doing::new("run"))
+            }
+            Some(EnvironmentCommand::Discover { .. }) => {
+                Self::helper(Work::Inspect, View::Discover, None, Kind::Other)
+            }
+            Some(EnvironmentCommand::List { .. }) => {
+                Self::helper(Work::Inspect, View::Plans, None, Kind::Other)
+            }
+        }
+    }
+
+    /// Attributed helper operations use ordinary signal handling and choose
+    /// their work, view and recording together.
+    fn helper(work: Work, view: View, doing: Option<Doing>, kind: Kind) -> Self {
+        Self {
+            doing,
+            kind,
+            work,
+            audience: Audience::Agent,
+            stop: Stop::Ordinary,
+            view,
+        }
+    }
+
+    /// A helper operation the activity log names and its session's record skips.
+    fn work(work: Work, view: View, doing: Doing) -> Self {
+        Self::helper(work, view, Some(doing), Kind::Other)
+    }
+
+    /// An attributed look at the helper or at Atlas: nothing is recorded.
+    fn read(view: View) -> Self {
+        Self::helper(Work::Read, view, None, Kind::Other)
+    }
+
+    /// Local flows and internal workers produce no helper activity or task resources.
+    fn passive(audience: Audience, stop: Stop, view: View) -> Self {
+        Self {
+            doing: None,
+            kind: Kind::Other,
+            work: Work::Read,
+            audience,
+            stop,
+            view,
+        }
+    }
+
+    /// The person's own look or a server, stopped as ordinary.
+    fn local(view: View) -> Self {
+        Self::passive(Audience::Local, Stop::Ordinary, view)
+    }
+
+    /// Whether it makes something its task's record claims, or cleans it up.
+    pub(super) fn makes(&self) -> bool {
+        match self.work {
+            Work::Make | Work::Collect | Work::Environment(_) => true,
+            Work::Read | Work::Inspect | Work::Change | Work::ServiceChange => false,
+        }
+    }
+
+    /// Whether it changes the helper, so an agent's is refused while the
+    /// person has stopped agents.
+    pub(super) fn changes_helper(&self) -> bool {
+        match self.work {
+            Work::Change | Work::Make | Work::ServiceChange => true,
+            Work::Environment(apply) => apply,
+            Work::Read | Work::Inspect | Work::Collect => false,
+        }
+    }
+
+    /// Whether it takes control of the helper.
+    pub(super) fn controls(&self) -> bool {
+        match self.work {
+            Work::Inspect | Work::Change | Work::Make | Work::Environment(_) => true,
+            Work::Read | Work::Collect | Work::ServiceChange => false,
+        }
+    }
+
+    /// Whether another Atlas process reads its result.
+    pub(super) fn machine_only(&self) -> bool {
+        match self.audience {
+            Audience::Machine | Audience::AgentMachine => true,
+            Audience::Agent | Audience::Local => false,
+        }
+    }
+
+    /// Whether it runs agent tools, which a stop ends with it.
+    pub(super) fn runs_agents(&self) -> bool {
+        match self.stop {
+            Stop::Tools(_) => true,
+            Stop::Ordinary | Stop::Prompt(_) => false,
+        }
+    }
+
+    /// What Ctrl-C at a terminal says when it stops the command; none for a
+    /// command a signal stops another way.
+    pub(super) fn interrupted(&self) -> Option<&'static str> {
+        match self.stop {
+            Stop::Prompt(message) => Some(message),
+            Stop::Tools(message) => message,
+            Stop::Ordinary => None,
         }
     }
 
@@ -320,7 +376,11 @@ impl Policy {
     /// session it comes from: an agent's own work only. What the person
     /// does from the app, the menu bar or a viewer never is.
     pub(super) fn labelled(&self, actor: Actor) -> bool {
-        actor == Actor::Agent && self.attributed
+        actor == Actor::Agent
+            && match self.audience {
+                Audience::Agent | Audience::AgentMachine => true,
+                Audience::Local | Audience::Machine => false,
+            }
     }
 
     /// Whether the command, run by `actor`, waits for another controller to
@@ -329,6 +389,6 @@ impl Policy {
     /// servers, which take no control of their own: a wait blocks the
     /// thread it runs on.
     pub(super) fn waits(&self, actor: Actor) -> bool {
-        self.controls && actor == Actor::Agent
+        self.controls() && actor == Actor::Agent
     }
 }

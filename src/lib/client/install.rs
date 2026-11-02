@@ -86,18 +86,20 @@ impl Client {
                         || metadata.uid() == 0 && metadata.mode() & 0o022 == 0)
             })
         });
+        let linked = || fs::canonicalize(target).is_ok_and(|path| path == source);
+        let unchanged = json!({ "ok": true, "path": target, "alreadyInstalled": true });
         // An unchanged link and folder need no mutation or exclusion.
         // A copy is always replaced, using a fresh inode.
-        if folder_ready && fs::canonicalize(target).ok().as_ref() == Some(&source) {
-            return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
+        if folder_ready && linked() {
+            return Ok(unchanged);
         }
 
         let _ownership = self.controller.acquire(recovery)?;
         if let Some(parent) = shared {
             shared_folder(parent)?;
         }
-        if fs::canonicalize(target).ok().as_ref() == Some(&source) {
-            return Ok(json!({ "ok": true, "path": target, "alreadyInstalled": true }));
+        if linked() {
+            return Ok(unchanged);
         }
 
         let parent = target.parent().ok_or_else(|| {
@@ -108,8 +110,8 @@ impl Client {
         // Atlas.app's executable is sealed with its bundle: a copy would
         // fail its signature, so the shared path links to it instead, and
         // follows the app through updates.
-        if crate::update::app_of(&source).is_some() {
-            if !crate::update::reachable_by_others(&source) {
+        if crate::app_bundle::app_of(&source).is_some() {
+            if !crate::app_bundle::reachable_by_others(&source) {
                 return Err(Error::new(
                     Code::Install,
                     "The helper account cannot reach Atlas.app here; install it in /Applications",
@@ -127,7 +129,7 @@ impl Client {
             return Ok(json!({ "ok": true, "path": target, "linkedTo": source }));
         }
 
-        crate::config::write_beside(
+        crate::files::write_beside(
             target,
             0o755,
             |file| {

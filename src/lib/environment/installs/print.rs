@@ -12,9 +12,8 @@ use nix::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    ffi::CStr,
+    ffi::{CStr, CString},
     fs,
-    io::Read,
     os::{fd::AsFd, unix::ffi::OsStrExt},
     time::Instant,
 };
@@ -77,9 +76,16 @@ pub(in crate::environment) enum Unprinted {
     Unreadable(String),
 }
 
+/// What printing comes to.
+type Printed<T> = std::result::Result<T, Unprinted>;
+
 impl Unprinted {
     fn read(error: impl std::fmt::Display) -> Self {
         Self::Unreadable(error.to_string())
+    }
+
+    fn changed() -> Self {
+        Self::Unreadable("The app changed while it was read".into())
     }
 }
 
@@ -89,139 +95,18 @@ pub(in crate::environment) fn print_at(
     root: &fs::File,
     executable: Option<&str>,
     limits: Limits,
-) -> std::result::Result<BundlePrint, Unprinted> {
+) -> Printed<BundlePrint> {
     let metadata = fstat(root).map_err(Unprinted::read)?;
-    if SFlag::from_bits_truncate(metadata.st_mode) & SFlag::S_IFMT != SFlag::S_IFDIR {
+    if kind(&metadata) != SFlag::S_IFDIR {
         return Err(Unprinted::Unreadable("An app bundle is a folder".into()));
     }
 
-    let mut lines: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    let (mut count, mut bytes) = (0u64, 0u64);
-    let opened =
-        Dir::from_fd(root.try_clone().map_err(Unprinted::read)?.into()).map_err(Unprinted::read)?;
-    let mut folders = vec![(Vec::new(), opened)];
-    while let Some((relative, mut folder)) = folders.pop() {
-        if limits.until.is_some_and(|until| Instant::now() >= until) {
-            return Err(Unprinted::TooSlow);
-        }
-        // A folder that cannot be read to its end is never printed: a walk
-        // that skipped an entry would print less than is there.
-        let mut names: Vec<std::ffi::CString> = Vec::new();
-        let remaining = limits.entries.saturating_sub(count);
-        for entry in folder.iter() {
-            let entry = entry.map_err(Unprinted::read)?;
-            let name = entry.file_name();
-            // Keep the first excess name for the entry-limit refusal below,
-            // but read to EOF so a later read error keeps its precedence.
-            if name.to_bytes() != b"."
-                && name.to_bytes() != b".."
-                && names.len() as u64 <= remaining
-            {
-                names.push(name.to_owned());
-            }
-        }
-        let mut looked: Vec<(std::ffi::CString, FileStat)> = Vec::new();
-        for name in names {
-            count += 1;
-            if count > limits.entries {
-                return Err(Unprinted::TooLarge);
-            }
-            let stat = fstatat(
-                folder.as_fd(),
-                name.as_c_str(),
-                AtFlags::AT_SYMLINK_NOFOLLOW,
-            )
-            .map_err(Unprinted::read)?;
-            let mut path = relative.clone();
-            if !path.is_empty() {
-                path.push(b'/');
-            }
-            path.extend_from_slice(name.as_bytes());
-
-            let kind = SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT;
-            let mut line = format!(
-                "{}:{:o}:{}:{}:{}",
-                match kind {
-                    SFlag::S_IFDIR => 'd',
-                    SFlag::S_IFLNK => 'l',
-                    SFlag::S_IFREG => 'f',
-                    _ => 'o',
-                },
-                u32::from(stat.st_mode) & 0o7777,
-                stat.st_uid,
-                stat.st_gid,
-                stat.st_ino,
-            )
-            .into_bytes();
-            if kind == SFlag::S_IFREG || kind == SFlag::S_IFLNK {
-                line.extend(
-                    format!(":{}:{}.{}", stat.st_size, stat.st_mtime, stat.st_mtime_nsec).bytes(),
-                );
-            }
-            if kind == SFlag::S_IFLNK {
-                let target = nix::fcntl::readlinkat(folder.as_fd(), name.as_c_str())
-                    .map_err(Unprinted::read)?;
-                line.push(b':');
-                line.extend(target.as_bytes());
-            }
-            if kind == SFlag::S_IFREG {
-                bytes += u64::try_from(stat.st_size).unwrap_or(u64::MAX);
-                if bytes > limits.bytes {
-                    return Err(Unprinted::TooLarge);
-                }
-            }
-            if kind == SFlag::S_IFDIR {
-                let inner = Dir::openat(
-                    folder.as_fd(),
-                    name.as_c_str(),
-                    OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
-                    Mode::empty(),
-                )
-                .map_err(Unprinted::read)?;
-                // The folder opened must be the one looked at.
-                same(&stat, &fstat(inner.as_fd()).map_err(Unprinted::read)?)?;
-                folders.push((path.clone(), inner));
-            }
-            lines.push((path, line));
-            looked.push((name, stat));
-        }
-        // Every entry is looked at again once its folder was read: one that
-        // was swapped, moved away or changed meanwhile leaves the print
-        // unreadable, never taken for the bundle as it was.
-        for (name, before) in &looked {
-            let after = fstatat(
-                folder.as_fd(),
-                name.as_c_str(),
-                AtFlags::AT_SYMLINK_NOFOLLOW,
-            )
-            .map_err(Unprinted::read)?;
-            let unchanged = after.st_ino == before.st_ino
-                && after.st_dev == before.st_dev
-                && after.st_mode == before.st_mode
-                && after.st_size == before.st_size
-                && after.st_mtime == before.st_mtime
-                && after.st_mtime_nsec == before.st_mtime_nsec;
-            if !unchanged {
-                return Err(Unprinted::Unreadable(
-                    "The app changed while it was read".into(),
-                ));
-            }
-        }
-    }
-    lines.sort();
-
-    let mut tree = Sha256::new();
-    for (path, line) in &lines {
-        tree.update(path);
-        tree.update([0]);
-        tree.update(line);
-        tree.update([b'\n']);
-    }
+    let (tree, entries, bytes) = tree(root, limits)?;
 
     let contents = open_folder(root, c"Contents")?;
     let info = file_digest(&contents, c"Info.plist")?
         .ok_or_else(|| Unprinted::Unreadable("The app has no Contents/Info.plist".into()))?;
-    let executable = match executable.and_then(|name| std::ffi::CString::new(name).ok()) {
+    let executable = match executable.and_then(|name| CString::new(name).ok()) {
         Some(name) => match open_folder(&contents, c"MacOS") {
             Ok(folder) => file_digest(&folder, &name)?,
             Err(_) => None,
@@ -237,27 +122,159 @@ pub(in crate::environment) fn print_at(
         mode: u32::from(metadata.st_mode) & 0o7777,
         uid: metadata.st_uid,
         gid: metadata.st_gid,
-        tree: hex(&tree.finalize()),
-        entries: count,
+        tree,
+        entries,
         bytes,
         info,
         executable,
     })
 }
 
+/// The digest of every entry under `root`, how many there are and how many
+/// bytes their files hold. Folders are walked by pinned descriptor, every
+/// folder is read to its end and every entry is looked at again before its
+/// print counts.
+fn tree(root: &fs::File, limits: Limits) -> Printed<(String, u64, u64)> {
+    let mut lines: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let (mut count, mut bytes) = (0u64, 0u64);
+    let opened =
+        Dir::from_fd(root.try_clone().map_err(Unprinted::read)?.into()).map_err(Unprinted::read)?;
+    let mut folders = vec![(Vec::new(), opened)];
+    while let Some((relative, mut folder)) = folders.pop() {
+        if limits.until.is_some_and(|until| Instant::now() >= until) {
+            return Err(Unprinted::TooSlow);
+        }
+        let names = entry_names(&mut folder, limits.entries.saturating_sub(count))?;
+        let mut looked: Vec<(CString, FileStat)> = Vec::new();
+        for name in names {
+            count += 1;
+            if count > limits.entries {
+                return Err(Unprinted::TooLarge);
+            }
+            let stat = entry_stat(&folder, &name)?;
+            let mut path = relative.clone();
+            if !path.is_empty() {
+                path.push(b'/');
+            }
+            path.extend_from_slice(name.as_bytes());
+
+            let line = entry_line(&folder, &name, &stat)?;
+            if kind(&stat) == SFlag::S_IFREG {
+                bytes += u64::try_from(stat.st_size).unwrap_or(u64::MAX);
+                if bytes > limits.bytes {
+                    return Err(Unprinted::TooLarge);
+                }
+            }
+            if kind(&stat) == SFlag::S_IFDIR {
+                let inner =
+                    Dir::from_fd(open_folder(&folder, &name)?.into()).map_err(Unprinted::read)?;
+                // The folder opened must be the one looked at.
+                same(&stat, &fstat(inner.as_fd()).map_err(Unprinted::read)?)?;
+                folders.push((path.clone(), inner));
+            }
+            lines.push((path, line));
+            looked.push((name, stat));
+        }
+        unchanged_entries(&folder, &looked)?;
+    }
+    lines.sort();
+
+    let mut tree = Sha256::new();
+    for (path, line) in &lines {
+        tree.update(path);
+        tree.update([0]);
+        tree.update(line);
+        tree.update([b'\n']);
+    }
+
+    Ok((hex(&tree.finalize()), count, bytes))
+}
+
+/// The entries of `folder`, up to one past `remaining`. A folder that cannot
+/// be read to its end is never printed: a walk that skipped an entry would
+/// print less than is there.
+fn entry_names(folder: &mut Dir, remaining: u64) -> Printed<Vec<CString>> {
+    let mut names: Vec<CString> = Vec::new();
+    for entry in folder.iter() {
+        let entry = entry.map_err(Unprinted::read)?;
+        let name = entry.file_name();
+        // Keep the first excess name for the entry-limit refusal, but read to
+        // EOF so a later read error keeps its precedence.
+        if name.to_bytes() != b"." && name.to_bytes() != b".." && names.len() as u64 <= remaining {
+            names.push(name.to_owned());
+        }
+    }
+    Ok(names)
+}
+
+/// Look at every entry again once its folder was read: one that was swapped,
+/// moved away or changed meanwhile leaves the print unreadable, never taken
+/// for the bundle as it was.
+fn unchanged_entries(folder: &Dir, looked: &[(CString, FileStat)]) -> Printed<()> {
+    for (name, before) in looked {
+        let after = entry_stat(folder, name)?;
+        if after.st_ino != before.st_ino
+            || after.st_dev != before.st_dev
+            || after.st_mode != before.st_mode
+            || after.st_size != before.st_size
+            || after.st_mtime != before.st_mtime
+            || after.st_mtime_nsec != before.st_mtime_nsec
+        {
+            return Err(Unprinted::changed());
+        }
+    }
+    Ok(())
+}
+
+fn kind(stat: &FileStat) -> SFlag {
+    SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT
+}
+
+fn entry_stat(folder: &impl AsFd, name: &CStr) -> Printed<FileStat> {
+    fstatat(folder.as_fd(), name, AtFlags::AT_SYMLINK_NOFOLLOW).map_err(Unprinted::read)
+}
+
+/// One entry's stable description; directory times and all extended
+/// attributes are deliberately absent.
+fn entry_line(folder: &impl AsFd, name: &CStr, stat: &FileStat) -> Printed<Vec<u8>> {
+    let kind = kind(stat);
+    let mut line = format!(
+        "{}:{:o}:{}:{}:{}",
+        match kind {
+            SFlag::S_IFDIR => 'd',
+            SFlag::S_IFLNK => 'l',
+            SFlag::S_IFREG => 'f',
+            _ => 'o',
+        },
+        u32::from(stat.st_mode) & 0o7777,
+        stat.st_uid,
+        stat.st_gid,
+        stat.st_ino,
+    )
+    .into_bytes();
+    if kind == SFlag::S_IFREG || kind == SFlag::S_IFLNK {
+        line.extend(format!(":{}:{}.{}", stat.st_size, stat.st_mtime, stat.st_mtime_nsec).bytes());
+    }
+    if kind == SFlag::S_IFLNK {
+        let target = nix::fcntl::readlinkat(folder.as_fd(), name).map_err(Unprinted::read)?;
+        line.push(b':');
+        line.extend(target.as_bytes());
+    }
+
+    Ok(line)
+}
+
 /// Refuse a folder opened that is not the entry looked at.
-fn same(looked: &FileStat, opened: &FileStat) -> std::result::Result<(), Unprinted> {
+fn same(looked: &FileStat, opened: &FileStat) -> Printed<()> {
     if looked.st_ino == opened.st_ino && looked.st_dev == opened.st_dev {
         Ok(())
     } else {
-        Err(Unprinted::Unreadable(
-            "The app changed while it was read".into(),
-        ))
+        Err(Unprinted::changed())
     }
 }
 
 /// The folder `name` in `parent`, opened without following a link.
-fn open_folder(parent: &impl AsFd, name: &CStr) -> std::result::Result<fs::File, Unprinted> {
+fn open_folder(parent: &impl AsFd, name: &CStr) -> Printed<fs::File> {
     openat(
         parent.as_fd(),
         name,
@@ -270,14 +287,14 @@ fn open_folder(parent: &impl AsFd, name: &CStr) -> std::result::Result<fs::File,
 
 /// The SHA-256 of the plain file `name` in `folder`, opened without
 /// following a link; none when nothing plain is there.
-fn file_digest(folder: &fs::File, name: &CStr) -> std::result::Result<Option<String>, Unprinted> {
+fn file_digest(folder: &fs::File, name: &CStr) -> Printed<Option<String>> {
     let opened = openat(
         folder.as_fd(),
         name,
         OFlag::O_RDONLY | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
         Mode::empty(),
     );
-    let mut file = match opened {
+    let file = match opened {
         Ok(fd) => fs::File::from(fd),
         Err(nix::errno::Errno::ENOENT | nix::errno::Errno::ELOOP) => return Ok(None),
         Err(error) => return Err(Unprinted::read(error)),
@@ -285,16 +302,9 @@ fn file_digest(folder: &fs::File, name: &CStr) -> std::result::Result<Option<Str
     if !file.metadata().map_err(Unprinted::read)?.is_file() {
         return Ok(None);
     }
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0; 1 << 16];
-    loop {
-        let read = file.read(&mut buffer).map_err(Unprinted::read)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(Some(hex(&hasher.finalize())))
+    crate::digest::read_sha256(&file)
+        .map(Some)
+        .map_err(Unprinted::read)
 }
 
 #[cfg(test)]
@@ -304,7 +314,7 @@ pub(in crate::environment) fn print(
     path: &std::path::Path,
     executable: Option<&str>,
     limits: Limits,
-) -> std::result::Result<BundlePrint, Unprinted> {
+) -> Printed<BundlePrint> {
     let root = super::super::files::directory(path, false)
         .map_err(|error| Unprinted::Unreadable(error.error))?
         .ok_or_else(|| Unprinted::Unreadable("The app is missing".into()))?;

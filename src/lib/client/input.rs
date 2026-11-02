@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 /// The longest the input service's grant can outlast a command killed
 /// while holding it: the grant's own life, and a second to spare.
-const GRANT_OUTLIVES: Duration = crate::native::GRANT_TTL.saturating_add(Duration::from_secs(1));
+const GRANT_OUTLIVES: Duration = crate::session::GRANT_TTL.saturating_add(Duration::from_secs(1));
 
 /// What the helper is asked to expect of an agent's batch, given what its
 /// input service `native` says it can check. An input service that answered
@@ -48,6 +48,28 @@ fn checks_all(native: &NativeObservation, expect: &Expect) -> bool {
         && native.has_capability(FOCUS_DOCK)
         && (expect.window().is_none() || native.has_capability(FOCUS_WINDOW))
         && (expect.field().is_none() || native.has_capability(FOCUS_FIELD))
+}
+
+/// The input service's refusal in `result`: its code when it is one callers
+/// act on, who holds control when it says, and whether the failure may
+/// already have changed state.
+fn native_refusal(result: &Value) -> Error {
+    let code = match result["code"].as_str() {
+        Some("busy") => Code::Busy,
+        Some("lease-lost") => Code::LeaseLost,
+        Some("cancelled") => Code::Cancelled,
+        Some("stopped") => Code::Stopped,
+        Some("identity") => Code::Identity,
+        Some("session-changed") => Code::SessionChanged,
+        Some("permission") => Code::Permission,
+        Some("focus-changed") => Code::FocusChanged,
+        _ => Code::Native,
+    };
+    let error = Error::refused(code, result, "Native control request failed");
+    match result["holder"].as_str().and_then(Holder::parse) {
+        Some(holder) => error.held_by(holder),
+        None => error,
+    }
 }
 
 impl Client {
@@ -124,35 +146,7 @@ impl Client {
         };
         let result = self.answer(sent).await?;
         if result["ok"] != true {
-            let error = Error::new(
-                match result["code"].as_str() {
-                    Some("busy") => Code::Busy,
-                    Some("lease-lost") => Code::LeaseLost,
-                    Some("cancelled") => Code::Cancelled,
-                    Some("stopped") => Code::Stopped,
-                    Some("identity") => Code::Identity,
-                    Some("session-changed") => Code::SessionChanged,
-                    Some("permission") => Code::Permission,
-                    Some("focus-changed") => Code::FocusChanged,
-                    _ => Code::Native,
-                },
-                result["error"]
-                    .as_str()
-                    .unwrap_or("Native control request failed"),
-            );
-
-            // Who holds control, when the service says.
-            let error = match result["holder"].as_str().and_then(Holder::parse) {
-                Some(holder) => error.held_by(holder),
-                None => error,
-            };
-
-            // The service reports when a failure may already have changed state.
-            return Err(if result["uncertain"] == true {
-                error.uncertain()
-            } else {
-                error
-            });
+            return Err(native_refusal(&result));
         }
 
         if result["uncertain"] == true {
@@ -229,10 +223,7 @@ impl Client {
         }
 
         if !same_size {
-            return Err(Error::new(
-                Code::SessionChanged,
-                "The helper's display changed size. Take a new screenshot, then try again.",
-            ));
+            return Err(Error::session_changed());
         }
 
         Ok(current)
@@ -287,10 +278,7 @@ impl Client {
         let expect = expectation(&observation.native, check)?;
 
         if expected.is_some_and(|(epoch, _)| *epoch != session.epoch) {
-            return Err(Error::new(
-                Code::SessionChanged,
-                "The helper changed since this frame",
-            ));
+            return Err(Error::session_changed());
         }
 
         let input_pid = session.epoch.input_pid;
@@ -302,10 +290,7 @@ impl Client {
 
         // The service whose capability was read is the one that checks.
         if expect.is_some() && session.epoch.input_pid != input_pid {
-            return Err(Error::new(
-                Code::SessionChanged,
-                "The helper's input service changed meanwhile",
-            ));
+            return Err(Error::session_changed());
         }
 
         let actions = actions?;
@@ -347,7 +332,10 @@ impl Client {
             .is_none()
             .then(|| self.controller.quarantine())
             .transpose()?;
-        let mutation = Mutation::Input(Some(actions.actions().len() as u64));
+        let mutation = Mutation::Input {
+            count: actions.actions().len() as u64,
+            expect: expect.as_ref(),
+        };
         let mut request = json!({
             "op": "input",
             "actions": actions.into_wire(),
@@ -356,51 +344,54 @@ impl Client {
             // An agent's command names the app it acted in.
             "app": self.doing.is_some(),
         });
-        if let Some(expect) = expect {
+        if let Some(expect) = &expect {
             request["expect"] = json!(expect);
         }
         let result = self
             .mutate(mutation, request, lease, expected.map(|(_, at)| at), None)
             .await;
 
-        if lease.is_none() {
-            let cleanup = self.native_control("release", owner).await;
-            let unknown = result
-                .as_ref()
-                .map_or_else(|error| error.uncertain, |reply| reply["uncertain"] == true)
-                || cleanup.as_ref().is_err_and(|error| error.uncertain);
-            if cleanup.is_ok()
-                && !unknown
-                && let Some(generation) = &generation
-            {
+        match &generation {
+            Some(generation) => self.release_input(owner, generation, result).await,
+            None => result,
+        }
+    }
+
+    /// End a standalone action: release its grant, and settle `generation`
+    /// only once both the action's `result` and the release are known. The
+    /// claim stays held until this returns.
+    async fn release_input(
+        &self,
+        owner: &str,
+        generation: &str,
+        result: Result<Value>,
+    ) -> Result<Value> {
+        let cleanup = self.native_control("release", owner).await;
+        let unknown = result
+            .as_ref()
+            .map_or_else(|error| error.uncertain, |reply| reply["uncertain"] == true);
+        let Err(cleanup) = cleanup else {
+            if !unknown {
                 self.controller.clear_if(generation)?;
             }
-            if let Err(cleanup) = cleanup {
-                // A release the stop cut short says so, as its input may.
-                if cleanup.code == Code::Interrupted {
-                    return Err(cleanup);
-                }
-                let error = match result {
-                    Ok(_) => Error::new(
-                        Code::Uncertain,
-                        format!(
-                            "Input finished but native release was not confirmed: {}",
-                            cleanup.error
-                        ),
-                    ),
-                    Err(error) => Error::new(
-                        Code::Uncertain,
-                        format!(
-                            "{} Native release was not confirmed either: {}",
-                            error.error, cleanup.error
-                        ),
-                    ),
-                };
-                return Err(error.uncertain());
-            }
-        }
+            return result;
+        };
 
-        result
+        // A release the stop cut short says so, as its input may.
+        if cleanup.code == Code::Interrupted {
+            return Err(cleanup);
+        }
+        let message = match result {
+            Ok(_) => format!(
+                "Input finished but native release was not confirmed: {}",
+                cleanup.error
+            ),
+            Err(error) => format!(
+                "{} Native release was not confirmed either: {}",
+                error.error, cleanup.error
+            ),
+        };
+        Err(Error::new(Code::Uncertain, message).uncertain())
     }
 
     /// Carry out a change to the input service as a pending mutation: it
@@ -412,10 +403,7 @@ impl Client {
     ) -> Result<T> {
         let generation = self.controller.quarantine()?;
         let outcome = change.await;
-        if outcome
-            .as_ref()
-            .map_or_else(|error| !error.uncertain, |_| true)
-        {
+        if !outcome.as_ref().is_err_and(|error| error.uncertain) {
             self.controller.clear_if(&generation)?;
         }
 

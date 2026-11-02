@@ -6,10 +6,10 @@ use super::{Client, Mutation, Verified};
 use crate::{
     control::Ownership,
     error::{Code, Error, Result},
-    transport::accepted,
+    transport::{OutputError, accepted, run_output},
 };
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::{borrow::Cow, time::Duration};
 
 /// How long `run` lets a command take unless told otherwise.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -63,17 +63,9 @@ impl<'a> Run<'a> {
         Self::new(Mode::Held, RUN_TIMEOUT)
     }
 
-    /// An agent's own command. Control is held only until the request
-    /// reaches the helper; while the command runs, its claim keeps
-    /// recovery, restart, update and log-out out, and other agents may act.
-    /// Its outcome is pending until it ends.
-    fn beside() -> Self {
-        Self::new(Mode::Beside, RUN_TIMEOUT)
-    }
-
     /// A recorded change under controller ownership the caller already
     /// holds.
-    pub(crate) fn owned(_ownership: &Ownership) -> Self {
+    pub(crate) fn owned(_ownership: &'a Ownership) -> Self {
         Self::new(Mode::Owned, RUN_TIMEOUT)
     }
 
@@ -111,11 +103,45 @@ impl<'a> Run<'a> {
     }
 }
 
+/// What a caller decides by once the helper accepted a command: whether it
+/// succeeded, whether its time ran out, and what it printed.
+pub(crate) struct Finished {
+    pub(crate) succeeded: bool,
+    pub(crate) timed_out: bool,
+    output: std::result::Result<Vec<u8>, OutputError>,
+}
+
+impl Finished {
+    /// `reply` read once, keeping at most `limit` bytes of output.
+    pub(crate) fn decode(reply: &Value, limit: usize) -> Self {
+        Self {
+            succeeded: reply["exitCode"] == 0,
+            timed_out: reply["timedOut"] == true,
+            output: run_output(reply, limit),
+        }
+    }
+
+    /// What it printed; nothing when that could not be read.
+    pub(crate) fn output(&self) -> &[u8] {
+        self.output.as_deref().unwrap_or_default()
+    }
+
+    /// [`Finished::output`] as text.
+    pub(crate) fn said(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(self.output())
+    }
+
+    /// Why its output could not be read, when it could not.
+    pub(crate) fn unread(&self) -> Option<OutputError> {
+        self.output.as_ref().err().copied()
+    }
+}
+
 /// The request that runs `argv` in the helper, stopping it after `timeout`:
 /// a program and its arguments, none holding a NUL, for 1 second to 10
 /// minutes.
 fn run_request(argv: Vec<String>, timeout: Duration) -> Result<Value> {
-    if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|a| a.contains('\0')) {
+    if argv.first().is_none_or(String::is_empty) || argv.iter().any(|a| a.contains('\0')) {
         return Err(Error::new(
             Code::Input,
             "Provide a command and arguments after run --",
@@ -143,8 +169,8 @@ impl Client {
             Mode::Owned | Mode::Pending | Mode::Inspect => None,
         };
 
-        match run.pin.and_then(Verified::pin) {
-            Some(pin) => request["session"] = json!(pin),
+        match run.pin {
+            Some(verified) => request["session"] = json!(verified.pin()?),
             None => {
                 self.identity().await?;
             }
@@ -175,7 +201,7 @@ impl Client {
     /// unconfirmed reply. A failed or timed-out child can also be represented in the returned
     /// reply; unknown execution stays pending.
     pub async fn run_beside(&self, argv: Vec<String>, timeout: Duration) -> Result<Value> {
-        self.run(argv, Run::beside().within(timeout)).await
+        self.run(argv, Run::new(Mode::Beside, timeout)).await
     }
 
     /// Execute argv in the verified hidden helper as a recorded mutation
@@ -193,6 +219,18 @@ impl Client {
         timeout: Duration,
     ) -> Result<Value> {
         self.run(argv, Run::owned(ownership).within(timeout)).await
+    }
+
+    /// [`Client::run`] under `ownership`, refused unless the helper accepted
+    /// the command, keeping at most `limit` bytes of its output.
+    pub(crate) async fn run_finished(
+        &self,
+        ownership: &Ownership,
+        argv: Vec<String>,
+        limit: usize,
+    ) -> Result<Finished> {
+        let reply = accepted(self.run(argv, Run::owned(ownership)).await?)?;
+        Ok(Finished::decode(&reply, limit))
     }
 
     /// Run a fixed, read-only inspection command with a run's usual limit,
@@ -214,7 +252,7 @@ impl Client {
         transport.timeout = transport.timeout.max(timeout + RUN_MARGIN);
 
         let reply = transport.call(request).await?;
-        Mutation::Run.validate(request, &reply)?;
+        Mutation::Run.validate(&reply)?;
 
         accepted(reply)
     }

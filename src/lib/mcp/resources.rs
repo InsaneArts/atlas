@@ -1,4 +1,4 @@
-use super::ACTIONS;
+use super::control::ACTIONS;
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 
@@ -40,13 +40,13 @@ pub(super) fn initialized(params: &Value) -> Value {
 }
 
 /// A tool's MCP Apps metadata: the view it shows, and who may call it.
-pub(super) fn ui(visibility: &[&str]) -> Value {
+fn ui(visibility: &[&str]) -> Value {
     json!({"resourceUri": SCREEN_URI, "visibility": visibility})
 }
 
 /// A tool's metadata when only the view may call it, in the MCP Apps
 /// words and in OpenAI's, which the Codex app reads.
-pub(super) fn app_only() -> Value {
+fn app_only() -> Value {
     json!({
         "ui": ui(&["app"]),
         "openai/visibility": "private",
@@ -54,10 +54,12 @@ pub(super) fn app_only() -> Value {
     })
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub(super) enum Audience {
     Any,
     Views,
+    /// Only views that control through a private context.
+    ViewContexts,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -70,6 +72,8 @@ enum Metadata {
     Public,
     Screen,
     App,
+    /// Only a view's own context reaches it: no title or hints.
+    Context,
 }
 
 /// A tool's identity, catalog and exposure decisions are declared together.
@@ -104,6 +108,12 @@ macro_rules! tools {
                 match metadata {
                     Metadata::Public => {}
                     Metadata::App => catalog["_meta"] = app_only(),
+                    Metadata::Context => catalog = json!({
+                        "name": catalog["name"],
+                        "description": catalog["description"],
+                        "inputSchema": catalog["inputSchema"],
+                        "_meta": app_only(),
+                    }),
                     Metadata::Screen => catalog["_meta"] = json!({
                         "ui": ui(&["model", "app"]),
                         "ui/resourceUri": SCREEN_URI,
@@ -136,10 +146,11 @@ tools! { none;
     Screenshot => ("screenshot", "Screenshot", "One screenshot an agent took, as a thumbnail or full size.", Views, Read, json!({"type": "object", "properties": {"name": {"type": "string"}, "full": {"type": "boolean"}}, "required": ["name"], "additionalProperties": false}), App),
     SwitchHelper => ("switch_helper", "Switch to the Helper", "Lock the screen so the person can log in to the helper.", Views, Change, none, App),
     LogOutHelper => ("log_out_helper", "Log Out the Helper", "Log the helper out; its apps quit.", Views, Change, none, App),
+    CloseView => ("view_close", "", "Close this Atlas view's private context.", ViewContexts, Change, none, Context),
 }
 
 /// The view's metadata: no network, no border of the app's own.
-pub(super) fn screen_meta() -> Value {
+fn screen_meta() -> Value {
     json!({
         "ui": {"csp": {"connectDomains": [], "resourceDomains": []}, "prefersBorder": false},
         "openai/widgetPrefersBorder": false,
@@ -167,7 +178,7 @@ pub(super) fn screen_contents() -> Value {
 /// The hosts' logos the view draws beside each session, as one line of
 /// script holding a data URI for each: made once, from the app's own
 /// images.
-pub(super) fn logos() -> &'static str {
+fn logos() -> &'static str {
     static LOGOS: OnceLock<String> = OnceLock::new();
     LOGOS.get_or_init(|| {
         use base64::{Engine, engine::general_purpose::STANDARD};
@@ -201,6 +212,11 @@ pub(super) fn logos() -> &'static str {
 #[test]
 fn the_tool_catalog_keeps_its_fields_and_order() -> crate::error::Result<()> {
     let expected: Value = serde_json::from_str(include_str!("tools.fixture.json"))?;
-    assert_eq!(json!(Tool::ALL.map(Tool::catalog)), expected);
+    let catalog = Tool::ALL
+        .into_iter()
+        .filter(|tool| *tool != Tool::CloseView)
+        .map(Tool::catalog)
+        .collect::<Vec<_>>();
+    assert_eq!(json!(catalog), expected);
     Ok(())
 }

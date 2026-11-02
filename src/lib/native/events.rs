@@ -5,9 +5,8 @@ use super::{
 };
 use crate::{
     actions::{
-        Action, Button, CLICK_GAP, COMMAND, CONTROL, DRAG_ANCHOR, DRAG_HOLD, DRAG_START, DRAG_STEP,
-        DRAG_STEPS, FUNCTION, OPTION, PointerPhase, SCROLL_SETTLE, SHIFT, TYPE_GAP, modifier_flags,
-        parse_key,
+        Action, Button, DRAG_ANCHOR, DRAG_HOLD, DRAG_START, DRAG_STEP, DRAG_STEPS, MODIFIER_KEYS,
+        PointerPhase, SCROLL_SETTLE, TYPE_GAP, modifier_flags, parse_key,
     },
     error::{Code, Error, Result},
     native::{accessibility_trusted, session_info},
@@ -42,22 +41,35 @@ fn created(event: Option<CFRetained<CGEvent>>) -> Result<CFRetained<CGEvent>> {
     event.ok_or_else(|| Error::new(Code::Native, "Could not create a native event"))
 }
 
-/// The modifier keys a finished gesture releases, each with its flag:
-/// command, shift, option, control and function.
-const MODIFIER_KEYS: [(u16, u64); 5] = [
-    (55, COMMAND),
-    (56, SHIFT),
-    (58, OPTION),
-    (59, CONTROL),
-    (63, FUNCTION),
-];
+fn may_not_post() -> Error {
+    Error::new(
+        Code::Permission,
+        "The input process may not post events (Accessibility)",
+    )
+}
+
+/// The first moved step of a drag from `from` towards `to`: at most
+/// [`DRAG_ANCHOR`] on each axis.
+fn first_step(from: Point, to: Point) -> Point {
+    Point {
+        x: (to.x - from.x).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
+        y: (to.y - from.y).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
+    }
+}
+
+fn shifted(point: Point, by: Point) -> Point {
+    Point {
+        x: point.x + by.x,
+        y: point.y + by.y,
+    }
+}
 
 /// Release each held modifier in `held` through `post`, given its key code
 /// and the flags still held once it is up. A modifier's flag is cleared only
 /// once its own release has posted, so after a failure the ones not yet
 /// released stay held and the next release tries them again.
 fn release_each(held: &mut u64, mut post: impl FnMut(u16, u64) -> Result<()>) -> Result<()> {
-    for (code, mask) in MODIFIER_KEYS {
+    for &(code, mask) in MODIFIER_KEYS {
         if *held & mask == 0 {
             continue;
         }
@@ -192,10 +204,7 @@ impl Engine {
             Self::check_epoch(&epoch)?;
             super::ax::check_application(target)?;
             if !objc2_core_graphics::CGPreflightPostEventAccess() {
-                return Err(Error::new(
-                    Code::Permission,
-                    "The input process may not post events (Accessibility)",
-                ));
+                return Err(may_not_post());
             }
             drop(grant.authorize()?);
             Ok(())
@@ -232,10 +241,7 @@ impl Engine {
         if !confirmed {
             if !objc2_core_graphics::CGPreflightPostEventAccess() {
                 self.post_access = None;
-                return Err(Error::new(
-                    Code::Permission,
-                    "The input process may not post events (Accessibility)",
-                ));
+                return Err(may_not_post());
             }
 
             self.post_access = Some(Instant::now());
@@ -347,7 +353,7 @@ impl Engine {
             Some(self.source.get()),
             kind,
             point,
-            button.number(),
+            Mouse::from(button).number,
         ))?;
 
         let set = |field, value| CGEvent::set_integer_value_field(Some(&event), field, value);
@@ -380,7 +386,13 @@ impl Engine {
         }
 
         if let Some(button) = self.held {
-            self.mouse(button.up(), self.position, button, self.click_count, 0)?;
+            self.mouse(
+                Mouse::from(button).up,
+                self.position,
+                button,
+                self.click_count,
+                0,
+            )?;
             self.held = None;
             self.drag_started = false;
         }
@@ -427,33 +439,31 @@ impl Engine {
                 self.mouse_number = self.mouse_number.checked_add(1).unwrap_or(1);
                 self.drag_started = false;
                 self.click_count = count;
-                self.mouse(button.down(), point, button, count, flags)?;
+                self.mouse(Mouse::from(button).down, point, button, count, flags)?;
             }
             PointerPhase::Move => {
                 let active = self.held.unwrap_or(button);
 
-                if self.held.is_some()
-                    && !self.drag_started
-                    && (point.x != self.position.x || point.y != self.position.y)
-                {
+                if self.held.is_some() && !self.drag_started && point != self.position {
                     // AppKit establishes native window tracking at the first
                     // dragged location that has moved, and what is dragged
                     // then follows the pointer from there. Bound that initial
                     // step to one point so a sparse viewer stream does not
                     // lose its first jump. A stationary click never enters
                     // this path.
-                    let anchor = Point {
-                        x: self.position.x
-                            + (point.x - self.position.x).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
-                        y: self.position.y
-                            + (point.y - self.position.y).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
-                    };
-                    self.mouse(active.dragged(), anchor, active, self.click_count, flags)?;
+                    let anchor = shifted(self.position, first_step(self.position, point));
+                    self.mouse(
+                        Mouse::from(active).dragged,
+                        anchor,
+                        active,
+                        self.click_count,
+                        flags,
+                    )?;
                     self.position = anchor;
                     self.drag_started = true;
                     self.commit()?;
 
-                    if anchor.x == point.x && anchor.y == point.y {
+                    if anchor == point {
                         return Ok(());
                     }
 
@@ -462,7 +472,7 @@ impl Engine {
 
                 self.mouse(
                     if self.held.is_some() {
-                        active.dragged()
+                        Mouse::from(active).dragged
                     } else {
                         CGEventType::MouseMoved
                     },
@@ -484,7 +494,13 @@ impl Engine {
                     ));
                 }
 
-                self.mouse(button.up(), point, button, self.click_count, flags)?;
+                self.mouse(
+                    Mouse::from(button).up,
+                    point,
+                    button,
+                    self.click_count,
+                    flags,
+                )?;
                 self.held = None;
                 self.drag_started = false;
                 self.position = point;
@@ -562,52 +578,39 @@ impl Engine {
         }
     }
 
+    /// One step of a gesture with no modifiers and a single click.
+    async fn step(&mut self, phase: PointerPhase, point: Point, button: Button) -> Result<()> {
+        self.pointer(phase, point, button, &[], 1).await
+    }
+
     /// One drag owns its anchor, paced travel, release and final resting point.
     async fn drag(&mut self, from: Point, to: Point, button: Button) -> Result<()> {
-        self.pointer(PointerPhase::Down, from, button, &[], 1)
-            .await?;
+        self.step(PointerPhase::Down, from, button).await?;
 
         self.delay(DRAG_HOLD).await?;
         // What is dragged follows the pointer from the first moved
         // step (see the move phase), so the pointer travels that
         // step past the target, releases there, and then rests on
         // the target: the window or item moves exactly as asked.
-        let step = Point {
-            x: (to.x - from.x).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
-            y: (to.y - from.y).clamp(-DRAG_ANCHOR, DRAG_ANCHOR),
-        };
-        let anchor = Point {
-            x: from.x + step.x,
-            y: from.y + step.y,
-        };
-        let end = self.on_display(Point {
-            x: to.x + step.x,
-            y: to.y + step.y,
-        });
+        let first = first_step(from, to);
+        let anchor = shifted(from, first);
+        let end = self.on_display(shifted(to, first));
 
-        self.pointer(PointerPhase::Move, anchor, button, &[], 1)
-            .await?;
+        self.step(PointerPhase::Move, anchor, button).await?;
         self.delay(DRAG_START).await?;
 
         for step in 1..=DRAG_STEPS {
             let t = f64::from(step) / f64::from(DRAG_STEPS);
-            self.pointer(
-                PointerPhase::Move,
-                Point {
-                    x: anchor.x + (end.x - anchor.x) * t,
-                    y: anchor.y + (end.y - anchor.y) * t,
-                },
-                button,
-                &[],
-                1,
-            )
-            .await?;
+            let point = Point {
+                x: anchor.x + (end.x - anchor.x) * t,
+                y: anchor.y + (end.y - anchor.y) * t,
+            };
+            self.step(PointerPhase::Move, point, button).await?;
             self.delay(DRAG_STEP).await?;
         }
 
-        self.pointer(PointerPhase::Up, end, button, &[], 1).await?;
-        self.pointer(PointerPhase::Move, to, button, &[], 1).await?;
-        Ok(())
+        self.step(PointerPhase::Up, end, button).await?;
+        self.step(PointerPhase::Move, to, button).await
     }
 
     pub(super) async fn perform(&mut self, action: Action) -> Result<()> {
@@ -636,17 +639,8 @@ impl Engine {
                 count,
                 modifiers,
             } => {
-                if self.held.is_some() || self.dock_down.is_some() {
-                    return Err(Error::new(Code::Input, "A mouse button is already held"));
-                }
-                for click in 1..=count {
-                    self.click(Point { x, y }, button, &modifiers, click)
-                        .await?;
-
-                    if click < count {
-                        self.delay(CLICK_GAP).await?;
-                    }
-                }
+                self.click(Point { x, y }, button, &modifiers, count)
+                    .await?
             }
             Action::Drag {
                 from_x,
@@ -703,127 +697,44 @@ impl Engine {
     }
 }
 
-impl Button {
-    fn number(self) -> CGMouseButton {
-        match self {
-            Self::Left => CGMouseButton::Left,
-            Self::Right => CGMouseButton::Right,
-            Self::Middle => CGMouseButton::Center,
-        }
-    }
+/// A button as macOS names it and its events.
+struct Mouse {
+    number: CGMouseButton,
+    down: CGEventType,
+    up: CGEventType,
+    dragged: CGEventType,
+}
 
-    fn down(self) -> CGEventType {
-        match self {
-            Self::Left => CGEventType::LeftMouseDown,
-            Self::Right => CGEventType::RightMouseDown,
-            Self::Middle => CGEventType::OtherMouseDown,
-        }
-    }
-
-    fn up(self) -> CGEventType {
-        match self {
-            Self::Left => CGEventType::LeftMouseUp,
-            Self::Right => CGEventType::RightMouseUp,
-            Self::Middle => CGEventType::OtherMouseUp,
-        }
-    }
-
-    fn dragged(self) -> CGEventType {
-        match self {
-            Self::Left => CGEventType::LeftMouseDragged,
-            Self::Right => CGEventType::RightMouseDragged,
-            Self::Middle => CGEventType::OtherMouseDragged,
+impl From<Button> for Mouse {
+    fn from(button: Button) -> Self {
+        let (number, down, up, dragged) = match button {
+            Button::Left => (
+                CGMouseButton::Left,
+                CGEventType::LeftMouseDown,
+                CGEventType::LeftMouseUp,
+                CGEventType::LeftMouseDragged,
+            ),
+            Button::Right => (
+                CGMouseButton::Right,
+                CGEventType::RightMouseDown,
+                CGEventType::RightMouseUp,
+                CGEventType::RightMouseDragged,
+            ),
+            Button::Middle => (
+                CGMouseButton::Center,
+                CGEventType::OtherMouseDown,
+                CGEventType::OtherMouseUp,
+                CGEventType::OtherMouseDragged,
+            ),
+        };
+        Self {
+            number,
+            down,
+            up,
+            dragged,
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The typed event kinds, buttons and modifier masks are the raw values
-    /// input has always sent.
-    #[test]
-    fn typed_constants_keep_their_raw_values() {
-        let raw = |button: Button| {
-            (
-                button.number().0,
-                button.down().0,
-                button.up().0,
-                button.dragged().0,
-            )
-        };
-
-        assert_eq!(raw(Button::Left), (0, 1, 2, 6));
-        assert_eq!(raw(Button::Right), (1, 3, 4, 7));
-        assert_eq!(raw(Button::Middle), (2, 25, 26, 27));
-        assert_eq!(CGEventType::MouseMoved.0, 5);
-
-        assert_eq!(COMMAND, CGEventFlags::MaskCommand.0);
-        assert_eq!(CONTROL, CGEventFlags::MaskControl.0);
-        assert_eq!(OPTION, CGEventFlags::MaskAlternate.0);
-        assert_eq!(SHIFT, CGEventFlags::MaskShift.0);
-        assert_eq!(FUNCTION, CGEventFlags::MaskSecondaryFn.0);
-    }
-
-    /// Each modifier is released with the flags still held after it, and
-    /// one that fails keeps itself and the rest held for the next try.
-    #[test]
-    fn a_failed_modifier_release_is_retried_with_the_rest() {
-        let mut held = COMMAND | SHIFT | CONTROL;
-        let mut posted = Vec::new();
-
-        let failed = release_each(&mut held, |code, rest| {
-            if code == 56 {
-                return Err(Error::new(Code::Native, "Could not post"));
-            }
-
-            posted.push((code, rest));
-            Ok(())
-        });
-
-        assert!(failed.is_err());
-        assert_eq!(posted, [(55, SHIFT | CONTROL)]);
-        assert_eq!(held, SHIFT | CONTROL, "shift and control are still held");
-
-        posted.clear();
-        release_each(&mut held, |code, rest| {
-            posted.push((code, rest));
-            Ok(())
-        })
-        .unwrap();
-
-        assert_eq!(posted, [(56, CONTROL), (59, 0)]);
-        assert_eq!(held, 0);
-    }
-
-    /// Flags no modifier key stands for do not stay held once every
-    /// modifier key is up.
-    #[test]
-    fn nothing_stays_held_once_every_modifier_is_up() {
-        let mut held = CGEventFlags::MaskAlphaShift.0;
-        let mut posted = 0;
-
-        release_each(&mut held, |_, _| {
-            posted += 1;
-            Ok(())
-        })
-        .unwrap();
-
-        assert_eq!((held, posted), (0, 0));
-    }
-
-    /// The named constants are the raw values input has always used; in
-    /// particular events go to the session tap (1), never the HID tap (0).
-    #[test]
-    fn event_constants_keep_their_raw_values() {
-        assert_eq!(TAP.0, 1);
-        assert_ne!(TAP, CGEventTapLocation::HIDEventTap);
-        assert_eq!(CGEventField::MouseEventNumber.0, 0);
-        assert_eq!(CGEventField::MouseEventClickState.0, 1);
-        assert_eq!(CGEventField::MouseEventDeltaX.0, 4);
-        assert_eq!(CGEventField::MouseEventDeltaY.0, 5);
-        assert_eq!(CGScrollEventUnit::Line.0, 1);
-        assert_eq!(CGEventSourceStateID::Private.0, -1);
-    }
-}
+mod tests;

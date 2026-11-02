@@ -155,8 +155,10 @@ impl Backend for &mut Fake {
         self.pauses.push(duration);
         self.now.set(self.now.get() + duration);
     }
-    fn app(&mut self, _: i64) -> Option<usize> {
-        self.present.then_some(APP)
+    fn app(&mut self, _: i64) -> Result<usize> {
+        self.present
+            .then_some(APP)
+            .ok_or_else(|| refused(Reason::App))
     }
     fn windows(&mut self) -> Result<Vec<Window>> {
         Ok(self.windows.clone())
@@ -817,11 +819,7 @@ fn a_missing_find_field_name_refuses_before_activating_the_background_app() {
     let mut fake = find_bar();
     let error = fake.run(&named().in_field("_NS:10").unwrap()).unwrap_err();
     assert_eq!(error.details["reason"], "field");
-    assert!(
-        error
-            .error
-            .starts_with("No field in the target window has that name")
-    );
+    assert!(error.error.starts_with("The named field"));
     assert!(fake.writes.is_empty());
     assert!(!fake.frontmost.get());
     assert_eq!(fake.focused_element.get(), 3);
@@ -1078,7 +1076,7 @@ fn a_window_refusal_survives_a_later_production_verification_that_exceeds_its_de
     assert_eq!(reads, 2);
     assert!(fake.now.get() > deadline);
     assert_eq!(error.details["reason"], "window");
-    assert!(error.error.contains("Window 43 has keyboard focus"));
+    assert!(error.error.contains("The named window"));
     assert!(!error.details.contains_key("unread"));
     assert!(!error.uncertain);
 }
@@ -1296,10 +1294,7 @@ fn a_find_field_focus_write_that_does_not_take_retains_the_field_refusal_at_the_
             if expires_in_read {
                 now.set(deadline);
             }
-            Err(refused(
-                "field",
-                "The field with keyboard focus is not the one named _NS:9",
-            ))
+            Err(refused(Reason::Field))
         })
         .unwrap_err();
         assert_eq!(error.details["reason"], "field");
@@ -1723,11 +1718,7 @@ fn keyboard_input_still_requires_window_focus_and_whole_window_visibility() {
         assert_eq!(error.details["reason"], "window");
         assert_eq!(reads, 2);
         if focused == WINDOW {
-            assert!(
-                error
-                    .error
-                    .starts_with("Another window of the app is in front")
-            );
+            assert!(error.error.starts_with("The named window"));
         }
     }
 }
@@ -1861,7 +1852,7 @@ fn a_point_three_pixels_outside_the_named_document_refuses_before_readiness_or_w
         .unwrap();
         assert_eq!(error.code, Code::FocusChanged);
         assert_eq!(error.details["reason"], "window");
-        assert!(error.error.contains("41631 is not at that point"));
+        assert!(error.error.contains("The named window"));
         assert!(fake.writes.is_empty());
     }
 }
@@ -1900,10 +1891,7 @@ fn the_actual_focus_refusal_survives_the_final_pause() {
             reads += 1;
             if reads == 1 {
                 now.set(deadline - Duration::from_millis(if later.is_some() { 11 } else { 1 }));
-                Err(refused(
-                    "window",
-                    "Window 43 has keyboard focus, not window 42",
-                ))
+                Err(refused(Reason::Window))
             } else {
                 assert_eq!(reads, 2);
                 match later.unwrap() {
@@ -1933,7 +1921,7 @@ fn the_actual_focus_refusal_survives_the_final_pause() {
             assert_eq!(error.code, Code::FocusChanged);
             assert_eq!(
                 error.error,
-                "Window 43 has keyboard focus, not window 42, so this action and the rest were not sent"
+                "The named window is not in front, so bring it to the front or look again; this action and the rest were not sent"
             );
             assert_eq!(error.details["reason"], "window");
             assert!(!error.details.contains_key("unread"));
@@ -1963,10 +1951,7 @@ fn a_window_refusal_is_preserved_when_the_next_admission_scan_runs_out_of_time()
         assert_eq!(reads, 1);
         // Leave less than one admission read, which advances the fake clock.
         now.set(deadline - Duration::from_millis(1));
-        Err(refused(
-            "window",
-            "Window 43 has keyboard focus, not window 42",
-        ))
+        Err(refused(Reason::Window))
     });
     reason(error.map(|_| ()), "window");
 }
@@ -2097,7 +2082,7 @@ fn a_confirmed_write_needs_fresh_proof_and_does_not_expand_the_reply() {
     )
     .unwrap();
     let error = settle(target, &named(), deadline, &|| Ok(()), |_, _| {
-        Err(refused("sheet", "A sheet blocks the target"))
+        Err(refused(Reason::Sheet))
     })
     .unwrap_err();
     assert_eq!(error.details["reason"], "sheet");
@@ -2251,7 +2236,7 @@ fn field_readiness_is_polled_after_a_confirmed_focus_request() {
         observations += 1;
         assert!(observations <= 3);
         if observations == 1 {
-            Err(refused("field", "The field has not gained focus yet"))
+            Err(refused(Reason::Field))
         } else {
             Ok(Some("AXTextField"))
         }
@@ -2261,14 +2246,31 @@ fn field_readiness_is_polled_after_a_confirmed_focus_request() {
     assert_eq!(role, Some("AXTextField"));
 }
 
+/// The instance admission finds for a live process of the helper's.
+fn instance(pid: i32, start: [u64; 2]) -> Instance {
+    application_with(pid.into(), 502, |_| Ok(Some(process_info(pid, start))))
+        .unwrap()
+        .unwrap()
+}
+
+/// A failed process lookup stays a failure, not a process that is gone.
+#[test]
+fn a_failed_process_lookup_is_told_apart_from_a_missing_process() {
+    let lookup = application_with(812, 502, |_| {
+        Err(Error::new(Code::Io, "The process table could not be read"))
+    });
+    assert_eq!(lookup.unwrap_err().code, Code::Io);
+}
+
 #[test]
 fn application_admission_requires_a_live_process_owned_by_the_helper() {
     let info = process_info(812, [100, 200]);
     assert_eq!(
         application_with(812, 502, |pid| {
             assert_eq!(pid, 812);
-            Some(info.clone())
-        }),
+            Ok(Some(info.clone()))
+        })
+        .unwrap(),
         Some(info.instance)
     );
     for facts in [
@@ -2283,13 +2285,14 @@ fn application_admission_requires_a_live_process_owned_by_the_helper() {
         }),
         Some(process_info(813, [100, 200])),
     ] {
-        assert_eq!(application_with(812, 502, |_| facts), None);
+        assert_eq!(application_with(812, 502, |_| Ok(facts)).unwrap(), None);
     }
     for pid in [0, -1, i64::MAX] {
         assert_eq!(
             application_with(pid, 502, |_| panic!(
                 "invalid pid reached the kernel lookup"
-            )),
+            ))
+            .unwrap(),
             None
         );
     }
@@ -2599,7 +2602,7 @@ fn the_live_backend_resolves_a_process_launched_after_it_was_created() {
     let app = backend.app(pid);
     let _ = child.kill();
     child.wait().unwrap();
-    assert_eq!(app.as_ref().and_then(|app| backend.owner(app)), Some(pid));
+    assert_eq!(backend.owner(&app.unwrap()), Some(pid));
 }
 
 #[test]
@@ -2672,7 +2675,7 @@ fn a_later_admission_scan_cannot_reuse_an_earlier_window_proof() {
             observed.set(0);
             Ok(None)
         } else {
-            Err(refused("window", "Another document has focus"))
+            Err(refused(Reason::Window))
         }
     });
     reason(result.map(|_| ()), "window");
@@ -2742,10 +2745,9 @@ fn process_info(pid: i32, start: crate::process::Start) -> Info {
 fn a_reused_pid_cannot_prepare_or_verify_the_replacement_app() {
     for replaced_before_preparation in [true, false] {
         let mut fake = Fake::new();
-        let target = application_with(812, 502, |_| Some(process_info(812, [100, 200]))).unwrap();
+        let target = instance(812, [100, 200]);
         let current = Cell::new(Some(target));
-        let replacement =
-            application_with(812, 502, |_| Some(process_info(812, [101, 200]))).unwrap();
+        let replacement = instance(812, [101, 200]);
         let guard = || same_application(target, current.get());
         if replaced_before_preparation {
             current.set(Some(replacement));
@@ -2778,7 +2780,7 @@ fn a_reused_pid_cannot_prepare_or_verify_the_replacement_app() {
 #[test]
 fn replacing_the_process_during_final_verification_invalidates_the_result() {
     let mut fake = Fake::new();
-    let target = application_with(812, 502, |_| Some(process_info(812, [100, 200]))).unwrap();
+    let target = instance(812, [100, 200]);
     let current = Cell::new(Some(target));
     let deadline = fake.now.get() + Duration::from_millis(450);
     let guard = || same_application(target, current.get());

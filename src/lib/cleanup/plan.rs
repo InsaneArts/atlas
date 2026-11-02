@@ -4,11 +4,12 @@
 //! background jobs; undo its copies into the helper, newest first; remove
 //! its installs, which a copy into the helper may have written into;
 //! remove its copy folders. Each step names the steps it waits for.
-use super::receipt::Entry;
+use super::receipt::{Entry, StepState};
 use crate::{
-    collect::ReceiptId, daemon::protocol::JobId, files::Token, host_session::Key, task::Owned,
+    collect::ReceiptId, files::Token, handoff, host_session::Key, protocol::JobId, task::Owned,
 };
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// One step of a cleanup: what it does, and to which recorded thing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +56,31 @@ impl Step {
             Self::UndoPlan { .. } => PLANS,
             Self::RemoveInstall { .. } => 4,
             Self::RemoveCopy { .. } => 5,
+        }
+    }
+
+    /// Whether it recovers nothing and changes no app, so it may run while
+    /// an earlier outcome is unknown.
+    pub(super) fn contained(&self) -> bool {
+        match self {
+            Self::CheckOutputs { .. } | Self::StopJob { .. } | Self::FindJobs => true,
+            Self::Quit { .. }
+            | Self::UndoPlan { .. }
+            | Self::RemoveInstall { .. }
+            | Self::RemoveCopy { .. } => false,
+        }
+    }
+
+    /// The app a copy folder this step removes is for, under `copies`.
+    pub(super) fn copied_app(&self, copies: &Path) -> Option<String> {
+        match self {
+            Self::RemoveCopy { copy } => handoff::copy_app(copies, copy),
+            Self::CheckOutputs { .. }
+            | Self::Quit { .. }
+            | Self::StopJob { .. }
+            | Self::FindJobs
+            | Self::UndoPlan { .. }
+            | Self::RemoveInstall { .. } => None,
         }
     }
 
@@ -152,11 +178,15 @@ pub(super) fn merge_with(steps: &mut Vec<Entry>, work: &[Undoable], others: &Oth
 /// of those and every plan. Steps done or kept keep what they waited for,
 /// and every step keeps its number.
 fn rewire(steps: &mut [Entry]) {
-    let quits = numbers(steps, |step| matches!(step, Step::Quit { .. }));
-    let jobs = numbers(steps, |step| {
-        matches!(step, Step::StopJob { .. } | Step::FindJobs)
-    });
-    let plans = numbers(steps, |step| matches!(step, Step::UndoPlan { .. }));
+    let (mut quits, mut jobs, mut plans) = (Vec::new(), Vec::new(), Vec::new());
+    for entry in steps.iter() {
+        match entry.step {
+            Step::Quit { .. } => quits.push(entry.n),
+            Step::StopJob { .. } | Step::FindJobs => jobs.push(entry.n),
+            Step::UndoPlan { .. } => plans.push(entry.n),
+            Step::CheckOutputs { .. } | Step::RemoveInstall { .. } | Step::RemoveCopy { .. } => {}
+        }
+    }
     for entry in steps.iter_mut().filter(|entry| !entry.state.finished()) {
         entry.after = match entry.step {
             Step::CheckOutputs { .. } | Step::Quit { .. } => Vec::new(),
@@ -175,12 +205,7 @@ fn rewire(steps: &mut [Entry]) {
 /// Add a step for each of `others` no step covers yet: one check of every
 /// collection, first, and a stop of each job, after the quits.
 fn add_others(steps: &mut Vec<Entry>, others: &Others) {
-    let mut next = steps.iter().map(|entry| entry.n).max().unwrap_or(0) + 1;
-    let mut number = || {
-        let n = next;
-        next += 1;
-        n
-    };
+    let mut number = numbering(steps);
 
     if !others.outputs.is_empty() {
         let unfinished = steps.iter().any(|entry| {
@@ -199,7 +224,7 @@ fn add_others(steps: &mut Vec<Entry>, others: &Others) {
                     }
                 }
                 if entry.state.finished() && unfinished {
-                    entry.set(super::receipt::StepState::Pending, None);
+                    entry.set(StepState::Pending, None);
                 }
             }
             None => {
@@ -214,21 +239,15 @@ fn add_others(steps: &mut Vec<Entry>, others: &Others) {
     // A listing that failed is tried again by a step of its own, which
     // every removal waits for; one already done is run again. With no
     // removal left to hold back, there is nothing for it to protect.
-    let removes = steps.iter().any(|entry| {
-        !entry.state.finished()
-            && matches!(
-                entry.step,
-                Step::UndoPlan { .. } | Step::RemoveInstall { .. } | Step::RemoveCopy { .. }
-            )
-    });
+    let removes = steps
+        .iter()
+        .any(|entry| !entry.state.finished() && entry.step.owned().is_some());
     if others.unlisted.is_some() && removes {
         match steps
             .iter_mut()
             .find(|entry| matches!(entry.step, Step::FindJobs))
         {
-            Some(entry) if entry.state.finished() => {
-                entry.set(super::receipt::StepState::Pending, None);
-            }
+            Some(entry) if entry.state.finished() => entry.set(StepState::Pending, None),
             Some(_) => {}
             None => place(steps, Entry::new(number(), Step::FindJobs)),
         }
@@ -278,19 +297,14 @@ fn add(steps: &mut Vec<Entry>, work: &[Undoable]) {
         return;
     }
 
-    let mut next = steps.iter().map(|entry| entry.n).max().unwrap_or(0) + 1;
-    let mut number = || {
-        let n = next;
-        next += 1;
-        n
-    };
+    let mut number = numbering(steps);
 
     let bundles: Vec<Bundle> = new
         .iter()
         .filter_map(|(undoable, _)| match &undoable.owned {
             Owned::Install { id, .. } => Some(Bundle::Install(id.clone())),
             Owned::Copy { id } => Some(Bundle::Copy(id.clone())),
-            _ => None,
+            Owned::Plan { .. } | Owned::Launch { .. } => None,
         })
         .collect();
     if !bundles.is_empty() {
@@ -320,6 +334,16 @@ fn add(steps: &mut Vec<Entry>, work: &[Undoable]) {
     }
 }
 
+/// What numbers the steps added to `steps`: each after the highest yet.
+fn numbering(steps: &[Entry]) -> impl FnMut() -> u32 + use<> {
+    let mut next = steps.iter().map(|entry| entry.n).max().unwrap_or(0) + 1;
+    move || {
+        let n = next;
+        next += 1;
+        n
+    }
+}
+
 /// Put `entry` after every step that runs before or with it.
 fn place(steps: &mut Vec<Entry>, entry: Entry) {
     let rank = entry.step.rank();
@@ -328,13 +352,4 @@ fn place(steps: &mut Vec<Entry>, entry: Entry) {
         .rposition(|known| known.step.rank() <= rank)
         .map_or(0, |last| last + 1);
     steps.insert(at, entry);
-}
-
-/// The numbers of the steps `which` picks.
-fn numbers(steps: &[Entry], which: impl Fn(&Step) -> bool) -> Vec<u32> {
-    steps
-        .iter()
-        .filter(|entry| which(&entry.step))
-        .map(|entry| entry.n)
-        .collect()
 }

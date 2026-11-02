@@ -52,11 +52,11 @@ impl Scan {
                     break;
                 };
 
-                let frame = self.frame(Source::Element(&current));
-                let menu =
-                    self.text(Source::Element(&current), "AXRole").as_deref() == Some("AXMenu");
+                let from = Source::Element(&current);
+                let frame = self.frame(from);
+                let menu = self.text(from, "AXRole").as_deref() == Some("AXMenu");
                 let parent = self
-                    .attribute(Source::Element(&current), "AXParent")
+                    .attribute(from, "AXParent")
                     .and_then(|parent| parent.downcast::<AXUIElement>().ok());
                 let top = parent.as_ref().is_some_and(|parent| {
                     self.text(Source::Element(parent), "AXRole").as_deref() == Some("AXApplication")

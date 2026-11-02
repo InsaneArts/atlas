@@ -13,6 +13,8 @@ use tokio::sync::watch;
 
 /// How long a frame is kept and may be named by control requests.
 const FRAME_LIFETIME: Duration = Duration::from_secs(8);
+/// How recent the last frame must be to stand in for a capture.
+const FRAME_REUSE: Duration = Duration::from_millis(400);
 /// The widest picture of the helper the viewer asks for, in pixels.
 const FRAME_WIDTH: u32 = 1600;
 /// How many recent frames are kept for control requests to name.
@@ -76,11 +78,9 @@ impl Viewer {
             let sender = match ours {
                 Ok(sender) => sender,
                 Err((mut outcome, current)) => {
-                    let Ok(waited) =
-                        tokio::time::timeout_at(until, outcome.wait_for(Option::is_some)).await
-                    else {
-                        return Err(late());
-                    };
+                    let waited = tokio::time::timeout_at(until, outcome.wait_for(Option::is_some))
+                        .await
+                        .map_err(|_| late())?;
 
                     let shared = waited.ok().and_then(|outcome| outcome.clone());
                     match shared {
@@ -111,29 +111,26 @@ impl Viewer {
     async fn take_frame(&self) -> Result<(String, Arc<Frame>)> {
         let client = self.client();
         let current = client.identity().await?.epoch;
-        let revision;
-
-        {
+        let revision = {
             let mut frames = self.frames.lock().await;
             frames
                 .items
                 .retain(|(_, frame)| frame.at.elapsed() < FRAME_LIFETIME && frame.epoch == current);
-            revision = frames.input_revision;
+            let revision = frames.input_revision;
 
             if frames.capture_revision == Some(revision)
                 && let Some((key, frame)) = frames.items.back()
-                && frame.at.elapsed() < Duration::from_millis(400)
+                && frame.at.elapsed() < FRAME_REUSE
             {
                 return Ok((key.clone(), frame.clone()));
             }
-        }
+
+            revision
+        };
 
         let frame = Arc::new(client.frame(Some(FRAME_WIDTH)).await?);
         if frame.at.elapsed() >= FRAME_LIFETIME {
-            return Err(Error::new(
-                Code::StaleFrame,
-                "Capture became stale while checking its session",
-            ));
+            return Err(Error::stale_frame());
         }
 
         let key = files::token();
@@ -158,11 +155,6 @@ impl Viewer {
             .find(|(id, _)| id == key)
             .map(|(_, frame)| frame.clone())
             .filter(|frame| frame.at.elapsed() < FRAME_LIFETIME)
-            .ok_or_else(|| {
-                Error::new(
-                    Code::StaleFrame,
-                    "Wait for a fresh frame before taking control",
-                )
-            })
+            .ok_or_else(Error::stale_frame)
     }
 }

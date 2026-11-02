@@ -1,4 +1,5 @@
-use super::*;
+use super::{reply::WorkerReply, *};
+use crate::files::own_folder;
 
 /// Whether `stage` holds a retained request: a step whose outcome is not
 /// known yet, kept as evidence until it is. A folder or entry that cannot
@@ -31,11 +32,7 @@ pub(crate) fn leftovers(shared: &Path) -> Vec<PathBuf> {
                 .strip_prefix("environment-plan-")
                 .or_else(|| name.strip_prefix("environment-run-"));
 
-            id.is_some_and(|id| validate_id(id).is_ok())
-                && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| {
-                    metadata.file_type().is_dir()
-                        && metadata.uid() == nix::unistd::getuid().as_raw()
-                })
+            id.is_some_and(|id| validate_id(id).is_ok()) && own_folder(&entry.path())
         })
         .map(|entry| entry.path())
         .collect()
@@ -75,11 +72,7 @@ pub(super) fn clear_discarded(shared: &Path) {
     };
 
     for entry in entries.flatten() {
-        let ours = entry.file_name().to_string_lossy().starts_with(DISCARDED)
-            && fs::symlink_metadata(entry.path()).is_ok_and(|metadata| {
-                metadata.file_type().is_dir() && metadata.uid() == nix::unistd::getuid().as_raw()
-            });
-        if ours {
+        if entry.file_name().to_string_lossy().starts_with(DISCARDED) && own_folder(&entry.path()) {
             let _ = fs::remove_dir_all(entry.path());
         }
     }
@@ -165,7 +158,7 @@ pub(super) async fn prune(client: &Client, helper: &str) {
         .await;
         let never = answer
             .as_ref()
-            .is_ok_and(|answer| answer["ok"] == false && answer["error"] == worker::MISSING);
+            .is_ok_and(|answer| WorkerReply::read(answer).never_started());
         if never && !requests(&stage) {
             discard(&stage);
             if fs::symlink_metadata(&stage).is_err()
@@ -219,22 +212,30 @@ pub(super) fn abandoned(stage: &Path) -> bool {
 /// Whether the helper may be asked about the plan in `stage`: a readable
 /// plan for this ID and helper, with no request whose outcome is unknown.
 pub(super) fn prunable(stage: &Path, id: &str, uid: u32) -> bool {
-    let ours = read_limited(&stage.join("plan.json"), MAX_RECORD)
+    kept_plan(stage, id, uid).is_some() && !requests(stage)
+}
+
+/// The plan frozen in `stage`, when one reads and it is for this ID and helper.
+pub(super) fn kept_plan(stage: &Path, id: &str, uid: u32) -> Option<Plan> {
+    read_limited(&stage.join("plan.json"), MAX_RECORD)
         .ok()
         .and_then(|bytes| decode::<Plan>(&bytes).ok())
-        .is_some_and(|plan| plan.id == id && plan.uid == uid);
+        .filter(|plan| plan.id == id && plan.uid == uid)
+}
 
-    ours && !requests(stage)
+/// The folder beside the shared command, where plans and requests are kept.
+pub(super) fn shared_folder(client: &Client) -> Result<&Path> {
+    client
+        .config
+        .identity_probe
+        .parent()
+        .ok_or_else(|| problem("Missing shared directory"))
 }
 
 pub(super) fn stage_path(client: &Client, id: &str) -> Result<PathBuf> {
     validate_id(id)?;
 
-    let parent = client
-        .config
-        .identity_probe
-        .parent()
-        .ok_or_else(|| problem("Missing shared directory"))?;
+    let parent = shared_folder(client)?;
     let directory =
         directory(parent, false)?.ok_or_else(|| problem("Shared staging directory is missing"))?;
     installation_parent(&directory)?;
@@ -244,6 +245,24 @@ pub(super) fn stage_path(client: &Client, id: &str) -> Result<PathBuf> {
     }
 
     Ok(parent.join(format!("environment-plan-{id}")))
+}
+
+/// A new request folder's place, for a request that belongs to no plan.
+pub(super) fn request_stage(client: &Client) -> Result<PathBuf> {
+    let id = crate::files::token();
+    Ok(stage_path(client, &id)?.with_file_name(format!("environment-run-{id}")))
+}
+
+/// The plan folder at `stage` locked, made first when it is not there, and
+/// whether it was made.
+pub(super) fn open_stage(stage: &Path, helper: &str) -> Result<(LockFile, bool)> {
+    let created = directory(stage, false)?.is_none();
+    let lock = if created {
+        create_locked_stage(stage, helper)?
+    } else {
+        lock_stage(stage)?
+    };
+    Ok((lock, created))
 }
 
 /// Make a private folder the helper may read, or nothing.
@@ -308,8 +327,11 @@ pub(super) fn lock_stage(stage: &Path) -> Result<LockFile> {
 
     let lock = LockFile(lock);
     // A listing holds a shared lock for an instant.
-    crate::files::lock_within(&lock, crate::files::Lock::Exclusive, STAGE_PATIENCE)
-        .map_err(|_| problem("This environment plan is already running"))?;
+    crate::files::lock_within(&lock, crate::files::Lock::Exclusive, STAGE_PATIENCE).map_err(
+        |crate::files::Held(cause)| {
+            problem("This environment plan is already running").with_source(cause)
+        },
+    )?;
 
     Ok(lock)
 }
@@ -399,7 +421,7 @@ pub(super) async fn freeze_as(
             },
         )
         .await?;
-        if result["ok"] == false && result["plan"].is_null() {
+        if WorkerReply::read(&result).ok == Some(false) && result["plan"].is_null() {
             return Ok(result);
         }
 
@@ -408,7 +430,7 @@ pub(super) async fn freeze_as(
             .and_then(|result| result.remove("plan"))
             .unwrap_or(Value::Null);
         let plan: Plan = serde_json::from_value(plan)
-            .map_err(|_| problem("Invalid environment record or schema"))?;
+            .map_err(|cause| problem("Invalid environment record or schema").with_source(cause))?;
         if plan.id != id || plan.uid != client.config.helper_uid {
             return Err(problem("Preview returned a different plan identity"));
         }
@@ -435,7 +457,9 @@ pub(super) async fn freeze_as(
     // The apply takes the plan's lock itself.
     drop(lock);
     match result {
-        Ok(result) if apply_now && result["ok"] == true => apply_frozen(client, helper, &id).await,
+        Ok(result) if apply_now && WorkerReply::read(&result).ok == Some(true) => {
+            apply_frozen(client, helper, &id).await
+        }
         result => result,
     }
 }
@@ -479,7 +503,7 @@ pub(super) async fn apply_frozen(client: &Client, helper: &str, plan_id: &str) -
     claim_plan(client, plan_id);
     let result = dispatch(client, helper, &stage, Request::Apply { plan }).await;
     // Discarded while still locked, so nothing else can start on it.
-    if settled(&result, "applied") {
+    if settled(&result, Phase::Applied) {
         discard(&stage);
     }
 
@@ -506,7 +530,7 @@ pub(super) fn rolled_back(
     created: bool,
     stage: &Path,
 ) -> bool {
-    (apply && settled(result, "rolledBack")) || (created && !requests(stage))
+    (apply && settled(result, Phase::RolledBack)) || (created && !requests(stage))
 }
 
 /// Say which step a result answers, so it is read in the right direction.
@@ -520,10 +544,10 @@ pub(super) fn operation(mut result: Result<Value>, name: &str) -> Result<Value> 
 /// Whether the helper confirmed the transaction reached `phase` with nothing
 /// left to resume, so its frozen plan (copies of the selected files) is no
 /// longer needed: rollback works from the helper's own records.
-pub(super) fn settled(result: &Result<Value>, phase: &str) -> bool {
-    result.as_ref().is_ok_and(|value| {
-        value["ok"] == true && value["phase"] == phase && value["resumeRequired"] == false
-    })
+pub(super) fn settled(result: &Result<Value>, phase: Phase) -> bool {
+    result
+        .as_ref()
+        .is_ok_and(|value| WorkerReply::read(value).settled(phase))
 }
 
 /// The exit status of a worker that refused before running anything; its
@@ -630,7 +654,7 @@ pub(super) async fn dispatch_as(
     timeout: Duration,
 ) -> Result<Value> {
     let mutating = request.changes_helper();
-    let raw_output = matches!(&request, Request::Run { .. });
+    let raw_output = request.command_output();
     // A preview only reads in the helper: like any other inspection it
     // takes no control and records nothing pending, so a lost reply leaves
     // no recovery behind. A change reads the helper under control, so a
@@ -714,8 +738,8 @@ pub(super) fn stage_request(
     // fail its signature: the helper runs the app's own executable. A loose
     // build is copied, so its request keeps the binary it was made with.
     let source = fs::canonicalize(std::env::current_exe()?)?;
-    let executable = if crate::update::app_of(&source).is_some()
-        && crate::update::reachable_by_others(&source)
+    let executable = if crate::app_bundle::app_of(&source).is_some()
+        && crate::app_bundle::reachable_by_others(&source)
     {
         source
     } else {
@@ -758,8 +782,9 @@ pub(super) fn decode_reply(reply: &Value, mutating: bool, request: &str) -> Resu
         OutputError::Malformed => invalid("Malformed environment output"),
         OutputError::Oversized => invalid("Environment output exceeded its limit"),
     })?;
-    let mut value: Value = serde_json::from_slice(&output)
-        .map_err(|_| invalid("Environment worker did not return a complete result"))?;
+    let mut value: Value = serde_json::from_slice(&output).map_err(|cause| {
+        invalid("Environment worker did not return a complete result").with_source(cause)
+    })?;
     if !value.is_object()
         || !value["ok"].is_boolean()
         || (reply["exitCode"] != 0 && value["ok"] != false)

@@ -3,20 +3,20 @@
 //! and its leader checked. A launch that fails before its exec leaves
 //! nothing running; one that may have started something is kept.
 use super::{
-    Jobs,
-    record::{JobIdentity, Record, VERSION},
+    Jobs, State,
+    record::{Record, VERSION},
     reply::unconfirmed,
     store::Found,
-    supervise,
     verdict::Verdict,
 };
 use crate::{
-    daemon::{
-        protocol::{JobFailure, JobId, JobRefusal, JobReply, JobStart, JobState, failure},
-        run,
-    },
+    daemon::run,
     error::{Code, Error, Result},
-    host_session::now_ms,
+    host::Key,
+    protocol::{
+        JOB_NAME_MAX, JobFailure, JobId, JobRefusal, JobReply, JobStart, JobState, failure,
+    },
+    time::now_ms,
 };
 use nix::sys::signal::Signal;
 use serde_json::{Value, json};
@@ -68,14 +68,11 @@ impl Jobs {
             return Err(failure(Code::SpawnFailed, "No command to run"));
         };
         let home = run::home();
-        let path = run::search_path(home.as_deref());
-        let Some(executable) = run::resolve(program, Some(&path), home.as_deref()) else {
-            return Err(run::unresolved(program, home.as_deref()));
-        };
+        let (executable, path) = run::program(program, home.as_deref())?;
         let name = start.name.clone().unwrap_or_else(|| {
             Path::new(program)
                 .file_name()
-                .map(|name| name.to_string_lossy().chars().take(64).collect())
+                .map(|name| name.to_string_lossy().chars().take(JOB_NAME_MAX).collect())
                 .filter(|name: &String| !name.is_empty())
                 .unwrap_or_else(|| "job".to_owned())
         });
@@ -103,30 +100,7 @@ impl Jobs {
         };
 
         let mut state = self.state().map_err(|error| json!(error))?;
-        let records = state.store.records();
-        let running: Vec<&Record> = records
-            .iter()
-            .filter_map(|read| match read {
-                Found::Record(record) if record.state.live() => Some(record.as_ref()),
-                _ => None,
-            })
-            .collect();
-        if running.len() + state.launching.len() >= RUNNING_MAX {
-            return Err(JobFailure::new(
-                JobRefusal::Limit,
-                "16 background jobs already run in the helper; stop one first",
-            )
-            .into_value());
-        }
-        if start.task.is_some()
-            && running.iter().filter(|job| job.task == start.task).count() >= TASK_MAX
-        {
-            return Err(JobFailure::new(
-                JobRefusal::Limit,
-                "This task already runs 8 background jobs; stop one first",
-            )
-            .into_value());
-        }
+        within_limits(&state, start.task.as_ref())?;
         while state.store.holds(&record.id) {
             record.id = JobId::new();
         }
@@ -161,16 +135,9 @@ impl Jobs {
 
     /// Launch a prepared job, and reply.
     pub(super) async fn launch(self: &Arc<Self>, prepared: Prepared, start: &JobStart) -> Value {
-        let Prepared {
-            record,
-            executable,
-            path,
-            home,
-            lifetime,
-            log,
-        } = prepared;
         let program = &start.argv[0];
-        let mut command = self.command(start, &executable, &path, home.as_deref(), &log);
+        let mut command = self.command(start, &prepared);
+        let (record, lifetime) = (prepared.record, prepared.lifetime);
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -184,19 +151,15 @@ impl Jobs {
         let record = match self.record_launched(&record, &child).await {
             Ok(record) => record,
             Err(error) if error.code == Code::SpawnFailed => {
-                let _ = child.start_kill();
-                let _ = tokio::time::timeout(REAP, child.wait()).await;
-                if let Err(error) = self.forget(&record.id).await {
-                    return unconfirmed(&record, &error.error);
-                }
-                return failure(error.code, error.error);
+                end_launcher(&mut child).await;
+                return self.forgotten(&record, error.error).await;
             }
             Err(error) => {
                 self.retain_unobserved_child(record.id.clone(), child);
                 return unconfirmed(&record, &error.error);
             }
         };
-        let Some(identity) = record.identity() else {
+        let Some(leader) = record.identity().map(|identity| identity.leader()) else {
             return failure(Code::SpawnFailed, "The job's process could not be observed");
         };
 
@@ -206,30 +169,21 @@ impl Jobs {
         }
 
         let jobs = self.clone();
-        tokio::task::spawn_blocking(move || jobs.running_now(record, child, lifetime, &identity))
-            .await
-            .unwrap_or_else(|_| {
-                self.fail_supervision();
-                json!(Self::unavailable().uncertain())
-            })
+        self.launch_reply(
+            tokio::task::spawn_blocking(move || jobs.running_now(record, child, lifetime, leader))
+                .await,
+        )
     }
 
-    /// The launcher's command: it logs to `log`, gives the program its own
-    /// name as `argv[0]`, and runs `executable` with the rest of the start's
-    /// arguments, in the helper's home, waiting on its standard input to go
-    /// on and saying how its launch went on its standard output.
-    fn command(
-        &self,
-        start: &JobStart,
-        executable: &Path,
-        path: &str,
-        home: Option<&Path>,
-        log: &Path,
-    ) -> Command {
+    /// The launcher's command: it logs to the job's log, gives the program
+    /// its own name as `argv[0]`, and runs the executable with the rest of
+    /// the start's arguments, in the helper's home, waiting on its standard
+    /// input to go on and saying how its launch went on its standard output.
+    fn command(&self, start: &JobStart, prepared: &Prepared) -> Command {
         let mut argv0 = OsString::from("--argv0=");
         argv0.push(&start.argv[0]);
         let mut log_arg = OsString::from("--log=");
-        log_arg.push(log);
+        log_arg.push(&prepared.log);
 
         let mut command = Command::new(&self.launcher);
         command
@@ -237,19 +191,13 @@ impl Jobs {
             .arg(log_arg)
             .arg(argv0)
             .arg("--")
-            .arg(executable)
+            .arg(&prepared.executable)
             .args(&start.argv[1..])
-            .env("PATH", path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(false);
-        if let Some(lang) = run::locale() {
-            command.env("LANG", lang);
-        }
-        if let Some(home) = home {
-            command.current_dir(home);
-        }
+        run::in_helper(&mut command, &prepared.path, prepared.home.as_deref());
         command
     }
 
@@ -308,24 +256,17 @@ impl Jobs {
             // Before its session of its own the launcher is this
             // daemon's child alone, still waiting or exiting: ending it
             // by its own PID is certain, and nothing else ran.
-            let _ = child.start_kill();
-            return match tokio::time::timeout(REAP, child.wait()).await {
-                Ok(_) => {
-                    if let Err(error) = self.forget(&record.id).await {
-                        return unconfirmed(&record, &error.error);
-                    }
-                    failure(Code::SpawnFailed, said)
-                }
-                Err(_) => {
-                    let jobs = self.clone();
-                    tokio::task::spawn_blocking(move || jobs.keep_unconfirmed(record, child, &said))
-                        .await
-                        .unwrap_or_else(|_| {
-                            self.fail_supervision();
-                            json!(Self::unavailable().uncertain())
-                        })
-                }
-            };
+            if end_launcher(&mut child).await {
+                return self.forgotten(&record, said).await;
+            }
+            let jobs = self.clone();
+            return self.launch_reply(
+                tokio::task::spawn_blocking(move || match jobs.holding(&record.id, child) {
+                    Ok(mut state) => keep_running(&mut state, record, &said),
+                    Err(error) => unconfirmed(&record, &error.error),
+                })
+                .await,
+            );
         }
         // After it, its group may hold the program's processes too: it
         // is ended like any job, through a fresh look, and kept and
@@ -341,28 +282,22 @@ impl Jobs {
         mut record: Record,
         child: Child,
         lifetime: u64,
-        identity: &JobIdentity,
+        identity: crate::process::Instance,
     ) -> Value {
-        let mut state = match self.state() {
+        let mut state = match self.holding(&record.id, child) {
             Ok(state) => state,
-            Err(error) => {
-                self.retain_unobserved_child(record.id.clone(), child);
-                return unconfirmed(&record, &error.error);
-            }
+            Err(error) => return unconfirmed(&record, &error.error),
         };
-        state.children.insert(record.id.clone(), child);
-        let leader = self.kernel.process(identity.pid()).ok().flatten();
+        let leader = self.kernel.process(identity.pid).ok().flatten();
         let own = leader.as_ref().is_some_and(|leader| {
-            leader.instance.start == identity.start()
-                && leader.pgid == identity.pgid()
+            leader.instance.start == identity.start
+                && leader.pgid == identity.pid
                 && leader.owned_by(self.uid)
         });
         if !own {
-            record.state = JobState::Running;
-            state.store.put(&record);
-            state.running += 1;
-            return unconfirmed(
-                &record,
+            return keep_running(
+                &mut state,
+                record,
                 "The job started, but Atlas could not confirm it runs as the helper in a process group of its own",
             );
         }
@@ -370,18 +305,11 @@ impl Jobs {
         record.ends_at = now_ms().saturating_add(lifetime);
         let written = state.store.put(&record);
         state.running += 1;
-        let processes = self.kernel.of_user(self.uid).ok();
+        let processes = self.processes();
         if let Some((at, why)) = state.stopped_all
             && at >= record.started_at
         {
-            self.begin_stop(
-                &mut state,
-                &mut record,
-                why,
-                supervise::GRACE_MS,
-                processes.as_deref(),
-                now_ms(),
-            );
+            self.begin_stop(&mut state, &mut record, why, processes.as_deref(), now_ms());
         } else {
             // A program that already ended is reported so.
             self.look(
@@ -403,18 +331,10 @@ impl Jobs {
     /// forget it only once a fresh look finds nothing of it left. Otherwise
     /// it stays supervised and the reply says its outcome is not known.
     async fn abandon_launch(self: &Arc<Self>, record: Record, child: Child, said: String) -> Value {
-        let id = record.id.clone();
         let jobs = self.clone();
         let killing = record.clone();
-        let outcome = tokio::task::spawn_blocking(move || {
-            let mut state = match jobs.state() {
-                Ok(state) => state,
-                Err(error) => {
-                    jobs.retain_unobserved_child(killing.id.clone(), child);
-                    return Err(error);
-                }
-            };
-            state.children.insert(killing.id.clone(), child);
+        let outcome = tokio::task::spawn_blocking(move || -> Result<()> {
+            let state = jobs.holding(&killing.id, child)?;
             let _ = jobs.signal(&state, &killing, None, Signal::SIGKILL);
             Ok(())
         })
@@ -435,7 +355,7 @@ impl Jobs {
                 if reaped {
                     state.children.remove(&looked.id);
                 }
-                Ok(reaped && jobs.judge(&state, &looked, None).0 == Verdict::Ended)
+                Ok(reaped && jobs.judge(&state, &looked, None) == Verdict::Ended)
             })
             .await;
             let ended = match ended {
@@ -447,10 +367,7 @@ impl Jobs {
                 }
             };
             if ended {
-                if let Err(error) = self.forget(&id).await {
-                    return unconfirmed(&record, &error.error);
-                }
-                return failure(Code::SpawnFailed, said);
+                return self.forgotten(&record, said).await;
             }
             if tokio::time::Instant::now() >= until {
                 break;
@@ -458,40 +375,28 @@ impl Jobs {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         let jobs = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut state = match jobs.state() {
-                Ok(state) => state,
-                Err(error) => return unconfirmed(&record, &error.error),
-            };
-            let mut record = record;
-            record.state = JobState::Running;
-            state.store.put(&record);
-            state.running += 1;
-            unconfirmed(&record, &said)
-        })
-        .await
-        .unwrap_or_else(|_| {
+        self.launch_reply(
+            tokio::task::spawn_blocking(move || match jobs.state() {
+                Ok(mut state) => keep_running(&mut state, record, &said),
+                Err(error) => unconfirmed(&record, &error.error),
+            })
+            .await,
+        )
+    }
+
+    fn launch_reply(&self, outcome: std::result::Result<Value, tokio::task::JoinError>) -> Value {
+        outcome.unwrap_or_else(|_| {
             self.fail_supervision();
             json!(Self::unavailable().uncertain())
         })
     }
 
-    /// Keep `record`'s job, which may run, supervised but unconfirmed: its
-    /// record stays, its leader is held, and the reply says its outcome is
-    /// not known.
-    fn keep_unconfirmed(&self, mut record: Record, child: Child, said: &str) -> Value {
-        let mut state = match self.state() {
-            Ok(state) => state,
-            Err(error) => {
-                self.retain_unobserved_child(record.id.clone(), child);
-                return unconfirmed(&record, &error.error);
-            }
-        };
-        record.state = JobState::Running;
-        state.children.insert(record.id.clone(), child);
-        state.store.put(&record);
-        state.running += 1;
-        unconfirmed(&record, said)
+    /// Forget a launch that left nothing running, and refuse it with `said`.
+    async fn forgotten(self: &Arc<Self>, record: &Record, said: String) -> Value {
+        match self.forget(&record.id).await {
+            Ok(()) => failure(Code::SpawnFailed, said),
+            Err(error) => unconfirmed(record, &error.error),
+        }
     }
 
     /// Remove `id`'s record and log, on a blocking thread.
@@ -505,6 +410,48 @@ impl Jobs {
         .await;
         self.worker_outcome(outcome)
     }
+}
+
+/// Kill a launcher that is this daemon's child alone: whether waiting for it
+/// came to an end in time.
+async fn end_launcher(child: &mut Child) -> bool {
+    let _ = child.start_kill();
+    tokio::time::timeout(REAP, child.wait()).await.is_ok()
+}
+
+/// Refuse a start past the limit on jobs running, in the helper or for `task`.
+fn within_limits(state: &State, task: Option<&Key>) -> std::result::Result<(), Value> {
+    let records = state.store.records();
+    let running = || {
+        records
+            .iter()
+            .filter_map(|read| match read {
+                Found::Record(record) => Some(record),
+                Found::Unreadable(_) => None,
+            })
+            .filter(|record| record.state.live())
+    };
+    let refused = |said: &str| JobFailure::new(JobRefusal::Limit, said).into_value();
+    if running().count() + state.launching.len() >= RUNNING_MAX {
+        return Err(refused(
+            "16 background jobs already run in the helper; stop one first",
+        ));
+    }
+    if task.is_some() && running().filter(|job| job.task.as_ref() == task).count() >= TASK_MAX {
+        return Err(refused(
+            "This task already runs 8 background jobs; stop one first",
+        ));
+    }
+    Ok(())
+}
+
+/// Keep `record`'s job, which may run, supervised: the reply says `said` and
+/// that its outcome is not known.
+fn keep_running(state: &mut State, mut record: Record, said: &str) -> Value {
+    record.state = JobState::Running;
+    state.store.put(&record);
+    state.running += 1;
+    unconfirmed(&record, said)
 }
 
 /// Tell `child`'s launcher to go on, and wait for it to say it launched.

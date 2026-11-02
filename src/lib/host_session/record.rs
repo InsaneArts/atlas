@@ -120,26 +120,32 @@ impl Record {
 
     /// Attach verified metadata without letting delayed commands replace a
     /// root that is still live, or revive a same-process explicit end.
-    fn attach(&mut self, session: &HostSession, ancestor: Option<Instance>, now: u64) {
-        let Some(process) = ancestor else { return };
+    fn attach(&mut self, session: &HostSession, ancestor: Option<Instance>, now: u64) -> bool {
+        let Some(process) = ancestor else {
+            return false;
+        };
+        let mut changed = false;
         if self.host_process != Some(process) {
             if self.host_process.is_some_and(|old| {
                 session.replaces != Some(old) && old.state() != crate::process::State::Gone
             }) {
-                return;
+                return false;
             }
             self.host_process = Some(process);
             self.folder = None;
             self.folder_from_host = false;
             self.ended = None;
             self.last_seen = now;
+            changed = true;
         }
         if session.folder_from_host {
+            changed |= self.folder != session.folder || !self.folder_from_host;
             self.folder.clone_from(&session.folder);
             self.folder_from_host = true;
         } else if !self.folder_from_host {
-            self.folder = None;
+            changed |= self.folder.take().is_some();
         }
+        changed
     }
 
     /// Refresh changed metadata immediately, throttling unchanged timestamps.
@@ -149,25 +155,13 @@ impl Record {
         ancestor: Option<Instance>,
         now: u64,
     ) -> bool {
-        let before = (
-            self.host_process,
-            self.ended,
-            self.last_seen,
-            self.folder.clone(),
-            self.folder_from_host,
-        );
-        self.attach(session, ancestor, now);
+        let changed = self.attach(session, ancestor, now);
         let within = crate::time::ms(SEEN_WITHIN);
         if self.ended.is_none() && now.saturating_sub(self.last_seen) > within {
             self.last_seen = now;
+            return true;
         }
-        (
-            self.host_process,
-            self.ended,
-            self.last_seen,
-            self.folder.clone(),
-            self.folder_from_host,
-        ) != before
+        changed
     }
 
     /// Note the screenshot saved as `capture`, newest first.

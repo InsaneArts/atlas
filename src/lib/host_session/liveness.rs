@@ -3,14 +3,18 @@ use super::{
     Instance,
     record::{ACTIVE_FOR, Record},
 };
-use crate::{process::State, single_flight::Shared};
+use crate::{
+    control::{NOTES_READ, Note},
+    process::State,
+    single_flight::Shared,
+};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     time::Duration,
 };
 
-pub(crate) const BUDGET: usize = 128;
+pub(crate) const BUDGET: usize = NOTES_READ;
 const FRESH: Duration = Duration::from_millis(500);
 const WAIT: Duration = Duration::from_millis(250);
 
@@ -93,7 +97,20 @@ impl Snapshot {
     }
 
     pub(crate) fn running(&self, instance: Instance) -> bool {
-        matches!(self.state(instance), State::Running | State::Stopped)
+        self.state(instance).running()
+    }
+
+    /// Keep the notes whose commands live by this sample: a stopped holder
+    /// or running command still counts, a stopped waiter does not.
+    pub(crate) fn keep_live(
+        &self,
+        holder: &mut Option<Note>,
+        waiting: &mut Vec<Note>,
+        running: &mut Vec<Note>,
+    ) {
+        *holder = holder.take().filter(|note| self.running(note.process));
+        waiting.retain(|note| self.state(note.process) == State::Running);
+        running.retain(|note| self.running(note.process));
     }
 
     pub(crate) fn lifetime(&self, record: &Record, now: u64, work: bool) -> Lifetime {
@@ -108,7 +125,7 @@ impl Snapshot {
         let (ended, live, active) = match record.host_process.map(|instance| self.state(instance)) {
             Some(State::Gone) if !work => (Some(record.last_seen), false, false),
             Some(State::Running | State::Stopped) => (None, true, recent || work),
-            Some(_) => (None, work, work),
+            Some(State::Gone | State::Unknown) => (None, work, work),
             None => (
                 None,
                 work || now.saturating_sub(record.last_seen)

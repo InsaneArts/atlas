@@ -1,13 +1,13 @@
 use super::{Absence, FIRST_USER_UID};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Why the silent helper `uid` is down, if this side can tell. It asks
 /// directory services and the process list, so call it off the async
 /// runtime.
 pub fn absence(uid: u32) -> Option<Absence> {
-    match crate::setup::account_with_uid(uid) {
+    match crate::account::account_with_uid(uid) {
         Ok(None) => Some(Absence::Missing),
         Ok(Some(account)) => {
             (logged_in(uid) == Some(false)).then_some(Absence::LoggedOut(account.name))
@@ -21,7 +21,7 @@ pub fn absence(uid: u32) -> Option<Absence> {
 pub(super) struct Process {
     pub(super) uid: u32,
     pub(super) pid: u32,
-    pub(super) running: std::time::Duration,
+    pub(super) running: Duration,
     pub(super) command: String,
 }
 
@@ -69,8 +69,7 @@ pub(super) fn parse_processes(listing: &str) -> Option<Vec<Process>> {
 /// Whether `uid` is logged in to a desktop (its Dock runs); `None` when the
 /// process list could not be read, which is never "logged out".
 pub fn logged_in(uid: u32) -> Option<bool> {
-    let listed = processes()?;
-    Some(runs_as(&listed, uid, "/Dock"))
+    Some(runs_as(&processes()?, uid, "/Dock"))
 }
 
 /// Whether `uid` is fully logged out: neither its loginwindow nor its Dock
@@ -127,27 +126,17 @@ pub(crate) fn setup_assistant(uid: u32) -> Option<bool> {
     Some(runs_as(&processes()?, uid, "/Setup Assistant"))
 }
 
-/// A desktop login: its loginwindow, which starts when the person logs in
-/// and lasts until they log out (unlike the Dock, which may restart).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Login {
-    pub(crate) pid: u32,
-    pub(crate) age: std::time::Duration,
-}
-
 /// The desktop login of `uid`, if it has one.
-pub(crate) fn login(uid: u32) -> Option<Login> {
-    processes()?
+pub(crate) fn login(uid: u32) -> Option<Window> {
+    loginwindows_in(&processes()?)
         .into_iter()
-        .find(|process| process.uid == uid && process.command.ends_with("/loginwindow"))
-        .map(|process| Login {
-            pid: process.pid,
-            age: process.running,
-        })
+        .find(|window| window.uid == uid)
 }
 
-/// One desktop login as the process list shows it: its loginwindow, the
-/// user ID that runs it, and how long it has run.
+/// One desktop login as the process list shows it: its loginwindow, which
+/// starts when the person logs in and lasts until they log out (unlike the
+/// Dock, which may restart), the user ID that runs it, and how long it has
+/// run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Window {
     pub(crate) uid: u32,
@@ -193,10 +182,20 @@ pub enum Kind {
     Picker,
 }
 
+impl Kind {
+    /// Whether this is a deleted account's login, which Atlas may close.
+    fn leftover(self) -> bool {
+        match self {
+            Self::Orphan | Self::HelperLeftover => true,
+            Self::Mine | Self::Helper | Self::OtherPerson | Self::Picker => false,
+        }
+    }
+}
+
 /// How much older than its account a login must be to have outlived an
 /// earlier account: a login cannot start before its account exists, and a
 /// few seconds cover clock rounding.
-pub(crate) const REUSED_SLACK: Duration = Duration::from_secs(10);
+const REUSED_SLACK: Duration = Duration::from_secs(10);
 
 /// Each login in `windows` with whose it is, given what directory services
 /// say of each user ID (`accounts`), this account (`me`), the helper (or
@@ -296,7 +295,7 @@ pub(super) fn blockers(classified: &[(Window, Kind)], listed: &[Process]) -> Vec
             {
                 Some(Blocker::StuckLogin { uid: window.uid })
             }
-            _ => None,
+            Kind::Helper | Kind::OtherPerson | Kind::Mine | Kind::Picker => None,
         })
         .collect();
 
@@ -335,7 +334,7 @@ pub(crate) fn console_owner() -> Option<u32> {
 /// fails counts as an account found: an unknown is never taken for a
 /// deleted account.
 pub(crate) fn record(uid: u32, aged: bool) -> Record {
-    record_with(uid, aged, crate::setup::account_with_uid(uid), searched)
+    record_with(uid, aged, crate::account::account_with_uid(uid), searched)
 }
 
 /// Whether a search of every directory finds an account with `uid`. A
@@ -361,7 +360,7 @@ pub(super) fn searched(uid: u32) -> bool {
 pub(super) fn record_with(
     uid: u32,
     aged: bool,
-    account: crate::error::Result<Option<crate::setup::Account>>,
+    account: crate::error::Result<Option<crate::account::Account>>,
     search: impl FnOnce(u32) -> bool,
 ) -> Record {
     let passwd = !matches!(account, Ok(None));
@@ -415,7 +414,7 @@ impl Sessions {
     pub(crate) fn leftovers(&self) -> Vec<Value> {
         self.logins
             .iter()
-            .filter(|(_, kind)| matches!(kind, Kind::Orphan | Kind::HelperLeftover))
+            .filter(|(_, kind)| kind.leftover())
             .map(|(window, kind)| json!({"uid": window.uid, "kind": kind}))
             .collect()
     }
@@ -445,8 +444,7 @@ pub(super) const STALE_AFTER: Duration = Duration::from_secs(180);
 /// silent, it tells a login left behind from one still starting. `None`
 /// when processes could not be listed.
 pub(crate) fn stale(uid: u32) -> Option<bool> {
-    let listed = processes()?;
-    Some(stale_in(&listed, uid))
+    Some(stale_in(&processes()?, uid))
 }
 
 pub(super) fn stale_in(listed: &[Process], uid: u32) -> bool {
@@ -478,12 +476,12 @@ pub(super) fn gone_twice(
 }
 
 /// How long ago account `name` was created, from its directory record.
-pub(super) fn account_age(name: &str) -> Option<std::time::Duration> {
+pub(super) fn account_age(name: &str) -> Option<Duration> {
     account_created(name)?.elapsed().ok()
 }
 
 /// The directory record's creation time; home-folder timestamps are not provenance.
-pub(crate) fn account_created(name: &str) -> Option<std::time::SystemTime> {
+fn account_created(name: &str) -> Option<SystemTime> {
     let output = crate::bounded::output(
         std::process::Command::new("/usr/bin/dscl").args([
             ".",
@@ -500,12 +498,11 @@ pub(crate) fn account_created(name: &str) -> Option<std::time::SystemTime> {
     let text = String::from_utf8_lossy(&output.stdout);
     let after = text.split("<key>creationTime</key>").nth(1)?;
     let value = after.split("<real>").nth(1)?.split("</real>").next()?;
-    std::time::UNIX_EPOCH
-        .checked_add(std::time::Duration::try_from_secs_f64(value.trim().parse().ok()?).ok()?)
+    UNIX_EPOCH.checked_add(Duration::try_from_secs_f64(value.trim().parse().ok()?).ok()?)
 }
 
 /// `ps` elapsed time (`[[days-]hours:]minutes:seconds`) as a duration.
-pub(super) fn running_for(elapsed: &str) -> Option<std::time::Duration> {
+pub(super) fn running_for(elapsed: &str) -> Option<Duration> {
     let (days, clock) = match elapsed.split_once('-') {
         Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
         None => (0, elapsed),
@@ -521,5 +518,5 @@ pub(super) fn running_for(elapsed: &str) -> Option<std::time::Duration> {
         _ => return None,
     };
 
-    Some(std::time::Duration::from_secs(days * 86_400 + seconds))
+    Some(Duration::from_secs(days * 86_400 + seconds))
 }

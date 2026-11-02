@@ -6,9 +6,9 @@ use super::{
     *,
 };
 use crate::{
-    daemon::protocol::Left,
     host_session::Key,
     process::{Info, Instance, Start},
+    protocol::Left,
 };
 use nix::errno::Errno;
 use serde_json::json;
@@ -288,7 +288,7 @@ fn descendants_that_left_the_group_are_reported_not_signalled() {
         unrelated,
     ];
     let mut noted = Vec::new();
-    observe(&mut noted, &job, &[leader(), child], &processes, |_| None);
+    observe(&mut noted, &job, &processes, |_| None);
     assert!(noted.contains(&escaped.instance));
     assert!(noted.iter().any(|instance| instance.pid == 4401));
     assert!(!noted.iter().any(|instance| instance.pid == 5000));
@@ -313,7 +313,7 @@ fn what_was_seen_stays_within_its_bound() {
     let mut processes = vec![leader()];
     processes.extend((0..300).map(|n| process(5000 + n, later(1), 4312, 4312)));
     let mut noted = Vec::new();
-    observe(&mut noted, &job, &processes, &processes, |_| None);
+    observe(&mut noted, &job, &processes, |_| None);
     assert_eq!(noted.len(), observe::SEEN_MAX);
 }
 

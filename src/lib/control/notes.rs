@@ -5,7 +5,9 @@
 use crate::{
     error::Result,
     files::{Durability, write_private_with},
-    host_session::{Host, HostId, Instance, Key, Label, now_ms},
+    host::{Host, HostId, Key, Label},
+    process::Instance,
+    time::now_ms,
 };
 use serde::{Deserialize, Serialize};
 use std::path::Path;

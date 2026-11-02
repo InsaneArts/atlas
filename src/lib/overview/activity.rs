@@ -13,45 +13,77 @@ pub(super) fn reason(row: &Row) -> Option<&'static str> {
         return None;
     }
     let focus = row.reason.as_deref();
-    Some(match row.code.as_ref()? {
-        Failure::Code(Code::Busy) => "Something else had the mouse and keyboard",
-        Failure::Code(Code::Stopped) => "Agents were stopped",
-        Failure::Code(Code::Elements) => "Nothing on screen matched",
-        Failure::Code(Code::Windows) => "The window wasn't there",
-        Failure::Code(Code::NoWindow) => "The app had no window on screen",
-        Failure::Code(Code::Input) => "The mouse and keyboard weren't ready",
-        Failure::Code(Code::Capture) => "The screen couldn't be read",
-        Failure::Code(Code::Permission) => match row.operation {
+    let code = match row.code.as_ref()? {
+        Failure::Code(code) => code,
+        Failure::Timeout => return Some("It took too long"),
+        Failure::Exit => return Some("The command failed"),
+        Failure::Later(_) => return None,
+    };
+    Some(match code {
+        Code::Busy => "Something else had the mouse and keyboard",
+        Code::Stopped => "Agents were stopped",
+        Code::Elements => "Nothing on screen matched",
+        Code::Windows => "The window wasn't there",
+        Code::NoWindow => "The app had no window on screen",
+        Code::Input => "The mouse and keyboard weren't ready",
+        Code::Capture => "The screen couldn't be read",
+        Code::Permission => match row.operation {
             Some(Op::Screenshot) => "The helper can't record the screen",
             Some(Op::Input) => "The helper can't use the mouse and keyboard",
             _ => "The helper doesn't have permission",
         },
-        Failure::Code(Code::SessionChanged) => "The helper's screen changed meanwhile",
-        Failure::Code(Code::FocusChanged) if focus == Some("unreadable") => {
+        Code::SessionChanged => "The helper's screen changed meanwhile",
+        Code::FocusChanged if focus == Some("unreadable") => {
             "Atlas couldn't read which app was in front"
         }
-        Failure::Code(Code::FocusChanged) if focus == Some("window") => {
-            "Another window was in front"
+        Code::FocusChanged if focus == Some("window") => "Another window was in front",
+        Code::FocusChanged if focus == Some("sheet") => "A sheet was open over the window",
+        Code::FocusChanged if focus == Some("field") => "Another field had focus",
+        Code::FocusChanged if focus == Some("disabled") => "That field is disabled",
+        Code::FocusChanged => "Another app was in front",
+        Code::LeaseLost => "Control ended before it finished",
+        Code::Cancelled => "It was cancelled",
+        Code::Uncertain => "It may not have finished",
+        Code::Job => "A background job was refused",
+        Code::Collect => "A file could not be collected",
+        Code::Transport | Code::Identity | Code::Native | Code::Daemon | Code::OnConsole => {
+            "Atlas couldn't reach the helper"
         }
-        Failure::Code(Code::FocusChanged) if focus == Some("sheet") => {
-            "A sheet was open over the window"
-        }
-        Failure::Code(Code::FocusChanged) if focus == Some("field") => "Another field had focus",
-        Failure::Code(Code::FocusChanged) if focus == Some("disabled") => "That field is disabled",
-        Failure::Code(Code::FocusChanged) => "Another app was in front",
-        Failure::Code(Code::LeaseLost) => "Control ended before it finished",
-        Failure::Code(Code::Cancelled) => "It was cancelled",
-        Failure::Code(Code::Uncertain) => "It may not have finished",
-        Failure::Timeout => "It took too long",
-        Failure::Code(Code::Job) => "A background job was refused",
-        Failure::Code(Code::Collect) => "A file could not be collected",
-        Failure::Exit => "The command failed",
-        Failure::Code(Code::Transport)
-        | Failure::Code(Code::Identity)
-        | Failure::Code(Code::Native)
-        | Failure::Code(Code::Daemon)
-        | Failure::Code(Code::OnConsole) => "Atlas couldn't reach the helper",
-        _ => return None,
+        Code::Agents
+        | Code::Apps
+        | Code::BadRequest
+        | Code::Blocked
+        | Code::Cleanup
+        | Code::Config
+        | Code::ConfigInvalid
+        | Code::Environment
+        | Code::Init
+        | Code::Install
+        | Code::Interrupted
+        | Code::InvalidJson
+        | Code::Io
+        | Code::LoggedOut
+        | Code::Logout
+        | Code::LogoutHeld
+        | Code::Menubar
+        | Code::NoEnvironment
+        | Code::NotReady
+        | Code::Onboarding
+        | Code::Platform
+        | Code::PortInUse
+        | Code::Protocol
+        | Code::Restart
+        | Code::Setup
+        | Code::SpawnFailed
+        | Code::StaleFrame
+        | Code::Startup
+        | Code::State
+        | Code::Switch
+        | Code::Terminal
+        | Code::Uninstall
+        | Code::Update
+        | Code::Usage
+        | Code::WaitFailed => return None,
     })
 }
 

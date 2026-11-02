@@ -15,7 +15,10 @@ use fs2::FileExt;
 use rand::Rng;
 #[cfg(test)]
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    io::ErrorKind,
+    time::{Duration, Instant},
+};
 
 /// How long to sleep before trying the lock again: about a tenth of a
 /// second, spread by 25 ms either way so waiters do not try in step, and
@@ -120,7 +123,8 @@ impl Controller {
         turn: bool,
         now: impl Fn() -> Instant,
     ) -> Result<bool> {
-        let taken = turn && FileExt::try_lock_exclusive(&lock.0).is_ok();
+        let tried = turn.then(|| FileExt::try_lock_exclusive(&lock.0));
+        let taken = matches!(tried, Some(Ok(())));
         let waited = (!self.wait.is_zero()).then(|| now().saturating_duration_since(started));
         if !taken && self.person.exists() {
             return Err(busy_person(waited));
@@ -132,7 +136,13 @@ impl Controller {
             return Ok(true);
         }
         if self.remaining_at(now()).is_zero() {
-            return Err(busy_agent(waited, self.wait));
+            let busy = busy_agent(waited, self.wait);
+            return Err(match tried {
+                Some(Err(cause)) if cause.kind() != ErrorKind::WouldBlock => {
+                    busy.with_source(cause)
+                }
+                _ => busy,
+            });
         }
 
         Ok(false)

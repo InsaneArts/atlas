@@ -1,10 +1,9 @@
 //! Following the settings file: a new output folder keeps the helper and
 //! moves the viewer's record, and another helper is served once control in
 //! the previous one has ended.
-use super::{MENUBAR_RECORD, Viewer, unpoisoned};
+use super::{MENUBAR_RECORD, Viewer, local::read_record, unpoisoned};
 use crate::{client::Client, config::Config, error::Error, files};
-use serde_json::Value;
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc};
 
 impl Viewer {
     /// Follow the settings file. Only a change to the file's text is read.
@@ -49,8 +48,7 @@ impl Viewer {
         next.actor = current.actor;
         next.person_input = current.person_input.clone();
 
-        let ending = self.release_in_background();
-        let _ = tokio::time::timeout(Duration::from_secs(1), ending).await;
+        self.release_shortly().await;
 
         {
             let mut lease = self.lease.lock().await;
@@ -71,7 +69,7 @@ impl Viewer {
     /// The settings name another output folder for the same helper: serve
     /// it with `config` (whose file reads `text`) in place of `current`,
     /// control and all, and move the record there.
-    pub(super) async fn follow_output(&self, current: &Arc<Client>, config: Config, text: Vec<u8>) {
+    async fn follow_output(&self, current: &Arc<Client>, config: Config, text: Vec<u8>) {
         let mut next = Client::clone(current);
         next.config = config;
         let next = Arc::new(next);
@@ -125,11 +123,10 @@ impl Viewer {
 
 /// Remove the record at `path` when it names this process.
 pub(super) fn remove_record(path: &Path) {
-    let ours = std::fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|record| record["pid"] == std::process::id());
-    if ours {
+    if read_record(path).is_some_and(|record| record["pid"] == std::process::id()) {
         let _ = std::fs::remove_file(path);
     }
 }
+
+#[cfg(test)]
+mod tests;

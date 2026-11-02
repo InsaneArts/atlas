@@ -6,10 +6,10 @@
 use super::{
     list::frozen,
     model::*,
-    reply::{TransactionSummary, Transactions},
+    reply::{TransactionSummary, Transactions, WorkerReply},
     *,
 };
-use crate::{files::Token, task::record::Lenient};
+use crate::{files::Token, lenient::Lenient};
 
 /// How far a plan got, as a cleanup reads it before it undoes anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -61,12 +61,7 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
         return Ok(Vec::new());
     }
     let helper = helper_name(client.config.helper_uid)?;
-    let shared = client
-        .config
-        .identity_probe
-        .parent()
-        .ok_or_else(|| problem("Missing shared directory"))?;
-    let here = frozen(shared, client.config.helper_uid);
+    let here = frozen(shared_folder(client)?, client.config.helper_uid);
     let mut transactions: Vec<TransactionSummary> = Vec::new();
     for batch in ids.chunks(list::ASKED) {
         let asked: Vec<String> = batch.iter().map(|id| id.as_str().to_owned()).collect();
@@ -77,14 +72,13 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
     Ok(ids
         .iter()
         .map(|id| {
-            let plan = here.iter().find(|plan| plan.id() == id.as_str());
-            let running = plan.is_some_and(list::Frozen::running);
+            let plan = here.iter().find(|plan| plan.id == id.as_str());
             let started = transactions
                 .iter()
                 .find(|transaction| transaction.plan_id == id.as_str());
             match (started, plan) {
                 (Some(transaction), _) => PlanState {
-                    phase: if running {
+                    phase: if plan.is_some_and(|plan| plan.running) {
                         PlanPhase::Running
                     } else {
                         PlanPhase::started(&transaction.phase).unwrap_or(PlanPhase::Unknown)
@@ -96,13 +90,7 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
                         .collect(),
                 },
                 (None, Some(plan)) => PlanState {
-                    phase: if running {
-                        PlanPhase::Running
-                    } else if plan.request() {
-                        PlanPhase::Unknown
-                    } else {
-                        PlanPhase::Previewed
-                    },
+                    phase: plan.state(),
                     targets: plan.targets(),
                 },
                 (None, None) => PlanState {
@@ -145,12 +133,7 @@ pub(crate) async fn undo_plan(
 ) -> Result<Undone> {
     let helper = helper_name(client.config.helper_uid)?;
     let stage = stage_path(client, id.as_str())?;
-    let created = directory(&stage, false)?.is_none();
-    let lock = if created {
-        create_locked_stage(&stage, &helper)?
-    } else {
-        lock_stage(&stage)?
-    };
+    let (lock, created) = open_stage(&stage, &helper)?;
 
     let undone = undo_locked(client, ownership, &helper, &stage, id, created).await;
     // A folder made only to ask goes, unless it keeps a request whose
@@ -183,9 +166,9 @@ pub(super) async fn undo_locked(
         crate::client::RUN_TIMEOUT,
     )
     .await?;
-    let preview = RollbackReply::read(&preview);
+    let preview = WorkerReply::read(&preview);
 
-    if preview.ok == Some(false) && preview.error == worker::MISSING {
+    if preview.never_started() {
         if requests(stage) {
             return Ok(Undone::Unfinished(
                 "A step of this copy into the helper has an outcome Atlas does not know".into(),
@@ -205,8 +188,8 @@ pub(super) async fn undo_locked(
         return Ok(Undone::Unfinished(preview.error));
     }
     let reply = match preview.phase {
-        Some(PlanPhase::RolledBack) => preview,
-        Some(PlanPhase::Applying | PlanPhase::Applied | PlanPhase::RollingBack) => {
+        Some(Phase::RolledBack) => preview,
+        Some(Phase::Applying | Phase::Applied | Phase::RollingBack) => {
             let reply = dispatch_as(
                 client,
                 Some(ownership),
@@ -216,16 +199,13 @@ pub(super) async fn undo_locked(
                 crate::client::RUN_TIMEOUT,
             )
             .await?;
-            let reply = RollbackReply::read(&reply);
-            if reply.ok != Some(true)
-                || reply.phase != Some(PlanPhase::RolledBack)
-                || reply.resume_required != Some(false)
-            {
+            let reply = WorkerReply::read(&reply);
+            if !reply.settled(Phase::RolledBack) {
                 return Ok(Undone::Unfinished(reply.error));
             }
             reply
         }
-        _ => {
+        None => {
             return Ok(Undone::Unfinished(
                 "The helper reported an unknown transaction phase; no rollback was sent".into(),
             ));
@@ -248,44 +228,10 @@ fn discarded(stage: &Path) -> bool {
     fs::symlink_metadata(stage).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
 }
 
-/// The facts undo uses from a helper reply. Optional booleans retain the
-/// difference between explicit proof and a missing or malformed field.
-struct RollbackReply {
-    ok: Option<bool>,
-    phase: Option<PlanPhase>,
-    error: String,
-    resume_required: Option<bool>,
-    kept_targets: Vec<String>,
-    retained_directories: usize,
-}
-
-impl RollbackReply {
-    fn read(reply: &Value) -> Self {
-        let phase = reply["phase"]
-            .as_str()
-            .and_then(|_| Lenient::<Phase>::deserialize(&reply["phase"]).ok())
-            .as_ref()
-            .and_then(PlanPhase::started);
-        Self {
-            ok: reply["ok"].as_bool(),
-            phase,
-            error: said(reply),
-            resume_required: reply["resumeRequired"].as_bool(),
-            kept_targets: reply["keptTargets"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|target| target.as_str().map(str::to_owned))
-                .collect(),
-            retained_directories: reply["retainedDirectories"].as_array().map_or(0, Vec::len),
-        }
-    }
-}
-
 /// What a rollback `reply` that reached rolledBack left: nothing, or the
 /// files the helper changed since and the folders it could not remove. One
 /// rolled back before says the same as one rolled back now.
-fn rolled_back(reply: RollbackReply) -> Undone {
+fn rolled_back(reply: WorkerReply) -> Undone {
     if reply.kept_targets.is_empty() && reply.retained_directories == 0 {
         Undone::RolledBack
     } else {
@@ -296,68 +242,5 @@ fn rolled_back(reply: RollbackReply) -> Undone {
     }
 }
 
-/// What the helper said of a request it did not finish.
-fn said(reply: &Value) -> String {
-    reply["error"]
-        .as_str()
-        .unwrap_or("The helper did not finish undoing this copy")
-        .to_owned()
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reply_observations_keep_known_phases_and_leave_other_values_unknown() {
-        for (phase, expected) in [
-            (json!("applying"), Some(PlanPhase::Applying)),
-            (json!("applied"), Some(PlanPhase::Applied)),
-            (json!("rollingBack"), Some(PlanPhase::RollingBack)),
-            (json!("rolledBack"), Some(PlanPhase::RolledBack)),
-            (json!("future"), None),
-            (Value::Null, None),
-            (json!(false), None),
-            (json!(7), None),
-            (json!([]), None),
-            (json!({}), None),
-            (json!({"applying": null}), None),
-            (json!({"applied": null}), None),
-            (json!({"rollingBack": null}), None),
-            (json!({"rolledBack": null}), None),
-        ] {
-            assert_eq!(
-                RollbackReply::read(&json!({"phase": phase})).phase,
-                expected
-            );
-        }
-        assert_eq!(RollbackReply::read(&json!({})).phase, None);
-    }
-
-    #[test]
-    fn reply_observations_preserve_explicit_proof_and_error_defaults() {
-        let fallback = "The helper did not finish undoing this copy";
-        for (value, error) in [
-            (Value::Null, fallback),
-            (json!("false"), "false"),
-            (json!(7), fallback),
-            (json!([]), fallback),
-            (json!({}), fallback),
-        ] {
-            let reply = RollbackReply::read(&json!({
-                "ok": value, "resumeRequired": value, "error": value
-            }));
-            assert_eq!(reply.ok, None);
-            assert_eq!(reply.resume_required, None);
-            assert_eq!(reply.error, error);
-        }
-        for value in [false, true] {
-            let reply = RollbackReply::read(&json!({
-                "ok": value, "resumeRequired": value, "error": worker::MISSING
-            }));
-            assert_eq!(reply.ok, Some(value));
-            assert_eq!(reply.resume_required, Some(value));
-            assert_eq!(reply.error, worker::MISSING);
-        }
-    }
-}
+mod tests;

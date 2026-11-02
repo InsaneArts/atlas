@@ -1,6 +1,6 @@
 //! Private write-ahead state. Preview opens existing state without creating it.
 use super::{model::*, *};
-use crate::files::{Lock, LockFile, lock_retrying};
+use crate::files::{Held, Lock, LockFile, lock_retrying};
 
 /// How long a lock that looks held is retried, as [`lock_retrying`] says.
 const LOCK_PATIENCE: std::time::Duration = std::time::Duration::from_millis(250);
@@ -27,35 +27,17 @@ impl Store {
         access: Lock,
         retry: impl FnMut(std::time::Instant) -> bool,
     ) -> Result<Self> {
-        let write = access == Lock::Exclusive;
         let path = home.join(STATE);
-
-        let directory = if write {
-            Some(private_directory(&path)?)
-        } else {
-            directory(&path, false)?
-        };
-
-        let Some(directory) = directory else {
-            return Ok(Self {
-                path,
-                lock: None,
-                existed: false,
-            });
-        };
-
-        validate_private(&directory, true)?;
-        let lock = open_regular(&path.join("lock"), write)?.map(LockFile);
-        if let Some(lock) = &lock {
-            validate_private(&lock.0, false)?;
+        let opened = open_store(&path, access, |lock| {
             let deadline = std::time::Instant::now() + LOCK_PATIENCE;
-            lock_retrying(lock, access, deadline, retry).map_err(|_| problem(RUNNING))?;
-        }
+            lock_retrying(lock, access, deadline, retry)
+                .map_err(|Held(cause)| problem(RUNNING).with_source(cause))
+        })?;
 
         Ok(Self {
             path,
-            lock,
-            existed: true,
+            existed: opened.is_some(),
+            lock: opened.flatten(),
         })
     }
 
@@ -78,7 +60,7 @@ impl Store {
         let ledger: Ledger = self
             .read(&self.path.join("files.json"))?
             .unwrap_or_default();
-        if ledger.version > 1 {
+        if ledger.version != 1 {
             return Err(problem("Unsupported provisioning ledger version"));
         }
 
@@ -100,7 +82,7 @@ impl Store {
                 || transaction.plan.id != id
                 || !transaction.valid_progress()
                 || transaction.plan.files.is_empty()
-                || transaction.plan.files.len() > 32
+                || transaction.plan.files.len() > MAX_SELECTIONS
             {
                 return Err(problem("Invalid transaction record"));
             }

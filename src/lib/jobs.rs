@@ -6,22 +6,22 @@
 //! task's record holds the person's side's copy of its identity, which a
 //! stop must agree with. A job of another task is stopped only when that
 //! task is named.
-//! size-exception: controller job operations share task identity and tolerant
-//! wire conversion here; the identity-mismatch and future-reply tests protect
-//! those contracts while durable helper records remain a separate owner.
 use crate::{
-    client::Client,
-    daemon::protocol::{
-        Expected, How, JOB_GRACE, JOB_LIFETIME_MAX, JOBS, JobId, JobRefusal, JobReply, JobState,
-        JobView, Logged, Progress, SessionPin, Showing, Shown, StopCameTo, StopReason, Stopped,
-        job_name,
-    },
+    client::{Client, Mutation},
     error::{Code, Error, Result},
-    host_session::{Key, now_ms},
+    host::Key,
+    lenient::Lenient,
+    protocol::{
+        Expected, How, JOB_GRACE, JOB_LIFETIME_MAX, JOB_LIFETIME_MIN, JOBS, JobId, JobRefusal,
+        JobReply, JobState, JobView, Logged, Progress, SessionPin, Showing, Shown, StopCameTo,
+        StopReason, Stopped, job_name,
+    },
     task::{
-        record::{JobEntry, Lenient, Noted},
+        Task,
+        record::{JobEntry, Noted},
         store::Store,
     },
+    time::now_ms,
     transport::Transport,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -57,13 +57,13 @@ pub async fn start(
     lifetime: Duration,
     name: Option<String>,
 ) -> Result<Value> {
-    if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|a| a.contains('\0')) {
+    if argv.first().is_none_or(String::is_empty) || argv.iter().any(|a| a.contains('\0')) {
         return Err(Error::new(
             Code::Input,
             "Provide a command and arguments after job start --",
         ));
     }
-    if lifetime < Duration::from_secs(1) || lifetime > JOB_LIFETIME_MAX {
+    if !(JOB_LIFETIME_MIN..=JOB_LIFETIME_MAX).contains(&lifetime) {
         return Err(Error::new(
             Code::Usage,
             "A job may run for 1 second to a day",
@@ -83,7 +83,7 @@ pub async fn start(
     }
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify_offering(JOBS, OLDER).await?;
-    let started = started(client, verified.pin(), argv, lifetime, name).await;
+    let started = started(client, verified.pin()?, argv, lifetime, name).await;
     drop(ownership);
     started
 }
@@ -93,7 +93,7 @@ pub async fn start(
 /// task's record, and the reply.
 async fn started(
     client: &Client,
-    pin: Option<SessionPin>,
+    pin: SessionPin,
     argv: Vec<String>,
     lifetime: Duration,
     name: Option<String>,
@@ -112,20 +112,18 @@ async fn started(
         request["task"] = json!(task.key());
         request["hostSession"] = json!(task.session());
     }
-    if let Some(pin) = pin {
-        request["session"] = json!(pin);
-    }
-    let reply = client
-        .mutate(crate::client::Mutation::JobStart, request, None, None, None)
-        .await?;
-    if reply["ok"] != true {
-        return Err(refused(&reply));
-    }
-
+    request["session"] = json!(pin);
+    let uid = client.config.helper_uid;
+    let reply = mutate(client, Mutation::JobStart { uid }, request).await?;
     let Ok(JobReply::Start { job }) = JobReply::deserialize(&reply) else {
         return Err(unconfirmed());
     };
-    let mut warnings = carried_warnings(&reply);
+    let mut warnings: Vec<String> = reply["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|warning| warning.as_str().map(str::to_owned))
+        .collect();
     if let Some(entry) = entry(&job)
         && note(client, None, entry).is_err()
     {
@@ -250,49 +248,46 @@ async fn expected_for(client: &Client, id: &JobId, task: Option<&Key>) -> Result
             .and_then(|store| store.load(key))
             .and_then(|record| record.job(id).cloned())
     };
-    if let Some(key) = task {
-        return match listed(key) {
-            Some(entry) => Ok(Found {
-                expected: entry.expected,
-                owner: Some(key.clone()),
-                checked: Checked::Task,
-            }),
-            None => Err(Error::new(
-                Code::Job,
-                "That task's record does not list this job; atlas job list --all shows whose it is",
-            )
-            .with("reason", json!(JobRefusal::Unknown))
-            .with("id", json!(id))),
-        };
-    }
-    let mine = client.task.as_ref().map(|task| task.key().clone());
-    if let Some(entry) = mine.as_ref().and_then(listed) {
+    let mine = client.task.as_ref().map(|task| task.key());
+    let owner = task.or(mine);
+    if let Some(entry) = owner.and_then(listed) {
         return Ok(Found {
             expected: entry.expected,
-            owner: mine,
+            owner: owner.cloned(),
             checked: Checked::Task,
         });
     }
+    if task.is_some() {
+        return Err(unknown_job(
+            id,
+            "That task's record does not list this job; atlas job list --all shows whose it is",
+        ));
+    }
 
     let shown = show(client, id).await?;
-    let theirs = shown.job().and_then(|job| job.task.clone());
-    match theirs {
-        Some(theirs) if Some(&theirs) != mine.as_ref() => Err(other_task(id, &theirs, "stop")),
-        theirs => {
-            let expected = shown.job().and_then(JobView::expected).ok_or_else(|| {
-                Error::new(Code::Job, "The job has not finished starting")
-                    .with("reason", json!(JobRefusal::Unknown))
-                    .with("id", json!(id))
-            })?;
-            // No task's record lists it: the helper's record is all it is
-            // checked against, whichever task that record names.
-            Ok(Found {
-                expected,
-                owner: theirs,
-                checked: Checked::Helper,
-            })
-        }
+    let theirs = shown.job().and_then(|job| job.task.as_ref());
+    if let Some(theirs) = theirs
+        && Some(theirs) != mine
+    {
+        return Err(other_task(id, theirs, "stop"));
     }
+    // No task's record lists it: the helper's record is all it is checked
+    // against, whichever task that record names.
+    Ok(Found {
+        expected: shown
+            .job()
+            .and_then(JobView::expected)
+            .ok_or_else(|| unknown_job(id, "The job has not finished starting"))?,
+        owner: theirs.cloned(),
+        checked: Checked::Helper,
+    })
+}
+
+/// The refusal of a stop of job `id`, which is not known well enough to stop.
+fn unknown_job(id: &JobId, said: &str) -> Error {
+    Error::new(Code::Job, said)
+        .with("reason", json!(JobRefusal::Unknown))
+        .with("id", json!(id))
 }
 
 /// Stop job `id` of `task` for a cleanup, under the control the cleanup
@@ -364,15 +359,21 @@ pub(crate) async fn stop_held(
         "expect": expected,
         "graceMs": crate::time::ms(grace),
     });
-    let reply = client
-        .mutate(crate::client::Mutation::JobStop, request, None, None, None)
-        .await?;
-    if reply["ok"] != true {
-        return Err(refused(&reply));
-    }
+    let mutation = Mutation::JobStop { id: id.as_str() };
+    let reply = mutate(client, mutation, request).await?;
     match JobReply::deserialize(&reply) {
         Ok(JobReply::Stop(stopped)) => Ok(stopped),
         _ => Err(unconfirmed()),
+    }
+}
+
+/// Send a job `mutation`: the helper's reply, unless it refused.
+async fn mutate(client: &Client, mutation: Mutation<'_>, request: Value) -> Result<Value> {
+    let reply = client.mutate(mutation, request, None, None, None).await?;
+    if reply["ok"] == true {
+        Ok(reply)
+    } else {
+        Err(refused(&reply))
     }
 }
 
@@ -388,7 +389,7 @@ fn stopped(id: &JobId, shown: &Shown, waited: Duration) -> Value {
         let remaining = match shown.job().map(|job| &job.progress) {
             Some(Progress::Stopping(stopping)) => stopping.remaining,
             Some(Progress::Ended(ended)) => ended.remaining,
-            _ => None,
+            Some(Progress::Neither {}) | None => None,
         };
         return json!({
             "ok": false,
@@ -403,14 +404,14 @@ fn stopped(id: &JobId, shown: &Shown, waited: Duration) -> Value {
             "next": "atlas job list shows when it has ended.",
         });
     };
-    let left = ended.map(|ended| ended.left.clone()).unwrap_or_default();
+    let left = ended.map(|ended| ended.left.as_slice()).unwrap_or_default();
     let how = ended.map(|ended| ended.how);
     let mut reply = json!({
         "ok": true,
         "id": id,
         "state": job.state,
         "how": how,
-        "signal": ended.and_then(|ended| ended.signal.clone()),
+        "signal": ended.and_then(|ended| ended.signal.as_deref()),
         "waitedMs": waited_ms,
         "left": left,
     });
@@ -447,8 +448,7 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
         .map(|record| record.jobs)
         .unwrap_or_default();
 
-    let shown = shown_all(client).await;
-    let jobs = match shown {
+    let jobs = match shown_all(client).await {
         Ok(jobs) => jobs,
         Err(error) => {
             let jobs: Vec<Value> = recorded
@@ -559,13 +559,13 @@ pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) 
     // when that task is named, as for a stop.
     match show(client, id).await {
         Ok(shown) => {
-            let theirs = shown.job().and_then(|job| job.task.clone());
+            let theirs = shown.job().and_then(|job| job.task.as_ref());
             let mine = client.task.as_ref().map(|task| task.key());
             if let Some(theirs) = theirs
-                && Some(&theirs) != mine
-                && Some(&theirs) != task
+                && Some(theirs) != mine
+                && Some(theirs) != task
             {
-                return Err(other_task(id, &theirs, "log"));
+                return Err(other_task(id, theirs, "log"));
             }
         }
         Err(error) if error.code == Code::Daemon || error.details.contains_key("reason") => {
@@ -576,16 +576,16 @@ pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) 
     let request = json!({"op": "job", "action": "log", "id": id, "bytes": bytes});
     let reply = read_one(client, &request).await?;
     let malformed = || Error::new(Code::Protocol, "The job's log came back malformed");
-    let Ok(JobReply::Log(logged)) = JobReply::deserialize(&reply) else {
-        return Err(malformed());
-    };
-    let Logged {
+    let Ok(JobReply::Log(Logged {
         data,
         size,
         output_truncated,
         log_resets,
         ..
-    } = logged;
+    })) = JobReply::deserialize(&reply)
+    else {
+        return Err(malformed());
+    };
     let data = STANDARD.decode(data).map_err(|_| malformed())?;
     Ok(json!({
         "ok": true,
@@ -598,6 +598,7 @@ pub async fn log(client: &Client, id: &JobId, bytes: usize, task: Option<&Key>) 
 }
 
 /// How stopping every job came out, for a log-out or uninstall to say.
+#[derive(Default)]
 pub(crate) struct Everyone {
     /// How many were told to stop.
     pub(crate) asked: u64,
@@ -613,10 +614,23 @@ pub(crate) struct Everyone {
 }
 
 impl Everyone {
-    /// Add what this came to to `reply`: `jobsStopped`, and a warning for
-    /// jobs still running or a helper that could not be told.
-    pub(crate) fn say(&self, reply: &mut Value) {
-        reply["jobsStopped"] = json!(self.asked.saturating_sub(self.left));
+    /// The helper could not be told, for the reason `error`.
+    fn failed(error: String) -> Self {
+        Self {
+            error: Some(error),
+            ..Self::default()
+        }
+    }
+
+    /// How many of those told to stop have stopped.
+    pub(crate) fn stopped(&self) -> u64 {
+        self.asked.saturating_sub(self.left)
+    }
+
+    /// A warning for jobs still running or a helper that could not be told.
+    pub(crate) fn warnings(&self) -> Vec<String> {
+        let jobs = |count: u64| crate::name::count(count as usize, "background job");
+        let them = |count: u64| if count == 1 { "it" } else { "them" };
         let warning = match (&self.error, self.left) {
             (Some(error), _) => Some(format!(
                 "Atlas could not stop the helper's background jobs: {error}"
@@ -624,24 +638,30 @@ impl Everyone {
             (None, 0) => None,
             (None, left) => Some(format!(
                 "{} still ran when Atlas stopped waiting",
-                crate::ui::text::count(left as usize, "background job")
+                jobs(left)
             )),
         };
         let refused = (self.refused > 0).then(|| {
             format!(
                 "{} could not be stopped, and nothing was signalled; atlas job list --all shows {}",
-                crate::ui::text::count(self.refused as usize, "background job"),
-                if self.refused == 1 { "it" } else { "them" }
+                jobs(self.refused),
+                them(self.refused)
             )
         });
         let unknown = (self.unknown > 0).then(|| {
             format!(
                 "Atlas could not see the processes of {}, so nothing was signalled; atlas job list --all shows {}",
-                crate::ui::text::count(self.unknown as usize, "background job"),
-                if self.unknown == 1 { "it" } else { "them" }
+                jobs(self.unknown),
+                them(self.unknown)
             )
         });
-        for warning in warning.into_iter().chain(refused).chain(unknown) {
+        warning.into_iter().chain(refused).chain(unknown).collect()
+    }
+
+    /// Add what this came to to `reply`: `jobsStopped` and its warnings.
+    pub(crate) fn say(&self, reply: &mut Value) {
+        reply["jobsStopped"] = json!(self.stopped());
+        for warning in self.warnings() {
             match reply["warnings"].as_array_mut() {
                 Some(warnings) => warnings.push(json!(warning)),
                 None => reply["warnings"] = json!([warning]),
@@ -655,30 +675,15 @@ impl Everyone {
 /// control the caller holds.
 pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
     let request = json!({"op": "job", "action": "stop-all", "reason": reason});
-    let none = Everyone {
-        asked: 0,
-        left: 0,
-        refused: 0,
-        unknown: 0,
-        error: None,
-    };
     let reply = match client.transport.call(&request).await {
         Ok(reply) if reply["ok"] == true => reply,
         // A daemon from before jobs, or none running, keeps none.
-        Ok(reply) if reply["code"] == "bad-request" => return none,
-        Err(error) if error.code == Code::Io && !client.transport.path.exists() => return none,
-        Ok(reply) => {
-            return Everyone {
-                error: Some(refused(&reply).error),
-                ..none
-            };
+        Ok(reply) if reply["code"] == "bad-request" => return Everyone::default(),
+        Err(error) if error.code == Code::Io && !client.transport.path.exists() => {
+            return Everyone::default();
         }
-        Err(error) => {
-            return Everyone {
-                error: Some(error.error),
-                ..none
-            };
-        }
+        Ok(reply) => return Everyone::failed(refused(&reply).error),
+        Err(error) => return Everyone::failed(error.error),
     };
     let all = match JobReply::deserialize(&reply) {
         Ok(JobReply::StopAll(all)) => all,
@@ -694,7 +699,10 @@ pub(crate) async fn stop_every(client: &Client, reason: StopReason) -> Everyone 
         if let Ok(jobs) = shown_all(client).await {
             left = jobs
                 .iter()
-                .filter(|job| matches!(job.state(), Some(JobState::Running | JobState::Stopping)))
+                .filter(|job| match job.state() {
+                    Some(JobState::Running | JobState::Stopping) => true,
+                    Some(JobState::Starting | JobState::Launched | JobState::Ended) | None => false,
+                })
                 .count() as u64;
         }
     }
@@ -715,13 +723,21 @@ async fn read_one(client: &Client, request: &Value) -> Result<Value> {
         .call(request)
         .await
         .map_err(Error::certain)?;
+    if reply["ok"] == true && reply["code"] != "bad-request" {
+        Ok(reply)
+    } else {
+        Err(read_refused(&reply))
+    }
+}
+
+/// Why the helper answered a read with `reply`: a request a daemon from
+/// before jobs does not know, or its refusal.
+fn read_refused(reply: &Value) -> Error {
     if reply["code"] == "bad-request" {
-        return Err(Error::new(Code::Daemon, OLDER));
+        Error::new(Code::Daemon, OLDER)
+    } else {
+        refused(reply)
     }
-    if reply["ok"] != true {
-        return Err(refused(&reply));
-    }
-    Ok(reply)
 }
 
 /// Job `id` as the helper shows it now. Reading changes nothing.
@@ -776,19 +792,16 @@ pub(crate) async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
 }
 
 fn shown_from(reply: &Value) -> Result<Vec<Shown>> {
-    if reply["ok"] == true {
-        return match JobReply::deserialize(reply) {
-            Ok(JobReply::Show(Showing::Every { jobs })) => Ok(jobs),
-            _ => Err(Error::new(
-                Code::Protocol,
-                "The helper did not report its background jobs",
-            )),
-        };
+    if reply["ok"] != true {
+        return Err(read_refused(reply));
     }
-    if reply["code"] == "bad-request" {
-        return Err(Error::new(Code::Daemon, OLDER));
+    match JobReply::deserialize(reply) {
+        Ok(JobReply::Show(Showing::Every { jobs })) => Ok(jobs),
+        _ => Err(Error::new(
+            Code::Protocol,
+            "The helper did not report its background jobs",
+        )),
     }
-    Err(refused(reply))
 }
 
 /// The task's record's entry for a job the helper shows as `job`.
@@ -820,21 +833,19 @@ fn unconfirmed() -> Error {
 /// command's task; nothing without one. An identity the record already
 /// keeps for the job is never replaced: [`Noted::Disagrees`] says so.
 fn note(client: &Client, owner: Option<&Key>, entry: JobEntry) -> Result<Noted> {
+    let store = || client.output_dir().map(Store::at);
     let task = match owner {
-        Some(owner) => {
-            let store = Store::at(client.output_dir()?);
-            let Some(record) = store.load(owner) else {
-                return Ok(Noted::Yes);
-            };
-            crate::task::Task::recorded(&record)
-        }
+        Some(owner) => match store()?.load(owner) {
+            Some(record) => Task::recorded(&record),
+            None => return Ok(Noted::Yes),
+        },
         None => match &client.task {
             Some(task) => task.clone(),
             None => return Ok(Noted::Yes),
         },
     };
     let mut noted = Noted::Yes;
-    Store::at(client.output_dir()?).update(&task, now_ms(), |record| {
+    store()?.update(&task, now_ms(), |record| {
         noted = record.noted_job(entry);
         match noted {
             Noted::Full => Err(Error::new(
@@ -850,16 +861,6 @@ fn note(client: &Client, owner: Option<&Key>, entry: JobEntry) -> Result<Noted> 
 /// What a reply says when the helper's record of a job names another
 /// identity than the task's record does, which is kept as it was.
 const DISAGREES: &str = "The helper's record of this job names another process than the task's record does; the task's record was kept as it was";
-
-/// The warnings a reply carried, as text.
-fn carried_warnings(reply: &Value) -> Vec<String> {
-    reply["warnings"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|warning| warning.as_str().map(str::to_owned))
-        .collect()
-}
 
 /// A helper's refusal of a job request, keeping its code, why and which
 /// job, and whether it may have happened anyway.

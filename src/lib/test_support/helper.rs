@@ -184,7 +184,7 @@ impl Helper {
 
     fn hello(&self) -> Value {
         let capabilities: &[&str] = if self.pins {
-            &[crate::daemon::protocol::SESSION_PIN]
+            &[crate::protocol::SESSION_PIN]
         } else {
             &[]
         };

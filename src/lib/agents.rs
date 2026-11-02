@@ -52,7 +52,8 @@ macro_rules! agents {
         pub enum Agent { $($agent),+ }
 
         impl Agent {
-            pub(crate) const ALL: [Agent; [$($name),+].len()] = [$(Agent::$agent),+];
+            /// Every agent, in the order they are listed.
+            pub const ALL: [Agent; [$($name),+].len()] = [$(Agent::$agent),+];
 
             pub(crate) fn metadata(self) -> Metadata {
                 match self { $(Self::$agent => Metadata {
@@ -212,16 +213,8 @@ impl Agent {
     /// Whether the tool is here: its version, or why it could not be asked.
     fn presence(self) -> Presence {
         match self {
-            Self::Cursor => return cursor::presence(),
-            Self::Claude | Self::Codex | Self::Pi | Self::Opencode => {}
-        }
-        match exec(self, &["--version"], ASK) {
-            Ok(output) if output.status.success() => {
-                Presence::Installed(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-            }
-            // Installed, but it did not answer in time.
-            Err(error) if error.code == Code::Agents => Presence::Silent(error.error),
-            _ => Presence::Missing,
+            Self::Cursor => cursor::presence(),
+            Self::Claude | Self::Codex | Self::Pi | Self::Opencode => process::presence(self),
         }
     }
 
@@ -239,15 +232,14 @@ impl Agent {
     /// Whether this agent uses the Atlas plugin from this Atlas's own
     /// marketplace (unknown when its lists cannot be read); an error when it
     /// does not answer.
-    fn connected(self) -> std::result::Result<Option<bool>, String> {
-        if self == Agent::Cursor {
-            return cursor::connected().map(Some).map_err(|e| e.error);
-        }
-        if self != Agent::Pi {
-            match self.installed()? {
+    fn connected(self) -> Result<Option<bool>> {
+        match self {
+            Self::Cursor => return cursor::connected().map(Some),
+            Self::Pi => {}
+            Self::Claude | Self::Codex | Self::Opencode => match self.installed()? {
                 Some(true) => {}
                 other => return Ok(other),
-            }
+            },
         }
 
         Ok(self.source()?.map(|source| match source {
@@ -259,26 +251,20 @@ impl Agent {
     /// Whether the Atlas plugin is installed in this agent, from whichever
     /// marketplace (unknown when its list cannot be read); an error when it
     /// does not answer.
-    fn installed(self) -> std::result::Result<Option<bool>, String> {
-        if self == Agent::Opencode {
-            return opencode::installed().map(Some).map_err(|e| e.error);
-        }
-        if self == Agent::Pi {
-            return self
-                .source()
-                .map(|source| source.map(|s| s != Source::Absent));
-        }
+    fn installed(self) -> Result<Option<bool>> {
         // Codex's whole list asks its remote marketplaces too, which can
         // take longer than ASK; Atlas's own marketplace answers at once.
         let list: &[&str] = match self {
-            Agent::Claude => &["plugin", "list", "--json"],
-            Agent::Codex => &["plugin", "list", "--marketplace", NAME, "--json"],
-            Agent::Pi | Agent::Opencode | Agent::Cursor => return Ok(None),
+            Self::Claude => &["plugin", "list", "--json"],
+            Self::Codex => &["plugin", "list", "--marketplace", NAME, "--json"],
+            Self::Opencode => return opencode::installed().map(Some),
+            Self::Pi => return Ok(self.source()?.map(|source| source != Source::Absent)),
+            Self::Cursor => return Ok(None),
         };
 
         let output = match exec(self, list, ASK) {
             Ok(output) => output,
-            Err(error) if error.code == Code::Agents => return Err(error.error),
+            Err(error) if error.code == Code::Agents => return Err(error),
             Err(_) => return Ok(None),
         };
 
@@ -304,17 +290,12 @@ impl Agent {
     /// cannot be read); an error when it does not answer. Codex's whole list
     /// fails while any of its local marketplace folders is missing, so its
     /// settings, where adding a marketplace records it, are read first.
-    fn source(self) -> std::result::Result<Option<Source>, String> {
-        if self == Agent::Opencode {
-            return opencode::source().map(Some).map_err(|e| e.error);
-        }
-        if self == Agent::Pi {
-            return pi::source().map(Some).map_err(|e| e.error);
-        }
+    fn source(self) -> Result<Option<Source>> {
         let recorded = match self {
-            Agent::Claude => None,
-            Agent::Codex => self.home().and_then(|home| codex_recorded(&home)),
-            Agent::Pi | Agent::Opencode | Agent::Cursor => None,
+            Self::Opencode => return opencode::source().map(Some),
+            Self::Pi => return pi::source().map(Some),
+            Self::Codex => self.home().and_then(|home| codex_recorded(&home)),
+            Self::Claude | Self::Cursor => None,
         };
 
         if let Some(found @ (Source::Folder(_) | Source::Elsewhere(_))) = &recorded {
@@ -323,7 +304,7 @@ impl Agent {
 
         match exec(self, &["plugin", "marketplace", "list", "--json"], ASK) {
             Ok(output) => Ok(self.source_in(&output.stdout).or(recorded)),
-            Err(error) if error.code == Code::Agents => Err(error.error),
+            Err(error) if error.code == Code::Agents => Err(error),
             Err(_) => Ok(recorded),
         }
     }
@@ -495,15 +476,8 @@ fn connection_lock() -> Result<crate::files::LockFile> {
 /// The connection lock in `directory`, also used by the Claude app's writer.
 pub(crate) fn connection_lock_in(directory: &Path) -> Result<crate::files::LockFile> {
     use fs2::FileExt;
-    use std::os::unix::fs::OpenOptionsExt;
     let path = directory.join(format!("atlas-agents-{}.lock", nix::unistd::Uid::current()));
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
+    let file = crate::files::open_lock_file(&path, crate::files::LockOpen::WriteOnly)
         .map_err(|error| problem(format!("Could not open the agent connection lock: {error}")))?;
     file.try_lock_exclusive()
         .map_err(|error| problem(format!("Another agent connection is running: {error}")))?;
@@ -516,6 +490,58 @@ enum Presence {
     /// Installed, but it did not answer in time.
     Silent(String),
     Missing,
+}
+
+/// What was found of one agent, kept typed for what decides on it.
+struct Probe {
+    presence: Presence,
+    /// Whether Atlas is connected, or why that could not be told; none when
+    /// it was not asked.
+    connection: Option<Result<Option<bool>>>,
+    /// What the connection's word rests on, when it is not the agent's own.
+    verification: Option<&'static str>,
+}
+
+impl Probe {
+    /// `agent`'s row for `status`.
+    fn row(&self, agent: Agent) -> Value {
+        let mut row = self.presence.row(agent);
+        match &self.connection {
+            Some(Ok(connected)) => row["connected"] = json!(connected),
+            Some(Err(error)) => row["error"] = json!(error.error),
+            None => {}
+        }
+        if let Some(verification) = self.verification {
+            row["verification"] = json!(verification);
+        }
+        row
+    }
+
+    /// Whether the agent is here and known not to be connected.
+    fn unconnected(&self) -> bool {
+        self.presence.here() && matches!(self.connection, Some(Ok(Some(false))))
+    }
+}
+
+impl Presence {
+    fn here(&self) -> bool {
+        match self {
+            Self::Installed(_) | Self::Silent(_) => true,
+            Self::Missing => false,
+        }
+    }
+
+    /// `agent`'s row for `status`, as far as its tool says.
+    fn row(&self, agent: Agent) -> Value {
+        let name = agent.name();
+        match self {
+            Self::Installed(version) => {
+                json!({"agent": name, "installed": true, "version": version})
+            }
+            Self::Silent(error) => json!({"agent": name, "installed": true, "error": error}),
+            Self::Missing => json!({"agent": name, "installed": false}),
+        }
+    }
 }
 
 /// The plugin marketplace shipped with this CLI: inside Atlas.app, or
@@ -543,51 +569,62 @@ pub(crate) fn marketplace() -> Result<PathBuf> {
 
 /// Each agent on this Mac and whether Atlas is connected to it.
 pub fn status() -> Value {
-    let agents: Vec<Value> = std::thread::scope(|scope| {
-        let probes: Vec<_> = Agent::ALL
-            .map(|agent| scope.spawn(move || probe(agent)))
-            .into_iter()
-            .collect();
+    let mut agents: Vec<Value> = probes()
+        .into_iter()
+        .map(|probed| probed.map_or(Value::Null, |(agent, probe)| probe.row(agent)))
+        .collect();
 
-        probes
-            .into_iter()
-            .map(|probe| probe.join().unwrap_or(Value::Null))
-            .collect()
-    });
-
-    let mut agents = agents;
     agents.push(crate::claude_app::status());
     json!({"ok": true, "agents": agents, "plugin": marketplace().ok(), "projects": taught()})
 }
 
-/// One agent's row for `status`: whether its tool is here, and whether
-/// Atlas is connected to it.
-fn probe(agent: Agent) -> Value {
-    match agent {
-        Agent::Cursor => return cursor::status(),
-        Agent::Claude | Agent::Codex | Agent::Pi | Agent::Opencode => {}
+/// What could still be connected here.
+pub struct Unconnected {
+    pub agents: Vec<Agent>,
+    /// The Claude app.
+    pub app: bool,
+}
+
+/// The agents here, and the Claude app, known not to be connected.
+pub fn unconnected() -> Unconnected {
+    Unconnected {
+        agents: probes()
+            .into_iter()
+            .flatten()
+            .filter(|(_, probe)| probe.unconnected())
+            .map(|(agent, _)| agent)
+            .collect(),
+        app: crate::claude_app::unconnected(),
     }
-    match agent.presence() {
-        Presence::Installed(version) => match agent.connected() {
-            Ok(connected) => json!({
-                "agent": agent.name(),
-                "installed": true,
-                "version": version,
-                "connected": connected,
-            }),
-            Err(error) => json!({
-                "agent": agent.name(),
-                "installed": true,
-                "version": version,
-                "error": error,
-            }),
-        },
-        Presence::Silent(error) => json!({
-            "agent": agent.name(),
-            "installed": true,
-            "error": error,
-        }),
-        Presence::Missing => json!({"agent": agent.name(), "installed": false}),
+}
+
+/// Every agent looked at side by side; none for a look that panicked.
+fn probes() -> Vec<Option<(Agent, Probe)>> {
+    std::thread::scope(|scope| {
+        Agent::ALL
+            .map(|agent| scope.spawn(move || (agent, probe(agent))))
+            .into_iter()
+            .map(|probe| probe.join().ok())
+            .collect()
+    })
+}
+
+/// Whether `agent`'s tool is here, and whether Atlas is connected to it.
+fn probe(agent: Agent) -> Probe {
+    match agent {
+        Agent::Cursor => cursor::probe(),
+        Agent::Claude | Agent::Codex | Agent::Pi | Agent::Opencode => {
+            let presence = agent.presence();
+            let connection = match presence {
+                Presence::Installed(_) => Some(agent.connected()),
+                Presence::Silent(_) | Presence::Missing => None,
+            };
+            Probe {
+                presence,
+                connection,
+                verification: None,
+            }
+        }
     }
 }
 
@@ -623,7 +660,13 @@ pub fn change(chosen: &[Agent], change: Change) -> Result<Value> {
         every_agent: chosen.is_empty(),
         app: chosen.is_empty() && crate::claude_app::installed(),
     };
-    change_these(chosen, covering, change)
+    change_these(chosen, covering, change).map(|changed| changed.report)
+}
+
+/// What a change did: whether all of it worked, and its report.
+pub struct Changed {
+    pub ok: bool,
+    pub report: Value,
 }
 
 /// [`change`] for exactly `chosen` and what `covering` adds.
@@ -632,8 +675,11 @@ pub fn change(chosen: &[Agent], change: Change) -> Result<Value> {
 ///
 /// Returns a selected host or app integration failure. Changes completed for earlier
 /// selections are not rolled back automatically.
-pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Result<Value> {
-    let remove = change == Change::Disconnect;
+pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Result<Changed> {
+    let remove = match change {
+        Change::Connect => false,
+        Change::Disconnect => true,
+    };
     let Covering { every_agent, app } = covering;
     let marketplace = if remove { None } else { Some(marketplace()?) };
 
@@ -642,8 +688,7 @@ pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Res
             .into_iter()
             .map(|agent| (agent, agent.presence_for_change(remove)))
             .filter(|(agent, presence)| {
-                !matches!(presence, Presence::Missing)
-                    && (!remove || *agent != Agent::Cursor || cursor::recorded())
+                presence.here() && (!remove || *agent != Agent::Cursor || cursor::recorded())
             })
             .collect()
     } else {
@@ -660,63 +705,71 @@ pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Res
         )));
     }
 
-    let mut results = Vec::new();
-
-    for (agent, presence) in present {
-        match presence {
-            Presence::Installed(_) => {}
-            Presence::Silent(error) => {
-                results.push(json!({"agent": agent.name(), "ok": false, "error": error}));
-                continue;
-            }
-            Presence::Missing if remove && agent == Agent::Cursor => {}
-            Presence::Missing => {
-                results.push(json!({"agent": agent.name(), "ok": false, "error": "not installed"}));
-                continue;
-            }
-        }
-
-        let outcome = match agent {
-            Agent::Cursor => cursor::change(marketplace.as_deref()),
-            Agent::Pi => pi::change(marketplace.as_deref()),
-            Agent::Opencode => opencode::change(marketplace.as_deref()),
-            Agent::Claude | Agent::Codex => {
-                // A marketplace owned by someone else is never changed.
-                let source = agent.source();
-                match &marketplace {
-                    Some(path) => connect_agent(agent, path, &source),
-                    None => disconnect_agent(agent, source),
-                }
-            }
-        };
-
-        let mut result = match &outcome {
-            Ok(removal) => json!({
-                "agent": agent.name(),
-                "ok": true,
-                "connected": !remove,
-                "changed": *removal == Removal::Changed,
-            }),
-            Err(error) => json!({"agent": agent.name(), "ok": false, "error": error.error}),
-        };
-
-        if agent.metadata().restart.is_some() && matches!(outcome, Ok(Removal::Changed)) {
-            result["restart"] = json!(true);
-        }
-
-        if let Ok(Removal::Kept(place)) = outcome {
-            result["kept"] = json!(place);
-        }
-
-        results.push(result);
-    }
+    let mut results: Vec<Changed> = present
+        .into_iter()
+        .map(|(agent, presence)| change_agent(agent, &presence, marketplace.as_deref()))
+        .collect();
 
     if app {
         results.push(crate::claude_app::change(!remove));
     }
 
-    let ok = results.iter().all(|result| result["ok"] == true);
-    Ok(json!({"ok": ok, "agents": results}))
+    let ok = results.iter().all(|result| result.ok);
+    let agents: Vec<Value> = results.into_iter().map(|result| result.report).collect();
+    Ok(Changed {
+        ok,
+        report: json!({"ok": ok, "agents": agents}),
+    })
+}
+
+/// `agent`'s part of a change: connected to `marketplace`, or with none
+/// disconnected.
+fn change_agent(agent: Agent, presence: &Presence, marketplace: Option<&Path>) -> Changed {
+    let name = agent.name();
+    let refused = |error: &str| Changed {
+        ok: false,
+        report: json!({"agent": name, "ok": false, "error": error}),
+    };
+    match presence {
+        Presence::Installed(_) => {}
+        Presence::Silent(error) => return refused(error),
+        Presence::Missing => return refused("not installed"),
+    }
+
+    let outcome = match agent {
+        Agent::Cursor => cursor::change(marketplace),
+        Agent::Pi => pi::change(marketplace),
+        Agent::Opencode => opencode::change(marketplace),
+        Agent::Claude | Agent::Codex => {
+            // A marketplace owned by someone else is never changed.
+            let source = agent.source();
+            match marketplace {
+                Some(path) => connect_agent(agent, path, source),
+                None => disconnect_agent(agent, source),
+            }
+        }
+    };
+
+    let removal = match outcome {
+        Ok(removal) => removal,
+        Err(error) => return refused(&error.error),
+    };
+    let mut report = json!({
+        "agent": name,
+        "ok": true,
+        "connected": marketplace.is_some(),
+        "changed": removal == Removal::Changed,
+    });
+
+    if agent.metadata().restart.is_some() && removal == Removal::Changed {
+        report["restart"] = json!(true);
+    }
+
+    if let Removal::Kept(place) = removal {
+        report["kept"] = json!(place);
+    }
+
+    Changed { ok: true, report }
 }
 
 /// Connect `agent` to `marketplace`, given where its marketplace named
@@ -725,16 +778,19 @@ pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Res
 fn connect_agent(
     agent: Agent,
     marketplace: &Path,
-    source: &std::result::Result<Option<Source>, String>,
+    source: Result<Option<Source>>,
 ) -> Result<Removal> {
-    let steps = agent.connecting(marketplace, source.as_ref().ok().and_then(Option::as_ref))?;
+    let steps = agent
+        .connecting(marketplace, source.as_ref().ok().and_then(Option::as_ref))
+        .map_err(|refused| match source {
+            Err(cause) => refused.with_source(cause),
+            Ok(_) => refused,
+        })?;
 
-    steps
-        .iter()
-        .map(|argv| run(agent, argv))
-        .find(Result::is_err)
-        .unwrap_or(Ok(()))
-        .map(|()| Removal::Changed)
+    for argv in steps {
+        run(agent, &argv)?;
+    }
+    Ok(Removal::Changed)
 }
 
 /// What removing the plugin from an agent did.
@@ -750,11 +806,8 @@ enum Removal {
 /// Disconnect `agent` when its marketplace named atlas (from `source`) is
 /// Atlas's own: every step runs, tolerating parts already gone, then the
 /// plugin must be gone.
-fn disconnect_agent(
-    agent: Agent,
-    source: std::result::Result<Option<Source>, String>,
-) -> Result<Removal> {
-    match source.map_err(problem)? {
+fn disconnect_agent(agent: Agent, source: Result<Option<Source>>) -> Result<Removal> {
+    match source? {
         Some(Source::Folder(folder)) if agent.ours(&folder) => {}
         Some(Source::Folder(folder)) => return Ok(Removal::Kept(folder.display().to_string())),
         Some(Source::Elsewhere(place)) => return Ok(Removal::Kept(place)),
@@ -775,11 +828,7 @@ fn disconnect_agent(
 /// whether the agent still lists the plugin afterwards (`installed`). A
 /// failed step on a plugin that is gone was a part already absent; when the
 /// list cannot be read, a failed step is reported.
-fn removed(
-    agent: Agent,
-    failures: Vec<Error>,
-    installed: std::result::Result<Option<bool>, String>,
-) -> Result<()> {
+fn removed(agent: Agent, failures: Vec<Error>, installed: Result<Option<bool>>) -> Result<()> {
     let first = failures.into_iter().next();
 
     match installed {
@@ -802,7 +851,7 @@ pub fn refresh() -> Value {
         .filter(|agent| match agent {
             Agent::Cursor => cursor::recorded(),
             Agent::Claude | Agent::Codex | Agent::Pi | Agent::Opencode => {
-                agent.connected() == Ok(Some(true))
+                matches!(agent.connected(), Ok(Some(true)))
             }
         })
         .map(|agent| {
@@ -858,8 +907,7 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         );
     }
 
-    let ready = crate::capability::doctor(status, config.helper_uid)["ready"] == true;
-    if ready {
+    if crate::capability::doctor(status, config.helper_uid)["ready"] == true {
         let mut line = format!(
             "Atlas {version}: ready. After any change a person could see, check it in the \
              hidden helper with the atlas skill before saying it works."
@@ -875,409 +923,4 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_plugin_is_found_in_each_agents_list() {
-        assert_eq!(PLUGIN, format!("{NAME}@{NAME}"));
-        let claude = br#"[{"id":"other@x"},{"id":"atlas@atlas","version":"1"}]"#;
-        assert_eq!(Agent::Claude.listed(claude), Some(true));
-        assert_eq!(Agent::Claude.listed(br#"[{"id":"other@x"}]"#), Some(false));
-
-        let codex = br#"{"installed":[{"pluginId":"atlas@atlas"}]}"#;
-        assert_eq!(Agent::Codex.listed(codex), Some(true));
-        assert_eq!(Agent::Codex.listed(br#"{"installed":[]}"#), Some(false));
-        assert_eq!(Agent::Codex.listed(claude), None, "not Codex's shape");
-        assert_eq!(Agent::Claude.listed(b"not json"), None);
-    }
-
-    /// Removing reports success only when the plugin is gone, or when every
-    /// step worked and the list cannot be read.
-    #[test]
-    fn removing_checks_the_plugin_is_gone() {
-        let failed = || vec![problem("claude plugin uninstall failed: not found")];
-        assert!(removed(Agent::Claude, failed(), Ok(Some(false))).is_ok());
-        assert!(removed(Agent::Claude, Vec::new(), Ok(Some(false))).is_ok());
-        let error = removed(Agent::Claude, failed(), Ok(Some(true))).unwrap_err();
-        assert!(error.error.contains("uninstall failed"));
-        let error = removed(Agent::Codex, Vec::new(), Ok(Some(true))).unwrap_err();
-        assert_eq!(error.error, "Codex still lists the Atlas plugin");
-        assert!(removed(Agent::Claude, Vec::new(), Ok(None)).is_ok());
-        assert!(removed(Agent::Claude, failed(), Ok(None)).is_err());
-        assert!(removed(Agent::Claude, failed(), Err("silent".into())).is_err());
-    }
-
-    #[test]
-    fn connecting_registers_the_local_marketplace_then_installs() {
-        let path = Path::new("/Applications/Atlas.app/Contents/Resources/agents");
-        assert_eq!(
-            Agent::Claude.connect(path),
-            [
-                vec![
-                    "plugin",
-                    "marketplace",
-                    "add",
-                    path.to_str().unwrap(),
-                    "--scope",
-                    "user"
-                ],
-                vec!["plugin", "install", "atlas@atlas", "--scope", "user"],
-            ]
-        );
-        assert_eq!(
-            Agent::Codex.connect(path),
-            [
-                vec!["plugin", "marketplace", "add", path.to_str().unwrap()],
-                vec!["plugin", "add", "atlas@atlas"],
-            ]
-        );
-        assert_eq!(
-            Agent::Codex.disconnect()[0],
-            ["plugin", "remove", "atlas@atlas"]
-        );
-        assert_eq!(
-            Agent::Claude.disconnect()[1],
-            ["plugin", "marketplace", "remove", "atlas"]
-        );
-    }
-
-    #[test]
-    fn the_marketplace_source_is_read_from_each_agents_list() {
-        let claude = br#"[{"name":"other","source":"github","repo":"o/r"},
-            {"name":"atlas","source":"directory","path":"/a/agents","installLocation":"/a/agents"}]"#;
-        assert_eq!(
-            Agent::Claude.source_in(claude),
-            Some(Source::Folder("/a/agents".into()))
-        );
-        let repository = br#"[{"name":"atlas","source":"github","repo":"someone/atlas"}]"#;
-        assert_eq!(
-            Agent::Claude.source_in(repository),
-            Some(Source::Elsewhere("someone/atlas".into()))
-        );
-        assert_eq!(Agent::Claude.source_in(b"[]"), Some(Source::Absent));
-
-        let codex = br#"{"marketplaces":[{"name":"atlas","root":"/a/agents",
-            "marketplaceSource":{"sourceType":"local","source":"/a/agents"}}]}"#;
-        assert_eq!(
-            Agent::Codex.source_in(codex),
-            Some(Source::Folder("/a/agents".into()))
-        );
-        let git = br#"{"marketplaces":[{"name":"atlas","root":"/cache",
-            "marketplaceSource":{"sourceType":"git","source":"https://example.com/atlas.git"}}]}"#;
-        assert_eq!(
-            Agent::Codex.source_in(git),
-            Some(Source::Elsewhere("https://example.com/atlas.git".into()))
-        );
-        assert_eq!(
-            Agent::Codex.source_in(br#"{"marketplaces":[]}"#),
-            Some(Source::Absent)
-        );
-        assert_eq!(Agent::Codex.source_in(claude), None, "not Codex's shape");
-        assert_eq!(Agent::Claude.source_in(b"not json"), None);
-    }
-
-    #[test]
-    fn only_atlas_own_folders_count_as_its_marketplace() {
-        let dir = tempfile::tempdir().unwrap();
-        let checkout = dir.path().join("checkout/agents");
-        let manifest = checkout.join("atlas/.claude-plugin");
-        fs::create_dir_all(&manifest).unwrap();
-        fs::write(
-            manifest.join("plugin.json"),
-            format!(r#"{{"name":"atlas","homepage":"{HOMEPAGE}"}}"#),
-        )
-        .unwrap();
-        assert!(atlas_folder(&checkout), "a checkout's, by its homepage");
-
-        let someone = dir.path().join("someone/agents");
-        let manifest = someone.join("atlas/.claude-plugin");
-        fs::create_dir_all(&manifest).unwrap();
-        fs::write(
-            manifest.join("plugin.json"),
-            r#"{"name":"atlas","homepage":"https://example.com"}"#,
-        )
-        .unwrap();
-        assert!(!atlas_folder(&someone));
-        assert!(!atlas_folder(&dir.path().join("missing")));
-
-        assert!(atlas_folder(Path::new(
-            "/Volumes/Old/Atlas.app/Contents/Resources/agents"
-        )));
-    }
-
-    #[test]
-    fn the_manifests_give_the_homepage_that_marks_atlas_own() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
-        assert!(atlas_folder(&root));
-
-        for manifest in [
-            ".claude-plugin/plugin.json",
-            ".codex-plugin/plugin.json",
-            ".cursor-plugin/plugin.json",
-        ] {
-            let text = std::fs::read_to_string(root.join("atlas").join(manifest)).unwrap();
-            let value: Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(value["homepage"], HOMEPAGE, "{manifest}");
-        }
-    }
-
-    /// Codex refuses hooks/hooks.json for its Claude Code `modules`, so its
-    /// manifest names hooks.json, which holds the same hooks without them.
-    #[test]
-    fn codex_reads_the_same_hooks_without_claude_code_modules() {
-        let plugin = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents/atlas");
-        let read = |name: &str| -> Value {
-            serde_json::from_str(&std::fs::read_to_string(plugin.join(name)).unwrap()).unwrap()
-        };
-
-        let mut claude = read("hooks/hooks.json");
-        assert!(claude["modules"].is_array());
-        claude.as_object_mut().unwrap().remove("modules");
-        assert_eq!(read("hooks.json"), claude);
-        assert_eq!(read(".codex-plugin/plugin.json")["hooks"], "./hooks.json");
-    }
-
-    /// Codex will not add over a marketplace of the same name, so another
-    /// of Atlas's own goes first; anyone else's stops the connection.
-    #[test]
-    fn connecting_replaces_only_a_marketplace_of_atlas_own() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("Atlas.app/Contents/Resources/agents");
-        fs::create_dir_all(&path).unwrap();
-        let old = Source::Folder("/Volumes/Old/Atlas.app/Contents/Resources/agents".into());
-        let remove = argv(&["plugin", "marketplace", "remove", "atlas"]);
-
-        for agent in [Agent::Claude, Agent::Codex] {
-            for source in [Some(&Source::Absent), Some(&Source::Folder(path.clone()))] {
-                assert_eq!(
-                    agent.connecting(&path, source).unwrap(),
-                    agent.connect(&path),
-                    "{agent:?} {source:?}"
-                );
-            }
-
-            // There, so not judged by the agent's own copy of the plugin.
-            fs::create_dir_all(dir.path().join("someone")).unwrap();
-            let someone = Source::Folder(dir.path().join("someone"));
-            let error = agent.connecting(&path, Some(&someone)).unwrap_err();
-            assert!(error.error.contains("another marketplace named atlas"));
-            let elsewhere = Source::Elsewhere("someone/atlas".into());
-            assert!(agent.connecting(&path, Some(&elsewhere)).is_err());
-        }
-
-        let mut codex = vec![remove];
-        codex.extend(Agent::Codex.connect(&path));
-        assert_eq!(Agent::Codex.connecting(&path, Some(&old)).unwrap(), codex);
-        assert_eq!(
-            Agent::Claude.connecting(&path, Some(&old)).unwrap(),
-            Agent::Claude.connect(&path),
-            "Claude Code replaces it itself"
-        );
-    }
-
-    /// Claude Code replaces a marketplace named atlas without asking, so an
-    /// unknown one stops it; Codex refuses to add over another itself.
-    #[test]
-    fn claude_code_is_not_connected_over_an_unknown_marketplace() {
-        let path = Path::new("/Applications/Atlas.app/Contents/Resources/agents");
-        let error = Agent::Claude.connecting(path, None).unwrap_err();
-        assert_eq!(error.error, "Claude Code's marketplaces could not be read");
-        assert_eq!(
-            Agent::Claude
-                .connecting(path, Some(&Source::Absent))
-                .unwrap(),
-            Agent::Claude.connect(path),
-            "none at all is no reason to stop"
-        );
-        assert_eq!(
-            Agent::Codex.connecting(path, None).unwrap(),
-            Agent::Codex.connect(path)
-        );
-    }
-
-    /// Removing leaves an agent alone unless its marketplace named atlas is
-    /// Atlas's own, and says whose it left (these cases run no tool).
-    #[test]
-    fn removing_never_touches_someone_elses_marketplace() {
-        let dir = tempfile::tempdir().unwrap();
-        let someone = Some(Source::Folder(dir.path().to_owned()));
-        assert_eq!(
-            disconnect_agent(Agent::Claude, Ok(someone)).unwrap(),
-            Removal::Kept(dir.path().display().to_string())
-        );
-        let elsewhere = Some(Source::Elsewhere("someone/atlas".into()));
-        assert_eq!(
-            disconnect_agent(Agent::Codex, Ok(elsewhere)).unwrap(),
-            Removal::Kept("someone/atlas".into())
-        );
-        assert_eq!(
-            disconnect_agent(Agent::Codex, Ok(Some(Source::Absent))).unwrap(),
-            Removal::Nothing
-        );
-        assert!(disconnect_agent(Agent::Claude, Ok(None)).is_err());
-        assert!(disconnect_agent(Agent::Claude, Err("silent".into())).is_err());
-    }
-
-    /// Codex records where each marketplace comes from in its settings,
-    /// which stay readable while any marketplace folder is missing.
-    #[test]
-    fn codex_settings_say_where_its_atlas_marketplace_comes_from() {
-        let local = "model = \"x\"\n\n[marketplaces.atlas]\nsource_type = \"local\"\n\
-                     source = \"/a/agents\"\n\n[marketplaces.other]\nsource_type = \"local\"\n\
-                     source = \"/gone\"\n";
-        assert_eq!(
-            codex_recorded_in(local),
-            Some(Source::Folder("/a/agents".into()))
-        );
-        let git =
-            "[marketplaces.atlas]\nsource_type = \"git\"\nsource = \"https://example.com/a.git\"\n";
-        assert_eq!(
-            codex_recorded_in(git),
-            Some(Source::Elsewhere("https://example.com/a.git".into()))
-        );
-        assert_eq!(
-            codex_recorded_in("[marketplaces.other]\nsource = \"/x\"\n"),
-            Some(Source::Absent)
-        );
-        assert_eq!(codex_recorded_in(""), Some(Source::Absent));
-        assert_eq!(codex_recorded_in("not = [toml"), None);
-
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(codex_recorded(dir.path()), Some(Source::Absent), "no file");
-        fs::write(dir.path().join("config.toml"), local).unwrap();
-        assert_eq!(
-            codex_recorded(dir.path()),
-            Some(Source::Folder("/a/agents".into()))
-        );
-    }
-
-    /// A marketplace folder since removed is Atlas's when it was inside an
-    /// app, or when the agent's own copy of the plugin is Atlas's.
-    #[test]
-    fn a_removed_folder_is_atlas_own_by_its_shape_or_the_agents_copy() {
-        let dir = tempfile::tempdir().unwrap();
-        let gone = dir.path().join("Atlas 2.app/Contents/Resources/agents");
-        assert!(atlas_folder(&gone), "any app's, once removed");
-        assert!(!atlas_folder(&dir.path().join("checkout/agents")));
-
-        // An app that is there counts only when it is Atlas.
-        let other = dir.path().join("Other.app");
-        fs::create_dir_all(other.join("Contents/Resources/agents")).unwrap();
-        fs::write(
-            other.join("Contents/Info.plist"),
-            "<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>com.example.other</string>\n</dict>",
-        )
-        .unwrap();
-        assert!(!atlas_folder(&other.join("Contents/Resources/agents")));
-        fs::write(
-            other.join("Contents/Info.plist"),
-            "<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>com.insanearts.atlas</string>\n</dict>",
-        )
-        .unwrap();
-        assert!(atlas_folder(&other.join("Contents/Resources/agents")));
-
-        // The copy an agent keeps when installing the plugin.
-        let copy = dir.path().join("cache/1.0/.codex-plugin");
-        fs::create_dir_all(&copy).unwrap();
-        assert!(!atlas_plugin(&dir.path().join("cache/1.0")));
-        fs::write(
-            copy.join("plugin.json"),
-            format!(r#"{{"name":"atlas","homepage":"{HOMEPAGE}"}}"#),
-        )
-        .unwrap();
-        assert!(atlas_plugin(&dir.path().join("cache/1.0")));
-    }
-
-    /// The plugin's manifests describe this version, and its skill and
-    /// command reference are exactly what this CLI generates.
-    #[test]
-    fn the_plugin_matches_this_cli() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
-
-        for manifest in [
-            ".claude-plugin/plugin.json",
-            ".codex-plugin/plugin.json",
-            ".cursor-plugin/plugin.json",
-        ] {
-            let text = std::fs::read_to_string(root.join("atlas").join(manifest)).unwrap();
-            let value: Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(value["name"], NAME, "{manifest}");
-            assert_eq!(value["version"], crate::VERSION, "{manifest}");
-        }
-
-        for marketplace in [
-            ".claude-plugin/marketplace.json",
-            ".agents/plugins/marketplace.json",
-        ] {
-            let text = std::fs::read_to_string(root.join(marketplace)).unwrap();
-            let value: Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(value["name"], NAME, "{marketplace}");
-        }
-
-        let skill = std::fs::read_to_string(root.join("atlas/skills/atlas/SKILL.md")).unwrap();
-        assert_eq!(
-            skill,
-            crate::agent::skill(),
-            "regenerate with: atlas agent-guide --skill"
-        );
-    }
-
-    /// Every error code the CLI can report is explained to the agent.
-    #[test]
-    fn every_error_code_is_in_the_troubleshooting_reference() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let reference = std::fs::read_to_string(
-            root.join("agents/atlas/skills/atlas/references/troubleshooting.md"),
-        )
-        .unwrap();
-
-        let mut sources = Vec::new();
-        let mut directories = vec![root.join("src")];
-        while let Some(directory) = directories.pop() {
-            for entry in std::fs::read_dir(directory).unwrap().flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    directories.push(path);
-                } else if path.extension().is_some_and(|ext| ext == "rs") {
-                    sources.push(std::fs::read_to_string(path).unwrap());
-                }
-            }
-        }
-
-        let mut missing = Vec::new();
-
-        for source in &sources {
-            for start in ["Error::new(", "failure("] {
-                for (index, _) in source.match_indices(start) {
-                    let rest = source[index + start.len()..].trim_start();
-                    let Some(code) = rest
-                        .strip_prefix('"')
-                        .and_then(|rest| rest.split('"').next())
-                    else {
-                        continue;
-                    };
-
-                    let documented = format!("| `{code}` |");
-                    if !code.is_empty()
-                        && code.chars().all(|c| c.is_ascii_lowercase() || c == '-')
-                        && !reference.contains(&documented)
-                        && !missing.contains(&code.to_owned())
-                    {
-                        missing.push(code.to_owned());
-                    }
-                }
-            }
-        }
-
-        // Codes reached through each module's own problem() helper.
-        for code in ["agents", "init", "setup", "uninstall", "update"] {
-            if !reference.contains(&format!("| `{code}` |")) && !missing.contains(&code.to_owned())
-            {
-                missing.push(code.to_owned());
-            }
-        }
-
-        assert!(missing.is_empty(), "undocumented error codes: {missing:?}");
-    }
-}
+mod tests;

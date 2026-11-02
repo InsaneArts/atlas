@@ -19,9 +19,11 @@ mod text;
 mod tree;
 
 pub use crate::screen::elements::{Element, Frame, Limits, Snapshot};
-pub(super) use bring::{bring, check_application, target_application};
+pub(super) use bring::{bring, check_application, described, target_application};
 pub(super) use ffi::act;
-pub(super) use keyboard::{Focused, Judged, Keyboard, Unread, Within, frontmost, keyboard};
+pub(super) use keyboard::{
+    Focused, Judged, Keyboard, Status, Unread, Within, frontmost, keyboard, remaining,
+};
 pub(super) use system::dock_item;
 pub(super) use system::focused_pid;
 pub(crate) use system::{DOCK_TIMEOUT, dock};
@@ -43,16 +45,6 @@ const ABSENT: [AXError; 3] = [
     AXError::AttributeUnsupported,
     AXError::NotImplemented,
 ];
-
-/// Whether an `"attribute:code"` error key says something went wrong,
-/// rather than that the element simply lacks the attribute.
-pub(crate) fn telling(key: &str) -> bool {
-    let code = key
-        .rsplit_once(':')
-        .and_then(|(_, code)| code.parse::<i32>().ok());
-
-    code.is_none_or(|code| !ABSENT.iter().any(|absent| absent.0 == code))
-}
 
 #[cfg(test)]
 mod tests;

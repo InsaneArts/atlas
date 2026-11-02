@@ -273,7 +273,7 @@ fn another_owners_file_is_refused() {
         readable(
             &metadata,
             &path,
-            &places.roots(),
+            &places,
             uid() + 1,
             None,
             1 << 20,

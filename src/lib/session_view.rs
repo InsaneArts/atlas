@@ -162,10 +162,7 @@ impl Scene<'_> {
         // A command it started with `run` that still runs is its work
         // under way, whoever has control meanwhile.
         let running = self.running(who);
-        let note = self.waiting.iter().find(|note| {
-            self.processes.state(note.process) == crate::process::State::Running
-                && who.names(note.session.as_ref())
-        });
+        let note = self.waiting_note(who);
         let recently = newest
             .and_then(|row| row.age(self.now))
             .is_some_and(|age| age < RECOVERY_WAIT.as_nanos());
@@ -186,10 +183,7 @@ impl Scene<'_> {
 
         let waiting_seconds = note
             .filter(|_| waiting_for == Some(WaitingFor::Helper))
-            .map(|note| {
-                let now = u64::try_from(self.now / 1_000_000).unwrap_or(u64::MAX);
-                now.saturating_sub(note.since) / 1000
-            });
+            .map(|note| self.now_ms().unwrap_or(u64::MAX).saturating_sub(note.since) / 1000);
         let uncertain = needs_you.then(|| self.cause_row(who)).flatten();
 
         Shown {
@@ -216,7 +210,7 @@ impl Scene<'_> {
             .iter()
             .any(|cause| cause.command && cause.session.is_none())
         {
-            let now = u64::try_from(self.now / 1_000_000).ok()?;
+            let now = self.now_ms()?;
             return Some((now, now));
         }
         let named_since = self
@@ -236,7 +230,7 @@ impl Scene<'_> {
                 Some((oldest.at_ms()?, newest.at_ms()?))
             }
             None => {
-                let now = u64::try_from(self.now / 1_000_000).ok()?;
+                let now = self.now_ms()?;
                 (self.holder() == Some(Who::Terminal)).then_some((now, now))
             }
         }
@@ -257,13 +251,21 @@ impl Scene<'_> {
         self.agent_holds.then_some(Who::Terminal)
     }
 
+    /// Now, in milliseconds since 1970, while a `u64` holds it.
+    fn now_ms(&self) -> Option<u64> {
+        u64::try_from(self.now / 1_000_000).ok()
+    }
+
+    /// The note of a command of `who`'s that still waits for control.
+    fn waiting_note(&self, who: &Who) -> Option<&Note> {
+        self.waiting.iter().find(|note| {
+            self.processes.state(note.process) == crate::process::State::Running
+                && who.names(note.session.as_ref())
+        })
+    }
+
     pub(crate) fn work(&self, who: &Who) -> bool {
-        self.holder().as_ref() == Some(who)
-            || self.waiting.iter().any(|note| {
-                self.processes.state(note.process) == crate::process::State::Running
-                    && who.names(note.session.as_ref())
-            })
-            || self.running(who)
+        self.holder().as_ref() == Some(who) || self.waiting_note(who).is_some() || self.running(who)
     }
 
     fn running(&self, who: &Who) -> bool {
@@ -278,7 +280,7 @@ impl Scene<'_> {
 
     pub(crate) fn project(&self, record: &Record) -> (Shown, Lifetime) {
         let who = Who::Host(record.key.clone());
-        let now = u64::try_from(self.now / 1_000_000).unwrap_or(u64::MAX);
+        let now = self.now_ms().unwrap_or(u64::MAX);
         let lifetime = self.processes.lifetime(record, now, self.work(&who));
         let mut shown = self.shown(&who, lifetime.ended.is_some());
         shown.live = lifetime.live;
@@ -455,11 +457,11 @@ impl HistorySource<'_> {
                         .map(|plan| PastPlan {
                             phase: plan.phase,
                             made_at: plan.at,
-                            can_roll_back: matches!(plan.phase, Phase::Applied | Phase::Applying),
+                            can_roll_back: can_roll_back(plan.phase),
                         })
                         .collect(),
-                    installs: self.installs(&record.key),
-                    cleanup: self.cleanup(&record.key),
+                    installs: crate::task::record::installs_of(self.tasks, &record.key),
+                    cleanup: crate::task::record::unfinished_cleanup_of(self.tasks, &record.key),
                     screenshots: record
                         .screenshots
                         .iter()
@@ -470,16 +472,6 @@ impl HistorySource<'_> {
                 }
             })
             .collect()
-    }
-
-    /// The apps `key`'s tasks installed that may still be there, by name.
-    fn installs(&self, key: &Key) -> Vec<String> {
-        crate::task::record::installs_of(self.tasks, key)
-    }
-
-    /// How far the newest unfinished cleanup of `key`'s work got.
-    fn cleanup(&self, key: &Key) -> Option<CleanupState> {
-        crate::task::record::unfinished_cleanup_of(self.tasks, key)
     }
 
     /// The apps `record`'s session opened, as its rows still say, newest
@@ -504,9 +496,21 @@ impl HistorySource<'_> {
     }
 }
 
+/// Whether a plan as far as `phase` can still be rolled back.
+fn can_roll_back(phase: Phase) -> bool {
+    match phase {
+        Phase::Applied | Phase::Applying => true,
+        Phase::RollingBack | Phase::RolledBack => false,
+    }
+}
+
 /// Whether the apps speak of sessions: two or more remain relevant.
 pub(crate) fn sessions_shown<'a>(shown: impl IntoIterator<Item = &'a Shown>) -> bool {
-    shown.into_iter().filter(|shown| shown.relevant()).count() >= 2
+    shown
+        .into_iter()
+        .filter(|shown| shown.relevant())
+        .nth(1)
+        .is_some()
 }
 
 /// Whether `row`'s outcome may be unknown: refused as uncertain, or a
@@ -519,7 +523,20 @@ fn unknown(row: &Row) -> bool {
 /// Whether `row` only looked at the helper, which takes no control: a
 /// screenshot or a list of its apps.
 fn looks(row: &Row) -> bool {
-    matches!(row.operation, Some(Op::Screenshot | Op::Apps))
+    match row.operation {
+        Some(Op::Screenshot | Op::Apps) => true,
+        Some(
+            Op::Collect
+            | Op::Input
+            | Op::Job
+            | Op::Logout
+            | Op::Read
+            | Op::Restart
+            | Op::Run
+            | Op::Other(_),
+        )
+        | None => false,
+    }
 }
 
 #[cfg(test)]

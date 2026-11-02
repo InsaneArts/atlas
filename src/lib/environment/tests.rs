@@ -98,40 +98,6 @@ fn preview_is_read_only_and_create_apply_rollback_is_idempotent() {
 }
 
 #[test]
-fn rollback_restores_observed_bytes_and_mode_without_inventing_legacy_metadata() {
-    let sandbox = Sandbox::new();
-    let path = sandbox.home.join("config");
-    fs::write(&path, b"old").unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
-
-    let state = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
-    let legacy = json!({"files": {"config": digest(b"old")}});
-    atomic_write(
-        &state.path.join("files.json"),
-        &serde_json::to_vec(&legacy).unwrap(),
-        0o600,
-    )
-    .unwrap();
-    drop(state);
-
-    let plan = sandbox.plan(vec![sandbox.payload("config", b"new")]);
-    assert!(matches!(plan.files[0].previous, Some(Entry::Legacy(_))));
-    assert_eq!(sandbox.apply(&plan)["ok"], true);
-    assert_eq!(fs::read(&path).unwrap(), b"new");
-
-    let result = sandbox.rollback(&plan, true);
-    assert_eq!(result["ok"], true, "{result}");
-    assert_eq!(fs::read(&path).unwrap(), b"old");
-    assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o640);
-
-    let state = state::Store::open(&sandbox.home, Lock::Shared).unwrap();
-    assert!(matches!(
-        state.ledger().unwrap().files[Path::new("config")],
-        Entry::Legacy(_)
-    ));
-}
-
-#[test]
 fn adopting_an_existing_file_never_makes_rollback_delete_it() {
     let sandbox = Sandbox::new();
     let path = sandbox.home.join("existing");
@@ -478,8 +444,14 @@ fn bounded_extended_attributes_are_preserved_and_compared_exactly() {
     let state = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     state
         .save_ledger(&Ledger {
-            version: 0,
-            files: BTreeMap::from([(PathBuf::from("config"), Entry::Legacy(digest(b"old")))]),
+            version: 1,
+            files: BTreeMap::from([(
+                PathBuf::from("config"),
+                Entry {
+                    generation: "earlier".into(),
+                    fingerprint: fingerprint(&path).unwrap().unwrap(),
+                },
+            )]),
         })
         .unwrap();
     drop(state);
@@ -771,7 +743,7 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
         ledger.version = 1;
         ledger.files.insert(
             "file".into(),
-            Entry::Managed {
+            Entry {
                 generation: plan.id.clone(),
                 fingerprint: fingerprint(&path).unwrap().unwrap(),
             },
@@ -837,16 +809,13 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
                 break 'cut;
             }
         }
-        let previous = match &plan.files[0].previous {
-            Some(Entry::Managed { generation, .. }) => Some(Entry::Managed {
-                generation: generation.clone(),
-                fingerprint: transaction.progress[0]
-                    .restore
-                    .clone()
-                    .unwrap_or_else(|| plan.files[0].before.clone().unwrap()),
-            }),
-            entry => entry.clone(),
-        };
+        let previous = plan.files[0].previous.as_ref().map(|entry| Entry {
+            generation: entry.generation.clone(),
+            fingerprint: transaction.progress[0]
+                .restore
+                .clone()
+                .unwrap_or_else(|| plan.files[0].before.clone().unwrap()),
+        });
         if let Some(previous) = previous {
             ledger.files.insert("file".into(), previous);
         } else {
@@ -1422,18 +1391,18 @@ fn worker_reply(exit: u8, output: &Value) -> Value {
 #[test]
 fn only_a_confirmed_finish_settles_a_plan() {
     let done = json!({"ok": true, "phase": "applied", "resumeRequired": false});
-    assert!(settled(&Ok(done.clone()), "applied"));
-    assert!(!settled(&Ok(done), "rolledBack"));
+    assert!(settled(&Ok(done.clone()), Phase::Applied));
+    assert!(!settled(&Ok(done), Phase::RolledBack));
 
     for value in [
         json!({"ok": true, "phase": "applied", "resumeRequired": true}),
         json!({"ok": false, "phase": "applied", "resumeRequired": false}),
         json!({"ok": true, "phase": "applied"}),
     ] {
-        assert!(!settled(&Ok(value.clone()), "applied"), "{value}");
+        assert!(!settled(&Ok(value.clone()), Phase::Applied), "{value}");
     }
 
-    assert!(!settled(&Err(problem("lost")), "applied"));
+    assert!(!settled(&Err(problem("lost")), Phase::Applied));
 }
 
 #[test]
@@ -2852,8 +2821,14 @@ fn new_contents_do_not_inherit_the_download_mark() {
     let state = state::Store::open(&sandbox.home, Lock::Exclusive).unwrap();
     state
         .save_ledger(&Ledger {
-            version: 0,
-            files: BTreeMap::from([(PathBuf::from("tool"), Entry::Legacy(digest(b"old")))]),
+            version: 1,
+            files: BTreeMap::from([(
+                PathBuf::from("tool"),
+                Entry {
+                    generation: "earlier".into(),
+                    fingerprint: fingerprint(&path).unwrap().unwrap(),
+                },
+            )]),
         })
         .unwrap();
     drop(state);

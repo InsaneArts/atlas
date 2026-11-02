@@ -58,23 +58,13 @@ struct Package {
 
 fn packages(home: &Path) -> Result<Vec<Package>> {
     let path = home.join("settings.json");
+    let unreadable = |why: String| problem(format!("Could not read {}: {why}", path.display()));
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(error) => {
-            return Err(problem(format!(
-                "Could not read {}: {error}",
-                path.display()
-            )));
-        }
+        Err(error) => return Err(unreadable(error.to_string())),
     };
-    packages_in(&text, home).map_err(|error| {
-        problem(format!(
-            "Could not read {}: {}",
-            path.display(),
-            error.error
-        ))
-    })
+    packages_in(&text, home).map_err(|error| unreadable(error.error))
 }
 
 fn packages_in(text: &str, home: &Path) -> Result<Vec<Package>> {
@@ -114,14 +104,10 @@ fn packages_in(text: &str, home: &Path) -> Result<Vec<Package>> {
 fn local_path(source: &str, home: &Path, person: Option<&Path>) -> Option<PathBuf> {
     let source = if let Some(file) = source.strip_prefix("file://") {
         // Local file URLs only. Percent escapes are decoded without treating '+' as a space.
-        let file = file.strip_prefix("localhost/").map_or(file, |tail| tail);
-        if !source.starts_with("file:///") && !source.starts_with("file://localhost/") {
-            return None;
-        }
-        let file = if source.starts_with("file://localhost/") {
-            format!("/{file}")
-        } else {
-            file.to_owned()
+        let file = match file.strip_prefix("localhost/") {
+            Some(tail) => format!("/{tail}"),
+            None if file.starts_with('/') => file.to_owned(),
+            None => return None,
         };
         decode_file_path(&file)?
     } else {
@@ -186,14 +172,18 @@ fn source_of(packages: &[Package]) -> Source {
     })
 }
 
+/// Pi's config folder, which every change and report needs.
+fn required_home() -> Result<PathBuf> {
+    home().ok_or_else(|| problem("Pi's config folder could not be found"))
+}
+
 pub(super) fn source() -> Result<Source> {
-    let home = home().ok_or_else(|| problem("Pi's config folder could not be found"))?;
-    Ok(source_of(&packages(&home)?))
+    Ok(source_of(&packages(&required_home()?)?))
 }
 
 pub(super) fn change(marketplace: Option<&Path>) -> Result<Removal> {
     let _lock = super::connection_lock()?;
-    let home = home().ok_or_else(|| problem("Pi's config folder could not be found"))?;
+    let home = required_home()?;
     let current = packages(&home)?;
     if let Source::Elsewhere(place) = source_of(&current) {
         return if marketplace.is_some() {
@@ -220,11 +210,7 @@ pub(super) fn change(marketplace: Option<&Path>) -> Result<Removal> {
         .any(|package| same_place(&package.folder, &plugin));
     let mut changed = false;
     for package in &current {
-        if !same_place(&package.folder, &plugin)
-            && packages(&home)?
-                .iter()
-                .any(|entry| entry.stored == package.stored)
-        {
+        if !same_place(&package.folder, &plugin) && listed(&home, package)? {
             mutate(&home, "remove", &package.stored)?;
             changed = true;
         }
@@ -251,10 +237,7 @@ pub(super) fn change(marketplace: Option<&Path>) -> Result<Removal> {
 fn remove_owned(home: &Path, packages: &[Package]) -> Result<()> {
     for package in packages.iter().filter(|package| owned(package)) {
         // A prior exact removal may also have removed duplicate entries.
-        if self::packages(home)?
-            .iter()
-            .any(|entry| entry.stored == package.stored)
-        {
+        if listed(home, package)? {
             mutate(home, "remove", &package.stored)?;
         }
     }
@@ -262,6 +245,13 @@ fn remove_owned(home: &Path, packages: &[Package]) -> Result<()> {
         return Err(problem("Pi still lists the Atlas package"));
     }
     Ok(())
+}
+
+/// Whether Pi's settings still list `package`.
+fn listed(home: &Path, package: &Package) -> Result<bool> {
+    Ok(packages(home)?
+        .iter()
+        .any(|entry| entry.stored == package.stored))
 }
 
 fn mutate(home: &Path, verb: &str, source: &str) -> Result<()> {
@@ -281,96 +271,4 @@ fn mutate(home: &Path, verb: &str, source: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn pi_resolves_local_sources_without_confusing_remote_packages() {
-        let home = Path::new("/Users/person/.pi/agent");
-        let person = Some(Path::new("/Users/person"));
-        for (source, path) in [
-            (
-                "../../../Applications/Atlas.app/Contents/Resources/agents/atlas",
-                "/Users/Applications/Atlas.app/Contents/Resources/agents/atlas",
-            ),
-            ("~/Applications/atlas", "/Users/person/Applications/atlas"),
-            (
-                "file:///Applications/Atlas%20Test.app/Contents/Resources/agents/atlas",
-                "/Applications/Atlas Test.app/Contents/Resources/agents/atlas",
-            ),
-            ("file://localhost/Applications/atlas", "/Applications/atlas"),
-        ] {
-            assert_eq!(
-                local_path(source, home, person),
-                Some(PathBuf::from(path)),
-                "{source}"
-            );
-        }
-        for source in [
-            "npm:atlas",
-            "git:atlas",
-            "github:a/atlas",
-            "https://host/atlas",
-            "ssh://host/atlas",
-            "builtin:atlas",
-            "git@host:atlas",
-            "file://host/atlas",
-        ] {
-            assert_eq!(local_path(source, home, person), None, "{source}");
-        }
-    }
-
-    #[test]
-    fn pi_reads_object_packages_and_preserves_their_exact_removal_source() {
-        let home = Path::new("/config");
-        let value = json!({"packages": ["npm:elsewhere", {"source": "../old/atlas", "extensions": []}, "../other"]});
-        let entries = packages_in(&value.to_string(), home).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].stored, "../old/atlas");
-        assert_eq!(entries[0].folder, Path::new("/old/atlas"));
-        assert_eq!(source_of(&entries), Source::Elsewhere("/old/atlas".into()));
-    }
-
-    #[test]
-    fn pi_distinguishes_old_atlas_bundles_from_unrelated_packages() {
-        let value = json!({"packages": ["/missing/Atlas.app/Contents/Resources/agents/atlas", "/someone/atlas"]});
-        let entries = packages_in(&value.to_string(), Path::new("/config")).unwrap();
-        assert!(owned(&entries[0]));
-        assert!(!owned(&entries[1]));
-        assert_eq!(
-            source_of(&entries),
-            Source::Elsewhere("/someone/atlas".into())
-        );
-        assert_eq!(
-            source_of(&entries[..1]),
-            Source::Folder("/missing/Atlas.app/Contents/Resources/agents".into())
-        );
-    }
-
-    #[test]
-    fn pi_refuses_malformed_settings_and_treats_absence_as_empty() {
-        for text in [
-            "not json",
-            "[]",
-            r#"{"packages":false}"#,
-            r#"{"packages":[{}]}"#,
-        ] {
-            assert!(packages_in(text, Path::new("/config")).is_err(), "{text}");
-        }
-        assert!(
-            packages_in("\u{feff}{}", Path::new("/config"))
-                .unwrap()
-                .is_empty()
-        );
-        let temp = tempfile::tempdir().unwrap();
-        assert!(packages(temp.path()).unwrap().is_empty());
-        fs::write(temp.path().join("settings.json"), "{").unwrap();
-        assert!(
-            packages(temp.path())
-                .unwrap_err()
-                .error
-                .contains("settings.json")
-        );
-    }
-}
+mod tests;

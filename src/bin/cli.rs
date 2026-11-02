@@ -1,13 +1,15 @@
 //! Command-line grammar, value parsing and argument adapters.
 //! The declarative grammar stays together so argument relationships and
 //! generated help remain beside their commands; parser and guide parity tests
-//! check the same schema.
+//! check the same schema. A command with many arguments keeps them in a struct
+//! of its own, which its handler takes whole.
 use atlas::{
     actions::Button,
     agent,
+    agents::Agent,
     control::{CONTROL_WAIT, CONTROL_WAIT_MAX},
-    daemon::protocol::{JobId, Region},
     host_session::Key,
+    protocol::{self, JobId, Region},
 };
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
 use std::{ffi::OsStr, path::PathBuf, time::Duration};
@@ -43,7 +45,7 @@ pub(super) struct Cli {
         global = true,
         value_name = "SECONDS",
         hide = true,
-        value_parser = control_wait
+        value_parser = control_wait()
     )]
     pub(super) wait: Option<Duration>,
     #[command(subcommand)]
@@ -57,15 +59,7 @@ pub(super) enum Command {
         args_conflicts_with_subcommands = true,
         long_about = "Copy selected settings and files into the helper.\n\nPreview a one-way copy into the helper. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (an ASCII path inside the helper's home) and optional executable. Quit apps that write these files before applying. A different file already in the helper, or one changed there after Atlas copied it, is a conflict; a target inside, around or differing only in case from another, or from a file copied earlier, is refused. Rollback undoes it, leaves a file changed in the helper since as it is, and deletes the copies Atlas kept for it. Accounts, sign-ins and running apps' databases are never copied."
     )]
-    Environment {
-        /// TOML manifest listing only the files to provision.
-        manifest: Option<PathBuf>,
-        /// Apply the previewed changes; otherwise inspect without changing selected files.
-        #[arg(long)]
-        apply: bool,
-        #[command(subcommand)]
-        command: Option<EnvironmentCommand>,
-    },
+    Environment(Environment),
     #[command(hide = true)]
     EnvironmentWorker {
         packet: PathBuf,
@@ -83,48 +77,16 @@ pub(super) enum Command {
     ElementsInfo { pid: i32 },
     /// The helper daemon inside the helper login (started by its LaunchAgent).
     #[command(hide = true)]
-    HelperServe {
-        #[arg(long)]
-        uid: u32,
-        #[arg(long)]
-        controller_uid: u32,
-        #[arg(long)]
-        socket: PathBuf,
-    },
+    HelperServe(Service),
     #[command(hide = true)]
-    InputService {
-        #[arg(long)]
-        uid: u32,
-        #[arg(long)]
-        controller_uid: u32,
-        #[arg(long)]
-        socket: PathBuf,
-    },
+    InputService(Service),
     /// Inspect or repair the helper's setup (advanced).
     #[command(
         long_about = "Inspect or repair the helper's setup (advanced).\n\nWithout flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Atlas's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration."
     )]
-    Setup {
-        /// Helper account short name. Defaults to the configured helper.
-        #[arg(long, conflicts_with_all = ["apply", "rollback"])]
-        helper: Option<String>,
-        /// Migrate (or resume migrating) to the managed private layout.
-        #[arg(long, conflicts_with = "rollback")]
-        apply: bool,
-        /// Undo an applied or interrupted migration.
-        #[arg(long)]
-        rollback: bool,
-    },
+    Setup(Setup),
     #[command(hide = true)]
-    SetupHelper {
-        request: String,
-        /// Refuse unless this account matches this JSON account identity.
-        #[arg(long)]
-        account: String,
-        /// Refuse unless this account is logged out.
-        #[arg(long)]
-        logged_out: bool,
-    },
+    SetupHelper(SetupHelper),
     /// Show where Atlas keeps its settings, sockets and screenshots.
     Config,
     /// Show the helper: who it is, where it is and what it may do.
@@ -138,31 +100,9 @@ pub(super) enum Command {
     /// their session themselves; elsewhere set ATLAS_SESSION=NAME. Without a
     /// session, or with --all, every session's. It only reads: it works
     /// while another agent or the person has control, or after a Stop.
-    Activity {
-        /// Every session's, not only this one's.
-        #[arg(long, conflicts_with = "session")]
-        all: bool,
-        /// Another session's, by the key --all lists.
-        #[arg(long, value_name = "KEY", value_parser = session_key)]
-        session: Option<Key>,
-        /// How many recent actions to list: 10 unless given, at most 50.
-        #[arg(
-            long,
-            value_name = "N",
-            default_value_t = 10,
-            value_parser = clap::value_parser!(u16).range(1..=50)
-        )]
-        limit: u16,
-    },
+    Activity(Activity),
     /// Check that everything is ready, and say what to fix if not.
-    Doctor {
-        /// Include every check and the helper's full status (in --json too).
-        #[arg(long)]
-        verbose: bool,
-        /// Show how long the last login of the past two hours took, step by step.
-        #[arg(long, conflicts_with = "verbose")]
-        login_timing: bool,
-    },
+    Doctor(Doctor),
     /// Check that native Save and Open dialogs work in the helper.
     ///
     /// Exercises real Save/Open dialogs with the AppKit fixture and records the outcome.
@@ -193,17 +133,7 @@ pub(super) enum Command {
     /// Serve agent apps over MCP on standard input and output: the status,
     /// and a live view of the helper's screen with Stop.
     #[command(hide = true)]
-    Mcp {
-        /// Local port of the menu bar's viewer.
-        #[arg(long, default_value_t = 8765)]
-        port: u16,
-        /// Offer only the status and the screen: no Stop, Resume or Recover.
-        #[arg(long)]
-        read_only: bool,
-        /// Require a private view capability for person-operated MCP actions.
-        #[arg(long, hide = true)]
-        guard_app_controls: bool,
-    },
+    Mcp(Mcp),
     /// The helper's status as it changes, one JSON line each, for agent apps.
     #[command(hide = true)]
     Watch {
@@ -221,20 +151,7 @@ pub(super) enum Command {
     ///
     /// The menu bar runs on its own, so the terminal can close. Quit it from
     /// its menu; that stops its viewer and releases control.
-    Menubar {
-        /// Local port for the viewer it opens.
-        #[arg(long, default_value_t = 8765, value_parser = clap::value_parser!(u16).range(1..))]
-        port: u16,
-        /// Serve the menu bar from this process (how it runs on its own).
-        #[arg(long, hide = true, conflicts_with_all = ["render", "login"])]
-        serve: bool,
-        /// Instead, draw the panel in light and dark to PNGs in DIR and exit.
-        #[arg(long, value_name = "DIR")]
-        render: Option<PathBuf>,
-        /// Instead, turn "Open at Login" on or off, or report it.
-        #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
-        login: Option<LoginArg>,
-    },
+    Menubar(Menubar),
     /// Save a screenshot of the helper's screen, an app's windows or a region.
     ///
     /// Reports origin and pointsPerPixel: the image's pixel (px, py) is the
@@ -243,27 +160,7 @@ pub(super) enum Command {
     /// sheets, panels and open menus with a small margin; overlapping lists other
     /// apps' windows in front of them (take a full screenshot to see those).
     #[command(visible_alias = "capture")]
-    Screenshot {
-        #[command(flatten)]
-        target: AppTarget,
-        /// Only this part of the display: X,Y,W,H in display points, widened to
-        /// whole points.
-        #[arg(
-            long,
-            value_name = "X,Y,W,H",
-            allow_hyphen_values = true,
-            value_parser = region,
-            conflicts_with_all = ["app", "pid"]
-        )]
-        region: Option<Region>,
-        /// Shrink the longer side to at most this many pixels; 0 keeps the
-        /// full size. Without it: at most 1456 and one pixel per display point.
-        #[arg(long, value_parser = clap::value_parser!(u32).range(0..=8192))]
-        max_dimension: Option<u32>,
-        /// Save a new file even when nothing changed since the last screenshot.
-        #[arg(long)]
-        new_file: bool,
-    },
+    Screenshot(Screenshot),
     /// List the apps open in the helper.
     ///
     /// Lists apps with a Dock icon and menu bar apps that are not part of
@@ -298,34 +195,7 @@ pub(super) enum Command {
     /// the same point before clicking. With X Y, --app or --pid selects the
     /// app, and --window selects a particular window. A blocked or unreadable
     /// target refuses the click. No app is launched.
-    Click {
-        /// Display point X (origin + screenshot pixels × pointsPerPixel).
-        #[arg(requires = "y")]
-        x: Option<f64>,
-        /// Display point Y.
-        y: Option<f64>,
-        #[command(flatten)]
-        target: AppTarget,
-        /// Bring window N (from atlas windows) forward and check the point.
-        /// Nothing is sent if it is still covered or unreadable.
-        #[arg(long, value_name = "N", requires = "x")]
-        window: Option<i64>,
-        /// Exact element title, label text, description or identifier.
-        #[arg(long, conflicts_with = "x")]
-        name: Option<String>,
-        /// Accessibility role, for example AXButton.
-        #[arg(long, conflicts_with = "x")]
-        role: Option<String>,
-        /// Which mouse button.
-        #[arg(long, value_enum, default_value_t)]
-        button: ButtonArg,
-        /// Clicks in a row, 1 to 5: 2 for a double click.
-        #[arg(long, default_value_t = 1)]
-        count: u8,
-        /// Comma-separated: cmd, ctrl, alt, shift, fn.
-        #[arg(long, value_delimiter = ',')]
-        modifiers: Vec<String>,
-    },
+    Click(Click),
     /// List an app's buttons, fields and other elements.
     ///
     /// Lists accessibility elements of the app's windows: role, name, value,
@@ -333,35 +203,10 @@ pub(super) enum Command {
     /// items of a menu the app has open (menu: true, with a check mark as
     /// mark) and, while the app is in front, its menu bar titles. more says
     /// how many matching elements were left out.
-    Elements {
-        #[command(flatten)]
-        target: AppTarget,
-        /// Only elements with this accessibility role, for example AXButton.
-        #[arg(long)]
-        role: Option<String>,
-        /// Only elements with this exact title, label text, description or identifier.
-        #[arg(long)]
-        name: Option<String>,
-        /// Show at most this many elements.
-        #[arg(long, default_value_t = 50)]
-        max: usize,
-        /// Show every attribute the scan read, as it read it.
-        #[arg(long)]
-        full: bool,
-    },
+    Elements(Elements),
     /// Print the guide agents read to use Atlas (all of it by default).
     #[command(group(clap::ArgGroup::new("part").args(["skill", "commands", "errors"])))]
-    AgentGuide {
-        /// Print the short version the agent plugins load (SKILL.md), which lists the rest.
-        #[arg(long)]
-        skill: bool,
-        /// Print every command and its options (Markdown).
-        #[arg(long)]
-        commands: bool,
-        /// Print what each error code means and what to do (Markdown).
-        #[arg(long)]
-        errors: bool,
-    },
+    AgentGuide(AgentGuide),
     /// Check that tools and apps are ready in the helper.
     Readiness {
         /// A command-line tool to check (repeat for more).
@@ -388,25 +233,7 @@ pub(super) enum Command {
     /// mouse. With --app or --pid, bring the target forward, then check that
     /// app at both ends. --window selects the starting window. A blocked or
     /// unreadable target refuses the drag; no app is launched.
-    Drag {
-        /// Start point X.
-        from_x: f64,
-        /// Start point Y.
-        from_y: f64,
-        /// End point X.
-        to_x: f64,
-        /// End point Y.
-        to_y: f64,
-        /// Which mouse button.
-        #[arg(long, value_enum, default_value_t)]
-        button: ButtonArg,
-        #[command(flatten)]
-        target: AppTarget,
-        /// Only if window N (from atlas windows) is the top one at the
-        /// start point. Nothing is sent otherwise.
-        #[arg(long, value_name = "N")]
-        window: Option<i64>,
-    },
+    Drag(Drag),
     /// Scroll at a point.
     ///
     /// Scroll at X Y by lines, as a mouse wheel's notches (about 10 points
@@ -414,24 +241,7 @@ pub(super) enum Command {
     /// --app or --pid, bring the target forward and check the same point;
     /// --window selects a particular window. A blocked or unreadable target
     /// refuses the scroll. No app is launched.
-    Scroll {
-        /// Display point X.
-        x: f64,
-        /// Display point Y.
-        y: f64,
-        /// Lines to scroll sideways, at most 100; negative scrolls left.
-        #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
-        dx: i32,
-        /// Lines to scroll, at most 100; negative scrolls up.
-        #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
-        dy: i32,
-        #[command(flatten)]
-        target: AppTarget,
-        /// Bring window N (from atlas windows) forward and check the point.
-        /// Nothing is sent if it is still covered or unreadable.
-        #[arg(long, value_name = "N")]
-        window: Option<i64>,
-    },
+    Scroll(Scroll),
     /// Type text.
     ///
     /// The text is typed as given: a real newline or tab in it (in a shell,
@@ -443,24 +253,7 @@ pub(super) enum Command {
     /// --field establishes its named field where supported. Check focus before
     /// every 16 characters. A blocked or unreadable target refuses the text.
     /// No app is launched.
-    Type {
-        /// The text to type.
-        #[arg(required_unless_present = "stdin", allow_hyphen_values = true)]
-        text: Option<String>,
-        /// Read the text from standard input instead.
-        #[arg(long, conflicts_with = "text")]
-        stdin: bool,
-        #[command(flatten)]
-        target: AppTarget,
-        /// Bring window N (from atlas windows) forward; refuse if a sheet
-        /// blocks it or its focus cannot be proved.
-        #[arg(long, value_name = "N")]
-        window: Option<i64>,
-        /// Establish a named field where supported, as atlas elements
-        /// --name matches it, then check its focus before sending.
-        #[arg(long, value_name = "NAME")]
-        field: Option<String>,
-    },
+    Type(Type),
     /// Press keys, for example cmd+s or escape.
     ///
     /// Keys are pressed in order: `key cmd+s` or `key escape return`. A key is
@@ -471,21 +264,7 @@ pub(super) enum Command {
     /// and checks it before the first key. Later keys only check the app,
     /// since a key may move the window or field on purpose. A blocked or
     /// unreadable target refuses input. No app is launched.
-    Key {
-        /// Keys or chords such as cmd+s, escape, return, shift+tab.
-        #[arg(required = true)]
-        keys: Vec<String>,
-        #[command(flatten)]
-        target: AppTarget,
-        /// Bring window N (from atlas windows) forward; refuse if a sheet
-        /// blocks it or its focus cannot be proved.
-        #[arg(long, value_name = "N")]
-        window: Option<i64>,
-        /// Establish a named field where supported, as atlas elements
-        /// --name matches it, then check its focus before sending.
-        #[arg(long, value_name = "NAME")]
-        field: Option<String>,
-    },
+    Key(Keys),
     /// List the helper's windows, front to back.
     ///
     /// Every app's windows, floating panels and alerts. --all adds menus,
@@ -502,17 +281,7 @@ pub(super) enum Command {
         all: bool,
     },
     /// Open an app, files or URLs in the helper.
-    Open {
-        /// The app to open (or to open the targets with).
-        #[arg(long)]
-        app: Option<String>,
-        /// A variable for the app's environment when it launches (repeat for more).
-        #[arg(long = "env", value_name = "NAME=VALUE")]
-        environment: Vec<String>,
-        /// Files or URLs to open.
-        #[arg(value_name = "FILE|URL")]
-        targets: Vec<String>,
-    },
+    Open(Open),
     /// Quit an app in the helper and remove the copies `open` made for it.
     ///
     /// The app quits at once, without asking to save: save first (key cmd+s).
@@ -549,32 +318,9 @@ pub(super) enum Command {
     /// after 7 days), removes the copies, and reports what it kept and why.
     /// Run it again to finish what is left. Apps opened by name that still run
     /// are listed, not quit.
-    Cleanup {
-        /// Do it; otherwise only show what would be done.
-        #[arg(long)]
-        apply: bool,
-        /// An ended session's work, by the key atlas activity --all shows.
-        #[arg(long, value_name = "KEY", value_parser = session_key)]
-        session: Option<Key>,
-        /// Only one task, by the key atlas activity shows for it.
-        #[arg(long, value_name = "KEY", value_parser = session_key)]
-        task: Option<Key>,
-    },
+    Cleanup(Cleanup),
     /// Wait for a window to appear (or, with --gone, to close).
-    Wait {
-        /// A window of this app.
-        #[arg(long)]
-        app: Option<String>,
-        /// A window whose title contains this.
-        #[arg(long)]
-        title: Option<String>,
-        /// Wait for the window to close instead.
-        #[arg(long)]
-        gone: bool,
-        /// Seconds, at most 86400 (a day).
-        #[arg(long, default_value_t = 10, value_parser = wait_seconds)]
-        timeout: u64,
-    },
+    Wait(Wait),
     /// Run a command in the helper and print its output.
     ///
     /// The command starts in the helper's home and finds programs where
@@ -585,14 +331,7 @@ pub(super) enum Command {
     /// it ends. Atlas exits 1 when the command's exit code is not 0 or it
     /// was stopped, with the reply still ok. For a server or worker that
     /// must keep running, use atlas job start.
-    Run {
-        /// Seconds before the command is stopped, 1 to 600.
-        #[arg(long, value_name = "SECONDS", default_value_t = atlas::client::RUN_TIMEOUT.as_secs(), value_parser = run_seconds)]
-        timeout: u64,
-        /// The program and its arguments, after `--`.
-        #[arg(last = true, required = true, value_name = "COMMAND")]
-        argv: Vec<String>,
-    },
+    Run(Run),
     /// Keep a server or worker running in the helper, and stop it.
     ///
     /// A job starts in the helper's home like run, in a session and process
@@ -650,36 +389,11 @@ pub(super) enum Command {
     /// Lock the screen so you can switch to the helper.
     ///
     /// You log in on the lock screen; Atlas never sees a password.
-    Switch {
-        /// The account you will choose on the lock screen (the helper by default).
-        account: Option<String>,
-        /// Just lock the screen.
-        #[arg(long, conflicts_with = "account")]
-        lock: bool,
-        /// List the accounts you can switch to.
-        #[arg(long)]
-        list: bool,
-        /// Lock without asking first.
-        #[arg(long)]
-        yes: bool,
-    },
+    Switch(Switch),
     /// Update Atlas, checking its signature first.
     ///
     /// Verifies the release's checksum, Developer ID signature and version, then moves the helper onto it. Defers while another session or a background job is active; --allow-disrupt permits interrupting it.
-    Update {
-        /// Accept a signed release that is not notarized.
-        #[arg(long)]
-        allow_unnotarized: bool,
-        /// Reinstall even when the release is not newer.
-        #[arg(long)]
-        force: bool,
-        /// Install this release tag instead of the latest.
-        #[arg(long)]
-        version: Option<String>,
-        /// Only say whether a newer release is out; install nothing.
-        #[arg(long, conflicts_with_all = ["allow_unnotarized", "force"])]
-        check: bool,
-    },
+    Update(Update),
     /// Set Atlas up, step by step (safe to run again).
     ///
     /// Helper account, first sign-in, permissions, the helper job and input.
@@ -687,17 +401,7 @@ pub(super) enum Command {
     /// Remove Atlas from this Mac (asks first).
     ///
     /// The helper is logged out first. Its account and files stay unless you pass --remove-helper; the app goes to the Trash.
-    Uninstall {
-        /// Keep configuration, setup records and logs.
-        #[arg(long)]
-        keep_config: bool,
-        /// Do not ask.
-        #[arg(long)]
-        yes: bool,
-        /// Also delete the helper account and its files, once it is logged out.
-        #[arg(long)]
-        remove_helper: bool,
-    },
+    Uninstall(Uninstall),
     /// Connect Claude Code and Codex, or show which are connected.
     ///
     /// Adds a plugin that teaches the agent to use Atlas and guides setup.
@@ -714,6 +418,371 @@ pub(super) enum Command {
         #[command(subcommand)]
         step: OnboardingCommand,
     },
+}
+
+#[derive(clap::Args)]
+pub(super) struct Environment {
+    /// TOML manifest listing only the files to provision.
+    pub(super) manifest: Option<PathBuf>,
+    /// Apply the previewed changes; otherwise inspect without changing selected files.
+    #[arg(long)]
+    pub(super) apply: bool,
+    #[command(subcommand)]
+    pub(super) command: Option<EnvironmentCommand>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Service {
+    #[arg(long)]
+    pub(super) uid: u32,
+    #[arg(long)]
+    pub(super) controller_uid: u32,
+    #[arg(long)]
+    pub(super) socket: PathBuf,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Setup {
+    /// Helper account short name. Defaults to the configured helper.
+    #[arg(long, conflicts_with_all = ["apply", "rollback"])]
+    pub(super) helper: Option<String>,
+    /// Migrate (or resume migrating) to the managed private layout.
+    #[arg(long, conflicts_with = "rollback")]
+    pub(super) apply: bool,
+    /// Undo an applied or interrupted migration.
+    #[arg(long)]
+    pub(super) rollback: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct SetupHelper {
+    pub(super) request: String,
+    /// Refuse unless this account matches this JSON account identity.
+    #[arg(long)]
+    pub(super) account: String,
+    /// Refuse unless this account is logged out.
+    #[arg(long)]
+    pub(super) logged_out: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Activity {
+    /// Every session's, not only this one's.
+    #[arg(long, conflicts_with = "session")]
+    pub(super) all: bool,
+    /// Another session's, by the key --all lists.
+    #[arg(long, value_name = "KEY", value_parser = session_key)]
+    pub(super) session: Option<Key>,
+    /// How many recent actions to list: 10 unless given, at most 50.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u16).range(1..=50)
+    )]
+    pub(super) limit: u16,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Doctor {
+    /// Include every check and the helper's full status (in --json too).
+    #[arg(long)]
+    pub(super) verbose: bool,
+    /// Show how long the last login of the past two hours took, step by step.
+    #[arg(long, conflicts_with = "verbose")]
+    pub(super) login_timing: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Mcp {
+    /// Local port of the menu bar's viewer.
+    #[arg(long, default_value_t = 8765)]
+    pub(super) port: u16,
+    /// Offer only the status and the screen: no Stop, Resume or Recover.
+    #[arg(long)]
+    pub(super) read_only: bool,
+    /// Require a private view capability for person-operated MCP actions.
+    #[arg(long, hide = true)]
+    pub(super) guard_app_controls: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Menubar {
+    /// Local port for the viewer it opens.
+    #[arg(long, default_value_t = 8765, value_parser = clap::value_parser!(u16).range(1..))]
+    pub(super) port: u16,
+    /// Serve the menu bar from this process (how it runs on its own).
+    #[arg(long, hide = true, conflicts_with_all = ["render", "login"])]
+    pub(super) serve: bool,
+    /// Instead, draw the panel in light and dark to PNGs in DIR and exit.
+    #[arg(long, value_name = "DIR")]
+    pub(super) render: Option<PathBuf>,
+    /// Instead, turn "Open at Login" on or off, or report it.
+    #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
+    pub(super) login: Option<LoginArg>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Screenshot {
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Only this part of the display: X,Y,W,H in display points, widened to
+    /// whole points.
+    #[arg(
+        long,
+        value_name = "X,Y,W,H",
+        allow_hyphen_values = true,
+        value_parser = region,
+        conflicts_with_all = ["app", "pid"]
+    )]
+    pub(super) region: Option<Region>,
+    /// Shrink the longer side to at most this many pixels; 0 keeps the
+    /// full size. Without it: at most 1456 and one pixel per display point.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(0..=8192))]
+    pub(super) max_dimension: Option<u32>,
+    /// Save a new file even when nothing changed since the last screenshot.
+    #[arg(long)]
+    pub(super) new_file: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Click {
+    /// Display point X (origin + screenshot pixels × pointsPerPixel).
+    #[arg(requires = "y")]
+    pub(super) x: Option<f64>,
+    /// Display point Y.
+    pub(super) y: Option<f64>,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Bring window N (from atlas windows) forward and check the point.
+    /// Nothing is sent if it is still covered or unreadable.
+    #[arg(long, value_name = "N", requires = "x")]
+    pub(super) window: Option<i64>,
+    /// Exact element title, label text, description or identifier.
+    #[arg(long, conflicts_with = "x")]
+    pub(super) name: Option<String>,
+    /// Accessibility role, for example AXButton.
+    #[arg(long, conflicts_with = "x")]
+    pub(super) role: Option<String>,
+    /// Which mouse button.
+    #[arg(long, value_enum, default_value_t)]
+    pub(super) button: ButtonArg,
+    /// Clicks in a row, 1 to 5: 2 for a double click.
+    #[arg(long, default_value_t = 1)]
+    pub(super) count: u8,
+    /// Comma-separated: cmd, ctrl, alt, shift, fn.
+    #[arg(long, value_delimiter = ',')]
+    pub(super) modifiers: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Elements {
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Only elements with this accessibility role, for example AXButton.
+    #[arg(long)]
+    pub(super) role: Option<String>,
+    /// Only elements with this exact title, label text, description or identifier.
+    #[arg(long)]
+    pub(super) name: Option<String>,
+    /// Show at most this many elements.
+    #[arg(long, default_value_t = 50)]
+    pub(super) max: usize,
+    /// Show every attribute the scan read, as it read it.
+    #[arg(long)]
+    pub(super) full: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct AgentGuide {
+    /// Print the short version the agent plugins load (SKILL.md), which lists the rest.
+    #[arg(long)]
+    pub(super) skill: bool,
+    /// Print every command and its options (Markdown).
+    #[arg(long)]
+    pub(super) commands: bool,
+    /// Print what each error code means and what to do (Markdown).
+    #[arg(long)]
+    pub(super) errors: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Drag {
+    /// Start point X.
+    pub(super) from_x: f64,
+    /// Start point Y.
+    pub(super) from_y: f64,
+    /// End point X.
+    pub(super) to_x: f64,
+    /// End point Y.
+    pub(super) to_y: f64,
+    /// Which mouse button.
+    #[arg(long, value_enum, default_value_t)]
+    pub(super) button: ButtonArg,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Only if window N (from atlas windows) is the top one at the
+    /// start point. Nothing is sent otherwise.
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Scroll {
+    /// Display point X.
+    pub(super) x: f64,
+    /// Display point Y.
+    pub(super) y: f64,
+    /// Lines to scroll sideways, at most 100; negative scrolls left.
+    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+    pub(super) dx: i32,
+    /// Lines to scroll, at most 100; negative scrolls up.
+    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+    pub(super) dy: i32,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Bring window N (from atlas windows) forward and check the point.
+    /// Nothing is sent if it is still covered or unreadable.
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Type {
+    /// The text to type.
+    #[arg(required_unless_present = "stdin", allow_hyphen_values = true)]
+    pub(super) text: Option<String>,
+    /// Read the text from standard input instead.
+    #[arg(long, conflicts_with = "text")]
+    pub(super) stdin: bool,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Bring window N (from atlas windows) forward; refuse if a sheet
+    /// blocks it or its focus cannot be proved.
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
+    /// Establish a named field where supported, as atlas elements
+    /// --name matches it, then check its focus before sending.
+    #[arg(long, value_name = "NAME")]
+    pub(super) field: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Keys {
+    /// Keys or chords such as cmd+s, escape, return, shift+tab.
+    #[arg(required = true)]
+    pub(super) keys: Vec<String>,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Bring window N (from atlas windows) forward; refuse if a sheet
+    /// blocks it or its focus cannot be proved.
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
+    /// Establish a named field where supported, as atlas elements
+    /// --name matches it, then check its focus before sending.
+    #[arg(long, value_name = "NAME")]
+    pub(super) field: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Open {
+    /// The app to open (or to open the targets with).
+    #[arg(long)]
+    pub(super) app: Option<String>,
+    /// A variable for the app's environment when it launches (repeat for more).
+    #[arg(long = "env", value_name = "NAME=VALUE")]
+    pub(super) environment: Vec<String>,
+    /// Files or URLs to open.
+    #[arg(value_name = "FILE|URL")]
+    pub(super) targets: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Cleanup {
+    /// Do it; otherwise only show what would be done.
+    #[arg(long)]
+    pub(super) apply: bool,
+    /// An ended session's work, by the key atlas activity --all shows.
+    #[arg(long, value_name = "KEY", value_parser = session_key)]
+    pub(super) session: Option<Key>,
+    /// Only one task, by the key atlas activity shows for it.
+    #[arg(long, value_name = "KEY", value_parser = session_key)]
+    pub(super) task: Option<Key>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Wait {
+    /// A window of this app.
+    #[arg(long)]
+    pub(super) app: Option<String>,
+    /// A window whose title contains this.
+    #[arg(long)]
+    pub(super) title: Option<String>,
+    /// Wait for the window to close instead.
+    #[arg(long)]
+    pub(super) gone: bool,
+    /// Seconds, at most 86400 (a day).
+    #[arg(long, default_value_t = 10, value_parser = whole(0, WAIT_MAX_SECONDS, "seconds"))]
+    pub(super) timeout: u64,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Switch {
+    /// The account you will choose on the lock screen (the helper by default).
+    pub(super) account: Option<String>,
+    /// Just lock the screen.
+    #[arg(long, conflicts_with = "account")]
+    pub(super) lock: bool,
+    /// List the accounts you can switch to.
+    #[arg(long)]
+    pub(super) list: bool,
+    /// Lock without asking first.
+    #[arg(long)]
+    pub(super) yes: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Update {
+    /// Accept a signed release that is not notarized.
+    #[arg(long)]
+    pub(super) allow_unnotarized: bool,
+    /// Reinstall even when the release is not newer.
+    #[arg(long)]
+    pub(super) force: bool,
+    /// Install this release tag instead of the latest.
+    #[arg(long)]
+    pub(super) version: Option<String>,
+    /// Only say whether a newer release is out; install nothing.
+    #[arg(long, conflicts_with_all = ["allow_unnotarized", "force"])]
+    pub(super) check: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Run {
+    /// Seconds before the command is stopped, 1 to 600.
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = atlas::client::RUN_TIMEOUT.as_secs(),
+        value_parser = whole(1, atlas::client::RUN_TIMEOUT_MAX.as_secs(), "seconds")
+    )]
+    pub(super) timeout: u64,
+    /// The program and its arguments, after `--`.
+    #[arg(last = true, required = true, value_name = "COMMAND")]
+    pub(super) argv: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Uninstall {
+    /// Keep configuration, setup records and logs.
+    #[arg(long)]
+    pub(super) keep_config: bool,
+    /// Do not ask.
+    #[arg(long)]
+    pub(super) yes: bool,
+    /// Also delete the helper account and its files, once it is logged out.
+    #[arg(long)]
+    pub(super) remove_helper: bool,
 }
 
 #[derive(Subcommand)]
@@ -849,28 +918,22 @@ pub(super) struct AgentPicks {
 }
 
 impl AgentPicks {
-    /// The coding agents picked.
-    pub(super) fn agents(&self) -> Vec<atlas::agents::Agent> {
-        use atlas::agents::Agent;
-        let &Self {
-            claude,
-            codex,
-            opencode,
-            pi,
-            cursor,
-            app: _,
-        } = self;
+    fn picks(&self, agent: Agent) -> bool {
+        match agent {
+            Agent::Claude => self.claude,
+            Agent::Codex => self.codex,
+            Agent::Opencode => self.opencode,
+            Agent::Pi => self.pi,
+            Agent::Cursor => self.cursor,
+        }
+    }
 
-        [
-            (claude, Agent::Claude),
-            (codex, Agent::Codex),
-            (opencode, Agent::Opencode),
-            (pi, Agent::Pi),
-            (cursor, Agent::Cursor),
-        ]
-        .into_iter()
-        .filter_map(|(on, agent)| on.then_some(agent))
-        .collect()
+    /// The coding agents picked.
+    pub(super) fn agents(&self) -> Vec<Agent> {
+        Agent::ALL
+            .into_iter()
+            .filter(|agent| self.picks(*agent))
+            .collect()
     }
 }
 
@@ -893,14 +956,7 @@ pub(super) enum EnvironmentCommand {
     /// Run a command with the selected helper environment and helper tool paths.
     ///
     /// It is stopped after --timeout seconds (20 unless given, at most 600).
-    Run {
-        /// Seconds before the command is stopped, 1 to 600.
-        #[arg(long, value_name = "SECONDS", default_value_t = atlas::client::RUN_TIMEOUT.as_secs(), value_parser = run_seconds)]
-        timeout: u64,
-        /// The program and its arguments, after `--`.
-        #[arg(last = true, required = true, value_name = "COMMAND")]
-        argv: Vec<String>,
-    },
+    Run(Run),
     /// Copy a previewed plan into the helper (or finish one that stopped).
     Apply {
         /// The ID the preview printed.
@@ -951,7 +1007,12 @@ pub(super) enum JobCommand {
         #[arg(long, value_parser = job_name)]
         name: Option<String>,
         /// Seconds before Atlas stops it, 1 to 86400.
-        #[arg(long, value_name = "SECONDS", default_value_t = 3600, value_parser = job_seconds)]
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = 3600,
+            value_parser = whole(1, protocol::JOB_LIFETIME_MAX.as_secs(), "seconds")
+        )]
         timeout: u64,
         /// The program and its arguments, after `--`.
         #[arg(last = true, required = true, value_name = "COMMAND")]
@@ -967,7 +1028,12 @@ pub(super) enum JobCommand {
         #[arg(value_parser = job_id)]
         id: JobId,
         /// Bytes from the end, at most 1048576.
-        #[arg(long, default_value_t = 16384, value_parser = log_bytes)]
+        #[arg(
+            long,
+            default_value_t = 16384,
+            value_parser = whole(1, protocol::JOB_LOG_MAX as u64, "bytes")
+                .map(|bytes| bytes as usize)
+        )]
         bytes: usize,
         /// Read a job of another task, after that task's session was lost.
         #[arg(long, value_name = "KEY", value_parser = session_key)]
@@ -978,42 +1044,16 @@ pub(super) enum JobCommand {
         #[arg(value_parser = job_id)]
         id: JobId,
         /// Seconds between TERM and KILL, 1 to 60.
-        #[arg(long, default_value_t = 5, value_parser = grace_seconds)]
+        #[arg(
+            long,
+            default_value_t = 5,
+            value_parser = whole(1, protocol::JOB_GRACE_MAX.as_secs(), "seconds")
+        )]
         grace: u64,
         /// Stop a job of another task, after that task's session was lost.
         #[arg(long, value_name = "KEY", value_parser = session_key)]
         task: Option<Key>,
     },
-}
-
-/// `job start --timeout`: whole seconds a job may run.
-fn job_seconds(value: &str) -> std::result::Result<u64, String> {
-    let most = atlas::daemon::protocol::JOB_LIFETIME_MAX.as_secs();
-    value
-        .parse()
-        .ok()
-        .filter(|seconds| (1..=most).contains(seconds))
-        .ok_or_else(|| format!("Give 1 to {most} seconds."))
-}
-
-/// `job stop --grace`: whole seconds between TERM and KILL.
-fn grace_seconds(value: &str) -> std::result::Result<u64, String> {
-    let most = atlas::daemon::protocol::JOB_GRACE_MAX.as_secs();
-    value
-        .parse()
-        .ok()
-        .filter(|seconds| (1..=most).contains(seconds))
-        .ok_or_else(|| format!("Give 1 to {most} seconds."))
-}
-
-/// `job log --bytes`: how much of the end of a job's output.
-fn log_bytes(value: &str) -> std::result::Result<usize, String> {
-    let most = atlas::daemon::protocol::JOB_LOG_MAX;
-    value
-        .parse()
-        .ok()
-        .filter(|bytes| (1..=most).contains(bytes))
-        .ok_or_else(|| format!("Give 1 to {most} bytes."))
 }
 
 /// A job's ID, as `job start` printed it.
@@ -1023,7 +1063,7 @@ fn job_id(value: &str) -> std::result::Result<JobId, String> {
 
 /// `job start --name`: a short name to know a job by.
 fn job_name(value: &str) -> std::result::Result<String, String> {
-    atlas::daemon::protocol::job_name(value)
+    protocol::job_name(value)
         .then(|| value.to_owned())
         .ok_or_else(|| {
             "Give a name of 1 to 64 characters, none of them a control character.".into()
@@ -1049,22 +1089,8 @@ fn file_size(value: &str) -> std::result::Result<u64, String> {
         .parse::<u64>()
         .ok()
         .and_then(|count| count.checked_mul(scale))
-        .filter(|bytes| (1..=atlas::daemon::protocol::READ_SIZE_MAX).contains(bytes))
+        .filter(|bytes| (1..=protocol::READ_SIZE_MAX).contains(bytes))
         .ok_or_else(refused)
-}
-
-/// `run --timeout`: whole seconds the helper allows a command.
-fn run_seconds(value: &str) -> std::result::Result<u64, String> {
-    value
-        .parse()
-        .ok()
-        .filter(|seconds| (1..=atlas::client::RUN_TIMEOUT_MAX.as_secs()).contains(seconds))
-        .ok_or_else(|| {
-            format!(
-                "Give 1 to {} seconds.",
-                atlas::client::RUN_TIMEOUT_MAX.as_secs()
-            )
-        })
 }
 
 /// `screenshot --region`: X,Y,W,H in display points.
@@ -1098,23 +1124,20 @@ fn session_key(value: &str) -> std::result::Result<Key, String> {
 /// The longest `wait --timeout`: a day.
 const WAIT_MAX_SECONDS: u64 = 24 * 60 * 60;
 
-/// `wait --timeout`: whole seconds, 0 for one look.
-fn wait_seconds(value: &str) -> std::result::Result<u64, String> {
-    value
-        .parse()
-        .ok()
-        .filter(|seconds| *seconds <= WAIT_MAX_SECONDS)
-        .ok_or_else(|| format!("Give 0 to {WAIT_MAX_SECONDS} seconds."))
+/// `--wait` or `ATLAS_WAIT`: whole seconds, 0 for none.
+fn control_wait() -> impl TypedValueParser<Value = Duration> {
+    whole(0, CONTROL_WAIT_MAX.as_secs(), "seconds").map(Duration::from_secs)
 }
 
-/// `--wait` or `ATLAS_WAIT`: whole seconds, 0 for none.
-fn control_wait(value: &str) -> std::result::Result<Duration, String> {
-    value
-        .parse()
-        .ok()
-        .map(Duration::from_secs)
-        .filter(|wait| *wait <= CONTROL_WAIT_MAX)
-        .ok_or_else(|| format!("Give 0 to {} seconds.", CONTROL_WAIT_MAX.as_secs()))
+/// A whole number from `least` to `most` of `unit`, said in a sentence when refused.
+fn whole(least: u64, most: u64, unit: &'static str) -> impl TypedValueParser<Value = u64> {
+    clap::builder::StringValueParser::new().try_map(move |value| {
+        value
+            .parse::<u64>()
+            .ok()
+            .filter(|n| (least..=most).contains(n))
+            .ok_or_else(|| format!("Give {least} to {most} {unit}."))
+    })
 }
 
 /// The wait a command that waits is given: `--wait`'s, else the variable
@@ -1126,7 +1149,7 @@ pub(super) fn control_wait_given(
 ) -> std::result::Result<Duration, clap::Error> {
     match (flag, variable) {
         (Some(wait), _) => Ok(wait),
-        (None, Some(variable)) => control_wait.parse_ref(
+        (None, Some(variable)) => control_wait().parse_ref(
             &Cli::command(),
             Some(&clap::Arg::new("ATLAS_WAIT").value_name("ATLAS_WAIT")),
             variable,
@@ -1202,564 +1225,4 @@ impl AppTarget {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn allowing_disruption_is_separate_from_reinstalling_an_older_release() {
-        let cli = parse(&["update", "--force"]).unwrap();
-        assert!(!cli.allow_disrupt);
-        assert!(matches!(
-            cli.command,
-            Some(Command::Update { force: true, .. })
-        ));
-
-        let cli = parse(&["update", "--allow-disrupt"]).unwrap();
-        assert!(cli.allow_disrupt);
-        assert!(matches!(
-            cli.command,
-            Some(Command::Update { force: false, .. })
-        ));
-
-        for command in ["restart", "start-input", "init", "setup", "update-finish"] {
-            assert!(parse(&[command, "--allow-disrupt"]).unwrap().allow_disrupt);
-        }
-    }
-
-    fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
-        Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
-    }
-
-    #[test]
-    fn jobs_take_their_command_after_two_dashes() {
-        let Some(Command::Job {
-            command:
-                JobCommand::Start {
-                    name,
-                    timeout,
-                    argv,
-                },
-        }) = parse(&["job", "start", "--", "/bin/sh", "-c", "echo --name"])
-            .unwrap()
-            .command
-        else {
-            panic!("a job start");
-        };
-        assert_eq!(argv, ["/bin/sh", "-c", "echo --name"]);
-        assert_eq!((name, timeout), (None, 3600));
-        assert!(parse(&["job", "start", "/bin/sleep"]).is_err());
-    }
-
-    #[test]
-    fn job_ids_sizes_and_times_are_checked_when_parsed() {
-        for args in [
-            &["job", "stop", "7c2e91a04b3"][..],
-            &["job", "stop", "7C2E91A04B3F"],
-            &["job", "log", "nope"],
-            &["job", "stop", "7c2e91a04b3f", "--grace", "0"],
-            &["job", "stop", "7c2e91a04b3f", "--grace", "61"],
-            &["job", "stop", "7c2e91a04b3f", "--task", "ABC"],
-            &["job", "log", "7c2e91a04b3f", "--bytes", "1048577"],
-            &["job", "start", "--timeout", "0", "--", "x"],
-            &["job", "start", "--timeout", "86401", "--", "x"],
-            &["job", "start", "--name", "", "--", "x"],
-            &["collect", "--max-size", "2G", "a"],
-            &["collect", "--max-size", "0", "a"],
-            &["collect", "--max-size", "12Q", "a"],
-        ] {
-            assert!(parse(args).is_err(), "{args:?}");
-        }
-        assert_eq!(file_size("200M"), Ok(200 << 20));
-        assert_eq!(file_size("1G"), Ok(1 << 30));
-        assert_eq!(file_size("512k"), Ok(512 << 10));
-        assert_eq!(file_size("17"), Ok(17));
-        assert_eq!(job_seconds("86400"), Ok(86400));
-        assert_eq!(
-            job_id("x").unwrap_err(),
-            "Give the job's id, as atlas job start printed it."
-        );
-    }
-
-    #[test]
-    fn collect_takes_one_to_sixteen_files() {
-        assert!(parse(&["collect"]).is_err());
-        let sixteen: Vec<String> = (0..16).map(|n| format!("f{n}")).collect();
-        let mut args = vec!["collect"];
-        args.extend(sixteen.iter().map(String::as_str));
-        let Some(Command::Collect { files, max_size }) = parse(&args).unwrap().command else {
-            panic!("a collection");
-        };
-        assert_eq!((files.len(), max_size), (16, 64 << 20));
-        args.push("f16");
-        assert!(parse(&args).is_err());
-    }
-
-    #[test]
-    fn setup_workers_require_an_explicit_account_identity() {
-        let request = r#"{"action":"prepare","uid":502,"controller":"controller"}"#;
-        assert_eq!(
-            parse(&["setup-helper", request]).err().unwrap().kind(),
-            clap::error::ErrorKind::MissingRequiredArgument
-        );
-        let identity =
-            r#"{"uid":502,"name":"helper","generatedUid":"6DB4B7AF-BE3C-486C-BD46-1B4558946919"}"#;
-        assert!(parse(&["setup-helper", request, "--account", identity]).is_ok());
-    }
-
-    #[test]
-    fn activity_takes_all_or_a_session_key_and_a_limit_from_one_to_fifty() {
-        let activity = |args: &[&str]| match parse(args) {
-            Ok(Cli {
-                command:
-                    Some(Command::Activity {
-                        all,
-                        session,
-                        limit,
-                    }),
-                ..
-            }) => Some((all, session.map(String::from), limit)),
-            _ => None,
-        };
-
-        assert_eq!(activity(&["activity"]), Some((false, None, 10)));
-        assert_eq!(activity(&["activity", "--all"]), Some((true, None, 10)));
-        assert_eq!(
-            activity(&["activity", "--session", "3f9a1c07b2e4", "--limit", "50"]),
-            Some((false, Some("3f9a1c07b2e4".into()), 50))
-        );
-        assert_eq!(
-            activity(&["activity", "--limit", "1"]),
-            Some((false, None, 1))
-        );
-        for refused in [
-            &["activity", "--all", "--session", "3f9a1c07b2e4"][..],
-            &["activity", "--session", "3F9A1C07B2E4"],
-            &["activity", "--session", "3f9a1c07b2e"],
-            &["activity", "--session", "../sessions"],
-            &["activity", "--limit", "0"],
-            &["activity", "--limit", "51"],
-        ] {
-            assert!(parse(refused).is_err(), "{refused:?}");
-        }
-    }
-
-    #[test]
-    fn cleanup_takes_apply_session_and_task_and_install_app_a_path() {
-        let cleanup = |args: &[&str]| match parse(args) {
-            Ok(Cli {
-                command:
-                    Some(Command::Cleanup {
-                        apply,
-                        session,
-                        task,
-                    }),
-                ..
-            }) => Some((apply, session.map(String::from), task.map(String::from))),
-            _ => None,
-        };
-
-        assert_eq!(cleanup(&["cleanup"]), Some((false, None, None)));
-        assert_eq!(cleanup(&["cleanup", "--apply"]), Some((true, None, None)));
-        assert_eq!(
-            cleanup(&[
-                "cleanup",
-                "--session",
-                "3f9a1c07b2e4",
-                "--task",
-                "5be0d1a2c3f4",
-                "--apply"
-            ]),
-            Some((
-                true,
-                Some("3f9a1c07b2e4".into()),
-                Some("5be0d1a2c3f4".into())
-            ))
-        );
-        assert!(matches!(
-            parse(&["install-app", "./build/Probe.app"]),
-            Ok(Cli {
-                command: Some(Command::InstallApp { path }),
-                ..
-            }) if path == std::path::Path::new("./build/Probe.app")
-        ));
-        assert!(parse(&["install-app"]).is_err(), "a path is needed");
-
-        for refused in [
-            &["cleanup", "--session", "3F9A1C07B2E4"][..],
-            &["cleanup", "--task", "../tasks"],
-            &["cleanup", "notes.rtf"],
-        ] {
-            assert!(parse(refused).is_err(), "{refused:?}");
-        }
-    }
-
-    #[test]
-    fn clicks_take_coordinates_or_an_element_never_both() {
-        assert!(parse(&["click", "10", "20"]).is_ok());
-        assert!(parse(&["click", "--app", "Calculator", "--name", "7"]).is_ok());
-        assert!(parse(&["click", "--pid", "42", "--role", "AXButton"]).is_ok());
-        assert!(parse(&["click", "10", "20", "--name", "Save"]).is_err());
-        assert!(parse(&["click", "10", "20", "--role", "AXButton"]).is_err());
-        assert!(parse(&["click", "10"]).is_err(), "Y is required with X");
-        assert!(parse(&["click", "--app", "A", "--pid", "1", "--name", "x"]).is_err());
-        assert!(parse(&["click", "10", "20", "--app", "A"]).is_ok());
-        assert!(parse(&["click", "10", "20", "--pid", "1"]).is_ok());
-        assert!(parse(&["click", "10", "20", "--app", "A", "--pid", "1"]).is_err());
-    }
-
-    #[test]
-    fn field_is_accepted_by_type_and_key_only() {
-        for accepted in [
-            &["type", "--app", "A", "--field", "Email", "hi"][..],
-            &["type", "hi", "--window", "4120", "--field", "Email"],
-            &["key", "--window", "4120", "--field", "Email", "tab"],
-        ] {
-            assert!(parse(accepted).is_ok(), "{accepted:?}");
-        }
-        for refused in [
-            &["click", "1", "2", "--field", "Email"][..],
-            &["scroll", "1", "2", "--dy", "1", "--field", "Email"],
-            &["drag", "1", "2", "3", "4", "--field", "Email"],
-            &["input", r#"[{"type":"key","key":"a"}]"#, "--field", "Email"],
-            &["move", "1", "2", "--field", "Email"],
-        ] {
-            assert!(parse(refused).is_err(), "{refused:?}");
-        }
-    }
-
-    #[test]
-    fn a_window_is_named_on_keys_and_on_pointer_actions_at_a_point() {
-        let window = |args: &[&str]| match parse(args) {
-            Ok(Cli {
-                command:
-                    Some(
-                        Command::Type { window, .. }
-                        | Command::Key { window, .. }
-                        | Command::Click { window, .. }
-                        | Command::Scroll { window, .. }
-                        | Command::Drag { window, .. },
-                    ),
-                ..
-            }) => window,
-            _ => None,
-        };
-
-        assert_eq!(window(&["type", "--window", "4120", "hi"]), Some(4120));
-        assert_eq!(window(&["key", "cmd+s", "--window", "4120"]), Some(4120));
-        assert_eq!(window(&["click", "1", "2", "--window", "4120"]), Some(4120));
-        assert_eq!(
-            window(&["scroll", "1", "2", "--dy", "1", "--window", "4120"]),
-            Some(4120)
-        );
-        assert_eq!(
-            window(&["drag", "1", "2", "3", "4", "--window", "4120"]),
-            Some(4120)
-        );
-        assert!(
-            parse(&["click", "--app", "A", "--name", "Save", "--window", "4120"]).is_err(),
-            "a click by name checks its own element's window"
-        );
-        assert!(parse(&["input", "[]", "--window", "4120"]).is_err());
-        assert!(parse(&["type", "--window", "x", "hi"]).is_err());
-    }
-
-    #[test]
-    fn keyboard_and_pointer_commands_take_an_app() {
-        let app = |args: &[&str]| match parse(args) {
-            Ok(Cli {
-                command:
-                    Some(
-                        Command::Type { target, .. }
-                        | Command::Key { target, .. }
-                        | Command::Scroll { target, .. }
-                        | Command::Drag { target, .. }
-                        | Command::Input { target, .. },
-                    ),
-                ..
-            }) => Some((target.app, target.pid)),
-            _ => None,
-        };
-        let named = Some((Some("A".to_owned()), None));
-
-        assert_eq!(app(&["type", "--app", "A", "hi"]), named);
-        assert_eq!(app(&["type", "hi", "--app", "A"]), named);
-        assert_eq!(app(&["key", "--pid", "3", "escape"]), Some((None, Some(3))));
-        assert_eq!(app(&["scroll", "1", "2", "--dy", "3", "--app", "A"]), named);
-        assert_eq!(app(&["drag", "1", "2", "3", "4", "--app", "A"]), named);
-        assert_eq!(
-            app(&["input", r#"[{"type":"key","key":"a"}]"#, "--app", "A"]),
-            named
-        );
-        assert!(matches!(
-            parse(&["key", "cmd+s", "--app", "A"]),
-            Ok(Cli { command: Some(Command::Key { keys, .. }), .. }) if keys == ["cmd+s"]
-        ));
-        assert!(parse(&["type", "hi", "--app", "A", "--pid", "1"]).is_err());
-        assert!(parse(&["move", "1", "2", "--app", "A"]).is_err());
-    }
-
-    #[test]
-    fn screenshots_take_an_app_or_a_region_never_both() {
-        let given = |args: &[&str]| match parse(args) {
-            Ok(Cli {
-                command:
-                    Some(Command::Screenshot {
-                        target,
-                        region,
-                        max_dimension,
-                        ..
-                    }),
-                ..
-            }) => Ok((target.app, target.pid, region, max_dimension)),
-            Err(error) => Err(error.to_string()),
-            _ => Err("not a screenshot".into()),
-        };
-        let region = |x, y, width, height| Region {
-            x,
-            y,
-            width,
-            height,
-        };
-
-        assert_eq!(given(&["screenshot"]), Ok((None, None, None, None)));
-        assert_eq!(
-            given(&["screenshot", "--app", "TextEdit", "--max-dimension", "400"]),
-            Ok((Some("TextEdit".into()), None, None, Some(400)))
-        );
-        assert_eq!(
-            given(&["capture", "--pid", "42"]),
-            Ok((None, Some(42), None, None))
-        );
-        assert_eq!(
-            given(&["screenshot", "--region", "-50,-50,200,200"]),
-            Ok((None, None, Some(region(-50, -50, 200, 200)), None))
-        );
-        assert_eq!(
-            given(&["screenshot", "--region", "1.5, 2.25, 3, 4"]),
-            Ok((None, None, Some(region(1, 2, 4, 5)), None))
-        );
-
-        for (args, says) in [
-            (
-                &["screenshot", "--app", "A", "--region", "0,0,10,10"][..],
-                "cannot be used with",
-            ),
-            (
-                &["screenshot", "--pid", "1", "--region", "0,0,10,10"],
-                "cannot be used with",
-            ),
-            (
-                &["screenshot", "--app", "A", "--pid", "1"],
-                "cannot be used with",
-            ),
-            (&["screenshot", "--region", "0,0,10"], "X,Y,W,H"),
-            (&["screenshot", "--region", "a,b,c,d"], "X,Y,W,H"),
-            (&["screenshot", "--region", "0,0,inf,10"], "X,Y,W,H"),
-            (&["screenshot", "--region", "0,0,0,10"], "more than 0"),
-            (&["screenshot", "--region", "0,0,10,-5"], "more than 0"),
-            (&["screenshot", "--region", "0,0,16385,10"], "16384"),
-            (&["screenshot", "--region", "-16385,0,10,10"], "16384"),
-        ] {
-            let refused = given(args).unwrap_err();
-            assert!(refused.contains(says), "{args:?}: {refused}");
-        }
-    }
-
-    #[test]
-    fn a_screenshot_is_smaller_by_default_and_full_size_on_request() {
-        use crate::dispatch::screenshot_size;
-        use atlas::client::Size;
-
-        assert_eq!(screenshot_size(None), Size::Standard);
-        assert_eq!(screenshot_size(Some(0)), Size::Full);
-        assert_eq!(screenshot_size(Some(800)), Size::Longest(800));
-        assert_eq!(screenshot_size(Some(1456)), Size::Longest(1456));
-
-        let given = |args: &[&str]| match parse(args) {
-            Ok(Cli {
-                command:
-                    Some(Command::Screenshot {
-                        max_dimension,
-                        new_file,
-                        ..
-                    }),
-                ..
-            }) => Some((max_dimension, new_file)),
-            _ => None,
-        };
-        assert_eq!(given(&["screenshot"]), Some((None, false)));
-        assert_eq!(
-            given(&["screenshot", "--max-dimension", "0"]),
-            Some((Some(0), false))
-        );
-        assert_eq!(
-            given(&["screenshot", "--max-dimension", "8192", "--new-file"]),
-            Some((Some(8192), true))
-        );
-        assert_eq!(given(&["screenshot", "--max-dimension", "8193"]), None);
-        assert_eq!(given(&["screenshot", "--max-dimension", "-1"]), None);
-    }
-
-    #[test]
-    fn the_menu_bar_serves_or_renders() {
-        let Ok(Cli {
-            command: Some(Command::Menubar { port, render, .. }),
-            ..
-        }) = parse(&["menubar", "--render", "out"])
-        else {
-            panic!("menubar did not parse");
-        };
-
-        assert_eq!((port, render), (8765, Some(PathBuf::from("out"))));
-        assert!(parse(&["menubar", "--port", "9000"]).is_ok());
-    }
-
-    #[test]
-    fn scrolling_accepts_negative_lines() {
-        let Ok(Cli {
-            command: Some(Command::Scroll { dy, .. }),
-            ..
-        }) = parse(&["scroll", "1", "2", "--dy", "-3"])
-        else {
-            panic!("scroll did not parse");
-        };
-
-        assert_eq!(dy, -3);
-    }
-
-    /// Text and keys that begin with a hyphen are typed and pressed, not
-    /// read as options.
-
-    #[test]
-    fn text_may_begin_with_a_hyphen_and_keys_may_be_one() {
-        let Ok(Cli {
-            command: Some(Command::Type { text, stdin, .. }),
-            ..
-        }) = parse(&["type", "-hi there"])
-        else {
-            panic!("type did not parse");
-        };
-
-        assert_eq!((text.as_deref(), stdin), (Some("-hi there"), false));
-
-        let Ok(Cli {
-            command: Some(Command::Key { keys, .. }),
-            ..
-        }) = parse(&["key", "-", "cmd+-"])
-        else {
-            panic!("key did not parse");
-        };
-
-        assert_eq!(keys, ["-", "cmd+-"]);
-        assert!(
-            matches!(
-                parse(&["key", "cmd+s", "--json"]),
-                Ok(Cli {
-                    json: true,
-                    command: Some(Command::Key { .. }),
-                    ..
-                })
-            ),
-            "an option after the keys stays an option"
-        );
-        assert!(matches!(
-            parse(&["type", "--stdin"]),
-            Ok(Cli {
-                command: Some(Command::Type {
-                    text: None,
-                    stdin: true,
-                    ..
-                }),
-                ..
-            })
-        ));
-        assert!(parse(&["type", "--help"]).is_err(), "help still shows");
-    }
-
-    #[test]
-    fn a_wait_lasts_at_most_a_day() {
-        assert!(parse(&["wait", "--app", "A", "--timeout", "0"]).is_ok());
-        assert!(parse(&["wait", "--app", "A", "--timeout", "86400"]).is_ok());
-        assert!(parse(&["wait", "--app", "A", "--timeout", "86401"]).is_err());
-        assert!(parse(&["wait", "--app", "A", "--timeout", "18446744073709551615"]).is_err());
-    }
-
-    #[test]
-    fn the_wait_is_whole_seconds_from_zero_to_six_hundred() {
-        let wait = |given: &str| parse(&["--wait", given, "key", "escape"]).map(|cli| cli.wait);
-        assert_eq!(wait("0").unwrap(), Some(Duration::ZERO));
-        assert_eq!(wait("600").unwrap(), Some(CONTROL_WAIT_MAX));
-        for refused in ["601", "-1", "1.5", "soon"] {
-            assert!(wait(refused).is_err(), "{refused}");
-        }
-        assert_eq!(parse(&["key", "escape"]).unwrap().wait, None);
-    }
-
-    #[test]
-    fn the_flag_wins_over_the_variable_and_either_over_the_default() {
-        let given = |flag: Option<u64>, variable: Option<&str>| {
-            control_wait_given(flag.map(Duration::from_secs), variable.map(OsStr::new))
-        };
-        assert_eq!(given(None, None).unwrap(), CONTROL_WAIT);
-        assert_eq!(given(None, Some("12")).unwrap(), Duration::from_secs(12));
-        assert_eq!(given(Some(5), Some("12")).unwrap(), Duration::from_secs(5));
-        assert_eq!(
-            given(Some(5), Some("soon")).unwrap(),
-            Duration::from_secs(5)
-        );
-        for refused in ["601", "-1", "1.5", "soon", ""] {
-            let error = given(None, Some(refused)).unwrap_err();
-            assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-        }
-    }
-
-    #[test]
-    fn the_wait_flag_is_global_and_hidden() {
-        for args in [
-            &["type", "--wait", "5", "hi"][..],
-            &["--wait", "5", "type", "hi"],
-        ] {
-            assert_eq!(
-                parse(args).unwrap().wait,
-                Some(Duration::from_secs(5)),
-                "{args:?}"
-            );
-        }
-
-        let help = match parse(&["type", "--help"]) {
-            Err(error) => error.to_string(),
-            Ok(_) => panic!("help is shown"),
-        };
-        assert!(help.contains("--json"), "{help}");
-        assert!(!help.contains("--wait"), "{help}");
-    }
-
-    #[test]
-    fn an_environment_command_takes_the_same_time_limit_as_run() {
-        let given = |args: &[&str]| match parse(args) {
-            Ok(Cli {
-                command:
-                    Some(Command::Environment {
-                        command: Some(EnvironmentCommand::Run { timeout, .. }),
-                        ..
-                    }),
-                ..
-            }) => Some(timeout),
-            _ => None,
-        };
-
-        assert_eq!(given(&["environment", "run", "--", "tool"]), Some(20));
-        assert_eq!(
-            given(&["environment", "run", "--timeout", "600", "--", "tool"]),
-            Some(600)
-        );
-        assert_eq!(
-            given(&["environment", "run", "--timeout", "0", "--", "tool"]),
-            None
-        );
-        assert_eq!(
-            given(&["environment", "run", "--timeout", "601", "--", "tool"]),
-            None
-        );
-    }
-}
+mod tests;

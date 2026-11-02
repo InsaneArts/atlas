@@ -10,11 +10,13 @@
 //! [`control`] retains exclusion and pending work through cleanup. Observations
 //! from [`session`] describe one epoch and must be rechecked before effects.
 
+mod account;
 pub(crate) mod acl;
 pub mod actions;
 pub mod activity_log;
 pub mod agent;
 pub mod agents;
+mod app_bundle;
 pub mod app_selection;
 pub(crate) mod approval;
 mod bounded;
@@ -27,7 +29,7 @@ pub mod config;
 mod context;
 pub mod control;
 pub mod daemon;
-pub mod digest;
+mod digest;
 pub mod doing;
 pub mod environment;
 pub mod error;
@@ -36,11 +38,13 @@ pub mod files;
 mod fs_move;
 pub(crate) mod handoff;
 pub(crate) mod helper_info;
+mod host;
 pub mod host_session;
 pub mod install_app;
 pub mod interrupt;
 pub mod jobs;
 mod last_capture;
+mod lenient;
 pub mod login_log;
 pub mod mcp;
 pub mod menubar;
@@ -49,6 +53,7 @@ pub mod native;
 pub mod onboarding;
 pub(crate) mod overview;
 pub mod process;
+pub mod protocol;
 pub mod readiness;
 mod record_folder;
 mod screen;

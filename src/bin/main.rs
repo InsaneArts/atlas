@@ -5,6 +5,7 @@ mod help;
 mod init;
 mod output;
 mod policy;
+mod prompt;
 mod uninstall;
 mod update;
 
@@ -57,7 +58,7 @@ fn main() -> ExitCode {
 
     // Commands run by Atlas itself always answer in JSON, and their
     // failures carry no step for an agent: another Atlas process reads them.
-    let machine = policy.machine_only;
+    let machine = policy.machine_only();
     let format = if machine {
         Format::Json
     } else {
@@ -93,13 +94,13 @@ fn main() -> ExitCode {
     }
 
     // The helper daemon keeps this thread for the Core Foundation run loop.
-    if let Command::HelperServe {
-        uid,
-        controller_uid,
-        socket,
-    } = command
-    {
-        return match atlas::daemon::serve::serve_blocking(uid, controller_uid, socket) {
+    if let Command::HelperServe(service) = command {
+        let served = atlas::daemon::serve::serve_blocking(
+            service.uid,
+            service.controller_uid,
+            service.socket,
+        );
+        return match served {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("{}", json!(error));
@@ -120,7 +121,7 @@ fn run(
     allow_disrupt: bool,
     format: Format,
 ) -> ExitCode {
-    let machine = policy.machine_only;
+    let machine = policy.machine_only();
     // A refusing environment worker exits distinctly, so its caller can tell
     // the refusal from the command it would have run.
     let worker = match &command {
@@ -139,8 +140,11 @@ fn run(
     // stop them whenever they are stopped, a person watching or not. Every
     // other command that takes control, whoever runs it, stops on a signal
     // by starting nothing more and letting the step under way settle.
-    let (interrupted, runs_agents, listens) =
-        (policy.interrupted, policy.runs_agents, policy.controls);
+    let (interrupted, runs_agents, listens) = (
+        policy.interrupted(),
+        policy.runs_agents(),
+        policy.controls(),
+    );
     let interrupt = Interrupt::process();
 
     // The runtime lasts until the process exits, so a signal that comes
@@ -338,7 +342,8 @@ fn open_app(config: &std::path::Path) -> ExitCode {
     };
 
     let me = nix::unistd::getuid().as_raw();
-    let helper_here = atlas::onboarding::request().is_some_and(|pairing| pairing.helper_uid == me);
+    let helper_here =
+        atlas::setup::pairing::request().is_some_and(|pairing| pairing.helper_uid == me);
     let finished = !helper_here
         && Config::load(config).is_ok_and(|config| {
             atlas::setup::migrate::settled(config.helper_uid)
@@ -371,7 +376,7 @@ fn open_app(config: &std::path::Path) -> ExitCode {
 
 /// Ctrl-C during a question or a wait puts the cursor back and says how to
 /// resume (`message`, when a person is asked), instead of leaving a
-/// half-drawn line. A question Ctrl-C ends (`ui::prompt`) waits a second
+/// half-drawn line. A question Ctrl-C ends (`prompt`) waits a second
 /// for this to print and exit, so the person sees one message; change the
 /// two together. Being told to stop (SIGTERM) or losing the terminal
 /// (SIGHUP) stops the same way, without a message.
@@ -408,26 +413,4 @@ fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_signal_gives_its_status_whatever_the_result() {
-        assert_eq!(exit_status(false, None), ExitCode::SUCCESS);
-        assert_eq!(exit_status(true, None), ExitCode::FAILURE);
-        for failed in [false, true] {
-            assert_eq!(
-                exit_status(failed, Some(Signal::SIGTERM)),
-                ExitCode::from(143)
-            );
-            assert_eq!(
-                exit_status(failed, Some(Signal::SIGHUP)),
-                ExitCode::from(129)
-            );
-            assert_eq!(
-                exit_status(failed, Some(Signal::SIGINT)),
-                ExitCode::from(130)
-            );
-        }
-    }
-}
+mod tests;

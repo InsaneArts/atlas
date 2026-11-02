@@ -7,8 +7,8 @@ pub(crate) use sessions::service_blocker_with;
 use super::Client;
 use crate::{
     control::Ownership,
-    daemon::protocol::{JobState, Shown},
     error::{Code, Error, Holder, Result},
+    protocol::{JobState, Shown},
 };
 use std::time::Duration;
 
@@ -62,14 +62,12 @@ impl Client {
         let client = self.clone();
         let blocker = tokio::task::spawn_blocking(move || {
             client.output_dir()?;
-            Ok::<_, Error>(crate::client::service_change::service_blocker(
-                &client,
-                recovery,
-                super::timestamp(),
-            ))
+            Ok::<_, Error>(service_blocker(&client, recovery, super::timestamp()))
         })
         .await
-        .map_err(|_| busy("Atlas could not check which sessions are active."))??;
+        .map_err(|cause| {
+            busy("Atlas could not check which sessions are active.").with_source(cause)
+        })??;
         if let Some(message) = blocker {
             return Err(busy(message));
         }
@@ -101,12 +99,14 @@ impl Client {
                 return Err(busy(format!(
                     "Atlas could not check background jobs: {}",
                     error.error
-                )));
+                ))
+                .with_source(error));
             }
-            Err(_) => {
-                return Err(busy(
-                    "The helper did not report its background jobs in time.",
-                ));
+            Err(cause) => {
+                return Err(
+                    busy("The helper did not report its background jobs in time.")
+                        .with_source(cause),
+                );
             }
         };
         if let Some(message) = job_blocker(&jobs) {
@@ -115,9 +115,6 @@ impl Client {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests;
 
 /// The first job that has not ended, including a record Atlas cannot read.
 fn job_blocker(jobs: &[Shown]) -> Option<String> {
@@ -130,3 +127,6 @@ fn job_blocker(jobs: &[Shown]) -> Option<String> {
             }
         })
 }
+
+#[cfg(test)]
+mod tests;

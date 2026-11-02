@@ -144,15 +144,8 @@ pub(super) struct Executor {
     pub(super) start: Start,
 }
 
-#[cfg(test)]
-pub(super) fn executor_boot_with(
-    read: impl FnOnce(&std::ffi::CStr) -> Result<String>,
-) -> Result<String> {
-    read(c"kern.bootsessionuuid")
-}
-
 /// A different boot or process instance cannot be the dispatched executor.
-/// Unreadable identities and legacy PID-only records remain conservative.
+/// Unreadable identities and records remain conservative.
 pub(super) fn executor_running(file: &File) -> bool {
     executor_running_with(file, executor_boot, executor_start)
 }
@@ -173,30 +166,21 @@ pub(super) fn executor_running_with(
     if text.is_empty() {
         return false;
     }
-    let executor = serde_json::from_str::<Executor>(&text)
+    let Some(executor) = serde_json::from_str::<Executor>(&text)
         .ok()
-        .filter(|executor| executor.pid > 0);
-    let pid = match &executor {
-        Some(executor) => executor.pid,
-        None => match text.trim().parse::<i32>().ok().filter(|pid| *pid > 0) {
-            Some(pid) => pid,
-            None => return true,
-        },
+        .filter(|executor| executor.pid > 0)
+    else {
+        return true;
     };
     // An exited process has no start time to read. Only ESRCH proves absence;
     // permission errors and unavailable identities still retain the claim.
-    if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+    if nix::sys::signal::kill(nix::unistd::Pid::from_raw(executor.pid), None)
         == Err(nix::errno::Errno::ESRCH)
     {
         return false;
     }
-    if let Some(executor) = executor {
-        let (Ok(boot), Ok(start)) = (boot(), start(pid)) else {
-            return true;
-        };
-        if boot != executor.boot || start != executor.start {
-            return false;
-        }
-    }
-    true
+    let (Ok(boot), Ok(start)) = (boot(), start(executor.pid)) else {
+        return true;
+    };
+    boot == executor.boot && start == executor.start
 }

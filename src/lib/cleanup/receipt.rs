@@ -12,9 +12,10 @@ use crate::{
     client::Actor,
     error::Result,
     files::{Durability, Token},
-    host_session::{Key, now_ms},
+    host::Key,
     record_folder::{LISTED, RecordFolder, Records},
     task::record::CleanupState,
+    time::now_ms,
 };
 use serde::{Deserialize, Serialize};
 use std::{path::Path, time::Duration};
@@ -80,8 +81,11 @@ impl Receipt {
     /// any step is, blocked when any is, incomplete while any has not been
     /// done or kept, complete otherwise.
     pub(super) fn summed(&self) -> CleanupState {
-        let any = |state: StepState| self.steps.iter().any(|step| step.state == state);
-        if any(StepState::Uncertain) {
+        if self
+            .steps
+            .iter()
+            .any(|step| step.state == StepState::Uncertain)
+        {
             CleanupState::Uncertain
         } else if self
             .steps
@@ -201,7 +205,7 @@ pub(super) struct CameTo {
     /// The processes that left a stopped job's group and still ran, which
     /// were never signalled.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(super) left: Vec<crate::daemon::protocol::Left>,
+    pub(super) left: Vec<crate::protocol::Left>,
 }
 
 /// A file in the helper whose collected copy is missing or changed.
@@ -251,7 +255,10 @@ pub(super) enum StepState {
 impl StepState {
     /// Whether nothing is left to do for it.
     pub(super) fn finished(self) -> bool {
-        matches!(self, Self::Done | Self::Kept)
+        match self {
+            Self::Done | Self::Kept => true,
+            Self::Pending | Self::Started | Self::Failed | Self::Blocked | Self::Uncertain => false,
+        }
     }
 }
 
@@ -306,17 +313,27 @@ impl Reason {
     /// Whether a step that failed for this reason may succeed when run
     /// again.
     fn retried(self) -> bool {
-        matches!(
-            self,
+        match self {
             Self::Timeout
-                | Self::InUse
-                | Self::Io
-                | Self::Helper
-                | Self::NeedsStep
-                | Self::OutputNotKept
-                | Self::StillStopping
-                | Self::Uncertain
-        )
+            | Self::InUse
+            | Self::Io
+            | Self::Helper
+            | Self::NeedsStep
+            | Self::OutputNotKept
+            | Self::StillStopping
+            | Self::Uncertain => true,
+            Self::Changed
+            | Self::Replaced
+            | Self::AnotherSession
+            | Self::LabelUnreadable
+            | Self::KeptTargets
+            | Self::OtherVolume
+            | Self::Unreadable
+            | Self::Stopped
+            | Self::Identity
+            | Self::OtherAccount
+            | Self::Daemon => false,
+        }
     }
 }
 
@@ -343,23 +360,13 @@ impl Receipts {
     /// including a run cut short before its task named the receipt. Opaque
     /// formats retain load's omission policy; physical scan failures refuse.
     pub(super) fn of_session(&self, session: &Key) -> Result<Vec<Receipt>> {
-        let Some(identity) = self.folder.cleanup_identity()? else {
-            return Ok(Vec::new());
-        };
-        let _lock = self.folder.lock()?;
-        let mut receipts = Vec::new();
-        self.folder.visit_cleanup(identity, |id, bytes, modified| {
-            if let Ok(receipt) = serde_json::from_slice::<Receipt>(bytes)
-                && receipt.id == *id
-                && receipt.version <= VERSION
-                && receipt.session == *session
-            {
-                receipts.push((modified, receipt));
-            }
-            Ok(())
-        })?;
-        receipts.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-        Ok(receipts.into_iter().map(|(_, receipt)| receipt).collect())
+        self.folder.newest_complete(|id, bytes| {
+            serde_json::from_slice::<Receipt>(bytes)
+                .ok()
+                .filter(|receipt| {
+                    receipt.id == *id && receipt.version <= VERSION && receipt.session == *session
+                })
+        })
     }
 
     /// Write `receipt` whole, through to the disk, as its state is now.

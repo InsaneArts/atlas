@@ -11,8 +11,9 @@ mod origins;
 mod reads;
 mod settings;
 
-pub(crate) use app::open_viewer;
+pub(crate) use app::{launched_url, open_viewer};
 pub use app::{monitor, render_menubar, serve};
+pub(crate) use control::LeaseRefusal;
 pub(crate) use local::{SharedFrame, fetch, fetch_frame, local, post_local, recorded, running};
 
 use crate::{

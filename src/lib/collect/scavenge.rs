@@ -3,7 +3,7 @@
 //! receipt. Every level is opened from the one above it without following
 //! a link, and only private folders of this account are touched.
 use super::{ReceiptId, UNLABELLED};
-use crate::host_session::Key;
+use crate::host::Key;
 use nix::{
     dir::{Dir, Type},
     fcntl::{AtFlags, OFlag},
@@ -36,12 +36,7 @@ pub(super) fn remove_abandoned(root: &Path) {
         if !known {
             continue;
         }
-        let Some(mut receipts) = private_dir(Dir::openat(
-            &root,
-            owner.as_c_str(),
-            directory_flags(),
-            Mode::empty(),
-        )) else {
+        let Some(mut receipts) = open_private(&root, &owner) else {
             continue;
         };
         for receipt in names(&mut receipts) {
@@ -62,8 +57,7 @@ fn scavenge(parent: &Dir, name: &CStr) {
         return;
     };
     let stale = old(&stat);
-    let Some(mut folder) = private_dir(Dir::openat(parent, name, directory_flags(), Mode::empty()))
-    else {
+    let Some(mut folder) = open_private(parent, name) else {
         return;
     };
     let entries = names(&mut folder);
@@ -79,12 +73,7 @@ fn scavenge(parent: &Dir, name: &CStr) {
         }
     }
     if stale && !receipted {
-        if let Some(mut files) = private_dir(Dir::openat(
-            &folder,
-            c"files",
-            directory_flags(),
-            Mode::empty(),
-        )) {
+        if let Some(mut files) = open_private(&folder, c"files") {
             for entry in names(&mut files) {
                 remove_file_at(&files, &entry);
             }
@@ -107,10 +96,13 @@ fn remove_file_at(folder: &Dir, name: &CStr) {
 /// Whether `name` of `folder` is a regular file, itself and not a link,
 /// that last changed over an hour ago.
 fn stale_file(folder: &Dir, name: &CStr) -> bool {
-    fstatat(folder, name, AtFlags::AT_SYMLINK_NOFOLLOW).is_ok_and(|stat| {
-        SFlag::from_bits_truncate(stat.st_mode & SFlag::S_IFMT.bits()) == SFlag::S_IFREG
-            && old(&stat)
-    })
+    fstatat(folder, name, AtFlags::AT_SYMLINK_NOFOLLOW)
+        .is_ok_and(|stat| kind(&stat) == SFlag::S_IFREG && old(&stat))
+}
+
+/// What sort of thing `stat` describes.
+fn kind(stat: &FileStat) -> SFlag {
+    SFlag::from_bits_truncate(stat.st_mode & SFlag::S_IFMT.bits())
 }
 
 /// Whether what `stat` describes last changed over an hour ago.
@@ -127,14 +119,17 @@ fn directory_flags() -> OFlag {
     OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC
 }
 
+/// The folder `name` of `parent`, when it is a private folder of this account.
+fn open_private(parent: &Dir, name: &CStr) -> Option<Dir> {
+    private_dir(Dir::openat(parent, name, directory_flags(), Mode::empty()))
+}
+
 /// The folder `opened`, when it is a private folder of this account.
 fn private_dir(opened: nix::Result<Dir>) -> Option<Dir> {
     let folder = opened.ok()?;
     let stat = fstat(&folder).ok()?;
-    let directory =
-        SFlag::from_bits_truncate(stat.st_mode & SFlag::S_IFMT.bits()) == SFlag::S_IFDIR;
     let private = stat.st_uid == nix::unistd::getuid().as_raw() && stat.st_mode & 0o077 == 0;
-    (directory && private).then_some(folder)
+    (kind(&stat) == SFlag::S_IFDIR && private).then_some(folder)
 }
 
 /// The names in `folder`, but `.` and `..`, and links, which are never

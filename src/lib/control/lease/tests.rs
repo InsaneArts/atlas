@@ -229,8 +229,15 @@ async fn finishing_input_does_not_release_cleanup_still_in_progress() {
     assert!(controller.acquire(false).is_ok());
 }
 
+/// What the viewer does with an acquire the helper refused for certain.
+fn end_refused_acquire(lease: &mut Lease, token: &str, now: Instant) {
+    if lease.require_at(token, now).is_ok() {
+        lease.release_at(now);
+    }
+}
+
 #[test]
-fn abandonment_never_ends_a_later_owner_or_unfinished_work() {
+fn a_refused_acquire_never_ends_a_later_owner_or_unfinished_work() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let now = Instant::now();
@@ -238,23 +245,28 @@ fn abandonment_never_ends_a_later_owner_or_unfinished_work() {
     let old = lease.acquire_at(&controller, now, || now).unwrap();
     lease.release_at(now);
     let owner = lease.acquire_at(&controller, now, || now).unwrap();
-    lease.abandon_acquire_at(&old, now);
+    end_refused_acquire(&mut lease, &old, now);
     lease.require_at(&owner, now).unwrap();
+    assert_eq!(
+        lease.begin_release_at(Some(&owner), now).unwrap(),
+        Some(owner.clone())
+    );
+    end_refused_acquire(&mut lease, &owner, now);
+    assert!(lease.cleaning && lease.descriptor.is_some());
+    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
+    lease.end_release_at(now);
+    let owner = lease.acquire_at(&controller, now, || now).unwrap();
     lease.inflight = true;
-    lease.abandon_acquire_at(&owner, now);
-    lease.require_at(&owner, now).unwrap();
+    end_refused_acquire(&mut lease, &owner, now);
+    assert!(lease.active_at(now), "input in flight keeps the lock");
+    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
     lease.inflight = false;
-    lease.cleaning = true;
-    lease.abandon_acquire_at(&owner, now);
-    lease.require_at(&owner, now).unwrap();
-    lease.cleaning = false;
-    lease.abandon_acquire_at(&owner, now);
     assert!(!lease.active_at(now));
     assert!(controller.acquire(false).is_ok());
 }
 
 #[test]
-fn abandoning_an_expired_acquire_leaves_cleanup_in_charge() {
+fn a_refused_acquire_that_expired_leaves_cleanup_in_charge() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
     let mut lease = Lease::default();
@@ -262,7 +274,7 @@ fn abandoning_an_expired_acquire_leaves_cleanup_in_charge() {
         .acquire_at(&controller, Instant::now(), Instant::now)
         .unwrap();
     let deadline = lease.expires;
-    lease.abandon_acquire_at(&owner, deadline);
+    end_refused_acquire(&mut lease, &owner, deadline);
     assert_eq!(lease.retired.as_ref(), Some(&owner));
     assert!(lease.cleaning && lease.descriptor.is_some());
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");

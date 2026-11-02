@@ -13,12 +13,12 @@ use crate::{
     app_selection::Process,
     client::AppList,
     collect::{Intact, Kept},
-    daemon::protocol::{JobId, JobRefusal, JobState, Left, Shown},
-    environment::{InstallState, KeptReason, Outcome as Removed, PlanState, Removal, Undone},
+    environment::{InstallState, KeptReason, Outcome as Removed, PlanState, RemovalReply, Undone},
     error::{Code, Error, Result},
     files::Token,
     handoff::{self, CopyRemoval, Running},
     host_session::Key,
+    protocol::{JobId, JobRefusal, JobState, Left, Shown},
 };
 use serde_json::Value;
 use std::path::Path;
@@ -29,6 +29,40 @@ pub(super) enum Quitted {
     Gone,
     /// Some were still running when the wait ran out, as said.
     TimedOut(String),
+}
+
+/// How stopping a job came out.
+pub(super) struct JobEnd {
+    ended: bool,
+    /// What left its group and still ran.
+    left: Vec<Left>,
+}
+
+impl JobEnd {
+    /// A stop's reply, or a job's row of a shape this build does not know.
+    pub(super) fn read(reply: &Value) -> Self {
+        Self {
+            ended: reply["state"] == "ended",
+            left: serde_json::from_value(reply["left"].clone()).unwrap_or_default(),
+        }
+    }
+
+    /// `shown`, a job the helper already says has ended.
+    fn shown(shown: &Shown) -> Self {
+        match shown {
+            Shown::Job(job) => Self {
+                ended: job.state == JobState::Ended,
+                left: job
+                    .ended()
+                    .map_or_else(Vec::new, |ended| ended.left.clone()),
+            },
+            Shown::Unreadable(_) => Self {
+                ended: false,
+                left: Vec::new(),
+            },
+            Shown::Later(row) => Self::read(row),
+        }
+    }
 }
 
 /// What a cleanup needs of the helper; tests stand in for it.
@@ -56,7 +90,7 @@ pub(super) trait Hands {
     async fn undo_plan(&self, plan: &Token) -> Result<Undone>;
     /// Remove one install, when it is unchanged and nothing runs from it,
     /// under the control the cleanup holds.
-    async fn remove_install(&self, install: &Token) -> Result<Value>;
+    async fn remove_install(&self, install: &Token) -> Result<RemovalReply>;
     /// Whether each copy `collection` kept still has its size and digest.
     fn intact(&self, collection: &Collection) -> Intact;
     /// Background job `id` as the helper shows it now, read without
@@ -69,7 +103,7 @@ pub(super) trait Hands {
     async fn jobs_of(&self, session: &Key, task: Option<&Key>) -> Result<Vec<Job>>;
     /// Stop job `id` of `task` by its identity, under the control the
     /// cleanup holds, and wait for it to end: the helper's word on it then.
-    async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value>;
+    async fn stop_job(&self, task: &Key, id: &JobId) -> Result<JobEnd>;
     /// Whether the person has stopped agents.
     fn stopped(&self) -> bool;
     /// Whether an earlier action's outcome is unknown: only steps that
@@ -112,11 +146,7 @@ pub(super) async fn run(
 
         // While an outcome is unknown, only background jobs are stopped and
         // collected copies checked; the rest waits for recovery.
-        let contained = matches!(
-            receipt.steps[place].step,
-            Step::CheckOutputs { .. } | Step::StopJob { .. } | Step::FindJobs
-        );
-        if hands.unknown() && !contained {
+        if hands.unknown() && !receipt.steps[place].step.contained() {
             receipt.steps[place].set(StepState::Blocked, Some(Reason::Uncertain));
             save(receipt)?;
             continue;
@@ -143,10 +173,7 @@ pub(super) async fn run(
 
         receipt.steps[place].set(StepState::Started, None);
         save(receipt)?;
-        let outcome = match step {
-            Step::FindJobs => find_jobs(hands, receipt, session).await,
-            _ => act(hands, &step, session).await,
-        };
+        let outcome = act(hands, &step, receipt, session).await;
         let entry = &mut receipt.steps[place];
         entry.set(outcome.state, outcome.reason);
         entry.already_gone = outcome.already_gone;
@@ -269,7 +296,11 @@ async fn removes_any(hands: &impl Hands, step: &Step, not_kept: &[NotKept]) -> b
             let folder = placed.path.to_string_lossy();
             unknown || not_kept.iter().any(|file| within(&file.source, &folder))
         }
-        _ => false,
+        Step::CheckOutputs { .. }
+        | Step::Quit { .. }
+        | Step::StopJob { .. }
+        | Step::FindJobs
+        | Step::RemoveCopy { .. } => false,
     }
 }
 
@@ -284,13 +315,14 @@ fn within(path: &str, folder: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
-async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
+async fn act(hands: &impl Hands, step: &Step, receipt: &Receipt, session: &Key) -> Outcome {
     match step {
         Step::CheckOutputs { outputs } => check_outputs(hands, outputs),
-        // Listed by the run itself, which knows the receipt's job stops.
-        Step::FindJobs => Outcome::failed(Reason::NeedsStep),
+        Step::FindJobs => find_jobs(hands, receipt, session).await,
         Step::StopJob { job, task, .. } => stop_job(hands, task, job).await,
-        Step::Quit { bundles } => quit(hands, bundles, session).await,
+        Step::Quit { bundles } => quit(hands, bundles, session)
+            .await
+            .unwrap_or_else(helper_erred),
         Step::UndoPlan { plan } => match hands.undo_plan(plan).await {
             Ok(Undone::AlreadyGone) => Outcome::gone(),
             Ok(Undone::Discarded | Undone::RolledBack) => Outcome::done(),
@@ -305,11 +337,20 @@ async fn act(hands: &impl Hands, step: &Step, session: &Key) -> Outcome {
             Ok(Undone::Unfinished(said)) => {
                 Outcome::failed(Reason::Helper).with(CameTo::failed(&said))
             }
-            Err(error) => Outcome::erred(&error, Reason::Helper),
+            Err(error) => helper_erred(error),
         },
-        Step::RemoveInstall { install, .. } => remove_install(hands, install).await,
-        Step::RemoveCopy { copy } => remove_copy(hands, copy, session).await,
+        Step::RemoveInstall { install, .. } => remove_install(hands, install)
+            .await
+            .unwrap_or_else(helper_erred),
+        Step::RemoveCopy { copy } => remove_copy(hands, copy, session)
+            .await
+            .unwrap_or_else(helper_erred),
     }
+}
+
+/// A step the helper could not carry out, because of `error`.
+fn helper_erred(error: Error) -> Outcome {
+    Outcome::erred(&error, Reason::Helper)
 }
 
 /// List the helper's own jobs of `receipt`'s tasks again: done once the
@@ -507,22 +548,21 @@ async fn stop_job(hands: &impl Hands, task: &Key, id: &JobId) -> Outcome {
             "Atlas cannot tell whether this job's process is running",
         ));
     }
-    let ended = if shown.state() == Some(JobState::Ended) {
-        serde_json::to_value(shown).unwrap_or_default()
+    let end = if shown.state() == Some(JobState::Ended) {
+        JobEnd::shown(&shown)
     } else {
         match hands.stop_job(task, id).await {
-            Ok(ended) => ended,
+            Ok(end) => end,
             Err(error) => return job_failed(&error),
         }
     };
-    if ended["state"] != "ended" {
+    if !end.ended {
         return Outcome::failed(Reason::StillStopping).with(CameTo::failed(
             "The job has not ended yet; Atlas keeps stopping it",
         ));
     }
-    let left: Vec<Left> = serde_json::from_value(ended["left"].clone()).unwrap_or_default();
     Outcome::done().with(CameTo {
-        left,
+        left: end.left,
         ..CameTo::default()
     })
 }
@@ -565,84 +605,71 @@ pub(super) async fn installs_answer(
     hands.installs(&ids).await
 }
 
-async fn quit(hands: &impl Hands, bundles: &[Bundle], session: &Key) -> Outcome {
-    let installs = match installs_answer(hands, bundles).await {
-        Ok(installs) => installs,
-        Err(error) => return Outcome::erred(&error, Reason::Helper),
-    };
-    let apps = match hands.apps().await {
-        Ok(apps) => apps,
-        Err(error) => return Outcome::erred(&error, Reason::Helper),
-    };
+async fn quit(hands: &impl Hands, bundles: &[Bundle], session: &Key) -> Result<Outcome> {
+    let installs = installs_answer(hands, bundles).await?;
+    let apps = hands.apps().await?;
     let targets = targets(hands.copies(), session, bundles, &installs, &apps);
     let left = CameTo {
         untraced: targets.untraced.clone(),
         ..CameTo::default()
     };
     if targets.processes.is_empty() {
-        return Outcome::done().with(left);
+        return Ok(Outcome::done().with(left));
     }
-    match hands
+    let quitting = hands
         .quit(&targets.processes, &targets.folders, &installs_of(bundles))
-        .await
-    {
-        Ok(Quitted::Gone) => Outcome::done().with(left),
-        Ok(Quitted::TimedOut(still)) => Outcome::failed(Reason::Timeout).with(CameTo {
+        .await?;
+    Ok(match quitting {
+        Quitted::Gone => Outcome::done().with(left),
+        Quitted::TimedOut(still) => Outcome::failed(Reason::Timeout).with(CameTo {
             error: Some(still),
             ..left
         }),
-        Err(error) => Outcome::erred(&error, Reason::Helper),
-    }
+    })
 }
 
-async fn remove_install(hands: &impl Hands, install: &Token) -> Outcome {
-    let reply = match hands.remove_install(install).await {
-        Ok(reply) => reply,
-        Err(error) => return Outcome::erred(&error, Reason::Helper),
+async fn remove_install(hands: &impl Hands, install: &Token) -> Result<Outcome> {
+    let removal = match hands.remove_install(install).await? {
+        RemovalReply::Finished(removal) => removal,
+        RemovalReply::Unfinished(said) => {
+            return Ok(Outcome::failed(Reason::Helper).with(CameTo::failed(&said)));
+        }
+        RemovalReply::Unread => return Ok(Outcome::failed(Reason::Helper)),
     };
-    if reply["ok"] != true {
-        let said = reply["error"]
-            .as_str()
-            .unwrap_or("The helper did not finish moving the app aside");
-        return Outcome::failed(Reason::Helper).with(CameTo::failed(said));
-    }
-    let Ok(removal) = serde_json::from_value::<Removal>(reply) else {
-        return Outcome::failed(Reason::Helper);
+    let (outcome, held) = match removal.outcome {
+        Removed::Held { held_path } => (
+            Outcome::done(),
+            Some(held_path.to_string_lossy().into_owned()),
+        ),
+        Removed::AlreadyGone => (Outcome::gone(), None),
+        Removed::Kept { reason } => {
+            let reason = match reason {
+                KeptReason::Replaced => Reason::Replaced,
+                KeptReason::OtherVolume => Reason::OtherVolume,
+                KeptReason::Unreadable => Reason::Unreadable,
+                KeptReason::Changed => Reason::Changed,
+            };
+            (Outcome::kept(reason), None)
+        }
+        Removed::InUse => (Outcome::failed(Reason::InUse), None),
     };
-    let came_to = CameTo {
+    Ok(outcome.with(CameTo {
         side_effects: removal.side_effects.unwrap_or_default().kept,
-        held: match &removal.outcome {
-            Removed::Held { held_path } => Some(held_path.to_string_lossy().into_owned()),
-            _ => None,
-        },
+        held,
         ..CameTo::default()
-    };
-    let outcome = match removal.outcome {
-        Removed::Held { .. } => Outcome::done(),
-        Removed::AlreadyGone => Outcome::gone(),
-        Removed::Kept { reason } => Outcome::kept(match reason {
-            KeptReason::Replaced => Reason::Replaced,
-            KeptReason::OtherVolume => Reason::OtherVolume,
-            KeptReason::Unreadable => Reason::Unreadable,
-            KeptReason::Changed => Reason::Changed,
-        }),
-        Removed::InUse => Outcome::failed(Reason::InUse),
-    };
-    outcome.with(came_to)
+    }))
 }
 
-async fn remove_copy(hands: &impl Hands, copy: &Token, session: &Key) -> Outcome {
-    let apps = match hands.apps().await {
-        Ok(apps) => apps,
-        Err(error) => return Outcome::erred(&error, Reason::Helper),
-    };
-    let running = Running::listed(&apps);
-    match handoff::remove_copy(hands.copies(), copy, session, &running) {
-        CopyRemoval::AlreadyGone => Outcome::gone(),
-        CopyRemoval::Removed => Outcome::done(),
-        CopyRemoval::AnotherSession => Outcome::kept(Reason::AnotherSession),
-        CopyRemoval::Unreadable => Outcome::kept(Reason::LabelUnreadable),
-        CopyRemoval::InUse => Outcome::failed(Reason::InUse),
-        CopyRemoval::Failed(error) => Outcome::failed(Reason::Io).with(CameTo::failed(&error)),
-    }
+async fn remove_copy(hands: &impl Hands, copy: &Token, session: &Key) -> Result<Outcome> {
+    let running = Running::listed(&hands.apps().await?);
+    Ok(
+        match handoff::remove_copy(hands.copies(), copy, session, &running) {
+            CopyRemoval::AlreadyGone => Outcome::gone(),
+            CopyRemoval::Removed => Outcome::done(),
+            CopyRemoval::AnotherSession => Outcome::kept(Reason::AnotherSession),
+            CopyRemoval::Unreadable => Outcome::kept(Reason::LabelUnreadable),
+            CopyRemoval::InUse => Outcome::failed(Reason::InUse),
+            CopyRemoval::Failed(error) => Outcome::failed(Reason::Io).with(CameTo::failed(&error)),
+        },
+    )
 }

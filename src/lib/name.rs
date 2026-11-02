@@ -3,6 +3,9 @@
 //! hexadecimal digits digests and random names are written in.
 use rand::RngCore;
 
+/// The most characters an app name or element label keeps.
+pub(crate) const NAME_LIMIT: usize = 40;
+
 /// A type that holds only text its own `parse` accepts: it is read from and
 /// written as that text, and nothing else ever becomes one. `refused(text)`
 /// is the error for text that is not one; `display` also shows it as its
@@ -51,6 +54,54 @@ macro_rules! name_type {
 }
 pub(crate) use name_type;
 
+/// The first non-empty line of a program's output, at most `limit`
+/// characters, for a report; None when it printed nothing.
+pub(crate) fn first_line(output: &[u8], limit: usize) -> Option<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.chars().take(limit).collect())
+}
+
+/// `1 window`, `3 windows`.
+pub(crate) fn count(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
+/// `a`, `a and b`, `a, b and c`.
+pub fn listed(parts: &[String]) -> String {
+    match parts {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// At most [`NAME_LIMIT`] characters, cut with an ellipsis.
+pub(crate) fn bounded(text: &str) -> String {
+    let text = text.trim();
+    if text.chars().count() <= NAME_LIMIT {
+        return text.to_owned();
+    }
+
+    let mut cut = text.chars().take(NAME_LIMIT - 1).collect::<String>();
+    cut.push('…');
+    cut
+}
+
+/// `text` with its first letter upper case, for a line shown on its own.
+pub fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 /// Whether `text` is exactly `digits` lowercase hexadecimal digits, as
 /// Atlas writes digests and random names.
 pub(crate) fn lower_hex(text: &str, digits: usize) -> bool {
@@ -94,28 +145,4 @@ pub(crate) fn same_text(a: &str, b: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{hex, lower_hex, plain, random_hex};
-
-    #[test]
-    fn hex_is_lowercase_two_digits_a_byte_and_read_back_exactly() {
-        assert_eq!(hex(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
-        assert!(lower_hex("000fa0ff", 8));
-        assert!(!lower_hex("000FA0FF", 8), "uppercase is not Atlas's");
-        assert!(!lower_hex("000fa0f", 8), "every digit is there");
-        for digits in [1, 6, 12, 48] {
-            assert!(lower_hex(&random_hex(digits), digits), "{digits}");
-        }
-        assert_ne!(random_hex(48), random_hex(48));
-    }
-
-    #[test]
-    fn a_plain_label_is_short_and_of_safe_characters() {
-        assert!(plain("d9031471-5e2a:task_1.b", 64));
-        assert!(!plain("", 64));
-        assert!(!plain(&"a".repeat(65), 64));
-        for refused in ["a b", "a/b", "é", "a\nb"] {
-            assert!(!plain(refused, 64), "{refused:?}");
-        }
-    }
-}
+mod tests;

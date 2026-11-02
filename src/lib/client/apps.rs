@@ -4,26 +4,20 @@ use super::{Client, Verified};
 use crate::{
     error::{Code, Error, Result},
     process::Start,
+    protocol::SessionPin,
     transport::refusal,
 };
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 /// A complete helper observation, independent of public app filtering.
 #[derive(Clone, Debug)]
 pub(crate) struct AppList {
     rows: Vec<AppRow>,
-    starts: Starts,
+    /// The helper's process identities. Public listing discards a malformed
+    /// map, while target resolution must refuse it.
+    starts: std::result::Result<BTreeMap<i64, Start>, Arc<serde_json::Error>>,
     projection: Map<String, Value>,
-}
-
-/// Starts are optional on older helpers. Public listing discards malformed
-/// starts too, while target resolution must refuse them.
-#[derive(Clone, Debug)]
-enum Starts {
-    Absent,
-    Valid(BTreeMap<i64, Start>),
-    Malformed,
 }
 
 /// Validated decision fields and the original row for output only.
@@ -35,11 +29,12 @@ pub(crate) struct AppRow {
     executable: Option<String>,
     active: Option<bool>,
     policy: Option<String>,
+    launched_at: Option<u64>,
     projection: Map<String, Value>,
 }
 
 impl AppList {
-    /// Decode accepted rows without tightening optional fields or starts.
+    /// Decode accepted rows without tightening optional fields.
     /// A helper refusal keeps its code; other shapes are protocol failures.
     pub(crate) fn decode(reply: Value) -> Result<Self> {
         if reply["ok"] == false {
@@ -65,13 +60,8 @@ impl AppList {
             .map(AppRow::decode)
             .collect::<Option<_>>()
             .ok_or_else(malformed)?;
-        let starts = match projection.remove("starts") {
-            None => Starts::Absent,
-            Some(value) => match serde_json::from_value(value) {
-                Ok(starts) => Starts::Valid(starts),
-                Err(_) => Starts::Malformed,
-            },
-        };
+        let starts = serde_json::from_value(projection.remove("starts").unwrap_or_default())
+            .map_err(Arc::new);
         Ok(Self {
             rows,
             starts,
@@ -83,7 +73,7 @@ impl AppList {
     pub(crate) fn empty() -> Self {
         Self {
             rows: Vec::new(),
-            starts: Starts::Absent,
+            starts: Ok(BTreeMap::new()),
             projection: Map::from_iter([("ok".to_owned(), Value::Bool(true))]),
         }
     }
@@ -92,19 +82,18 @@ impl AppList {
         &self.rows
     }
 
-    pub(crate) fn starts(&self) -> Result<Option<&BTreeMap<i64, Start>>> {
-        match &self.starts {
-            Starts::Absent => Ok(None),
-            Starts::Valid(starts) => Ok(Some(starts)),
-            Starts::Malformed => Err(Error::new(
+    pub(crate) fn starts(&self) -> Result<&BTreeMap<i64, Start>> {
+        self.starts.as_ref().map_err(|cause| {
+            Error::new(
                 Code::Protocol,
                 "The helper's process identities were malformed",
-            )),
-        }
+            )
+            .with_source(cause.clone())
+        })
     }
 
     /// Public output retains every original field except internal starts.
-    pub(super) fn project(self) -> Value {
+    pub(crate) fn project(self) -> Value {
         let mut projection = self.projection;
         projection.insert(
             "apps".to_owned(),
@@ -148,6 +137,7 @@ impl AppRow {
             executable: text("executable"),
             active: fields.get("active").and_then(Value::as_bool),
             policy: text("policy"),
+            launched_at: fields.get("launchedAt").and_then(Value::as_u64),
             projection: fields,
         })
     }
@@ -170,6 +160,10 @@ impl AppRow {
     pub(crate) fn policy(&self) -> Option<&str> {
         self.policy.as_deref()
     }
+    /// Its launch, in milliseconds since 1970, when the helper says.
+    pub(crate) fn launched_at(&self) -> Option<u64> {
+        self.launched_at
+    }
 }
 
 impl Client {
@@ -186,181 +180,27 @@ impl Client {
 
     /// The complete, identity-checked observation for internal decisions.
     pub(crate) async fn running_apps(&self) -> Result<AppList> {
-        let read = async {
-            self.identity().await?;
-            self.listed_apps(json!({"op": "apps"})).await
-        };
-        read.await.map_err(Error::certain)
+        self.read_apps(None).await.map_err(Error::certain)
     }
 
-    /// The app observation in the helper session `verified` names. Older
-    /// helpers cannot pin reads and are verified again instead.
+    /// The app observation in the helper session `verified` names.
     pub(crate) async fn apps_in(&self, verified: &Verified) -> Result<AppList> {
-        let Some(pin) = verified.pin() else {
-            self.identity().await?;
-            return self
-                .listed_apps(json!({"op": "apps"}))
-                .await
-                .map_err(Error::certain);
-        };
-        self.listed_apps(json!({"op": "apps", "session": pin}))
-            .await
-            .map_err(Error::certain)
+        self.read_apps(Some(verified.pin()?)).await
     }
 
-    async fn listed_apps(&self, request: Value) -> Result<AppList> {
-        AppList::decode(self.transport.call(&request).await?)
+    /// One app list, in the session `pin` names, or after verifying the helper
+    /// when there is no pin. Only the read itself is made certain here.
+    async fn read_apps(&self, pin: Option<SessionPin>) -> Result<AppList> {
+        let mut request = json!({"op": "apps"});
+        if let Some(pin) = pin {
+            request["session"] = json!(pin);
+        } else {
+            self.identity().await?;
+        }
+        let read = async { AppList::decode(self.transport.call(&request).await?) };
+        read.await.map_err(Error::certain)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn optional_app_fields_retain_their_original_presence() {
-        let rows = vec![
-            json!({"pid": 1}),
-            json!({"pid": 2, "name": null, "bundleId": null, "executable": null}),
-            json!({"pid": 3, "name": "", "bundleId": "", "executable": "",
-                "active": false, "hidden": true, "policy": "future",
-                "launchedAt": {"future": true}, "extension": [null, 17]}),
-            json!({"pid": i32::MAX, "name": "Éditeur", "bundleId": "org.editor",
-                "executable": "/Applications/Editor.app/Contents/MacOS/Editor",
-                "active": true, "hidden": false, "policy": "regular", "launchedAt": null}),
-        ];
-        let reply = json!({"ok": true, "apps": rows, "elapsedMs": 1.5,
-            "extension": {"retained": true}});
-        let apps = AppList::decode(reply.clone()).unwrap();
-        assert_eq!(
-            apps.rows().iter().map(AppRow::pid).collect::<Vec<_>>(),
-            [1, 2, 3, i32::MAX as u64]
-        );
-        assert_eq!(apps.project(), reply);
-
-        for field in [
-            "name",
-            "bundleId",
-            "executable",
-            "active",
-            "hidden",
-            "policy",
-        ] {
-            let values = match field {
-                "active" | "hidden" => vec![json!(false), json!(true)],
-                "policy" => vec![json!(""), json!("unknown")],
-                _ => vec![Value::Null, json!(""), json!("text")],
-            };
-            for value in values {
-                let mut row = json!({"pid": 1});
-                row[field] = value;
-                let reply = json!({"ok": true, "apps": [row]});
-                assert_eq!(AppList::decode(reply.clone()).unwrap().project(), reply);
-            }
-        }
-    }
-
-    #[test]
-    fn malformed_app_rows_never_become_an_empty_running_list() {
-        for field in [
-            "pid",
-            "name",
-            "bundleId",
-            "executable",
-            "active",
-            "hidden",
-            "policy",
-        ] {
-            for value in [
-                Value::Null,
-                json!(true),
-                json!(false),
-                json!(0),
-                json!(-1),
-                json!(1.5),
-                json!("1"),
-                json!([]),
-                json!({}),
-                json!(u64::MAX),
-            ] {
-                let accepted = match field {
-                    "pid" => false,
-                    "name" | "bundleId" | "executable" => value.is_null() || value.is_string(),
-                    "active" | "hidden" => value.is_boolean(),
-                    "policy" => value.is_string(),
-                    _ => unreachable!(),
-                };
-                if accepted {
-                    continue;
-                }
-                let mut row = json!({"pid": 812});
-                row[field] = value;
-                let reply = json!({"ok": true, "apps": [{"pid": 1}, row]});
-                let error = AppList::decode(reply.clone()).unwrap_err();
-                assert_eq!(error.code, Code::Protocol, "{reply}");
-                assert!(!error.uncertain);
-                assert_eq!(
-                    error.error,
-                    "The helper's list of running apps was malformed, so Atlas cannot tell what is running"
-                );
-            }
-        }
-        for row in [
-            json!({}),
-            Value::Null,
-            json!(false),
-            json!([]),
-            json!("app"),
-            json!({"pid": 2_147_483_648_u64}),
-        ] {
-            assert_eq!(
-                AppList::decode(json!({"ok": true, "apps": [row]}))
-                    .unwrap_err()
-                    .code,
-                Code::Protocol
-            );
-        }
-    }
-
-    #[test]
-    fn public_apps_omit_starts_while_targets_reject_malformed_starts() {
-        for starts in [
-            Value::Null,
-            json!(false),
-            json!("legacy"),
-            json!([]),
-            json!({"812": null}),
-            json!({"812": [123]}),
-            json!({"812": [123, -1]}),
-            json!({"pid": [123, 456]}),
-        ] {
-            let reply = json!({"ok": true, "apps": [{"pid": 812}], "starts": starts});
-            let apps = AppList::decode(reply).unwrap();
-            let error = apps.starts().unwrap_err();
-            assert_eq!(error.code, Code::Protocol);
-            assert_eq!(
-                error.error,
-                "The helper's process identities were malformed"
-            );
-            assert!(!error.uncertain);
-            assert_eq!(apps.project(), json!({"ok": true, "apps": [{"pid": 812}]}));
-        }
-        let legacy = AppList::decode(json!({"ok": true, "apps": [{"pid": 812}]})).unwrap();
-        assert!(legacy.starts().unwrap().is_none());
-        let current = AppList::decode(json!({"ok": true, "apps": [{"pid": 812}],
-            "starts": {"812": [123, 456]}}))
-        .unwrap();
-        assert_eq!(
-            current.starts().unwrap().unwrap().get(&812),
-            Some(&[123, 456])
-        );
-        // A decoded but invalid start stays present for snapshot identity validation.
-        let stale = AppList::decode(json!({"ok": true, "apps": [{"pid": 812}],
-            "starts": {"812": [0, 1_000_000]}}))
-        .unwrap();
-        assert_eq!(
-            stale.starts().unwrap().unwrap().get(&812),
-            Some(&[0, 1_000_000])
-        );
-    }
-}
+mod tests;

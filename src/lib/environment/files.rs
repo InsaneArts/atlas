@@ -4,7 +4,11 @@ use super::{
     model::{Fingerprint, Node},
     problem,
 };
-use crate::fs_move::{Replace, rename_within};
+use crate::{
+    acl::{self, Acl},
+    files::{Lock, LockFile},
+    fs_move::{Replace, rename_within},
+};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use nix::{
     errno::Errno,
@@ -17,7 +21,7 @@ use std::os::macos::fs::MetadataExt as _;
 use std::{
     ffi::{CStr, CString},
     fs,
-    io::{Read, Write},
+    io::Write,
     os::{
         fd::AsRawFd,
         unix::{
@@ -35,15 +39,13 @@ pub(super) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {
 }
 
 pub(super) fn read_file(file: fs::File, limit: u64) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-
     if !file.metadata()?.is_file() {
         return Err(problem(
             "Environment files must be regular files, not links or devices",
         ));
     }
 
-    file.take(limit + 1).read_to_end(&mut bytes)?;
+    let bytes = crate::files::read_up_to(file, limit + 1)?;
 
     if bytes.len() as u64 > limit {
         return Err(problem("Environment file exceeds its size limit"));
@@ -147,6 +149,13 @@ pub(super) fn snapshot(path: &Path) -> Result<Option<(Fingerprint, Vec<u8>)>> {
 
 pub(super) fn fingerprint(path: &Path) -> Result<Option<Fingerprint>> {
     Ok(snapshot(path)?.map(|(fingerprint, _)| fingerprint))
+}
+
+/// When `path` last changed, in milliseconds since 1970, when that can be told.
+pub(super) fn changed_ms(path: &Path) -> Option<u64> {
+    let at = fs::symlink_metadata(path).ok()?.modified().ok()?;
+    let since = at.duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(since.as_millis()).ok()
 }
 
 pub(super) fn node(metadata: &fs::Metadata) -> Node {
@@ -261,7 +270,7 @@ fn attributes(file: &fs::File) -> Result<std::collections::BTreeMap<String, Stri
 const SYSTEM_ATTRIBUTES: &[&str] = &["com.apple.provenance"];
 
 /// Whether macOS, not the file's owner, decides the attribute `name`.
-pub(super) fn system_attribute(name: &str) -> bool {
+fn system_attribute(name: &str) -> bool {
     SYSTEM_ATTRIBUTES.contains(&name)
 }
 
@@ -293,9 +302,7 @@ pub(super) fn restore_attributes(
         // SAFETY: a live descriptor and NUL-terminated name.
         let status = unsafe { libc::fremovexattr(file.as_raw_fd(), name.as_ptr(), 0) };
         if status != 0 {
-            return Err(problem(
-                "Cannot restore an extended attribute; destination was preserved",
-            ));
+            return Err(attribute_refused());
         }
     }
 
@@ -330,9 +337,7 @@ pub(super) fn restore_attributes(
         };
 
         if status != 0 {
-            return Err(problem(
-                "Cannot restore an extended attribute; destination was preserved",
-            ));
+            return Err(attribute_refused());
         }
     }
 
@@ -345,11 +350,17 @@ pub(super) fn restore_attributes(
     Ok(())
 }
 
+/// The refusal of an attribute call that just failed, with its errno.
+fn attribute_refused() -> crate::error::Error {
+    let cause = std::io::Error::last_os_error();
+    problem("Cannot restore an extended attribute; destination was preserved").with_source(cause)
+}
+
 pub(super) fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-pub(super) fn relative_target(path: &Path) -> Result<()> {
+fn relative_target(path: &Path) -> Result<()> {
     relative_path(path, false)
 }
 
@@ -419,7 +430,7 @@ pub(super) fn overlap(first: &Path, second: &Path) -> bool {
 }
 
 pub(super) fn has_acl(path: &Path) -> Result<bool> {
-    crate::acl::present(path).map_err(|error| match error.kind() {
+    acl::present(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::InvalidData => problem("Invalid filesystem ACL"),
         _ => error.into(),
     })
@@ -429,8 +440,9 @@ pub(super) fn has_acl(path: &Path) -> Result<bool> {
 pub(super) fn remove_inherited_acl(path: &Path) -> Result<()> {
     let folder =
         directory(path, false)?.ok_or_else(|| problem("Missing provisioning directory"))?;
-    clear_acl(&folder)
-        .map_err(|error| problem(format!("Could not make provisioning data private: {error}")))
+    acl::clear(&folder).map_err(|error| {
+        problem(format!("Could not make provisioning data private: {error}")).with_source(error)
+    })
 }
 
 pub(super) fn destination(home: &Path, relative: &Path) -> Result<PathBuf> {
@@ -548,9 +560,8 @@ pub(super) fn atomic_install(
         .map_err(std::io::Error::from)?,
     );
 
-    let discard = || unlinkat(&parent, temporary.as_c_str(), UnlinkatFlags::NoRemoveDir);
     let result = (|| -> Result<()> {
-        clear_acl(&file)?;
+        acl::clear(&file)?;
         file.set_permissions(fs::Permissions::from_mode(mode))?;
         file.write_all(bytes)?;
         file.sync_all()?;
@@ -563,7 +574,8 @@ pub(super) fn atomic_install(
         Ok(())
     })();
     if result.is_err() {
-        let _ = discard();
+        // A failed cleanup leaves the reserved partial name for the next write.
+        let _ = unlinkat(&parent, temporary.as_c_str(), UnlinkatFlags::NoRemoveDir);
     }
 
     result
@@ -697,13 +709,41 @@ pub(super) fn create_private_directory(path: &Path) -> Result<fs::File> {
         .map_err(std::io::Error::from)?;
 
     let dir = directory(path, false)?.ok_or_else(|| problem("New directory disappeared"))?;
-    clear_acl(&dir)?;
+    acl::clear(&dir)?;
     dir.set_permissions(fs::Permissions::from_mode(0o700))?;
     validate_private(&dir, true)?;
     dir.sync_all()?;
     parent.sync_all()?;
 
     Ok(dir)
+}
+
+/// The private store folder at `path` and its lock file, which `take` locks:
+/// the folder is made when `access` is exclusive. None when reading a store
+/// that was never made; no lock file when nothing has written to it yet.
+pub(super) fn open_store(
+    path: &Path,
+    access: Lock,
+    take: impl FnOnce(&LockFile) -> Result<()>,
+) -> Result<Option<Option<LockFile>>> {
+    let write = access == Lock::Exclusive;
+    let folder = if write {
+        Some(private_directory(path)?)
+    } else {
+        directory(path, false)?
+    };
+    let Some(folder) = folder else {
+        return Ok(None);
+    };
+
+    validate_private(&folder, true)?;
+    let lock = open_regular(&path.join("lock"), write)?.map(LockFile);
+    if let Some(lock) = &lock {
+        validate_private(&lock.0, false)?;
+        take(lock)?;
+    }
+
+    Ok(Some(lock))
 }
 
 pub(super) fn validate_private(file: &fs::File, directory: bool) -> Result<()> {
@@ -756,27 +796,27 @@ pub(super) fn installable_parents(home: &Path, target: &Path) -> Result<()> {
             ))
         };
 
-        let Some(folder) = directory(&path, false).map_err(|_| refused())? else {
+        let Some(folder) = directory(&path, false).map_err(|cause| refused().with_source(cause))?
+        else {
             return Ok(());
         };
 
-        installation_parent(&folder).map_err(|_| refused())?;
+        installation_parent(&folder).map_err(|cause| refused().with_source(cause))?;
     }
 
     Ok(())
 }
 
-/// Only called for an inode this operation just created. Existing selected
-/// files with ACLs are refused; private files never inherit broader access.
-fn clear_acl(file: &fs::File) -> Result<()> {
-    Ok(crate::acl::clear(file)?)
+/// The entries of `file`'s ACL; none without one.
+fn acl_entries(file: &fs::File) -> Result<Vec<acl::Entry>> {
+    Ok(Acl::of_file(file)?
+        .map(|acl| acl.entries())
+        .transpose()?
+        .unwrap_or_default())
 }
 
 fn descriptor_acl(file: &fs::File) -> Result<bool> {
-    Ok(crate::acl::Acl::of_file(file)?
-        .map(|acl| acl.entries())
-        .transpose()?
-        .is_some_and(|entries| !entries.is_empty()))
+    Ok(!acl_entries(file)?.is_empty())
 }
 
 /// The helper's short name, as an ACL entry names it. Resolved once per
@@ -835,12 +875,7 @@ pub(super) fn allow_helper(path: &Path, helper: &str, executable: bool) -> Resul
 }
 
 fn writable_acl(directory: &fs::File) -> Result<bool> {
-    Ok(crate::acl::Acl::of_file(directory)?
-        .map(|acl| acl.entries())
-        .transpose()?
-        .is_some_and(|entries| {
-            entries
-                .iter()
-                .any(|entry| entry.allow && entry.mask & crate::acl::WRITE_RIGHTS != 0)
-        }))
+    Ok(acl_entries(directory)?
+        .iter()
+        .any(|entry| entry.allow && entry.mask & acl::WRITE_RIGHTS != 0))
 }

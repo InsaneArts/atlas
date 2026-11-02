@@ -69,6 +69,11 @@ impl Scan {
         self.stops.insert(why);
     }
 
+    /// Whether the last read failed, rather than finding nothing there.
+    pub(super) fn read_failed(&self) -> bool {
+        self.last_error.is_some_and(|code| !ABSENT.contains(&code))
+    }
+
     pub(super) fn failed(&mut self, status: AXError, attribute: &str) {
         self.last_error = Some(status);
         let key = format!("{attribute}:{}", status.0);
@@ -315,13 +320,10 @@ impl Scan {
             self.stop(Stop::Count);
         }
 
-        let values = match ffi::copy_values(element, &name, wanted) {
-            Ok(Some(values)) => values,
-            Ok(None) => {
-                self.failed(AXError::Success, attribute);
-                self.stop(Stop::Unread);
-                return Vec::new();
-            }
+        let values = match ffi::copy_values(element, &name, wanted)
+            .and_then(|values| values.ok_or(AXError::Success))
+        {
+            Ok(values) => values,
             Err(status) => {
                 self.failed(status, attribute);
                 self.stop(Stop::Unread);

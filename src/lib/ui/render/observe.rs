@@ -1,6 +1,6 @@
 //! Views of what the helper is and shows: doctor, status, configuration,
 //! screenshots, apps, windows, elements and readiness.
-use super::{Rendered, failed, style, text};
+use super::{Rendered, failed, items, labelled, numbered, strings, style, text};
 use crate::{
     screen::elements::{Stop, why},
     ui::table,
@@ -92,12 +92,7 @@ pub(super) fn login_timing(value: &Value) -> String {
         ),
     ];
 
-    let unfinished: Vec<&str> = value["unfinished"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
+    let unfinished: Vec<&str> = strings(&value["unfinished"]).collect();
     if !unfinished.is_empty() {
         lines.push(format!(
             "{} Never finished: {}",
@@ -133,31 +128,20 @@ pub(super) fn doctor(value: &Value, verbose: bool) -> String {
         lines.push(format!("{} Atlas is not ready", style::fail()));
         lines.push(String::new());
 
-        for check in value["checks"].as_array().into_iter().flatten() {
+        for check in items(&value["checks"]) {
             let name = check["name"].as_str().unwrap_or("Check");
             lines.push(format!("  {} {name}", style::mark(check["ok"].as_bool())));
         }
 
-        let steps: Vec<&str> = value["nextSteps"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect();
+        let steps = numbered(&value["nextSteps"]);
         if !steps.is_empty() {
             lines.push(String::new());
             lines.push("To fix:".to_owned());
-            for (number, step) in steps.iter().enumerate() {
-                lines.push(format!("  {}. {}", number + 1, text::printable(step)));
-            }
+            lines.extend(steps);
         }
     }
 
-    for warning in value["warnings"].as_array().into_iter().flatten() {
-        if let Some(warning) = warning.as_str() {
-            lines.push(format!("{} {}", style::warn(), text::printable(warning)));
-        }
-    }
+    lines.extend(warnings(value));
 
     let native = &value["capabilities"]["nativeDialogs"];
     if verbose {
@@ -166,6 +150,12 @@ pub(super) fn doctor(value: &Value, verbose: bool) -> String {
     }
 
     lines.join("\n")
+}
+
+/// The warnings `value` carries, each on a line and safe to print.
+pub(super) fn warnings(value: &Value) -> impl Iterator<Item = String> {
+    strings(&value["warnings"])
+        .map(|warning| format!("{} {}", style::warn(), text::printable(warning)))
 }
 
 /// The facts behind a doctor report, for `doctor --verbose`.
@@ -216,12 +206,9 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
         ),
     ];
 
-    let mut lines: Vec<String> = rows
-        .iter()
-        .map(|(label, shown)| format!("{}  {shown}", style::dim(format!("{label:<13}"))))
-        .collect();
+    let mut lines = labelled(&rows, 13);
 
-    for check in value["checks"].as_array().into_iter().flatten() {
+    for check in items(&value["checks"]) {
         if let Some(step) = check["nextStep"].as_str() {
             lines.push(format!(
                 "{}  {}",
@@ -288,12 +275,7 @@ pub(super) fn status(value: &Value) -> Rendered {
         ),
     ];
 
-    Rendered::out(
-        rows.iter()
-            .map(|(label, shown)| format!("{}  {shown}", style::dim(format!("{label:<8}"))))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    )
+    Rendered::out(labelled(&rows, 8).join("\n"))
 }
 
 /// The resolved settings, labelled in words.
@@ -308,10 +290,7 @@ pub(super) fn config(value: &Value) -> String {
         ("Input socket", path(&config["input_socket"])),
     ];
 
-    rows.iter()
-        .map(|(label, shown)| format!("{}  {shown}", style::dim(format!("{label:<14}"))))
-        .collect::<Vec<_>>()
-        .join("\n")
+    labelled(&rows, 14).join("\n")
 }
 
 fn path(value: &Value) -> String {
@@ -353,10 +332,7 @@ pub(super) fn capture(value: &Value) -> String {
         lines.push(format!("  {}", style::dim(facts.join(" · "))));
     }
 
-    let in_front: Vec<String> = value["overlapping"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let in_front: Vec<String> = items(&value["overlapping"])
         .filter_map(|window| window["owner"].as_str())
         .map(|owner| text::printable(owner).into_owned())
         .fold(Vec::new(), |mut owners, owner| {
@@ -375,7 +351,7 @@ pub(super) fn capture(value: &Value) -> String {
 /// The helper's apps as `atlas apps` chose them, and how many background
 /// processes it left out.
 pub(super) fn apps(value: &Value) -> String {
-    let shown: Vec<&Value> = value["apps"].as_array().into_iter().flatten().collect();
+    let shown: Vec<&Value> = items(&value["apps"]).collect();
     let mut lines = Vec::new();
 
     if shown.is_empty() {
@@ -404,11 +380,7 @@ pub(super) fn apps(value: &Value) -> String {
 
     let background = value["more"].as_u64().unwrap_or(0);
     if background > 0 {
-        let what = if background == 1 {
-            "1 background process".to_owned()
-        } else {
-            format!("{background} background processes")
-        };
+        let what = text::amount(background, "background process", "background processes");
         lines.push(style::dim(format!("{what} not shown; --all lists them.")));
     }
 
@@ -416,7 +388,7 @@ pub(super) fn apps(value: &Value) -> String {
 }
 
 pub(super) fn windows(value: &Value) -> String {
-    let windows: Vec<&Value> = value["windows"].as_array().into_iter().flatten().collect();
+    let windows: Vec<&Value> = items(&value["windows"]).collect();
     if windows.is_empty() {
         return "No windows. --all adds menus, the menu bar and the Dock.".to_owned();
     }
@@ -450,7 +422,7 @@ pub(super) fn windows(value: &Value) -> String {
 }
 
 pub(super) fn elements(value: &Value) -> String {
-    let elements: Vec<&Value> = value["elements"].as_array().into_iter().flatten().collect();
+    let elements: Vec<&Value> = items(&value["elements"]).collect();
     let matching = value["matching"].as_u64().unwrap_or(elements.len() as u64);
     let scanned = value["scanned"].as_u64().unwrap_or(matching);
     let mut lines = vec![if matching == scanned {
@@ -510,8 +482,7 @@ pub(super) fn elements(value: &Value) -> String {
     }
 
     if value["scanIncomplete"] == true {
-        let reasons = value["scan"]["reasons"].as_array().into_iter().flatten();
-        let why = why(reasons.filter_map(Value::as_str).filter_map(Stop::parse))
+        let why = why(strings(&value["scan"]["reasons"]).filter_map(Stop::parse))
             .map(|why| format!(" ({why})"))
             .unwrap_or_default();
         lines.push(format!(
@@ -542,7 +513,7 @@ fn listed_point(element: &Value) -> Option<(f64, f64)> {
 pub(super) fn readiness(value: &Value) -> String {
     let mut lines = Vec::new();
 
-    for item in value["items"].as_array().into_iter().flatten() {
+    for item in items(&value["items"]) {
         let status = item["status"].as_str().unwrap_or("unknown");
         let mark = match status {
             "ready" | "installed" => style::ok(),
@@ -564,12 +535,7 @@ pub(super) fn readiness(value: &Value) -> String {
         ));
     }
 
-    let unchecked: Vec<&str> = value["notVerified"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
+    let unchecked: Vec<&str> = strings(&value["notVerified"]).collect();
     if !unchecked.is_empty() {
         lines.push(style::dim(format!(
             "Not checked: {}.",
@@ -581,43 +547,4 @@ pub(super) fn readiness(value: &Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn an_oversized_app_name_cannot_amplify_padding_across_many_rows() {
-        console::set_colors_enabled(false);
-
-        let mut entries = vec![json!({
-            "name": "a".repeat(1024 * 1024), "pid": 1, "policy": "regular"
-        })];
-        assert!(apps(&json!({"apps": &entries})).len() < 128);
-        entries
-            .extend((0..10_000).map(|_| json!({"name": "Short", "pid": 2, "policy": "regular"})));
-
-        let shown = apps(&json!({"apps": entries}));
-        assert!(shown.len() < 400_000);
-        assert_eq!(shown.lines().count(), 10_002);
-        assert!(shown.contains("aaaaaaaaaaaaaaaaaaaaaaa…  1"));
-        assert!(shown.ends_with("Short                     2"));
-    }
-
-    #[test]
-    fn app_names_are_made_printable_and_clipped_by_display_width() {
-        console::set_colors_enabled(false);
-
-        let shown = apps(&json!({"apps": [{
-            "name": format!("\n{}", "界".repeat(20)),
-            "pid": 1, "policy": "regular", "active": true
-        }]}));
-
-        assert_eq!(
-            shown,
-            format!(
-                "APP                      PID  STATE\n\\n{}…  1    frontmost",
-                "界".repeat(10)
-            )
-        );
-    }
-}
+mod tests;

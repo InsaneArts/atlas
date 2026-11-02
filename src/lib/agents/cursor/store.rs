@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
 };
@@ -102,12 +102,17 @@ impl Store {
         }
     }
 
-    fn finish(&self, transaction: &Transaction) -> Result<()> {
-        self.write_record(transaction.after.as_ref())?;
-        remove_tree(&self.backup(), transaction.before.as_ref(), true)?;
-        remove_tree(&self.stage(), transaction.after.as_ref(), true)?;
+    /// Keep `record`, the side `transaction` ended on, and clear its scratch.
+    fn settle(&self, transaction: &Transaction, record: Option<&Record>) -> Result<()> {
+        self.write_record(record)?;
+        remove_tree(&self.backup(), transaction.before.as_ref())?;
+        remove_tree(&self.stage(), transaction.after.as_ref())?;
         remove_file(&self.transaction_path())?;
         sync_directory(&self.state)
+    }
+
+    fn finish(&self, transaction: &Transaction) -> Result<()> {
+        self.settle(transaction, transaction.after.as_ref())
     }
 
     /// A published replacement is committed. Otherwise restore the previous
@@ -163,10 +168,7 @@ impl Store {
                 "Cursor's previous Atlas plugin and backup are missing; inspect .atlas-state before reconnecting",
             ));
         }
-        self.write_record(transaction.before.as_ref())?;
-        remove_tree(&self.stage(), transaction.after.as_ref(), true)?;
-        remove_file(&self.transaction_path())?;
-        sync_directory(&self.state)
+        self.settle(&transaction, transaction.before.as_ref())
     }
 
     /// The journal declares one unfinished copy before it is created. Only
@@ -374,7 +376,7 @@ fn payload(marketplace: &Path) -> Result<Record> {
     }
     let references = crate::agent::REFERENCES
         .iter()
-        .map(|(file, _)| format!("skills/atlas/references/{file}"));
+        .map(|file| format!("skills/atlas/references/{file}"));
     let files = [
         ".cursor-plugin/plugin.json",
         "cursor/mcp.json",
@@ -549,10 +551,8 @@ fn materialize(
                 .mode(0o600)
                 .open(&temporary)?;
             let metadata = file.metadata()?;
-            #[allow(clippy::unwrap_used, reason = "The copy record was just inserted")]
-            {
-                transaction.copying.as_mut().unwrap().identity =
-                    Some((metadata.dev(), metadata.ino()));
+            if let Some(copying) = &mut transaction.copying {
+                copying.identity = Some((metadata.dev(), metadata.ino()));
             }
             write_json(&store.transaction_path(), transaction)?;
             let middle = bytes.len() / 2;
@@ -575,16 +575,15 @@ fn materialize(
     sync_directory(&target)
 }
 
-fn remove_tree(path: &Path, record: Option<&Record>, partial: bool) -> Result<()> {
+fn remove_tree(path: &Path, record: Option<&Record>) -> Result<()> {
     if !exists(path)? {
         return Ok(());
     }
     let record = record.ok_or_else(|| problem("Cursor's Atlas scratch has no ownership record"))?;
     let actual = snapshot(path)?;
-    if (!partial && actual != record.entries)
-        || actual
-            .iter()
-            .any(|(name, entry)| record.entries.get(name) != Some(entry))
+    if actual
+        .iter()
+        .any(|(name, entry)| record.entries.get(name) != Some(entry))
     {
         return Err(problem(format!(
             "Cursor's Atlas scratch at {} changed; it was kept",
@@ -634,8 +633,7 @@ fn directory(path: &Path, create: bool, private: bool) -> Result<()> {
 fn read_file(path: &Path) -> Result<Vec<u8>> {
     let file = crate::files::open_plain(path)
         .ok_or_else(|| problem(format!("Could not read regular file {}", path.display())))?;
-    let mut bytes = Vec::new();
-    file.take(MAX_FILE + 1).read_to_end(&mut bytes)?;
+    let bytes = crate::files::read_up_to(file, MAX_FILE + 1)?;
     if bytes.len() as u64 > MAX_FILE {
         return Err(problem("Cursor's Atlas file exceeds 2 MiB"));
     }
@@ -665,20 +663,15 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| problem("Cursor's Atlas state has no parent"))?;
-    let temporary = parent.join(format!(".write-{}", rand::random::<u64>()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary)?;
-    let outcome = (|| {
-        file.write_all(&serde_json::to_vec(value)?)?;
-        file.sync_all()?;
-        fs::rename(&temporary, path)?;
-        sync_directory(parent)
-    })();
-    let _ = fs::remove_file(temporary);
-    outcome
+    crate::files::write_beside(
+        path,
+        0o600,
+        |file| Ok(file.write_all(&serde_json::to_vec(value)?)?),
+        |temporary| {
+            fs::rename(temporary, path)?;
+            sync_directory(parent)
+        },
+    )
 }
 
 fn exists(path: &Path) -> Result<bool> {

@@ -1,15 +1,12 @@
 //! `atlas activity` as a person reads it: one session's work in a few lines,
 //! or one line for each session. Words only; keys only with `--json`.
-use super::{style, text};
+use super::{items, style, text};
 use crate::host_session::names::minute;
 use serde_json::Value;
 
 /// One line for each task the session named, with what it left.
 fn tasks(tasks: &Value) -> Vec<String> {
-    tasks
-        .as_array()
-        .into_iter()
-        .flatten()
+    items(tasks)
         .filter_map(|task| {
             let name = text::printable(task["name"].as_str()?).into_owned();
             let left = &task["leftovers"];
@@ -17,10 +14,7 @@ fn tasks(tasks: &Value) -> Vec<String> {
                 left[field]
                     .as_u64()
                     .filter(|count| *count > 0)
-                    .map(|count| match count {
-                        1 => format!("1 {one}"),
-                        count => format!("{count} {many}"),
-                    })
+                    .map(|count| text::amount(count, one, many))
             };
             let parts: Vec<String> = [
                 count("copies", "open copy", "open copies"),
@@ -72,10 +66,7 @@ fn one(value: &Value) -> String {
         }
     ));
 
-    let copies: Vec<&str> = value["copies"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let copies: Vec<&str> = items(&value["copies"])
         .map(|copy| copy["app"].as_str().unwrap_or("an app"))
         .collect();
     if !copies.is_empty() {
@@ -85,10 +76,7 @@ fn one(value: &Value) -> String {
         ));
     }
 
-    let plans: Vec<String> = value["plans"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let plans: Vec<String> = items(&value["plans"])
         .filter_map(|plan| {
             let id = plan["planId"].as_str()?;
             let phase = phase_word(plan["phase"].as_str()?);
@@ -146,7 +134,7 @@ fn everyone(sessions: &[Value]) -> String {
         return format!("{} No agent session is recorded here", style::unknown());
     }
 
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     sessions
         .iter()
         .map(|session| {
@@ -167,11 +155,7 @@ fn everyone(sessions: &[Value]) -> String {
             .into_iter()
             .filter_map(|(key, one, many)| {
                 let count = left[key].as_u64().filter(|count| *count > 0)?;
-                Some(if count == 1 {
-                    format!("1 {one}")
-                } else {
-                    format!("{count} {many}")
-                })
+                Some(text::amount(count, one, many))
             })
             .collect();
             if !parts.is_empty() {
@@ -214,11 +198,7 @@ fn counted(counts: &Value) -> Vec<String> {
         .filter_map(|(verb, count)| Some((verb.as_str(), count.as_u64()?)))
         .map(|(verb, count)| {
             let (one, many) = verb_words(verb);
-            if count == 1 {
-                format!("1 {one}")
-            } else {
-                format!("{count} {many}")
-            }
+            text::amount(count, one, &many)
         })
         .collect()
 }

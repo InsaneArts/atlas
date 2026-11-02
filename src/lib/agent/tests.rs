@@ -21,7 +21,7 @@ fn helper_identity_resolves_even_when_the_process_is_unavailable_to_the_controll
     let pid = i64::from(i32::MAX);
     let start = [123, 456];
     let starts = BTreeMap::from([(pid, start)]);
-    let expect = snapshot_expect(pid, Some(&starts)).unwrap();
+    let expect = snapshot_expect(pid, &starts).unwrap();
     assert_eq!(
         serde_json::to_value(&expect).unwrap(),
         json!({"pid":pid,"start":start})
@@ -36,17 +36,10 @@ fn a_current_snapshot_without_the_process_identity_refuses_instead_of_adopting_i
         BTreeMap::from([(812, [0, 1])]),
         BTreeMap::from([(812, [123, 1_000_000])]),
     ] {
-        let error = snapshot_expect(812, Some(&starts)).unwrap_err();
+        let error = snapshot_expect(812, &starts).unwrap_err();
         assert_eq!(error.code, Code::Elements);
         assert!(!error.uncertain);
     }
-}
-
-#[test]
-fn an_older_snapshot_leaves_the_instance_for_the_input_service_to_pin() {
-    let expect = snapshot_expect(812, None).unwrap();
-    assert_eq!(serde_json::to_value(&expect).unwrap(), json!({"pid":812}));
-    assert_eq!(expect.instance(), None);
 }
 
 #[test]
@@ -55,7 +48,7 @@ fn window_snapshot_identities_are_read_but_never_appear_in_the_public_window_row
         "ok":true,"starts":{"812":[123,456]},"windows":[window(42,812,"Editor",0)]
     });
     let snapshot = crate::screen::windows::from_reply(&reply).unwrap();
-    let expect = snapshot_expect(snapshot.windows[0].pid, snapshot.starts.as_ref()).unwrap();
+    let expect = snapshot_expect(snapshot.windows[0].pid, &snapshot.starts).unwrap();
     assert_eq!(
         serde_json::to_value(expect).unwrap(),
         json!({"pid":812,"start":[123,456]})
@@ -72,10 +65,14 @@ fn textedit_reads(request: &Value) -> Option<Value> {
     use crate::test_support::completed;
 
     if request["op"] == "apps" {
-        return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit"}]}));
+        return Some(
+            json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit"}],
+            "starts": {"812": [123, 456]}}),
+        );
     }
     if request["op"] == "windows" {
-        return Some(json!({"ok": true, "windows": [{"number": 5, "pid": 812,
+        return Some(json!({"ok": true, "starts": {"812": [123, 456]},
+            "windows": [{"number": 5, "pid": 812,
             "owner": "TextEdit", "title": null, "layer": 0, "alpha": 1.0,
             "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}}]}));
     }
@@ -148,40 +145,35 @@ async fn finding_an_app_verifies_the_helper_once() {
 }
 
 /// A daemon that cannot be told which session a read is for is not
-/// trusted to be the one verified: each read verifies it again.
+/// trusted to be the one verified: nothing is read from it.
 #[tokio::test]
-async fn an_older_daemon_is_verified_again_for_each_read() {
+async fn a_daemon_that_cannot_pin_a_read_is_refused() {
     use crate::test_support::{Helper, UID};
 
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = Helper::client(directory.path(), UID);
     let helper = helper.older();
     let target = Target::Name("TextEdit".into());
-    let listed = helper
+    let error = helper
         .serve(
             elements(&client, &target, &ElementFilter::default(), 10, false),
-            textedit_reads,
+            |request| panic!("nothing is read: {request}"),
         )
         .await
-        .unwrap();
-    assert_eq!(listed["pid"], 812);
-    assert_eq!(
-        helper.proofs(),
-        3,
-        "once, then before the lookup and the scan"
-    );
+        .unwrap_err();
+    assert_eq!(error.code, Code::Daemon);
+    assert!(error.error.contains("run atlas restart"), "{error}");
 }
 
 /// An app found in one helper session is never captured in another:
-/// its process ID means nothing there. Even an older daemon, which
-/// cannot refuse the lookup itself, gets no capture asked of it.
+/// its process ID means nothing there, so no capture is asked for.
 #[tokio::test]
 async fn an_app_is_captured_only_in_the_session_it_was_found_in() {
     use crate::test_support::{Helper, UID};
 
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = Helper::client(directory.path(), UID);
-    let helper = helper.older().moving_after(1);
+    let helper = helper.moving_after(1);
     let mut captures = 0;
     let error = helper
         .serve(
@@ -533,6 +525,25 @@ fn core_text() -> String {
     CORE.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// What the skill says of each of its [`REFERENCES`].
+const ABOUT: [&str; 5] = [
+    "Test your own app.",
+    "Give the app what it needs: copy files in and roll them back.",
+    "Limits, and details of typing, keys, scrolling and `atlas run`.",
+    "every command and its options.",
+    "the error reference, every code and what to do.",
+];
+
+/// When a skill loads: what Atlas is for, in the words an agent matches.
+const SKILL_DESCRIPTION: &str = "See and use macOS GUIs in a hidden second login (the helper) \
+without touching the person's desktop, windows, keyboard or mouse. Use it whenever you change \
+something a person could see in a Mac app (a window, dialog, menu, menu bar item, layout or \
+icon), open the build in the helper and check it before saying it works. Also use it to \
+reproduce on-screen bugs, run installers or anything that opens windows or takes focus, test \
+a web app in Google Chrome or Firefox, take screenshots, and click or type in apps. Also use it when the person \
+asks to watch the helper, see what you are doing or take over: open the live view for them. Not for unit tests, builds \
+or reading files.";
+
 /// Where the skill's references live, beside its SKILL.md.
 fn references_folder() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("agents/atlas/skills/atlas/references")
@@ -545,7 +556,7 @@ fn the_skill_is_the_core_followed_by_its_references() {
     let (_, core) = CORE.split_once('\n').unwrap();
     let rest = body.strip_prefix(core.trim_start()).unwrap();
     let mut expected = String::from("\n## References\n\nRead one when the task needs it:\n\n");
-    for (file, about) in REFERENCES {
+    for (file, about) in REFERENCES.iter().zip(ABOUT) {
         expected.push_str(&format!(
             "- [references/{file}](references/{file}): {about}\n"
         ));
@@ -793,10 +804,7 @@ fn no_step_quits_or_discards_what_the_task_did_not_open() {
 fn the_full_guide_is_the_core_then_every_reference_written_for_it() {
     let mut expected = format!("{CORE}\n");
     for file in ["testing.md", "environment.md", "limits.md"] {
-        assert!(
-            REFERENCES.iter().any(|(listed, _)| *listed == file),
-            "{file}"
-        );
+        assert!(REFERENCES.contains(&file), "{file}");
         let text = std::fs::read_to_string(references_folder().join(file)).unwrap();
         assert!(text.starts_with("## "), "{file} starts with its heading");
         expected.push_str(&text);
@@ -815,10 +823,7 @@ fn every_reference_the_skill_lists_is_in_its_folder_and_nothing_else_is() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     present.sort();
-    let mut listed: Vec<String> = REFERENCES
-        .iter()
-        .map(|(file, _)| (*file).to_owned())
-        .collect();
+    let mut listed: Vec<String> = REFERENCES.iter().map(|file| (*file).to_owned()).collect();
     listed.sort();
     assert_eq!(present, listed);
 }
@@ -832,9 +837,7 @@ fn every_section_the_core_points_to_exists() {
         assert!(core.contains(&format!("read {section}")), "{section}");
         assert!(GUIDE.contains(&format!("\n## {section}\n")), "{section}");
         assert!(
-            REFERENCES
-                .iter()
-                .any(|(_, about)| about.starts_with(section)),
+            ABOUT.iter().any(|about| about.starts_with(section)),
             "{section}"
         );
     }
@@ -1607,7 +1610,8 @@ async fn a_disabled_named_control_refuses_before_any_input_or_native_preparation
             |request| {
                 if request["op"] == "apps" {
                     assert_eq!(reads, 0, "no app lookup after scanning");
-                    return Some(json!({"ok": true, "apps": [{"pid": std::process::id(), "name": "TextEdit"}]}));
+                    return Some(json!({"ok": true, "apps": [{"pid": std::process::id(), "name": "TextEdit"}],
+                        "starts": {std::process::id().to_string(): [123, 456]}}));
                 }
                 assert_eq!(
                     request["op"], "run",
@@ -3175,7 +3179,8 @@ async fn incomplete_or_ambiguous_element_scans_never_dispatch_input() {
                                 .to_string(),
                         ))
                     } else if request["op"] == "apps" {
-                        Some(json!({"ok": true, "apps": [{"pid": std::process::id(), "name": "TextEdit"}]}))
+                        Some(json!({"ok": true, "apps": [{"pid": std::process::id(), "name": "TextEdit"}],
+                            "starts": {std::process::id().to_string(): [123, 456]}}))
                     } else {
                         textedit_reads(request)
                     }
@@ -3223,8 +3228,8 @@ fn a_named_sheet_button_keeps_the_exact_sheet_or_parent_number_from_the_scan() {
 async fn pictures_compare_two_readings_and_window_lists_remember_their_own_reading() {
     use crate::{
         client::Size,
-        daemon::protocol::Crop,
         host_session::{Host, HostSession},
+        protocol::Crop,
         test_support::{Helper, UID, completed},
     };
     use base64::{Engine, engine::general_purpose::STANDARD};
@@ -3427,7 +3432,7 @@ async fn a_failed_window_read_preserves_memory_and_stops_the_look() {
                                 || json!({"ok": false, "code": "windows", "error": "Unavailable"}),
                             );
                         }
-                        Some(json!({"ok": true, "windows": [], "dock": "unread"}))
+                        Some(json!({"ok": true, "windows": [], "starts": {}, "dock": "unread"}))
                     },
                 )
                 .await;
@@ -3475,7 +3480,7 @@ async fn looks_and_window_lists_fail_when_window_memory_cannot_be_replaced() {
                 },
                 |request| {
                     assert_eq!(request["op"], "windows");
-                    Some(json!({"ok": true, "windows": [], "dock": "unread"}))
+                    Some(json!({"ok": true, "windows": [], "starts": {}, "dock": "unread"}))
                 },
             )
             .await;
@@ -3576,7 +3581,7 @@ fn target_selection_pins_the_listed_process_start() {
 }
 
 #[tokio::test]
-async fn app_targets_preserve_absent_valid_and_malformed_process_identities() {
+async fn app_targets_keep_valid_process_identities_and_refuse_absent_or_malformed_ones() {
     use crate::test_support::{Helper, UID};
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = Helper::client(directory.path(), UID);
@@ -3605,7 +3610,6 @@ async fn app_targets_preserve_absent_valid_and_malformed_process_identities() {
                 )
                 .await;
             match starts {
-                None => assert_eq!(result.unwrap().instance(), None),
                 Some(value) if value == json!({"812": [123, 456]}) => {
                     assert_eq!(
                         result.unwrap().instance(),
@@ -3620,7 +3624,7 @@ async fn app_targets_preserve_absent_valid_and_malformed_process_identities() {
                         "The app's process changed while it was being resolved; look again"
                     );
                 }
-                Some(_) => {
+                None | Some(_) => {
                     let error = result.unwrap_err();
                     assert_eq!(error.code, Code::Protocol);
                     assert_eq!(

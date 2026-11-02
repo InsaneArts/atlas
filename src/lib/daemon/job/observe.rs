@@ -2,9 +2,9 @@
 //! notes of a job's descendants to say which left its group. Nothing noted
 //! here ever decides a signal.
 use crate::{
-    daemon::protocol::Left,
     error::Result,
     process::{self, Info, Instance},
+    protocol::Left,
 };
 use nix::{errno::Errno, sys::signal::Signal, unistd::Pid};
 use std::collections::HashMap;
@@ -62,7 +62,6 @@ impl Kernel for Live {
 pub(super) fn observe(
     seen: &mut Vec<Instance>,
     job: &Instance,
-    members: &[Info],
     processes: &[Info],
     session_of: impl Fn(i32) -> Option<i32>,
 ) {
@@ -78,7 +77,10 @@ pub(super) fn observe(
             false
         }
     };
-    for member in members.iter().filter(|member| !member.zombie) {
+    for member in processes
+        .iter()
+        .filter(|member| member.pgid == job.pid && !member.zombie)
+    {
         add(seen, member.instance);
     }
 

@@ -4,8 +4,9 @@ use crate::{
     doing::Doing,
     error::advice as hints,
     error::{Code, Error},
+    host::ancestry,
     host_session::{
-        Host, Instance, ancestry,
+        Host, Instance,
         store::{Kind, note},
     },
     test_support::client,
@@ -39,8 +40,8 @@ fn holder(client: &Client, session: &HostSession, process: Instance) {
     let path = client.controller.holder_path();
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let note = Note {
-        session: Some(session.key.clone()),
-        host: Some(session.host),
+        session: Some(session.key().clone()),
+        host: Some(session.host()),
         folder: None,
         named: None,
         process,
@@ -63,7 +64,7 @@ fn busy_names_the_session_that_holds_the_helper() {
 
     let error = reply(busy(), || Some(client.clone()), None).unwrap_err();
     let held = &error.details["heldBy"];
-    assert_eq!(held["session"], codex.key.as_str());
+    assert_eq!(held["session"], codex.key().as_str());
     assert_eq!(held["host"], "codex");
     assert_eq!(held["since"], 1_761_660_300_000_u64);
     assert!(
@@ -82,8 +83,8 @@ fn busy_names_a_holder_on_its_first_command_by_its_host_and_folder() {
     let path = client.controller.holder_path();
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let note = Note {
-        session: Some(codex.key.clone()),
-        host: Some(codex.host),
+        session: Some(codex.key().clone()),
+        host: Some(codex.host()),
         folder: Some("left".into()),
         named: None,
         process: another_process(),
@@ -134,7 +135,7 @@ fn row(seconds_ago: u64, session: &HostSession, app: &str) -> Value {
     json!({
         "at": at.to_string(), "operation": "input", "ok": true, "elapsedMs": 4.0,
         "actor": "agent", "verb": "click", "command": &crate::files::token()[..12],
-        "app": app, "session": session.key,
+        "app": app, "session": session.key(),
     })
 }
 
@@ -180,7 +181,7 @@ fn focus_changed_names_who_last_used_the_app_in_front() {
     ];
     assert_eq!(
         last_used(&rows, "Calculator").as_deref(),
-        Some(pi.key.as_str())
+        Some(pi.key().as_str())
     );
     let value = reply(
         focus_changed("Calculator"),
@@ -207,7 +208,7 @@ fn focus_changed_names_who_last_used_the_app_in_front() {
     assert_eq!(last_used(&[row(5, &codex, "TextEdit")], "Calculator"), None);
     assert_eq!(
         last_used(&[row(5, &codex, "ÉDITEUR")], "Éditeur").as_deref(),
-        Some(codex.key.as_str()),
+        Some(codex.key().as_str()),
         "app names fold case beyond ASCII"
     );
 }
@@ -238,7 +239,7 @@ fn a_refusal_inside_the_app_names_no_last_user() {
         Some(&claude),
     )
     .unwrap();
-    assert_eq!(value["lastUsedBy"]["session"], codex.key.as_str());
+    assert_eq!(value["lastUsedBy"]["session"], codex.key().as_str());
 }
 
 /// A pending change claimed for `session`, left with no process carrying
@@ -353,7 +354,7 @@ fn busy_from_a_running_command_names_the_session_that_started_it() {
     assert_eq!(error.code, "busy");
     assert_eq!(error.details["running"], "command");
     let held = &error.details["heldBy"];
-    assert_eq!(held["session"], codex.key.as_str());
+    assert_eq!(held["session"], codex.key().as_str());
     assert!(
         held["name"].as_str().unwrap().starts_with("Codex"),
         "{held}"
@@ -384,7 +385,7 @@ fn busy_from_a_first_commands_run_names_its_session_as_its_record_will() {
     assert_eq!(error.details["running"], "command");
     assert_eq!(
         error.details["heldBy"],
-        json!({"session": agent.key.as_str(), "name": "agent-a · left"}),
+        json!({"session": agent.key().as_str(), "name": "agent-a · left"}),
         "never its key: it has no record yet and holds no control"
     );
 

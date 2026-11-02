@@ -15,7 +15,7 @@ use crate::{
     context::context,
     error::{Code, Error, Result},
     files::{Held, Lock, LockFile, lock_within, open_lock, token},
-    host_session::Key,
+    host::Key,
 };
 use fs2::FileExt;
 use std::{
@@ -57,11 +57,7 @@ impl Controller {
 
     /// Read unsettled state while the caller holds the marker lock.
     pub(super) fn read_unsettled(&self) -> Result<Unsettled> {
-        if !self
-            .marker
-            .try_exists()
-            .map_err(context("Inspect pending marker", &self.marker))?
-        {
+        if !self.marker_exists()? {
             return Ok(Unsettled::Nothing);
         }
 
@@ -73,6 +69,12 @@ impl Controller {
         } else {
             Unsettled::Unknown
         })
+    }
+
+    fn marker_exists(&self) -> Result<bool> {
+        self.marker
+            .try_exists()
+            .map_err(context("Inspect pending marker", &self.marker))
     }
 
     pub(super) fn lock_marker(&self) -> Result<LockFile> {
@@ -88,11 +90,12 @@ impl Controller {
     pub(super) fn lock_marker_within(&self, wait: Duration) -> Result<LockFile> {
         self.make_directory()?;
         let file = open_lock(&self.marker_lock)?;
-        lock_within(&file, Lock::Exclusive, wait).map_err(|Held| {
+        lock_within(&file, Lock::Exclusive, wait).map_err(|Held(cause)| {
             Error::new(
                 Code::Busy,
                 "Atlas could not check pending activity in time.",
             )
+            .with_source(cause)
         })?;
         Ok(file)
     }
@@ -101,11 +104,7 @@ impl Controller {
     /// it out, and the host session that claimed it when one is recorded;
     /// from one locked read of the marker, or none when there is no marker.
     pub(crate) fn pending_causes(&self) -> Result<Vec<Cause>> {
-        if !self
-            .marker
-            .try_exists()
-            .map_err(context("Inspect pending marker", &self.marker))?
-        {
+        if !self.marker_exists()? {
             return Ok(Vec::new());
         }
 
@@ -121,11 +120,7 @@ impl Controller {
     /// Returns lock, storage or decoding failures rather than treating unreadable pending
     /// ownership as empty.
     pub fn pending_causes_within(&self, wait: Duration) -> Result<Vec<Cause>> {
-        if !self
-            .marker
-            .try_exists()
-            .map_err(context("Inspect pending marker", &self.marker))?
-        {
+        if !self.marker_exists()? {
             return Ok(Vec::new());
         }
         let _lock = self.lock_marker_within(wait)?;
@@ -298,8 +293,10 @@ impl Controller {
 
         self.make_directory()?;
         let file = open_lock(&live)?;
-        FileExt::try_lock_exclusive(&file.0)
-            .map_err(|_| Error::new(Code::Busy, "That generation is already being carried out"))?;
+        FileExt::try_lock_exclusive(&file.0).map_err(|cause| {
+            Error::new(Code::Busy, "That generation is already being carried out")
+                .with_source(cause)
+        })?;
 
         let claim = Pending {
             generation: generation.to_owned(),
@@ -386,15 +383,7 @@ impl Controller {
 
         let mut pending = pending(&self.marker)?;
         pending.retain(|entry| entry != generation);
-        let _ = by_generation::keep::<Key>(&self.causes, &pending);
-        let _ = commands::keep(&self.commands, &pending);
-        let _ = by_generation::keep::<Note>(&self.running, &pending);
-
-        if pending.is_empty() {
-            remove_marker(&self.marker)
-        } else {
-            replace_private(&self.marker, &serde_json::to_vec(&pending)?)
-        }
+        self.keep_pending(&pending)
     }
 
     /// Verified recovery settles every pending mutation no live claim holds
@@ -414,51 +403,49 @@ impl Controller {
             .collect();
         let prefix = format!("{}.", self.name);
         let replacing = format!(".{prefix}");
+        let stale =
+            |generation: &str| self.live(generation).is_some() && !self.in_progress(generation);
 
         for entry in fs::read_dir(&self.directory)?.flatten() {
             let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
             // Only a writer holding the marker lock has a replacement under
             // way, so one found now was left by a writer that was killed.
-            if name
-                .to_str()
-                .is_some_and(|name| name.starts_with(&replacing) && name.ends_with(REPLACING))
-            {
+            if name.starts_with(&replacing) && name.ends_with(REPLACING) {
                 let _ = fs::remove_file(entry.path());
                 continue;
             }
-            let generation = name
-                .to_str()
-                .and_then(|name| name.strip_prefix(&prefix)?.strip_suffix(".live"));
-            if let Some(generation) = generation
-                && self.live(generation).is_some()
-                && !self.in_progress(generation)
-            {
+            let Some(name) = name.strip_prefix(&prefix) else {
+                continue;
+            };
+            if name.strip_suffix(".live").is_some_and(stale) {
                 remove_claim(&entry.path());
                 continue;
             }
             // An executor record still unnamed when its claim is no longer
             // held was left by a writer that was killed.
-            let writing = name.to_str().and_then(|name| {
-                let (generation, _) = name
-                    .strip_prefix(&prefix)?
-                    .split_once(&format!(".{EXECUTOR_WRITING}"))?;
-                Some(generation)
-            });
-            if let Some(generation) = writing
-                && self.live(generation).is_some()
-                && !self.in_progress(generation)
+            if name
+                .split_once(&format!(".{EXECUTOR_WRITING}"))
+                .is_some_and(|(generation, _)| stale(generation))
             {
                 let _ = fs::remove_file(entry.path());
             }
         }
-        let _ = by_generation::keep::<Key>(&self.causes, &running);
-        let _ = commands::keep(&self.commands, &running);
-        let _ = by_generation::keep::<Note>(&self.running, &running);
+        self.keep_pending(&running)
+    }
 
-        if running.is_empty() {
+    /// Under the marker lock, prune ancillary records before publishing settlement.
+    /// Lost labels are harmless; lost command marks conservatively become unknown.
+    fn keep_pending(&self, pending: &[String]) -> Result<()> {
+        let _ = by_generation::keep::<Key>(&self.causes, pending);
+        let _ = commands::keep(&self.commands, pending);
+        let _ = by_generation::keep::<Note>(&self.running, pending);
+        if pending.is_empty() {
             remove_marker(&self.marker)
         } else {
-            replace_private(&self.marker, &serde_json::to_vec(&running)?)
+            replace_private(&self.marker, &serde_json::to_vec(pending)?)
         }
     }
 }

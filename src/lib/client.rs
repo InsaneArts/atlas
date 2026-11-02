@@ -19,37 +19,36 @@ mod tests;
 mod windows;
 
 pub(crate) use apps::{AppList, AppRow};
-pub(crate) use capture::Frame;
 #[cfg(test)]
 pub(crate) use capture::prune_captures;
-pub use capture::{SCREENSHOT_SIDE, Size, png_dimensions};
 pub(crate) use mutate::Mutation;
-pub(crate) use record::PersonInput;
-pub(crate) use run::Run;
+pub(crate) use record::{NOT_RECORDED, PersonInput};
+pub(crate) use run::{Finished, Run};
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 pub(crate) use windows::WINDOW_LOOKUP;
 
-pub use crate::time::timestamp;
+pub(crate) use crate::screen::frame::Frame;
 use crate::{
     config::Config,
     control::Controller,
-    daemon::protocol::{SESSION_PIN, SessionPin},
     doing::Doing,
     error::{Code, Error, Result},
     host_session::HostSession,
+    protocol::{SESSION_PIN, SessionPin},
     session::{Observation, Session},
     task::Task,
     transport::{Transport, run_output},
 };
+pub use crate::{
+    screen::{
+        frame::{SCREENSHOT_SIDE, Size},
+        png::png_dimensions,
+    },
+    time::timestamp,
+};
 use serde_json::{Value, json};
 
-use std::{
-    fs,
-    os::unix::fs::{DirBuilderExt, MetadataExt},
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{path::Path, sync::Arc, time::Duration};
 
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
 type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
@@ -69,15 +68,20 @@ impl Verified {
         &self.session
     }
 
-    /// What a read carries to be served only in this session; none when the
-    /// daemon cannot be told, and the session is verified again instead.
-    pub(crate) fn pin(&self) -> Option<SessionPin> {
-        self.observation
-            .has_capability(SESSION_PIN)
-            .then_some(SessionPin {
-                security_session_id: self.session.epoch.security_session_id,
-                display_id: self.session.epoch.display_id,
-            })
+    /// What a read carries to be served only in this session. A daemon that
+    /// cannot be told is refused, so no read goes unpinned.
+    pub(crate) fn pin(&self) -> Result<SessionPin> {
+        if !self.observation.has_capability(SESSION_PIN) {
+            return Err(Error::new(
+                Code::Daemon,
+                "The helper is running an older Atlas that cannot hold a read to its session; run \
+                 atlas restart, then try again",
+            ));
+        }
+        Ok(SessionPin {
+            security_session_id: self.session.epoch.security_session_id,
+            display_id: self.session.epoch.display_id,
+        })
     }
 }
 
@@ -178,31 +182,8 @@ impl Client {
     /// Rejects an existing non-private, foreign-owned or non-directory destination, and returns
     /// directory-creation or inspection failures.
     pub fn output_dir(&self) -> Result<&Path> {
-        let path = &self.config.output_dir;
-        if !path.exists() {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(path)
-                .map_err(|error| Error::writing(path, error))?;
-        }
-
-        let metadata = fs::symlink_metadata(path)
-            .map_err(crate::context::context("Inspect output directory", path))?;
-        if !metadata.is_dir()
-            || metadata.uid() != nix::unistd::getuid().as_raw()
-            || metadata.mode() & 0o077 != 0
-        {
-            return Err(Error::new(
-                Code::Config,
-                format!(
-                    "Output directory {} must be a private (0700) directory you own",
-                    path.display()
-                ),
-            ));
-        }
-
-        Ok(path)
+        crate::files::private_folder(&self.config.output_dir, Code::Config)?;
+        Ok(&self.config.output_dir)
     }
 
     pub async fn status(&self) -> Value {
@@ -258,6 +239,11 @@ impl Client {
         Ok(serde_json::from_slice(&output)?)
     }
 
+    /// What the helper's status says now.
+    async fn observed(&self) -> Observation {
+        Observation::decode(&self.status().await)
+    }
+
     pub(crate) async fn identity(&self) -> Result<Session> {
         self.verify().await.map(|verified| verified.session)
     }
@@ -267,8 +253,7 @@ impl Client {
     /// session are checked by. It verifies the helper as
     /// [`Client::identity`] does.
     pub(crate) async fn verify(&self) -> Result<Verified> {
-        let status = self.status().await;
-        let observation = Observation::decode(&status);
+        let observation = self.observed().await;
         let session = observation.require_hidden(self.config.helper_uid)?;
         Ok(Verified {
             session,

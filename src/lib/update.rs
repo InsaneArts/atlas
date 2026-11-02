@@ -2,8 +2,11 @@
 //! release after the same checks as install.sh — checksum, signature, the
 //! Developer ID requirement and notarization — swapping by rename so a
 //! running helper daemon never sees a half-written executable.
+pub use crate::app_bundle::{INSTALL_COMMAND, installed_app, installed_executable};
 use crate::{
+    app_bundle::{BUNDLE_EXECUTABLE as EXECUTABLE, reachable_by_others, require_helper_access},
     error::{Code, Error, Result},
+    files::{LockOpen, open_lock_file},
     setup,
 };
 use serde_json::{Value, json};
@@ -14,14 +17,10 @@ use std::{
     process::Command,
 };
 
-/// The command that installs Atlas, served by its website.
-pub const INSTALL_COMMAND: &str = "curl -fsSL https://atlas.insanearts.io/install.sh | sh";
-
 /// Where the website serves releases: one directory per version, and
 /// `latest/` for the newest.
 const RELEASES: &str = "https://atlas.insanearts.io/releases";
 
-/// What a missing newest release means.
 const NO_RELEASE: &str =
     "Atlas has no public release yet. Check https://atlas.insanearts.io for news.";
 
@@ -60,52 +59,17 @@ fn problem(message: impl Into<String>) -> Error {
     Error::new(Code::Update, message)
 }
 
-/// The Atlas.app this executable belongs to.
-///
-/// # Errors
-///
-/// Returns an error when Atlas is not running from the supported installed app layout.
-pub fn installed_app() -> Result<PathBuf> {
-    let executable = std::env::current_exe().and_then(fs::canonicalize)?;
-    app_of(&executable).ok_or_else(|| {
-        problem(format!(
-            "This atlas is not inside Atlas.app; install it with: {INSTALL_COMMAND}"
-        ))
-    })
-}
-
-/// The `atlas` executable inside the installed Atlas.app.
-///
-/// # Errors
-///
-/// Returns an error when the installed app or its command executable cannot be located
-/// safely.
-pub fn installed_executable() -> Result<PathBuf> {
-    Ok(installed_app()?.join(EXECUTABLE))
-}
-
-/// Where the main executable lives inside Atlas.app.
-const EXECUTABLE: &str = "Contents/MacOS/atlas";
-
-/// The app bundle `executable` is the main executable of, if any.
-pub(crate) fn app_of(executable: &Path) -> Option<PathBuf> {
-    let macos = executable.parent()?;
-    let app = macos.parent()?.parent()?;
-    (macos.ends_with("Contents/MacOS") && app.extension().is_some_and(|ext| ext == "app"))
-        .then(|| app.to_owned())
-}
-
 /// The version in a release archive's name, `Atlas-X.Y.Z-macos.zip`.
 fn archive_version(name: &str) -> Option<Vec<u64>> {
     exact_version(name.strip_prefix("Atlas-")?.strip_suffix("-macos.zip")?)
 }
 
-/// `X.Y.Z` as numbers, only when every part is one.
-fn exact_version(text: &str) -> Option<Vec<u64>> {
+/// `X.Y.Z` as numbers, only when every part is one: the versions a release
+/// may have.
+pub fn exact_version(text: &str) -> Option<Vec<u64>> {
     text.split('.').map(|part| part.parse().ok()).collect()
 }
 
-/// The version an app says it is in its Info.plist.
 fn bundle_version(app: &Path) -> Option<String> {
     let output = Command::new("/usr/libexec/PlistBuddy")
         .args(["-c", "Print :CFBundleShortVersionString"])
@@ -140,7 +104,6 @@ fn version(text: &str) -> Vec<u64> {
         .collect()
 }
 
-/// How long a download may take to connect, and in all.
 const CONNECT_TIMEOUT: &str = "30";
 const DOWNLOAD_TIMEOUT: &str = "900";
 
@@ -209,19 +172,29 @@ fn unpublished(error: Error, latest: bool) -> Error {
     }
 }
 
-/// Run a tool, failing with `why` if it does not succeed.
-fn check(program: &str, args: &[&std::ffi::OsStr], why: &str) -> Result<()> {
-    let output = Command::new(program).args(args).output()?;
-    output
-        .status
-        .success()
-        .then_some(())
-        .ok_or_else(|| problem(why))
+fn check(command: &mut Command, why: &str) -> Result<()> {
+    let output = command.output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(problem(why).with_source(std::io::Error::other(format!(
+        "{}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))))
 }
 
 /// Where Atlas keeps its caches: update's scratch and lock among them.
-fn caches() -> Result<PathBuf> {
+pub(crate) fn caches() -> Result<PathBuf> {
     Ok(crate::config::home()?.join("Library/Caches/Atlas"))
+}
+
+fn private_folder(path: &Path) -> std::io::Result<()> {
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
 }
 
 /// One update at a time on this account, held until dropped. Updates share
@@ -242,27 +215,16 @@ pub fn exclusive() -> Result<Exclusive> {
 
 fn exclusive_in(directory: &Path) -> Result<Exclusive> {
     use fs2::FileExt;
-    use std::os::unix::fs::OpenOptionsExt;
 
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(directory)
-        .map_err(|error| Error::writing(directory, error))?;
+    private_folder(directory).map_err(|error| Error::writing(directory, error))?;
 
     let path = directory.join("update.lock");
-    let lock = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-        .map_err(|error| Error::writing(&path, error))?;
+    let lock =
+        open_lock_file(&path, LockOpen::ReadWrite).map_err(|error| Error::writing(&path, error))?;
 
-    lock.try_lock_exclusive()
-        .map_err(|_| problem("Another atlas update is running. Wait for it to finish."))?;
+    lock.try_lock_exclusive().map_err(|error| {
+        problem("Another atlas update is running. Wait for it to finish.").with_source(error)
+    })?;
 
     Ok(Exclusive {
         _lock: crate::files::LockFile(lock),
@@ -277,31 +239,27 @@ fn scratch(caches: &Path) -> Result<PathBuf> {
         fs::remove_dir_all(&path)?;
     }
 
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&path)?;
+    private_folder(&path)?;
 
     Ok(path)
 }
 
-/// Download only the release's sums into `work`; the archive they name.
-fn newest(source: &Source, work: &Path) -> Result<String> {
+/// Download only the release's sums into `work`; the archive they name, and
+/// its version.
+fn newest(source: &Source, work: &Path) -> Result<(String, Vec<u64>)> {
     let base = &source.base;
     let sums = work.join("SHA256SUMS");
     curl(&format!("{base}/SHA256SUMS"), &sums)
         .map_err(|error| unpublished(error, source.latest))?;
 
     // The name becomes a path: accept only a plain archive name.
-    let name = fs::read_to_string(&sums)?
+    fs::read_to_string(&sums)?
         .lines()
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
-        .filter(|name| !name.contains('/') && archive_version(name).is_some())
-        .map(str::to_owned)
-        .ok_or_else(|| problem("SHA256SUMS does not name an Atlas archive"))?;
-
-    Ok(name)
+        .filter(|name| !name.contains('/'))
+        .and_then(|name| Some((name.to_owned(), archive_version(name)?)))
+        .ok_or_else(|| problem("SHA256SUMS does not name an Atlas archive"))
 }
 
 /// Whether a newer release than this one is published, without installing
@@ -316,22 +274,17 @@ pub fn newer(source: &Source) -> Result<Value> {
     newer_in(source, &caches()?)
 }
 
-/// [`newer`], reading the sums in a folder of its own inside `caches`.
 fn newer_in(source: &Source, caches: &Path) -> Result<Value> {
     sweep_checks(caches);
     // A folder of its own: an update running meanwhile keeps its scratch.
     let work = caches.join(format!("check-{}", std::process::id()));
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&work)
-        .map_err(|error| Error::writing(&work, error))?;
-    let outcome = newest(source, &work).map(|name| {
-        let available = archive_version(&name).unwrap_or_default();
+    private_folder(&work).map_err(|error| Error::writing(&work, error))?;
+    let outcome = newest(source, &work).map(|(_, available)| {
+        let latest: Vec<String> = available.iter().map(u64::to_string).collect();
         json!({
             "ok": true,
             "version": crate::VERSION,
-            "latest": shown_version(&available),
+            "latest": latest.join("."),
             "newer": available > version(crate::VERSION),
         })
     });
@@ -362,16 +315,6 @@ fn sweep_checks(caches: &Path) {
     }
 }
 
-/// A version's parts as people write it, such as "0.2.0".
-fn shown_version(parts: &[u64]) -> String {
-    parts
-        .iter()
-        .map(u64::to_string)
-        .collect::<Vec<_>>()
-        .join(".")
-}
-
-/// Verify the archive against SHA256SUMS, unpack it and check the app.
 fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
     let expected = fs::read_to_string(work.join("SHA256SUMS"))?
         .lines()
@@ -390,25 +333,18 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
 
     let unpacked = work.join("unpacked");
     check(
-        "/usr/bin/ditto",
-        &[
-            "-x".as_ref(),
-            "-k".as_ref(),
-            archive.as_os_str(),
-            unpacked.as_os_str(),
-        ],
+        Command::new("/usr/bin/ditto")
+            .args(["-x", "-k"])
+            .arg(&archive)
+            .arg(&unpacked),
         "The archive could not be unpacked",
     )?;
 
     let app = unpacked.join("Atlas.app");
     check(
-        "/usr/bin/codesign",
-        &[
-            "--verify".as_ref(),
-            "--strict".as_ref(),
-            "--deep".as_ref(),
-            app.as_os_str(),
-        ],
+        Command::new("/usr/bin/codesign")
+            .args(["--verify", "--strict", "--deep"])
+            .arg(&app),
         "The app's signature is invalid",
     )?;
 
@@ -419,26 +355,23 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
     require_named_version(&app, name)?;
 
     let notarized = check(
-        "/usr/sbin/spctl",
-        &[
-            "--assess".as_ref(),
-            "--type".as_ref(),
-            "execute".as_ref(),
-            app.as_os_str(),
-        ],
+        Command::new("/usr/sbin/spctl")
+            .args(["--assess", "--type", "execute"])
+            .arg(&app),
         "",
-    )
-    .is_ok();
-    if !notarized && !allow_unnotarized {
-        return Err(problem(
-            "The release is not notarized; --allow-unnotarized accepts it",
-        ));
+    );
+    if let Err(cause) = notarized
+        && !allow_unnotarized
+    {
+        return Err(
+            problem("The release is not notarized; --allow-unnotarized accepts it")
+                .with_source(cause),
+        );
     }
 
     Ok(app)
 }
 
-/// Exchange two paths in one atomic step (both must exist).
 fn exchange(first: &Path, second: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
 
@@ -451,30 +384,58 @@ fn exchange(first: &Path, second: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Where an unfinished update is recorded until the helper is on it.
 fn record_path() -> Result<PathBuf> {
     Ok(crate::config::home()?.join("Library/Application Support/Atlas/update.json"))
 }
 
+/// An unfinished update as its record describes it. Any JSON object is a
+/// record, and a field missing or of another type is unknown.
+#[derive(Debug)]
+struct Handover {
+    previous: Option<PathBuf>,
+    installed: Option<PathBuf>,
+    /// The new executable's hash.
+    executable: Option<String>,
+    /// The record as written, for the report.
+    written: Value,
+}
+
+impl From<Value> for Handover {
+    fn from(written: Value) -> Self {
+        let text = |key: &str| written[key].as_str().map(str::to_owned);
+        Self {
+            previous: text("previous").map(PathBuf::from),
+            installed: text("installed").map(PathBuf::from),
+            executable: text("executable"),
+            written,
+        }
+    }
+}
+
 /// The record at `path`, if any. One that cannot be read is an error that
 /// asks to inspect it, never a reason to skip the handover it describes.
-fn read_record(path: &Path) -> Result<Option<Value>> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .filter(Value::is_object)
-            .map(Some)
-            .ok_or_else(|| {
-                problem(format!(
-                    "The record of an unfinished update, {}, cannot be read. Inspect it (it \
-                     names the previous Atlas.app, kept beside the installed one), then remove \
-                     it and run atlas update again.",
-                    crate::ui::text::tilde(path)
-                ))
-            }),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
+fn read_record(path: &Path) -> Result<Option<Handover>> {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let unreadable = || {
+        problem(format!(
+            "The record of an unfinished update, {}, cannot be read. Inspect it (it names the \
+             previous Atlas.app, kept beside the installed one), then remove it and run atlas \
+             update again.",
+            crate::config::tilde(path)
+        ))
+    };
+
+    let written: Value =
+        serde_json::from_slice(&bytes).map_err(|error| unreadable().with_source(error))?;
+    if !written.is_object() {
+        return Err(unreadable());
     }
+
+    Ok(Some(written.into()))
 }
 
 /// The helper is on the new app: drop the previous bundle and the record.
@@ -493,15 +454,14 @@ fn finish_record(path: &Path) -> Result<Value> {
         return Ok(json!({"previous": null}));
     };
 
-    let previous = record["previous"].as_str().map(PathBuf::from);
-    let installed = record["installed"].as_str().map(Path::new);
+    let installed = record.installed.as_deref();
     // Only a staging copy beside the installed app is ever removed.
-    let removed = previous.as_ref().is_some_and(|previous| {
+    let removed = record.previous.as_ref().is_some_and(|previous| {
         beside(previous, installed, update_copy) && fs::remove_dir_all(previous).is_ok()
     });
 
     fs::remove_file(path)?;
-    Ok(json!({"previous": previous, "removed": removed}))
+    Ok(json!({"previous": record.previous, "removed": removed}))
 }
 
 /// What every staging copy beside the installed app is named from.
@@ -516,17 +476,12 @@ const UPDATE: &str = "update-";
 /// its process ID.
 const INSTALL: [&str; 2] = ["install-", "install-previous-"];
 
-/// Whether `text` is exactly a token from [`crate::files::token`].
-fn token_shaped(text: &str) -> bool {
-    crate::files::Token::parse(text).is_some()
-}
-
 /// Whether `name` is a copy `atlas update` stages: `.Atlas.app.update-` and
-/// a token, or (from Atlas before these names) `.Atlas.app.` and a token.
+/// a token.
 fn update_copy(name: &str) -> bool {
-    name.strip_prefix(STAGED).is_some_and(|rest| {
-        rest.strip_prefix(UPDATE).is_some_and(token_shaped) || token_shaped(rest)
-    })
+    name.strip_prefix(STAGED)
+        .and_then(|rest| rest.strip_prefix(UPDATE))
+        .is_some_and(|token| crate::files::Token::parse(token).is_some())
 }
 
 /// Whether `name` is a copy install.sh stages: `.Atlas.app.install-` or
@@ -555,7 +510,6 @@ fn beside(path: &Path, installed: Option<&Path>, named: fn(&str) -> bool) -> boo
             .is_some_and(|installed| installed.is_absolute() && installed.parent() == path.parent())
 }
 
-/// The copies beside `installed` whose names `named` accepts.
 fn copies(installed: &Path, named: fn(&str) -> bool) -> Vec<PathBuf> {
     let Some(entries) = installed
         .parent()
@@ -577,28 +531,16 @@ pub(crate) fn atlas_copies(installed: &Path) -> Vec<PathBuf> {
     copies(installed, |name| update_copy(name) || install_copy(name))
 }
 
-/// Put `new` in place of `installed` with one atomic exchange, keeping
-/// the previous app beside it (and recording where) until the helper's
-/// handover succeeds.
-#[cfg(test)]
-async fn swap(
-    new: &Path,
-    installed: &Path,
-    name: &str,
-    record: &Path,
-    preflight: impl AsyncFnOnce(&Path) -> Result<()>,
-) -> Result<()> {
-    swap_using(new, installed, name, record, preflight, stage).await
-}
-
 fn stage(new: &Path, staged: &Path) -> Result<()> {
     check(
-        "/usr/bin/ditto",
-        &[new.as_os_str(), staged.as_os_str()],
+        Command::new("/usr/bin/ditto").arg(new).arg(staged),
         "The new app could not be staged beside the installed one",
     )
 }
 
+/// Put `new` in place of `installed` with one atomic exchange, keeping
+/// the previous app beside it (and recording where) until the helper's
+/// handover succeeds.
 async fn swap_using(
     new: &Path,
     installed: &Path,
@@ -647,7 +589,7 @@ async fn swap_using(
     });
     let recorded = serde_json::to_vec_pretty(&plan)
         .map_err(Error::from)
-        .and_then(|bytes| crate::config::save_private(record, &bytes));
+        .and_then(|bytes| crate::files::save_private(record, &bytes));
     if let Err(error) = recorded {
         let _ = fs::remove_dir_all(&staged);
         return Err(error);
@@ -666,7 +608,7 @@ async fn swap_using(
 /// installed app is not the recorded new one but the staging copy beside it
 /// is, exchange them now, so finishing never discards the new app.
 async fn resume(
-    record: &Value,
+    record: &Handover,
     installed: &Path,
     preflight: impl AsyncFnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
@@ -683,46 +625,17 @@ async fn resume(
 }
 
 /// The staged new app when the recorded exchange has not happened yet.
-fn resume_source(record: &Value, installed: &Path) -> Option<PathBuf> {
-    let expected = record["executable"].as_str()?;
-
-    let previous = record["previous"].as_str().map(Path::new);
-    let previous = previous.filter(|previous| beside(previous, Some(installed), update_copy))?;
+fn resume_source(record: &Handover, installed: &Path) -> Option<PathBuf> {
+    let expected = record.executable.as_deref()?;
+    let previous = record
+        .previous
+        .as_deref()
+        .filter(|previous| beside(previous, Some(installed), update_copy))?;
 
     let sha256 = |app: &Path| crate::digest::file_sha256(&app.join(EXECUTABLE));
     (sha256(installed).as_deref() != Some(expected)
         && sha256(previous).as_deref() == Some(expected))
     .then(|| previous.to_owned())
-}
-
-/// Whether other accounts (the helper) can reach and run `executable`:
-/// every directory above it searchable and the file readable and executable
-/// by others. ACLs are not counted, so this errs on the side of refusing.
-pub(crate) fn reachable_by_others(executable: &Path) -> bool {
-    // These callers ask only for classification. Replacement uses the fallible
-    // gate directly so filesystem causes are retained rather than projected away.
-    require_helper_access(executable).is_ok()
-}
-
-/// The same conservative mode policy for an update candidate, before exchange.
-fn require_helper_access(executable: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let refused = || problem("Atlas.app must be readable and executable by the helper account");
-    let mode = |path: &Path| {
-        fs::metadata(path)
-            .map(|metadata| metadata.permissions().mode())
-            .map_err(|error| refused().with_source(error))
-    };
-    if mode(executable)? & 0o005 != 0o005 {
-        return Err(refused());
-    }
-    for directory in executable.ancestors().skip(1) {
-        if mode(directory)? & 0o001 == 0 {
-            return Err(refused());
-        }
-    }
-    Ok(())
 }
 
 /// Replace the installed app with the release from `source` when it is newer
@@ -768,7 +681,7 @@ async fn install_in(
     // A swap whose handover did not finish is resumed before anything else.
     if let Some(record) = read_record(record)? {
         resume(&record, installed, preflight).await?;
-        return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record}));
+        return Ok(json!({"ok": true, "updated": true, "resumed": true, "record": record.written}));
     }
 
     if !reachable_by_others(&installed.join(EXECUTABLE)) {
@@ -779,10 +692,8 @@ async fn install_in(
 
     let work = scratch(caches)?;
     let outcome = async {
-        let name = newest(source, &work)?;
-        let available = archive_version(&name).unwrap_or_default();
-        let current = version(crate::VERSION);
-        if available <= current && !force {
+        let (name, available) = newest(source, &work)?;
+        if available <= version(crate::VERSION) && !force {
             return Ok(json!({
                 "ok": true,
                 "updated": false,
@@ -810,982 +721,4 @@ async fn install_in(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// An owned, reachable stand-in bundle and private update paths. No test
-    /// runs the stand-in executable or resolves the account's real paths.
-    fn installation(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let installed = directory.join("Applications/Atlas.app");
-        let executable = installed.join(EXECUTABLE);
-        fs::create_dir_all(executable.parent().unwrap()).unwrap();
-        fs::write(&executable, b"installed app stays").unwrap();
-        for path in executable
-            .ancestors()
-            .take_while(|path| path.starts_with(directory))
-        {
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        assert!(reachable_by_others(&executable));
-        (
-            installed,
-            directory.join("cache"),
-            directory.join("update.json"),
-        )
-    }
-
-    #[tokio::test]
-    async fn unchanged_updates_need_no_archive_and_clean_their_scratch() {
-        for available in [crate::VERSION, "0.0.0"] {
-            let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-            let (installed, cache, record) = installation(dir.path());
-            let _exclusive = exclusive_in(&cache).unwrap();
-            let source = Source {
-                base: format!("file://{}", dir.path().display()),
-                latest: false,
-            };
-            let name = format!("Atlas-{available}-macos.zip");
-            fs::write(
-                dir.path().join("SHA256SUMS"),
-                format!("{}  {name}\n", "0".repeat(64)),
-            )
-            .unwrap();
-            fs::create_dir_all(cache.join("update")).unwrap();
-            fs::write(cache.join("update/stale"), "previous attempt").unwrap();
-
-            let result = install_in(
-                &source,
-                false,
-                false,
-                &installed,
-                &cache,
-                &record,
-                async |_| panic!("a no-op must not preflight or swap"),
-            )
-            .await
-            .unwrap();
-
-            assert_eq!(
-                result,
-                json!({"ok": true, "updated": false, "version": crate::VERSION, "available": name})
-            );
-            assert_eq!(
-                fs::read(installed.join(EXECUTABLE)).unwrap(),
-                b"installed app stays"
-            );
-            assert!(!cache.join("update").exists());
-            assert!(!record.exists());
-            assert!(
-                !dir.path().join(name).exists(),
-                "the unused archive is absent"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn newer_and_forced_updates_still_download_and_verify_the_archive() {
-        let newer = format!("{}.0.0", version(crate::VERSION)[0] + 1);
-        for (available, force) in [
-            (newer.as_str(), false),
-            (crate::VERSION, true),
-            ("0.0.0", true),
-        ] {
-            let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-            let (installed, cache, record) = installation(dir.path());
-            let _exclusive = exclusive_in(&cache).unwrap();
-            let source = Source {
-                base: format!("file://{}", dir.path().display()),
-                latest: false,
-            };
-            let name = format!("Atlas-{available}-macos.zip");
-            let archive = dir.path().join(&name);
-            let sums = dir.path().join("SHA256SUMS");
-            fs::write(&sums, format!("{}  {name}\n", "0".repeat(64))).unwrap();
-
-            for expected in [
-                "Could not download",
-                "Checksum mismatch",
-                "could not be unpacked",
-            ] {
-                let error = install_in(
-                    &source,
-                    false,
-                    force,
-                    &installed,
-                    &cache,
-                    &record,
-                    async |_| panic!("unverified archives must not preflight or swap"),
-                )
-                .await
-                .unwrap_err();
-                assert!(error.error.contains(expected), "{}", error.error);
-                assert!(!cache.join("update").exists());
-                assert!(!record.exists());
-                assert_eq!(
-                    fs::read(installed.join(EXECUTABLE)).unwrap(),
-                    b"installed app stays"
-                );
-
-                // First supply an archive, then its correct checksum: neither
-                // missing bytes nor corrupt bytes can reach installation.
-                if !archive.exists() {
-                    fs::write(&archive, b"not a zip archive").unwrap();
-                } else {
-                    let sum = crate::digest::file_sha256(&archive).unwrap();
-                    fs::write(&sums, format!("{sum}  {name}\n")).unwrap();
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn invalid_release_metadata_never_reaches_installation() {
-        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-        let (installed, cache, record) = installation(dir.path());
-        let _exclusive = exclusive_in(&cache).unwrap();
-        let source = Source {
-            base: format!("file://{}", dir.path().display()),
-            latest: false,
-        };
-        for metadata in [
-            "",
-            "00  ../Atlas-0.0.0-macos.zip\n",
-            "00  Atlas-bad-macos.zip\n",
-        ] {
-            fs::write(dir.path().join("SHA256SUMS"), metadata).unwrap();
-            let error = install_in(
-                &source,
-                false,
-                false,
-                &installed,
-                &cache,
-                &record,
-                async |_| panic!("invalid metadata must not preflight or swap"),
-            )
-            .await
-            .unwrap_err();
-            assert_eq!(error.error, "SHA256SUMS does not name an Atlas archive");
-            assert!(!cache.join("update").exists());
-            assert!(!record.exists());
-            assert_eq!(
-                fs::read(installed.join(EXECUTABLE)).unwrap(),
-                b"installed app stays"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn an_unfinished_handover_precedes_downloads_and_scratch_cleanup() {
-        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-        let (installed, cache, record_path) = installation(dir.path());
-        let _exclusive = exclusive_in(&cache).unwrap();
-        let source = Source {
-            base: format!("file://{}/absent", dir.path().display()),
-            latest: false,
-        };
-        let record = json!({"installed": installed, "to": "Atlas-9.9.9-macos.zip"});
-        fs::write(&record_path, record.to_string()).unwrap();
-        fs::create_dir_all(cache.join("update")).unwrap();
-        fs::write(cache.join("update/keep"), "unfinished").unwrap();
-        let mut checked = false;
-        let result = install_in(
-            &source,
-            false,
-            false,
-            &installed,
-            &cache,
-            &record_path,
-            async |program| {
-                assert_eq!(program, installed.join(EXECUTABLE));
-                checked = true;
-                Ok(())
-            },
-        )
-        .await
-        .unwrap();
-        assert!(checked);
-        assert_eq!(
-            result,
-            json!({"ok": true, "updated": true, "resumed": true, "record": record})
-        );
-        assert_eq!(
-            fs::read_to_string(cache.join("update/keep")).unwrap(),
-            "unfinished"
-        );
-        assert_eq!(read_record(&record_path).unwrap(), Some(record));
-        assert_eq!(
-            fs::read(installed.join(EXECUTABLE)).unwrap(),
-            b"installed app stays"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_waiter_arriving_during_staging_prevents_recording_and_exchange_under_ownership() {
-        use crate::host_session::{Host, HostSession};
-        use std::time::Duration;
-
-        for waiter in [None, Some("worker"), Some("updater")] {
-            let directory = tempfile::tempdir().unwrap();
-            let installed = directory.path().join("Applications/Atlas.app");
-            let new = directory.path().join("unpacked/Atlas.app");
-            let record = directory.path().join("Support/update.json");
-            for (app, version) in [(&installed, "old"), (&new, "new")] {
-                fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-                fs::write(app.join(EXECUTABLE), version).unwrap();
-            }
-            let mut client = crate::test_support::client(directory.path());
-            client.host_session = Some(HostSession::new(Host::Named, "updater").unwrap());
-            client.controller = client.controller.labelled(client.host_session.as_ref());
-            let ownership = client.service_change(false).await.unwrap();
-            let worker = waiter.map(|name| HostSession::new(Host::Named, name).unwrap());
-            let mut checked = false;
-            let result = tokio::time::timeout(
-                Duration::from_secs(1),
-                swap_using(
-                    &new,
-                    &installed,
-                    "Atlas-9.9.9-macos.zip",
-                    &record,
-                    async |program| {
-                        checked = true;
-                        assert_eq!(fs::read_to_string(program).unwrap(), "new");
-                        assert_eq!(program, copies(&installed, update_copy)[0].join(EXECUTABLE));
-                        assert!(!record.exists());
-                        assert_eq!(
-                            client.controller.acquire(false).unwrap_err().code,
-                            Code::Busy
-                        );
-                        client.require_service_idle().await
-                    },
-                    |new, staged| {
-                        stage(new, staged)?;
-                        crate::test_support::waiting_note(
-                            &directory.path().join("state"),
-                            worker.as_ref(),
-                        );
-                        Ok(())
-                    },
-                ),
-            )
-            .await
-            .unwrap();
-            let error = result.unwrap_err();
-            assert!(checked);
-            assert_eq!(error.code, Code::Busy);
-            assert_eq!(
-                error.error,
-                format!("{} is active in the helper.", waiter.unwrap_or("Terminal"))
-            );
-            assert_eq!(
-                fs::read_to_string(installed.join(EXECUTABLE)).unwrap(),
-                "old"
-            );
-            assert!(!record.exists());
-            assert!(copies(&installed, update_copy).is_empty());
-            assert!(
-                client
-                    .controller
-                    .holder_note()
-                    .unwrap()
-                    .process
-                    .is_this_one()
-            );
-            assert_eq!(
-                client.controller.acquire(false).unwrap_err().code,
-                Code::Busy
-            );
-            drop(ownership);
-        }
-    }
-
-    #[tokio::test]
-    async fn setup_refusal_prevents_the_bundle_exchange_and_update_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let installed = dir.path().join("Applications/Atlas.app");
-        let new = dir.path().join("unpacked/Atlas.app");
-        let record = dir.path().join("Support/update.json");
-        for (app, version) in [(&installed, "old"), (&new, "new")] {
-            fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-            fs::write(app.join(EXECUTABLE), version).unwrap();
-        }
-        let result = swap(
-            &new,
-            &installed,
-            "Atlas-9.9.9-macos.zip",
-            &record,
-            async |program| {
-                assert_ne!(program, new.join(EXECUTABLE));
-                assert_eq!(fs::read_to_string(program).unwrap(), "new");
-                assert_eq!(program, copies(&installed, update_copy)[0].join(EXECUTABLE));
-                assert_eq!(
-                    fs::read_to_string(installed.join(EXECUTABLE)).unwrap(),
-                    "old"
-                );
-                Err(problem("setup refuses"))
-            },
-        )
-        .await;
-        assert_eq!(result.unwrap_err().error, "setup refuses");
-        assert_eq!(
-            fs::read_to_string(installed.join(EXECUTABLE)).unwrap(),
-            "old"
-        );
-        assert_eq!(fs::read_to_string(new.join(EXECUTABLE)).unwrap(), "new");
-        assert!(!record.exists());
-        assert!(copies(&installed, update_copy).is_empty());
-    }
-
-    #[tokio::test]
-    async fn private_staged_apps_are_refused_before_recording_or_replacing_the_installation() {
-        use std::os::unix::fs::PermissionsExt;
-
-        for (relative, mode) in [
-            ("", 0o700),
-            ("Contents", 0o700),
-            ("Contents/MacOS", 0o700),
-            (EXECUTABLE, 0o700),
-            (EXECUTABLE, 0o744),
-            (EXECUTABLE, 0o711),
-        ] {
-            let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-            let (installed, _, record) = installation(directory.path());
-            let original = fs::read(installed.join(EXECUTABLE)).unwrap();
-            let new = directory.path().join("unpacked/Atlas.app");
-            let executable = new.join(EXECUTABLE);
-            fs::create_dir_all(executable.parent().unwrap()).unwrap();
-            fs::write(&executable, b"new candidate").unwrap();
-            for path in executable
-                .ancestors()
-                .take_while(|path| path.starts_with(&new))
-            {
-                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-            }
-            fs::set_permissions(new.join(relative), fs::Permissions::from_mode(mode)).unwrap();
-            let mut checked = false;
-            let error = swap(
-                &new,
-                &installed,
-                "Atlas-9.9.9-macos.zip",
-                &record,
-                async |program| {
-                    checked = true;
-                    assert_eq!(fs::read(program).unwrap(), b"new candidate");
-                    assert!(!record.exists());
-                    Ok(())
-                },
-            )
-            .await
-            .unwrap_err();
-            assert!(checked, "existing preflight checks still run first");
-            assert_eq!(error.code, Code::Update);
-            assert_eq!(fs::read(installed.join(EXECUTABLE)).unwrap(), original);
-            assert!(!record.exists());
-            assert!(copies(&installed, update_copy).is_empty());
-            assert_eq!(fs::read(executable).unwrap(), b"new candidate");
-        }
-    }
-
-    #[tokio::test]
-    async fn a_recorded_private_candidate_is_retained_without_exchange_on_resume() {
-        let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-        let (installed, _, path) = installation(directory.path());
-        let previous = installed
-            .parent()
-            .unwrap()
-            .join(format!("{STAGED}{UPDATE}{}", crate::files::token()));
-        fs::create_dir_all(previous.join("Contents/MacOS")).unwrap();
-        fs::write(previous.join(EXECUTABLE), b"private candidate").unwrap();
-        let record = json!({
-            "installed": installed,
-            "previous": previous,
-            "executable": crate::digest::file_sha256(&previous.join(EXECUTABLE)).unwrap(),
-        });
-        let bytes = serde_json::to_vec(&record).unwrap();
-        crate::config::save_private(&path, &bytes).unwrap();
-        let mut checked = false;
-        let error = resume(&record, &installed, async |program| {
-            checked = true;
-            assert_eq!(program, previous.join(EXECUTABLE));
-            Ok(())
-        })
-        .await
-        .unwrap_err();
-        assert!(checked);
-        assert_eq!(error.code, Code::Update);
-        assert!(!error.uncertain);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-        assert_eq!(
-            fs::read(installed.join(EXECUTABLE)).unwrap(),
-            b"installed app stays"
-        );
-        assert_eq!(
-            fs::read(previous.join(EXECUTABLE)).unwrap(),
-            b"private candidate"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_missing_staged_executable_keeps_its_private_io_cause_without_replacement() {
-        use std::error::Error as _;
-
-        let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-        let (installed, _, record) = installation(directory.path());
-        let new = directory.path().join("unpacked/Atlas.app");
-        fs::create_dir_all(new.join("Contents/MacOS")).unwrap();
-        fs::write(new.join(EXECUTABLE), b"candidate").unwrap();
-        let error = swap_using(
-            &new,
-            &installed,
-            "Atlas-9.9.9-macos.zip",
-            &record,
-            async |_| Ok(()),
-            |new, staged| {
-                stage(new, staged)?;
-                fs::remove_file(staged.join(EXECUTABLE))?;
-                Ok(())
-            },
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.code, Code::Update);
-        assert!(!error.uncertain);
-        assert_eq!(
-            error
-                .source()
-                .unwrap()
-                .downcast_ref::<std::io::Error>()
-                .unwrap()
-                .kind(),
-            std::io::ErrorKind::NotFound
-        );
-        assert!(
-            !serde_json::to_string(&error)
-                .unwrap()
-                .contains(directory.path().to_str().unwrap())
-        );
-        assert!(!record.exists());
-        assert!(copies(&installed, update_copy).is_empty());
-        assert_eq!(
-            fs::read(installed.join(EXECUTABLE)).unwrap(),
-            b"installed app stays"
-        );
-    }
-
-    #[test]
-    fn a_check_reads_the_newest_release_and_installs_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let next = format!("Atlas-{}.0.0-macos.zip", version(crate::VERSION)[0] + 1);
-        fs::write(
-            dir.path().join("SHA256SUMS"),
-            format!("{} {next}\n", "0".repeat(64)),
-        )
-        .unwrap();
-        let source = Source {
-            base: format!("file://{}", dir.path().display()),
-            latest: true,
-        };
-
-        let caches = tempfile::tempdir().unwrap();
-        let report = newer_in(&source, caches.path()).unwrap();
-        assert_eq!(report["newer"], true);
-        assert_eq!(report["version"], crate::VERSION);
-        assert_eq!(
-            fs::read_dir(dir.path()).unwrap().count(),
-            1,
-            "only the sums were there to read"
-        );
-
-        let current = format!("Atlas-{}-macos.zip", crate::VERSION);
-        fs::write(
-            dir.path().join("SHA256SUMS"),
-            format!("{} {current}\n", "0".repeat(64)),
-        )
-        .unwrap();
-        assert_eq!(newer_in(&source, caches.path()).unwrap()["newer"], false);
-    }
-
-    #[test]
-    fn a_check_stopped_midway_leaves_nothing_for_long() {
-        let caches = tempfile::tempdir().unwrap();
-        let stale = caches.path().join("check-999999");
-        let other = caches.path().join("update");
-        fs::create_dir_all(&stale).unwrap();
-        fs::create_dir_all(&other).unwrap();
-
-        sweep_checks(caches.path());
-
-        assert!(!stale.exists(), "no process 999999 runs");
-        assert!(other.exists(), "an update's scratch is not a check's");
-    }
-
-    #[test]
-    fn archives_name_their_version() {
-        assert_eq!(
-            archive_version("Atlas-0.10.2-macos.zip"),
-            Some(vec![0, 10, 2])
-        );
-        assert_eq!(archive_version("Atlas-x-macos.zip"), None);
-        assert_eq!(archive_version("SHA256SUMS"), None);
-        assert!(archive_version("Atlas-0.10.0-macos.zip").unwrap() > version("0.9.9"));
-    }
-
-    #[test]
-    fn an_app_must_be_the_version_its_archive_is_named_for() {
-        let dir = tempfile::tempdir().unwrap();
-        let app = dir.path().join("Atlas.app");
-        fs::create_dir_all(app.join("Contents")).unwrap();
-        let name = "Atlas-1.2.3-macos.zip";
-        assert!(require_named_version(&app, name).is_err(), "no Info.plist");
-
-        for (version, matches) in [("1.2.3", true), ("1.2.4", false), ("1.2.3-beta", false)] {
-            fs::write(
-                app.join("Contents/Info.plist"),
-                format!(
-                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>\
-                     <key>CFBundleShortVersionString</key><string>{version}</string>\
-                     </dict></plist>\n"
-                ),
-            )
-            .unwrap();
-            assert_eq!(
-                require_named_version(&app, name).is_ok(),
-                matches,
-                "{version}"
-            );
-        }
-    }
-
-    #[test]
-    fn releases_come_from_the_website() {
-        assert_eq!(
-            Source::website(None),
-            Source {
-                base: "https://atlas.insanearts.io/releases/latest".into(),
-                latest: true,
-            }
-        );
-        assert_eq!(
-            Source::website(Some("0.2.0")),
-            Source {
-                base: "https://atlas.insanearts.io/releases/0.2.0".into(),
-                latest: false,
-            }
-        );
-        assert!(INSTALL_COMMAND.contains("https://atlas.insanearts.io/install.sh"));
-    }
-
-    #[test]
-    fn a_missing_newest_release_is_not_yet_published() {
-        // curl says (22) over HTTP/1.1 and (56) over HTTP/2; the words are the same.
-        for code in ["22", "56"] {
-            let missing = || {
-                problem(format!(
-                    "Could not download x: curl: ({code}) The requested URL returned error: 404"
-                ))
-            };
-            assert_eq!(unpublished(missing(), true).error, NO_RELEASE);
-            assert_ne!(unpublished(missing(), false).error, NO_RELEASE);
-        }
-
-        let offline = problem("Could not download x: curl: (6) Could not resolve host");
-        assert_ne!(unpublished(offline, true).error, NO_RELEASE);
-    }
-
-    #[test]
-    fn only_an_app_executable_belongs_to_an_app() {
-        assert_eq!(
-            app_of(Path::new("/Applications/Atlas.app/Contents/MacOS/atlas")),
-            Some(PathBuf::from("/Applications/Atlas.app"))
-        );
-        assert_eq!(app_of(Path::new("/usr/local/bin/atlas")), None);
-        assert_eq!(app_of(Path::new("/x/Contents/MacOS/atlas")), None);
-    }
-
-    #[test]
-    fn an_exchange_swaps_both_apps_in_one_step() {
-        let dir = tempfile::tempdir().unwrap();
-        let installed = dir.path().join("Atlas.app");
-        let new = dir.path().join(".Atlas.app.new");
-
-        fs::create_dir_all(&installed).unwrap();
-        fs::write(installed.join("version"), "old").unwrap();
-        fs::create_dir_all(&new).unwrap();
-        fs::write(new.join("version"), "new").unwrap();
-
-        exchange(&new, &installed).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(installed.join("version")).unwrap(),
-            "new"
-        );
-        assert_eq!(
-            fs::read_to_string(new.join("version")).unwrap(),
-            "old",
-            "kept"
-        );
-
-        assert!(exchange(&dir.path().join("missing"), &installed).is_err());
-        assert_eq!(
-            fs::read_to_string(installed.join("version")).unwrap(),
-            "new"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_swap_is_recorded_first_and_finishing_removes_only_the_staged_copy() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-        let root = fs::canonicalize(dir.path()).unwrap();
-        let installed = root.join("Applications/Atlas.app");
-        let new = root.join("unpacked/Atlas.app");
-        for (app, version) in [(&installed, "old"), (&new, "new")] {
-            fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
-            fs::write(app.join("version"), version).unwrap();
-            fs::write(app.join(EXECUTABLE), version).unwrap();
-            for path in app
-                .join(EXECUTABLE)
-                .ancestors()
-                .take_while(|path| path.starts_with(&root))
-            {
-                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-            }
-        }
-
-        // A staging copy a stopped update left behind is swept first; a
-        // person's own folders beside the app, and install.sh's, stay.
-        let stale = root.join(format!(
-            "Applications/.Atlas.app.update-{}",
-            crate::files::token()
-        ));
-        let legacy = root.join(format!("Applications/.Atlas.app.{}", crate::files::token()));
-        let kept = [
-            ".Atlas.app.feature",
-            ".Atlas.app.previous",
-            ".Atlas.app.install-42",
-        ]
-        .map(|name| root.join("Applications").join(name));
-        for folder in [&stale, &legacy].into_iter().chain(&kept) {
-            fs::create_dir_all(folder).unwrap();
-        }
-
-        let record = root.join("Support/update.json");
-        swap(
-            &new,
-            &installed,
-            "Atlas-9.9.9-macos.zip",
-            &record,
-            async |_| Ok(()),
-        )
-        .await
-        .unwrap();
-        assert!(!stale.exists() && !legacy.exists());
-        for folder in &kept {
-            assert!(folder.exists(), "{}", folder.display());
-        }
-        assert_eq!(
-            fs::read_to_string(installed.join("version")).unwrap(),
-            "new"
-        );
-
-        let plan = read_record(&record).unwrap().unwrap();
-        let previous = PathBuf::from(plan["previous"].as_str().unwrap());
-        assert_eq!(previous.parent(), installed.parent());
-        assert!(
-            previous
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(".Atlas.app.update-")),
-            "{}",
-            previous.display()
-        );
-        assert_eq!(copies(&installed, update_copy), vec![previous.clone()]);
-        assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "old");
-        assert_eq!(
-            plan["executable"],
-            crate::digest::file_sha256(&installed.join(EXECUTABLE)).unwrap()
-        );
-
-        // The exchange happened: resuming changes nothing.
-        resume(&plan, &installed, async |_| Ok(())).await.unwrap();
-        assert_eq!(
-            fs::read_to_string(installed.join("version")).unwrap(),
-            "new"
-        );
-
-        // Stopped between the record and the exchange: resuming exchanges.
-        exchange(&previous, &installed).unwrap();
-        assert_eq!(
-            fs::read_to_string(installed.join("version")).unwrap(),
-            "old"
-        );
-
-        let refused = resume(&plan, &installed, async |program| {
-            assert_eq!(program, previous.join(EXECUTABLE));
-            Err(problem("setup refuses"))
-        })
-        .await;
-        assert_eq!(refused.unwrap_err().error, "setup refuses");
-        assert_eq!(
-            fs::read_to_string(installed.join("version")).unwrap(),
-            "old"
-        );
-        assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "new");
-        resume(&plan, &installed, async |_| Ok(())).await.unwrap();
-        assert_eq!(
-            fs::read_to_string(installed.join("version")).unwrap(),
-            "new"
-        );
-        assert_eq!(fs::read_to_string(previous.join("version")).unwrap(), "old");
-
-        let report = finish_record(&record).unwrap();
-        assert_eq!(report["removed"], true);
-        assert!(!previous.exists() && !record.exists());
-        assert_eq!(finish_record(&record).unwrap()["previous"], Value::Null);
-
-        // A swap that cannot exchange leaves no record and no staged copy.
-        let missing = root.join("Elsewhere/Atlas.app");
-        fs::create_dir_all(missing.parent().unwrap()).unwrap();
-        fs::set_permissions(missing.parent().unwrap(), fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(
-            swap(&new, &missing, "x", &record, async |_| Ok(()))
-                .await
-                .is_err()
-        );
-        assert!(!record.exists());
-        assert_eq!(fs::read_dir(missing.parent().unwrap()).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn finishing_never_removes_what_is_not_a_staged_copy_beside_the_app() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(dir.path()).unwrap();
-        let installed = root.join("Applications/Atlas.app");
-        let record = root.join("update.json");
-
-        let token = crate::files::token();
-        for previous in [
-            root.join("Documents"),
-            root.join("Applications/Other.app"),
-            root.join("Applications/.Atlas.app.previous"),
-            root.join("Applications/.Atlas.app.feature"),
-            root.join("Applications/.Atlas.app.install-42"),
-            root.join(format!("Elsewhere/.Atlas.app.update-{token}")),
-        ] {
-            fs::create_dir_all(&previous).unwrap();
-            let plan = json!({"previous": previous, "installed": installed, "to": "x"});
-            fs::write(&record, plan.to_string()).unwrap();
-            assert_eq!(finish_record(&record).unwrap()["removed"], false);
-            assert!(previous.exists(), "{}", previous.display());
-            assert!(!record.exists());
-        }
-
-        let staged = root.join(format!("Applications/.Atlas.app.update-{token}"));
-        assert!(beside(&staged, Some(&installed), update_copy));
-        assert!(!beside(&staged, None, update_copy));
-
-        // A record an earlier Atlas wrote names its copy without the prefix.
-        let legacy = root.join(format!("Applications/.Atlas.app.{token}"));
-        assert!(beside(&legacy, Some(&installed), update_copy));
-
-        for name in [
-            ".Atlas.app.",
-            ".Atlas.app.update-",
-            ".Atlas.app.update-1",
-            ".Atlas.app.1",
-            ".Atlas.app.previous",
-            &format!(".Atlas.app.update-{}", token.to_uppercase()),
-            &format!(".Atlas.app.update-{token}0"),
-        ] {
-            let path = root.join("Applications").join(name);
-            assert!(!beside(&path, Some(&installed), update_copy), "{name}");
-        }
-    }
-
-    /// Uninstall clears every copy Atlas staged, by update or by
-    /// install.sh, and nothing else beside the app.
-    #[test]
-    fn only_copies_atlas_staged_are_its_own() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(dir.path()).unwrap();
-        let installed = root.join("Atlas.app");
-        let token = crate::files::token();
-
-        let ours = [
-            format!(".Atlas.app.update-{token}"),
-            format!(".Atlas.app.{token}"),
-            ".Atlas.app.install-123".to_owned(),
-            ".Atlas.app.install-previous-123".to_owned(),
-        ];
-        let theirs = [
-            ".Atlas.app.feature",
-            ".Atlas.app.previous",
-            ".Atlas.app.previous.123",
-            ".Atlas.app.123",
-            ".Atlas.app.install-",
-            ".Atlas.app.install-12x",
-            ".Atlas.app.install-previous-",
-            "Atlas.app.update-1",
-        ];
-        for name in ours.iter().map(String::as_str).chain(theirs) {
-            fs::create_dir_all(root.join(name)).unwrap();
-        }
-
-        let mut found = atlas_copies(&installed);
-        found.sort();
-        let mut expected: Vec<PathBuf> = ours.iter().map(|name| root.join(name)).collect();
-        expected.sort();
-        assert_eq!(found, expected);
-        assert_eq!(
-            copies(&installed, update_copy).len(),
-            2,
-            "update sweeps only its own"
-        );
-    }
-
-    /// Two updates never run at once on one account.
-    #[test]
-    fn one_update_runs_at_a_time() {
-        let dir = tempfile::tempdir().unwrap();
-        let first = exclusive_in(dir.path()).unwrap();
-        let error = exclusive_in(dir.path()).unwrap_err();
-        assert!(
-            error.error.contains("Another atlas update"),
-            "{}",
-            error.error
-        );
-
-        drop(first);
-        // A process another test starts at this moment may hold a copy of
-        // the lock's file for an instant before it runs its program.
-        let again = (0..50).find_map(|_| {
-            exclusive_in(dir.path()).ok().or_else(|| {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                None
-            })
-        });
-        assert!(
-            again.is_some(),
-            "the lock is free once the first is dropped"
-        );
-    }
-
-    /// Releases come over https or from a folder; plain http only from
-    /// this Mac, as a rehearsal serves them.
-    #[test]
-    fn releases_come_only_over_https_a_folder_or_this_mac() {
-        for (url, allowed) in [
-            (
-                "https://atlas.insanearts.io/releases/latest/SHA256SUMS",
-                Some("=https"),
-            ),
-            ("file:///tmp/releases/latest/SHA256SUMS", Some("=file")),
-            (
-                "http://127.0.0.1:8787/releases/latest/SHA256SUMS",
-                Some("=http"),
-            ),
-            ("http://localhost:8787/releases/latest", Some("=http")),
-            ("http://localhost/releases", Some("=http")),
-            ("http://127.0.0.1", Some("=http")),
-            ("http://example.com/releases", None),
-            ("http://127.0.0.1.example.com/releases", None),
-            ("http://127.0.0.1:8787@example.com/releases", None),
-            ("http://localhost@example.com/releases", None),
-            ("http://127.0.0.1:/releases", None),
-            ("ftp://127.0.0.1/releases", None),
-        ] {
-            assert_eq!(protocol(url).ok(), allowed, "{url}");
-        }
-    }
-
-    #[test]
-    fn an_unreadable_record_asks_to_be_inspected() {
-        let dir = tempfile::tempdir().unwrap();
-        let record = dir.path().join("update.json");
-        assert!(read_record(&record).unwrap().is_none());
-
-        for corrupt in ["{\"previous\": ", "[]", ""] {
-            fs::write(&record, corrupt).unwrap();
-            let error = read_record(&record).unwrap_err();
-            assert_eq!(error.code, "update");
-            assert!(error.error.contains("Inspect it"), "{}", error.error);
-            assert!(finish_record(&record).is_err());
-            assert!(record.exists(), "an unreadable record is kept");
-        }
-    }
-
-    #[test]
-    fn archives_must_match_their_listed_checksum() {
-        let dir = tempfile::tempdir().unwrap();
-        let name = "Atlas-1.0.0-macos.zip";
-        fs::write(dir.path().join(name), b"archive").unwrap();
-        fs::write(dir.path().join("SHA256SUMS"), "00  Other.zip\n").unwrap();
-        let unlisted = verify(dir.path(), name, false).unwrap_err();
-        assert!(
-            unlisted.error.contains("does not list"),
-            "{}",
-            unlisted.error
-        );
-
-        fs::write(
-            dir.path().join("SHA256SUMS"),
-            format!("{}  {name}\n", "0".repeat(64)),
-        )
-        .unwrap();
-        let mismatch = verify(dir.path(), name, false).unwrap_err();
-        assert!(
-            mismatch.error.contains("Checksum mismatch"),
-            "{}",
-            mismatch.error
-        );
-
-        let sum = crate::digest::file_sha256(&dir.path().join(name)).unwrap();
-        fs::write(dir.path().join("SHA256SUMS"), format!("{sum}  {name}\n")).unwrap();
-        // The right bytes get past the checksum to unpacking, which fails here.
-        let unpacked = verify(dir.path(), name, false).unwrap_err();
-        assert!(unpacked.error.contains("unpacked"), "{}", unpacked.error);
-    }
-
-    #[test]
-    fn downloads_report_why_they_failed() {
-        let dir = tempfile::tempdir().unwrap();
-        let missing = format!("file://{}/missing", dir.path().display());
-        let error = curl(&missing, &dir.path().join("out")).unwrap_err();
-        assert!(error.error.starts_with("Could not download"));
-        assert!(error.error.contains("curl"), "{}", error.error);
-
-        let plain = curl("http://127.0.0.1:9/x", &dir.path().join("out")).unwrap_err();
-        assert!(
-            plain.error.contains("Could not download"),
-            "{}",
-            plain.error
-        );
-
-        let source = dir.path().join("source");
-        fs::write(&source, b"bytes").unwrap();
-        let local = format!("file://{}", source.display());
-        curl(&local, &dir.path().join("copy")).unwrap();
-        assert_eq!(fs::read(dir.path().join("copy")).unwrap(), b"bytes");
-    }
-
-    #[test]
-    fn only_paths_others_can_reach_are_runnable_by_the_helper() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let private = dir.path().join("home");
-        let file = private.join("Applications/atlas");
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(&file, b"").unwrap();
-        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
-
-        assert!(
-            !reachable_by_others(&file),
-            "a private home blocks the helper"
-        );
-        assert!(reachable_by_others(Path::new("/bin/ls")));
-    }
-}
+mod tests;

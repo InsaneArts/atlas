@@ -9,16 +9,14 @@ use super::{
     record::{Ended, Record, Stopping},
     signal::Signalled,
     store::Found,
-    verdict::Verdict,
+    verdict::{Verdict, verdict},
 };
 use crate::{
-    daemon::{
-        protocol::{How, JobState, Left},
-        run,
-    },
+    daemon::run,
     error::Result,
-    host_session::now_ms,
     process::Info,
+    protocol::{How, JOB_GRACE, JobState, Left},
+    time::now_ms,
 };
 use nix::sys::signal::Signal;
 use std::{
@@ -38,8 +36,6 @@ const KILL_FOR: Duration = Duration::from_secs(60);
 /// How often jobs are looked at while one is stopping, and otherwise.
 const WATCH_STOPPING: Duration = Duration::from_millis(200);
 const WATCH: Duration = Duration::from_secs(1);
-/// The grace a stop that no client asked for gives.
-pub(super) const GRACE_MS: u64 = 5_000;
 
 impl Jobs {
     /// Look at every job once: end what has ended, stop what ran past its
@@ -56,13 +52,13 @@ impl Jobs {
         let mut state = self.state()?;
         let now = now_ms();
         let records = state.store.records();
-        let processes = self.kernel.of_user(self.uid).ok();
+        let processes = self.processes();
         for read in records {
             let Found::Record(mut record) = read else {
                 continue;
             };
-            if record.state == JobState::Launched && !state.launching.contains(&record.id) {
-                self.found_launched(&mut state, &mut record, processes.as_deref());
+            if state.left_launched(&record) {
+                self.found_again(&mut state, &mut record, processes.as_deref());
             }
             self.look(&mut state, &mut record, processes.as_deref(), forced, now);
             if state.store.bound_log(&record.id, self.log_limit) {
@@ -82,7 +78,7 @@ impl Jobs {
     }
 
     /// How long until the next look: sooner while a job is stopping.
-    pub(crate) fn interval(&self) -> Result<Duration> {
+    pub(super) fn interval(&self) -> Result<Duration> {
         Ok(if self.state()?.stopping {
             WATCH_STOPPING
         } else {
@@ -126,36 +122,38 @@ impl Jobs {
             JobState::Running => {
                 let why = forced.or((now >= record.ends_at).then_some(How::Timeout));
                 if let Some(why) = why {
-                    return self.begin_stop(state, record, why, GRACE_MS, processes, now);
+                    return self.begin_stop(state, record, why, processes, now);
                 }
-                let (verdict, _) = self.judge(state, record, None);
+                let verdict = self.judge(state, record, None);
                 if !self.settle(state, record, &verdict, How::Exited, processes)
-                    && matches!(verdict, Verdict::Signal { .. })
+                    && verdict.signals()
                 {
                     let before = record.seen.len();
-                    note_seen(record, processes, self);
+                    self.note_seen(record, processes);
                     if record.seen.len() != before {
                         state.store.put(record);
                     }
                 }
             }
             JobState::Stopping => self.escalate(state, record, processes, now),
-            _ => {}
+            JobState::Starting | JobState::Launched | JobState::Ended => {}
         }
     }
 
-    /// Settle a job whose record says launched while no start is launching
-    /// it: run on when it is still the job, ended when it is not, and
-    /// otherwise shown as it is and never signalled.
-    pub(super) fn found_launched(
+    /// Settle a job no start is attending to: one still the job's runs on,
+    /// adopted when this daemon did not start it, one that ended is ended,
+    /// and any other is shown as it is and never signalled.
+    pub(super) fn found_again(
         &self,
         state: &mut State,
         record: &mut Record,
         processes: Option<&[Info]>,
     ) {
-        let (verdict, _) = self.judge(state, record, None);
-        if let Verdict::Signal { .. } = verdict {
-            record.state = JobState::Running;
+        let verdict = self.judge(state, record, None);
+        if verdict.signals() {
+            if record.state == JobState::Launched {
+                record.state = JobState::Running;
+            }
             record.adopted |= !state.children.contains_key(&record.id);
             state.store.put(record);
         } else {
@@ -163,36 +161,34 @@ impl Jobs {
         }
     }
 
-    /// Begin stopping `record` for `why`. A fresh look decides: a job that
-    /// has ended is ended; one whose processes do not match it, or cannot be
-    /// read, is marked stopping with nothing sent, and is looked at again;
-    /// otherwise the stop is kept first, then TERM is sent, after another
-    /// fresh look.
+    /// Begin stopping `record` for `why`, with the grace no client asked for.
+    /// A fresh look decides: a job that has ended is ended; one whose
+    /// processes do not match it, or cannot be read, is marked stopping with
+    /// nothing sent, and is looked at again; otherwise the stop is kept
+    /// first, then TERM is sent, after another fresh look.
     pub(super) fn begin_stop(
         &self,
         state: &mut State,
         record: &mut Record,
         why: How,
-        grace_ms: u64,
         processes: Option<&[Info]>,
         now: u64,
     ) {
-        let (verdict, _) = self.judge(state, record, None);
+        let verdict = self.judge(state, record, None);
         if self.settle(state, record, &verdict, How::Exited, processes) {
             return;
         }
-        if matches!(verdict, Verdict::Signal { .. }) {
-            note_seen(record, processes, self);
-        }
-        let mut stopping = Stopping::new(why, now, grace_ms);
-        if !matches!(verdict, Verdict::Signal { .. }) {
-            stopping.refused = Some(verdict.reason());
+        let mut stopping = Stopping::new(why, now, crate::time::ms(JOB_GRACE));
+        if verdict.signals() {
+            self.note_seen(record, processes);
+        } else {
+            stopping.refused = Some(verdict.refusal().0);
         }
         record.state = JobState::Stopping;
         record.stopping = Some(stopping);
         state.store.put(record);
         state.stopping = true;
-        if matches!(verdict, Verdict::Signal { .. }) {
+        if verdict.signals() {
             self.send_term(state, record, processes, now);
         }
     }
@@ -209,17 +205,12 @@ impl Jobs {
             return;
         };
         match self.signal(state, record, None, Signal::SIGTERM) {
-            Signalled::Sent => {
-                stopping.term_sent = true;
-                stopping.signal = Some("SIGTERM".into());
-                stopping.since = now;
-                stopping.refused = None;
-            }
+            Signalled::Sent => stopping.term_reached(now),
             Signalled::NotSent(verdict) => {
                 if self.settle(state, record, &verdict, stopping.why, processes) {
                     return;
                 }
-                stopping.refused = Some(verdict.reason());
+                stopping.refused = Some(verdict.refusal().0);
             }
         }
         record.stopping = Some(stopping);
@@ -243,12 +234,13 @@ impl Jobs {
         if !stopping.term_sent {
             return self.send_term(state, record, processes, now);
         }
-        let (verdict, seen) = self.judge(state, record, None);
+        let seen = self.observe(state, record);
+        let verdict = verdict(record, None, &self.boot, self.uid, seen.as_ref());
         if self.settle(state, record, &verdict, stopping.why, processes) {
             return;
         }
-        if !matches!(verdict, Verdict::Signal { .. }) {
-            let why = verdict.reason();
+        if !verdict.signals() {
+            let why = verdict.refusal().0;
             if stopping.refused != Some(why) {
                 stopping.refused = Some(why);
                 record.stopping = Some(stopping);
@@ -256,7 +248,7 @@ impl Jobs {
             }
             return;
         }
-        note_seen(record, processes, self);
+        self.note_seen(record, processes);
         stopping.refused = None;
 
         let after = |since: u64, wait: Duration| now >= since.saturating_add(crate::time::ms(wait));
@@ -284,7 +276,7 @@ impl Jobs {
                     if self.settle(state, record, &verdict, stopping.why, processes) {
                         return;
                     }
-                    stopping.refused = Some(verdict.reason());
+                    stopping.refused = Some(verdict.refusal().0);
                 }
             }
         }
@@ -338,15 +330,8 @@ impl Jobs {
         if let Some(child) = state.children.get_mut(&record.id) {
             match child.try_wait() {
                 Ok(Some(status)) => exit = Some(status),
-                Ok(None)
-                    if matches!(
-                        how,
-                        How::Exited | How::Stopped | How::Timeout | How::Person | How::OnConsole
-                    ) =>
-                {
-                    return;
-                }
-                _ => {}
+                Ok(None) if ended_by_itself(how) => return,
+                Ok(None) | Err(_) => {}
             }
             state.children.remove(&record.id);
         }
@@ -382,32 +367,13 @@ impl Jobs {
     /// be read, is shown as it is and never signalled.
     pub(super) fn adopt(&self) -> Result<()> {
         let mut state = self.state()?;
-        let processes = self.kernel.of_user(self.uid).ok();
+        let processes = self.processes();
         for read in state.store.records() {
             let Found::Record(mut record) = read else {
                 continue;
             };
-            if !record.state.live() {
-                continue;
-            }
-            let (verdict, _) = self.judge(&state, &record, None);
-            match verdict {
-                Verdict::Signal { .. } => {
-                    record.adopted = true;
-                    if record.state == JobState::Launched {
-                        record.state = JobState::Running;
-                    }
-                    state.store.put(&record);
-                }
-                verdict => {
-                    self.settle(
-                        &mut state,
-                        &mut record,
-                        &verdict,
-                        How::Gone,
-                        processes.as_deref(),
-                    );
-                }
+            if record.state.live() {
+                self.found_again(&mut state, &mut record, processes.as_deref());
             }
         }
         self.count(&mut state);
@@ -418,44 +384,40 @@ impl Jobs {
         &self,
         outcome: std::result::Result<Result<()>, tokio::task::JoinError>,
     ) -> Result<()> {
-        match outcome {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(error)) => {
-                self.fail_supervision();
-                Err(error)
-            }
-            Err(error) => {
-                self.fail_supervision();
-                Err(Self::unavailable().with_source(error))
-            }
+        let outcome = outcome.unwrap_or_else(|error| Err(Self::unavailable().with_source(error)));
+        if outcome.is_err() {
+            self.fail_supervision();
         }
+        outcome
+    }
+
+    /// Note `record`'s descendants among `processes`, to report later which
+    /// left its group.
+    fn note_seen(&self, record: &mut Record, processes: Option<&[Info]>) {
+        let leader = record.identity().map(|identity| identity.leader());
+        let (Some(processes), Some(leader)) = (processes, leader) else {
+            return;
+        };
+        observe(&mut record.seen, &leader, processes, |pid| {
+            self.kernel.session(pid)
+        });
     }
 }
 
-/// Note `record`'s descendants among `processes`, to report later which
-/// left its group.
-fn note_seen(record: &mut Record, processes: Option<&[Info]>, jobs: &Jobs) {
-    let (Some(processes), Some(identity)) = (processes, record.identity()) else {
-        return;
-    };
-    let members: Vec<Info> = processes
-        .iter()
-        .filter(|process| process.pgid == identity.pgid())
-        .cloned()
-        .collect();
-    observe(
-        &mut record.seen,
-        &identity.leader(),
-        &members,
-        processes,
-        |pid| jobs.kernel.session(pid),
-    );
+/// Whether a job that ended `how` ended of itself or by a signal, so a leader
+/// of this daemon's that cannot be collected yet is waited for: nothing else
+/// says it is gone.
+fn ended_by_itself(how: How) -> bool {
+    match how {
+        How::Exited | How::Stopped | How::Timeout | How::Person | How::OnConsole => true,
+        How::Gone | How::Restarted | How::LeaderGone => false,
+    }
 }
 
 /// Watch `jobs` until stopping: about once a second, five times a second
 /// while one is stopping. A Stop is seen through the input service's
 /// saved `stop_marker`; the helper on screen through `on_console`.
-pub(crate) async fn supervise(
+pub(in crate::daemon) async fn supervise(
     jobs: Arc<Jobs>,
     stop_marker: PathBuf,
     on_console: fn() -> bool,

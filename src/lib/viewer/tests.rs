@@ -2,17 +2,17 @@
 //! taking and ending control, following the settings and what each read
 //! leaves out.
 use super::{
-    control::{Control, release_native},
+    control::release_native,
     frames::Capture,
     http::{
         CONCURRENT_REQUESTS, CONNECTIONS, FIRST_REQUEST, accept, bind, header, json_response,
         respond,
     },
-    local::{Answer, answering, exchange, parse_response},
-    reads::{ACTIVITY_ROWS, account_title, activity_row, listed_apps},
+    local::{answering, exchange, reply_status},
+    reads::{ACTIVITY_ROWS, activity_row, listed_apps},
     *,
 };
-use crate::{config::Config, files, overview::READ_DEADLINE, setup::Title, test_support::SETTINGS};
+use crate::{config::Config, files, overview::READ_DEADLINE, test_support::SETTINGS};
 use axum::{
     body::{Body, to_bytes},
     extract::Request,
@@ -189,7 +189,7 @@ async fn the_cleanup_routes_preview_and_apply_as_the_person() {
 }
 
 /// [`answering`] off the runtime.
-async fn answering_off(url: &str) -> Answer {
+async fn answering_off(url: &str) -> Option<u32> {
     let url = url.to_owned();
     tokio::task::spawn_blocking(move || answering(&url))
         .await
@@ -376,10 +376,7 @@ async fn post_local_reads_the_viewers_answer_in_its_own_words() {
     .unwrap();
     assert_eq!(opened["viewer"], "open");
     assert_eq!(received.recv().await, Some(Line::Viewer));
-    assert_eq!(
-        answering_off(&url).await,
-        Answer::Process(std::process::id())
-    );
+    assert_eq!(answering_off(&url).await, Some(std::process::id()));
 
     server.abort();
 }
@@ -480,13 +477,13 @@ async fn revoking_ends_any_lease_and_keeps_unconfirmed_cleanup_pending() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let controller = viewer.client().controller.clone();
-    let idle = viewer.control(Control::Revoke).await.unwrap();
+    let idle = viewer.revoke().await.unwrap();
     assert_eq!(idle, json!({"ok": true, "released": false}));
     viewer.lease.lock().await.acquire(&controller).unwrap();
 
     // The helper cannot confirm native cleanup, so control ends but the
     // release stays an unknown outcome for recovery.
-    let error = viewer.control(Control::Revoke).await.unwrap_err();
+    let error = viewer.revoke().await.unwrap_err();
     assert!(error.uncertain);
     assert!(!viewer.lease.lock().await.active());
     assert_eq!(controller.unresolved().unwrap().len(), 1);
@@ -593,7 +590,7 @@ async fn a_running_viewer_is_the_process_its_record_names() {
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 11\r\n\r\n{\"ok\":true}");
         }
     });
-    assert_eq!(answering_off(&url).await, Answer::Nobody);
+    assert_eq!(answering_off(&url).await, None);
 
     server.abort();
 }
@@ -612,17 +609,23 @@ async fn finding_the_viewer_and_ending_control_never_wait_for_a_slot() {
 
     let status = tokio::task::spawn_blocking({
         let url = url.clone();
-        move || exchange(&url, "GET", "status.json", None, Duration::from_secs(5))
+        move || {
+            exchange(
+                &url,
+                "GET",
+                "status.json",
+                None,
+                Duration::from_secs(5),
+                1 << 16,
+            )
+        }
     })
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(status.0, 503, "reads wait for a slot");
+    assert_eq!(status.status, 503, "reads wait for a slot");
 
-    assert_eq!(
-        answering_off(&url).await,
-        Answer::Process(std::process::id())
-    );
+    assert_eq!(answering_off(&url).await, Some(std::process::id()));
 
     let ended = tokio::task::spawn_blocking(move || {
         let revoked = post_local(&url, "control/revoke", &json!({}))?;
@@ -662,7 +665,7 @@ async fn connections_past_the_limit_wait_their_turn() {
                 let read = stream.read(&mut chunk).await.unwrap();
                 assert_ne!(read, 0, "the accepted connection stays open");
                 response.extend_from_slice(&chunk[..read]);
-                if let Some((status, ..)) = parse_response(&response) {
+                if let Some(status) = reply_status(&response) {
                     assert_eq!(status, 200, "the connection reached its private route");
                     break;
                 }
@@ -674,17 +677,10 @@ async fn connections_past_the_limit_wait_their_turn() {
     .await
     .expect("all four connections were admitted before probing capacity");
 
-    assert_eq!(
-        answering_off(&viewer.url).await,
-        Answer::Nobody,
-        "all are taken"
-    );
+    assert_eq!(answering_off(&viewer.url).await, None, "all are taken");
 
     drop(held);
-    assert_eq!(
-        answering_off(&viewer.url).await,
-        Answer::Process(std::process::id())
-    );
+    assert_eq!(answering_off(&viewer.url).await, Some(std::process::id()));
 
     server.abort();
 }
@@ -1272,42 +1268,6 @@ async fn a_frame_waiting_out_an_older_capture_still_ends_in_time() {
     assert_eq!(error.error, "The helper did not answer in time");
 }
 
-/// A viewer from an older build answers without its process: the one
-/// its record names counts when that runs Atlas.
-#[tokio::test]
-async fn an_older_viewer_is_found_by_its_record() {
-    let dir = tempfile::tempdir().unwrap();
-    let older = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = older.local_addr().unwrap();
-    std::thread::spawn(move || {
-        use std::io::{Read, Write};
-
-        let reply = "{\"ok\":true,\"service\":\"atlas-viewer\"}";
-        for mut stream in older.incoming().flatten() {
-            let _ = stream.read(&mut [0u8; 1024]);
-            let _ = stream.write_all(
-                format!(
-                    "HTTP/1.1 200 OK\r\ncontent-length: {}\r\n\r\n{reply}",
-                    reply.len()
-                )
-                .as_bytes(),
-            );
-        }
-    });
-
-    let record = dir.path().join(MENUBAR_RECORD);
-    let url = format!("http://{address}/secret/");
-    let check = |pid: u32| {
-        std::fs::write(&record, json!({"url": url, "pid": pid}).to_string()).unwrap();
-        let record = record.clone();
-        tokio::task::spawn_blocking(move || running(&record, address.port()))
-    };
-
-    assert_eq!(answering_off(&url).await, Answer::Older);
-    assert!(check(std::process::id()).await.unwrap().is_some());
-    assert!(check(1).await.unwrap().is_none(), "not Atlas");
-}
-
 /// Shutdown waits for control being taken to settle, however long the
 /// helper takes, and then lets no more changes begin.
 #[tokio::test]
@@ -1393,8 +1353,8 @@ async fn connections_that_never_name_the_viewer_close_soon() {
                 let read = stream.read(&mut chunk).unwrap();
                 assert_ne!(read, 0, "closed before replying");
                 reply.extend_from_slice(&chunk[..read]);
-                if let Some(parsed) = parse_response(&reply) {
-                    return parsed.0;
+                if let Some(status) = reply_status(&reply) {
+                    return status;
                 }
             }
         };
@@ -2171,97 +2131,6 @@ async fn screenshots_are_listed_newest_first_and_served_only_by_a_capture_name()
     }
 }
 
-#[test]
-fn screenshot_rows_keep_the_folder_they_were_listed_from() {
-    use std::future::{Future, poll_fn};
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .max_blocking_threads(1)
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let dir = tempfile::tempdir().unwrap();
-        let viewer = unreachable(dir.path()).await;
-        let original = viewer.client();
-        let output = original.output_dir().unwrap().to_path_buf();
-        std::fs::write(output.join("1-capture.png"), b"old capture").unwrap();
-
-        // Hold the only blocking worker so settings can change after
-        // listing has captured its client but before it reads that folder.
-        let (release, held) = std::sync::mpsc::channel();
-        let (started, ready) = tokio::sync::oneshot::channel();
-        let worker = tokio::task::spawn_blocking(move || {
-            let _ = started.send(());
-            let _ = held.recv_timeout(Duration::from_secs(5));
-        });
-        ready.await.unwrap();
-        let mut listing = Box::pin(viewer.screenshots());
-        poll_fn(|context| {
-            assert!(listing.as_mut().poll(context).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
-
-        let text = SETTINGS.replace("\"out\"", "\"moved\"").into_bytes();
-        let config = Config::parse(&text, &dir.path().join("u.toml")).unwrap();
-        viewer.follow_output(&original, config, text).await;
-        assert_ne!(
-            viewer.client().config.output_dir,
-            original.config.output_dir
-        );
-        release.send(()).unwrap();
-        worker.await.unwrap();
-
-        let listed = listing.await.unwrap();
-        assert_eq!(listed["folder"], json!(output));
-        assert_eq!(
-            listed["screenshots"],
-            json!([{"name": "1-capture.png", "takenAt": 0}])
-        );
-    });
-}
-
-#[tokio::test]
-async fn an_account_title_is_asked_again_after_no_answer_and_kept_once_answered() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static ASKED: AtomicUsize = AtomicUsize::new(0);
-    fn ask(_: &str) -> Title {
-        match ASKED.fetch_add(1, Ordering::SeqCst) {
-            0 => Title::Unknown,
-            1 => Title::Titled("Atlas".to_owned()),
-            _ => Title::Titled("Not asked".to_owned()),
-        }
-    }
-    let known = std::sync::Mutex::new(None);
-
-    assert_eq!(account_title(&known, "atlas", ask).await, None);
-    assert_eq!(
-        account_title(&known, "atlas", ask).await.as_deref(),
-        Some("Atlas")
-    );
-    assert_eq!(
-        account_title(&known, "atlas", ask).await.as_deref(),
-        Some("Atlas")
-    );
-    assert_eq!(ASKED.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
-async fn an_account_with_no_full_name_is_asked_once() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static ASKED: AtomicUsize = AtomicUsize::new(0);
-    fn ask(_: &str) -> Title {
-        ASKED.fetch_add(1, Ordering::SeqCst);
-        Title::Untitled
-    }
-    let known = std::sync::Mutex::new(None);
-
-    assert_eq!(account_title(&known, "atlas", ask).await, None);
-    assert_eq!(account_title(&known, "atlas", ask).await, None);
-    assert_eq!(ASKED.load(Ordering::SeqCst), 1);
-}
-
 #[tokio::test]
 async fn control_tokens_keep_their_validation_order_for_missing_and_non_string_fields()
 -> crate::error::Result<()> {
@@ -2296,7 +2165,6 @@ async fn fresh_input_frame(viewer: &Viewer, key: &str) {
         png: Arc::from(&b"stand-in frame"[..]),
         width: 1,
         height: 1,
-        display: epoch.display.clone(),
         epoch,
         at: std::time::Instant::now(),
     };

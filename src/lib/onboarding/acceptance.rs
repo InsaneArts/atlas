@@ -1,11 +1,14 @@
 //! Allow records consent; the requesting Atlas owns and drives setup.
-use super::{Pairing, problem, request};
-use crate::setup::installed_app::signed_executable;
+use super::{MAX_RECORD, Pairing, problem, request};
 use crate::{
     control::{Controller, ExecutorClaims},
     error::Result,
     native::endpoint,
-    setup::{self, helper::Request},
+    setup::{
+        self, executor,
+        helper::{JobReport, Request},
+        installed_app::signed_executable,
+    },
 };
 use serde_json::{Value, json};
 use std::{
@@ -15,7 +18,7 @@ use std::{
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub(super) fn listening(uid: u32) -> bool {
@@ -95,11 +98,11 @@ fn signal_using(command: &mut Command) -> Result<Value> {
         .stdout
         .take()
         .ok_or_else(|| problem("No setup pipe"))?;
-    let receiver = crate::setup::executor::forward(output);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let receiver = executor::forward(output);
+    let deadline = Instant::now() + Duration::from_secs(10);
     let mut bytes = Vec::new();
     let ready = loop {
-        match receiver.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(chunk) => bytes.extend(chunk),
             Err(_) => break false,
         }
@@ -112,7 +115,8 @@ fn signal_using(command: &mut Command) -> Result<Value> {
         let _ = child.wait();
         return Err(problem(
             "Allow could not be confirmed. Open Atlas here to retry; any recorded acceptance is kept.",
-        ).uncertain());
+        )
+        .uncertain());
     }
     Ok(json!({"ok":true,"accepted":true}))
 }
@@ -143,7 +147,7 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
     )
     .await?;
     verify(&pairing)?;
-    crate::config::write_atomic(
+    crate::files::write_atomic(
         &path.with_file_name("accepted.json"),
         &serde_json::to_vec(&pairing)?,
         0o644,
@@ -152,12 +156,12 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
     std::io::stdout().flush()?;
     // Idle listeners retire when the request changes, so a later choice can
     // reuse the endpoint without waiting for an earlier Allow to time out.
-    let deadline = std::time::Instant::now() + Duration::from_secs(600);
+    let deadline = Instant::now() + Duration::from_secs(600);
     loop {
         if super::read_request(Path::new(super::REQUEST)).as_ref() != Some(&pairing) {
             return Err(problem("The helper request changed before setup"));
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             return Err(problem("Open Atlas in the helper to resume acceptance"));
         }
         let (stream, _) =
@@ -205,7 +209,7 @@ fn accepted_at(path: &Path, pairing: &Pairing) -> bool {
         {
             return None;
         }
-        let mut file = crate::files::open_plain(path)?;
+        let file = crate::files::open_plain(path)?;
         let metadata = file.metadata().ok()?;
         if !metadata.is_file()
             || metadata.uid() != pairing.helper_uid
@@ -213,22 +217,14 @@ fn accepted_at(path: &Path, pairing: &Pairing) -> bool {
         {
             return None;
         }
-        let mut bytes = Vec::new();
-        (&mut file)
-            .take(64 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .ok()?;
-        if bytes.len() > 64 * 1024 {
-            return None;
-        }
-        serde_json::from_slice(&bytes).ok()
+        serde_json::from_slice(&crate::files::read_limited(file, MAX_RECORD)?).ok()
     };
     read().as_ref() == Some(pairing)
 }
 
 fn receive(channel: &mut impl Read) -> Result<Value> {
     let mut bytes = Vec::new();
-    for _ in 0..crate::daemon::protocol::MAX_REQUEST {
+    for _ in 0..crate::protocol::MAX_REQUEST {
         let mut byte = [0];
         channel.read_exact(&mut byte)?;
         if byte[0] == b'\n' {
@@ -265,7 +261,7 @@ fn serve_channel(
             return Ok(());
         }
         let action: Request = serde_json::from_value(value["request"].clone())?;
-        if matches!(action, Request::FirstLogin { .. }) {
+        if !action.allowed_in_acceptance() {
             return Err(problem("First-login setup is not an acceptance operation"));
         }
         let outcome = run(&action)
@@ -316,12 +312,16 @@ pub(super) async fn resume(config: &crate::config::Config, pairing: Pairing) -> 
         )
     })
     .await
-    .map_err(|_| problem("The setup connection ended").uncertain())?
+    .map_err(|error| {
+        problem("The setup connection ended")
+            .uncertain()
+            .with_source(error)
+    })?
 }
 
 fn drive(
     controller: &Controller,
-    executor: nix::unistd::Pid,
+    worker: nix::unistd::Pid,
     mut channel: impl Read + Write,
     pairing: &Pairing,
     verify: impl FnOnce() -> Result<()>,
@@ -337,19 +337,15 @@ fn drive(
     }
     let pending = controller.quarantine()?;
     let _executors = ExecutorClaims::new(std::slice::from_ref(&pending))?;
-    crate::control::record_executor(executor)?;
+    crate::control::record_executor(worker)?;
     let channel = RefCell::new(channel);
     let outcome = (|| {
         let run = |action: &Request| -> Result<Value> {
             let mut stream = channel.borrow_mut();
             send(&mut *stream, &json!({"ticket":ticket,"request":action}))?;
-            let reply = receive(&mut *stream)?;
-            if reply["ok"] != true {
-                return Err(
-                    problem(reply["error"].as_str().unwrap_or("Helper setup failed")).uncertain(),
-                );
-            }
-            Ok(reply)
+            setup::helper::acknowledged(receive(&mut *stream)?).map_err(|unfinished| {
+                problem(unfinished.reason().unwrap_or("Helper setup failed")).uncertain()
+            })
         };
         complete_setup(&pairing.controller_name, agent, logs, run)?;
         let mut stream = channel.borrow_mut();
@@ -362,7 +358,7 @@ fn drive(
     // Closing the channel stops future commands. Retain ownership while any
     // dispatched filesystem/launchd operation finishes after a lost reply.
     drop(channel);
-    crate::setup::executor::wait_until_ended(executor);
+    executor::wait_until_ended(worker);
     if outcome.is_ok() {
         controller.clear_if(&pending)?;
     }
@@ -374,18 +370,18 @@ fn complete_setup(
     agent: setup::helper::Agent,
     logs: &Path,
     run: impl Fn(&Request) -> Result<Value>,
-) -> Result<Value> {
+) -> Result<()> {
     let uid = agent.uid;
     run(&Request::Prepare {
         uid,
         controller: controller_name.to_owned(),
     })?;
-    let installed = crate::setup::helper::install_job(&run, uid, agent, logs)?;
+    let installed = setup::job::install_job(&run, agent, logs)?;
     run(&Request::ForgetOpener { uid })?;
     if installed["pid"].is_null() {
         run(&Request::Kickstart { uid })?;
     }
-    Ok(installed)
+    Ok(())
 }
 
 fn receipt(uid: u32) -> Result<PathBuf> {
@@ -394,667 +390,57 @@ fn receipt(uid: u32) -> Result<PathBuf> {
         .join(format!("helper-{uid}.acceptance.json")))
 }
 
-/// Account observations and the existing handoff, substituted in acceptance tests.
-pub(super) trait Observation {
-    fn accepted(&self, pairing: &Pairing) -> bool;
-    fn receipt(&self, uid: u32) -> Result<PathBuf>;
-    async fn job(&self) -> Result<Value>;
-    async fn resume(&self, pairing: Pairing) -> Result<()>;
-    fn pending(&self) -> Result<Vec<String>>;
+/// Where setup stands for `pairing` in the person's status loop.
+pub(super) async fn observe(config: &crate::config::Config, pairing: Pairing) -> Value {
+    reconcile(
+        accepted(&pairing),
+        receipt(pairing.helper_uid),
+        pairing,
+        async || {
+            let client = crate::client::Client::new(config.clone())?;
+            setup::migrate::managed_job(&client).await
+        },
+        async |pairing| resume(config, pairing).await,
+        || Controller::new(config.helper_uid)?.pending(),
+    )
+    .await
 }
 
-impl Observation for crate::config::Config {
-    fn accepted(&self, pairing: &Pairing) -> bool {
-        accepted(pairing)
-    }
-
-    fn receipt(&self, uid: u32) -> Result<PathBuf> {
-        receipt(uid)
-    }
-
-    async fn job(&self) -> Result<Value> {
-        let client = crate::client::Client::new(self.clone())?;
-        setup::migrate::managed_job(&client).await
-    }
-
-    async fn resume(&self, pairing: Pairing) -> Result<()> {
-        resume(self, pairing).await
-    }
-
-    fn pending(&self) -> Result<Vec<String>> {
-        Controller::new(self.helper_uid)?.pending()
-    }
-}
-
-pub(super) async fn observe(config: &impl Observation, pairing: Pairing) -> Value {
-    let accepted = config.accepted(&pairing);
+/// Finish an `accepted` handoff unless `receipt` and today's `job` show it
+/// done already, repairing through `resume`.
+async fn reconcile(
+    accepted: bool,
+    receipt: Result<PathBuf>,
+    pairing: Pairing,
+    job: impl AsyncFnOnce() -> Result<JobReport>,
+    resume: impl AsyncFnOnce(Pairing) -> Result<()>,
+    pending: impl FnOnce() -> Result<Vec<String>>,
+) -> Value {
     if !accepted {
         return json!({"accepted":false});
     }
     let result = async {
-        let receipt = config.receipt(pairing.helper_uid)?;
+        let receipt = receipt?;
         let expected = serde_json::to_vec(&pairing)?;
         // A receipt acknowledges an earlier handoff, not today's job. A
         // silent daemon cannot confirm it either; retry through the same
         // helper-owned listener and requester-owned transaction in that case.
         if fs::read(&receipt).ok().as_ref() == Some(&expected)
-            && config.job().await.is_ok_and(|job| {
-                job["plistKind"] == "regular"
-                    && job["loaded"] == true
-                    && job["pid"].as_u64().is_some_and(|pid| pid > 1)
-                    && job["path"].as_str().is_some()
-                    && job["path"] == job["plist"]
-            })
+            && job().await.is_ok_and(|job| job.running())
         {
             return Ok(());
         }
-        config.resume(pairing).await?;
-        crate::config::save_private(&receipt, &expected)
+        resume(pairing).await?;
+        crate::files::save_private(&receipt, &expected)
     }
     .await;
     match result {
         Ok(()) => json!({"accepted":true,"complete":true}),
         Err(error) => json!({"accepted":true,"complete":false,"error":error.error,
-            "pending": config.pending().ok(),
+            "pending": pending().ok(),
             "recovery":"Open Atlas in the helper to retry; return here to finish or recover pending setup."}),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{BufRead, BufReader, Cursor};
-
-    // The test harness writes its own lines around a subprocess test. Only
-    // JSON lines belong to the production worker protocol exercised here.
-    struct JsonInput<R> {
-        input: R,
-        bytes: Cursor<Vec<u8>>,
-    }
-    impl<R: BufRead> Read for JsonInput<R> {
-        fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-            loop {
-                let count = self.bytes.read(output)?;
-                if count > 0 {
-                    return Ok(count);
-                }
-                let mut line = Vec::new();
-                if self.input.read_until(b'\n', &mut line)? == 0 {
-                    return Ok(0);
-                }
-                if line.starts_with(b"{") {
-                    self.bytes = Cursor::new(line);
-                }
-            }
-        }
-    }
-    struct Channel<R, W>(JsonInput<R>, W);
-    impl<R: BufRead, W> Read for Channel<R, W> {
-        fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-            self.0.read(bytes)
-        }
-    }
-    impl<R, W: Write> Write for Channel<R, W> {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.1.write(bytes)
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            self.1.flush()
-        }
-    }
-    fn channel<R: BufRead, W>(input: R, output: W) -> Channel<R, W> {
-        Channel(
-            JsonInput {
-                input,
-                bytes: Cursor::new(Vec::new()),
-            },
-            output,
-        )
-    }
-    fn pairing() -> Pairing {
-        Pairing {
-            ticket: "a".repeat(crate::files::TOKEN_BYTES * 2),
-            controller_uid: nix::unistd::getuid().as_raw(),
-            controller_name: "requester".into(),
-            helper_uid: 7001,
-            helper_name: "helper".into(),
-            helper_identity: setup::identity::Identity {
-                uid: 7001,
-                name: "helper".into(),
-                generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
-            },
-        }
-    }
-
-    #[test]
-    fn acceptance_reads_only_a_bounded_plain_file_without_waiting_for_a_writer() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("accepted.json");
-        let mut pairing = pairing();
-        pairing.helper_uid = nix::unistd::getuid().as_raw();
-        let bytes = serde_json::to_vec(&pairing).unwrap();
-        fs::write(&path, &bytes).unwrap();
-        assert!(accepted_at(&path, &pairing));
-
-        let link = dir.path().join("link.json");
-        std::os::unix::fs::symlink(&path, &link).unwrap();
-        assert!(!accepted_at(&link, &pairing));
-        fs::write(&path, [bytes, vec![b' '; 64 * 1024]].concat()).unwrap();
-        assert!(!accepted_at(&path, &pairing));
-
-        fs::remove_file(&path).unwrap();
-        nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
-        assert!(!accepted_at(&path, &pairing));
-    }
-    fn agent(dir: &Path) -> setup::helper::Agent {
-        setup::helper::Agent {
-            uid: 7001,
-            controller_uid: pairing().controller_uid,
-            label: setup::helper::LABEL.into(),
-            program: dir.join("Atlas"),
-            socket: dir.join("helper/c.sock"),
-        }
-    }
-    fn worker(dir: &Path, stage: &str) -> crate::test_support::Fixture {
-        crate::test_support::Fixture::spawn(
-            dir,
-            crate::test_support::rerun("onboarding::acceptance::tests::an_acceptance_test_worker")
-                .arg("--nocapture")
-                .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir)
-                .env("ATLAS_ACCEPTANCE_TEST_STAGE", stage)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null()),
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends() {
-        if !crate::test_support::isolated(
-            "onboarding::acceptance::tests::interrupted_acceptance_keeps_the_requesters_claim_until_its_worker_ends",
-        ) {
-            return;
-        }
-        for stage in [
-            "prepare",
-            "retire",
-            "install",
-            "restore",
-            "opener",
-            "kickstart",
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            let controller = Controller::at(7001, &dir.path().join("requester/state"));
-            let mut worker = worker(dir.path(), stage);
-            let pid = worker.caller.id();
-            worker
-                .request(
-                    crate::test_support::rerun(
-                        "onboarding::acceptance::tests::an_acceptance_test_requester",
-                    )
-                    .arg("--nocapture")
-                    .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir.path())
-                    .env("ATLAS_ACCEPTANCE_TEST_PID", pid.to_string())
-                    .stderr(Stdio::null()),
-                )
-                .unwrap();
-            worker.ready().unwrap();
-            let before = controller.pending().unwrap();
-            worker.interrupt().unwrap();
-            let excluded = controller.acquire(true).is_err();
-            let after = controller.pending().unwrap();
-            worker.finish().unwrap();
-            worker.caller.wait().unwrap();
-            assert_eq!(before.len(), 1, "a claim precedes {stage}");
-            assert_eq!(after, before, "the interrupted claim survives {stage}");
-            assert!(
-                excluded,
-                "the still-running worker excludes teardown after {stage}"
-            );
-            assert!(
-                controller.acquire(true).is_ok(),
-                "worker ended after {stage}"
-            );
-            assert_eq!(
-                controller.pending().unwrap(),
-                before,
-                "unknown outcomes require recovery"
-            );
-            assert!(!dir.path().join("helper/state").exists());
-        }
-    }
-
-    #[test]
-    fn acceptance_excludes_competing_teardown_through_completion_and_rollback() {
-        if !crate::test_support::isolated(
-            "onboarding::acceptance::tests::acceptance_excludes_competing_teardown_through_completion_and_rollback",
-        ) {
-            return;
-        }
-        for stage in [
-            "prepare",
-            "retire",
-            "install",
-            "restore",
-            "opener",
-            "kickstart",
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            let controller = Controller::at(7001, &dir.path().join("requester/state"));
-            let previous = controller.quarantine().unwrap();
-            let generation = previous.generation().to_owned();
-            drop(previous);
-            let mut worker = worker(dir.path(), stage);
-            let pid = worker.caller.id();
-            worker
-                .request(
-                    crate::test_support::rerun(
-                        "onboarding::acceptance::tests::an_acceptance_test_requester",
-                    )
-                    .arg("--nocapture")
-                    .env("ATLAS_ACCEPTANCE_TEST_DIRECTORY", dir.path())
-                    .env("ATLAS_ACCEPTANCE_TEST_PID", pid.to_string())
-                    .stderr(Stdio::null()),
-                )
-                .unwrap();
-            worker.ready().unwrap();
-            let excluded = controller.acquire(true).is_err();
-            let pending = controller.pending().unwrap();
-            worker.finish().unwrap();
-            worker.wait().unwrap();
-            let succeeded = fs::read_to_string(dir.path().join("result")).unwrap() == "true";
-            assert!(excluded, "teardown must not enter during {stage}");
-            assert_eq!(
-                fs::read_to_string(dir.path().join("ownership-checked")).unwrap(),
-                "true",
-                "ownership precedes the claim and every dispatch: {stage}"
-            );
-            assert_eq!(pending.len(), 2, "{stage}");
-            assert_eq!(succeeded, stage != "restore", "{stage}");
-            let remaining = controller.pending().unwrap();
-            assert!(
-                remaining.contains(&generation),
-                "unrelated pending work stays"
-            );
-            assert_eq!(
-                remaining.len(),
-                if stage == "restore" { 2 } else { 1 },
-                "{stage}"
-            );
-        }
-    }
-
-    #[test]
-    fn acceptance_refuses_dispatch_during_teardown_or_after_the_pairing_changes() {
-        if !crate::test_support::isolated(
-            "onboarding::acceptance::tests::acceptance_refuses_dispatch_during_teardown_or_after_the_pairing_changes",
-        ) {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let controller = Controller::at(7001, dir.path());
-        let teardown = controller.acquire(true).unwrap();
-        let mut output = Vec::new();
-        let result = drive(
-            &controller,
-            nix::unistd::getpid(),
-            channel(Cursor::new(b""), &mut output),
-            &pairing(),
-            || Ok(()),
-            agent(dir.path()),
-            dir.path(),
-        );
-        assert!(result.is_err());
-        assert!(
-            output.is_empty(),
-            "teardown acquired first, so no worker command runs"
-        );
-        drop(teardown);
-        let result = drive(
-            &controller,
-            nix::unistd::getpid(),
-            channel(Cursor::new(b""), &mut output),
-            &pairing(),
-            || Err(problem("Teardown removed the request")),
-            agent(dir.path()),
-            dir.path(),
-        );
-        assert!(result.is_err());
-        assert!(output.is_empty(), "pairing is rechecked under ownership");
-        assert!(controller.pending().unwrap().is_empty());
-    }
-
-    #[test]
-    fn acceptance_makes_zero_authorization_calls() {
-        let pairing = pairing();
-        let (result, calls) = crate::approval::without_authorization(|| {
-            allow(
-                (pairing.controller_uid, &pairing.controller_name),
-                (pairing.helper_uid, &pairing.helper_name),
-                false,
-                Some(false),
-                Some(pairing.clone()),
-                |_| signal_using(Command::new("/bin/sh").args(["-c", "printf 'ready\\n'"])),
-            )
-        });
-        assert_eq!(
-            calls, 0,
-            "Allow must not ask for another administrator approval"
-        );
-        assert_eq!(result.unwrap(), json!({"ok":true,"accepted":true}));
-    }
-
-    struct ObservedHelper {
-        directory: tempfile::TempDir,
-        controller: Controller,
-        inspection_unavailable: std::cell::Cell<bool>,
-    }
-
-    impl Observation for ObservedHelper {
-        fn accepted(&self, accepted: &Pairing) -> bool {
-            accepted == &pairing()
-        }
-
-        fn receipt(&self, _: u32) -> Result<PathBuf> {
-            Ok(self.directory.path().join("receipt.json"))
-        }
-
-        async fn job(&self) -> Result<Value> {
-            if self.inspection_unavailable.replace(false) {
-                return Err(problem("The helper is not answering"));
-            }
-            Ok(serde_json::from_slice(&fs::read(
-                self.directory.path().join("job.json"),
-            )?)?)
-        }
-
-        async fn resume(&self, pairing: Pairing) -> Result<()> {
-            let root = self.directory.path();
-            let controller = &self.controller;
-            std::thread::scope(|scope| {
-                // Reap the worker on failure before the scope joins its requester.
-                let mut worker = worker(root, "repair");
-                let pid = nix::unistd::Pid::from_raw(worker.caller.id().try_into().unwrap());
-                let stream = channel(
-                    BufReader::new(worker.caller.stdout.take().unwrap()),
-                    worker.caller.stdin.take().unwrap(),
-                );
-                let requester = scope.spawn(move || {
-                    drive(
-                        controller,
-                        pid,
-                        stream,
-                        &pairing,
-                        || {
-                            assert!(controller.acquire(true).is_err());
-                            Ok(())
-                        },
-                        agent(root),
-                        root,
-                    )
-                });
-                worker.ready().unwrap();
-                assert_eq!(self.controller.pending().unwrap().len(), 2);
-                assert!(self.controller.acquire(true).is_err());
-                worker.finish().unwrap();
-                worker.wait().unwrap();
-                requester.join().unwrap()
-            })
-        }
-
-        fn pending(&self) -> Result<Vec<String>> {
-            self.controller.pending()
-        }
-    }
-
-    fn observe_repair(plist_kind: &str, loaded: bool, pid: Option<u32>, unavailable: bool) {
-        let directory = tempfile::tempdir().unwrap();
-        let controller = Controller::at(7001, &directory.path().join("requester/state"));
-        let previous = controller.quarantine().unwrap();
-        let generation = previous.generation().to_owned();
-        drop(previous);
-        let observed = ObservedHelper {
-            directory,
-            controller,
-            inspection_unavailable: std::cell::Cell::new(unavailable),
-        };
-        let receipt = observed.receipt(7001).unwrap();
-        let expected = serde_json::to_vec(&pairing()).unwrap();
-        crate::config::save_private(&receipt, &expected).unwrap();
-        fs::write(
-            observed.directory.path().join("job.json"),
-            serde_json::to_vec(&json!({
-                "plistKind":plist_kind,"loaded":loaded,"pid":pid,
-                "path":"/helper/Library/LaunchAgents/helper.plist",
-                "plist":"/helper/Library/LaunchAgents/helper.plist",
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        let initial = runtime.block_on(observed.job());
-        if unavailable {
-            assert!(initial.is_err(), "an unreported job is not a missing job");
-            observed.inspection_unavailable.set(true);
-        } else {
-            let initial = initial.unwrap();
-            assert_eq!(initial["plistKind"], plist_kind);
-            assert_eq!(initial["loaded"], loaded);
-            assert_eq!(initial["pid"], json!(pid));
-        }
-        assert_eq!(observed.pending().unwrap(), vec![generation.clone()]);
-        let (result, calls) = crate::approval::without_authorization(|| {
-            runtime.block_on(observe(&observed, pairing()))
-        });
-        assert_eq!(calls, 0, "repair must reuse consent without authorization");
-        assert_eq!(result, json!({"accepted":true,"complete":true}));
-        let repaired = runtime.block_on(observed.job()).unwrap();
-        assert_eq!(
-            repaired["plistKind"], "regular",
-            "repair restores the plist"
-        );
-        assert_eq!(repaired["loaded"], true, "repair loads the helper job");
-        assert_eq!(repaired["pid"], 42, "repair starts the helper job");
-        assert_eq!(
-            fs::read_to_string(observed.directory.path().join("authorization-calls")).unwrap(),
-            "0",
-            "the unprivileged worker must not request authorization either"
-        );
-        assert_eq!(observed.pending().unwrap(), vec![generation]);
-        assert_eq!(fs::read(&receipt).unwrap(), expected);
-        assert!(observed.controller.acquire(true).is_ok());
-
-        fs::remove_file(observed.directory.path().join("changed")).unwrap();
-        let (result, calls) = crate::approval::without_authorization(|| {
-            runtime.block_on(observe(&observed, pairing()))
-        });
-        assert_eq!(calls, 0);
-        assert_eq!(result, json!({"accepted":true,"complete":true}));
-        assert!(
-            !observed.directory.path().join("changed").exists(),
-            "a matching receipt and healthy job skip repeated setup"
-        );
-    }
-
-    #[test]
-    fn observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization() {
-        if !crate::test_support::isolated(
-            "onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_missing_helper_job_without_authorization",
-        ) {
-            return;
-        }
-        observe_repair("absent", false, None, false);
-        observe_repair("absent", true, Some(42), false);
-    }
-
-    #[test]
-    fn observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization() {
-        if !crate::test_support::isolated(
-            "onboarding::acceptance::tests::observing_a_matching_receipt_repairs_a_stopped_helper_job_without_authorization",
-        ) {
-            return;
-        }
-        observe_repair("regular", true, None, false);
-        observe_repair("regular", false, None, false);
-    }
-
-    #[test]
-    fn observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job() {
-        if !crate::test_support::isolated(
-            "onboarding::acceptance::tests::observing_a_matching_receipt_retries_when_the_helper_cannot_report_its_job",
-        ) {
-            return;
-        }
-        observe_repair("absent", false, None, true);
-    }
-
-    fn serve_repair_worker(dir: &Path, output: fs::File) {
-        let controller = Controller::at(7001, &dir.join("requester/state"));
-        let run = |request: &Request| {
-            assert!(controller.acquire(true).is_err());
-            assert_eq!(controller.pending().unwrap().len(), 2);
-            if matches!(request, Request::Prepare { .. }) {
-                crate::test_support::executor_ready(dir, || {})?;
-            }
-            let path = dir.join("job.json");
-            let mut job: Value = serde_json::from_slice(&fs::read(&path)?)?;
-            match request {
-                Request::Inspect { .. } => {
-                    return Ok(json!({"ok":true,"jobs":{setup::helper::LABEL:job}}));
-                }
-                Request::Install { .. } => {
-                    job["plistKind"] = json!("regular");
-                    job["loaded"] = json!(true);
-                    job["pid"] = Value::Null;
-                }
-                Request::Kickstart { .. } => job["pid"] = json!(42),
-                Request::Prepare { .. } | Request::ForgetOpener { .. } => {}
-                _ => panic!("Unexpected repair request"),
-            }
-            fs::write(dir.join("changed"), serde_json::to_vec(request)?)?;
-            fs::write(path, serde_json::to_vec(&job)?)?;
-            Ok(json!({"ok":true,"pid":job["pid"]}))
-        };
-        let (result, calls) = crate::approval::without_authorization(|| {
-            serve_channel(
-                &mut channel(BufReader::new(std::io::stdin()), output),
-                &pairing().ticket,
-                || Ok(()),
-                run,
-            )
-        });
-        fs::write(dir.join("authorization-calls"), calls.to_string()).unwrap();
-        result.unwrap();
-    }
-
-    #[test]
-    fn acceptance_refuses_a_stale_ticket_before_dispatching_setup() {
-        if !crate::test_support::isolated(
-            "onboarding::acceptance::tests::acceptance_refuses_a_stale_ticket_before_dispatching_setup",
-        ) {
-            return;
-        }
-        let dir = tempfile::tempdir().unwrap();
-        let controller = Controller::at(7001, dir.path());
-        let mut output = Vec::new();
-        let hello = serde_json::to_vec(&json!({"ok":true,"ticket":"old"})).unwrap();
-        let mut bytes = hello;
-        bytes.push(b'\n');
-        assert!(
-            drive(
-                &controller,
-                nix::unistd::getpid(),
-                channel(Cursor::new(bytes), &mut output),
-                &pairing(),
-                || Ok(()),
-                agent(dir.path()),
-                dir.path()
-            )
-            .is_err()
-        );
-        assert!(output.is_empty());
-        assert!(controller.pending().unwrap().is_empty());
-    }
-
-    #[test]
-    fn an_acceptance_test_requester() {
-        let Some(dir) = std::env::var_os("ATLAS_ACCEPTANCE_TEST_DIRECTORY").map(PathBuf::from)
-        else {
-            return;
-        };
-        let pid = std::env::var("ATLAS_ACCEPTANCE_TEST_PID")
-            .unwrap()
-            .parse()
-            .unwrap();
-        // Let drive close the protocol while libtest keeps its own output.
-        let output = fs::File::from(nix::unistd::dup(std::io::stdout()).unwrap());
-        nix::unistd::dup2_stdout(std::io::stderr()).unwrap();
-        let controller = Controller::at(7001, &dir.join("requester/state"));
-        let result = drive(
-            &controller,
-            nix::unistd::Pid::from_raw(pid),
-            channel(BufReader::new(std::io::stdin()), output),
-            &pairing(),
-            || {
-                fs::write(
-                    dir.join("ownership-checked"),
-                    controller.acquire(true).is_err().to_string(),
-                )?;
-                Ok(())
-            },
-            agent(&dir),
-            &dir,
-        );
-        fs::write(dir.join("result"), result.is_ok().to_string()).unwrap();
-    }
-
-    #[test]
-    fn an_acceptance_test_worker() {
-        let Some(dir) = std::env::var_os("ATLAS_ACCEPTANCE_TEST_DIRECTORY").map(PathBuf::from)
-        else {
-            return;
-        };
-        let stage = std::env::var("ATLAS_ACCEPTANCE_TEST_STAGE").unwrap();
-        // Close the protocol before libtest reports completion on stderr.
-        let output = fs::File::from(nix::unistd::dup(std::io::stdout()).unwrap());
-        nix::unistd::dup2_stdout(std::io::stderr()).unwrap();
-        if stage == "repair" {
-            serve_repair_worker(&dir, output);
-            return;
-        }
-        let run = |request: &Request| {
-            let action = match request {
-                Request::Prepare { .. } => "prepare",
-                Request::Retire { .. } => "retire",
-                Request::Install { .. } => "install",
-                Request::Restore { .. } => "restore",
-                Request::ForgetOpener { .. } => "opener",
-                Request::Kickstart { .. } => "kickstart",
-                _ => "inspect",
-            };
-            if action == "inspect" {
-                return Ok(
-                    json!({"ok":true,"jobs":{setup::helper::LABEL:{"plistSha256":"b".repeat(64)}}}),
-                );
-            }
-            fs::write(dir.join("changed"), action).unwrap();
-            if action == stage {
-                crate::test_support::executor_ready(&dir, || {})?;
-            }
-            if action == "install" && stage == "restore" {
-                return Err(problem("Installation refused"));
-            }
-            Ok(json!({"ok":true,"pid":null}))
-        };
-        let _ = serve_channel(
-            &mut channel(BufReader::new(std::io::stdin()), output),
-            &pairing().ticket,
-            || Ok(()),
-            run,
-        );
-    }
-}
+mod tests;

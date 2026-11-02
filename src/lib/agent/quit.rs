@@ -3,13 +3,10 @@
 //! or every app also removes the copies `open` made of them.
 use crate::{
     app_selection::{Closing, Process, atlas_bundle, selected},
-    client::{AppList, Client, Run},
+    client::{AppList, Client},
     control::Ownership,
     error::{Code, Error, Result},
-    handoff,
-    host_session::HostSession,
-    task,
-    transport::{accepted, run_output},
+    handoff, task,
 };
 use serde_json::{Value, json};
 use std::{
@@ -20,11 +17,17 @@ use std::{
 /// The names of the selected processes that were (or, with `quit` false,
 /// were not) among the `signalled` ones, sorted, each once.
 pub(super) fn names_by_quit(processes: &[Process], signalled: &[u64], quit: bool) -> Vec<String> {
-    let mut names: Vec<String> = processes
-        .iter()
-        .filter(|process| signalled.contains(&process.pid) == quit)
-        .map(|process| process.name.clone())
-        .collect();
+    sorted(
+        processes
+            .iter()
+            .filter(|process| signalled.contains(&process.pid) == quit)
+            .map(|process| process.name.clone()),
+    )
+}
+
+/// `names` sorted, each once.
+fn sorted(names: impl Iterator<Item = String>) -> Vec<String> {
+    let mut names: Vec<String> = names.collect();
     names.sort();
     names.dedup();
 
@@ -80,27 +83,6 @@ pub(crate) enum Quitting {
 /// valid app list. A list that cannot be read after the signal ends the
 /// wait with its error, naming what was signalled: nothing is judged
 /// without proof the apps exited.
-async fn quit(
-    client: &Client,
-    ownership: &Ownership,
-    processes: &[Process],
-    left: impl Fn(&AppList, &[u64]) -> Vec<String>,
-    limit: Duration,
-) -> Result<Quit> {
-    match quit_until(client, ownership, processes, left, limit).await? {
-        Quitting::Gone(quit) => Ok(quit),
-        Quitting::TimedOut { still } => Err(Error::new(
-            Code::WaitFailed,
-            format!(
-                "{} did not quit within {} seconds",
-                still.join(", "),
-                limit.as_secs()
-            ),
-        )),
-    }
-}
-
-/// [`quit`], saying a wait that ran out as such rather than as an error.
 pub(crate) async fn quit_until(
     client: &Client,
     ownership: &Ownership,
@@ -128,8 +110,8 @@ pub(crate) async fn quit_until(
         ]);
     }
 
-    let reply = accepted(client.run(argv, Run::owned(ownership)).await?)?;
-    if reply["timedOut"] == true || reply["exitCode"] != 0 {
+    let finished = client.run_finished(ownership, argv, 64 * 1024).await?;
+    if finished.timed_out || !finished.succeeded {
         return Err(Error::new(
             Code::WaitFailed,
             "The helper did not finish quitting the apps; run atlas apps to see what is open",
@@ -138,7 +120,7 @@ pub(crate) async fn quit_until(
 
     // Only the processes signalled are waited for: one whose program did
     // not check out was left alone.
-    let signalled = self::signalled(&run_output(&reply, 64 * 1024).unwrap_or_default());
+    let signalled = self::signalled(finished.output());
     let deadline = Instant::now() + limit;
 
     loop {
@@ -199,8 +181,6 @@ pub async fn close(client: &Client, closing: Closing<'_>) -> Result<Value> {
 }
 
 /// [`close`], with `open`'s copies under `copies`.
-// size-exception: selection, exit proof and copy removal share one ownership.
-// Keeping their order together makes the close identity and copy-retention tests reviewable.
 pub(super) async fn close_in(
     client: &Client,
     closing: Closing<'_>,
@@ -250,35 +230,61 @@ pub(super) async fn close_in(
         // counts); everything once each process signalled is gone, whatever
         // started since.
         let left = |apps: &AppList, pids: &[u64]| {
-            let mut left: Vec<String> = selected(apps, closing, atlas.as_deref())
-                .into_iter()
-                .filter(|process| matches!(closing, Closing::App(_)) || pids.contains(&process.pid))
-                .map(|process| process.name)
-                .collect();
-            left.sort();
-            left.dedup();
-            left
+            sorted(
+                selected(apps, closing, atlas.as_deref())
+                    .into_iter()
+                    .filter(|process| match closing {
+                        Closing::App(_) => true,
+                        Closing::All => pids.contains(&process.pid),
+                    })
+                    .map(|process| process.name),
+            )
         };
-        let quit = quit(client, &ownership, &processes, left, QUIT_WAIT).await?;
+        let quit = match quit_until(client, &ownership, &processes, left, QUIT_WAIT).await? {
+            Quitting::Gone(quit) => quit,
+            Quitting::TimedOut { still } => {
+                return Err(Error::new(
+                    Code::WaitFailed,
+                    format!(
+                        "{} did not quit within {} seconds",
+                        still.join(", "),
+                        QUIT_WAIT.as_secs()
+                    ),
+                ));
+            }
+        };
         (quit.after, quit.signalled)
     };
 
-    // What was quit, and (for --all) what was left because its process had
-    // already changed by the time it would have been signalled.
-    let named = |signalled: bool| names_by_quit(&processes, &quit, signalled);
-
     let names = match closing {
         Closing::App(app) => vec![app.to_owned()],
-        Closing::All => named(true),
+        Closing::All => names_by_quit(&processes, &quit, true),
     };
+    let removed = remove_copies(client, copies, &names, &after);
+    let reply = closed(closing, &processes, &quit, names, removed);
 
+    if let Some((name, bundle_id)) = identity {
+        client
+            .record_app_completion(name.as_deref(), bundle_id.as_deref(), started.elapsed())
+            .await;
+    }
+    Ok(reply)
+}
+
+/// Remove the copies of `names`, once `after` proved those apps gone.
+fn remove_copies(
+    client: &Client,
+    copies: &Path,
+    names: &[String],
+    after: &AppList,
+) -> handoff::Removed {
     // A copy is never removed while an app of its names runs: an app that
     // came back, or another one, may be running from it. An agent's close
     // keeps the copies another agent session made.
-    let running = handoff::Running::listed(&after);
-    let session = client.host_session.as_ref().map(HostSession::key);
+    let running = handoff::Running::listed(after);
+    let session = client.host_session.as_ref().map(|session| session.key());
     let mut removed = handoff::Removed::default();
-    for name in &names {
+    for name in names {
         let gone = handoff::remove_copies_in(copies, name, &running, session);
         removed.folders.extend(gone.folders);
         removed.kept_others += gone.kept_others;
@@ -286,6 +292,17 @@ pub(super) async fn close_in(
     }
     task::settle_copies_gone(client, removed.tokens());
 
+    removed
+}
+
+/// The reply to a close: what it closed, skipped and removed.
+fn closed(
+    closing: Closing<'_>,
+    processes: &[Process],
+    signalled: &[u64],
+    names: Vec<String>,
+    removed: handoff::Removed,
+) -> Value {
     let mut reply = json!({
         "ok": true,
         "closed": !processes.is_empty(),
@@ -309,17 +326,12 @@ pub(super) async fn close_in(
         Closing::All => {
             reply["closed"] = json!(!names.is_empty());
             reply["apps"] = json!(names);
-            let skipped = named(false);
+            let skipped = names_by_quit(processes, signalled, false);
             if !skipped.is_empty() {
                 reply["skipped"] = json!(skipped);
             }
         }
     }
 
-    if let Some((name, bundle_id)) = identity {
-        client
-            .record_app_completion(name.as_deref(), bundle_id.as_deref(), started.elapsed())
-            .await;
-    }
-    Ok(reply)
+    reply
 }

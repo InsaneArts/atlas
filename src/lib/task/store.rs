@@ -10,7 +10,7 @@ use super::{
 use crate::{
     error::{Code, Error, Result},
     files::Durability,
-    host_session::Key,
+    host::Key,
     record_folder::{Cached, LISTED, RecordFolder, Records},
 };
 use std::{
@@ -79,26 +79,15 @@ impl Store {
     /// existing opaque-record policy; strict claim validation belongs to
     /// settlement. Physical read/scan failures cannot prove an empty scope.
     pub(crate) fn cleanup_tasks(&self, session: &Key) -> Result<Vec<Record>> {
-        let Some(identity) = self.folder.cleanup_identity()? else {
-            return Ok(Vec::new());
-        };
-        let _lock = self.folder.lock()?;
-        let mut records = Vec::new();
-        self.folder
-            .visit_cleanup(identity, |key, bytes, modified| {
-                // As in load, unsupported JSON/version/identity stays untouched
-                // and cannot supply a claim. Acknowledgement checks it separately.
-                if let Ok(record) = serde_json::from_slice::<Record>(bytes)
-                    && record.key == *key
-                    && record.version <= VERSION
-                    && record.session == *session
-                {
-                    records.push((modified, record));
-                }
-                Ok(())
-            })?;
-        records.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-        let mut records: Vec<_> = records.into_iter().map(|(_, record)| record).collect();
+        let mut records = self.folder.newest_complete(|key, bytes| {
+            // As in load, unsupported JSON/version/identity stays untouched
+            // and cannot supply a claim. Acknowledgement checks it separately.
+            serde_json::from_slice::<Record>(bytes)
+                .ok()
+                .filter(|record| {
+                    record.key == *key && record.version <= VERSION && record.session == *session
+                })
+        })?;
         records.sort_by_key(|record| record.started);
         Ok(records)
     }
@@ -184,11 +173,6 @@ impl Store {
         now: u64,
         scope: Option<(&Key, Option<&Key>)>,
     ) -> Result<()> {
-        let incomplete = |cause| incomplete_settlement().with_source(cause);
-        let Some(identity) = self.folder.cleanup_identity().map_err(incomplete)? else {
-            return Ok(());
-        };
-        let _lock = self.folder.lock()?;
         let in_scope = |record: &Record| {
             scope.is_none_or(|(session, task)| {
                 record.session == *session && task.is_none_or(|task| record.key == *task)
@@ -197,54 +181,28 @@ impl Store {
         let matches = |record: &Record| {
             in_scope(record) && record.claims().any(|(claimed, _)| claimed.same(owned))
         };
-        let mut selected = Vec::new();
-        self.folder
-            .visit_cleanup(identity, |key, bytes, modified| {
-                let record = cleanup_record(key, bytes)?;
-                if matches(&record) {
-                    selected.push((modified, key.clone()));
+        self.folder.rewrite_complete(
+            cleanup_record,
+            |record, modified| matches(record).then_some(std::cmp::Reverse(modified)),
+            |record| {
+                if !matches(record) || !record.settle(owned, state, now) {
+                    return Err(incomplete_settlement());
                 }
-                Ok(())
-            })
-            .map_err(incomplete)?;
-        // Keep the old newest-written order, but retain only keys, never all records.
-        selected.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
-        let mut remaining = self.folder.cleanup_bytes().map_err(incomplete)?;
-        for (_, key) in selected {
-            self.folder
-                .check_cleanup_identity(identity)
-                .map_err(incomplete)?;
-            let bytes = self
-                .folder
-                .read_cleanup(&key, &mut remaining)
-                .map_err(incomplete)?;
-            let mut record = cleanup_record(&key, &bytes)?;
-            if !matches(&record) {
-                return Err(incomplete_settlement());
-            }
-            if record.settle(owned, state, now) {
                 record.updated = now;
-                self.write(&record)?;
-            } else {
-                return Err(incomplete_settlement());
-            }
-        }
-        let mut acknowledged = true;
-        self.folder
-            .visit_cleanup(identity, |key, bytes, _| {
-                let record = cleanup_record(key, bytes)?;
-                if in_scope(&record) {
-                    acknowledged &= !record
+                self.write(record)
+            },
+            |record| {
+                if in_scope(record)
+                    && record
                         .claims()
-                        .any(|(claimed, found)| claimed.same(owned) && found != state);
+                        .any(|(claimed, found)| claimed.same(owned) && found != state)
+                {
+                    return Err(incomplete_settlement());
                 }
                 Ok(())
-            })
-            .map_err(incomplete)?;
-        if !acknowledged {
-            return Err(incomplete_settlement());
-        }
-        Ok(())
+            },
+            incomplete_settlement,
+        )
     }
 
     /// Remove the records [`super::prune::finished`] says may go. The

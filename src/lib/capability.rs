@@ -14,7 +14,7 @@ pub use canary::verify;
 use crate::{
     config::home,
     error::{Code, Error, Result},
-    session::{Display, Epoch, require_hidden},
+    session::{Display, Epoch, Observation},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -26,7 +26,6 @@ use std::{
 
 /// Default location of the compiled fixture (tests/live/DesktopFixture.swift).
 pub const FIXTURE: &str = "/Users/Shared/AtlasTests/DesktopFixture";
-/// How long an observation stays meaningful.
 const FRESH: Duration = Duration::from_secs(30 * 60);
 /// Clock skew tolerated before an observation counts as from the future.
 const SKEW: u64 = 60;
@@ -56,6 +55,26 @@ impl Generation {
     }
 }
 
+/// One native panel a check drives.
+#[derive(Clone, Copy)]
+enum Panel {
+    Save,
+    Open,
+}
+
+impl Panel {
+    /// Every panel a passing record covers, in the order they run.
+    const ALL: [Self; 2] = [Self::Save, Self::Open];
+
+    /// The name the fixture and the record know this panel by.
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Save => "save",
+            Self::Open => "open",
+        }
+    }
+}
+
 /// One native operation's outcome and, if it failed, where.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -77,22 +96,13 @@ struct Record {
 }
 
 impl Record {
-    /// Exactly one Save and one Open check, and `passed` only if both passed.
+    /// Exactly one check of every panel, and `passed` only if all passed.
     fn consistent(&self) -> bool {
-        let outcome = |kind: &str| {
-            let mut matches = self.checks.iter().filter(|check| check.kind == kind);
-            let first = matches.next().map(|check| check.passed);
-            if matches.next().is_some() {
-                None
-            } else {
-                first
-            }
-        };
+        let covered = |panel: Panel| self.checks.iter().any(|check| check.kind == panel.kind());
 
-        match (self.checks.len(), outcome("save"), outcome("open")) {
-            (2, Some(save), Some(open)) => self.passed == (save && open),
-            _ => false,
-        }
+        self.checks.len() == Panel::ALL.len()
+            && Panel::ALL.into_iter().all(covered)
+            && self.passed == self.checks.iter().all(|check| check.passed)
     }
 }
 
@@ -138,16 +148,14 @@ fn boot_time() -> Option<u64> {
     (status == 0).then(|| u64::try_from(boot.tv_sec).unwrap_or_default())
 }
 
-/// The generation a status snapshot describes on a machine booted at `boot`.
-fn generation_at(status: &Value, uid: u32, boot: u64) -> Option<Generation> {
-    let session = require_hidden(status, uid).ok().filter(|s| s.input)?;
-    Some(Generation::of(&session.epoch, boot))
+fn ready_epoch(observation: &Observation, uid: u32) -> Option<Epoch> {
+    let session = observation.require_hidden(uid).ok()?;
+    session.input.then_some(session.epoch)
 }
 
-/// Doctor's view of native dialogs: unknown, stale, passed or failed.
-#[cfg(test)]
-fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) -> Value {
-    assessment(record, current, at).value()
+/// The generation a status snapshot describes on a machine booted at `boot`.
+fn generation_at(observation: &Observation, uid: u32, boot: u64) -> Option<Generation> {
+    Some(Generation::of(&ready_epoch(observation, uid)?, boot))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -159,40 +167,18 @@ pub(crate) enum NativeState {
     Failed,
 }
 
-struct Assessment<'a> {
-    state: NativeState,
-    reason: &'static str,
-    record: Option<&'a Record>,
-    at: u64,
-}
-
-impl Assessment<'_> {
-    fn value(&self) -> Value {
-        let mut value = json!({"state": self.state, "reason": self.reason});
-        if let Some(record) = self.record {
-            value["observedAt"] = json!(record.observed_at);
-            value["ageSeconds"] = json!(self.at.saturating_sub(record.observed_at));
-            value["checks"] = json!(record.checks);
-            value["evidence"] = json!(record.evidence);
-        }
-        value
-    }
-}
-
-fn assessment<'a>(
-    record: Option<&'a Record>,
+/// Doctor's view of native dialogs: unknown, stale, passed or failed, and
+/// its report.
+fn assessment(
+    record: Option<&Record>,
     current: Option<&Generation>,
     at: u64,
-) -> Assessment<'a> {
+) -> (NativeState, Value) {
     use NativeState::{Failed, Passed, Stale, Unknown};
     let Some(record) = record else {
-        return Assessment {
-            state: Unknown,
-            reason: "Native Save/Open has no recorded check. Panels can be inert without \
-                       authenticated Screen Sharing; use atlas run or atlas open instead.",
-            record: None,
-            at,
-        };
+        let reason = "Native Save/Open has no recorded check. Panels can be inert without \
+                      authenticated Screen Sharing; use atlas run or atlas open instead.";
+        return (Unknown, json!({"state": Unknown, "reason": reason}));
     };
 
     let (state, reason) = if !record.consistent() {
@@ -218,12 +204,15 @@ fn assessment<'a>(
         (Failed, "Native Save/Open did not complete in this session")
     };
 
-    Assessment {
-        state,
-        reason,
-        record: Some(record),
-        at,
-    }
+    let report = json!({
+        "state": state,
+        "reason": reason,
+        "observedAt": record.observed_at,
+        "ageSeconds": at.saturating_sub(record.observed_at),
+        "checks": record.checks,
+        "evidence": record.evidence,
+    });
+    (state, report)
 }
 
 /// Static guidance, not a test of the page or remote connection.
@@ -251,17 +240,9 @@ pub(crate) struct Doctor {
 
 pub(crate) fn doctor_report(status: Value, uid: u32) -> Doctor {
     let record = read_record(uid);
-    let observation = crate::session::Observation::decode(&status);
-    let current = boot_time().and_then(|boot| {
-        observation
-            .require_hidden(uid)
-            .ok()
-            .filter(|session| session.input)
-            .map(|session| Generation::of(&session.epoch, boot))
-    });
-    let assessment = assessment(record.as_ref(), current.as_ref(), now());
-    let native = assessment.state;
-    let projection = assessment.value();
+    let observation = Observation::decode(&status);
+    let current = boot_time().and_then(|boot| generation_at(&observation, uid, boot));
+    let (native, projection) = assessment(record.as_ref(), current.as_ref(), now());
     let mut diagnosis = observation.diagnose(status, uid);
     diagnosis.value = with_capabilities(diagnosis.value, native, projection);
     Doctor {
@@ -286,8 +267,7 @@ fn with_capabilities(mut report: Value, state: NativeState, native: Value) -> Va
     report
 }
 
-/// What doctor warns when the last native Save and Open check failed.
-pub const NATIVE_DIALOGS_FAILED: &str =
+const NATIVE_DIALOGS_FAILED: &str =
     "Native Save/Open failed its last check; cancel inert panels and use atlas run or atlas open.";
 
 fn compact_warning(state: NativeState) -> String {
@@ -336,286 +316,4 @@ fn summarize(mut report: Value, ready: bool) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn generation() -> Generation {
-        Generation {
-            capture_pid: 1,
-            input_pid: 2,
-            security_session_id: 3,
-            display_id: 4,
-            display: Display {
-                width: 2560.0,
-                height: 1440.0,
-                scale: 1.0,
-            },
-            boot: 5,
-        }
-    }
-
-    fn check(kind: &str, passed: bool) -> Check {
-        Check {
-            kind: kind.into(),
-            passed,
-            stage: (!passed).then(|| format!("{kind} confirmation enabled")),
-            error: None,
-        }
-    }
-
-    fn record(save: bool, open: bool, observed_at: u64) -> Record {
-        Record {
-            observed_at,
-            passed: save && open,
-            checks: vec![check("save", save), check("open", open)],
-            generation: generation(),
-            evidence: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn observations_count_only_for_the_same_fresh_generation() {
-        let current = generation();
-        let state = |record: Option<&Record>, current: Option<&Generation>, at| {
-            assess(record, current, at)["state"].clone()
-        };
-
-        assert_eq!(state(None, Some(&current), 100), "unknown");
-
-        let passed = record(true, true, 100);
-        assert_eq!(state(Some(&passed), Some(&current), 160), "passed");
-        let failed = record(true, false, 100);
-        assert_eq!(state(Some(&failed), Some(&current), 160), "failed");
-        assert_eq!(state(Some(&passed), Some(&current), 100 + 31 * 60), "stale");
-
-        let mut resized = generation();
-        resized.display.width = 1920.0;
-        assert_eq!(state(Some(&passed), Some(&resized), 160), "stale");
-
-        let mut restarted = generation();
-        restarted.input_pid = 9;
-        assert_eq!(state(Some(&passed), Some(&restarted), 160), "stale");
-        assert_eq!(state(Some(&passed), None, 160), "stale");
-    }
-
-    #[test]
-    fn inconsistent_or_future_records_are_not_trusted() {
-        let current = generation();
-        let state = |record: &Record| assess(Some(record), Some(&current), 1000)["state"].clone();
-
-        let mut save_only = record(true, true, 900);
-        save_only.checks.pop();
-        assert_eq!(state(&save_only), "unknown");
-
-        let mut duplicated = record(true, true, 900);
-        duplicated.checks[1] = check("save", true);
-        assert_eq!(state(&duplicated), "unknown");
-
-        let mut claimed = record(true, false, 900);
-        claimed.passed = true;
-        assert_eq!(state(&claimed), "unknown");
-
-        let mut launch = record(false, false, 900);
-        launch.checks = vec![check("launch", false)];
-        assert_eq!(state(&launch), "unknown");
-
-        assert_eq!(state(&record(true, true, 1000 + SKEW + 1)), "unknown");
-        assert_eq!(state(&record(true, true, 1000 + SKEW)), "passed");
-    }
-
-    fn report(ready: bool, warnings: Value, native: &str) -> Value {
-        with_capabilities(
-            json!({
-                "ok": true,
-                "ready": ready,
-                "canObserve": true,
-                "capabilities": {
-                    "observe": true,
-                    "input": ready,
-                },
-                "checks": [{"kind": "input", "ok": ready}],
-                "nextSteps": if ready { json!([]) } else { json!(["Run atlas start-input."]) },
-                "warnings": warnings,
-                "absence": "loggedOut",
-                "account": "atlas",
-                "session": {
-                    "user": {"name": "atlas", "uid": 502},
-                    "display": {"width": 1920, "height": 1080},
-                },
-            }),
-            match native {
-                "passed" => NativeState::Passed,
-                "failed" => NativeState::Failed,
-                "stale" => NativeState::Stale,
-                _ => NativeState::Unknown,
-            },
-            json!({"state": native}),
-        )
-    }
-
-    #[test]
-    fn a_doctor_warns_about_panels_and_webkit_once_in_each_format() {
-        for (state, native) in [
-            (
-                "unknown",
-                "Native Save/Open is unqualified; use atlas run or atlas open.",
-            ),
-            (
-                "stale",
-                "Native Save/Open's check is stale; use atlas run or atlas open.",
-            ),
-            ("failed", NATIVE_DIALOGS_FAILED),
-            (
-                "passed",
-                "Native Save/Open passed a dated check, not a connection check.",
-            ),
-        ] {
-            for ready in [false, true] {
-                let full = report(ready, json!([]), state);
-                let warning = format!("{native} {WEB_CONTENT}");
-                assert_eq!(full["warnings"], json!([warning]));
-                for verbose in [false, true] {
-                    let rendered = crate::ui::render::render(
-                        &crate::ui::render::View::Doctor { verbose },
-                        &full,
-                    );
-                    assert_eq!(
-                        rendered.out.matches(&warning).count(),
-                        1,
-                        "{}",
-                        rendered.out
-                    );
-                    assert_eq!(rendered.out.matches(native).count(), 1, "{}", rendered.out);
-                }
-                let summed = summary(full);
-                assert_eq!(summed["warnings"], json!([warning]));
-                if ready {
-                    assert_eq!(
-                        summed,
-                        json!({"ok":true, "ready":true, "warnings":[warning]})
-                    );
-                    assert!(summed.to_string().len() < 384);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn compact_capability_advice_preserves_existing_warnings() {
-        let summed = summary(report(true, json!(["The display changed."]), "passed"));
-        assert_eq!(summed["warnings"][0], "The display changed.");
-        assert_eq!(summed["warnings"].as_array().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn a_pass_reports_its_date_without_claiming_a_connected_session() {
-        let passed = record(true, true, 100);
-        let assessment = assess(Some(&passed), Some(&generation()), 160);
-        assert_eq!(assessment["observedAt"], 100);
-        assert_eq!(assessment["ageSeconds"], 60);
-        assert!(
-            assessment["reason"]
-                .as_str()
-                .unwrap()
-                .contains("not a connection check")
-        );
-        assert_eq!(
-            assess(Some(&passed), Some(&generation()), u64::MAX)["state"],
-            "stale"
-        );
-    }
-
-    #[test]
-    fn a_doctor_that_is_not_ready_keeps_every_check_for_programs() {
-        let summed = summary(report(false, json!(["The display changed."]), "failed"));
-
-        assert_eq!(summed["ok"], true);
-        assert_eq!(summed["ready"], false);
-        assert_eq!(summed["helper"], json!({"name": "atlas", "uid": 502}));
-        assert_eq!(summed["display"], json!({"width": 1920, "height": 1080}));
-        assert_eq!(summed["checks"], json!([{"kind": "input", "ok": false}]));
-        assert_eq!(summed["nextSteps"], json!(["Run atlas start-input."]));
-        assert_eq!(
-            summed["warnings"],
-            json!(["The display changed.", compact_warning(NativeState::Failed)])
-        );
-        assert_eq!(summed["capabilities"]["nativeDialogs"]["state"], "failed");
-        assert_eq!(summed["absence"], "loggedOut");
-        assert_eq!(summed["account"], "atlas");
-        assert!(summed.get("session").is_none());
-    }
-
-    #[test]
-    fn a_failed_native_check_keeps_its_exact_warning() {
-        let report = with_capabilities(
-            json!({"warnings": ["existing"]}),
-            NativeState::Failed,
-            json!({"state": "passed"}),
-        );
-        assert_eq!(
-            report["warnings"],
-            json!(["existing", format!("{NATIVE_DIALOGS_FAILED} {WEB_CONTENT}")])
-        );
-        assert_eq!(report["capabilities"]["nativeDialogs"]["state"], "passed");
-    }
-
-    #[test]
-    fn missing_proof_never_upgrades_capability() {
-        for status in [
-            Value::Null,
-            json!({}),
-            json!({"ok": true}),
-            json!({
-                "ok": true, "user": {"uid": 502},
-                "session": {"managerName": "Aqua", "onConsole": false},
-                "inputService": {"ok": true, "ready": true, "accessibility": true}
-            }),
-        ] {
-            let diagnosis = crate::session::diagnosis(status, 502);
-            assert!(!diagnosis.ready);
-            assert!(diagnosis.observation.require_hidden(502).is_err());
-            assert!(!diagnosis.value["capabilities"]["input"].as_bool().unwrap());
-        }
-        let native = assessment(None, None, 100);
-        assert_eq!(native.state, NativeState::Unknown);
-        assert_eq!(
-            native.value(),
-            json!({
-                "state": "unknown",
-                "reason": "Native Save/Open has no recorded check. Panels can be inert without authenticated Screen Sharing; use atlas run or atlas open instead."
-            })
-        );
-    }
-
-    #[test]
-    fn a_summary_uses_the_readiness_fact_instead_of_the_projection() {
-        assert_eq!(
-            summarize(json!({"ready": false, "warnings": ["kept"]}), true),
-            json!({"ok": true, "ready": true, "warnings": ["kept"]})
-        );
-    }
-
-    #[test]
-    fn unsupported_report_roots_return_a_certain_error_instead_of_panicking() {
-        let outcomes: Vec<_> = crate::test_support::unsupported_report_roots()
-            .into_iter()
-            .map(|value| std::panic::catch_unwind(|| summary(value)))
-            .collect();
-        for outcome in outcomes {
-            let reply = outcome.expect("An invalid report shape must not panic");
-            assert_eq!(
-                reply,
-                json!({"ok": false, "code": "state", "error": "A doctor report must be an object or null", "uncertain": false})
-            );
-            assert!(!reply.to_string().contains("private-report-input-canary"));
-        }
-    }
-
-    #[test]
-    fn a_legacy_null_report_keeps_its_existing_summary_fields() {
-        assert_eq!(
-            summary(json!(null)),
-            json!({"display": null, "helper": {"name": null, "uid": null}})
-        );
-    }
-}
+mod tests;

@@ -9,6 +9,11 @@ use tokio::{
     net::UnixListener,
 };
 
+const PIN: SessionPin = SessionPin {
+    security_session_id: 42,
+    display_id: 7,
+};
+
 /// The requests a stand-in daemon received, in order.
 type Heard = Arc<Mutex<Vec<Value>>>;
 
@@ -150,7 +155,7 @@ async fn a_job_start_holds_control_only_until_it_is_acknowledged_and_notes_the_j
     let ownership = client.controller.acquire_beside_commands().unwrap();
     let reply = started(
         &client,
-        None,
+        PIN,
         vec!["/usr/bin/nc".into(), "-lk".into(), "8790".into()],
         Duration::from_secs(60),
         Some("web".into()),
@@ -200,7 +205,7 @@ async fn a_start_reply_that_does_not_prove_its_job_is_uncertain() {
         });
         let error = started(
             &client,
-            None,
+            PIN,
             vec!["/bin/sleep".into(), "9".into()],
             Duration::from_secs(60),
             None,
@@ -220,7 +225,7 @@ async fn a_lost_start_reply_stays_pending_for_every_agent() {
     stand_in(&client.config.socket_path, |_| None);
     let error = started(
         &client,
-        None,
+        PIN,
         vec!["/bin/sleep".into(), "9".into()],
         Duration::from_secs(60),
         None,
@@ -377,11 +382,11 @@ async fn a_stopped_helper_refuses_job_starts_and_stops_but_lists_them() {
     });
     for (mutation, request) in [
         (
-            crate::client::Mutation::JobStart,
+            crate::client::Mutation::JobStart { uid: 0 },
             json!({"op": "job", "action": "start", "argv": ["/bin/sleep", "9"]}),
         ),
         (
-            crate::client::Mutation::JobStop,
+            crate::client::Mutation::JobStop { id: ID },
             json!({"op": "job", "action": "stop", "id": ID}),
         ),
     ] {

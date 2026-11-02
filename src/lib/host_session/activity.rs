@@ -17,7 +17,10 @@ use crate::{
     error::{Code, Error, Result},
     files::Token,
     handoff,
-    task::Owned,
+    task::{
+        Owned,
+        record::{installs_of, unfinished_cleanup_of},
+    },
 };
 use serde_json::{Value, json};
 use std::{
@@ -59,9 +62,9 @@ pub fn list(
     let store = Store::at(output);
     let records = store.all();
     let causes = client.controller.pending_causes().unwrap_or_default();
-    let holder = client.controller.holder_note();
-    let waiting = client.controller.waiting_candidates();
-    let running = client.controller.running_candidates();
+    let mut holder = client.controller.holder_note();
+    let mut waiting = client.controller.waiting_candidates();
+    let mut running = client.controller.running_candidates();
     let processes = Snapshot::sample(
         holder
             .iter()
@@ -71,17 +74,11 @@ pub fn list(
             .chain(records.iter().filter_map(|record| record.host_process)),
         |instance| instance.state(),
     );
-    let holder = holder
-        .filter(|note| processes.running(note.process))
-        .and_then(|note| note.session);
+    processes.keep_live(&mut holder, &mut waiting, &mut running);
+    let holder = holder.and_then(|note| note.session);
     let mut work: BTreeSet<_> = waiting
         .iter()
-        .filter(|note| processes.state(note.process) == crate::process::State::Running)
-        .chain(
-            running
-                .iter()
-                .filter(|note| processes.running(note.process)),
-        )
+        .chain(&running)
         .filter_map(|note| note.session.clone())
         .collect();
     work.extend(holder.iter().cloned());
@@ -198,12 +195,6 @@ impl Reading<'_> {
         self.store.leftovers(record, &self.causes)
     }
 
-    /// The apps `key`'s tasks installed into the helper that may still be
-    /// there, by name, never by path.
-    fn installs(&self, key: &Key) -> Vec<String> {
-        crate::task::record::installs_of(&self.tasks, key)
-    }
-
     /// The background jobs `key`'s tasks started, as their records last
     /// noted them: by ID, name and state, never their arguments.
     fn jobs(&self, key: &Key) -> Vec<Value> {
@@ -228,25 +219,20 @@ impl Reading<'_> {
             .collect()
     }
 
-    /// How far the newest unfinished cleanup of `key`'s work got, when one
-    /// has not finished.
-    fn cleanup(&self, key: &Key) -> Option<crate::task::record::CleanupState> {
-        crate::task::record::unfinished_cleanup_of(&self.tasks, key)
-    }
-
     /// The session object a reply names: who it is and when it acted, and
     /// the host's own id only to the session itself.
     fn session(&self, subject: &Subject) -> Value {
         let record = subject.record;
+        let lifetime = record.map(|record| self.lifetime(record));
         let mut session = json!({
             "key": subject.key,
             "host": subject.host,
             "name": self.name(subject.key, subject.host),
             "started": record.map(|record| record.started),
             "lastSeen": record.map(|record| record.last_seen),
-            "ended": record.and_then(|record| self.lifetime(record).ended),
-            "live": record.is_some_and(|record| self.lifetime(record).live),
-            "active": record.is_some_and(|record| self.lifetime(record).active),
+            "ended": lifetime.and_then(|lifetime| lifetime.ended),
+            "live": lifetime.is_some_and(|lifetime| lifetime.live),
+            "active": lifetime.is_some_and(|lifetime| lifetime.active),
             "workInProgress": self.work.contains(subject.key),
             "this": subject.own.is_some(),
         });
@@ -292,7 +278,7 @@ impl Reading<'_> {
         if let Some(previous) = subject.record.and_then(|record| self.previous(record)) {
             reply["previous"] = previous;
         }
-        let installs = self.installs(subject.key);
+        let installs = installs_of(&self.tasks, subject.key);
         if !installs.is_empty() {
             reply["installs"] = installs.iter().map(|app| json!({"app": app})).collect();
         }
@@ -304,7 +290,7 @@ impl Reading<'_> {
         if !outputs.is_empty() {
             reply["outputs"] = json!(outputs);
         }
-        if let Some(state) = self.cleanup(subject.key) {
+        if let Some(state) = unfinished_cleanup_of(&self.tasks, subject.key) {
             reply["cleanup"] = json!(state);
         }
         // Only the session itself may recover, and only when every
@@ -327,16 +313,17 @@ impl Reading<'_> {
             .iter()
             .map(|record| {
                 let leftovers = self.leftovers(record);
+                let lifetime = self.lifetime(record);
                 let mut left = json!({
                     "copies": leftovers.copies.len(),
                     "plans": leftovers.plans,
                     "uncertain": leftovers.uncertain,
                 });
-                let installs = self.installs(&record.key).len();
+                let installs = installs_of(&self.tasks, &record.key).len();
                 if installs > 0 {
                     left["installs"] = json!(installs);
                 }
-                if let Some(state) = self.cleanup(&record.key) {
+                if let Some(state) = unfinished_cleanup_of(&self.tasks, &record.key) {
                     left["cleanup"] = json!(state);
                 }
                 json!({
@@ -345,11 +332,11 @@ impl Reading<'_> {
                     "name": self.name(&record.key, record.host),
                     "started": record.started,
                     "lastSeen": record.last_seen,
-                    "ended": self.lifetime(record).ended,
-                    "active": self.lifetime(record).active,
-                    "live": self.lifetime(record).live,
+                    "ended": lifetime.ended,
+                    "active": lifetime.active,
+                    "live": lifetime.live,
                     "workInProgress": self.work.contains(&record.key),
-                    "holdsHelper": self.lifetime(record).live && self.holder.as_ref() == Some(&record.key),
+                    "holdsHelper": lifetime.live && self.holder.as_ref() == Some(&record.key),
                     "screenshots": record.screenshots.len(),
                     "leftovers": left,
                 })
@@ -451,7 +438,10 @@ impl Reading<'_> {
                             plans += 1;
                         }
                         Owned::Install { .. } if live => installs += 1,
-                        _ => {}
+                        Owned::Copy { .. }
+                        | Owned::Plan { .. }
+                        | Owned::Install { .. }
+                        | Owned::Launch { .. } => {}
                     }
                 }
                 let mut left = json!({"copies": copies, "plans": plans});

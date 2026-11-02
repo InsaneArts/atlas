@@ -126,11 +126,7 @@ pub(super) fn applied(
         .steps
         .iter()
         .map(|entry| {
-            let copied_app = match &entry.step {
-                Step::RemoveCopy { copy } => handoff::copy_app(copies, copy),
-                _ => None,
-            };
-            let mut value = described(copies, entry, copied_app);
+            let mut value = described(copies, entry, entry.step.copied_app(copies));
             said_state(&mut value, entry);
             value
         })
@@ -163,10 +159,9 @@ pub(super) fn nothing(
     mode: super::Mode,
     running: Option<&AppList>,
 ) -> Value {
-    let preview = mode == super::Mode::Preview;
     json!({
         "ok": true,
-        "preview": preview,
+        "preview": mode == super::Mode::Preview,
         "state": "complete",
         "session": session_named(output, &scope.session),
         "task": task_named(loaded, scope),
@@ -214,10 +209,11 @@ fn unfinished(receipt: &Receipt) -> String {
              could not be reached to stop a background job. Ask the person before running atlas \
              cleanup --apply again."
             .to_owned(),
-        _ if failed == 0 => "Cleanup is not finished. Run atlas cleanup --apply again, or tell \
-             the person."
-            .to_owned(),
-        _ => format!(
+        CleanupState::Complete | CleanupState::Incomplete if failed == 0 => {
+            "Cleanup is not finished. Run atlas cleanup --apply again, or tell the person."
+                .to_owned()
+        }
+        CleanupState::Complete | CleanupState::Incomplete => format!(
             "Cleanup is not finished: {failed} step{} failed. Run atlas cleanup --apply again, \
              or tell the person.",
             if failed == 1 { "" } else { "s" }

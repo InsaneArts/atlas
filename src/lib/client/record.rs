@@ -20,6 +20,10 @@ use tokio::time::Instant;
 /// before the row is written.
 pub(crate) const PERSON_INPUT_SPAN: Duration = Duration::from_secs(5);
 
+/// The warning on a valid result whose activity row could not be written.
+pub(crate) const NOT_RECORDED: &str =
+    "Operation result is valid; local metadata could not be recorded";
+
 /// The person's input through a viewer, gathered into one row a span,
 /// [`PERSON_INPUT_SPAN`] unless made with another: their mouse and keyboard
 /// send a message every few milliseconds, and a row for each would push
@@ -156,14 +160,20 @@ impl PersonInput {
         tokio::time::sleep_until(timer.deadline).await;
         tokio::task::spawn_blocking(move || self.flush_due(timer))
             .await
-            .map_err(|_| Error::new(Code::State, "The activity row could not be written"))?
+            .map_err(row_worker_failed)?
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Gathering> {
+        // Rows are metadata, never authority: keep them for a later flush
+        // even after a writer panicked.
         self.gathering
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+fn row_worker_failed(cause: tokio::task::JoinError) -> Error {
+    Error::new(Code::State, "The activity row could not be written").with_source(cause)
 }
 
 /// The code a failure is recorded with: `uncertain` when it may have
@@ -202,15 +212,11 @@ fn failure_code(reply: &Value) -> Option<Failure> {
 /// focus or was there (`window`), a sheet over it had focus (`sheet`),
 /// another field had focus (`field`) or the field was disabled
 /// (`disabled`), or Atlas couldn't tell (`unreadable`).
-fn focus_reason(reply: &Value) -> Option<&'static str> {
+fn focus_reason(reply: &Value) -> Option<&str> {
     match reply["reason"].as_str()? {
-        "app" => Some("app"),
-        "point" => Some("point"),
-        "window" => Some("window"),
-        "sheet" => Some("sheet"),
-        "field" => Some("field"),
-        "disabled" => Some("disabled"),
-        "unreadable" => Some("unreadable"),
+        reason @ ("app" | "point" | "window" | "sheet" | "field" | "disabled" | "unreadable") => {
+            Some(reason)
+        }
         _ => None,
     }
 }
@@ -234,7 +240,7 @@ fn app_seen(reply: &Value, installs: bool) -> Option<(String, Option<String>)> {
             reply["bundleId"].as_str().map(str::to_owned),
         )
     };
-    let app = crate::doing::bounded(&app);
+    let app = crate::name::bounded(&app);
     if app.is_empty() {
         return None;
     }
@@ -288,7 +294,8 @@ impl Client {
     }
 
     /// [`Client::write_row`] on a blocking thread: a row waits its turn
-    /// behind another command's, which must not hold up the runtime.
+    /// behind another command's, which must not hold up the runtime. Only
+    /// the row goes there, never the request or reply it was projected from.
     async fn recorded(
         &self,
         request: &Value,
@@ -296,11 +303,11 @@ impl Client {
         elapsed: Duration,
         step: Step,
     ) -> Result<()> {
-        let (client, request, reply) = (self.clone(), request.clone(), reply.clone());
-        let written =
-            tokio::task::spawn_blocking(move || client.write_row(&request, &reply, elapsed, step))
-                .await
-                .map_err(|_| Error::new(Code::State, "The activity row could not be written"))?;
+        let (row, ok) = (self.row(request, reply, elapsed, step), worked(reply));
+        let client = self.clone();
+        let written = tokio::task::spawn_blocking(move || client.write_row(row, step, ok))
+            .await
+            .map_err(row_worker_failed)?;
 
         // The person's gathered input is written once its span ends, even
         // when no more comes.
@@ -323,13 +330,15 @@ impl Client {
         };
         tokio::task::spawn_blocking(move || gathering.flush())
             .await
-            .map_err(|_| Error::new(Code::State, "The activity row could not be written"))?
+            .map_err(row_worker_failed)?
     }
 
     /// [`Client::record_start`] on this thread, for tests.
     #[cfg(test)]
     pub(super) fn record_start_blocking(&self, request: &Value) -> Result<()> {
-        self.write_row(request, &json!({"ok": null}), Duration::ZERO, Step::Start)
+        let reply = json!({"ok": null});
+        let row = self.row(request, &reply, Duration::ZERO, Step::Start);
+        self.write_row(row, Step::Start, worked(&reply))
     }
 
     /// [`Client::record`] on this thread, for tests.
@@ -340,7 +349,8 @@ impl Client {
         reply: &Value,
         elapsed: Duration,
     ) -> Result<()> {
-        self.write_row(request, reply, elapsed, Step::End)
+        let row = self.row(request, reply, elapsed, Step::End);
+        self.write_row(row, Step::End, worked(reply))
     }
 
     /// [`Client::record`] a finished command's row, for tests elsewhere in
@@ -351,25 +361,35 @@ impl Client {
             .unwrap();
     }
 
-    /// Append the activity row for `step` of `request`, which `reply`
-    /// answered, after `elapsed`.
-    fn write_row(
-        &self,
-        request: &Value,
-        reply: &Value,
-        elapsed: Duration,
-        step: Step,
-    ) -> Result<()> {
+    /// Stamp `row`, for `step` of a request that `worked` or not, and append
+    /// it.
+    fn write_row(&self, mut row: Row, step: Step, worked: bool) -> Result<()> {
         let directory = self.output_dir()?;
-        let start = step == Step::Start;
-        let operation = Op::of(request);
+        row.at = Some(timestamp().to_string());
 
-        // No input text, argv, coordinates, window titles, output or image
-        // payloads in metadata: only what `Doing` names.
+        // The person's input through a viewer is gathered; a failure is
+        // written at once, after the input gathered before it.
+        if let Some(gathering) = &self.person_input
+            && row.persons_input()
+            && step == Step::End
+        {
+            if worked && row.code.is_none() {
+                return gathering.gather(directory, row);
+            }
+            gathering.flush()?;
+        }
+
+        activity_log::append(directory, &row)
+    }
+
+    /// The activity row for `step` of `request`, unstamped. No input text, argv,
+    /// coordinates, window titles, output or image payloads reach it: only
+    /// what `Doing` names.
+    fn row(&self, request: &Value, reply: &Value, elapsed: Duration, step: Step) -> Row {
+        let start = step == Step::Start;
         let ok = worked(reply);
         let mut row = Row {
-            at: Some(timestamp().to_string()),
-            operation: operation.clone(),
+            operation: Op::of(request),
             ok: (!start).then_some(ok),
             elapsed_ms: Some(elapsed.as_secs_f64() * 1000.0),
             action_count: request["actions"]
@@ -399,30 +419,29 @@ impl Client {
 
         // Only an agent's own command names its host session; the person's,
         // through a viewer, never does.
-        if self.actor == Actor::Agent
-            && let Some(session) = &self.host_session
-        {
-            row.session = Some(session.key().as_str().to_owned());
-        }
-
-        // A task ATLAS_TASK split from its session names its key, never its
-        // name; a session's default task adds nothing.
-        if self.actor == Actor::Agent
-            && let Some(task) = &self.task
-            && task.name().is_some()
-        {
-            row.task = Some(task.key().as_str().to_owned());
+        if self.actor == Actor::Agent {
+            row.session = self
+                .host_session
+                .as_ref()
+                .map(|session| session.key().as_str().to_owned());
+            // A task ATLAS_TASK split from its session names its key, never its
+            // name; a session's default task adds nothing.
+            row.task = self
+                .task
+                .as_ref()
+                .filter(|task| task.name().is_some())
+                .map(|task| task.key().as_str().to_owned());
         }
 
         // A collection says how many files and bytes it kept, never which.
-        if operation == Some(Op::Collect) {
+        if row.operation == Some(Op::Collect) {
             row.count = reply["count"].as_u64();
             row.bytes = reply["bytes"].as_u64();
         }
 
         // A screenshot names the file it gave: Atlas's own timestamp name,
         // never a path or a person's file.
-        if operation == Some(Op::Screenshot)
+        if row.operation == Some(Op::Screenshot)
             && let Some(capture) = reply["capture"].as_str()
             && crate::helper_info::capture_time(capture).is_some()
         {
@@ -446,98 +465,9 @@ impl Client {
             }
         }
 
-        // The person's input through a viewer is gathered; a failure is
-        // written at once, after the input gathered before it.
-        if let Some(gathering) = &self.person_input
-            && row.persons_input()
-            && !start
-        {
-            if ok && row.code.is_none() {
-                return gathering.gather(directory, row);
-            }
-            gathering.flush()?;
-        }
-
-        activity_log::append(directory, &row)
+        row
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test(start_paused = true)]
-    async fn the_input_timer_keeps_a_newer_command_first_in_recent_activity() {
-        let directory = tempfile::tempdir().unwrap();
-        let input = PersonInput::default();
-        let row = |at: &str, actor: &str| {
-            Row::parse(&json!({
-                "at": at, "operation": "input", "actor": actor,
-                "ok": true, "actionCount": 1
-            }))
-            .unwrap()
-        };
-        input
-            .gather(directory.path(), row("1000000000", "viewer"))
-            .unwrap();
-        let timer = input.untimed().unwrap();
-        activity_log::append(directory.path(), &row("2000000000", "agent")).unwrap();
-        tokio::time::advance(PERSON_INPUT_SPAN).await;
-        input.flush_due(timer).unwrap();
-
-        let one = activity_log::recent(directory.path(), 1);
-        assert_eq!(one[0].at.as_deref(), Some("2000000000"));
-        let both = activity_log::recent(directory.path(), 2);
-        assert_eq!(
-            both.iter().map(Row::actor).collect::<Vec<_>>(),
-            ["agent", "viewer"]
-        );
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn input_on_either_side_of_local_midnight_stays_separate_when_buffered_and_read() {
-        if !crate::test_support::in_timezone(
-            "client::record::tests::input_on_either_side_of_local_midnight_stays_separate_when_buffered_and_read",
-            "Asia/Tbilisi",
-        ) {
-            return;
-        }
-        let directory = tempfile::tempdir().unwrap();
-        let input = PersonInput::default();
-        // Midnight at UTC+4, while both timestamps belong to the same UTC day.
-        let midnight = 72_000_000;
-        let times = [midnight - 2, midnight - 1, midnight, midnight + 1];
-        for at in times {
-            let row = Row::parse(&json!({
-                "at": (u128::from(at) * 1_000_000).to_string(),
-                "operation": "input", "actor": "viewer", "ok": true,
-                "actionCount": 1, "elapsedMs": 2.5
-            }))
-            .unwrap();
-            input.gather(directory.path(), row).unwrap();
-        }
-
-        let read = || {
-            std::fs::read_to_string(directory.path().join(activity_log::FILE))
-                .unwrap()
-                .lines()
-                .map(|line| Row::parse(&serde_json::from_str(line).unwrap()).unwrap())
-                .map(|row| (row.at_ms(), row.action_count, row.elapsed_ms))
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(read(), [(Some(midnight - 1), Some(2), Some(5.0))]);
-        input.flush().unwrap();
-        assert_eq!(
-            read(),
-            [
-                (Some(midnight - 1), Some(2), Some(5.0)),
-                (Some(midnight + 1), Some(2), Some(5.0))
-            ]
-        );
-        let shown = activity_log::recent(directory.path(), 5);
-        assert_eq!(shown.len(), 2);
-        assert_eq!(shown[0].at_ms(), Some(midnight + 1));
-        assert_eq!(shown[1].at_ms(), Some(midnight - 1));
-        assert!(shown.iter().all(|row| row.action_count == Some(2)));
-    }
-}
+mod tests;

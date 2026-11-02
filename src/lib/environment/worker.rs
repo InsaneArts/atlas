@@ -6,7 +6,7 @@ use super::{
     *,
 };
 use crate::files::Lock;
-use crate::task::record::Lenient;
+use crate::lenient::Lenient;
 
 /// The helper's answer for a plan it never applied.
 pub(super) const MISSING: &str =
@@ -147,20 +147,15 @@ fn recorded_transactions(path: &Path) -> Vec<(String, u64)> {
             if !fs::symlink_metadata(entry.path()).ok()?.is_dir() {
                 return None;
             }
-            let modified = fs::symlink_metadata(entry.path().join("transaction.json"))
-                .ok()?
-                .modified()
-                .ok()?;
-            let at = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
-            Some((id.to_owned(), u64::try_from(at.as_millis()).ok()?))
+            let at = changed_ms(&entry.path().join("transaction.json"))?;
+            Some((id.to_owned(), at))
         })
         .collect()
 }
 
 fn account_home(uid: u32) -> Result<PathBuf> {
     let account = crate::setup::account_with_uid(uid)
-        .ok()
-        .flatten()
+        .map_err(|cause| problem("Cannot resolve the helper account home").with_source(cause))?
         .ok_or_else(|| problem("Cannot resolve the helper account home"))?;
     if account.uid != uid {
         return Err(problem("Invalid helper account record"));
@@ -200,7 +195,7 @@ pub(super) fn preview(
         separate_from_ledger(&ledger, &payload.target)?;
         installable_parents(home, &payload.target)?;
 
-        let bytes = payload_bytes(&payload)?;
+        let bytes = checked_bytes(&payload.source, &payload.sha256, "Frozen payload changed")?;
         let current = snapshot(&destination(home, &payload.target)?)?;
         total += bytes.len() as u64 + current.as_ref().map_or(0, |(_, bytes)| bytes.len() as u64);
         memory_limit(total)?;
@@ -246,10 +241,9 @@ fn operation(
     previous: Option<&Entry>,
 ) -> Operation {
     let managed_matches = match (previous, current) {
-        (Some(Entry::Managed { fingerprint, .. }), Some(current)) => fingerprint == current,
-        (Some(Entry::Legacy(hash)), Some(current)) => hash == &current.sha256,
+        (Some(previous), Some(current)) => previous.fingerprint == *current,
         (None, _) => true,
-        _ => false,
+        (Some(_), None) => false,
     };
 
     if !managed_matches {
@@ -266,7 +260,7 @@ fn operation(
             }
         }
         Some(_) if previous.is_some() => Operation::Update,
-        _ => Operation::Conflict,
+        Some(_) => Operation::Conflict,
     }
 }
 
@@ -286,12 +280,11 @@ fn validate_files<'a>(files: impl ExactSizeIterator<Item = &'a Payload> + Clone)
     Ok(())
 }
 
-fn payload_bytes(payload: &Payload) -> Result<Vec<u8>> {
-    let bytes = read_limited(&payload.source, MAX_FILE)?;
-    if digest(&bytes) != payload.sha256 {
-        return Err(problem("Frozen payload changed"));
+fn checked_bytes(path: &Path, sha256: &str, changed: &str) -> Result<Vec<u8>> {
+    let bytes = read_limited(path, MAX_FILE)?;
+    if digest(&bytes) != sha256 {
+        return Err(problem(changed));
     }
-
     Ok(bytes)
 }
 
@@ -350,9 +343,9 @@ pub(super) fn apply_plan(
     guard()?;
     let store = Store::open(home, Lock::Exclusive)?;
     store.require_available(&plan.id)?;
-    let mut ledger = store.ledger()?;
+    let ledger = store.ledger()?;
 
-    let mut transaction = match store.transaction(&plan.id)? {
+    let transaction = match store.transaction(&plan.id)? {
         Some(transaction) => {
             if transaction.plan != *plan {
                 return Err(problem("Transaction does not match this frozen plan"));
@@ -362,39 +355,31 @@ pub(super) fn apply_plan(
         None => prepare(home, plan, &store, &ledger, guard)?,
     };
 
-    if matches!(transaction.phase, Phase::RollingBack | Phase::RolledBack) {
-        return Err(problem(
-            "This transaction was rolled back or is being rolled back",
-        ));
+    match transaction.phase {
+        Phase::Applying | Phase::Applied => {}
+        Phase::RollingBack | Phase::RolledBack => {
+            return Err(problem(
+                "This transaction was rolled back or is being rolled back",
+            ));
+        }
     }
 
-    let result = (|| -> Result<()> {
-        for index in 0..plan.files.len() {
-            apply_state(home, &transaction, index, &ledger)?;
-        }
-
-        guard()?;
-        store.activate(&plan.id)?;
-
-        for index in 0..plan.files.len() {
-            apply_file(home, &mut transaction, index, &store, &mut ledger, guard)?;
-        }
-
-        guard()?;
-        transaction.phase = Phase::Applied;
-        store.save(&transaction)?;
-        store.finish(&plan.id)?;
-
-        Ok(())
-    })();
+    let mut changing = Changing {
+        home,
+        store: &store,
+        guard,
+        transaction,
+        ledger,
+    };
+    let result = changing.apply();
 
     // A file that changed in the helper some other way can never be copied
     // by this plan: only undoing it finishes.
     let stuck = result.is_err()
         && (0..plan.files.len())
-            .any(|index| matches!(install_state(home, &transaction, index, &ledger), Ok(None)));
+            .any(|index| matches!(changing.install_state(index), Ok(Installation::Changed)));
 
-    let mut value = report(&transaction, result, false);
+    let mut value = report(&changing.transaction, result, false);
     if stuck {
         value["rollbackRequired"] = json!(true);
     }
@@ -449,7 +434,11 @@ fn prepare(
     let mut total = 0;
 
     for file in &plan.files {
-        let after = payload_bytes(&file.payload)?;
+        let after = checked_bytes(
+            &file.payload.source,
+            &file.payload.sha256,
+            "Frozen payload changed",
+        )?;
         let before = snapshot(&destination(home, &file.payload.target)?)?;
         if before.as_ref().map(|(fp, _)| fp) != file.before.as_ref() {
             return Err(problem("Destination changed during preparation"));
@@ -495,226 +484,637 @@ fn prepare(
 }
 
 /// Whether this transaction installed the file, recognized by its owned
-/// generation or its journaled inode: Some(true) installed, Some(false) not
-/// yet, None when it changed some other way.
-fn install_state(
-    home: &Path,
-    transaction: &Transaction,
-    index: usize,
-    ledger: &Ledger,
-) -> Result<Option<bool>> {
-    let file = &transaction.plan.files[index];
-    let progress = &transaction.progress[index];
-    let current = fingerprint(&destination(home, &file.payload.target)?)?;
-    let entry = ledger.files.get(&file.payload.target);
-    if let (
-        Some(Entry::Managed {
-            generation,
-            fingerprint,
-        }),
-        Some(current),
-    ) = (entry, &current)
-        && generation == &transaction.plan.id
-        && fingerprint == current
-        && current.sha256 == file.payload.sha256
-        && current.mode == desired_mode(&file.payload)
-    {
-        return Ok(Some(true));
+/// generation or its journaled inode; a different file remains changed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Installation {
+    Present,
+    Waiting,
+    Changed,
+}
+
+/// Where a file stands against the transaction undoing it.
+#[derive(Clone, Copy, PartialEq)]
+enum RollbackState {
+    /// Undone already: put back, left untouched or kept.
+    Done,
+    /// Never put in place by this transaction.
+    Untouched,
+    /// As it was before this transaction.
+    Before,
+    /// This transaction's copy, unchanged.
+    Installed,
+    /// The earlier file is back, not yet recorded.
+    Restored,
+    /// Changed in the helper since this transaction copied it.
+    Changed,
+}
+
+/// One transaction being applied or undone in the helper's `home`, journaled
+/// in `store` under `guard`, with the ledger as that store holds it.
+struct Changing<'a, G> {
+    home: &'a Path,
+    store: &'a Store,
+    guard: &'a G,
+    transaction: Transaction,
+    ledger: Ledger,
+}
+
+impl<G: Fn() -> Result<()>> Changing<'_, G> {
+    fn file(&self, index: usize) -> &PlannedFile {
+        &self.transaction.plan.files[index]
     }
 
-    if entry == file.previous.as_ref() {
-        if current == file.before && !progress.applied {
-            return Ok(Some(false));
+    fn path(&self, index: usize) -> Result<PathBuf> {
+        destination(self.home, &self.file(index).payload.target)
+    }
+
+    fn entry(&self, index: usize) -> Option<&Entry> {
+        self.ledger.files.get(&self.file(index).payload.target)
+    }
+
+    /// The copy the ledger names as this transaction's own, when it does.
+    fn own_copy(&self, index: usize) -> Option<&Fingerprint> {
+        self.entry(index)
+            .filter(|entry| entry.generation == self.transaction.plan.id)
+            .map(|entry| &entry.fingerprint)
+    }
+
+    /// Where a file is prepared beside `path` before it is moved over it. A
+    /// checked destination lies inside the helper home, so it has a folder.
+    fn candidate(&self, path: &Path, index: usize, rollback: bool) -> Result<PathBuf> {
+        let folder = path
+            .parent()
+            .ok_or_else(|| problem("A destination needs a folder"))?;
+        Ok(folder.join(format!(
+            ".atlas-{}-{index}-{}",
+            self.transaction.plan.id,
+            if rollback { "restore" } else { "install" }
+        )))
+    }
+
+    fn install_state(&self, index: usize) -> Result<Installation> {
+        let file = self.file(index);
+        let progress = &self.transaction.progress[index];
+        let current = fingerprint(&self.path(index)?)?;
+        if let (Some(recorded), Some(current)) = (self.own_copy(index), &current)
+            && recorded == current
+            && current.sha256 == file.payload.sha256
+            && current.mode == desired_mode(&file.payload)
+        {
+            return Ok(Installation::Present);
         }
-        if progress.prepared.is_some() && current == progress.prepared {
-            return Ok(Some(true));
+
+        if self.entry(index) == file.previous.as_ref() {
+            if current == file.before && !progress.applied {
+                return Ok(Installation::Waiting);
+            }
+            if progress.prepared.is_some() && current == progress.prepared {
+                return Ok(Installation::Present);
+            }
         }
+
+        Ok(Installation::Changed)
     }
 
-    Ok(None)
-}
+    /// Whether this transaction installed the file. One that changed some other
+    /// way is refused, saying how to finish when the plan never put it in place.
+    fn apply_state(&self, index: usize) -> Result<bool> {
+        match self.install_state(index)? {
+            Installation::Present => return Ok(true),
+            Installation::Waiting => return Ok(false),
+            Installation::Changed => {}
+        }
 
-/// Whether this transaction installed the file. One that changed some other
-/// way is refused, saying how to finish when the plan never put it in place.
-fn apply_state(
-    home: &Path,
-    transaction: &Transaction,
-    index: usize,
-    ledger: &Ledger,
-) -> Result<bool> {
-    if let Some(installed) = install_state(home, transaction, index, ledger)? {
-        return Ok(installed);
+        let when = if self.never_installed(index)? {
+            "before"
+        } else if self.undoable(index) {
+            "after"
+        } else {
+            return Err(problem(
+                "Destination or ownership changed during this transaction; it was preserved",
+            ));
+        };
+
+        Err(problem(format!(
+            "{} changed in the helper {when} this plan copied it; it was kept. \
+             To finish, run atlas environment rollback {} --apply",
+            self.file(index).payload.target.display(),
+            self.transaction.plan.id,
+        )))
     }
 
-    let file = &transaction.plan.files[index];
-    let when = if never_installed(home, transaction, index, ledger)? {
-        "before"
-    } else if undoable(transaction, index, ledger) {
-        "after"
-    } else {
-        return Err(problem(
-            "Destination or ownership changed during this transaction; it was preserved",
-        ));
-    };
-
-    Err(problem(format!(
-        "{} changed in the helper {when} this plan copied it; it was kept. \
-         To finish, run atlas environment rollback {} --apply",
-        file.payload.target.display(),
-        transaction.plan.id,
-    )))
-}
-
-/// Whether the ledger names this transaction's own copy of the file.
-fn recorded(transaction: &Transaction, index: usize, ledger: &Ledger) -> bool {
-    matches!(
-        ledger.files.get(&transaction.plan.files[index].payload.target),
-        Some(Entry::Managed { generation, .. }) if generation == &transaction.plan.id
-    )
-}
-
-/// Whether undoing this transaction may still decide the file: the ledger
-/// names this transaction's copy, or still the entry it started from. One
-/// another plan copied since is that plan's to undo first.
-fn undoable(transaction: &Transaction, index: usize, ledger: &Ledger) -> bool {
-    let file = &transaction.plan.files[index];
-
-    recorded(transaction, index, ledger)
-        || ledger.files.get(&file.payload.target) == file.previous.as_ref()
-}
-
-/// Whether this transaction provably never put its file in place: it was
-/// never acknowledged, the ledger does not name its copy, and either
-/// nothing was prepared or the prepared copy still waits beside it. A plan
-/// stopped before it was activated may find another plan copied the same
-/// file since; that file is the other plan's, and this one never touched it.
-fn never_installed(
-    home: &Path,
-    transaction: &Transaction,
-    index: usize,
-    ledger: &Ledger,
-) -> Result<bool> {
-    let file = &transaction.plan.files[index];
-    let progress = &transaction.progress[index];
-    if progress.applied || recorded(transaction, index, ledger) {
-        return Ok(false);
+    /// Whether undoing this transaction may still decide the file: the ledger
+    /// names this transaction's copy, or still the entry it started from. One
+    /// another plan copied since is that plan's to undo first.
+    fn undoable(&self, index: usize) -> bool {
+        self.own_copy(index).is_some() || self.entry(index) == self.file(index).previous.as_ref()
     }
 
-    let Some(prepared) = &progress.prepared else {
-        return Ok(true);
-    };
+    /// Whether this transaction provably never put its file in place: it was
+    /// never acknowledged, the ledger does not name its copy, and either
+    /// nothing was prepared or the prepared copy still waits beside it. A plan
+    /// stopped before it was activated may find another plan copied the same
+    /// file since; that file is the other plan's, and this one never touched it.
+    fn never_installed(&self, index: usize) -> Result<bool> {
+        let progress = &self.transaction.progress[index];
+        if progress.applied || self.own_copy(index).is_some() {
+            return Ok(false);
+        }
 
-    let path = destination(home, &file.payload.target)?;
-    let waiting = candidate(&path, &transaction.plan.id, index, false)?;
+        let Some(prepared) = &progress.prepared else {
+            return Ok(true);
+        };
 
-    Ok(fingerprint(&path)?.as_ref() != Some(prepared)
-        && fingerprint(&waiting)?.as_ref() == Some(prepared))
-}
+        let path = self.path(index)?;
+        let waiting = self.candidate(&path, index, false)?;
 
-fn apply_file(
-    home: &Path,
-    transaction: &mut Transaction,
-    index: usize,
-    store: &Store,
-    ledger: &mut Ledger,
-    guard: &impl Fn() -> Result<()>,
-) -> Result<()> {
-    guard()?;
+        Ok(fingerprint(&path)?.as_ref() != Some(prepared)
+            && fingerprint(&waiting)?.as_ref() == Some(prepared))
+    }
 
-    let file = transaction.plan.files[index].clone();
-    let path = destination(home, &file.payload.target)?;
-    let installed = apply_state(home, transaction, index, ledger)?;
-    if !installed && file.operation != Operation::Unchanged {
-        ensure_parents(home, transaction, &file.payload.target, store, guard)?;
-        let candidate = candidate(&path, &transaction.plan.id, index, false)?;
+    fn apply(&mut self) -> Result<()> {
+        let files = self.transaction.plan.files.len();
+        for index in 0..files {
+            self.apply_state(index)?;
+        }
 
-        if transaction.progress[index].prepared.is_none() {
-            guard()?;
-            let bytes = read_limited(&store.blob(&transaction.plan.id, index, false), MAX_FILE)?;
-            if digest(&bytes) != file.payload.sha256 {
-                return Err(problem("Transaction payload changed"));
+        (self.guard)()?;
+        self.store.activate(&self.transaction.plan.id)?;
+
+        for index in 0..files {
+            self.apply_file(index)?;
+        }
+
+        (self.guard)()?;
+        self.transaction.phase = Phase::Applied;
+        self.store.save(&self.transaction)?;
+        self.store.finish(&self.transaction.plan.id)
+    }
+
+    fn apply_file(&mut self, index: usize) -> Result<()> {
+        (self.guard)()?;
+
+        let file = self.file(index).clone();
+        let path = self.path(index)?;
+        let installed = self.apply_state(index)?;
+        if !installed && file.operation.places_a_copy() {
+            self.ensure_parents(&file.payload.target)?;
+            let candidate = self.candidate(&path, index, false)?;
+
+            if self.transaction.progress[index].prepared.is_none() {
+                (self.guard)()?;
+                let bytes = checked_bytes(
+                    &self.store.blob(&self.transaction.plan.id, index, false),
+                    &file.payload.sha256,
+                    "Transaction payload changed",
+                )?;
+
+                let prepared = prepare_inode(
+                    &candidate,
+                    &bytes,
+                    desired_mode(&file.payload),
+                    file.before.as_ref(),
+                    file.operation.new_contents(),
+                )?;
+                self.transaction.progress[index].prepared = Some(prepared);
+                self.store.save(&self.transaction)?;
             }
 
-            let prepared = prepare_inode(
+            (self.guard)()?;
+            if self.apply_state(index)? {
+                return self.finish_file(index);
+            }
+
+            if fingerprint(&candidate)? != self.transaction.progress[index].prepared {
+                return Err(problem("Prepared replacement changed or disappeared"));
+            }
+
+            install_prepared(&candidate, &path, file.before.is_none())?;
+
+            if fingerprint(&path)? != self.transaction.progress[index].prepared {
+                return Err(problem("Installed file did not match its prepared inode"));
+            }
+        }
+
+        (self.guard)()?;
+        self.finish_file(index)
+    }
+
+    fn finish_file(&mut self, index: usize) -> Result<()> {
+        let current = fingerprint(&self.path(index)?)?
+            .ok_or_else(|| problem("Installed file disappeared"))?;
+        let file = &self.transaction.plan.files[index];
+
+        let expected = if !file.operation.places_a_copy() {
+            &file.before
+        } else {
+            &self.transaction.progress[index].prepared
+        };
+
+        if expected
+            .as_ref()
+            .is_some_and(|expected| !current.same_contents_and_metadata(expected))
+        {
+            return Err(problem("Installed file metadata changed"));
+        }
+
+        self.ledger.files.insert(
+            file.payload.target.clone(),
+            Entry {
+                generation: self.transaction.plan.id.clone(),
+                fingerprint: current,
+            },
+        );
+
+        self.store.save_ledger(&self.ledger)?;
+        self.transaction.progress[index].applied = true;
+
+        self.store.save(&self.transaction)
+    }
+
+    fn ensure_parents(&mut self, target: &Path) -> Result<()> {
+        let mut relative = PathBuf::new();
+        let parent = target
+            .parent()
+            .ok_or_else(|| problem("Missing target parent"))?;
+
+        for component in parent.components() {
+            relative.push(component);
+            let path = directory_destination(self.home, &relative)?;
+            if let Some(dir) = directory(&path, false)? {
+                installation_parent(&dir)?;
+                continue;
+            }
+
+            (self.guard)()?;
+            let index = self
+                .transaction
+                .directories
+                .iter()
+                .position(|dir| dir.target == relative)
+                .unwrap_or_else(|| {
+                    self.transaction.directories.push(Directory {
+                        target: relative.clone(),
+                        node: None,
+                    });
+                    self.transaction.directories.len() - 1
+                });
+
+            self.store.save(&self.transaction)?;
+            (self.guard)()?;
+            let dir = create_private_directory(&path)?;
+            self.transaction.directories[index].node = Some(node(&dir.metadata()?));
+            self.store.save(&self.transaction)?;
+        }
+
+        Ok(())
+    }
+
+    fn rollback_state(&self, index: usize) -> Result<RollbackState> {
+        let file = self.file(index);
+        let progress = &self.transaction.progress[index];
+
+        // What happens to the file once it is undone is the helper's business.
+        if progress.restored {
+            return Ok(RollbackState::Done);
+        }
+
+        // A file this transaction never put in place is the helper's, whatever
+        // it holds now; rollback leaves it alone.
+        if self.never_installed(index)? {
+            return Ok(RollbackState::Untouched);
+        }
+
+        let current = fingerprint(&self.path(index)?)?;
+        let entry = self.entry(index);
+        let ours = self.own_copy(index).is_some();
+
+        // An unchanged file stays as it is when undone: the helper's original,
+        // or the copy a later plan's undo put back in its place.
+        let restored = if !file.operation.places_a_copy() {
+            progress.restore.as_ref().or(file.before.as_ref())
+        } else {
+            progress.restore.as_ref()
+        };
+
+        let previous = previous_entry(file, restored);
+        if progress.reverting
+            && current.as_ref() == restored
+            && (entry == previous.as_ref() || ours)
+        {
+            return Ok(RollbackState::Restored);
+        }
+
+        if current == file.before && (entry == file.previous.as_ref() || ours) {
+            return Ok(RollbackState::Before);
+        }
+
+        if self.install_state(index)? == Installation::Present {
+            return Ok(RollbackState::Installed);
+        }
+
+        if self.undoable(index) {
+            return Ok(RollbackState::Changed);
+        }
+
+        Err(problem(format!(
+            "{} was copied again by a later plan; roll that back first",
+            file.payload.target.display()
+        )))
+    }
+
+    /// Judge every file in `states` before anything changes, and refuse when
+    /// what would put a file back is no longer as it was kept.
+    fn check_rollback(&self, states: &mut Vec<RollbackState>) -> Result<()> {
+        for index in 0..self.transaction.plan.files.len() {
+            let status = self.rollback_state(index)?;
+            states.push(status);
+            let file = self.file(index);
+            if status == RollbackState::Installed
+                && file.operation.places_a_copy()
+                && let Some(before) = &file.before
+            {
+                if let Some(restore) = &self.transaction.progress[index].restore {
+                    let prepared = self.candidate(&self.path(index)?, index, true)?;
+                    if fingerprint(&prepared)?.as_ref() != Some(restore) {
+                        return Err(problem("A prepared restore changed or disappeared"));
+                    }
+                } else {
+                    checked_bytes(
+                        &self.store.blob(&self.transaction.plan.id, index, true),
+                        &before.sha256,
+                        "A transaction backup changed; rollback did not start",
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn roll_back(&mut self) -> Result<()> {
+        (self.guard)()?;
+        self.store.activate(&self.transaction.plan.id)?;
+        self.transaction.phase = Phase::RollingBack;
+        self.store.save(&self.transaction)?;
+
+        for index in (0..self.transaction.plan.files.len()).rev() {
+            self.rollback_file(index)?;
+        }
+
+        self.transaction.retained_directories = self.cleanup_directories()?;
+        (self.guard)()?;
+        self.transaction.phase = Phase::RolledBack;
+        self.store.save(&self.transaction)?;
+        self.store.finish(&self.transaction.plan.id)?;
+
+        // Nothing reads a rolled-back transaction's copies again.
+        self.store.discard_copies(&self.transaction);
+
+        Ok(())
+    }
+
+    fn rollback_file(&mut self, index: usize) -> Result<()> {
+        (self.guard)()?;
+
+        let file = self.file(index).clone();
+        let path = self.path(index)?;
+        let status = self.rollback_state(index)?;
+        let unchanged = !file.operation.places_a_copy();
+        self.record_candidate(&path, &file, index)?;
+
+        // Nothing is put back when the file is already as it was, or this plan
+        // only adopted it. What is recorded is the file the state was judged
+        // on (an adopted file a later plan's undo put back is a new inode,
+        // known from the ledger), never a fresh read: a helper edit made
+        // since fails the check below and is kept on the next try.
+        let judged = match status {
+            RollbackState::Done => return self.discard_candidates(&path, index),
+            RollbackState::Untouched => return self.release_untouched(&path, index),
+            RollbackState::Changed => return self.keep_changed(&path, index),
+            RollbackState::Installed if !unchanged => {
+                self.restore_file(&path, &file, index)?;
+                None
+            }
+            RollbackState::Restored if !unchanged => None,
+            RollbackState::Before => Some(file.before.clone()),
+            RollbackState::Installed => Some(
+                self.own_copy(index)
+                    .cloned()
+                    .or_else(|| self.transaction.progress[index].prepared.clone()),
+            ),
+            RollbackState::Restored => Some(
+                self.transaction.progress[index]
+                    .restore
+                    .clone()
+                    .or_else(|| file.before.clone()),
+            ),
+        };
+        if let Some(restore) = judged {
+            self.transaction.progress[index].restore = restore;
+            self.transaction.progress[index].reverting = true;
+            self.store.save(&self.transaction)?;
+        }
+
+        (self.guard)()?;
+        let restored = fingerprint(&path)?;
+
+        if restored != self.transaction.progress[index].restore {
+            return Err(problem("Restored file does not match its recorded inode"));
+        }
+
+        let previous = previous_entry(&file, restored.as_ref());
+        self.ledger.restore(&file.payload.target, previous);
+
+        self.store.save_ledger(&self.ledger)?;
+        self.transaction.progress[index].restored = true;
+        self.store.save(&self.transaction)?;
+
+        self.discard_candidates(&path, index)
+    }
+
+    /// The randomized candidate name is reserved in this durable transaction.
+    /// A crash can leave its inode prepared before the fingerprint was recorded.
+    fn record_candidate(&mut self, path: &Path, file: &PlannedFile, index: usize) -> Result<()> {
+        if self.transaction.progress[index].prepared.is_some() {
+            return Ok(());
+        }
+
+        let Some(prepared) = fingerprint(&self.candidate(path, index, false)?)? else {
+            return Ok(());
+        };
+        if prepared.sha256 != file.payload.sha256 || prepared.mode != desired_mode(&file.payload) {
+            return Err(problem(
+                "Unrecorded transaction candidate changed; it was preserved",
+            ));
+        }
+
+        self.transaction.progress[index].prepared = Some(prepared);
+        (self.guard)()?;
+        self.store.save(&self.transaction)
+    }
+
+    /// Prepare and journal a restore before replacing or removing the installed inode.
+    fn restore_file(&mut self, path: &Path, file: &PlannedFile, index: usize) -> Result<()> {
+        if let Some(before) = &file.before
+            && self.transaction.progress[index].restore.is_none()
+        {
+            let bytes = checked_bytes(
+                &self.store.blob(&self.transaction.plan.id, index, true),
+                &before.sha256,
+                "Transaction backup changed",
+            )?;
+
+            let candidate = self.candidate(path, index, true)?;
+            (self.guard)()?;
+            self.transaction.progress[index].restore = Some(prepare_inode(
                 &candidate,
                 &bytes,
-                desired_mode(&file.payload),
-                file.before.as_ref(),
-                file.operation == Operation::Update,
-            )?;
-            transaction.progress[index].prepared = Some(prepared);
-            store.save(transaction)?;
+                before.mode,
+                Some(before),
+                false,
+            )?);
+            self.store.save(&self.transaction)?;
         }
 
-        guard()?;
-        if apply_state(home, transaction, index, ledger)? {
-            return finish_file(home, transaction, index, store, ledger);
+        self.transaction.progress[index].reverting = true;
+        (self.guard)()?;
+        self.store.save(&self.transaction)?;
+        (self.guard)()?;
+
+        if self.rollback_state(index)? != RollbackState::Installed {
+            return Err(problem("Destination changed before rollback"));
         }
 
-        if fingerprint(&candidate)? != transaction.progress[index].prepared {
-            return Err(problem("Prepared replacement changed or disappeared"));
-        }
-
-        install_prepared(&candidate, &path, file.before.is_none())?;
-
-        if fingerprint(&path)? != transaction.progress[index].prepared {
-            return Err(problem("Installed file did not match its prepared inode"));
+        if file.before.is_some() {
+            let candidate = self.candidate(path, index, true)?;
+            if fingerprint(&candidate)? != self.transaction.progress[index].restore {
+                return Err(problem("Prepared restore changed"));
+            }
+            install_prepared(&candidate, path, false)
+        } else {
+            unlink(path, false)
         }
     }
 
-    guard()?;
-    finish_file(home, transaction, index, store, ledger)
-}
+    /// Leave a file the helper changed since this transaction copied it as the
+    /// helper has it. The ledger goes back to the entry the transaction started
+    /// from, so the file is no longer this transaction's copy, and only the
+    /// transaction's own waiting copies go.
+    fn keep_changed(&mut self, path: &Path, index: usize) -> Result<()> {
+        let file = &self.transaction.plan.files[index];
+        self.ledger
+            .restore(&file.payload.target, file.previous.clone());
 
-fn finish_file(
-    home: &Path,
-    transaction: &mut Transaction,
-    index: usize,
-    store: &Store,
-    ledger: &mut Ledger,
-) -> Result<()> {
-    let file = &transaction.plan.files[index];
-    let current = fingerprint(&destination(home, &file.payload.target)?)?
-        .ok_or_else(|| problem("Installed file disappeared"))?;
+        (self.guard)()?;
+        self.store.save_ledger(&self.ledger)?;
 
-    let expected = if file.operation == Operation::Unchanged {
-        &file.before
-    } else {
-        &transaction.progress[index].prepared
-    };
+        self.transaction.progress[index].complete_kept();
+        self.store.save(&self.transaction)?;
 
-    if expected
-        .as_ref()
-        .is_some_and(|expected| !current.same_contents_and_metadata(expected))
-    {
-        return Err(problem("Installed file metadata changed"));
+        self.discard_candidates(path, index)
     }
 
-    ledger.version = 1;
-    ledger.files.insert(
-        file.payload.target.clone(),
-        Entry::Managed {
-            generation: transaction.plan.id.clone(),
-            fingerprint: current,
-        },
-    );
+    /// Remove this transaction's waiting copies of one file, and anything an
+    /// interrupted write of them left. A restore copy written before it was
+    /// recorded holds the backed-up file and goes too; any other copy the
+    /// transaction did not record is kept for inspection.
+    fn discard_candidates(&self, path: &Path, index: usize) -> Result<()> {
+        for restore in [false, true] {
+            let candidate = self.candidate(path, index, restore)?;
+            discard_partial(&candidate)?;
 
-    store.save_ledger(ledger)?;
-    transaction.progress[index].applied = true;
+            if let Some(current) = fingerprint(&candidate)? {
+                let progress = &self.transaction.progress[index];
+                let expected = if restore {
+                    &progress.restore
+                } else {
+                    &progress.prepared
+                };
 
-    store.save(transaction)
-}
+                let unrecorded_restore = restore
+                    && expected.is_none()
+                    && self.file(index).before.as_ref().is_some_and(|backup| {
+                        current.sha256 == backup.sha256 && current.mode == backup.mode
+                    });
 
-/// Where a file is prepared beside `path` before it is moved over it. A
-/// checked destination lies inside the helper home, so it has a folder.
-fn candidate(path: &Path, id: &str, index: usize, rollback: bool) -> Result<PathBuf> {
-    let folder = path
-        .parent()
-        .ok_or_else(|| problem("A destination needs a folder"))?;
-    Ok(folder.join(format!(
-        ".atlas-{id}-{index}-{}",
-        if rollback { "restore" } else { "install" }
-    )))
+                if expected.as_ref() != Some(&current) && !unrecorded_restore {
+                    return Err(problem(
+                        "An unrecorded prepared file remains; resume or inspect before cleanup",
+                    ));
+                }
+
+                (self.guard)()?;
+                unlink(&candidate, false)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Finish a file this transaction never put in place: its destination and
+    /// ledger entry stay as they are and only its waiting copy goes. The copy is
+    /// forgotten before it is removed, so an interruption leaves an unrecorded
+    /// copy the next rollback records and removes again.
+    fn release_untouched(&mut self, path: &Path, index: usize) -> Result<()> {
+        let waiting = self.candidate(path, index, false)?;
+        discard_partial(&waiting)?;
+
+        let current = fingerprint(&waiting)?;
+        if current.is_some() && current != self.transaction.progress[index].prepared {
+            return Err(problem(
+                "An unrecorded prepared file remains; resume or inspect before cleanup",
+            ));
+        }
+
+        self.transaction.progress[index].release_untouched();
+        (self.guard)()?;
+        self.store.save(&self.transaction)?;
+
+        if current.is_some() {
+            (self.guard)()?;
+            unlink(&waiting, false)?;
+        }
+
+        Ok(())
+    }
+
+    fn cleanup_directories(&self) -> Result<Vec<PathBuf>> {
+        // Files are already restored. A directory that cannot be proven to be our
+        // unchanged, empty creation is kept and reported; an inspection error must
+        // not wedge the transaction in RollingBack forever.
+        // None: already absent. Some(removable) otherwise.
+        let inspect = |record: &Directory| -> Result<Option<(PathBuf, bool)>> {
+            let path = directory_destination(self.home, &record.target)?;
+            let Some(dir) = directory(&path, false)? else {
+                return Ok(None);
+            };
+            let removable = validate_private(&dir, true).is_ok()
+                && record.node.as_ref() == Some(&node(&dir.metadata()?))
+                && fs::read_dir(&path)?.next().is_none();
+            Ok(Some((path, removable)))
+        };
+
+        let mut retained = Vec::new();
+
+        for record in self.transaction.directories.iter().rev() {
+            let path = match inspect(record) {
+                Ok(None) => continue,
+                Ok(Some((path, true))) => path,
+                Ok(Some((_, false))) | Err(_) => {
+                    retained.push(record.target.clone());
+                    continue;
+                }
+            };
+
+            (self.guard)()?;
+            if unlink(&path, true).is_err() {
+                retained.push(record.target.clone());
+            }
+        }
+
+        Ok(retained)
+    }
 }
 
 /// Write `bytes` beside their destination with the group and attributes of
@@ -749,49 +1149,6 @@ fn prepare_inode(
     fingerprint(path)?.ok_or_else(|| problem("Prepared file disappeared"))
 }
 
-fn ensure_parents(
-    home: &Path,
-    transaction: &mut Transaction,
-    target: &Path,
-    store: &Store,
-    guard: &impl Fn() -> Result<()>,
-) -> Result<()> {
-    let mut relative = PathBuf::new();
-    let parent = target
-        .parent()
-        .ok_or_else(|| problem("Missing target parent"))?;
-
-    for component in parent.components() {
-        relative.push(component);
-        let path = directory_destination(home, &relative)?;
-        if let Some(dir) = directory(&path, false)? {
-            installation_parent(&dir)?;
-            continue;
-        }
-
-        guard()?;
-        let index = transaction
-            .directories
-            .iter()
-            .position(|dir| dir.target == relative)
-            .unwrap_or_else(|| {
-                transaction.directories.push(Directory {
-                    target: relative.clone(),
-                    node: None,
-                });
-                transaction.directories.len() - 1
-            });
-
-        store.save(transaction)?;
-        guard()?;
-        let dir = create_private_directory(&path)?;
-        transaction.directories[index].node = Some(node(&dir.metadata()?));
-        store.save(transaction)?;
-    }
-
-    Ok(())
-}
-
 pub(super) fn rollback(
     home: &Path,
     id: &str,
@@ -803,8 +1160,8 @@ pub(super) fn rollback(
 
     let store = Store::open(home, if apply { Lock::Exclusive } else { Lock::Shared })?;
     store.require_available(id)?;
-    let mut ledger = store.ledger()?;
-    let mut transaction = store.transaction(id)?.ok_or_else(|| problem(MISSING))?;
+    let ledger = store.ledger()?;
+    let transaction = store.transaction(id)?.ok_or_else(|| problem(MISSING))?;
     validate_plan(home, &transaction.plan)?;
 
     if transaction.phase == Phase::RolledBack {
@@ -816,62 +1173,25 @@ pub(super) fn rollback(
         return Ok(report(&transaction, Ok(()), true));
     }
 
+    let mut changing = Changing {
+        home,
+        store: &store,
+        guard,
+        transaction,
+        ledger,
+    };
     let mut states = Vec::new();
-    let result = (|| -> Result<()> {
-        for index in 0..transaction.plan.files.len() {
-            let status = rollback_state(home, &transaction, index, &ledger)?;
-            states.push(status);
-            let file = &transaction.plan.files[index];
-            if status == RollbackState::Installed
-                && file.operation != Operation::Unchanged
-                && let Some(before) = &file.before
-            {
-                if let Some(restore) = &transaction.progress[index].restore {
-                    let path = destination(home, &file.payload.target)?;
-                    if fingerprint(&candidate(&path, id, index, true)?)?.as_ref() != Some(restore) {
-                        return Err(problem("A prepared restore changed or disappeared"));
-                    }
-                } else {
-                    let backup = read_limited(&store.blob(id, index, true), MAX_FILE)?;
-                    if digest(&backup) != before.sha256 {
-                        return Err(problem(
-                            "A transaction backup changed; rollback did not start",
-                        ));
-                    }
-                }
-            }
-        }
-
-        if !apply {
-            return Ok(());
-        }
-
-        guard()?;
-        store.activate(id)?;
-        transaction.phase = Phase::RollingBack;
-        store.save(&transaction)?;
-
-        for index in (0..transaction.plan.files.len()).rev() {
-            rollback_file(home, &mut transaction, index, &store, &mut ledger, guard)?;
-        }
-
-        transaction.retained_directories = cleanup_directories(home, &transaction, guard)?;
-        guard()?;
-        transaction.phase = Phase::RolledBack;
-        store.save(&transaction)?;
-        store.finish(id)?;
-
-        // Nothing reads a rolled-back transaction's copies again.
-        store.discard_copies(&transaction);
-
-        Ok(())
-    })();
+    let mut result = changing.check_rollback(&mut states);
+    if apply && result.is_ok() {
+        result = changing.roll_back();
+    }
 
     if !apply {
         store.confirm_read()?;
     }
 
-    let mut value = report(&transaction, result, true);
+    let transaction = &changing.transaction;
+    let mut value = report(transaction, result, true);
     value["preview"] = json!(!apply);
 
     // A preview names only the files undoing would put back or remove, and
@@ -889,7 +1209,7 @@ pub(super) fn rollback(
         };
 
         value["pendingTargets"] = json!(targets(&|file, state| {
-            state == RollbackState::Installed && file.operation != Operation::Unchanged
+            state == RollbackState::Installed && file.operation.places_a_copy()
         }));
         value["keptTargets"] = json!(targets(&|_, state| state == RollbackState::Changed));
     }
@@ -897,388 +1217,33 @@ pub(super) fn rollback(
     Ok(value)
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum RollbackState {
-    /// Undone already: put back, left untouched or kept.
-    Done,
-    /// Never put in place by this transaction.
-    Untouched,
-    /// As it was before this transaction.
-    Before,
-    /// This transaction's copy, unchanged.
-    Installed,
-    /// The earlier file is back, not yet recorded.
-    Restored,
-    /// Changed in the helper since this transaction copied it.
-    Changed,
-}
-
 fn previous_entry(file: &PlannedFile, restored: Option<&Fingerprint>) -> Option<Entry> {
     match (&file.previous, restored) {
-        (Some(Entry::Managed { generation, .. }), Some(fingerprint)) => Some(Entry::Managed {
-            generation: generation.clone(),
+        (Some(entry), Some(fingerprint)) => Some(Entry {
+            generation: entry.generation.clone(),
             fingerprint: fingerprint.clone(),
         }),
-        _ => file.previous.clone(),
+        (None, _) | (Some(_), None) => file.previous.clone(),
     }
-}
-
-fn rollback_state(
-    home: &Path,
-    transaction: &Transaction,
-    index: usize,
-    ledger: &Ledger,
-) -> Result<RollbackState> {
-    let file = &transaction.plan.files[index];
-    let progress = &transaction.progress[index];
-
-    // What happens to the file once it is undone is the helper's business.
-    if progress.restored {
-        return Ok(RollbackState::Done);
-    }
-
-    // A file this transaction never put in place is the helper's, whatever
-    // it holds now; rollback leaves it alone.
-    if never_installed(home, transaction, index, ledger)? {
-        return Ok(RollbackState::Untouched);
-    }
-
-    let current = fingerprint(&destination(home, &file.payload.target)?)?;
-    let entry = ledger.files.get(&file.payload.target);
-    let ours = recorded(transaction, index, ledger);
-
-    // An unchanged file stays as it is when undone: the helper's original,
-    // or the copy a later plan's undo put back in its place.
-    let restored = if file.operation == Operation::Unchanged {
-        progress.restore.as_ref().or(file.before.as_ref())
-    } else {
-        progress.restore.as_ref()
-    };
-
-    let previous = previous_entry(file, restored);
-    if progress.reverting && current.as_ref() == restored && (entry == previous.as_ref() || ours) {
-        return Ok(RollbackState::Restored);
-    }
-
-    if current == file.before && (entry == file.previous.as_ref() || ours) {
-        return Ok(RollbackState::Before);
-    }
-
-    if install_state(home, transaction, index, ledger)? == Some(true) {
-        return Ok(RollbackState::Installed);
-    }
-
-    if undoable(transaction, index, ledger) {
-        return Ok(RollbackState::Changed);
-    }
-
-    Err(problem(format!(
-        "{} was copied again by a later plan; roll that back first",
-        file.payload.target.display()
-    )))
-}
-
-fn rollback_file(
-    home: &Path,
-    transaction: &mut Transaction,
-    index: usize,
-    store: &Store,
-    ledger: &mut Ledger,
-    guard: &impl Fn() -> Result<()>,
-) -> Result<()> {
-    guard()?;
-
-    let file = transaction.plan.files[index].clone();
-    let path = destination(home, &file.payload.target)?;
-    let status = rollback_state(home, transaction, index, ledger)?;
-
-    // The randomized candidate name is reserved in this durable transaction.
-    // A crash can leave its inode prepared before the fingerprint was recorded.
-    if transaction.progress[index].prepared.is_none() {
-        let candidate = candidate(&path, &transaction.plan.id, index, false)?;
-        if let Some(prepared) = fingerprint(&candidate)? {
-            if prepared.sha256 != file.payload.sha256
-                || prepared.mode != desired_mode(&file.payload)
-            {
-                return Err(problem(
-                    "Unrecorded transaction candidate changed; it was preserved",
-                ));
-            }
-
-            transaction.progress[index].prepared = Some(prepared);
-            guard()?;
-            store.save(transaction)?;
-        }
-    }
-
-    match status {
-        RollbackState::Done => return discard_candidates(&path, transaction, index, guard),
-        RollbackState::Untouched => {
-            return release_untouched(&path, transaction, index, store, guard);
-        }
-        RollbackState::Changed => {
-            return keep_changed(&path, transaction, index, store, ledger, guard);
-        }
-        _ => {}
-    }
-
-    if status == RollbackState::Installed && file.operation != Operation::Unchanged {
-        if let Some(before) = &file.before
-            && transaction.progress[index].restore.is_none()
-        {
-            let bytes = read_limited(&store.blob(&transaction.plan.id, index, true), MAX_FILE)?;
-            if digest(&bytes) != before.sha256 {
-                return Err(problem("Transaction backup changed"));
-            }
-
-            let candidate = candidate(&path, &transaction.plan.id, index, true)?;
-            guard()?;
-            transaction.progress[index].restore = Some(prepare_inode(
-                &candidate,
-                &bytes,
-                before.mode,
-                Some(before),
-                false,
-            )?);
-            store.save(transaction)?;
-        }
-
-        transaction.progress[index].reverting = true;
-        guard()?;
-        store.save(transaction)?;
-        guard()?;
-
-        if rollback_state(home, transaction, index, ledger)? != RollbackState::Installed {
-            return Err(problem("Destination changed before rollback"));
-        }
-
-        if file.before.is_some() {
-            let candidate = candidate(&path, &transaction.plan.id, index, true)?;
-            if fingerprint(&candidate)? != transaction.progress[index].restore {
-                return Err(problem("Prepared restore changed"));
-            }
-            install_prepared(&candidate, &path, false)?;
-        } else {
-            unlink(&path, false)?;
-        }
-    } else if status == RollbackState::Before || file.operation == Operation::Unchanged {
-        // Nothing is put back: the file is already as it was, or this plan
-        // only adopted it. What is recorded is the file the state was judged
-        // on (an adopted file a later plan's undo put back is a new inode,
-        // known from the ledger), never a fresh read: a helper edit made
-        // since fails the check below and is kept on the next try.
-        let restore = match status {
-            RollbackState::Installed => match ledger.files.get(&file.payload.target) {
-                Some(Entry::Managed {
-                    generation,
-                    fingerprint,
-                }) if generation == &transaction.plan.id => Some(fingerprint.clone()),
-                _ => transaction.progress[index].prepared.clone(),
-            },
-            RollbackState::Restored => transaction.progress[index]
-                .restore
-                .clone()
-                .or_else(|| file.before.clone()),
-            _ => file.before.clone(),
-        };
-        transaction.progress[index].restore = restore;
-        transaction.progress[index].reverting = true;
-        store.save(transaction)?;
-    }
-
-    guard()?;
-    let restored = fingerprint(&path)?;
-
-    if restored != transaction.progress[index].restore {
-        return Err(problem("Restored file does not match its recorded inode"));
-    }
-
-    let previous = previous_entry(&file, restored.as_ref());
-    if let Some(previous) = previous {
-        ledger.files.insert(file.payload.target.clone(), previous);
-    } else {
-        ledger.files.remove(&file.payload.target);
-    }
-
-    ledger.version = 1;
-    store.save_ledger(ledger)?;
-    transaction.progress[index].restored = true;
-    store.save(transaction)?;
-
-    discard_candidates(&path, transaction, index, guard)
-}
-
-/// Leave a file the helper changed since this transaction copied it as the
-/// helper has it. The ledger goes back to the entry the transaction started
-/// from, so the file is no longer this transaction's copy, and only the
-/// transaction's own waiting copies go.
-fn keep_changed(
-    path: &Path,
-    transaction: &mut Transaction,
-    index: usize,
-    store: &Store,
-    ledger: &mut Ledger,
-    guard: &impl Fn() -> Result<()>,
-) -> Result<()> {
-    let file = &transaction.plan.files[index];
-    match &file.previous {
-        Some(previous) => ledger
-            .files
-            .insert(file.payload.target.clone(), previous.clone()),
-        None => ledger.files.remove(&file.payload.target),
-    };
-
-    guard()?;
-    ledger.version = 1;
-    store.save_ledger(ledger)?;
-
-    transaction.progress[index].complete_kept();
-    store.save(transaction)?;
-
-    discard_candidates(path, transaction, index, guard)
-}
-
-/// Remove this transaction's waiting copies of one file, and anything an
-/// interrupted write of them left. A restore copy written before it was
-/// recorded holds the backed-up file and goes too; any other copy the
-/// transaction did not record is kept for inspection.
-fn discard_candidates(
-    path: &Path,
-    transaction: &Transaction,
-    index: usize,
-    guard: &impl Fn() -> Result<()>,
-) -> Result<()> {
-    for restore in [false, true] {
-        let candidate = candidate(path, &transaction.plan.id, index, restore)?;
-        discard_partial(&candidate)?;
-
-        if let Some(current) = fingerprint(&candidate)? {
-            let expected = if restore {
-                &transaction.progress[index].restore
-            } else {
-                &transaction.progress[index].prepared
-            };
-
-            let backup = transaction.plan.files[index].before.as_ref();
-            let unrecorded_restore = restore
-                && expected.is_none()
-                && backup.is_some_and(|backup| {
-                    current.sha256 == backup.sha256 && current.mode == backup.mode
-                });
-
-            if expected.as_ref() != Some(&current) && !unrecorded_restore {
-                return Err(problem(
-                    "An unrecorded prepared file remains; resume or inspect before cleanup",
-                ));
-            }
-
-            guard()?;
-            unlink(&candidate, false)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// Finish a file this transaction never put in place: its destination and
-/// ledger entry stay as they are and only its waiting copy goes. The copy is
-/// forgotten before it is removed, so an interruption leaves an unrecorded
-/// copy the next rollback records and removes again.
-fn release_untouched(
-    path: &Path,
-    transaction: &mut Transaction,
-    index: usize,
-    store: &Store,
-    guard: &impl Fn() -> Result<()>,
-) -> Result<()> {
-    let waiting = candidate(path, &transaction.plan.id, index, false)?;
-    discard_partial(&waiting)?;
-
-    let current = fingerprint(&waiting)?;
-    if current.is_some() && current != transaction.progress[index].prepared {
-        return Err(problem(
-            "An unrecorded prepared file remains; resume or inspect before cleanup",
-        ));
-    }
-
-    transaction.progress[index].release_untouched();
-    guard()?;
-    store.save(transaction)?;
-
-    if current.is_some() {
-        guard()?;
-        unlink(&waiting, false)?;
-    }
-
-    Ok(())
-}
-
-fn cleanup_directories(
-    home: &Path,
-    transaction: &Transaction,
-    guard: &impl Fn() -> Result<()>,
-) -> Result<Vec<PathBuf>> {
-    // Files are already restored. A directory that cannot be proven to be our
-    // unchanged, empty creation is kept and reported; an inspection error must
-    // not wedge the transaction in RollingBack forever.
-    // None: already absent. Some(removable) otherwise.
-    let inspect = |record: &Directory| -> Result<Option<(PathBuf, bool)>> {
-        let path = directory_destination(home, &record.target)?;
-        let Some(dir) = directory(&path, false)? else {
-            return Ok(None);
-        };
-        let removable = validate_private(&dir, true).is_ok()
-            && record.node.as_ref() == Some(&node(&dir.metadata()?))
-            && fs::read_dir(&path)?.next().is_none();
-        Ok(Some((path, removable)))
-    };
-
-    let mut retained = Vec::new();
-
-    for record in transaction.directories.iter().rev() {
-        let path = match inspect(record) {
-            Ok(None) => continue,
-            Ok(Some((path, true))) => path,
-            Ok(Some((_, false))) | Err(_) => {
-                retained.push(record.target.clone());
-                continue;
-            }
-        };
-
-        guard()?;
-        if unlink(&path, true).is_err() {
-            retained.push(record.target.clone());
-        }
-    }
-
-    Ok(retained)
 }
 
 fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Value {
-    let (completed, pending): (Vec<_>, Vec<_>) = transaction
-        .plan
-        .files
-        .iter()
-        .zip(&transaction.progress)
-        .partition(|(_, progress)| {
-            if rollback {
-                progress.restored
-            } else {
-                progress.applied
-            }
-        });
-    let (kept, completed): (Vec<_>, Vec<_>) = completed
-        .into_iter()
-        .partition(|(_, progress)| rollback && progress.kept);
-
-    fn targets<'a>(files: Vec<(&'a PlannedFile, &'a Progress)>) -> Vec<&'a PathBuf> {
-        files
-            .into_iter()
-            .map(|(file, _)| &file.payload.target)
-            .collect()
+    let (mut completed, mut pending, mut kept) = (Vec::new(), Vec::new(), Vec::new());
+    for (file, progress) in transaction.plan.files.iter().zip(&transaction.progress) {
+        let finished = if rollback {
+            progress.restored
+        } else {
+            progress.applied
+        };
+        let targets = if !finished {
+            &mut pending
+        } else if rollback && progress.kept {
+            &mut kept
+        } else {
+            &mut completed
+        };
+        targets.push(&file.payload.target);
     }
-
-    let (completed, pending, kept) = (targets(completed), targets(pending), targets(kept));
     let mut value = json!({
         "ok": result.is_ok(),
         "planId": transaction.plan.id,

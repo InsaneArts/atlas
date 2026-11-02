@@ -1,31 +1,41 @@
 //! The helper daemon's socket: one request per connection, answered with
 //! protocol v1 replies.
-//! size-exception: this owner retains listener admission, connection outcomes
-//! and registered run cleanup together. Shutdown and abandoned-handler tests
-//! protect the shared stop deadline and ownership after a socket disappears.
 use super::capture::{Capture, Screen, screenshot};
-use super::protocol::refused;
 use crate::{
     daemon::{
-        facts,
+        consent, facts,
         job::{self, Jobs},
-        protocol::{self, ConnectionPhase, MAX_REQUEST, Policy, ReadRequest, Request, failure},
-        read, run,
+        preferences, read, run,
     },
     error::{Code, Error, Result},
     native::{apps, capture, endpoint, windows},
-    session::{InputEpoch, validate_target_uid},
+    protocol::{
+        self, ConnectionPhase, MAX_REQUEST, Policy, ReadRequest, Request, failure, interrupted,
+        refused,
+    },
+    session::validate_target_uid,
 };
 #[cfg(test)]
 use objc2_core_foundation::CGRect;
 use serde_json::{Value, json};
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, SystemTime},
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::UnixStream,
-    signal::unix::{SignalKind, signal},
+    net::{
+        UnixListener, UnixStream,
+        unix::{OwnedReadHalf, OwnedWriteHalf},
+    },
+    signal::unix::{Signal, SignalKind, signal},
     sync::{Mutex, Notify, Semaphore, mpsc, oneshot, watch},
-    task::{Id, JoinError, JoinSet},
+    task::{Id, JoinError, JoinHandle, JoinSet},
 };
 
 /// Connections served at once.
@@ -59,17 +69,16 @@ fn connection_outcome(
         .remove(&id)
         .map(|phase| *phase.borrow())
         .unwrap_or(ConnectionPhase::Mutation("connection"));
-    let operation = match phase {
-        ConnectionPhase::Refusal => "refusal",
-        ConnectionPhase::Read(operation) | ConnectionPhase::Mutation(operation) => operation,
+    let (operation, mutation) = match phase {
+        ConnectionPhase::Refusal => ("refusal", false),
+        ConnectionPhase::Read(operation) => (operation, false),
+        ConnectionPhase::Mutation(operation) => (operation, true),
     };
     match outcome {
         Ok((_, Ok(()))) => Ok(()),
         // A refused request has no effects; abandoned read replies are
         // expected and say nothing about daemon or supervisor health.
-        Ok((_, Err(_))) if matches!(phase, ConnectionPhase::Refusal | ConnectionPhase::Read(_)) => {
-            Ok(())
-        }
+        Ok((_, Err(_))) if !mutation => Ok(()),
         Err(error) if stopping && error.is_cancelled() => Ok(()),
         Err(error) => supervisor_outcome(Err(error), stopping).map_err(|cause| {
             Error::new(
@@ -95,21 +104,21 @@ async fn drain_connections(
     deadline: tokio::time::Instant,
 ) -> Result<()> {
     let mut failure = Ok(());
+    let mut observe = |outcome| {
+        if let Err(error) = connection_outcome(outcome, connections, true) {
+            eprintln!("{}", error.error);
+            failure = Err(error);
+        }
+    };
     let drain = async {
         while let Some(outcome) = tasks.join_next_with_id().await {
-            if let Err(error) = connection_outcome(outcome, connections, true) {
-                eprintln!("{}", error.error);
-                failure = Err(error);
-            }
+            observe(outcome);
         }
     };
     if tokio::time::timeout_at(deadline, drain).await.is_err() {
         tasks.abort_all();
         while let Some(outcome) = tasks.join_next_with_id().await {
-            if let Err(error) = connection_outcome(outcome, connections, true) {
-                eprintln!("{}", error.error);
-                failure = Err(error);
-            }
+            observe(outcome);
         }
     }
     failure
@@ -124,10 +133,8 @@ fn run_outcome(daemon: &Daemon, outcome: std::result::Result<Result<()>, JoinErr
         // Only fixed labels and codes reach diagnostics; the retained
         // source may contain details of the abandoned transport.
         eprintln!("Daemon run outcome unknown ({})", error.code);
-        if error.code == Code::Job
-            && let Some(jobs) = &daemon.jobs
-        {
-            jobs.fail_supervision();
+        if error.code == Code::Job {
+            daemon.fail_supervision();
         }
     }
     outcome
@@ -185,7 +192,7 @@ impl Daemon {
                 capture,
                 windows: windows::windows,
                 bundle_id: apps::bundle_id,
-                dock: read_dock,
+                dock: |windows| crate::native::ax::dock(windows, crate::native::ax::DOCK_TIMEOUT),
                 on_console,
                 session,
             },
@@ -196,11 +203,70 @@ impl Daemon {
         }
     }
 
+    /// Establish this process's helper identity before applying login preferences
+    /// or adopting jobs. Missing job storage leaves that capability unavailable.
+    fn installed(uid: u32, socket: &Path) -> Result<Arc<Self>> {
+        if nix::unistd::getuid().as_raw() != uid {
+            return Err(Error::new(
+                Code::Identity,
+                "The helper daemon must run as the configured helper account",
+            ));
+        }
+
+        let manager = facts::manager_name();
+        require_graphical_session(uid, &manager)?;
+        crate::login_log::mark(&format!("daemon.start uid={uid}"));
+        preferences::type_exactly();
+        preferences::keep_desktop()?;
+
+        let mut daemon = Self::new(
+            manager,
+            capture::main_display,
+            facts::on_console,
+            crate::native::session_info,
+        );
+        // Jobs are kept beside the socket; the jobs a daemon before this one
+        // started are found again by their records.
+        if let (Some(folder), Ok(launcher)) = (socket.parent(), std::env::current_exe()) {
+            match Jobs::open(folder, launcher, uid) {
+                Ok(jobs) => daemon.jobs = Some(Arc::new(jobs)),
+                Err(error) => eprintln!("Background jobs are unavailable: {}", error.error),
+            }
+        }
+        Ok(Arc::new(daemon))
+    }
+
     /// The daemon's hello: its facts, and the background jobs it keeps.
     fn hello(&self) -> Value {
+        // The first hello of this login: Atlas answers in the helper.
+        static GREETED: AtomicBool = AtomicBool::new(false);
+        if !GREETED.swap(true, Ordering::Relaxed) {
+            crate::login_log::mark("daemon.firstHello");
+        }
         match self.jobs.as_deref().map(Jobs::census).transpose() {
             Ok(census) => facts::hello(&self.manager, census),
             Err(error) => json!(error),
+        }
+    }
+
+    /// Start supervising the jobs, when there are any.
+    fn supervision(&self, uid: u32) -> Option<JoinHandle<Result<()>>> {
+        // The person's Stop is seen through the input service's saved marker,
+        // where the helper's layout puts it: the configuration's input socket
+        // comes from the same layout.
+        let home = std::env::var_os("HOME")?;
+        let marker = crate::setup::helper::Layout::new(uid, PathBuf::from(home)).stop_marker();
+        Some(tokio::spawn(job::supervise(
+            self.jobs.clone()?,
+            marker,
+            self.screen.on_console,
+            self.stopping.subscribe(),
+        )))
+    }
+
+    fn fail_supervision(&self) {
+        if let Some(jobs) = &self.jobs {
+            jobs.fail_supervision();
         }
     }
 
@@ -257,39 +323,10 @@ fn require_graphical_session(uid: u32, manager: &str) -> Result<()> {
 /// Serve protocol v1 on `socket` as the helper `uid`, for the controller
 /// `controller_uid`. Returns when stopped; a `restart` request ends it with
 /// an error so launchd starts a fresh daemon.
-/// size-exception: watchers, credentialed admission and stop-before-drain share
-/// one lifetime, covered by the shutdown and supervisor-outcome tests.
 pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()> {
     validate_target_uid(uid, controller_uid)?;
 
-    if nix::unistd::getuid().as_raw() != uid {
-        return Err(Error::new(
-            Code::Identity,
-            "The helper daemon must run as the configured helper account",
-        ));
-    }
-
-    let manager = facts::manager_name();
-    require_graphical_session(uid, &manager)?;
-    crate::login_log::mark(&format!("daemon.start uid={uid}"));
-    facts::type_exactly();
-    facts::keep_desktop()?;
-
-    let mut daemon = Daemon::new(
-        manager,
-        capture::main_display,
-        facts::on_console,
-        crate::native::session_info,
-    );
-    // Jobs are kept beside the socket; the jobs a daemon before this one
-    // started are found again by their records.
-    if let (Some(folder), Ok(launcher)) = (socket.parent(), std::env::current_exe()) {
-        match Jobs::open(folder, launcher, uid) {
-            Ok(jobs) => daemon.jobs = Some(Arc::new(jobs)),
-            Err(error) => eprintln!("Background jobs are unavailable: {}", error.error),
-        }
-    }
-    let daemon = Arc::new(daemon);
+    let daemon = Daemon::installed(uid, &socket)?;
 
     let (listener, _endpoint) = endpoint::bind(
         &socket,
@@ -302,146 +339,160 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
     .await?;
 
     // Both listeners exist before work starts, so setup failure leaves no worker behind.
-    let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut terminate = signal(SignalKind::terminate())?;
+    let interrupt = signal(SignalKind::interrupt())?;
+    let terminate = signal(SignalKind::terminate())?;
 
     // A Screen Recording grant reaches this process only through a restart.
     let restarter = daemon.clone();
-    let consent = tokio::spawn(facts::request_consent_on_arrival(
+    let asking = tokio::spawn(consent::request_consent_on_arrival(
         controller_uid,
         move || {
             restarter.restarting.notify_one();
         },
     ));
     let watcher = daemon.clone();
-    let recording = tokio::spawn(facts::restart_for_recording(move || {
+    let recording = tokio::spawn(consent::restart_for_recording(move || {
         watcher.restarting.notify_one();
     }));
-    // The person's Stop is seen through the input service's saved marker,
-    // where the helper's layout puts it: the configuration's input socket
-    // comes from the same layout.
-    let marker = std::env::var_os("HOME")
-        .map(|home| crate::setup::helper::Layout::new(uid, PathBuf::from(home)).stop_marker());
-    let mut supervision = match (&daemon.jobs, marker) {
-        (Some(jobs), Some(marker)) => Some(tokio::spawn(job::supervise(
-            jobs.clone(),
-            marker,
-            daemon.screen.on_console,
-            daemon.stopping.subscribe(),
-        ))),
-        _ => None,
+    let mut serving = Serving {
+        supervision: daemon.supervision(uid),
+        daemon: daemon.clone(),
+        helper: uid,
+        controller: controller_uid,
+        interrupt,
+        terminate,
+        slots: Arc::new(Semaphore::new(CONNECTIONS)),
+        tasks: JoinSet::new(),
+        connections: Connections::new(),
     };
-
-    let slots = Arc::new(Semaphore::new(CONNECTIONS));
-    let mut tasks = JoinSet::new();
-    let mut connections = Connections::new();
-
-    let outcome = 'serving: loop {
-        {
-            let mut runs = daemon.runs.lock().await;
-            while let Some(outcome) = runs.try_join_next() {
-                if let Err(error) = run_outcome(&daemon, outcome)
-                    && error.code == Code::Job
-                {
-                    break 'serving Err(error);
-                }
-            }
-        }
-        tokio::select! {
-            result = async {
-                match supervision.as_mut() {
-                    Some(supervision) => supervision.await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                supervision = None;
-                if let Some(jobs) = &daemon.jobs {
-                    jobs.fail_supervision();
-                }
-                break supervisor_outcome(result, false);
-            }
-            // Stopped from outside (macOS's Quit & Reopen after a new
-            // permission, say): exit unsuccessfully so launchd starts it
-            // again. Uninstalling unloads the job first, so it stays down.
-            _ = interrupt.recv() => {
-                break Err(Error::new(Code::Restart, "Interrupted; launchd starts it again"));
-            }
-            _ = terminate.recv() => {
-                break Err(Error::new(Code::Restart, "Stopped; launchd starts it again"));
-            }
-            () = daemon.restarting.notified() => {
-                break Err(Error::new(Code::Restart, "Restarting at the controller's request"));
-            }
-            Some(result) = tasks.join_next_with_id(), if !tasks.is_empty() => {
-                if let Err(error) = connection_outcome(result, &mut connections, false) {
-                    if error.code == Code::Job {
-                        if let Some(jobs) = &daemon.jobs {
-                            jobs.fail_supervision();
-                        }
-                        break Err(error);
-                    }
-                    eprintln!("{}", error.error);
-                }
-            }
-            accepted = listener.accept() => {
-                let Ok((stream, _)) = accepted else {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                    continue;
-                };
-
-                let Ok(peer) = stream.peer_cred() else {
-                    continue;
-                };
-                if peer.uid() != controller_uid && peer.uid() != uid {
-                    continue;
-                }
-
-                let Ok(slot) = slots.clone().try_acquire_owned() else {
-                    // Nothing ran: say so, rather than hang up in a way a
-                    // client must treat as uncertain.
-                    endpoint::turn_away(stream, &failure(
-                        Code::Busy,
-                        "The helper is serving too many requests; try again",
-                    ));
-                    continue;
-                };
-
-                let daemon = daemon.clone();
-                let controller = peer.uid() == controller_uid;
-                let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
-                let task = tasks.spawn(async move {
-                    let _slot = slot;
-                    handle(stream, daemon, controller, phase).await
-                });
-                connections.insert(task.id(), observed);
-            }
-        }
-    };
+    let outcome = serving.listen(&listener).await;
 
     // Running commands are asked to end (TERM, then KILL) before the daemon
     // exits; work that misses the deadline stays unknown. Background jobs
     // go on: the next daemon finds them again by their records.
     daemon.stopping.send_replace(true);
     let deadline = tokio::time::Instant::now() + STOP;
-    let drained = drain_connections(&mut tasks, &mut connections, deadline).await;
+    let drained = drain_connections(&mut serving.tasks, &mut serving.connections, deadline).await;
     let runs = drain_runs(&daemon, deadline).await;
 
-    consent.abort();
+    asking.abort();
     recording.abort();
-    if let Some(supervision) = supervision {
+    if let Some(supervision) = serving.supervision {
         let supervised = drain_supervision(supervision, deadline).await;
         if supervised.is_err() {
-            if let Some(jobs) = &daemon.jobs {
-                jobs.fail_supervision();
-            }
+            daemon.fail_supervision();
             return supervised;
         }
     }
     outcome.and(drained).and(runs)
 }
 
+/// What serving holds until it ends: what can end it, and the connections it
+/// has admitted.
+struct Serving {
+    daemon: Arc<Daemon>,
+    helper: u32,
+    controller: u32,
+    interrupt: Signal,
+    terminate: Signal,
+    supervision: Option<JoinHandle<Result<()>>>,
+    slots: Arc<Semaphore>,
+    tasks: JoinSet<Result<()>>,
+    connections: Connections,
+}
+
+impl Serving {
+    /// Admit credentialed connections and observe every registered owner until
+    /// something ends serving, which is the error returned.
+    async fn listen(&mut self, listener: &UnixListener) -> Result<()> {
+        let daemon = self.daemon.clone();
+        loop {
+            let mut runs = daemon.runs.lock().await;
+            while let Some(outcome) = runs.try_join_next() {
+                if let Err(error) = run_outcome(&daemon, outcome)
+                    && error.code == Code::Job
+                {
+                    return Err(error);
+                }
+            }
+            drop(runs);
+            tokio::select! {
+                result = supervision_ended(&mut self.supervision) => {
+                    self.supervision = None;
+                    daemon.fail_supervision();
+                    return supervisor_outcome(result, false);
+                }
+                // Stopped from outside (macOS's Quit & Reopen after a new
+                // permission, say): exit unsuccessfully so launchd starts it
+                // again. Uninstalling unloads the job first, so it stays down.
+                _ = self.interrupt.recv() => {
+                    return Err(Error::new(Code::Restart, "Interrupted; launchd starts it again"));
+                }
+                _ = self.terminate.recv() => {
+                    return Err(Error::new(Code::Restart, "Stopped; launchd starts it again"));
+                }
+                () = daemon.restarting.notified() => {
+                    return Err(Error::new(Code::Restart, "Restarting at the controller's request"));
+                }
+                Some(result) = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
+                    if let Err(error) = connection_outcome(result, &mut self.connections, false) {
+                        if error.code == Code::Job {
+                            daemon.fail_supervision();
+                            return Err(error);
+                        }
+                        eprintln!("{}", error.error);
+                    }
+                }
+                accepted = listener.accept() => match accepted {
+                    Ok((stream, _)) => self.admit(stream),
+                    Err(_) => tokio::time::sleep(Duration::from_millis(10)).await,
+                },
+            }
+        }
+    }
+
+    fn admit(&mut self, stream: UnixStream) {
+        let Ok(peer) = stream.peer_cred() else {
+            return;
+        };
+        let controller = peer.uid() == self.controller;
+        if !controller && peer.uid() != self.helper {
+            return;
+        }
+        let Ok(slot) = self.slots.clone().try_acquire_owned() else {
+            // Nothing ran: say so, rather than hang up in a way a client must
+            // treat as uncertain.
+            endpoint::turn_away(
+                stream,
+                &failure(
+                    Code::Busy,
+                    "The helper is serving too many requests; try again",
+                ),
+            );
+            return;
+        };
+        let daemon = self.daemon.clone();
+        let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
+        let task = self.tasks.spawn(async move {
+            let _slot = slot;
+            handle(stream, daemon, controller, phase).await
+        });
+        self.connections.insert(task.id(), observed);
+    }
+}
+
+/// Completes when supervision ends; without any, never.
+async fn supervision_ended(
+    supervision: &mut Option<JoinHandle<Result<()>>>,
+) -> std::result::Result<Result<()>, JoinError> {
+    match supervision {
+        Some(supervision) => supervision.await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn drain_supervision(
-    mut task: tokio::task::JoinHandle<Result<()>>,
+    mut task: JoinHandle<Result<()>>,
     deadline: tokio::time::Instant,
 ) -> Result<()> {
     match tokio::time::timeout_at(deadline, &mut task).await {
@@ -456,7 +507,7 @@ async fn drain_supervision(
 }
 
 fn supervisor_outcome(
-    outcome: std::result::Result<Result<()>, tokio::task::JoinError>,
+    outcome: std::result::Result<Result<()>, JoinError>,
     stopping: bool,
 ) -> Result<()> {
     match outcome {
@@ -530,12 +581,10 @@ async fn ask_to_log_out() -> Value {
         .output();
 
     let unanswered = |why: &str| {
-        let mut reply = failure(
+        interrupted(
             Code::Logout,
             format!("macOS did not answer the log-out request ({why})"),
-        );
-        reply["uncertain"] = json!(true);
-        reply
+        )
     };
 
     match tokio::time::timeout(Duration::from_secs(5), asked).await {
@@ -577,11 +626,6 @@ fn force_log_out() {
     }
 }
 
-/// Where the Dock in `windows` takes clicks, read through Accessibility.
-fn read_dock(windows: &[windows::Window]) -> windows::Dock {
-    crate::native::ax::dock(windows, crate::native::ax::DOCK_TIMEOUT)
-}
-
 /// Serve one request. `controller` says whether it came from the controller:
 /// the helper's own processes (an app under test among them) may only say
 /// hello, as the setup window does there, never act with Atlas's
@@ -601,54 +645,26 @@ async fn handle(
         .filter(|info| info.uid == peer.uid() && !info.zombie)
         .map(|info| info.instance);
     let (mut reader, mut writer) = stream.into_split();
-    let request = match endpoint::read_line(&mut reader, MAX_REQUEST).await {
-        Ok(line) => protocol::parse(&line),
-        Err(error) => Err(refused(error)),
-    };
 
-    let request = request.and_then(|request| {
-        if controller || matches!(request, Request::Hello) {
-            Ok(request)
-        } else {
-            Err(failure(
-                Code::Permission,
-                "Only the account Atlas works for may ask the helper that",
-            ))
-        }
-    });
-
-    let request = request.and_then(|request| {
-        let policy = request.policy();
-        if let Some(refusal) = policy
-            .allowed((daemon.screen.on_console)())
-            .or_else(|| policy.pinned_elsewhere(daemon.screen.session))
-        {
-            return Err(refusal);
-        }
-        Ok((request, policy))
-    });
+    let admitted = admit(&mut reader, &daemon, controller).await;
     phase.send_replace(
-        request
+        admitted
             .as_ref()
             .map_or(ConnectionPhase::Refusal, |(_, policy)| policy.phase),
     );
+    let (request, policy) = match admitted {
+        Ok(admitted) => admitted,
+        Err(refusal) => return write(&mut writer, &refusal).await,
+    };
+
     let reply = match request {
-        Err(reply) => reply,
-        Ok((Request::HostSession(claims), _)) => tokio::task::spawn_blocking(move || {
-            crate::host_session::verification::verify(&claims, caller, peer.uid())
+        Request::HostSession(claims) => tokio::task::spawn_blocking(move || {
+            crate::host::verification::verify(&claims, caller, peer.uid())
         })
         .await
         .unwrap_or_else(|_| failure(Code::State, "The caller's host could not be verified")),
-        Ok((Request::Hello, _)) => {
-            // The first hello of this login: Atlas answers in the helper.
-            static GREETED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !GREETED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                crate::login_log::mark("daemon.firstHello");
-            }
-            daemon.hello()
-        }
-        Ok((Request::Apps { .. }, _)) => match tokio::task::spawn_blocking(|| {
+        Request::Hello => daemon.hello(),
+        Request::Apps { .. } => match tokio::task::spawn_blocking(|| {
             crate::native::processes::snapshot(|| Ok(apps::running()), |app| i64::from(app.pid))
         })
         .await
@@ -657,54 +673,74 @@ async fn handle(
             Ok(Err(error)) => json!(error),
             Err(_) => failure(Code::Apps, "Running applications could not be listed"),
         },
-        Ok((Request::Windows { dock, .. }, policy)) => {
-            serve_windows(daemon.clone(), dock, policy).await
-        }
-        Ok((
-            Request::Screenshot {
-                max_dimension,
-                per_point,
-                crop,
-            },
-            _,
-        )) => screenshot(&daemon.screen, max_dimension, per_point, crop).await,
-        Ok((Request::Run { argv, timeout, .. }, policy)) => {
+        Request::Windows { dock, .. } => serve_windows(daemon.clone(), dock, policy).await,
+        Request::Screenshot {
+            max_dimension,
+            per_point,
+            crop,
+        } => screenshot(&daemon.screen, max_dimension, per_point, crop).await,
+        Request::Run { argv, timeout, .. } => {
             return serve_run(daemon, argv, timeout, policy, (reader, writer), phase).await;
         }
-        Ok((Request::Restart, _)) => {
-            let written = write(&mut writer, &json!({"ok": true, "op": "restart"})).await;
-            daemon.restarting.notify_one();
-            return written;
+        Request::Restart => {
+            return acknowledge(&mut writer, "restart", || daemon.restarting.notify_one()).await;
         }
         // Answered before the log-out ends this process with the session.
-        Ok((Request::Logout { force: true }, _)) => {
-            let written = write(&mut writer, &json!({"ok": true, "op": "logout"})).await;
-            force_log_out();
-            return written;
+        Request::Logout { force: true } => {
+            return acknowledge(&mut writer, "logout", force_log_out).await;
         }
-        Ok((Request::Logout { force: false }, _)) => ask_to_log_out().await,
-        Ok((Request::Job(request), _)) => match &daemon.jobs {
+        Request::Logout { force: false } => ask_to_log_out().await,
+        Request::Job(request) => match &daemon.jobs {
             Some(jobs) => jobs.serve(request).await,
             None => failure(
                 Code::Daemon,
                 "This helper daemon cannot keep background jobs; run atlas restart",
             ),
         },
-        Ok((Request::Read(request), _)) => return serve_read(&daemon, request, writer).await,
+        Request::Read(request) => return serve_read(&daemon, request, policy, writer).await,
     };
 
     write(&mut writer, &reply).await
+}
+
+/// The connection's one request and its policy, or the reply refusing it, in
+/// the order of refusal: unreadable, malformed, from the helper's own account,
+/// then the policy's own checks.
+async fn admit(
+    reader: &mut OwnedReadHalf,
+    daemon: &Daemon,
+    controller: bool,
+) -> std::result::Result<(Request, Policy), Value> {
+    let line = endpoint::read_line(reader, MAX_REQUEST)
+        .await
+        .map_err(refused)?;
+    let request = protocol::parse(&line)?;
+    let policy = request.policy();
+    if !controller && !policy.open_to_helper() {
+        return Err(failure(
+            Code::Permission,
+            "Only the account Atlas works for may ask the helper that",
+        ));
+    }
+
+    match policy.check(daemon.screen.on_console, daemon.screen.session) {
+        Some(refusal) => Err(refusal),
+        None => Ok((request, policy)),
+    }
+}
+
+/// Reply that `op` is done, then do it, whether or not the reply got through.
+async fn acknowledge(writer: &mut OwnedWriteHalf, op: &str, effect: impl FnOnce()) -> Result<()> {
+    let written = write(writer, &json!({"ok": true, "op": op})).await;
+    effect();
+    written
 }
 
 /// Retain the daemon while the window worker checks admission and reads its
 /// snapshot, even if the connection disappears before the worker finishes.
 async fn serve_windows(daemon: Arc<Daemon>, dock: bool, policy: Policy) -> Value {
     tokio::task::spawn_blocking(move || {
-        let guard = || {
-            policy
-                .allowed((daemon.screen.on_console)())
-                .or_else(|| policy.pinned_elsewhere(daemon.screen.session))
-        };
+        let guard = || policy.check(daemon.screen.on_console, daemon.screen.session);
         if let Some(refusal) = guard() {
             return refusal;
         }
@@ -731,13 +767,10 @@ async fn serve_run(
     argv: Vec<String>,
     timeout: Duration,
     policy: Policy,
-    (mut reader, mut writer): (
-        tokio::net::unix::OwnedReadHalf,
-        tokio::net::unix::OwnedWriteHalf,
-    ),
+    connection: (OwnedReadHalf, OwnedWriteHalf),
     phase: watch::Sender<ConnectionPhase>,
 ) -> Result<()> {
-    let (send, outcome) = oneshot::channel();
+    let (mut handler, outcome) = oneshot::channel();
     let (start, registered) = oneshot::channel();
     let runner = daemon.clone();
     let mut runs = daemon.runs.lock().await;
@@ -745,65 +778,21 @@ async fn serve_run(
         if registered.await.is_err() {
             return Ok(());
         }
-        let mut send = send;
-        let result = async {
-            if let Some(refusal) = policy
-                .allowed((runner.screen.on_console)())
-                .or_else(|| policy.pinned_elsewhere(runner.screen.session))
-            {
-                phase.send_replace(ConnectionPhase::Refusal);
-                return write(&mut writer, &refusal).await;
-            }
-            // Events reach the client through their own writer, so a slow
-            // client never stalls supervision of the command.
-            let (events, mut queue) = mpsc::channel(run::EVENTS);
-            let mut delivery = tokio::spawn(async move {
-                while let Some(event) = queue.recv().await {
-                    write(&mut writer, &event).await?;
-                }
-                Ok::<_, Error>(writer)
-            });
-            // The client never sends after its request. Losing either
-            // the client or its handler cancels the owned command.
-            let cancel = async {
-                let mut byte = [0; 1];
-                tokio::select! {
-                    _ = reader.read(&mut byte) => run::Cancel::Left,
-                    () = send.closed() => run::Cancel::Left,
-                    () = runner.stopped() => run::Cancel::Stopping,
-                    () = runner.on_screen() => run::Cancel::OnConsole,
-                }
-            };
-            let reply = run::run(&argv, timeout, events, cancel).await;
-            let delivered = tokio::select! {
-                delivered = &mut delivery => delivered,
-                () = send.closed() => {
-                    // The command has already settled. Stop and join
-                    // its writer too when the handler is cancelled,
-                    // rather than drain queued events to a lost owner.
-                    delivery.abort();
-                    delivery.await
-                }
-            };
-            let mut writer =
-                delivered.map_err(|_| Error::new(Code::Transport, "The event writer failed"))??;
-            tokio::select! {
-                written = write(&mut writer, &reply) => written,
-                () = send.closed() => Err(Error::new(
-                    Code::Transport,
-                    "The run handler left before observing completion",
-                ).uncertain()),
-            }
-        }
+        let (mut reader, writer) = connection;
+        let result = run_registered(
+            &runner,
+            &argv,
+            timeout,
+            policy,
+            (&mut reader, writer),
+            &phase,
+            &mut handler,
+        )
         .await;
-        match send.send(result) {
+        match handler.send(result) {
             Ok(()) => Ok(()),
             Err(Err(error)) => Err(error),
-            Err(Ok(())) => Err(Error::new(
-                Code::Transport,
-                "The run handler left before observing completion",
-            )
-            .uncertain()),
+            Err(Ok(())) => Err(handler_left()),
         }
     });
     drop(runs);
@@ -817,6 +806,67 @@ async fn serve_run(
     })?
 }
 
+/// Admission a queued command must pass again, its execution, and the replies
+/// that report it to `handler`, which losing cancels the command.
+async fn run_registered(
+    daemon: &Daemon,
+    argv: &[String],
+    timeout: Duration,
+    policy: Policy,
+    (reader, mut writer): (&mut OwnedReadHalf, OwnedWriteHalf),
+    phase: &watch::Sender<ConnectionPhase>,
+    handler: &mut oneshot::Sender<Result<()>>,
+) -> Result<()> {
+    if let Some(refusal) = policy.check(daemon.screen.on_console, daemon.screen.session) {
+        phase.send_replace(ConnectionPhase::Refusal);
+        return write(&mut writer, &refusal).await;
+    }
+    // Events reach the client through their own writer, so a slow
+    // client never stalls supervision of the command.
+    let (events, queue) = mpsc::channel(run::EVENTS);
+    let mut delivery = tokio::spawn(deliver(queue, writer, || Ok(())));
+    // The client never sends after its request. Losing either
+    // the client or its handler cancels the owned command.
+    let cancel = async {
+        let mut byte = [0; 1];
+        tokio::select! {
+            _ = reader.read(&mut byte) => run::Cancel::Left,
+            () = handler.closed() => run::Cancel::Left,
+            () = daemon.stopped() => run::Cancel::Stopping,
+            () = daemon.on_screen() => run::Cancel::OnConsole,
+        }
+    };
+    let reply = run::run(argv, timeout, events, cancel).await;
+    let delivered = tokio::select! {
+        delivered = &mut delivery => delivered,
+        () = handler.closed() => {
+            // The command has already settled. Stop and join its writer too
+            // when the handler is cancelled, rather than drain queued events
+            // to a lost owner.
+            delivery.abort();
+            delivery.await
+        }
+    };
+    let (mut writer, _) = writer_back(delivered)?;
+    tokio::select! {
+        written = write(&mut writer, &reply) => written,
+        () = handler.closed() => Err(handler_left()),
+    }
+}
+
+fn handler_left() -> Error {
+    Error::new(
+        Code::Transport,
+        "The run handler left before observing completion",
+    )
+    .uncertain()
+}
+
+/// What a finished event writer handed back.
+fn writer_back<T>(delivered: std::result::Result<Result<T>, JoinError>) -> Result<T> {
+    delivered.map_err(|_| Error::new(Code::Transport, "The event writer failed"))?
+}
+
 /// Read part of a file for the person's side, its `data` events written as
 /// they are read, so the daemon never holds more than a few of them. The
 /// worker checks again, before it opens the file, before each part and
@@ -826,12 +876,11 @@ async fn serve_run(
 async fn serve_read(
     daemon: &Daemon,
     request: ReadRequest,
-    mut writer: tokio::net::unix::OwnedWriteHalf,
+    policy: Policy,
+    mut writer: OwnedWriteHalf,
 ) -> Result<()> {
-    let on_console = daemon.screen.on_console;
-    let session = daemon.screen.session;
-    let epoch = match session().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
-    {
+    let screen = daemon.screen;
+    let epoch = match screen.epoch() {
         Ok(epoch) => epoch,
         Err(error) => return write(&mut writer, &refused(error)).await,
     };
@@ -839,22 +888,7 @@ async fn serve_read(
     // Off screen, and in the session and display it was in when the
     // request came: asked by the worker before it reads and by the writer
     // before it delivers each part already read.
-    let screened = Request::Read(request.clone());
-    let guard = move || {
-        if let Some(refusal) = screened.policy().allowed(on_console()) {
-            return Err(refusal);
-        }
-        let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
-            .map_err(refused)?;
-        if current == epoch {
-            Ok(())
-        } else {
-            Err(failure(
-                Code::SessionChanged,
-                "The helper changed since Atlas checked it; look again",
-            ))
-        }
-    };
+    let guard = move || screen.guard(&epoch, policy);
     let (events, queue) = mpsc::channel(8);
     let delivery = tokio::spawn(deliver(queue, writer, guard.clone()));
     let uid = nix::unistd::getuid().as_raw();
@@ -866,18 +900,21 @@ async fn serve_read(
                 "The helper's home could not be found",
             ));
         };
-        Ok(read::read(&request, &places, uid, &guard, &mut |event| {
-            events.blocking_send(event).is_ok()
-        }))
+        Ok(read::read_at(
+            &request,
+            &places,
+            uid,
+            &guard,
+            &mut |event| events.blocking_send(event).is_ok(),
+            SystemTime::now(),
+        ))
     })
     .await
     .map_or_else(
         |_| failure(Code::Collect, "The file could not be read"),
         |reply: std::result::Result<Value, Value>| reply.unwrap_or_else(|refusal| refusal),
     );
-    let (mut writer, cut) = delivery
-        .await
-        .map_err(|_| Error::new(Code::Transport, "The event writer failed"))??;
+    let (mut writer, cut) = writer_back(delivery.await)?;
     write(&mut writer, &cut.unwrap_or(reply)).await
 }
 
@@ -899,1584 +936,4 @@ async fn deliver<W: AsyncWrite + Unpin>(
 }
 
 #[cfg(test)]
-pub(super) mod tests {
-    use super::*;
-    use crate::daemon::protocol::{Crop, JobRequest, Region};
-    use crate::daemon::run::tests::child::Processes;
-    use crate::transport::{Transport, run_output};
-    use std::os::fd::AsRawFd;
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
-    #[tokio::test]
-    async fn an_abandoned_read_does_not_degrade_the_service() {
-        let daemon = daemon(false);
-        let slots = Arc::new(Semaphore::new(1));
-        for request in [b"{\n".as_slice(), b"{\"op\":\"windows\"}\n"] {
-            let (mut client, server) = UnixStream::pair().unwrap();
-            client.write_all(request).await.unwrap();
-            nix::sys::socket::shutdown(server.as_raw_fd(), nix::sys::socket::Shutdown::Write)
-                .unwrap();
-            let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
-            let mut tasks = JoinSet::new();
-            let slot = slots.clone().acquire_owned().await.unwrap();
-            let daemon = daemon.clone();
-            let task = tasks.spawn(async move {
-                let _slot = slot;
-                handle(server, daemon, true, phase).await
-            });
-            let mut connections = Connections::from([(task.id(), observed)]);
-            let outcome = tasks.join_next_with_id().await.unwrap();
-            assert!(matches!(outcome, Ok((_, Err(_)))));
-            let phase = *connections.values().next().unwrap().borrow();
-            assert!(matches!(phase, ConnectionPhase::Refusal) == (request == b"{\n"));
-            connection_outcome(outcome, &mut connections, false).unwrap();
-            assert!(connections.is_empty());
-            assert_eq!(slots.available_permits(), 1);
-        }
-        let reply = exchange(daemon, r#"{"op":"screenshot"}"#).await;
-        assert_eq!(reply[0]["ok"], true);
-    }
-
-    #[tokio::test]
-    async fn a_handler_panic_is_observed() {
-        let mut daemon = Daemon::new(
-            "Aqua".into(),
-            synthetic,
-            || panic!("private handler cause"),
-            session,
-        );
-        daemon.screen.windows = fake_windows;
-        let (mut client, server) = UnixStream::pair().unwrap();
-        client.write_all(b"{\"op\":\"windows\"}\n").await.unwrap();
-        let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
-        let mut tasks = JoinSet::new();
-        let task = tasks.spawn(handle(server, Arc::new(daemon), true, phase));
-        let mut connections = Connections::from([(task.id(), observed)]);
-        let outcome = tasks.join_next_with_id().await.unwrap();
-        assert!(outcome.as_ref().unwrap_err().is_panic());
-        let error = connection_outcome(outcome, &mut connections, false).unwrap_err();
-        assert_eq!(error.code, Code::Job);
-        assert!(error.uncertain);
-        assert!(connections.is_empty());
-        for diagnostic in [json!(error).to_string(), format!("{error:?}")] {
-            assert!(!diagnostic.contains("private handler cause"));
-            assert!(diagnostic.len() < 256);
-        }
-    }
-
-    #[tokio::test]
-    async fn a_lost_mutation_reply_keeps_recovery_pending() {
-        let daemon = daemon(false);
-        let (mut client, server) = UnixStream::pair().unwrap();
-        client.write_all(b"{\"op\":\"restart\"}\n").await.unwrap();
-        nix::sys::socket::shutdown(server.as_raw_fd(), nix::sys::socket::Shutdown::Write).unwrap();
-        let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
-        let mut tasks = JoinSet::new();
-        let task = tasks.spawn(handle(server, daemon.clone(), true, phase));
-        let mut connections = Connections::from([(task.id(), observed)]);
-        let error = connection_outcome(
-            tasks.join_next_with_id().await.unwrap(),
-            &mut connections,
-            false,
-        )
-        .unwrap_err();
-        assert_eq!(error.code, Code::Transport);
-        assert!(error.uncertain);
-        assert_eq!(
-            error.error,
-            "Daemon restart reply was lost; outcome unknown"
-        );
-        // The failed reply did not suppress the requested effect or supply
-        // an acknowledgement on the caller's behalf.
-        let notified = daemon.restarting.notified();
-        tokio::pin!(notified);
-        std::future::poll_fn(|cx| {
-            assert!(std::future::Future::poll(notified.as_mut(), cx).is_ready());
-            std::task::Poll::Ready(())
-        })
-        .await;
-    }
-
-    #[tokio::test]
-    async fn a_lost_run_reply_does_not_refuse_the_next_command() {
-        let daemon = daemon(false);
-        let previous = daemon
-            .runs
-            .lock()
-            .await
-            .spawn(async { Err(Error::new(Code::Transport, "private abandoned transport")) });
-        while !previous.is_finished() {
-            tokio::task::yield_now().await;
-        }
-
-        let replies = exchange(
-            daemon.clone(),
-            r#"{"op":"run","argv":["/usr/bin/true"],"timeoutMs":60000}"#,
-        )
-        .await;
-        assert_eq!(replies.last().unwrap()["ok"], true);
-        assert_eq!(replies.last().unwrap()["exitCode"], 0);
-        let error = drain_runs(&daemon, tokio::time::Instant::now() + STOP)
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, Code::Transport);
-        assert!(error.uncertain);
-        assert!(daemon.runs.lock().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_queued_command_rechecks_admission_before_it_starts() {
-        use std::sync::atomic::{AtomicU8, Ordering};
-        static STATE: AtomicU8 = AtomicU8::new(0);
-
-        tokio::time::timeout(Duration::from_secs(8), async {
-            for state in 1..=3 {
-                STATE.store(0, Ordering::SeqCst);
-                let daemon = Arc::new(Daemon::new(
-                    "Aqua".into(),
-                    synthetic,
-                    || STATE.load(Ordering::SeqCst) == 1,
-                    || {
-                        let mut proof = session()?;
-                        match STATE.load(Ordering::SeqCst) {
-                            2 => proof["securitySessionID"] = json!(43),
-                            3 => proof["displayID"] = json!(8),
-                            _ => {}
-                        }
-                        Ok(proof)
-                    },
-                ));
-                let folder = tempfile::tempdir().unwrap();
-                let effect = folder.path().join("effect");
-                let request = json!({
-                    "op": "run",
-                    "argv": ["/usr/bin/touch", effect],
-                    "session": {"securitySessionId": 42, "displayId": 7},
-                });
-                let (mut client, server) = UnixStream::pair().unwrap();
-                let (phase, mut observed) = watch::channel(ConnectionPhase::Refusal);
-                let runs = daemon.runs.lock().await;
-                let served = tokio::spawn(handle(server, daemon.clone(), true, phase));
-                client
-                    .write_all(format!("{request}\n").as_bytes())
-                    .await
-                    .unwrap();
-                observed
-                    .wait_for(|phase| matches!(phase, ConnectionPhase::Mutation("run")))
-                    .await
-                    .unwrap();
-                STATE.store(state, Ordering::SeqCst);
-                drop(runs);
-
-                let mut bytes = Vec::new();
-                client.read_to_end(&mut bytes).await.unwrap();
-                served.await.unwrap().unwrap();
-                let refusal = if state == 1 {
-                    failure(
-                        Code::OnConsole,
-                        "The helper is on the screen; switch back to your own account first",
-                    )
-                } else {
-                    failure(
-                        Code::SessionChanged,
-                        "The helper changed since Atlas checked it; look again",
-                    )
-                };
-                assert_eq!(bytes, format!("{refusal}\n").as_bytes());
-                assert!(matches!(*observed.borrow(), ConnectionPhase::Refusal));
-                assert!(!effect.exists(), "nothing ran before refusal");
-                drain_runs(&daemon, tokio::time::Instant::now() + STOP)
-                    .await
-                    .unwrap();
-            }
-        })
-        .await
-        .expect("queued admission did not finish");
-    }
-
-    #[tokio::test]
-    async fn a_failed_run_event_writer_still_reaps_the_command() {
-        let mut processes = Processes::default();
-        tokio::time::timeout(Duration::from_secs(8), async {
-            let daemon = daemon(false);
-            let (mut client, server) = UnixStream::pair().unwrap();
-            let fault = nix::unistd::dup(&server).unwrap();
-            let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
-            let mut tasks = JoinSet::new();
-            let task = tasks.spawn(handle(server, daemon, true, phase));
-            let mut connections = Connections::from([(task.id(), observed)]);
-            client
-                .write_all(b"{\"op\":\"run\",\"argv\":[\"/bin/sh\",\"-c\",\"while :; do printf streamed; done\"],\"timeoutMs\":60000}\n")
-                .await
-                .unwrap();
-            let mut lines = BufReader::new(client).lines();
-            let started: Value =
-                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-            processes.started(&started);
-            let group = nix::unistd::Pid::from_raw(started["pid"].as_i64().unwrap() as i32);
-            // Leave the client connected: only a failed streamed write can
-            // abandon the producer and end this otherwise unbounded command.
-            nix::sys::socket::shutdown(fault.as_raw_fd(), nix::sys::socket::Shutdown::Write).unwrap();
-            let outcome = tasks.join_next_with_id().await.unwrap();
-            let error = connection_outcome(outcome, &mut connections, false).unwrap_err();
-            assert_eq!(error.code, Code::Transport);
-            assert!(error.uncertain);
-            assert!(nix::sys::signal::killpg(group, None).is_err());
-        })
-        .await
-        .expect("streamed writer cleanup did not finish");
-    }
-
-    #[tokio::test]
-    async fn aborting_a_run_handler_keeps_its_command_registered_until_reaped() {
-        let mut processes = Processes::default();
-        tokio::time::timeout(Duration::from_secs(8), async {
-            let daemon = daemon(false);
-            let (mut client, server) = UnixStream::pair().unwrap();
-            let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
-            let mut tasks = JoinSet::new();
-            let task = tasks.spawn(handle(server, daemon.clone(), true, phase));
-            let abort = task.clone();
-            let mut connections = Connections::from([(task.id(), observed)]);
-            client
-                .write_all(
-                    b"{\"op\":\"run\",\"argv\":[\"/bin/sleep\",\"30\"],\"timeoutMs\":60000}\n",
-                )
-                .await
-                .unwrap();
-            let mut lines = BufReader::new(client).lines();
-            let started: Value =
-                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-            processes.started(&started);
-            let group = nix::unistd::Pid::from_raw(started["pid"].as_i64().unwrap() as i32);
-            abort.abort();
-            let outcome = tasks.join_next_with_id().await.unwrap();
-            assert!(outcome.as_ref().unwrap_err().is_cancelled());
-            connection_outcome(outcome, &mut connections, true).unwrap();
-            assert!(!daemon.runs.lock().await.is_empty());
-            let error = drain_runs(&daemon, tokio::time::Instant::now() + STOP)
-                .await
-                .unwrap_err();
-            assert_eq!(error.code, Code::Transport);
-            assert!(error.uncertain);
-            assert!(daemon.runs.lock().await.is_empty());
-            assert!(nix::sys::signal::killpg(group, None).is_err());
-        })
-        .await
-        .expect("aborted handler cleanup did not finish");
-    }
-
-    #[tokio::test]
-    async fn cancelling_a_handler_joins_its_blocked_event_writer() {
-        let mut processes = Processes::default();
-        tokio::time::timeout(Duration::from_secs(8), async {
-            let daemon = daemon(false);
-            let (mut client, server) = UnixStream::pair().unwrap();
-            nix::sys::socket::setsockopt(&server, nix::sys::socket::sockopt::SndBuf, &4096).unwrap();
-            let (phase, observed) = watch::channel(ConnectionPhase::Refusal);
-            let mut tasks = JoinSet::new();
-            let task = tasks.spawn(handle(server, daemon.clone(), true, phase));
-            let mut connections = Connections::from([(task.id(), observed)]);
-            client
-                .write_all(b"{\"op\":\"run\",\"argv\":[\"/usr/bin/head\",\"-c\",\"65536\",\"/dev/zero\"],\"timeoutMs\":60000}\n")
-                .await
-                .unwrap();
-            let mut reader = BufReader::new(client);
-            let mut line = String::new();
-            reader.read_line(&mut line).await.unwrap();
-            let started: Value = serde_json::from_str(&line).unwrap();
-            processes.started(&started);
-            let group = nix::unistd::Pid::from_raw(started["pid"].as_i64().unwrap() as i32);
-            let mut first = [0];
-            reader.read_exact(&mut first).await.unwrap();
-            assert_eq!(first, [b'{']);
-            // The child has settled, while its output exceeds the socket's
-            // buffer. Keep the peer connected without draining that output.
-            while nix::sys::signal::killpg(group, None).is_ok() {
-                tokio::task::yield_now().await;
-            }
-            assert!(!task.is_finished());
-            tokio::time::pause();
-            let cancelled = tokio::time::Instant::now();
-            task.abort();
-            connection_outcome(
-                tasks.join_next_with_id().await.unwrap(),
-                &mut connections,
-                true,
-            )
-            .unwrap();
-            let error = drain_runs(&daemon, tokio::time::Instant::now() + STOP)
-                .await
-                .unwrap_err();
-            assert_eq!(error.code, Code::Transport);
-            assert!(error.uncertain);
-            assert_eq!(tokio::time::Instant::now(), cancelled);
-            assert!(daemon.runs.lock().await.is_empty());
-            drop(reader);
-        })
-        .await
-        .expect("blocked event writer cleanup did not finish");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn shutdown_classifies_cancelled_handlers_and_joins_owned_work() {
-        let daemon = daemon(false);
-        let mut tasks = JoinSet::new();
-        let mut connections = Connections::new();
-        let slots = Arc::new(Semaphore::new(1));
-        let slot = slots.clone().acquire_owned().await.unwrap();
-        let (phase, observed) = watch::channel(ConnectionPhase::Mutation("run"));
-        let (left, mut gone) = oneshot::channel::<()>();
-        let idle = tasks.spawn(async move {
-            let _slot = slot;
-            let _phase = phase;
-            let _left = left;
-            std::future::pending::<Result<()>>().await
-        });
-        connections.insert(idle.id(), observed);
-        let (resume, barrier) = oneshot::channel::<()>();
-        let run = daemon.runs.lock().await.spawn(async move {
-            barrier.await.unwrap();
-            Ok(())
-        });
-        let deadline = tokio::time::Instant::now() + STOP;
-        let error = tokio::time::timeout(STOP * 2, async {
-            drain_connections(&mut tasks, &mut connections, deadline).await?;
-            drain_runs(&daemon, deadline).await
-        })
-        .await
-        .expect("shutdown exceeded its watchdog")
-        .unwrap_err();
-        assert_eq!(tokio::time::Instant::now(), deadline);
-        assert_eq!(error.code, Code::Daemon);
-        assert!(error.uncertain);
-        assert_eq!(
-            error.error,
-            "Daemon commands did not finish before shutdown; outcome unknown"
-        );
-        assert!(matches!(
-            gone.try_recv(),
-            Err(oneshot::error::TryRecvError::Closed)
-        ));
-        assert!(idle.is_finished());
-        assert!(tasks.is_empty());
-        assert!(connections.is_empty());
-        assert_eq!(slots.available_permits(), 1);
-        assert!(!run.is_finished());
-        assert_eq!(daemon.runs.lock().await.len(), 1);
-        resume.send(()).unwrap();
-        drain_runs(&daemon, tokio::time::Instant::now() + STOP)
-            .await
-            .unwrap();
-        assert!(run.is_finished());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn shutdown_joins_owned_work_that_finishes_before_the_deadline() {
-        let daemon = daemon(false);
-        let mut tasks = JoinSet::new();
-        let mut connections = Connections::new();
-        let (phase, observed) = watch::channel(ConnectionPhase::Mutation("run"));
-        let task = tasks.spawn(async move {
-            let _phase = phase;
-            tokio::time::sleep(STOP / 4).await;
-            Ok(())
-        });
-        connections.insert(task.id(), observed);
-        let run = daemon.runs.lock().await.spawn(async {
-            tokio::time::sleep(STOP / 2).await;
-            Ok(())
-        });
-        let started = tokio::time::Instant::now();
-        let deadline = started + STOP;
-        tokio::time::timeout(STOP * 2, async {
-            drain_connections(&mut tasks, &mut connections, deadline).await?;
-            drain_runs(&daemon, deadline).await
-        })
-        .await
-        .expect("shutdown exceeded its watchdog")
-        .unwrap();
-        assert_eq!(tokio::time::Instant::now(), started + STOP / 2);
-        assert!(task.is_finished());
-        assert!(run.is_finished());
-        assert!(daemon.runs.lock().await.is_empty());
-        assert!(connections.is_empty());
-    }
-
-    #[tokio::test]
-    async fn event_cost_counts_the_emitted_json_lines_and_delimiters() {
-        let fixtures: Vec<Value> =
-            serde_json::from_str(include_str!("../../../tests/fixtures/reply-cost/run.json"))
-                .unwrap();
-        for fixture in fixtures {
-            let mut reply = fixture["input"].clone();
-            let events = reply.as_object_mut().unwrap().remove("events").unwrap();
-            let (mut client, mut server) = UnixStream::pair().unwrap();
-            let send = async move {
-                for event in events.as_array().unwrap() {
-                    write(&mut server, event).await.unwrap();
-                }
-                write(&mut server, &reply).await.unwrap();
-            };
-            let receive = async {
-                let mut bytes = Vec::new();
-                client.read_to_end(&mut bytes).await.unwrap();
-                bytes
-            };
-            let ((), bytes) = tokio::join!(send, receive);
-            let baseline = &fixture["eventCost"];
-            assert_eq!(
-                bytes.len(),
-                baseline["bytes"].as_u64().unwrap() as usize,
-                "{}",
-                baseline["id"]
-            );
-            let serialized = String::from_utf8(bytes).unwrap();
-            assert_eq!(
-                serialized,
-                baseline["serialized"].as_str().unwrap(),
-                "{}",
-                baseline["id"]
-            );
-            assert_eq!(
-                serialized.lines().count() - 1,
-                baseline["rows"].as_u64().unwrap() as usize,
-                "{}",
-                baseline["id"]
-            );
-        }
-    }
-
-    /// The run loop mode is passed by name; it is the default mode.
-    #[test]
-    #[allow(
-        unsafe_code,
-        reason = "FFI: the framework's constants are extern statics"
-    )]
-    fn the_run_loop_mode_is_the_default_mode() {
-        // SAFETY: reading an immutable framework constant in a test.
-        let mode = unsafe { objc2_core_foundation::kCFRunLoopDefaultMode }.unwrap();
-        assert_eq!(mode.to_string(), "kCFRunLoopDefaultMode");
-    }
-
-    fn synthetic(display: u32, _: Option<CGRect>, _: Option<u32>) -> Result<capture::Shot> {
-        assert_eq!(display, 7);
-        Ok(capture::Shot {
-            png: b"\x89PNG synthetic".to_vec(),
-            width: 64,
-            height: 36,
-            scale: 1.0,
-        })
-    }
-
-    fn window(pid: i64, owner: &str, layer: i64, bounds: [f64; 4]) -> windows::Window {
-        windows::Window {
-            number: pid * 10 + layer,
-            pid,
-            owner: Some(owner.into()),
-            title: Some(format!("{owner} window")),
-            layer,
-            alpha: 1.0,
-            bounds: windows::Bounds {
-                x: bounds[0],
-                y: bounds[1],
-                width: bounds[2],
-                height: bounds[3],
-            },
-        }
-    }
-
-    /// A 64 × 36 point display: an alert of System Events in front of a
-    /// TextEdit window, and a Finder window behind both.
-    fn fake_windows() -> Result<Vec<windows::Window>> {
-        Ok(vec![
-            window(300, "System Events", 8, [20.0, 10.0, 10.0, 8.0]),
-            window(200, "TextEdit", 0, [10.0, 5.0, 30.0, 20.0]),
-            window(100, "Finder", 0, [0.0, 0.0, 64.0, 36.0]),
-        ])
-    }
-
-    fn fake_bundle_id(pid: i64) -> Option<String> {
-        (pid == 200).then(|| "com.apple.TextEdit".to_owned())
-    }
-
-    fn session() -> Result<Value> {
-        Ok(json!({
-            "ok": true,
-            "uid": 502,
-            "securitySessionID": 42,
-            "hasGraphicAccess": true,
-            "onConsole": false,
-            "displayID": 7,
-            "width": 64.0,
-            "height": 36.0,
-        }))
-    }
-
-    fn daemon(on_console: bool) -> Arc<Daemon> {
-        let mut daemon = Daemon::new(
-            "Aqua".into(),
-            synthetic,
-            if on_console { || true } else { || false },
-            session,
-        );
-        daemon.screen.windows = fake_windows;
-        daemon.screen.bundle_id = fake_bundle_id;
-        daemon.screen.dock = |_| windows::Dock::Icons(Vec::new());
-        Arc::new(daemon)
-    }
-
-    /// Send one request line over a socket pair and collect every reply line.
-    async fn exchange(daemon: Arc<Daemon>, request: &str) -> Vec<Value> {
-        exchange_as(daemon, request, true).await
-    }
-
-    pub(in crate::daemon) async fn exchange_with_jobs(
-        jobs: Arc<Jobs>,
-        request: &str,
-    ) -> Vec<Value> {
-        let mut daemon = daemon(false);
-        Arc::get_mut(&mut daemon).unwrap().jobs = Some(jobs);
-        exchange(daemon, request).await
-    }
-
-    /// [`exchange`] from the controller, or from the helper's own account.
-    async fn exchange_as(daemon: Arc<Daemon>, request: &str, controller: bool) -> Vec<Value> {
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let served = tokio::spawn(handle(
-            server,
-            daemon,
-            controller,
-            watch::channel(ConnectionPhase::Refusal).0,
-        ));
-
-        client
-            .write_all(format!("{request}\n").as_bytes())
-            .await
-            .unwrap();
-
-        let mut lines = BufReader::new(client).lines();
-        let mut replies = Vec::new();
-
-        while let Some(line) = lines.next_line().await.unwrap() {
-            let value: Value = serde_json::from_str(&line).unwrap();
-            let last = value.get("ok").is_some();
-            replies.push(value);
-            if last {
-                break;
-            }
-        }
-
-        served.await.unwrap().unwrap();
-        replies
-    }
-
-    /// Anything in the helper's own account is answered hello and refused
-    /// everything else, so nothing changed.
-    #[tokio::test]
-    async fn the_helpers_own_processes_may_only_say_hello() {
-        let hello = exchange_as(daemon(false), r#"{"op":"hello"}"#, false).await;
-        assert_eq!(hello[0]["op"], "hello");
-
-        for request in [
-            r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
-            r#"{"op":"windows"}"#,
-            r#"{"op":"screenshot"}"#,
-            r#"{"op":"apps"}"#,
-            r#"{"op":"restart"}"#,
-            r#"{"op":"logout","force":true}"#,
-            r#"{"op":"job","action":"show"}"#,
-            r#"{"op":"job","action":"stop-all","reason":"person"}"#,
-            r#"{"op":"read","path":".zshrc","maxSize":1024}"#,
-        ] {
-            let reply = &exchange_as(daemon(false), request, false).await[0];
-            assert_eq!(reply["code"], "permission", "{request}");
-            assert_eq!(reply["uncertain"], false, "{request}");
-        }
-    }
-
-    /// A read pinned to the session Atlas verified is served only in that
-    /// session: one that logged in again, or moved to another display, is
-    /// refused before anything runs.
-    #[tokio::test]
-    async fn a_read_pinned_to_another_session_is_refused_before_it_runs() {
-        let pinned = |session: &str| {
-            [
-                format!(r#"{{"op":"apps","session":{session}}}"#),
-                format!(r#"{{"op":"windows","session":{session}}}"#),
-                format!(r#"{{"op":"run","argv":["/bin/echo","hi"],"session":{session}}}"#),
-            ]
-        };
-
-        for request in pinned(r#"{"securitySessionId":42,"displayId":7}"#) {
-            let reply = exchange(daemon(false), &request).await;
-            assert_ne!(reply[0]["code"], "session-changed", "{request}");
-            assert!(
-                reply.iter().any(|line| line["ok"] == true),
-                "{request}: {reply:?}"
-            );
-        }
-
-        for session in [
-            r#"{"securitySessionId":43,"displayId":7}"#,
-            r#"{"securitySessionId":42,"displayId":8}"#,
-        ] {
-            for request in pinned(session) {
-                let reply = exchange(daemon(false), &request).await;
-                assert_eq!(reply.len(), 1, "nothing ran: {reply:?}");
-                assert_eq!(reply[0]["code"], "session-changed", "{request}");
-                assert_eq!(reply[0]["uncertain"], false);
-            }
-        }
-    }
-
-    #[test]
-    fn a_window_read_is_refused_while_the_helper_is_on_screen() {
-        let request = Request::Windows {
-            dock: true,
-            pin: None,
-        };
-        assert!(request.policy().allowed(false).is_none());
-        assert_eq!(
-            request.policy().allowed(true).unwrap()["code"],
-            "on-console"
-        );
-    }
-
-    #[test]
-    fn a_window_read_is_refused_in_another_session() {
-        for (security_session_id, display_id) in [(43, 7), (42, 8)] {
-            let request = Request::Windows {
-                dock: false,
-                pin: Some(protocol::SessionPin {
-                    security_session_id,
-                    display_id,
-                }),
-            };
-            let refusal = request.policy().pinned_elsewhere(session).unwrap();
-            assert_eq!(refusal["code"], "session-changed");
-            assert_eq!(refusal["uncertain"], false);
-        }
-    }
-
-    #[tokio::test]
-    async fn a_window_list_is_read_in_the_daemon_without_running_a_process() {
-        for dock in [false, true] {
-            let request = json!({"op": "windows", "dock": dock}).to_string();
-            let replies =
-                tokio::time::timeout(Duration::from_secs(5), exchange(daemon(false), &request))
-                    .await
-                    .unwrap();
-            assert_eq!(replies.len(), 1, "no process events");
-            let reply = &replies[0];
-            assert_eq!(reply["ok"], true, "{reply}");
-            assert_eq!(reply["windows"], json!(fake_windows().unwrap()));
-            assert!(reply["starts"].is_object());
-            assert_eq!(reply.get("dock").is_some(), dock);
-            assert!(reply.get("exitCode").is_none());
-        }
-    }
-
-    #[tokio::test]
-    async fn requests_are_answered_on_the_wire() {
-        let hello = exchange(daemon(false), r#"{"op":"hello"}"#).await;
-        assert_eq!(hello[0]["op"], "hello");
-        assert_eq!(hello[0]["session"]["managerName"], "Aqua");
-
-        let refused = exchange(daemon(false), r#"{"op":"nope"}"#).await;
-        assert_eq!(refused[0]["error"], "unknown op 'nope'");
-
-        let ran = exchange(
-            daemon(false),
-            r#"{"op":"run","argv":["/bin/echo","hi"],"timeoutMs":3000}"#,
-        )
-        .await;
-        assert_eq!(ran[0]["event"], "started");
-        assert_eq!(ran[1], json!({"event": "output", "data": "aGkK"}));
-        assert_eq!(ran[2]["exitCode"], 0);
-
-        let shot = exchange(daemon(false), r#"{"op":"screenshot","maxDimension":64}"#).await;
-        assert_eq!(
-            (&shot[0]["width"], &shot[0]["height"]),
-            (&json!(64), &json!(36))
-        );
-        assert!(shot[0]["offDisplayWindows"].is_array());
-
-        let apps = exchange(daemon(false), r#"{"op":"apps"}"#).await;
-        assert!(
-            apps[0]["apps"]
-                .as_array()
-                .is_some_and(|apps| !apps.is_empty())
-        );
-    }
-
-    #[tokio::test]
-    async fn nothing_acts_while_the_helper_is_on_screen() {
-        for request in [
-            r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
-            r#"{"op":"windows"}"#,
-            r#"{"op":"screenshot"}"#,
-            r#"{"op":"screenshot","pid":200}"#,
-            r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,
-        ] {
-            let reply = exchange(daemon(true), request).await;
-            assert_eq!(reply.len(), 1, "{request}");
-            assert_eq!(reply[0]["code"], "on-console", "{request}");
-        }
-
-        let hello = exchange(daemon(true), r#"{"op":"hello"}"#).await;
-        assert_eq!(hello[0]["ok"], true, "facts stay available");
-    }
-
-    #[test]
-    fn nothing_is_captured_if_the_helper_comes_on_screen_while_the_worker_waits() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-        static SHOWN: AtomicBool = AtomicBool::new(false);
-        static CHECKED: Notify = Notify::const_new();
-        static CAPTURES: AtomicUsize = AtomicUsize::new(0);
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .max_blocking_threads(1)
-            .build()
-            .unwrap();
-        let (release, waiting) = std::sync::mpsc::channel();
-        let blocker = runtime.spawn_blocking(move || {
-            waiting.recv_timeout(Duration::from_secs(5)).unwrap();
-        });
-        let daemon = Arc::new(Daemon::new(
-            "Aqua".into(),
-            |display, area, limit| {
-                CAPTURES.fetch_add(1, Ordering::SeqCst);
-                synthetic(display, area, limit)
-            },
-            || {
-                let shown = SHOWN.load(Ordering::SeqCst);
-                CHECKED.notify_one();
-                shown
-            },
-            session,
-        ));
-
-        runtime.block_on(async {
-            let request = tokio::spawn(exchange(daemon, r#"{"op":"screenshot"}"#));
-            tokio::time::timeout(Duration::from_secs(5), CHECKED.notified())
-                .await
-                .unwrap();
-            SHOWN.store(true, Ordering::SeqCst);
-            release.send(()).unwrap();
-            blocker.await.unwrap();
-
-            let reply = request.await.unwrap();
-            assert_eq!(CAPTURES.load(Ordering::SeqCst), 0);
-            assert_eq!(
-                reply,
-                vec![
-                    (Request::Screenshot {
-                        max_dimension: None,
-                        per_point: false,
-                        crop: None
-                    })
-                    .policy()
-                    .allowed(true)
-                    .unwrap()
-                ]
-            );
-        });
-    }
-
-    #[tokio::test]
-    async fn a_capture_is_refused_when_the_display_epoch_changes() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        static READS: AtomicUsize = AtomicUsize::new(0);
-        static CHANGE_AT: AtomicUsize = AtomicUsize::new(1);
-        static CAPTURES: AtomicUsize = AtomicUsize::new(0);
-
-        for (change_at, request) in [1, 2].into_iter().flat_map(|change_at| {
-            [
-                r#"{"op":"screenshot"}"#,
-                r#"{"op":"screenshot","pid":200}"#,
-                r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,
-            ]
-            .map(|request| (change_at, request))
-        }) {
-            READS.store(0, Ordering::SeqCst);
-            CHANGE_AT.store(change_at, Ordering::SeqCst);
-            CAPTURES.store(0, Ordering::SeqCst);
-            let mut daemon = Daemon::new(
-                "Aqua".into(),
-                |display, area, limit| {
-                    CAPTURES.fetch_add(1, Ordering::SeqCst);
-                    synthetic(display, area, limit)
-                },
-                || false,
-                || {
-                    let mut proof = session()?;
-                    if READS.fetch_add(1, Ordering::SeqCst) >= CHANGE_AT.load(Ordering::SeqCst) {
-                        proof["displayID"] = json!(8);
-                    }
-                    Ok(proof)
-                },
-            );
-            daemon.screen.windows = fake_windows;
-            daemon.screen.dock = |_| windows::Dock::Icons(Vec::new());
-
-            let reply = exchange(Arc::new(daemon), request).await;
-            assert_eq!(CAPTURES.load(Ordering::SeqCst), change_at - 1, "{request}");
-            assert_eq!(
-                reply,
-                vec![failure(
-                    Code::SessionChanged,
-                    "Session changed during capture; observe again"
-                )]
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn pixels_are_discarded_if_the_helper_comes_on_screen_during_capture() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        static SHOWN: AtomicBool = AtomicBool::new(false);
-        let daemon = Arc::new(Daemon::new(
-            "Aqua".into(),
-            |display, area, limit| {
-                SHOWN.store(true, Ordering::SeqCst);
-                synthetic(display, area, limit)
-            },
-            || SHOWN.load(Ordering::SeqCst),
-            session,
-        ));
-
-        let reply = exchange(daemon, r#"{"op":"screenshot"}"#).await;
-        assert_eq!(
-            reply,
-            vec![
-                (Request::Screenshot {
-                    max_dimension: None,
-                    per_point: false,
-                    crop: None
-                })
-                .policy()
-                .allowed(true)
-                .unwrap()
-            ]
-        );
-    }
-
-    /// The reply shapes clients and the live checks read.
-    #[tokio::test]
-    async fn replies_keep_their_shapes() {
-        let keys = |value: &Value| {
-            let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
-            keys.sort();
-            keys
-        };
-
-        let hello = &exchange(daemon(false), r#"{"op":"hello"}"#).await[0];
-        assert_eq!(
-            keys(hello),
-            [
-                "daemon",
-                "display",
-                "ok",
-                "op",
-                "permissions",
-                "session",
-                "user"
-            ]
-        );
-        assert_eq!(
-            keys(&hello["daemon"]),
-            ["capabilities", "pid", "protocol", "version"]
-        );
-        assert_eq!(keys(&hello["display"]), ["height", "scale", "width"]);
-        assert_eq!(keys(&hello["user"]), ["home", "name", "uid"]);
-
-        let shot = &exchange(daemon(false), r#"{"op":"screenshot"}"#).await[0];
-        assert_eq!(
-            keys(shot),
-            ["height", "offDisplayWindows", "ok", "png", "scale", "width"]
-        );
-
-        let region = &exchange(
-            daemon(false),
-            r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,
-        )
-        .await[0];
-        assert_eq!(
-            keys(region),
-            [
-                "height",
-                "offDisplayWindows",
-                "ok",
-                "png",
-                "region",
-                "scale",
-                "width"
-            ]
-        );
-        assert_eq!(keys(&region["region"]), ["height", "width", "x", "y"]);
-
-        let app = &exchange(daemon(false), r#"{"op":"screenshot","pid":200}"#).await[0];
-        assert_eq!(
-            keys(app),
-            [
-                "app",
-                "height",
-                "offDisplayWindows",
-                "ok",
-                "overlapping",
-                "png",
-                "region",
-                "scale",
-                "width"
-            ]
-        );
-        assert_eq!(keys(&app["app"]), ["bundleId", "name", "pid"]);
-        assert_eq!(app["app"]["bundleId"], "com.apple.TextEdit");
-        assert_eq!(
-            keys(&app["overlapping"][0]),
-            ["bounds", "owner", "pid", "title"]
-        );
-
-        let ran = exchange(daemon(false), r#"{"op":"run","argv":["/bin/echo"]}"#).await;
-        assert_eq!(keys(&ran[0]), ["event", "pid"]);
-        assert_eq!(
-            keys(ran.last().unwrap()),
-            ["durationMs", "exitCode", "ok", "signal", "timedOut"]
-        );
-
-        let refusal = &exchange(daemon(false), r#"{"op":"run","argv":[]}"#).await[0];
-        assert_eq!(keys(refusal), ["code", "error", "ok", "uncertain"]);
-
-        let apps = &exchange(daemon(false), r#"{"op":"apps"}"#).await[0];
-        assert_eq!(
-            keys(&apps["apps"][0]),
-            [
-                "active",
-                "bundleId",
-                "executable",
-                "hidden",
-                "launchedAt",
-                "name",
-                "pid",
-                "policy"
-            ]
-        );
-    }
-
-    /// The area each capture was asked for, kept in `areas`.
-    type Areas = std::sync::Mutex<Vec<Option<CGRect>>>;
-
-    fn recorded(areas: &Areas, area: Option<CGRect>) -> Result<capture::Shot> {
-        areas.lock().unwrap().push(area);
-        synthetic(7, area, None)
-    }
-
-    fn with_windows(
-        capture: Capture,
-        windows: fn() -> Result<Vec<windows::Window>>,
-    ) -> Arc<Daemon> {
-        let mut daemon = Daemon::new("Aqua".into(), capture, || false, session);
-        daemon.screen.windows = windows;
-        daemon.screen.bundle_id = fake_bundle_id;
-        daemon.screen.dock = |_| windows::Dock::Icons(Vec::new());
-        Arc::new(daemon)
-    }
-
-    #[tokio::test]
-    async fn anonymous_captures_skip_routing_but_app_crops_still_read_the_dock() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static LISTS: AtomicUsize = AtomicUsize::new(0);
-        static DOCKS: AtomicUsize = AtomicUsize::new(0);
-        let mut daemon = Daemon::new("Aqua".into(), synthetic, || false, session);
-        daemon.screen.windows = || {
-            LISTS.fetch_add(1, Ordering::SeqCst);
-            fake_windows()
-        };
-        daemon.screen.dock = |_| {
-            DOCKS.fetch_add(1, Ordering::SeqCst);
-            windows::Dock::Unread
-        };
-        for crop in [
-            None,
-            Some(Crop::Region(Region {
-                x: 0,
-                y: 0,
-                width: 10,
-                height: 10,
-            })),
-            Some(Crop::App { pid: 200 }),
-        ] {
-            LISTS.store(0, Ordering::SeqCst);
-            DOCKS.store(0, Ordering::SeqCst);
-            let reply = tokio::time::timeout(
-                Duration::from_secs(5),
-                screenshot(&daemon.screen, None, false, crop),
-            )
-            .await
-            .unwrap();
-            assert_eq!(reply["ok"], true);
-            assert!(reply.get("windows").is_none());
-            assert_eq!(
-                LISTS.load(Ordering::SeqCst),
-                1,
-                "only the existing window report is read"
-            );
-            assert_eq!(
-                DOCKS.load(Ordering::SeqCst),
-                usize::from(matches!(crop, Some(Crop::App { .. })))
-            );
-        }
-    }
-
-    fn sides(area: CGRect) -> (f64, f64, f64, f64) {
-        (
-            area.origin.x,
-            area.origin.y,
-            area.size.width,
-            area.size.height,
-        )
-    }
-
-    #[tokio::test]
-    async fn an_app_screenshot_covers_its_windows_and_names_what_is_in_front() {
-        static AREAS: Areas = std::sync::Mutex::new(Vec::new());
-        let daemon = with_windows(|_, area, _| recorded(&AREAS, area), fake_windows);
-
-        let reply = &exchange(daemon, r#"{"op":"screenshot","pid":200}"#).await[0];
-
-        let areas = AREAS.lock().unwrap().clone();
-        assert_eq!(areas.len(), 1);
-        assert_eq!(sides(areas[0].unwrap()), (2.0, 0.0, 46.0, 33.0));
-        assert_eq!(
-            reply["region"],
-            json!({"x": 2, "y": 0, "width": 46, "height": 33})
-        );
-        assert_eq!(
-            reply["app"],
-            json!({"pid": 200, "name": "TextEdit", "bundleId": "com.apple.TextEdit"})
-        );
-        assert_eq!(
-            reply["overlapping"],
-            json!([{
-                "owner": "System Events",
-                "pid": 300,
-                "title": "System Events window",
-                "bounds": {"x": 20.0, "y": 10.0, "width": 10.0, "height": 8.0},
-            }])
-        );
-    }
-
-    #[tokio::test]
-    async fn an_app_without_a_window_on_screen_is_refused_without_capturing() {
-        static AREAS: Areas = std::sync::Mutex::new(Vec::new());
-        let capture: Capture = |_, area, _| recorded(&AREAS, area);
-        let unavailable = || Err(Error::new(Code::Windows, "The window list is unavailable"));
-
-        let reply = exchange(
-            with_windows(capture, fake_windows),
-            r#"{"op":"screenshot","pid":4242}"#,
-        )
-        .await;
-        assert_eq!(
-            reply,
-            vec![failure(
-                Code::NoWindow,
-                "Process 4242 has no window on screen; open one, or take a full screenshot"
-            )]
-        );
-
-        let reply = exchange(
-            with_windows(capture, unavailable),
-            r#"{"op":"screenshot","pid":200}"#,
-        )
-        .await;
-        assert_eq!(reply[0]["code"], "windows");
-        assert!(AREAS.lock().unwrap().is_empty(), "nothing was captured");
-
-        // A full screenshot does without the window list.
-        let reply =
-            &exchange(with_windows(capture, unavailable), r#"{"op":"screenshot"}"#).await[0];
-        assert_eq!(
-            (&reply["ok"], &reply["offDisplayWindows"]),
-            (&json!(true), &json!([]))
-        );
-        assert_eq!(*AREAS.lock().unwrap(), [None]);
-    }
-
-    #[tokio::test]
-    async fn a_region_screenshot_is_cut_to_the_display() {
-        static AREAS: Areas = std::sync::Mutex::new(Vec::new());
-        let capture: Capture = |_, area, _| recorded(&AREAS, area);
-
-        let reply = &exchange(
-            with_windows(capture, fake_windows),
-            r#"{"op":"screenshot","region":{"x":-10,"y":30,"width":100,"height":100}}"#,
-        )
-        .await[0];
-        assert_eq!(
-            reply["region"],
-            json!({"x": 0, "y": 30, "width": 64, "height": 6})
-        );
-        assert!(reply.get("app").is_none() && reply.get("overlapping").is_none());
-
-        let reply = exchange(
-            with_windows(capture, fake_windows),
-            r#"{"op":"screenshot","region":{"x":64,"y":0,"width":10,"height":10}}"#,
-        )
-        .await;
-        assert_eq!(
-            reply,
-            vec![failure(
-                Code::BadRequest,
-                "\"region\" lies outside the display"
-            )]
-        );
-
-        let areas = AREAS.lock().unwrap().clone();
-        assert_eq!(areas.len(), 1, "the region outside was not captured");
-        assert_eq!(sides(areas[0].unwrap()), (0.0, 30.0, 64.0, 6.0));
-    }
-
-    #[tokio::test]
-    async fn a_picture_per_point_is_limited_to_the_points_it_shows() {
-        static LIMITS: std::sync::Mutex<Vec<Option<u32>>> = std::sync::Mutex::new(Vec::new());
-        let capture: Capture = |display, area, limit| {
-            LIMITS.lock().unwrap().push(limit);
-            synthetic(display, area, limit)
-        };
-
-        for request in [
-            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true}"#,
-            r#"{"op":"screenshot","maxDimension":40,"perPoint":true}"#,
-            r#"{"op":"screenshot","perPoint":true}"#,
-            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"region":{"x":0,"y":0,"width":12,"height":20}}"#,
-            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"region":{"x":-10,"y":30,"width":100,"height":100}}"#,
-            r#"{"op":"screenshot","maxDimension":1456,"perPoint":true,"pid":200}"#,
-            r#"{"op":"screenshot","maxDimension":1456,"region":{"x":0,"y":0,"width":12,"height":20}}"#,
-            r#"{"op":"screenshot","maxDimension":1456}"#,
-            r#"{"op":"screenshot"}"#,
-        ] {
-            let reply = &exchange(with_windows(capture, fake_windows), request).await[0];
-            assert_eq!(reply["ok"], true, "{request}");
-        }
-
-        assert_eq!(
-            *LIMITS.lock().unwrap(),
-            [
-                Some(64),
-                Some(40),
-                Some(64),
-                Some(20),
-                Some(64),
-                Some(46),
-                Some(1456),
-                Some(1456),
-                None
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn restart_answers_then_asks_the_daemon_to_exit() {
-        let daemon = daemon(false);
-        let notified = daemon.clone();
-        let waiting = tokio::spawn(async move { notified.restarting.notified().await });
-
-        tokio::task::yield_now().await;
-        let reply = exchange(daemon, r#"{"op":"restart"}"#).await;
-        assert_eq!(reply[0], json!({"ok": true, "op": "restart"}));
-
-        tokio::time::timeout(Duration::from_secs(2), waiting)
-            .await
-            .unwrap()
-            .unwrap();
-    }
-
-    /// A client that hangs up ends its quiet command; so does a stopping
-    /// daemon.
-    #[tokio::test]
-    async fn quiet_commands_end_when_the_client_or_daemon_leaves() {
-        for leave in ["client", "daemon"] {
-            let daemon = daemon(false);
-            let (mut client, server) = UnixStream::pair().unwrap();
-            let served = tokio::spawn(handle(
-                server,
-                daemon.clone(),
-                true,
-                watch::channel(ConnectionPhase::Refusal).0,
-            ));
-
-            client
-                .write_all(
-                    b"{\"op\":\"run\",\"argv\":[\"/bin/sleep\",\"30\"],\"timeoutMs\":60000}\n",
-                )
-                .await
-                .unwrap();
-
-            let mut lines = BufReader::new(client).lines();
-            let started: Value =
-                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-            let group = started["pid"].as_i64().unwrap() as i32;
-
-            match leave {
-                "client" => drop(lines),
-                _ => {
-                    daemon.stopping.send_replace(true);
-
-                    // The client still listens: it hears that the command
-                    // was cut short, with an outcome nobody can know.
-                    let reply: Value =
-                        serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-                    assert_eq!(
-                        (&reply["code"], &reply["uncertain"]),
-                        (&json!("restart"), &json!(true))
-                    );
-                }
-            }
-
-            tokio::time::timeout(Duration::from_secs(8), served)
-                .await
-                .expect(leave)
-                .unwrap()
-                .ok();
-
-            let group = nix::unistd::Pid::from_raw(group);
-            assert!(nix::sys::signal::killpg(group, None).is_err(), "{leave}");
-        }
-    }
-
-    /// A running command stops when the helper comes on screen, and the
-    /// client hears that its outcome is unknown.
-    #[tokio::test]
-    async fn a_command_stops_when_the_helper_comes_on_screen() {
-        static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-        let daemon = Arc::new(Daemon::new(
-            "Aqua".into(),
-            synthetic,
-            || SHOWN.load(std::sync::atomic::Ordering::SeqCst),
-            session,
-        ));
-        let (mut client, server) = UnixStream::pair().unwrap();
-        let served = tokio::spawn(handle(
-            server,
-            daemon,
-            true,
-            watch::channel(ConnectionPhase::Refusal).0,
-        ));
-
-        client
-            .write_all(b"{\"op\":\"run\",\"argv\":[\"/bin/sleep\",\"30\"],\"timeoutMs\":60000}\n")
-            .await
-            .unwrap();
-
-        let mut lines = BufReader::new(client).lines();
-        let started: Value =
-            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-        let group = started["pid"].as_i64().unwrap() as i32;
-
-        SHOWN.store(true, std::sync::atomic::Ordering::SeqCst);
-
-        let line = tokio::time::timeout(Duration::from_secs(8), lines.next_line())
-            .await
-            .expect("the command was stopped")
-            .unwrap()
-            .unwrap();
-        let reply: Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(
-            (&reply["code"], &reply["uncertain"]),
-            (&json!("on-console"), &json!(true))
-        );
-
-        served.await.unwrap().unwrap();
-
-        let group = nix::unistd::Pid::from_raw(group);
-        assert!(nix::sys::signal::killpg(group, None).is_err());
-    }
-
-    /// The client's own transport reads this daemon's replies.
-    #[tokio::test]
-    async fn the_client_transport_understands_the_daemon() {
-        let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("d.sock");
-        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-        let daemon = daemon(false);
-
-        tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                tokio::spawn(handle(
-                    stream,
-                    daemon.clone(),
-                    true,
-                    watch::channel(ConnectionPhase::Refusal).0,
-                ));
-            }
-        });
-
-        let transport = Transport {
-            path: socket,
-            timeout: Duration::from_secs(10),
-            peer_uid: nix::unistd::getuid().as_raw(),
-        };
-
-        let reply = transport
-            .call(&json!({"op": "run", "argv": ["/bin/sh", "-c", "printf ok; exit 4"], "timeoutMs": 3000}))
-            .await
-            .unwrap();
-        assert_eq!(run_output(&reply, 64).unwrap(), b"ok");
-        assert_eq!(
-            (&reply["exitCode"], &reply["timedOut"]),
-            (&json!(4), &json!(false))
-        );
-        crate::client::Mutation::Run
-            .validate(&json!({"op": "run"}), &reply)
-            .unwrap();
-
-        let hello = transport.call(&json!({"op": "hello"})).await.unwrap();
-        assert_eq!(hello["daemon"]["pid"], std::process::id());
-    }
-
-    /// A daemon that keeps its jobs in a folder of its own.
-    fn with_jobs(on_console: bool) -> (tempfile::TempDir, Arc<Daemon>) {
-        let folder = tempfile::tempdir().unwrap();
-        let mut daemon = Daemon::new(
-            "Aqua".into(),
-            synthetic,
-            if on_console { || true } else { || false },
-            session,
-        );
-        daemon.jobs = Some(Arc::new(
-            Jobs::open(
-                folder.path(),
-                std::env::current_exe().unwrap(),
-                nix::unistd::getuid().as_raw(),
-            )
-            .unwrap(),
-        ));
-        (folder, Arc::new(daemon))
-    }
-
-    #[tokio::test]
-    async fn daemon_shutdown_observes_the_supervisor_outcome() {
-        for stopping in [false, true] {
-            let complete = tokio::spawn(async { Ok(()) });
-            assert_eq!(
-                supervisor_outcome(complete.await, stopping).is_ok(),
-                stopping
-            );
-
-            let failed = tokio::spawn(async {
-                Err(Jobs::unavailable().with_source(std::io::Error::from_raw_os_error(libc::EIO)))
-            });
-            let error = supervisor_outcome(failed.await, stopping).unwrap_err();
-            assert_eq!(error.code, Code::Job);
-            assert_eq!(
-                std::error::Error::source(&error)
-                    .unwrap()
-                    .downcast_ref::<std::io::Error>()
-                    .unwrap()
-                    .raw_os_error(),
-                Some(libc::EIO)
-            );
-
-            let panicked = tokio::spawn(async { panic!("private supervisor cause") });
-            let error = supervisor_outcome(panicked.await, stopping).unwrap_err();
-            assert_eq!(error.code, Code::Job);
-            assert!(
-                std::error::Error::source(&error)
-                    .unwrap()
-                    .downcast_ref::<tokio::task::JoinError>()
-                    .unwrap()
-                    .is_panic()
-            );
-            assert!(
-                !json!(error)
-                    .to_string()
-                    .contains("private supervisor cause")
-            );
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn shutdown_bounds_a_supervisor_that_does_not_finish() -> Result<()> {
-        let task = tokio::spawn(std::future::pending::<Result<()>>());
-        let aborted = task.abort_handle();
-        let started = tokio::time::Instant::now();
-        let outcome = drain_supervision(task, started + STOP).await;
-        let Err(error) = outcome else {
-            panic!("unfinished supervision must remain unknown");
-        };
-        assert_eq!(tokio::time::Instant::now(), started + STOP);
-        assert_eq!(error.code, Code::Job);
-        assert!(error.uncertain);
-        tokio::task::yield_now().await;
-        assert!(aborted.is_finished());
-
-        let complete = tokio::spawn(async { Ok(()) });
-        tokio::task::yield_now().await;
-        drain_supervision(complete, started).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn unavailable_jobs_refuse_hello_instead_of_reporting_zero() {
-        let (_folder, daemon) = with_jobs(false);
-        daemon.jobs.as_ref().unwrap().fail_supervision();
-        let hello = daemon.hello();
-        assert_eq!(hello["ok"], false);
-        assert_eq!(hello["code"], "job");
-        assert!(hello.get("daemon").is_none());
-        let reply = daemon
-            .jobs
-            .as_ref()
-            .unwrap()
-            .serve(JobRequest::Show { id: None })
-            .await;
-        assert_eq!(reply["ok"], false);
-        assert_eq!(reply["code"], "job");
-        assert!(reply.get("jobs").is_none());
-    }
-
-    #[tokio::test]
-    async fn the_daemon_offers_jobs_and_reads() {
-        let hello = &exchange(daemon(false), r#"{"op":"hello"}"#).await[0];
-        assert_eq!(
-            hello["daemon"]["capabilities"],
-            json!(["session-pin", "read"]),
-            "no jobs without their folder"
-        );
-        let refused = &exchange(daemon(false), r#"{"op":"job","action":"show"}"#).await[0];
-        assert_eq!(refused["code"], "daemon");
-
-        let (_folder, daemon) = with_jobs(false);
-        let hello = &exchange(daemon.clone(), r#"{"op":"hello"}"#).await[0];
-        assert_eq!(
-            hello["daemon"]["capabilities"],
-            json!(["session-pin", "read", "jobs"])
-        );
-        assert_eq!(
-            hello["daemon"]["jobs"],
-            json!({"running": 0, "launching": 0, "unresolved": 0})
-        );
-        let shown = &exchange(daemon, r#"{"op":"job","action":"show"}"#).await[0];
-        assert_eq!(shown["jobs"], json!([]));
-    }
-
-    #[tokio::test]
-    async fn jobs_and_reads_are_refused_while_the_helper_is_on_screen() {
-        let (_folder, daemon) = with_jobs(true);
-        for request in [
-            r#"{"op":"job","action":"start","argv":["/bin/sleep","9"],"lifetimeMs":5000,"uid":502}"#,
-            r#"{"op":"read","path":".zshrc","maxSize":1024}"#,
-        ] {
-            let reply = exchange(daemon.clone(), request).await;
-            assert_eq!(reply.len(), 1, "{request}");
-            assert_eq!(reply[0]["code"], "on-console", "{request}");
-        }
-        for request in [
-            r#"{"op":"job","action":"show"}"#,
-            r#"{"op":"job","action":"stop-all","reason":"on-console"}"#,
-            r#"{"op":"job","action":"log","id":"7c2e91a04b3f","bytes":10}"#,
-        ] {
-            let reply = &exchange(daemon.clone(), request).await[0];
-            assert_ne!(
-                reply["code"], "on-console",
-                "{request}: ending things goes on"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_job_start_for_another_account_is_refused() {
-        let (_folder, daemon) = with_jobs(false);
-        let reply = &exchange(
-            daemon,
-            r#"{"op":"job","action":"start","argv":["/bin/sleep","9"],"lifetimeMs":5000,"uid":1}"#,
-        )
-        .await[0];
-        assert_eq!(reply["code"], "identity");
-        assert_eq!(reply["uncertain"], false);
-    }
-
-    #[test]
-    fn nothing_is_read_if_the_helper_comes_on_screen_while_the_worker_waits() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        static SHOWN: AtomicBool = AtomicBool::new(false);
-        static CHECKED: Notify = Notify::const_new();
-
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .max_blocking_threads(1)
-            .build()
-            .unwrap();
-        let (release, waiting) = std::sync::mpsc::channel();
-        let blocker = runtime.spawn_blocking(move || {
-            waiting.recv_timeout(Duration::from_secs(5)).unwrap();
-        });
-        let daemon = Arc::new(Daemon::new(
-            "Aqua".into(),
-            synthetic,
-            || {
-                let shown = SHOWN.load(Ordering::SeqCst);
-                CHECKED.notify_one();
-                shown
-            },
-            session,
-        ));
-
-        runtime.block_on(async {
-            let request = tokio::spawn(exchange(
-                daemon,
-                r#"{"op":"read","path":".zshrc","maxSize":1048576}"#,
-            ));
-            tokio::time::timeout(Duration::from_secs(5), CHECKED.notified())
-                .await
-                .unwrap();
-            SHOWN.store(true, Ordering::SeqCst);
-            release.send(()).unwrap();
-            blocker.await.unwrap();
-
-            let reply = request.await.unwrap();
-            assert_eq!(reply.len(), 1, "no part was sent: {reply:?}");
-            assert_eq!(reply[0]["code"], "on-console");
-            assert_eq!(reply[0]["uncertain"], false);
-        });
-    }
-
-    #[tokio::test]
-    async fn parts_waiting_to_be_delivered_are_dropped_once_the_session_changes() {
-        let (events, queue) = mpsc::channel(8);
-        for n in 0..3 {
-            events
-                .send(json!({"event": "data", "data": n.to_string()}))
-                .await
-                .unwrap();
-        }
-        drop(events);
-        let checks = std::sync::atomic::AtomicUsize::new(0);
-        let gate = || {
-            if checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                Ok(())
-            } else {
-                Err(failure(
-                    Code::SessionChanged,
-                    "The helper changed since Atlas checked it; look again",
-                ))
-            }
-        };
-        let (written, cut) = deliver(queue, Vec::new(), gate).await.unwrap();
-        let lines = String::from_utf8(written).unwrap();
-        assert_eq!(
-            lines.lines().count(),
-            1,
-            "only the part before the change: {lines}"
-        );
-        assert_eq!(cut.unwrap()["code"], "session-changed");
-    }
-}
+pub(super) mod tests;

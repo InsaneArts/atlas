@@ -8,8 +8,8 @@ use super::*;
 use super::{
     busy::{busy_agent, busy_person},
     executor::{
-        EXECUTOR_WRITING, Executor, executor_boot, executor_boot_with, executor_running,
-        executor_running_with, executor_start, publish_executor_with, record_executor_with,
+        EXECUTOR_WRITING, Executor, executor_boot, executor_running, executor_running_with,
+        executor_start, publish_executor_with, record_executor_with,
     },
     wait::poll_with,
 };
@@ -299,20 +299,20 @@ fn a_clock_change_does_not_release_a_surviving_executor() {
     };
     record_executor_with(
         nix::unistd::getpid(),
-        || executor_boot_with(read),
+        || read(c"kern.bootsessionuuid"),
         |_| Ok([300, 400]),
     )
     .unwrap();
     boottime.set(200);
     assert!(executor_running_with(
         &File::open(pending.live.with_extension("executor.live")).unwrap(),
-        || executor_boot_with(read),
+        || read(c"kern.bootsessionuuid"),
         |_| Ok([300, 400]),
     ));
 }
 
 #[test]
-fn unreadable_and_legacy_executor_records_do_not_release_a_live_process() {
+fn unreadable_executor_records_do_not_release_a_live_process() {
     let mut file = tempfile::tempfile().unwrap();
     for record in [nix::unistd::getpid().to_string(), "{".into(), "-1".into()] {
         file.set_len(0).unwrap();

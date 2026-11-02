@@ -2,6 +2,7 @@ use super::*;
 use crate::error::{Code, Error};
 use crate::{
     doing::Doing,
+    host::project_folder,
     host_session::{Host, HostSession, Instance},
     test_support::client,
 };
@@ -639,10 +640,7 @@ fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
 /// A process that is this one's ancestor: its parent.
 fn parent() -> Instance {
     let pid = nix::unistd::getppid().as_raw();
-    Instance::new(
-        pid,
-        crate::host_session::ancestry::process(pid).unwrap().start,
-    )
+    Instance::new(pid, crate::host::ancestry::process(pid).unwrap().start)
 }
 
 #[test]

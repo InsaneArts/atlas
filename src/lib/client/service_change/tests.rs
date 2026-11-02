@@ -37,7 +37,7 @@ fn service_changes_defer_for_two_minutes_but_not_for_the_callers_own_session() {
     let mut client = crate::test_support::client(directory.path());
     let own = session("updater");
     let other = session("worker");
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     seen(&client, &own, now, false);
     client.host_session = Some(own);
     assert!(service_blocker(&client, false, u128::from(now) * 1_000_000).is_none());
@@ -65,7 +65,7 @@ fn service_changes_respect_host_exits_without_treating_unknown_hosts_as_idle() {
         let directory = tempfile::tempdir().unwrap();
         let client = crate::test_support::client(directory.path());
         let worker = session("worker");
-        let now = crate::host_session::now_ms();
+        let now = crate::time::now_ms();
         Store::at(client.output_dir().unwrap())
             .update(&worker, now, &client.controller, |record| {
                 record.host_process = Some(process);
@@ -99,7 +99,7 @@ fn only_recovery_of_the_callers_outcome_can_pass_a_recent_host_with_unknown_live
             client.host_session = own.clone();
             client.controller = client.controller.labelled(own.as_ref());
             let worker = session("worker");
-            let now = crate::host_session::now_ms();
+            let now = crate::time::now_ms();
             Store::at(client.output_dir().unwrap())
                 .update(&worker, now, &client.controller, |record| {
                     record.host_process = Some(crate::process::Instance::new(1, [1, 0]));
@@ -128,7 +128,7 @@ fn only_recovery_of_the_callers_outcome_can_pass_a_recent_host_with_unknown_live
 fn service_changes_find_active_sessions_beyond_the_eight_shown_in_status() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     for index in 0..10 {
         let host = session(&format!("idle-{index}"));
         seen(&client, &host, now - 180_000, false);
@@ -152,7 +152,7 @@ fn service_changes_keep_recent_sessions_whose_process_state_is_unknown() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
     let host = session("worker");
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     let process = crate::process::Instance::new(0, [1, 0]);
     assert_eq!(process.state(), crate::process::State::Unknown);
     Store::at(client.output_dir().unwrap())
@@ -176,7 +176,7 @@ fn service_changes_find_terminal_activity_before_many_newer_actions() {
     let directory = tempfile::tempdir().unwrap();
     let mut client = crate::test_support::client(directory.path());
     let own = session("updater");
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     client.host_session = Some(own.clone());
     for index in 0..=65 {
         append(
@@ -249,7 +249,7 @@ fn rotated_activity_must_cover_the_service_idle_window() {
     let mut client = crate::test_support::client(directory.path());
     let own = session("updater");
     client.host_session = Some(own.clone());
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     let row = |at| {
         format!(
             "{}\n",
@@ -273,7 +273,7 @@ fn rotated_activity_must_cover_the_service_idle_window() {
 async fn a_terminal_can_update_after_its_completed_screenshot() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     crate::activity_log::append(
         client.output_dir().unwrap(),
         &crate::activity_log::Row {
@@ -314,7 +314,7 @@ async fn recovery_can_take_control_after_the_callers_screenshot_with_an_unknown_
         let abandoned = client.controller.quarantine().unwrap();
         let generation = abandoned.generation().to_owned();
         drop(abandoned);
-        let now = crate::host_session::now_ms();
+        let now = crate::time::now_ms();
         if let Some(own) = &own {
             seen(&client, own, now, false);
         }
@@ -377,7 +377,7 @@ async fn only_recovery_of_the_callers_unknown_outcome_can_pass_recent_work_and_w
             client.host_session = own.clone();
             client.controller = client.controller.labelled(own.as_ref());
             let other = session("worker");
-            seen(&client, &other, crate::host_session::now_ms(), false);
+            seen(&client, &other, crate::time::now_ms(), false);
             if waiter {
                 let holder = client
                     .controller
@@ -445,7 +445,7 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             std::fs::write(&client.config.identity_probe, b"installed build").unwrap();
             let build = client.installed_build().unwrap();
             let other = session("worker");
-            let at = crate::host_session::now_ms() - if other_owner { 120_001 } else { 0 };
+            let at = crate::time::now_ms() - if other_owner { 120_001 } else { 0 };
             seen(&client, &other, at, false);
             if waiter {
                 let holder = client
@@ -598,12 +598,7 @@ async fn an_ordinary_input_upgrade_still_refuses_recent_work_with_the_callers_un
     client.controller = client.controller.labelled(client.host_session.as_ref());
     drop(client.controller.quarantine().unwrap());
     let pending = client.controller.pending().unwrap();
-    seen(
-        &client,
-        &session("worker"),
-        crate::host_session::now_ms(),
-        false,
-    );
+    seen(&client, &session("worker"), crate::time::now_ms(), false);
     let _ownership = client.controller.acquire(true).unwrap();
 
     let error = tokio::time::timeout(
@@ -665,7 +660,7 @@ async fn recovery_of_another_sessions_unknown_outcome_uses_the_ordinary_idle_gua
             );
             let pending = client.controller.pending().unwrap();
             let worker = session("worker");
-            let now = crate::host_session::now_ms();
+            let now = crate::time::now_ms();
             seen(&client, &worker, now, false);
             let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(true))
                 .await
@@ -721,7 +716,7 @@ async fn a_named_updater_defers_for_terminal_work_before_its_own_screenshot() {
     let directory = tempfile::tempdir().unwrap();
     let mut client = crate::test_support::client(directory.path());
     let own = session("updater");
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     let terminal_at = now - 60_000;
     let screenshot_at = now - 30_000;
     seen(&client, &own, screenshot_at, false);
@@ -915,7 +910,7 @@ fn a_running_command_defers_service_changes_even_when_its_session_went_quiet() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
     let host = session("worker");
-    let now = crate::host_session::now_ms();
+    let now = crate::time::now_ms();
     seen(&client, &host, now - 7_200_000, false);
     let controller = client.controller.clone().labelled(Some(&host));
     let command = controller.quarantine_command().unwrap();
@@ -1229,12 +1224,7 @@ fn recovery_names_a_running_command_and_leaves_it_pending() {
 async fn a_restart_refuses_recent_work_before_contacting_the_helper() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    seen(
-        &client,
-        &session("worker"),
-        crate::host_session::now_ms(),
-        false,
-    );
+    seen(&client, &session("worker"), crate::time::now_ms(), false);
     let error = tokio::time::timeout(Duration::from_secs(1), client.restart())
         .await
         .unwrap()
@@ -1255,12 +1245,7 @@ async fn allowing_disruption_preserves_controller_exclusion_and_pending_changes(
     let directory = tempfile::tempdir().unwrap();
     let mut client = crate::test_support::client(directory.path());
     client.allow_disrupt = true;
-    seen(
-        &client,
-        &session("worker"),
-        crate::host_session::now_ms(),
-        false,
-    );
+    seen(&client, &session("worker"), crate::time::now_ms(), false);
     let ownership = client.service_change(false).await.unwrap();
     assert_eq!(
         client.service_change(false).await.unwrap_err().code,
@@ -1292,7 +1277,7 @@ async fn the_callers_own_session_can_update_after_its_running_command_ends() {
     let directory = tempfile::tempdir().unwrap();
     let mut client = crate::test_support::client(directory.path());
     let host = session("updater");
-    seen(&client, &host, crate::host_session::now_ms(), false);
+    seen(&client, &host, crate::time::now_ms(), false);
     client.controller = client.controller.clone().labelled(Some(&host));
     client.host_session = Some(host);
     let command = client.controller.quarantine_command().unwrap();
@@ -1322,12 +1307,7 @@ async fn the_callers_own_session_can_update_after_its_running_command_ends() {
 async fn input_replacement_and_setup_repairs_refuse_recent_work_before_dispatch() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    seen(
-        &client,
-        &session("worker"),
-        crate::host_session::now_ms(),
-        false,
-    );
+    seen(&client, &session("worker"), crate::time::now_ms(), false);
     let ownership = client.controller.acquire(true).unwrap();
     let config = directory.path().join("missing.toml");
     let checked = async {

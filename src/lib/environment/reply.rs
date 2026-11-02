@@ -6,9 +6,57 @@ use super::{
     installs::InstallPhase,
     model::{Node, Operation, Phase},
 };
-use crate::task::record::Lenient;
+use crate::lenient::Lenient;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::PathBuf;
+
+/// The facts orchestration reads from a worker's reply; the reply itself
+/// stays for whoever is shown it. Optional fields retain the difference
+/// between explicit proof and a missing or malformed field.
+pub(super) struct WorkerReply {
+    pub(super) ok: Option<bool>,
+    pub(super) phase: Option<Phase>,
+    pub(super) error: String,
+    pub(super) resume_required: Option<bool>,
+    pub(super) kept_targets: Vec<String>,
+    pub(super) retained_directories: usize,
+}
+
+impl WorkerReply {
+    pub(super) fn read(reply: &Value) -> Self {
+        let phase = reply["phase"]
+            .as_str()
+            .and_then(|_| Phase::deserialize(&reply["phase"]).ok());
+        Self {
+            ok: reply["ok"].as_bool(),
+            phase,
+            error: reply["error"]
+                .as_str()
+                .unwrap_or("The helper did not finish undoing this copy")
+                .to_owned(),
+            resume_required: reply["resumeRequired"].as_bool(),
+            kept_targets: reply["keptTargets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|target| target.as_str().map(str::to_owned))
+                .collect(),
+            retained_directories: reply["retainedDirectories"].as_array().map_or(0, Vec::len),
+        }
+    }
+
+    /// Whether the helper confirmed the transaction reached `phase` with
+    /// nothing left to resume.
+    pub(super) fn settled(&self, phase: Phase) -> bool {
+        self.ok == Some(true) && self.phase == Some(phase) && self.resume_required == Some(false)
+    }
+
+    /// Whether the helper said it never started this plan.
+    pub(super) fn never_started(&self) -> bool {
+        self.ok == Some(false) && self.error == super::worker::MISSING
+    }
+}
 
 /// One file of a plan, by its target and what the plan does to it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,7 +64,7 @@ use std::path::PathBuf;
 pub(crate) struct FileReport {
     pub(crate) target: PathBuf,
     pub(crate) operation: Lenient<Operation>,
-    /// Whether the file it replaces was copied by an earlier format.
+    /// Kept on the wire; always false, as no record has an earlier format.
     #[serde(default)]
     pub(crate) legacy_previous: bool,
 }
@@ -248,6 +296,27 @@ pub(crate) struct Removal {
     pub(crate) side_effects: Option<SideEffects>,
 }
 
+/// What the helper answered to taking an install away.
+pub(crate) enum RemovalReply {
+    Finished(Removal),
+    /// It did not finish, in its own words.
+    Unfinished(String),
+    /// It said it finished, in a shape this build cannot read.
+    Unread,
+}
+
+impl RemovalReply {
+    pub(crate) fn read(reply: Value) -> Self {
+        if reply["ok"] != true {
+            let said = reply["error"]
+                .as_str()
+                .unwrap_or("The helper did not finish moving the app aside");
+            return Self::Unfinished(said.to_owned());
+        }
+        serde_json::from_value(reply).map_or(Self::Unread, Self::Finished)
+    }
+}
+
 /// The files an installed app keeps outside its bundle that exist now.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SideEffects {
@@ -266,67 +335,4 @@ pub(crate) struct SideEffect {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::{Value, json};
-
-    /// `text` read as `T` and written again, as JSON with sorted keys.
-    fn again<T: Serialize + serde::de::DeserializeOwned>(text: &str) -> String {
-        let read: T = serde_json::from_str(text).unwrap();
-        serde_json::to_string(&serde_json::to_value(read).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn each_reply_reads_back_as_it_was_sent() {
-        let installs = [
-            r#"{"app":"Probe","bundleId":"test.atlas.install-probe","installId":"ID","path":"/h/Applications/Probe.app","phase":"installed","present":true,"processes":[{"executable":"/h/Applications/Probe.app/Contents/MacOS/Probe","pid":812}],"root":{"device":1,"inode":2},"unchanged":null,"unproven":[],"verified":true}"#,
-            r#"{"app":"Probe","bundleId":null,"installId":"ID","phase":"held","verified":false}"#,
-            r#"{"installId":"ID","phase":"unreadable","verified":false}"#,
-            r#"{"installId":"ID","phase":"missing"}"#,
-        ];
-        for text in installs {
-            assert_eq!(again::<InstallState>(text), text);
-        }
-        let removals = [
-            r#"{"app":"Probe","heldPath":"/h/held/ID/Probe.app","installId":"ID","ok":true,"outcome":"held","sideEffects":{"kept":[{"existedBefore":false,"path":"Library/Caches/x"}]}}"#,
-            r#"{"app":"Probe","installId":"ID","ok":true,"outcome":"kept","reason":"other-volume","sideEffects":{"kept":[]}}"#,
-            r#"{"installId":"ID","ok":true,"outcome":"kept","reason":"unreadable"}"#,
-            r#"{"installId":"ID","ok":true,"outcome":"alreadyGone"}"#,
-            r#"{"app":"Probe","installId":"ID","ok":true,"outcome":"inUse"}"#,
-        ];
-        for text in removals {
-            assert_eq!(again::<Removal>(text), text);
-        }
-        let listed = r#"{"hidden":1,"more":0,"ok":true,"transactions":[{"active":true,"files":[{"legacyPrevious":false,"operation":"create","target":"a"}],"phase":"applied","planId":"P","retainedDirectories":0,"updatedAt":5}],"unreadable":0}"#;
-        assert_eq!(again::<Transactions>(listed), listed);
-    }
-
-    #[test]
-    fn a_phase_or_reason_this_build_does_not_know_is_never_taken_for_one_it_does() {
-        let state: InstallState =
-            serde_json::from_value(json!({"installId": "ID", "phase": "sideways"})).unwrap();
-        assert_eq!(state.phase, Lenient::Later(json!("sideways")));
-        assert!(!state.verified());
-
-        let removal: Removal =
-            serde_json::from_value(json!({"ok": true, "outcome": "kept", "reason": "new"}))
-                .unwrap();
-        assert_eq!(
-            removal.outcome,
-            Outcome::Kept {
-                reason: KeptReason::Changed
-            }
-        );
-
-        let listed: Transactions = serde_json::from_value(json!({"ok": true, "transactions": [
-            {"planId": "P", "phase": "sideways"},
-            {"phase": "applied"},
-        ]}))
-        .unwrap();
-        assert_eq!(listed.known().count(), 1);
-        assert!(matches!(
-            listed.transactions[1],
-            Lenient::Later(Value::Object(_))
-        ));
-    }
-}
+mod tests;

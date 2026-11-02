@@ -13,10 +13,10 @@ use crate::{
     actions::{self, Expect},
     activity_log::{self, Failure, Op},
     control::{Ownership, SharedLease},
-    daemon::protocol::{Crop, Region},
     digest::file_sha256,
     error::Holder,
     interrupt::Interrupt,
+    protocol::{Crop, Region},
     screen::windows::HitWindow,
     session::{
         Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, HOLD, NativeObservation,
@@ -26,7 +26,11 @@ use crate::{
 };
 use fs2::FileExt;
 use nix::sys::signal::Signal;
-use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt, time::Instant};
+use std::{
+    fs::{self, OpenOptions},
+    os::unix::fs::OpenOptionsExt,
+    time::Instant,
+};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
@@ -445,11 +449,11 @@ async fn verification_reuses_decoded_capability_facts_without_another_helper_req
             assert!(verified.session().input);
             assert!(verified.session().capture);
             assert_eq!(
-                verified.pin(),
-                Some(SessionPin {
+                verified.pin().unwrap(),
+                SessionPin {
                     security_session_id: 42,
                     display_id: 7
-                })
+                }
             );
             assert!(verified.observation.has_capability("future-daemon"));
             assert!(verified.observation.native.has_capability("future-input"));
@@ -585,32 +589,27 @@ async fn a_focus_refusal_keeps_its_code_on_every_native_path() {
 
 #[test]
 fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
-    let unchecked = json!({"op": "input", "actions": [{}, {}]});
-    let mut checked = unchecked.clone();
-    checked["expect"] = json!({"pid": 812});
+    let app = Expect::new(812).unwrap();
+    let checked = Some(&app);
 
-    for (request, reply, confirmed) in [
-        (&unchecked, json!({"ok": true, "performed": 2}), true),
-        (&unchecked, json!({"ok": true, "performed": 1}), false),
+    for (expect, reply, confirmed) in [
+        (None, json!({"ok": true, "performed": 2}), true),
+        (None, json!({"ok": true, "performed": 1}), false),
         (
-            &checked,
+            checked,
             json!({"ok": true, "performed": 2, "expect": {"pid": 812}}),
             true,
         ),
-        (&checked, json!({"ok": true, "performed": 2}), false),
+        (checked, json!({"ok": true, "performed": 2}), false),
         (
-            &checked,
+            checked,
             json!({"ok": true, "performed": 2, "expect": {"pid": 9}}),
             false,
         ),
-        (
-            &checked,
-            json!({"ok": false, "code": "focus-changed"}),
-            true,
-        ),
+        (checked, json!({"ok": false, "code": "focus-changed"}), true),
     ] {
-        let outcome = Mutation::Input(Some(2)).validate(request, &reply);
-        assert_eq!(outcome.is_ok(), confirmed, "{request} {reply}");
+        let outcome = Mutation::Input { count: 2, expect }.validate(&reply);
+        assert_eq!(outcome.is_ok(), confirmed, "{expect:?} {reply}");
         if let Err(error) = outcome {
             assert_eq!(error.code, "protocol");
             assert!(error.uncertain);
@@ -1453,11 +1452,11 @@ async fn malformed_uncertainty_after_a_sent_mutation_keeps_its_original_claim() 
             json!({"op": "run", "argv": ["true"], "timeoutMs": 1000}),
         ),
         (
-            Mutation::JobStart,
+            Mutation::JobStart { uid: 0 },
             json!({"op": "job", "action": "start", "argv": ["true"]}),
         ),
         (
-            Mutation::JobStop,
+            Mutation::JobStop { id: "job" },
             json!({"op": "job", "action": "stop", "id": "job"}),
         ),
     ] {
@@ -1560,8 +1559,8 @@ async fn stop_with_job_reply(reply: Value) -> (tempfile::TempDir, Client, Value)
 async fn an_unconfirmed_stop_all_reply_never_fabricates_an_empty_job_summary() {
     let wrong_variant = json!({"ok": true, "action": "show", "jobs": []});
     assert!(matches!(
-        serde_json::from_value::<crate::daemon::protocol::JobReply>(wrong_variant.clone()).unwrap(),
-        crate::daemon::protocol::JobReply::Show(_)
+        serde_json::from_value::<crate::protocol::JobReply>(wrong_variant.clone()).unwrap(),
+        crate::protocol::JobReply::Show(_)
     ));
     for mut reply in [
         wrong_variant,
@@ -3337,7 +3336,7 @@ fn a_command_terminated_by_a_signal_is_recorded_as_an_exit_failure() {
     let client = client_in(dir.path()).doing(Doing::new("run"));
     let request = json!({"op": "run", "argv": ["tool"]});
     let reply = json!({"ok": true, "exitCode": null, "timedOut": false, "signal": "SIGTERM"});
-    Mutation::Run.validate(&request, &reply).unwrap();
+    Mutation::Run.validate(&reply).unwrap();
     client.record_start_blocking(&request).unwrap();
     client
         .record_blocking(&request, &reply, Duration::ZERO)
@@ -3723,7 +3722,7 @@ fn recording_appends_privately_and_rotates_a_full_log() {
     assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
     for name in [activity_log::LOCK, activity_log::FILE] {
         assert_eq!(
-            fs::metadata(output.join(name)).unwrap().mode() & 0o777,
+            std::os::unix::fs::MetadataExt::mode(&fs::metadata(output.join(name)).unwrap()) & 0o777,
             0o600
         );
     }
@@ -3789,35 +3788,28 @@ fn a_truly_empty_list_is_an_empty_list() {
 }
 
 #[tokio::test]
-async fn process_identities_stay_internal_to_app_resolution_in_current_and_older_sessions() {
+async fn process_identities_stay_internal_to_app_resolution() {
     use crate::test_support::{Helper, UID};
-    for older in [false, true] {
-        let dir = tempfile::tempdir().unwrap();
-        let (client, helper) = Helper::client(dir.path(), UID);
-        let helper = if older { helper.older() } else { helper };
-        let reply =
-            json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}],"starts":{"812":[123,456]}});
-        let internal = helper
-            .serve(
-                async {
-                    let verified = client.verify().await?;
-                    client.apps_in(&verified).await
-                },
-                |_| Some(reply.clone()),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            internal.starts().unwrap().unwrap().get(&812),
-            Some(&[123, 456])
-        );
-        let public = helper
-            .serve(client.apps(), |_| Some(reply.clone()))
-            .await
-            .unwrap();
-        assert!(public.get("starts").is_none());
-        assert_eq!(public["apps"], reply["apps"]);
-    }
+    let dir = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(dir.path(), UID);
+    let reply = json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}],"starts":{"812":[123,456]}});
+    let internal = helper
+        .serve(
+            async {
+                let verified = client.verify().await?;
+                client.apps_in(&verified).await
+            },
+            |_| Some(reply.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(internal.starts().unwrap().get(&812), Some(&[123, 456]));
+    let public = helper
+        .serve(client.apps(), |_| Some(reply.clone()))
+        .await
+        .unwrap();
+    assert!(public.get("starts").is_none());
+    assert_eq!(public["apps"], reply["apps"]);
 }
 
 #[tokio::test]

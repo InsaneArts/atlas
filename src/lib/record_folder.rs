@@ -4,19 +4,19 @@
 //! reader never sees half of one. Ordinary readers need no lock; writers
 //! and complete cleanup scans take the folder's lock.
 use crate::{
+    context::context,
     error::{Code, Error, Result},
     files::{
-        Durability, Held, Lock, LockFile, Token, lock_within, own_folder, read_own,
-        write_private_with,
+        Durability, Held, Lock, LockFile, LockOpen, Token, lock_within, open_lock_file, own_folder,
+        read_own, write_private_with,
     },
-    host_session::Key,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     fmt::Display,
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     marker::PhantomData,
-    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    os::unix::fs::{DirBuilderExt, MetadataExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant, SystemTime},
@@ -28,21 +28,9 @@ pub(crate) trait RecordName: Display + Sized {
     fn parse(text: &str) -> Option<Self>;
 }
 
-impl RecordName for Key {
-    fn parse(text: &str) -> Option<Self> {
-        Key::parse(text)
-    }
-}
-
 impl RecordName for Token {
     fn parse(text: &str) -> Option<Self> {
         Token::parse(text)
-    }
-}
-
-impl RecordName for crate::daemon::protocol::JobId {
-    fn parse(text: &str) -> Option<Self> {
-        Self::parse(text)
     }
 }
 
@@ -131,28 +119,29 @@ impl<K: RecordName> RecordFolder<K> {
 
     /// Like [`Self::listed`], retaining uncertainty from a failed or bounded scan.
     pub(crate) fn listing(&self, limit: usize) -> Listing<K> {
-        if fs::symlink_metadata(&self.directory)
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-        {
-            return Listing {
-                keys: Vec::new(),
-                complete: true,
-            };
-        }
-        if !self.exists() {
-            return Listing {
-                keys: Vec::new(),
-                complete: false,
-            };
-        }
-        let Ok(entries) = fs::read_dir(&self.directory) else {
-            return Listing {
-                keys: Vec::new(),
-                complete: false,
-            };
-        };
+        let absent = fs::symlink_metadata(&self.directory)
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+        let entries = self
+            .exists()
+            .then(|| fs::read_dir(&self.directory).ok())
+            .flatten();
 
-        Self::listed_from(entries, limit)
+        match entries {
+            Some(entries) => Self::listed_from(entries, limit),
+            None => Listing {
+                keys: Vec::new(),
+                complete: absent,
+            },
+        }
+    }
+
+    /// The key `entry`'s name gives, when it is a record's.
+    fn key_of(entry: &fs::DirEntry) -> Option<K> {
+        entry
+            .file_name()
+            .to_str()?
+            .strip_suffix(".json")
+            .and_then(K::parse)
     }
 
     fn listed_from(
@@ -168,12 +157,7 @@ impl<K: RecordName> RecordFolder<K> {
                 complete = false;
                 continue;
             };
-            let Some(key) = entry
-                .file_name()
-                .to_str()
-                .and_then(|name| name.strip_suffix(".json"))
-                .and_then(K::parse)
-            else {
+            let Some(key) = Self::key_of(&entry) else {
                 continue;
             };
             let modified = entry.metadata().and_then(|metadata| metadata.modified());
@@ -194,7 +178,7 @@ impl<K: RecordName> RecordFolder<K> {
 
     /// The directory cleanup must keep locked throughout its complete scans and writes.
     /// Only a confirmed missing folder is empty; replacement cannot inherit this proof.
-    pub(crate) fn cleanup_identity(&self) -> Result<Option<(u64, u64)>> {
+    fn cleanup_identity(&self) -> Result<Option<(u64, u64)>> {
         let metadata = match fs::symlink_metadata(&self.directory) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -206,7 +190,7 @@ impl<K: RecordName> RecordFolder<K> {
         Ok(Some((metadata.dev(), metadata.ino())))
     }
 
-    pub(crate) fn check_cleanup_identity(&self, identity: (u64, u64)) -> Result<()> {
+    fn check_cleanup_identity(&self, identity: (u64, u64)) -> Result<()> {
         if self.cleanup_identity()? != Some(identity) {
             return Err(cleanup_read());
         }
@@ -214,14 +198,14 @@ impl<K: RecordName> RecordFolder<K> {
     }
 
     /// One pass has the old listing's worst encoded-byte bound, without its full-record Vec.
-    pub(crate) fn cleanup_bytes(&self) -> Result<u64> {
+    fn cleanup_bytes(&self) -> Result<u64> {
         self.records
             .bytes
             .checked_mul(LISTED as u64)
             .ok_or_else(cleanup_read)
     }
 
-    pub(crate) fn read_cleanup(&self, key: &K, remaining: &mut u64) -> Result<Vec<u8>> {
+    fn read_cleanup(&self, key: &K, remaining: &mut u64) -> Result<Vec<u8>> {
         let bytes = read_own(&self.path(key), self.records.bytes.min(*remaining))
             .ok_or_else(cleanup_read)?;
         *remaining -= bytes.len() as u64;
@@ -230,7 +214,7 @@ impl<K: RecordName> RecordFolder<K> {
 
     /// A complete uncached pass for cleanup, under its caller's existing folder lock.
     /// The visitor only reads: finish and drop this iterator before renaming any record.
-    pub(crate) fn visit_cleanup(
+    fn visit_cleanup(
         &self,
         identity: (u64, u64),
         visit: impl FnMut(&K, &[u8], SystemTime) -> Result<()>,
@@ -257,12 +241,7 @@ impl<K: RecordName> RecordFolder<K> {
                 return Err(cleanup_read());
             }
             let entry = entry.map_err(|error| cleanup_read().with_source(error))?;
-            let Some(key) = entry
-                .file_name()
-                .to_str()
-                .and_then(|name| name.strip_suffix(".json"))
-                .and_then(K::parse)
-            else {
+            let Some(key) = Self::key_of(&entry) else {
                 continue;
             };
             let modified = entry
@@ -273,6 +252,75 @@ impl<K: RecordName> RecordFolder<K> {
             visit(&key, &bytes, modified)?;
         }
         Err(cleanup_read())
+    }
+
+    /// What `keep` makes of each record, last written first, from one
+    /// complete pass under the lock; a record it passes over stays as it is.
+    pub(crate) fn newest_complete<R>(
+        &self,
+        keep: impl Fn(&K, &[u8]) -> Option<R>,
+    ) -> Result<Vec<R>> {
+        let Some(identity) = self.cleanup_identity()? else {
+            return Ok(Vec::new());
+        };
+        let _lock = self.lock()?;
+        let mut kept = Vec::new();
+        self.visit_cleanup(identity, |key, bytes, modified| {
+            if let Some(record) = keep(key, bytes) {
+                kept.push((modified, record));
+            }
+            Ok(())
+        })?;
+        kept.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        Ok(kept.into_iter().map(|(_, record)| record).collect())
+    }
+
+    /// Rewrite the records `select` picks, in the order it gives them, then
+    /// read every record back with `confirm`, all under one hold of the lock.
+    /// Each owner brings its decoder, its selection and what acknowledges
+    /// its change; `incomplete` says a pass could not be finished.
+    pub(crate) fn rewrite_complete<R, O: Ord>(
+        &self,
+        decode: impl Fn(&K, &[u8]) -> Result<R>,
+        select: impl Fn(&R, SystemTime) -> Option<O>,
+        change: impl Fn(&mut R) -> Result<()>,
+        confirm: impl Fn(&R) -> Result<()>,
+        incomplete: fn() -> Error,
+    ) -> Result<()>
+    where
+        K: Clone,
+    {
+        let failed = |cause| incomplete().with_source(cause);
+        let Some(identity) = self.cleanup_identity().map_err(failed)? else {
+            return Ok(());
+        };
+        let _lock = self.lock()?;
+        let mut selected = Vec::new();
+        self.visit_cleanup(identity, |key, bytes, modified| {
+            if let Some(order) = select(&decode(key, bytes)?, modified) {
+                selected.push((order, key.clone()));
+            }
+            Ok(())
+        })
+        .map_err(failed)?;
+        selected.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let mut remaining = self.cleanup_bytes().map_err(failed)?;
+        for (_, key) in selected {
+            self.check_cleanup_identity(identity).map_err(failed)?;
+            let bytes = self.read_cleanup(&key, &mut remaining).map_err(failed)?;
+            change(&mut decode(&key, &bytes)?)?;
+        }
+        let mut confirmed = Ok(());
+        self.visit_cleanup(identity, |key, bytes, _| {
+            // Every record is decoded even after a failed acknowledgement: a
+            // pass that cannot finish keeps its own error first.
+            if let Err(error) = confirm(&decode(key, bytes)?) {
+                confirmed = Err(error);
+            }
+            Ok(())
+        })
+        .map_err(failed)?;
+        confirmed
     }
 
     /// `key`'s record read as a `T`, when it is there and reads as one.
@@ -333,15 +381,10 @@ impl<K: RecordName> RecordFolder<K> {
         let path = self.path(key);
         let partial = path.with_extension("json.partial");
         write_private_with(&partial, bytes, self.records.durability)
-            .map_err(crate::context::context("Write record", &path))?;
+            .map_err(context("Write record", &path))?;
         fs::rename(&partial, &path).map_err(|error| Error::writing(&path, error))?;
         if self.records.durability == Durability::Disk {
-            File::open(&self.directory)
-                .and_then(|file| file.sync_all())
-                .map_err(crate::context::context(
-                    "Sync record directory",
-                    &self.directory,
-                ))?;
+            sync_folder("Sync record directory", &self.directory)?;
         }
         Ok(())
     }
@@ -362,17 +405,11 @@ impl<K: RecordName> RecordFolder<K> {
     /// once.
     pub(crate) fn lock_within(&self, wait: Duration) -> Result<LockFile> {
         let path = self.directory.join(".lock");
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&path)
+        let lock = open_lock_file(&path, LockOpen::WriteNonblocking)
             .map_err(|error| Error::writing(&path, error))?;
         if !lock
             .metadata()
-            .map_err(crate::context::context("Inspect record lock", &path))?
+            .map_err(context("Inspect record lock", &path))?
             .is_file()
         {
             return Err(Error::new(
@@ -385,7 +422,7 @@ impl<K: RecordName> RecordFolder<K> {
         }
 
         let lock = LockFile(lock);
-        lock_within(&lock, Lock::Exclusive, wait).map_err(|Held| {
+        lock_within(&lock, Lock::Exclusive, wait).map_err(|Held(cause)| {
             Error::new(
                 Code::Busy,
                 format!(
@@ -393,6 +430,7 @@ impl<K: RecordName> RecordFolder<K> {
                     self.records.noun
                 ),
             )
+            .with_source(cause)
         })?;
         Ok(lock)
     }
@@ -404,12 +442,7 @@ impl<K: RecordName> RecordFolder<K> {
         match fs::DirBuilder::new().mode(0o700).create(&self.directory) {
             Ok(()) if self.records.durability == Durability::Disk => {
                 if let Some(output) = self.directory.parent() {
-                    File::open(output)
-                        .and_then(|file| file.sync_all())
-                        .map_err(crate::context::context(
-                            "Sync record parent directory",
-                            output,
-                        ))?;
+                    sync_folder("Sync record parent directory", output)?;
                 }
             }
             Err(error) if error.kind() != std::io::ErrorKind::AlreadyExists => {
@@ -444,6 +477,13 @@ impl<K: RecordName> RecordFolder<K> {
     }
 }
 
+/// Write `folder`'s entries through to the disk; `step` names it in a failure.
+fn sync_folder(step: &'static str, folder: &Path) -> Result<()> {
+    File::open(folder)
+        .and_then(|file| file.sync_all())
+        .map_err(context(step, folder))
+}
+
 fn cleanup_read() -> Error {
     Error::new(
         Code::State,
@@ -452,111 +492,12 @@ fn cleanup_read() -> Error {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cached_records_follow_the_observed_directory_revision_and_path() {
-        static RECORDS: Records = Records {
-            folder: "records",
-            noun: "test",
-            lock_wait: Duration::ZERO,
-            durability: Durability::Kernel,
-            bytes: 1024,
-        };
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
-        let folder = RecordFolder::<Key>::at(first.path(), &RECORDS);
-        let other = RecordFolder::<Key>::at(second.path(), &RECORDS);
-        folder.make().unwrap();
-        other.make().unwrap();
-        let revision = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
-        let set_modified = |folder: &RecordFolder<Key>, modified| {
-            File::open(folder.directory())
-                .unwrap()
-                .set_times(fs::FileTimes::new().set_modified(modified))
-                .unwrap();
-        };
-        set_modified(&folder, revision);
-        let kept = Mutex::new(None);
-        let read = folder.cached(&kept, Duration::MAX, || vec![1]);
-        let reused = folder.cached(&kept, Duration::MAX, || panic!("unchanged folder"));
-        assert!(Arc::ptr_eq(&read, &reused));
-        let revision = revision + Duration::from_secs(1);
-        set_modified(&folder, revision);
-        assert_eq!(&*folder.cached(&kept, Duration::MAX, || vec![2]), &[2]);
-        set_modified(&other, revision);
-        assert_eq!(&*other.cached(&kept, Duration::MAX, || vec![3]), &[3]);
-    }
-
-    #[test]
-    fn record_listing_bounds_unrelated_files_and_unreadable_entries() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("unrelated"), "").unwrap();
-        for unreadable in [false, true] {
-            let entries = std::iter::repeat_with(|| {
-                if unreadable {
-                    Err(std::io::Error::other("unreadable entry"))
-                } else {
-                    fs::read_dir(directory.path()).unwrap().next().unwrap()
-                }
-            })
-            .take(LISTED)
-            .chain(std::iter::once_with(|| {
-                panic!("read beyond the entry limit")
-            }));
-            let listing = RecordFolder::<Key>::listed_from(entries, 64);
-            assert!(listing.keys.is_empty());
-            assert!(!listing.complete);
-        }
-    }
-
-    #[test]
-    fn a_running_job_beyond_the_scan_budget_leaves_the_listing_incomplete() {
-        use crate::daemon::protocol::JobId;
-
-        let directory = tempfile::tempdir().unwrap();
-        let unrelated = directory.path().join("unrelated");
-        fs::write(&unrelated, "").unwrap();
-        let id = JobId::parse("7c2e91a04b3f").unwrap();
-        let job = directory.path().join(format!("{id}.json"));
-        fs::write(&job, r#"{"state":"running"}"#).unwrap();
-        let entry = |path: &Path| {
-            fs::read_dir(directory.path())
-                .unwrap()
-                .find(|entry| entry.as_ref().unwrap().path() == path)
-                .unwrap()
-        };
-        let entries = std::iter::repeat_with(|| entry(&unrelated))
-            .take(LISTED)
-            .chain(std::iter::once_with(|| entry(&job)));
-        let listing = RecordFolder::<JobId>::listed_from(entries, LISTED);
-        assert!(listing.keys.is_empty());
-        assert!(!listing.complete, "an omitted running job cannot mean idle");
-    }
-
-    #[test]
-    fn a_failed_entry_or_metadata_read_leaves_the_listing_incomplete() {
-        let failed = std::iter::once(Err(std::io::Error::other("scan failed")));
-        assert!(!RecordFolder::<Key>::listed_from(failed, LISTED).complete);
-
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("7c2e91a04b3f.json");
-        fs::write(&path, "{}").unwrap();
-        let entry = fs::read_dir(directory.path()).unwrap().next().unwrap();
-        fs::remove_file(path).unwrap();
-        let listing = RecordFolder::<crate::daemon::protocol::JobId>::listed_from(
-            std::iter::once(entry),
-            LISTED,
-        );
-        assert!(!listing.complete);
-        assert_eq!(listing.keys.len(), 1, "the unreadable record stays known");
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod cleanup_tests {
     use super::*;
+    use crate::host::Key;
     use std::cell::Cell;
 
     static RECORDS: Records = Records {

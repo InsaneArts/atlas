@@ -1,5 +1,11 @@
-//! Shared installed executable discovery and terminal command linking.
-use crate::{config, error::Result};
+//! The installed app setup relies on, and the terminal command that links
+//! to it.
+use super::{account::problem, executor};
+use crate::{
+    app_bundle::{INSTALL_COMMAND, reachable_by_others},
+    config,
+    error::Result,
+};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -8,11 +14,9 @@ use std::{
 
 pub(super) const EXECUTABLE: &str = "/Applications/Atlas.app/Contents/MacOS/atlas";
 
-use super::account::problem;
-
 /// The stable installed identity, including when a temporary worker calls us.
 pub(crate) fn app_executable() -> Result<PathBuf> {
-    app_executable_using(crate::update::reachable_by_others)
+    app_executable_using(reachable_by_others)
 }
 
 pub(crate) fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
@@ -31,7 +35,6 @@ pub(crate) fn link_command(executable: &Path) -> Result<Value> {
     link_command_in(&config::home()?.join(".local/bin"), executable)
 }
 
-/// [`link_command`] into the folder `bin`.
 fn link_command_in(bin: &Path, executable: &Path) -> Result<Value> {
     fs::create_dir_all(bin)?;
 
@@ -43,7 +46,7 @@ fn link_command_in(bin: &Path, executable: &Path) -> Result<Value> {
     if !replaceable(&link) {
         return Err(problem(format!(
             "{} is another program, so it was left alone. Move it aside, then try again.",
-            crate::ui::text::tilde(&link)
+            crate::config::tilde(&link)
         )));
     }
 
@@ -85,7 +88,7 @@ pub fn link_installed_command() -> Result<Value> {
     if !crate::setup::developer_id(&executable) {
         return Err(problem(format!(
             "This Atlas.app is not signed by Atlas's developer. Install Atlas with: {} (or atlas update), then run atlas init again.",
-            crate::update::INSTALL_COMMAND
+            INSTALL_COMMAND
         )));
     }
     link_command(&executable)
@@ -103,13 +106,13 @@ pub(crate) fn signed_executable_using(
     // Installation location for the shared app. The approved executor
     // independently protects and verifies its own copy before using it.
     if !executable.starts_with("/Applications") {
-        return Err(crate::setup::executor::problem(
+        return Err(executor::problem(
             "Atlas.app must be in Applications to set up the helper. Move it there, then open it again.",
         ));
     }
 
     if !developer_id(&executable) {
-        return Err(crate::setup::executor::problem(
+        return Err(executor::problem(
             "This Atlas.app is not signed by Atlas's developer. Install it again.",
         ));
     }
@@ -118,68 +121,4 @@ pub(crate) fn signed_executable_using(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn installed_application_identity_uses_the_fixed_path_and_refuses_unreachable_builds() {
-        let expected = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
-        let executable = app_executable_using(|path| {
-            assert_eq!(path, expected);
-            true
-        })
-        .unwrap();
-        assert_eq!(executable, expected);
-
-        let error = app_executable_using(|path| {
-            assert_eq!(path, expected);
-            false
-        })
-        .unwrap_err();
-        assert_eq!(error.code, "init");
-        assert_eq!(
-            error.error,
-            "Atlas.app must be in /Applications so the helper account can run it"
-        );
-        assert!(!error.uncertain);
-    }
-
-    #[test]
-    fn the_command_replaces_only_a_missing_dead_or_atlas_link() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(dir.path()).unwrap();
-        let bin = root.join("bin");
-        let executable = root.join("Applications/Atlas.app/Contents/MacOS/atlas");
-        let older = root.join("Old/Atlas.app/Contents/MacOS/atlas");
-        for path in [&executable, &older] {
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, b"").unwrap();
-        }
-        let link = bin.join("atlas");
-
-        assert_eq!(link_command_in(&bin, &executable).unwrap()["changed"], true);
-        assert_eq!(
-            link_command_in(&bin, &executable).unwrap()["changed"],
-            false
-        );
-
-        for target in [older, root.join("gone")] {
-            fs::remove_file(&link).unwrap();
-            std::os::unix::fs::symlink(&target, &link).unwrap();
-            assert_eq!(link_command_in(&bin, &executable).unwrap()["changed"], true);
-            assert_eq!(fs::canonicalize(&link).unwrap(), executable);
-        }
-
-        let other = root.join("other-atlas");
-        fs::write(&other, b"another program").unwrap();
-        fs::remove_file(&link).unwrap();
-        std::os::unix::fs::symlink(&other, &link).unwrap();
-        assert!(link_command_in(&bin, &executable).is_err());
-        assert_eq!(fs::canonicalize(&link).unwrap(), other);
-
-        fs::remove_file(&link).unwrap();
-        fs::write(&link, b"a script").unwrap();
-        assert!(link_command_in(&bin, &executable).is_err());
-        assert_eq!(fs::read(&link).unwrap(), b"a script");
-    }
-}
+mod tests;

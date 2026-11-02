@@ -12,6 +12,9 @@ use std::{
 /// What each line the script reports a step's outcome with starts with.
 pub(crate) const MARK: &str = "@atlas ";
 
+/// The search path privileged scripts run with, as `env` takes it.
+pub(crate) const ROOT_PATH: &str = "PATH=/usr/bin:/bin:/usr/sbin:/sbin";
+
 /// Identify the approved executor before it can act. If its caller cannot
 /// read the identity or goes away before acknowledging it, the script exits
 /// without reaching any privileged work.
@@ -37,7 +40,6 @@ pub(crate) fn tracked_output(command: &mut Command) -> Result<std::process::Outp
 pub(crate) fn start_executor(
     command: &mut Command,
 ) -> Result<(std::process::Child, nix::unistd::Pid), Refusal> {
-    use std::{io::Write, process::Stdio};
     let failed = |error: std::io::Error| Refusal::Failed(error.to_string());
     let mut child = command
         .stdin(Stdio::piped())
@@ -85,7 +87,6 @@ pub(crate) fn finish_executor(
         drop(stream);
         return (Err(Refusal::Failed(error.to_string())), reap(executor));
     }
-    use std::io::Write;
     if let Err(error) = writeln!(stream, "@atlas continue {}", executor.as_raw()) {
         return (Err(Refusal::Failed(error.to_string())), reap(executor));
     }
@@ -98,14 +99,6 @@ pub(crate) fn finish_executor(
 /// it ended (rather than Atlas giving up on it), and what it said. The step
 /// never writes the secret back; only what sysadminctl wrote before the
 /// first step's line could hold it, and it is cut out there.
-#[cfg(test)]
-pub(crate) fn converse(
-    stream: UnixStream,
-    secret: Option<&[u8]>,
-) -> (bool, Result<String, Refusal>) {
-    converse_until(stream, secret, Instant::now() + APPROVAL)
-}
-
 pub(crate) fn converse_until(
     mut stream: UnixStream,
     secret: Option<&[u8]>,
@@ -148,7 +141,7 @@ pub(crate) fn converse_until(
 /// even when its reply never came: a step that may still act holds this
 /// process, and with it the control and claims it runs under, until it
 /// ends. Whether it was seen to exit.
-pub(crate) fn reap(executor: nix::unistd::Pid) -> bool {
+fn reap(executor: nix::unistd::Pid) -> bool {
     use nix::{
         errno::Errno,
         sys::wait::{WaitStatus, waitpid},
@@ -164,7 +157,7 @@ pub(crate) fn reap(executor: nix::unistd::Pid) -> bool {
 
 /// Read the executor's own PID before its script can mutate anything.
 /// Waiting for this exact child cannot accidentally reap an unrelated process.
-pub(crate) fn executor(stream: &mut impl std::io::Read) -> Result<nix::unistd::Pid, Refusal> {
+fn executor(stream: &mut impl Read) -> Result<nix::unistd::Pid, Refusal> {
     let mut line = Vec::new();
     for _ in 0..64 {
         let mut byte = [0];
@@ -219,8 +212,7 @@ pub(crate) fn last_words(text: &str) -> Option<&str> {
 /// would receive a different password than the one typed).
 pub(crate) fn read_secret(input: impl Read) -> AtlasResult<Vec<u8>> {
     // To the end: the window closes its input after the password.
-    let mut secret = Vec::new();
-    input.take(258).read_to_end(&mut secret)?;
+    let mut secret = crate::files::read_up_to(input, 258)?;
 
     if secret.last() == Some(&b'\n') {
         secret.pop();
@@ -325,7 +317,7 @@ pub(crate) fn answer_prompts(
 /// `deadline` passes, collecting it into `seen`, and type `secret` and a
 /// newline into `input` each time it has asked for a password, up to
 /// `answers` times.
-pub(crate) fn answer(
+fn answer(
     input: &mut impl Write,
     receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
     secret: &[u8],
@@ -365,11 +357,11 @@ pub(crate) fn answer(
 }
 
 /// What a password question ends with, in any case.
-pub(crate) const PROMPT: &[u8] = b"password:";
+const PROMPT: &[u8] = b"password:";
 
 /// The most password questions answered, so a program that keeps asking
 /// (after a refused password, say) is not fed the secret forever.
-pub(crate) const MAX_ANSWERS: usize = 3;
+const MAX_ANSWERS: usize = 3;
 
 /// `bytes` with every occurrence of `secret` cut out.
 pub(crate) fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
@@ -394,7 +386,7 @@ pub(crate) fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
 /// Read `stream` on a thread of its own, passing each chunk on as it
 /// arrives; the channel closes when the stream ends.
 pub(crate) fn forward(
-    mut stream: impl std::io::Read + Send + 'static,
+    mut stream: impl Read + Send + 'static,
 ) -> std::sync::mpsc::Receiver<Vec<u8>> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -415,7 +407,6 @@ pub(crate) fn forward(
 pub(crate) fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResult<()> {
     let output = child.stdout.take().map(|mut stream| {
         std::thread::spawn(move || {
-            use std::io::Read;
             let mut bytes = Vec::new();
             stream.read_to_end(&mut bytes).map(|_| bytes)
         })
@@ -562,17 +553,6 @@ pub(crate) fn staging() -> String {
         )
 }
 
-/// Keep the administrator rights from `sudo -v` fresh while init waits
-/// for the person (sudo forgets them after five minutes otherwise).
-fn keep_sudo_alive() {
-    std::thread::spawn(|| {
-        loop {
-            std::thread::sleep(Duration::from_secs(60));
-            let _ = Command::new("/usr/bin/sudo").args(["-n", "-v"]).output();
-        }
-    });
-}
-
 /// Request normal sudo consent and refresh it while attended setup waits.
 /// Returns an init error when sudo refuses administrator rights.
 ///
@@ -587,7 +567,14 @@ pub fn request_administrator_rights() -> AtlasResult<()> {
             "Administrator rights were not granted",
         ));
     }
-    keep_sudo_alive();
+
+    // sudo forgets the rights after five minutes while init waits for the person.
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(Duration::from_secs(60));
+            let _ = Command::new("/usr/bin/sudo").args(["-n", "-v"]).output();
+        }
+    });
     Ok(())
 }
 
@@ -600,78 +587,4 @@ pub fn administrator_rights_current() -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn quiet_commands_hide_log_lines_and_keep_their_outcome() {
-        use crate::test_support::{TestChild, message, rerun};
-        use std::{process::Stdio, sync::mpsc::RecvTimeoutError};
-
-        const NAME: &str =
-            "setup::executor::tests::quiet_commands_hide_log_lines_and_keep_their_outcome";
-        const LOG: &str = "2026-10-11 14:28:19.767 sysadminctl[1:2] noise\n";
-        const PROMPT: &str = "User password:";
-        const OUTPUT: &str = "command output";
-        if let Ok(status) = std::env::var("ATLAS_QUIET_COMMAND_FIXTURE") {
-            assert!(matches!(status.as_str(), "0" | "3"));
-            // The fixture asks no real password. It cannot finish its partial line
-            // until the parent observes the actual prompt flush and sends a permit.
-            let script = "printf '%s' \"$1\" >&2; printf '%s' \"$2\" >&2; \
-                          read -r -t 10 permit && test \"$permit\" = continue || exit 9; \
-                          printf '\\n' >&2; printf '%s' \"$3\"; exit \"$4\"";
-            let child = Command::new("/bin/sh")
-                .args(["-c", script, "quiet-fixture", LOG, PROMPT, OUTPUT, &status])
-                .stdin(Stdio::inherit())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
-            message("quiet command started");
-            let result = quietly_attended(child, "it failed");
-            if status == "0" {
-                assert!(result.is_ok());
-            } else {
-                assert_eq!(result.unwrap_err().error, "it failed");
-            }
-            message("quiet command ended");
-            return;
-        }
-
-        for status in ["0", "3"] {
-            let mut child = TestChild::spawn(
-                rerun(NAME)
-                    .arg("--nocapture")
-                    .env("ATLAS_QUIET_COMMAND_FIXTURE", status),
-            );
-            let receiver = forward(child.process.stderr.take().unwrap());
-            child.expect("quiet command started");
-            let mut seen = Vec::new();
-            while seen.len() < PROMPT.len() {
-                seen.extend(receiver.recv_timeout(Duration::from_secs(10)).unwrap());
-            }
-            assert_eq!(
-                seen,
-                PROMPT.as_bytes(),
-                "only the partial prompt is flushed"
-            );
-            child.permit("continue");
-            child.expect("quiet command ended");
-            assert!(child.wait().success());
-            loop {
-                match receiver.recv_timeout(Duration::from_secs(10)) {
-                    Ok(bytes) => seen.extend(bytes),
-                    Err(RecvTimeoutError::Disconnected) => break,
-                    Err(RecvTimeoutError::Timeout) => {
-                        panic!("the owned stderr reader did not finish")
-                    }
-                }
-            }
-            let expected = if status == "0" {
-                format!("{PROMPT}\n")
-            } else {
-                format!("{PROMPT}\n{LOG}{OUTPUT}")
-            };
-            assert_eq!(seen, expected.as_bytes(), "status {status}");
-        }
-    }
-}
+mod tests;

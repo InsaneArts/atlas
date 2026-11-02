@@ -156,30 +156,68 @@ impl Acl {
     }
 }
 
+/// The extended ACL entries of `path`; an invalid ACL is an error.
+fn entries_of(path: &Path) -> io::Result<Vec<Entry>> {
+    match Acl::of_path(path)? {
+        None => Ok(Vec::new()),
+        Some(acl) if acl.is_valid() => acl.entries(),
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid filesystem ACL",
+        )),
+    }
+}
+
 /// Whether `path` carries any extended ACL entry; an invalid ACL is an error.
 pub(crate) fn present(path: &Path) -> io::Result<bool> {
-    match Acl::of_path(path)? {
-        None => Ok(false),
-        Some(acl) if acl.is_valid() => Ok(!acl.entries()?.is_empty()),
-        Some(_) => Err(invalid()),
-    }
+    Ok(!entries_of(path)?.is_empty())
 }
 
 /// Whether any extended ACL entry on `path` allows a write; deny entries are
 /// harmless. An invalid ACL is an error.
 pub(crate) fn allows_write(path: &Path) -> io::Result<bool> {
-    match Acl::of_path(path)? {
-        None => Ok(false),
-        Some(acl) if acl.is_valid() => Ok(acl
-            .entries()?
-            .iter()
-            .any(|entry| entry.allow && entry.mask & WRITE_RIGHTS != 0)),
-        Some(_) => Err(invalid()),
-    }
+    Ok(entries_of(path)?
+        .iter()
+        .any(|entry| entry.allow && entry.mask & WRITE_RIGHTS != 0))
 }
 
-fn invalid() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, "Invalid filesystem ACL")
+/// ACL rights a controller entry may carry: traversal only, no inheritance.
+fn search_only(rights: &str) -> bool {
+    rights
+        .split(',')
+        .all(|right| matches!(right, "search" | "execute"))
+}
+
+/// Check an ACL against the policy: shared directories may hold one
+/// search-only allow entry for `controller`; private ones hold none. Returns
+/// whether the controller entry is present; anything else is refused.
+pub(crate) fn acl_policy(
+    lines: &[String],
+    controller: Option<u32>,
+) -> std::result::Result<bool, String> {
+    let mut granted = false;
+
+    for line in lines {
+        let fields: Vec<&str> = line.split(':').collect();
+        match (fields.as_slice(), controller) {
+            (["user", _, _, id, "allow", rights], Some(controller))
+                if id.parse() == Ok(controller) && search_only(rights) && !granted =>
+            {
+                granted = true;
+            }
+            _ => return Err(format!("unexpected access entry {line}")),
+        }
+    }
+
+    Ok(granted)
+}
+
+/// The entries of `path`'s extended ACL, as its text form lists them.
+pub(crate) fn acl_lines(path: &Path) -> io::Result<Vec<String>> {
+    Ok(match Acl::of_path(path)? {
+        None => Vec::new(),
+        Some(acl) => acl.text()?.lines().skip(1).map(str::to_owned).collect(),
+    })
 }
 
 /// Replace an open file's extended ACL with an empty one.
@@ -197,40 +235,4 @@ pub(crate) fn clear(file: &File) -> io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    #[test]
-    fn entries_text_and_clear_round_trip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("file");
-        std::fs::write(&path, b"x").unwrap();
-        assert!(!present(&path).unwrap());
-        let user = std::env::var("USER").unwrap();
-
-        assert!(
-            Command::new("/bin/chmod")
-                .args(["+a", &format!("user:{user} allow write")])
-                .arg(&path)
-                .status()
-                .unwrap()
-                .success()
-        );
-
-        let acl = Acl::of_path(&path).unwrap().unwrap();
-        let entries = acl.entries().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].allow && entries[0].mask & WRITE_RIGHTS != 0);
-        assert!(acl.text().unwrap().contains(&format!(":{user}:")));
-
-        let file = File::open(&path).unwrap();
-        clear(&file).unwrap();
-        assert!(!present(&path).unwrap());
-        assert!(
-            Acl::of_file(&file)
-                .unwrap()
-                .is_none_or(|acl| acl.entries().unwrap().is_empty())
-        );
-    }
-}
+mod tests;

@@ -1,6 +1,6 @@
 //! Views of looking after Atlas itself: agents, switching, updates,
 //! removal and the menu bar's login item.
-use super::{Rendered, card, style, text};
+use super::{Rendered, card, items, style, text};
 use crate::{error::Code, ui::table};
 use serde_json::Value;
 
@@ -13,7 +13,7 @@ fn agent_name(id: &str) -> &str {
 }
 
 pub(super) fn agents(value: &Value) -> String {
-    let agents: Vec<&Value> = value["agents"].as_array().into_iter().flatten().collect();
+    let agents: Vec<&Value> = items(&value["agents"]).collect();
     let rows: Vec<Vec<String>> = agents
         .iter()
         .map(|agent| {
@@ -59,7 +59,7 @@ pub(super) fn agents_project(value: &Value) -> String {
     let mut lines = Vec::new();
     let mut changed = false;
 
-    for file in value["files"].as_array().into_iter().flatten() {
+    for file in items(&value["files"]) {
         let path = file["path"].as_str().unwrap_or("?");
         let name = std::path::Path::new(path)
             .file_name()
@@ -85,7 +85,7 @@ pub(super) fn agents_project(value: &Value) -> String {
     if lines.is_empty() {
         lines.push(format!("{} No Atlas section here", style::ok()));
     }
-    for warning in value["warnings"].as_array().into_iter().flatten() {
+    for warning in items(&value["warnings"]) {
         lines.push(style::dim(text::printable(
             warning.as_str().unwrap_or_default(),
         )));
@@ -99,7 +99,7 @@ pub(super) fn agents_change(value: &Value) -> Rendered {
     let mut err = Vec::new();
     let mut connected = false;
 
-    for agent in value["agents"].as_array().into_iter().flatten() {
+    for agent in items(&value["agents"]) {
         let name = agent_name(agent["agent"].as_str().unwrap_or("?"));
 
         if agent["ok"] == true {
@@ -119,7 +119,7 @@ pub(super) fn agents_change(value: &Value) -> Rendered {
         }
     }
 
-    for agent in value["agents"].as_array().into_iter().flatten() {
+    for agent in items(&value["agents"]) {
         if agent["ok"] == true && agent["restart"] == true {
             let words = agent["agent"]
                 .as_str()
@@ -190,19 +190,14 @@ pub(super) fn update(value: &Value) -> Rendered {
     if value["updated"] == false {
         let installed = value["version"].as_str().unwrap_or("");
         let available = version(value["available"].as_str().unwrap_or(installed));
-        let out = if available.is_empty() || available == installed {
+        return Rendered::out(if available.is_empty() || available == installed {
             format!("{} Atlas {installed} is up to date", style::ok())
         } else {
             format!(
                 "{} Atlas {installed} is installed; {available} is not newer. --force installs it anyway.",
                 style::ok()
             )
-        };
-
-        return Rendered {
-            out,
-            err: String::new(),
-        };
+        });
     }
 
     let helper = &value["helper"];
@@ -222,32 +217,26 @@ pub(super) fn update(value: &Value) -> Rendered {
             .or_else(|| value["error"].as_str())
             .unwrap_or("it did not finish");
 
-        return Rendered {
-            out: String::new(),
-            err: format!(
-                "{}\n  {} Fix that, then run atlas update again to finish.",
-                card(
-                    &format!("The app was updated, but {step} failed: {reason}"),
-                    None,
-                    false,
-                ),
-                style::dim("→")
+        return Rendered::err(format!(
+            "{}\n  {} Fix that, then run atlas update again to finish.",
+            card(
+                &format!("The app was updated, but {step} failed: {reason}"),
+                None,
+                false,
             ),
-        };
+            style::dim("→")
+        ));
     }
 
     let to = version(value["to"].as_str().unwrap_or(""));
 
     // Nothing was set up yet, so there was no helper to move.
     if helper["next"] == "atlas init" {
-        return Rendered {
-            out: format!(
-                "{} Updated Atlas to {to}\n  Run {} to set up the helper.",
-                style::ok(),
-                style::cmd("atlas init")
-            ),
-            err: String::new(),
-        };
+        return Rendered::out(format!(
+            "{} Updated Atlas to {to}\n  Run {} to set up the helper.",
+            style::ok(),
+            style::cmd("atlas init")
+        ));
     }
 
     let mut lines = vec![if value["resumed"] == true {
@@ -268,10 +257,7 @@ pub(super) fn update(value: &Value) -> Rendered {
 
     lines.push(format!("  {}", style::dim(facts.join(" · "))));
 
-    Rendered {
-        out: lines.join("\n"),
-        err: String::new(),
-    }
+    Rendered::out(lines.join("\n"))
 }
 
 pub(super) fn uninstall(value: &Value) -> String {

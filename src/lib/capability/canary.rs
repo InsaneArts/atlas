@@ -1,11 +1,14 @@
-use super::{Check, Generation, Record, boot_time, generation_at, now, problem, record_path};
+use super::{
+    Check, Generation, Panel, Record, boot_time, generation_at, now, problem, ready_epoch,
+    record_path,
+};
 use crate::{
     client::{Client, Run, timestamp},
     control::Ownership,
     error::{Code, Error, Result},
     files::write_private,
     screen::windows::{Bounds, Screen, Shown, Window, frontmost_pid, unobstructed, visible_point},
-    session::{Epoch, require_hidden},
+    session::{Epoch, Observation},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -14,7 +17,7 @@ use std::{
     fs,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 // Explicit escapes: the fixture's Open file ends in a decomposed e + U+0301,
@@ -23,24 +26,107 @@ const SAVE_TEXT: &str = "Atlas native Save \u{2014} \u{10e5}\u{10d0}\u{10e0}\u{1
 
 const OPEN_TEXT: &str = "Atlas native Open \u{2014} \u{10e5}\u{10d0}\u{10e0}\u{10d7}\u{10e3}\u{10da}\u{10d8} \u{65e5}\u{672c}\u{8a9e} \u{1f9d1}\u{1f3fd}\u{200d}\u{1f4bb} e\u{301}\n";
 
-/// A fresh fixture process running in the helper.
 struct Fixture {
     pid: u32,
     program: PathBuf,
     directory: PathBuf,
 }
 
-/// The most read of one fixture record while polling it.
+/// What the fixture says of itself. It is read while it writes: a field
+/// missing or of another type is unknown, never an error.
+struct FixtureState {
+    pid: Option<u64>,
+    window_x: Option<f64>,
+    window_y: Option<f64>,
+    instrumentation: Option<i64>,
+    center_count: Option<u64>,
+    text: Option<String>,
+    opened_text: Option<String>,
+    saved_path: Option<String>,
+    opened_path: Option<String>,
+    panel: PanelState,
+}
+
+struct PanelState {
+    presented: bool,
+    visible: bool,
+    sheet: bool,
+    kind: Option<String>,
+    attempt: Option<String>,
+    directory: Option<String>,
+}
+
+struct PanelScan {
+    panel_exists: bool,
+    focus_in_panel: bool,
+    focused_role: Option<String>,
+    focused_value: Option<String>,
+    controls: Vec<Control>,
+}
+
+struct Control {
+    role: Option<String>,
+    title: Option<String>,
+    enabled: bool,
+}
+
+fn text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_owned)
+}
+
+impl From<&Value> for FixtureState {
+    fn from(state: &Value) -> Self {
+        let panel = &state["panel"];
+        Self {
+            pid: state["pid"].as_u64(),
+            window_x: state["windowX"].as_f64(),
+            window_y: state["windowY"].as_f64(),
+            instrumentation: state["panelInstrumentationVersion"].as_i64(),
+            center_count: state["centerCount"].as_u64(),
+            text: text(&state["text"]),
+            opened_text: text(&state["openedText"]),
+            saved_path: text(&state["savedPath"]),
+            opened_path: text(&state["openedPath"]),
+            panel: PanelState {
+                presented: panel["presented"] == true,
+                visible: panel["visible"] == true,
+                sheet: !panel["attachedSheet"].is_null(),
+                kind: text(&panel["kind"]),
+                attempt: text(&panel["attemptID"]),
+                directory: text(&panel["directory"]),
+            },
+        }
+    }
+}
+
+impl From<&Value> for PanelScan {
+    fn from(scan: &Value) -> Self {
+        let controls = scan["controls"].as_array().into_iter().flatten();
+        Self {
+            panel_exists: scan["panelExists"] == true,
+            focus_in_panel: scan["focusInPanel"] == true,
+            focused_role: text(&scan["focused"]["role"]),
+            focused_value: text(&scan["focused"]["value"]),
+            controls: controls
+                .map(|control| Control {
+                    role: text(&control["role"]),
+                    title: text(&control["title"]),
+                    enabled: control["enabled"] == true,
+                })
+                .collect(),
+        }
+    }
+}
+
 const MAX_FIXTURE_RECORD: u64 = 1 << 20;
 
-/// The most archived of one fixture file.
 const MAX_ARCHIVED: u64 = 16 << 20;
 
 /// A regular file the fixture wrote in the helper, read whole up to `limit`
 /// bytes: links, pipes and devices are refused, and a larger file is an
 /// error rather than read without end.
 fn read_bounded(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
-    use std::{io::Read, os::unix::fs::OpenOptionsExt};
+    use std::os::unix::fs::OpenOptionsExt;
 
     let file = fs::OpenOptions::new()
         .read(true)
@@ -53,8 +139,7 @@ fn read_bounded(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
         ));
     }
 
-    let mut bytes = Vec::new();
-    file.take(limit + 1).read_to_end(&mut bytes)?;
+    let bytes = crate::files::read_up_to(file, limit + 1)?;
 
     if bytes.len() as u64 > limit {
         return Err(std::io::Error::new(
@@ -66,7 +151,6 @@ fn read_bounded(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// A small text file the fixture wrote, if it is one.
 fn fixture_text(path: &Path) -> Option<String> {
     String::from_utf8(read_bounded(path, MAX_FIXTURE_RECORD).ok()?).ok()
 }
@@ -77,20 +161,14 @@ impl Fixture {
             .ok()
     }
 
-    fn state(&self) -> Value {
-        self.read("state.json").unwrap_or(Value::Null)
+    fn state(&self) -> FixtureState {
+        FixtureState::from(&self.read("state.json").unwrap_or(Value::Null))
     }
 
     /// The panel observer's latest scan of `attempt`, if it is fresh.
-    fn observed(&self, attempt: &str) -> Option<Value> {
+    fn observed(&self, attempt: &str) -> Option<PanelScan> {
         let observed = self.read("panel-observer.json")?;
-        let ms = u64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .ok()?
-                .as_millis(),
-        )
-        .ok()?;
+        let ms = crate::time::now_ms();
         let finished = observed["finishedAt"].as_f64()? as u64;
 
         (observed["attemptID"] == attempt
@@ -98,51 +176,42 @@ impl Fixture {
             && observed["parentPID"] == self.pid
             && observed["scanComplete"] == true
             && ms.saturating_sub(finished) <= 1500)
-            .then_some(observed)
+            .then(|| PanelScan::from(&observed))
     }
 
-    fn completion(&self, attempt: &str, kind: &str) -> Option<Value> {
+    /// Whether the panel `attempt` opened accepted its operation, once it closed.
+    fn completion(&self, attempt: &str, kind: &str) -> Option<bool> {
         fixture_text(&self.directory.join("events.jsonl"))?
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .find(|event| {
                 event["attemptID"] == attempt && event["event"] == format!("{kind}Closed")
             })
-    }
-
-    fn file(&self, name: &str) -> PathBuf {
-        self.directory.join(name)
+            .map(|event| event["response"] == 1)
     }
 }
 
-fn button<'a>(observed: &'a Value, title: &str) -> Option<&'a Value> {
-    let mut matches = observed["controls"]
-        .as_array()?
-        .iter()
-        .filter(|control| control["role"] == "AXButton" && control["title"] == title);
+fn button<'a>(observed: &'a PanelScan, title: &str) -> Option<&'a Control> {
+    let mut matches = observed.controls.iter().filter(|control| {
+        control.role.as_deref() == Some("AXButton") && control.title.as_deref() == Some(title)
+    });
     let first = matches.next();
     matches.next().is_none().then_some(first).flatten()
 }
 
-fn sheets(observed: &Value) -> usize {
-    observed["controls"]
-        .as_array()
-        .map(|controls| {
-            controls
-                .iter()
-                .filter(|control| control["role"] == "AXSheet")
-                .count()
-        })
-        .unwrap_or(0)
+fn sheets(observed: &PanelScan) -> usize {
+    observed
+        .controls
+        .iter()
+        .filter(|control| control.role.as_deref() == Some("AXSheet"))
+        .count()
 }
 
-fn same_path(left: &Value, right: &Path) -> bool {
-    left.as_str()
-        .and_then(|left| fs::canonicalize(left).ok())
+fn same_path(left: Option<&str>, right: &Path) -> bool {
+    left.and_then(|left| fs::canonicalize(left).ok())
         .is_some_and(|left| fs::canonicalize(right).is_ok_and(|right| left == right))
 }
 
-/// Poll `check` until it yields a value or `stage` times out.
 async fn until<T>(stage: &str, mut check: impl FnMut() -> Option<T>) -> Result<T> {
     let deadline = Instant::now() + Duration::from_secs(6);
 
@@ -204,10 +273,6 @@ impl Canary<'_> {
         }
     }
 
-    async fn run(&self, argv: Vec<String>) -> Result<Value> {
-        self.client.run(argv, Run::owned(self.ownership)).await
-    }
-
     async fn keys(&self, actions: Value) -> Result<()> {
         self.client
             .input_owned(
@@ -240,10 +305,10 @@ impl Canary<'_> {
         let fixture = &self.fixture;
         until(&self.stage(), || {
             let state = fixture.state();
-            (state["pid"] == fixture.pid
-                && state["windowX"].is_number()
-                && state["panelInstrumentationVersion"] == 2)
-                .then_some(())
+            (state.pid == Some(u64::from(fixture.pid))
+                && state.window_x.is_some()
+                && state.instrumentation == Some(2))
+            .then_some(())
         })
         .await
     }
@@ -256,13 +321,11 @@ impl Canary<'_> {
             .await
     }
 
-    /// The helper's display, with its Dock as `shown` says.
     fn screen(&self, shown: &Shown) -> Screen {
         let display = Bounds::display(self.epoch.display.width, self.epoch.display.height);
         Screen::new(display, shown.dock.clone())
     }
 
-    /// The fixture's ordinary window in a fresh window list.
     fn fixture_window(&self, windows: &[Window]) -> Option<i64> {
         let pid = i64::from(self.fixture.pid);
         windows
@@ -305,12 +368,12 @@ impl Canary<'_> {
     /// and panels land on the display rather than wherever it opened.
     async fn center(&self) -> Result<()> {
         self.at("fixture window centred");
-        let previous = self.fixture.state()["centerCount"].as_u64();
+        let previous = self.fixture.state().center_count;
         self.press("ctrl+cmd+0").await?;
         let fixture = &self.fixture;
 
         until(&self.stage(), || {
-            (fixture.state()["centerCount"].as_u64() > previous).then_some(())
+            (fixture.state().center_count > previous).then_some(())
         })
         .await
     }
@@ -319,7 +382,7 @@ impl Canary<'_> {
     /// starts on top of a previous panel or sheet. The fixture is brought
     /// forward first so the Escape cannot reach another application.
     async fn dismissed(&self) -> Result<()> {
-        if self.fixture.state()["panel"]["presented"] != true {
+        if !self.fixture.state().panel.presented {
             return Ok(());
         }
 
@@ -327,7 +390,7 @@ impl Canary<'_> {
         self.at("previous panel dismissed");
 
         for _ in 0..2 {
-            if self.fixture.state()["panel"]["presented"] != true {
+            if !self.fixture.state().panel.presented {
                 return Ok(());
             }
 
@@ -337,32 +400,37 @@ impl Canary<'_> {
 
         let fixture = &self.fixture;
         until(&self.stage(), || {
-            (fixture.state()["panel"]["presented"] != true).then_some(())
+            (!fixture.state().panel.presented).then_some(())
         })
         .await
     }
 
-    /// Open a panel with `shortcut` and return its new attempt ID once both
+    /// Open `panel` with its shortcut and return its new attempt ID once both
     /// AppKit and the AX observer show it focused with Cancel enabled.
-    async fn open_panel(&self, kind: &str, shortcut: &str) -> Result<String> {
-        let previous = self.fixture.state()["panel"]["attemptID"].clone();
+    async fn open_panel(&self, panel: Panel) -> Result<String> {
+        let kind = panel.kind();
+        let shortcut = match panel {
+            Panel::Save => "cmd+s",
+            Panel::Open => "cmd+o",
+        };
+        let previous = self.fixture.state().panel.attempt;
         self.press(shortcut).await?;
 
         self.at(&format!("{kind} panel appears"));
         let fixture = &self.fixture;
         let attempt = until(&self.stage(), || {
-            let panel = &fixture.state()["panel"];
-            (panel["kind"] == kind && panel["attemptID"] != previous)
-                .then(|| panel["attemptID"].as_str().map(str::to_owned))
+            let panel = fixture.state().panel;
+            (panel.kind.as_deref() == Some(kind) && panel.attempt != previous)
+                .then_some(panel.attempt)
                 .flatten()
         })
         .await?;
 
         until(&self.stage(), || {
-            let panel = &fixture.state()["panel"];
-            (panel["presented"] == true
-                && (panel["visible"] == true || !panel["attachedSheet"].is_null())
-                && same_path(&panel["directory"], &fixture.directory))
+            let panel = fixture.state().panel;
+            (panel.presented
+                && (panel.visible || panel.sheet)
+                && same_path(panel.directory.as_deref(), &fixture.directory))
             .then_some(())
         })
         .await?;
@@ -371,25 +439,29 @@ impl Canary<'_> {
         until(&self.stage(), || {
             fixture
                 .observed(&attempt)
-                .filter(|o| o["panelExists"] == true && o["focusInPanel"] == true)
-                .filter(|o| button(o, "Cancel").is_some_and(|b| b["enabled"] == true))
+                .filter(|o| o.panel_exists && o.focus_in_panel)
+                .filter(|o| button(o, "Cancel").is_some_and(|b| b.enabled))
         })
         .await?;
 
         Ok(attempt)
     }
 
-    async fn confirm(&self, kind: &str, attempt: &str, expected: &Path) -> Result<()> {
+    async fn confirm(&self, panel: Panel, attempt: &str, expected: &Path) -> Result<()> {
+        let kind = panel.kind();
+        let title = match panel {
+            Panel::Save => "Save",
+            Panel::Open => "Open",
+        };
         let fixture = &self.fixture;
 
         if fixture.completion(attempt, kind).is_none() {
             self.at(&format!("{kind} confirmation enabled"));
-            let title = if kind == "save" { "Save" } else { "Open" };
             until(&self.stage(), || {
                 fixture
                     .observed(attempt)
-                    .filter(|o| o["focusInPanel"] == true)
-                    .filter(|o| button(o, title).is_some_and(|b| b["enabled"] == true))
+                    .filter(|o| o.focus_in_panel)
+                    .filter(|o| button(o, title).is_some_and(|b| b.enabled))
             })
             .await?;
 
@@ -397,31 +469,30 @@ impl Canary<'_> {
         }
 
         self.at(&format!("{kind} completes"));
-        let done = until(&self.stage(), || fixture.completion(attempt, kind)).await?;
-        if done["response"] != 1 {
+        let accepted = until(&self.stage(), || fixture.completion(attempt, kind)).await?;
+        if !accepted {
             return Err(problem(format!(
                 "The {kind} panel did not accept the operation"
             )));
         }
 
-        let key = if kind == "save" {
-            "savedPath"
-        } else {
-            "openedPath"
-        };
-
         until(&self.stage(), || {
-            same_path(&fixture.state()[key], expected).then_some(())
+            let state = fixture.state();
+            let path = match panel {
+                Panel::Save => state.saved_path,
+                Panel::Open => state.opened_path,
+            };
+            same_path(path.as_deref(), expected).then_some(())
         })
         .await
     }
 
     async fn save(&mut self) -> Result<()> {
-        let expected = self.fixture.file("atlas-fixture.txt");
+        let expected = self.fixture.directory.join("atlas-fixture.txt");
         self.at("fixture text receives focus and input");
         let state = self.fixture.state();
-        let x = state["windowX"].as_f64().unwrap_or_default() + 100.0;
-        let y = self.epoch.display.height - state["windowY"].as_f64().unwrap_or_default() - 520.0;
+        let x = state.window_x.unwrap_or_default() + 100.0;
+        let y = self.epoch.display.height - state.window_y.unwrap_or_default() - 520.0;
 
         // Never click or type unless the text field's point is the fixture's.
         let shown = self.windows().await?;
@@ -449,13 +520,13 @@ impl Canary<'_> {
 
         let fixture = &self.fixture;
         until(&self.stage(), || {
-            (fixture.state()["text"] == SAVE_TEXT).then_some(())
+            (fixture.state().text.as_deref() == Some(SAVE_TEXT)).then_some(())
         })
         .await?;
 
-        let attempt = self.open_panel("save", "cmd+s").await?;
+        let attempt = self.open_panel(Panel::Save).await?;
         self.capture("save-panel").await;
-        self.confirm("save", &attempt, &expected).await?;
+        self.confirm(Panel::Save, &attempt, &expected).await?;
 
         self.at("saved bytes match");
         if fixture_text(&expected).as_deref() != Some(SAVE_TEXT) {
@@ -466,13 +537,13 @@ impl Canary<'_> {
     }
 
     async fn open(&mut self) -> Result<()> {
-        let expected = self.fixture.file("atlas-open-fixture.txt");
+        let expected = self.fixture.directory.join("atlas-open-fixture.txt");
         self.at("open fixture file prepared");
         if fixture_text(&expected).as_deref() != Some(OPEN_TEXT) {
             return Err(problem("The fixture did not prepare its Open file"));
         }
 
-        let attempt = self.open_panel("open", "cmd+o").await?;
+        let attempt = self.open_panel(Panel::Open).await?;
         let fixture = &self.fixture;
         let before = fixture.observed(&attempt).map(|o| sheets(&o)).unwrap_or(0);
 
@@ -482,7 +553,7 @@ impl Canary<'_> {
             fixture.observed(&attempt).filter(|o| {
                 sheets(o) > before
                     && ["AXTextField", "AXComboBox"]
-                        .contains(&o["focused"]["role"].as_str().unwrap_or(""))
+                        .contains(&o.focused_role.as_deref().unwrap_or(""))
             })
         })
         .await?;
@@ -498,16 +569,16 @@ impl Canary<'_> {
         until(&self.stage(), || {
             fixture
                 .observed(&attempt)
-                .filter(|o| o["focused"]["value"] == path.as_str())
+                .filter(|o| o.focused_value.as_deref() == Some(path.as_str()))
         })
         .await?;
 
         self.press("return").await?;
         self.capture("open-panel").await;
-        self.confirm("open", &attempt, &expected).await?;
+        self.confirm(Panel::Open, &attempt, &expected).await?;
 
         self.at("opened text matches");
-        if self.fixture.state()["openedText"] != OPEN_TEXT {
+        if self.fixture.state().opened_text.as_deref() != Some(OPEN_TEXT) {
             return Err(problem("The fixture did not load the exact Open text"));
         }
 
@@ -516,20 +587,19 @@ impl Canary<'_> {
 
     /// One independent check: no leftover panel, the fixture in front, then
     /// the operation itself.
-    async fn attempt(&mut self, kind: &str) -> Check {
+    async fn attempt(&mut self, panel: Panel) -> Check {
         let outcome = async {
             self.dismissed().await?;
             self.focus().await?;
             self.center().await?;
-            if kind == "save" {
-                self.save().await
-            } else {
-                self.open().await
+            match panel {
+                Panel::Save => self.save().await,
+                Panel::Open => self.open().await,
             }
         }
         .await;
 
-        self.check(kind, outcome)
+        self.check(panel.kind(), outcome)
     }
 
     /// Copy the fixture's own records next to the screenshots before cleanup
@@ -549,7 +619,7 @@ impl Canary<'_> {
             "atlas-fixture.txt",
             "atlas-open-fixture.txt",
         ] {
-            match read_bounded(&self.fixture.file(name), MAX_ARCHIVED) {
+            match read_bounded(&self.fixture.directory.join(name), MAX_ARCHIVED) {
                 Ok(bytes) => write_private(&directory.join(name), &bytes)?,
                 // Saved output exists only if Save completed.
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -580,18 +650,17 @@ impl Canary<'_> {
             "*) exit 5;; esac",
         );
 
-        let reply = self
-            .run(vec![
-                "/bin/sh".into(),
-                "-c".into(),
-                script.into(),
-                "sh".into(),
-                self.fixture.pid.to_string(),
-                self.fixture.program.to_string_lossy().into_owned(),
-                self.fixture.directory.to_string_lossy().into_owned(),
-                if remove { "remove" } else { "keep" }.into(),
-            ])
-            .await?;
+        let argv = vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            script.into(),
+            "sh".into(),
+            self.fixture.pid.to_string(),
+            self.fixture.program.to_string_lossy().into_owned(),
+            self.fixture.directory.to_string_lossy().into_owned(),
+            if remove { "remove" } else { "keep" }.into(),
+        ];
+        let reply = self.client.run(argv, Run::owned(self.ownership)).await?;
         if reply["exitCode"] != 0 {
             return Err(problem(format!(
                 "The canary fixture could not be stopped and removed (exit {})",
@@ -650,24 +719,17 @@ async fn launch(client: &Client, ownership: &Ownership, program: &Path) -> Resul
 pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
     // A development check: its test app is built from a checkout, never shipped.
     if !fixture.is_file() {
-        return Err(Error::new(
-            Code::Native,
-            format!(
-                "verify-native is a development check: it needs Atlas's test app at {}, built \
-                 from tests/live/DesktopFixture.swift in a checkout.",
-                fixture.display()
-            ),
-        ));
+        return Err(problem(format!(
+            "verify-native is a development check: it needs Atlas's test app at {}, built from \
+             tests/live/DesktopFixture.swift in a checkout.",
+            fixture.display()
+        )));
     }
 
     let uid = client.config.helper_uid;
     let ownership = client.controller.acquire(false)?;
-    let status = client.status().await;
-    let epoch = require_hidden(&status, uid)
-        .ok()
-        .filter(|session| session.input)
-        .map(|session| session.epoch)
-        .ok_or_else(|| {
+    let epoch =
+        ready_epoch(&Observation::decode(&client.status().await), uid).ok_or_else(|| {
             Error::new(
                 Code::Permission,
                 "verify-native needs a hidden helper with ready input; see atlas doctor",
@@ -687,23 +749,30 @@ pub async fn verify(client: &Client, fixture: &Path) -> Result<Value> {
 
     let checks = match canary.ready().await {
         Err(error) => vec![canary.check("launch", Err(error))],
-        // Save and Open are independent observations.
-        Ok(()) => vec![canary.attempt("save").await, canary.attempt("open").await],
+        // Each panel is an independent observation.
+        Ok(()) => {
+            let mut checks = Vec::new();
+            for panel in Panel::ALL {
+                checks.push(canary.attempt(panel).await);
+            }
+            checks
+        }
     };
 
     canary.capture("after").await;
     let archived = canary.archive();
     let cleanup = canary.cleanup(archived.is_ok()).await;
 
-    let after = generation_at(&client.status().await, uid, boot);
+    let after = generation_at(&Observation::decode(&client.status().await), uid, boot);
     let unchanged = after.as_ref() == Some(&generation);
-    let passed = unchanged && checks.len() == 2 && checks.iter().all(|check| check.passed);
+    let passed =
+        unchanged && checks.len() == Panel::ALL.len() && checks.iter().all(|check| check.passed);
     let record = Record {
         observed_at: now(),
         passed,
         checks,
         generation,
-        evidence: canary.evidence.clone(),
+        evidence: std::mem::take(&mut canary.evidence),
     };
     write_record(uid, &record)?;
 
@@ -741,69 +810,4 @@ fn write_record(uid: u32, record: &Record) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn launcher_output_must_name_a_canary_directory() {
-        assert_eq!(
-            launched("123 /private/tmp/atlas-canary.Ab12Cd\n"),
-            Some((123, "/private/tmp/atlas-canary.Ab12Cd".into()))
-        );
-
-        for output in [
-            "123 /private/tmp/atlas-canary.",
-            "123 /private/tmp/other.Ab12Cd",
-            "123 /private/tmp/atlas-canary.x/nested",
-            "123 /private/tmp/atlas-canary.a-b",
-            "123 /tmp/atlas-canary.Ab12Cd",
-            "1 /private/tmp/atlas-canary.Ab12Cd",
-            "x /private/tmp/atlas-canary.Ab12Cd",
-            "",
-        ] {
-            assert_eq!(launched(output), None, "{output:?}");
-        }
-    }
-
-    #[test]
-    fn canary_texts_match_the_fixture_bytes() {
-        // tests/live/DesktopFixture.swift writes this exact Open text.
-        let fixture = include_str!("../../../tests/live/DesktopFixture.swift");
-        assert!(fixture.contains(&OPEN_TEXT.replace('\n', "\\n")));
-        assert!(SAVE_TEXT.ends_with('\u{e9}') && OPEN_TEXT.ends_with("e\u{301}\n"));
-    }
-
-    #[test]
-    fn buttons_must_be_unique_and_sheets_are_counted() {
-        let observed = json!({"controls": [
-            {"role": "AXButton", "title": "Save", "enabled": true},
-            {"role": "AXButton", "title": "Cancel", "enabled": true},
-            {"role": "AXButton", "title": "Cancel", "enabled": false},
-            {"role": "AXSheet"},
-        ]});
-
-        assert_eq!(button(&observed, "Save").unwrap()["enabled"], true);
-        assert!(button(&observed, "Cancel").is_none());
-        assert!(button(&observed, "Open").is_none());
-        assert_eq!(sheets(&observed), 1);
-    }
-
-    /// The fixture's files are the helper's: read within a bound, and only
-    /// as regular files.
-    #[test]
-    fn fixture_files_are_read_within_a_bound() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state.json");
-        fs::write(&path, b"{\"ok\":true}").unwrap();
-
-        assert_eq!(read_bounded(&path, 11).unwrap(), b"{\"ok\":true}");
-        assert!(read_bounded(&path, 10).is_err());
-
-        let link = dir.path().join("link");
-        std::os::unix::fs::symlink(&path, &link).unwrap();
-        assert!(read_bounded(&link, 1024).is_err());
-        assert!(read_bounded(dir.path(), 1024).is_err());
-
-        assert_eq!(fixture_text(&path).as_deref(), Some("{\"ok\":true}"));
-        assert_eq!(fixture_text(&dir.path().join("missing")), None);
-    }
-}
+mod tests;

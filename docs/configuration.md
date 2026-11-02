@@ -11,7 +11,7 @@ Atlas chooses configuration in this order:
 3. For an installed executable inside Atlas.app, `~/.config/atlas.toml`.
 4. For a development executable, an existing `atlas.local.toml` in the current directory, otherwise the installed settings path.
 
-An installed Atlas does not pick up a local settings file merely because you ran it from a project directory. A development executable also notices a legacy `atlas.local.json`, so it can report that the configuration needs migration rather than silently using different settings.
+An installed Atlas does not pick up a local settings file merely because you ran it from a project directory.
 
 For a file you already maintain, inspect it explicitly:
 

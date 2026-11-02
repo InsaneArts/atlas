@@ -7,7 +7,7 @@ use super::{
     undo::PlanPhase,
     *,
 };
-use crate::task::record::Lenient;
+use crate::lenient::Lenient;
 
 /// The most plans `list` shows; `more` counts the rest.
 pub(super) const SHOWN: usize = 50;
@@ -29,12 +29,7 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
 
 /// [`list`] for the helper account `helper`.
 pub(super) async fn list_as(client: &Client, helper: &str, all: bool) -> Result<Value> {
-    let shared = client
-        .config
-        .identity_probe
-        .parent()
-        .ok_or_else(|| problem("Missing shared directory"))?;
-    let here = frozen(shared, client.config.helper_uid);
+    let here = frozen(shared_folder(client)?, client.config.helper_uid);
     let there = transactions(client, helper, all, &here).await?;
     let work = task::everyone(client.output_dir()?);
     Ok(listing(&here, &there, &Labels::new(&work, client), all))
@@ -76,33 +71,33 @@ pub(super) async fn ask(
     let malformed = "The helper's list of its copies was malformed";
     let answer = one_off::send(client, helper, None, Request::Transactions { all, ids }).await?;
     let answer = one_off::read(answer, "transactions", malformed)?;
-    serde_json::from_value(answer).map_err(|_| Error::new(Code::Protocol, malformed))
+    serde_json::from_value(answer)
+        .map_err(|cause| Error::new(Code::Protocol, malformed).with_source(cause))
 }
 
 /// A plan folder beside the shared command, as `list` reports it.
 pub(super) struct Frozen {
-    id: String,
+    pub(super) id: String,
     /// The plan's files, when it holds a plan for this helper.
     files: Option<Vec<ShownFile>>,
     /// Whether it keeps a request whose outcome is not known.
     request: bool,
     /// Whether a command holds its lock right now.
-    running: bool,
+    pub(super) running: bool,
     /// When the folder last changed, in milliseconds since 1970.
     updated: u64,
 }
 
 impl Frozen {
-    pub(super) fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub(super) fn running(&self) -> bool {
-        self.running
-    }
-
-    pub(super) fn request(&self) -> bool {
-        self.request
+    /// How far it got, as one the helper never started.
+    pub(super) fn state(&self) -> PlanPhase {
+        if self.running {
+            PlanPhase::Running
+        } else if self.request {
+            PlanPhase::Unknown
+        } else {
+            PlanPhase::Previewed
+        }
     }
 
     /// The targets its plan copies into the helper.
@@ -123,10 +118,7 @@ pub(super) fn frozen(shared: &Path, uid: u32) -> Vec<Frozen> {
         .filter_map(|stage| {
             let name = stage.file_name()?.to_str()?.to_owned();
             let id = name.strip_prefix("environment-plan-")?.to_owned();
-            let files = read_limited(&stage.join("plan.json"), MAX_RECORD)
-                .ok()
-                .and_then(|bytes| decode::<Plan>(&bytes).ok())
-                .filter(|plan| plan.id == id && plan.uid == uid)
+            let files = kept_plan(&stage, &id, uid)
                 .map(|plan| file_report(&plan).iter().map(ShownFile::from).collect());
             let request = requests(&stage);
             if files.is_none() && !request {
@@ -134,7 +126,7 @@ pub(super) fn frozen(shared: &Path, uid: u32) -> Vec<Frozen> {
             }
             Some(Frozen {
                 running: held(&stage),
-                updated: modified_ms(&stage),
+                updated: changed_ms(&stage).unwrap_or(0),
                 id,
                 files,
                 request,
@@ -151,16 +143,6 @@ fn held(stage: &Path) -> bool {
         Ok(Some(lock)) => FileExt::try_lock_shared(&LockFile(lock).0).is_err(),
         Ok(None) | Err(_) => false,
     }
-}
-
-/// When `path` last changed, in milliseconds since 1970; 0 when unknown.
-fn modified_ms(path: &Path) -> u64 {
-    fs::symlink_metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-        .and_then(|since| u64::try_from(since.as_millis()).ok())
-        .unwrap_or(0)
 }
 
 /// Which session and task made each plan, from their records.
@@ -244,14 +226,7 @@ pub(super) fn listing(here: &[Frozen], there: &Transactions, labels: &Labels, al
         .iter()
         .filter(|plan| !started.contains(&plan.id.as_str()))
     {
-        let state = if plan.running {
-            PlanPhase::Running
-        } else if plan.request {
-            PlanPhase::Unknown
-        } else {
-            PlanPhase::Previewed
-        };
-        let entry = json!({"planId": plan.id, "state": state, "updatedAt": plan.updated,
+        let entry = json!({"planId": plan.id, "state": plan.state(), "updatedAt": plan.updated,
             "files": plan.files.clone().unwrap_or_default()});
         plans.push((plan.updated, labels.label(entry, &plan.id)));
     }

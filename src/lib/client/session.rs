@@ -48,7 +48,26 @@ where
     tokio::time::timeout(limit, gone).await.is_ok()
 }
 
+/// Whether `outcome` leaves nothing unknown: done, or refused for certain.
+fn settled(outcome: &Result<Value>) -> bool {
+    match outcome {
+        Ok(reply) => reply["ok"] == true || reply["uncertain"] != true,
+        Err(error) => !error.uncertain,
+    }
+}
+
 impl Client {
+    /// Recover the helper: the verified restart when an outcome is unknown,
+    /// otherwise starting, resetting or upgrading input. It never takes
+    /// control or resumes input.
+    pub(crate) async fn recover_helper(&self) -> Result<Value> {
+        if self.controller.pending()?.is_empty() {
+            self.start_input().await
+        } else {
+            self.restart().await
+        }
+    }
+
     /// Restart the verified helper while retaining exclusion and pending-work ownership.
     ///
     /// # Errors
@@ -61,8 +80,7 @@ impl Client {
 
         // Recovery goes through the input service; with none running and no
         // Accessibility to start one, it cannot finish, so nothing is marked.
-        let current = self.status().await;
-        let observation = Observation::decode(&current);
+        let observation = self.observed().await;
         if !observation.native.ok {
             require_accessibility(&observation)?;
         }
@@ -78,11 +96,7 @@ impl Client {
     /// Settle this restart after verified recovery or a definite refusal.
     /// Other live mutations retain their own claims.
     pub(super) fn settle_restart(&self, claim: &str, outcome: Result<Value>) -> Result<Value> {
-        let refused = match &outcome {
-            Ok(reply) => reply["ok"] != true && reply["uncertain"] != true,
-            Err(error) => !error.uncertain,
-        };
-        if refused || outcome.as_ref().is_ok_and(|reply| reply["ok"] == true) {
+        if settled(&outcome) {
             self.controller.clear_if(claim).map_err(Error::uncertain)?;
         }
 
@@ -94,11 +108,10 @@ impl Client {
     async fn restart_claimed(&self, before: &Session) -> Result<Value> {
         // Input has its own process. Clear held state there before restarting
         // the capture/command helper; a new capture PID alone proves nothing
-        // about an uncertain mouse or keyboard action.
-        let initial = self.status().await;
-        // A service whose file was replaced (an app update) cannot become
-        // ready under the restarted helper; it is replaced there instead.
-        let observation = Observation::decode(&initial);
+        // about an uncertain mouse or keyboard action. A service whose file was
+        // replaced (an app update) cannot become ready under the restarted
+        // helper; it is replaced there instead.
+        let observation = self.observed().await;
         let stale = !observation.input_build_current();
         let (input_pid, _) = self.ensure_input(&observation).await?;
         let session = self.identity().await?;
@@ -134,49 +147,7 @@ impl Client {
 
         // The helper was told to restart: from here on, every failure leaves
         // the outcome unknown, so the claim stays until recovery.
-        let recovery = async {
-            loop {
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                let status = self.status().await;
-
-                // Settle only with a new capture process and the same input
-                // service whose cleanup was acknowledged, idle and empty.
-                let observation = Observation::decode(&status);
-                let Ok(session) = observation.require_hidden(self.config.helper_uid) else {
-                    continue;
-                };
-
-                if session.epoch.capture_pid == before.epoch.capture_pid {
-                    continue;
-                }
-
-                if observation.settled_in(&session, input_pid) {
-                    self.controller.clear().map_err(Error::uncertain)?;
-                    return Ok(json!({"ok": true, "restarted": true, "session": status}));
-                }
-
-                // Its cleanup was confirmed above, so nothing is held: a stale
-                // service that is not ready under the new helper is replaced.
-                if stale
-                    && observation.native.pid == Some(input_pid)
-                    && observation.native.ready == Some(false)
-                {
-                    self.upgrade_input_for(&status, true)
-                        .await
-                        .map_err(Error::uncertain)?;
-                    self.controller.clear().map_err(Error::uncertain)?;
-                    let status = self.status().await;
-
-                    return Ok(json!({
-                        "ok": true,
-                        "restarted": true,
-                        "inputReplaced": true,
-                        "session": status,
-                    }));
-                }
-            }
-        };
-
+        let recovery = self.confirm_restart(before, input_pid, stale);
         tokio::time::timeout(Duration::from_secs(20), recovery)
             .await
             .map_err(|_| {
@@ -186,6 +157,53 @@ impl Client {
                 )
                 .uncertain()
             })?
+    }
+
+    /// Wait for a new capture process and the same input service whose
+    /// cleanup was acknowledged, idle and empty, then settle. A `stale`
+    /// service that is not ready under the new helper is replaced there.
+    async fn confirm_restart(
+        &self,
+        before: &Session,
+        input_pid: u32,
+        stale: bool,
+    ) -> Result<Value> {
+        loop {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let status = self.status().await;
+            let observation = Observation::decode(&status);
+            let Ok(session) = observation.require_hidden(self.config.helper_uid) else {
+                continue;
+            };
+
+            if session.epoch.capture_pid == before.epoch.capture_pid {
+                continue;
+            }
+
+            if observation.settled_in(&session, input_pid) {
+                self.controller.clear().map_err(Error::uncertain)?;
+                return Ok(json!({"ok": true, "restarted": true, "session": status}));
+            }
+
+            // Its cleanup was confirmed, so nothing is held.
+            if stale
+                && observation.native.pid == Some(input_pid)
+                && observation.native.ready == Some(false)
+            {
+                self.upgrade_input_for(&status, true)
+                    .await
+                    .map_err(Error::uncertain)?;
+                self.controller.clear().map_err(Error::uncertain)?;
+                let status = self.status().await;
+
+                return Ok(json!({
+                    "ok": true,
+                    "restarted": true,
+                    "inputReplaced": true,
+                    "session": status,
+                }));
+            }
+        }
     }
 
     /// Log the helper out (`atlas logout`) while it is in the background
@@ -208,26 +226,19 @@ impl Client {
     /// [`Client::logout`] under control already held (`_ownership`), for a
     /// caller that keeps it across more than the log-out, such as uninstall.
     pub(crate) async fn logout_held(&self, _ownership: &Ownership, force: bool) -> Result<Value> {
-        let status = self.status().await;
-        let observation = Observation::decode(&status);
+        let observation = self.observed().await;
         observation.require_hidden(self.config.helper_uid)?;
         let claim = self.controller.quarantine()?;
 
         // Background jobs are stopped first, so none outlives the login it
         // ran in unsupervised.
-        let jobs = if observation.has_capability(crate::daemon::protocol::JOBS) {
-            Some(crate::jobs::stop_every(self, crate::daemon::protocol::StopReason::Stopped).await)
+        let jobs = if observation.has_capability(crate::protocol::JOBS) {
+            Some(crate::jobs::stop_every(self, crate::protocol::StopReason::Stopped).await)
         } else {
             None
         };
-        let with_jobs = |mut reply: Value| {
-            if let Some(jobs) = &jobs {
-                jobs.say(&mut reply);
-            }
-            reply
-        };
 
-        match self
+        let requested = self
             .mutate(
                 Mutation::Logout,
                 json!({"op": "logout", "force": force}),
@@ -235,26 +246,22 @@ impl Client {
                 None,
                 None,
             )
-            .await
-        {
-            Ok(reply) if reply["ok"] == true => {}
+            .await;
+        if !requested.as_ref().is_ok_and(|reply| reply["ok"] == true) {
             // Refused before anything happened: nothing is pending.
-            Ok(reply) if reply["uncertain"] != true => {
+            if settled(&requested) {
                 self.controller.clear_if(&claim)?;
-                return Ok(reply);
             }
-            Ok(reply) => return Ok(reply),
-            Err(error) => {
-                if !error.uncertain {
-                    self.controller.clear_if(&claim)?;
-                }
-                return Err(error);
-            }
+            return requested;
         }
 
         if self.desktop_gone(if force { 15 } else { 30 }).await {
             self.controller.clear_if(&claim)?;
-            return Ok(with_jobs(json!({"ok": true, "loggedOut": true})));
+            let mut reply = json!({"ok": true, "loggedOut": true});
+            if let Some(jobs) = &jobs {
+                jobs.say(&mut reply);
+            }
+            return Ok(reply);
         }
 
         if force {

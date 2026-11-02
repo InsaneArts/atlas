@@ -3,7 +3,7 @@
 //! the cleanup holds.
 use super::{
     plan::{Collection, Job},
-    run::{Hands, Quitted},
+    run::{Hands, JobEnd, Quitted},
     targets::{still_in_installs, still_running},
 };
 use crate::{
@@ -12,13 +12,12 @@ use crate::{
     client::{Actor, AppList, Client},
     collect::{self, Intact},
     control::Ownership,
-    daemon::protocol::{JobId, Shown},
-    environment::{self, InstallState, PlanState, Undone},
+    environment::{self, InstallState, PlanState, RemovalReply, Undone},
     error::{Code, Error, Result},
     files::Token,
     host_session::Key,
+    protocol::{JobId, Shown},
 };
-use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -46,16 +45,12 @@ impl<'a> Live<'a> {
     }
 
     /// Hands that act under `ownership`.
-    pub(super) fn acting(client: &'a Client, ownership: &'a Ownership) -> Self {
+    pub(super) fn acting(client: &'a Client, ownership: &'a Ownership, unknown: bool) -> Self {
         Self {
             ownership: Some(ownership),
+            unknown,
             ..Self::reading(client)
         }
-    }
-
-    /// These hands, acting while an earlier outcome is `unknown`.
-    pub(super) fn knowing(self, unknown: bool) -> Self {
-        Self { unknown, ..self }
     }
 
     fn held(&self) -> Result<&Ownership> {
@@ -121,7 +116,7 @@ impl Hands for Live<'_> {
             if started.elapsed() >= agent::QUIT_WAIT {
                 return Ok(Quitted::TimedOut(format!(
                     "{} running from an installed app did not quit within {} seconds",
-                    crate::ui::text::count(still, "process"),
+                    crate::name::count(still, "process"),
                     agent::QUIT_WAIT.as_secs()
                 )));
             }
@@ -133,8 +128,10 @@ impl Hands for Live<'_> {
         environment::undo_plan(self.client, self.held()?, plan).await
     }
 
-    async fn remove_install(&self, install: &Token) -> Result<Value> {
-        environment::remove_app(self.client, self.held()?, install).await
+    async fn remove_install(&self, install: &Token) -> Result<RemovalReply> {
+        environment::remove_app(self.client, self.held()?, install)
+            .await
+            .map(RemovalReply::read)
     }
 
     fn intact(&self, collection: &Collection) -> Intact {
@@ -165,9 +162,10 @@ impl Hands for Live<'_> {
             .collect())
     }
 
-    async fn stop_job(&self, task: &Key, id: &JobId) -> Result<Value> {
+    async fn stop_job(&self, task: &Key, id: &JobId) -> Result<JobEnd> {
         self.held()?;
-        crate::jobs::stop_for_cleanup(self.client, task, id).await
+        let reply = crate::jobs::stop_for_cleanup(self.client, task, id).await?;
+        Ok(JobEnd::read(&reply))
     }
 
     fn unknown(&self) -> bool {

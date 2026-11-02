@@ -3,9 +3,9 @@
 //! memory instead, so what the daemon decided is never lost with it.
 use super::record::Record;
 use crate::{
-    daemon::protocol::{JobId, JobState},
     error::Result,
     files::Durability,
+    protocol::{JobId, JobState},
     record_folder::{LISTED, RecordFolder, Records},
 };
 use std::{
@@ -111,9 +111,7 @@ impl Store {
     /// Keep `record`: written whole, or held in memory when the write
     /// fails. Whether it reached the disk.
     pub(super) fn put(&mut self, record: &Record) -> bool {
-        let written = serde_json::to_vec(record)
-            .ok()
-            .is_some_and(|bytes| self.folder.write(&record.id, &bytes).is_ok());
+        let written = self.write(record).is_ok();
         if written {
             self.unwritten.remove(&record.id);
         } else {
@@ -176,7 +174,7 @@ impl Store {
                         record.id,
                     ))
                 }
-                _ => None,
+                Found::Record(_) | Found::Unreadable(_) => None,
             })
             .collect();
         ended.sort();

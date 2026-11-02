@@ -55,14 +55,14 @@ impl ElementFilter {
             return Some(NameMatch::Exact);
         };
 
-        let text = |value: &Option<String>, attribute: &str| {
+        let text = |value: Option<&str>, attribute: &str| {
             if cut(attribute) {
-                return cut_match(value.as_deref(), name, unknown(attribute));
+                return cut_match(value, name, unknown(attribute));
             }
             if unknown(attribute) {
                 return Some(NameMatch::Exact);
             }
-            value.as_deref().and_then(|text| name_match(text, name))
+            value.and_then(|text| name_match(text, name))
         };
 
         let identifier = if cut("AXIdentifier") {
@@ -83,19 +83,17 @@ impl ElementFilter {
                 .map(|_| NameMatch::Exact)
         };
 
-        let label = if cut("AXValue") {
-            cut_match(label(element), name, unknown("AXValue"))
-        } else if unknown("AXValue") {
+        let label = if !cut("AXValue") && unknown("AXValue") {
             // A static text whose value failed to read may be the label.
             (element.role.as_deref() == Some("AXStaticText") || unknown("AXRole"))
                 .then_some(NameMatch::Exact)
         } else {
-            label(element).and_then(|text| name_match(text, name))
+            text(label(element), "AXValue")
         };
 
         [
-            text(&element.title, "AXTitle"),
-            text(&element.description, "AXDescription"),
+            text(element.title.as_deref(), "AXTitle"),
+            text(element.description.as_deref(), "AXDescription"),
             identifier,
             label,
         ]

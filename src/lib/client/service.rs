@@ -22,6 +22,29 @@ pub(super) fn process_exists(pid: u32) -> bool {
     )
 }
 
+/// The process a launch printed, the only one that may satisfy readiness.
+/// Any other answer may still have started something.
+fn launched_pid(reply: &Value) -> Result<u32> {
+    let failed = || {
+        Error::new(
+            Code::Startup,
+            "The helper could not launch the Rust input service",
+        )
+        .uncertain()
+    };
+    if reply["ok"] != true || reply["exitCode"] != 0 {
+        return Err(failed());
+    }
+
+    let output = run_output(reply, 32).map_err(|cause| failed().with_source(cause))?;
+    let text = String::from_utf8(output).map_err(|cause| failed().with_source(cause))?;
+    let pid = text
+        .trim()
+        .parse::<u32>()
+        .map_err(|cause| failed().with_source(cause))?;
+    if pid > 1 { Ok(pid) } else { Err(failed()) }
+}
+
 /// Refuse input work while the helper's Atlas lacks Accessibility; an
 /// unknown answer is not a refusal.
 pub(super) fn require_accessibility(observation: &Observation) -> Result<()> {
@@ -175,6 +198,7 @@ impl Client {
                         error.code,
                         format!("The running input service refused to stop: {}", error.error),
                     )
+                    .with_source(error)
                 }
             })?;
 
@@ -224,22 +248,7 @@ impl Client {
             ],
             "timeoutMs": 3000,
         });
-        let reply = self.transport.call(&request).await?;
-
-        // The launch prints the child PID; only that process may satisfy readiness.
-        let child = (reply["ok"] == true && reply["exitCode"] == 0)
-            .then(|| run_output(&reply, 32).ok())
-            .flatten()
-            .and_then(|output| String::from_utf8(output).ok())
-            .and_then(|text| text.trim().parse::<u32>().ok())
-            .filter(|pid| *pid > 1)
-            .ok_or_else(|| {
-                Error::new(
-                    Code::Startup,
-                    "The helper could not launch the Rust input service",
-                )
-                .uncertain()
-            })?;
+        let child = launched_pid(&self.transport.call(&request).await?)?;
 
         let deadline = Instant::now() + Duration::from_secs(6);
 

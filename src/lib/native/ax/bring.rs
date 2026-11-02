@@ -3,16 +3,18 @@
 //! Resolution, each write and final observation share one reader deadline;
 //! retained elements identify the destination but never replace fresh admission.
 use super::{
-    ABSENT, Unread, Within, ffi,
-    keyboard::{Ask, Live, Reader},
+    ABSENT, Status, Unread, Within, ffi,
+    keyboard::{Ask, Live, PARENTS, REQUEST, Reader, UnknownNames, remaining},
+    system::bounds,
 };
 use crate::{
     actions::Expect,
     error::{Code, Error, Result},
     name::same_text,
-    native::focus::{CHECK_BUDGET, FIELDS, Need},
+    native::focus::{CHECK_BUDGET, FIELDS, Need, Reason, refused},
     process::{Info, Instance},
     screen::{
+        elements::{Element, Frame},
         select::{ElementFilter, NameMatch},
         windows::{self, Kind, Listed, Window},
     },
@@ -21,7 +23,6 @@ use objc2_application_services::AXError;
 use objc2_core_foundation::{CFArray, CFString, CFType, Type};
 use std::time::{Duration, Instant};
 
-const REQUEST: Duration = Duration::from_millis(250);
 const WRITE_BUDGET: Duration = Duration::from_secs(1);
 const SETTLE_BUDGET: Duration = Duration::from_millis(50);
 const WINDOWS: usize = 64;
@@ -33,7 +34,7 @@ pub(super) trait Backend: Ask {
     fn pause(&mut self, duration: Duration) {
         std::thread::sleep(duration);
     }
-    fn app(&mut self, pid: i64) -> Option<Self::Element>;
+    fn app(&mut self, pid: i64) -> Result<Self::Element>;
     fn windows(&mut self) -> Result<Vec<Window>>;
     /// A complete, typed list, or an error. Never a truncated prefix.
     fn list(
@@ -59,10 +60,9 @@ pub(super) enum Write {
 }
 
 impl Backend for Live {
-    fn app(&mut self, pid: i64) -> Option<Self::Element> {
-        application(pid)
-            .ok()
-            .and_then(|instance| ffi::application(instance.pid))
+    fn app(&mut self, pid: i64) -> Result<Self::Element> {
+        let instance = application(pid)?;
+        ffi::application(instance.pid).ok_or_else(|| refused(Reason::App))
     }
 
     fn windows(&mut self) -> Result<Vec<Window>> {
@@ -78,14 +78,11 @@ impl Backend for Live {
     ) -> Result<Vec<Self::Element>> {
         let name = CFString::from_static_str(name);
         let bound = || {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Unread::Slow.error());
+            Reader {
+                ask: Live,
+                deadline,
             }
-            if ffi::set_timeout(element, left.min(REQUEST)) != AXError::Success {
-                return Err(Unread::Failed.error());
-            }
-            Ok(())
+            .bound(element, REQUEST)
         };
         bound()?;
         let count = match ffi::count(element, &name) {
@@ -160,12 +157,7 @@ fn supports_raise(
     if names.len() > ACTIONS {
         return Err(Unread::Malformed.error());
     }
-    let mut check = || {
-        if now() >= deadline {
-            return Err(Unread::Slow.error());
-        }
-        Ok(())
-    };
+    let mut check = || remaining(deadline, now()).map(|_| ());
     let raise = CFString::from_static_str("AXRaise");
     let mut supported = false;
     for name in names.iter() {
@@ -184,23 +176,31 @@ fn supports_raise(
 fn application_with(
     pid: i64,
     uid: u32,
-    describe: impl FnOnce(libc::pid_t) -> Option<Info>,
-) -> Option<Instance> {
-    let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)?;
-    let info = describe(pid)?;
-    (info.instance.pid == pid && info.uid == uid && !info.zombie).then_some(info.instance)
+    describe: impl FnOnce(libc::pid_t) -> Result<Option<Info>>,
+) -> Result<Option<Instance>> {
+    let Some(pid) = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0) else {
+        return Ok(None);
+    };
+    Ok(describe(pid)?
+        .filter(|info| info.instance.pid == pid && info.uid == uid && !info.zombie)
+        .map(|info| info.instance))
 }
 
+/// A process that cannot be read is refused as gone, keeping why.
 pub(in crate::native) fn application(pid: i64) -> Result<Instance> {
-    application_with(pid, nix::unistd::geteuid().as_raw(), |pid| {
-        crate::process::info(pid).ok().flatten()
-    })
-    .ok_or_else(|| refused("app", "The target app is no longer running"))
+    application_with(pid, nix::unistd::geteuid().as_raw(), crate::process::info)
+        .map_err(|cause| refused(Reason::App).with_source(cause))?
+        .ok_or_else(|| refused(Reason::App))
 }
 
 pub(in crate::native) fn check_application(target: Option<Instance>) -> Result<()> {
     if let Some(target) = target {
-        same_application(target, application(target.pid.into()).ok())?;
+        match application(target.pid.into()) {
+            Ok(current) => same_application(target, Some(current))?,
+            Err(cause) => {
+                same_application(target, None).map_err(|refusal| refusal.with_source(cause))?;
+            }
+        }
     }
     Ok(())
 }
@@ -216,25 +216,86 @@ pub(in crate::native) fn target_application(expect: &Expect) -> Result<Instance>
 
 fn same_application(target: Instance, current: Option<Instance>) -> Result<()> {
     if current != Some(target) {
-        return Err(refused(
-            "app",
-            "The target app instance is no longer running",
-        ));
+        return Err(refused(Reason::App));
     }
     Ok(())
 }
 
-fn refused(reason: &str, message: &str) -> Error {
-    Error::new(
-        Code::FocusChanged,
-        format!("{message}, so this action and the rest were not sent"),
+/// The frame a window must have to be told from the window list.
+fn frame(window: &Element) -> Result<&Frame> {
+    window
+        .frame
+        .as_ref()
+        .ok_or_else(|| Unread::Malformed.error())
+}
+
+/// Which listed window of app `pid` an element with this `frame` is: the one
+/// its frame, title and kind (by its subrole) leave.
+pub(in crate::native) fn described(
+    window: &Element,
+    frame: &Frame,
+    pid: i64,
+    listed: &[Window],
+) -> Listed {
+    windows::described(
+        listed,
+        pid,
+        frame,
+        window.title.as_deref(),
+        Kind::of(window.subrole.as_deref()),
     )
-    .with("reason", serde_json::json!(reason))
+}
+
+/// Window `number` of app `pid` in `listed`.
+fn named_window(listed: &[Window], pid: i64, number: i64) -> Result<&Window> {
+    listed
+        .iter()
+        .find(|window| window.pid == pid && window.number == number)
+        .ok_or_else(|| refused(Reason::Window))
+}
+
+/// The window that must hold a named field.
+fn field_window<E>(window: Option<&E>) -> Result<&E> {
+    window.ok_or_else(|| refused(Reason::Field))
+}
+
+fn named_field(name: &str) -> ElementFilter {
+    ElementFilter {
+        name: Some(name.to_owned()),
+        ..Default::default()
+    }
+}
+
+/// The one field `matches` leaves, unless it is disabled.
+fn chosen<E>(matches: Vec<(E, Option<bool>)>) -> Result<E> {
+    let mut matches = matches.into_iter();
+    match (matches.next(), matches.next()) {
+        (Some((_, Some(false))), None) => Err(refused(Reason::Disabled)),
+        (Some((element, _)), None) => Ok(element),
+        (None, _) => Err(refused(Reason::Field)),
+        (Some(_), Some(_)) => Err(refused(Reason::Field)),
+    }
 }
 
 struct WindowRef<E> {
     element: E,
     parent: Option<E>,
+}
+
+/// The parent `refs` records for `element`.
+fn parent_of<'a, E: PartialEq>(refs: &'a [WindowRef<E>], element: &E) -> Option<&'a E> {
+    refs.iter()
+        .find(|entry| entry.element == *element)
+        .and_then(|entry| entry.parent.as_ref())
+}
+
+/// What one admission pass judges each window against: the app's windows,
+/// and the window selected, when the selection is explicit.
+struct Scope<'a, E> {
+    refs: Vec<WindowRef<E>>,
+    window: Option<&'a E>,
+    pid: i64,
+    explicit: bool,
 }
 
 impl<A: Backend> Reader<A> {
@@ -307,10 +368,7 @@ impl<A: Backend> Reader<A> {
                     return Err(Unread::Malformed.error());
                 }
                 seen.push(element);
-                parent = refs
-                    .iter()
-                    .find(|entry| entry.element == *element)
-                    .and_then(|entry| entry.parent.as_ref());
+                parent = parent_of(&refs, element);
             }
         }
         Ok(refs)
@@ -331,13 +389,35 @@ impl<A: Backend> Reader<A> {
         Ok(result)
     }
 
-    fn resolve(&mut self, app: &A::Element, pid: i64, number: i64) -> Result<A::Element> {
+    fn listed(&mut self) -> Result<Vec<Window>> {
         let listed = self.ask.windows()?;
         self.left()?;
-        let requested = listed
+        Ok(listed)
+    }
+
+    fn point_window(&mut self, pid: i64, x: f64, y: f64) -> Result<Option<i64>> {
+        let listed = self.listed()?;
+        if listed
             .iter()
-            .find(|window| window.pid == pid && window.number == number)
-            .ok_or_else(|| refused("window", "The named window is not on screen"))?;
+            .any(|window| window.is_menu_bar() && window.bounds.contains(x, y))
+        {
+            return Ok(None);
+        }
+        let candidate = listed
+            .iter()
+            .find(|window| {
+                window.pid == pid
+                    && window.alpha > 0.0
+                    && window.is_apps_or_menu()
+                    && window.bounds.contains(x, y)
+            })
+            .ok_or_else(|| refused(Reason::Point))?;
+        Ok((candidate.layer != windows::MENU_LAYER).then_some(candidate.number))
+    }
+
+    fn resolve(&mut self, app: &A::Element, pid: i64, number: i64) -> Result<A::Element> {
+        let listed = self.listed()?;
+        let requested = named_window(&listed, pid, number)?;
         let mut found = None;
         for WindowRef {
             element: candidate, ..
@@ -348,24 +428,11 @@ impl<A: Backend> Reader<A> {
             if !matches!(window.role.as_deref(), Some("AXWindow" | "AXSheet")) {
                 return Err(Unread::Malformed.error());
             }
-            let frame = window.frame.ok_or_else(|| Unread::Malformed.error())?;
-            if windows::described(
-                std::slice::from_ref(requested),
-                pid,
-                &frame,
-                window.title.as_deref(),
-                Kind::of(window.subrole.as_deref()),
-            ) == Listed::Missing
-            {
+            let frame = frame(&window)?;
+            if described(&window, frame, pid, std::slice::from_ref(requested)) == Listed::Missing {
                 continue;
             }
-            match windows::described(
-                &listed,
-                pid,
-                &frame,
-                window.title.as_deref(),
-                Kind::of(window.subrole.as_deref()),
-            ) {
+            match described(&window, frame, pid, &listed) {
                 Listed::One(n) if n == number => {
                     if found.is_some() {
                         return Err(Unread::Alike.error());
@@ -373,7 +440,7 @@ impl<A: Backend> Reader<A> {
                     found = Some(candidate);
                 }
                 Listed::Several => return Err(Unread::Alike.error()),
-                _ => {}
+                Listed::One(_) | Listed::Missing => {}
             }
         }
         let found = found.ok_or_else(|| Unread::Unlisted.error())?;
@@ -384,19 +451,12 @@ impl<A: Backend> Reader<A> {
     fn identity(&mut self, element: &A::Element, pid: i64, number: i64) -> Result<()> {
         self.owned(element, pid)?;
         let window = self.window(element)?;
-        let frame = window.frame.ok_or_else(|| Unread::Malformed.error())?;
-        let listed = self.ask.windows()?;
-        self.left()?;
-        match windows::described(
-            &listed,
-            pid,
-            &frame,
-            window.title.as_deref(),
-            Kind::of(window.subrole.as_deref()),
-        ) {
+        let frame = frame(&window)?;
+        let listed = self.listed()?;
+        match described(&window, frame, pid, &listed) {
             Listed::One(current) if current == number => Ok(()),
             Listed::Several => Err(Unread::Alike.error()),
-            _ => Err(Unread::Unlisted.error()),
+            Listed::One(_) | Listed::Missing => Err(Unread::Unlisted.error()),
         }
     }
 
@@ -404,10 +464,9 @@ impl<A: Backend> Reader<A> {
         &mut self,
         candidate: &A::Element,
         parent: Option<&A::Element>,
-        window: Option<&A::Element>,
-        pid: i64,
-        explicit: bool,
+        scope: &Scope<'_, A::Element>,
     ) -> Result<()> {
+        let (window, pid, explicit) = (scope.window, scope.pid, scope.explicit);
         self.owned(candidate, pid)?;
         let role = self.text(candidate, "AXRole")?;
         let subrole = self.text(candidate, "AXSubrole")?;
@@ -427,12 +486,12 @@ impl<A: Backend> Reader<A> {
             };
             self.owned(&parent, pid)?;
             if window.is_none() || window == Some(&parent) || window == Some(candidate) {
-                return Err(refused("sheet", "A sheet is open over the target window"));
+                return Err(refused(Reason::Sheet));
             }
             return Ok(());
         }
         if modal == Some(true) || subrole.as_deref() == Some("AXSystemDialog") {
-            return Err(refused("sheet", "A modal dialog blocks the target window"));
+            return Err(refused(Reason::Sheet));
         }
         if subrole.as_deref() == Some("AXDialog") && modal.is_none() {
             return Err(Unread::Failed.error());
@@ -440,9 +499,44 @@ impl<A: Backend> Reader<A> {
         Ok(())
     }
 
+    /// Walk up from the focused element to the window that holds it.
+    fn admit_focus_path(
+        &mut self,
+        mut element: A::Element,
+        focused: Option<&A::Element>,
+        scope: &Scope<'_, A::Element>,
+    ) -> Result<()> {
+        for _ in 0..PARENTS {
+            self.owned(&element, scope.pid)?;
+            if Some(&element) == scope.window {
+                return Ok(());
+            }
+            let role = self.text(&element, "AXRole")?;
+            if role.as_deref() == Some("AXApplication") {
+                return Ok(());
+            }
+            let parent = parent_of(&scope.refs, &element);
+            self.admit_window(&element, parent, scope)?;
+            if parent.is_some() || matches!(role.as_deref(), Some("AXWindow" | "AXSheet")) {
+                if role.as_deref() != Some("AXSheet")
+                    && parent.is_none()
+                    && scope.window == focused
+                    && scope.window.is_some()
+                {
+                    return Err(Unread::Failed.error());
+                }
+                return Ok(());
+            }
+            element = self
+                .reference(&element, "AXParent")?
+                .ok_or_else(|| Unread::Failed.error())?;
+        }
+        Err(Unread::Deep.error())
+    }
+
     fn sheet_parent(&mut self, sheet: &A::Element, pid: i64) -> Result<A::Element> {
         let mut element = sheet.clone();
-        for _ in 0..256 {
+        for _ in 0..PARENTS {
             element = self
                 .reference(&element, "AXParent")?
                 .ok_or_else(|| Unread::Failed.error())?;
@@ -461,25 +555,21 @@ impl<A: Backend> Reader<A> {
             .window(sheet)?
             .frame
             .ok_or_else(|| Unread::Malformed.error())?;
-        if x >= frame.x && y >= frame.y && x < frame.x + frame.width && y < frame.y + frame.height {
+        if bounds(frame).contains(x, y) {
             Ok(())
         } else {
-            Err(refused("sheet", "The point is outside the target sheet"))
+            Err(refused(Reason::Sheet))
         }
     }
 
     fn find_field(&mut self, window: &A::Element, pid: i64, name: &str) -> Result<A::Element> {
-        let filter = ElementFilter {
-            name: Some(name.to_owned()),
-            ..Default::default()
-        };
+        let filter = named_field(name);
         let mut stack = vec![(window.clone(), 0)];
         let mut seen = Vec::new();
         let mut best = None;
         let mut matches = Vec::new();
         let mut identifiers = Vec::new();
-        let mut failed_names = false;
-        let mut failed_identifier = false;
+        let mut unknown = UnknownNames::default();
         while let Some((element, depth)) = stack.pop() {
             if seen.len() >= ELEMENTS || depth > DEPTH || seen.contains(&element) {
                 return Err(Unread::Deep.error());
@@ -492,8 +582,8 @@ impl<A: Backend> Reader<A> {
             }
             if role.as_deref().is_some_and(|role| FIELDS.contains(&role)) {
                 let (mut described, failed) = self.field_names(&element)?;
-                failed_names |= failed.contains(&"AXTitle") || failed.contains(&"AXDescription");
-                failed_identifier |= failed.contains(&"AXIdentifier");
+                unknown.labels |= failed.labels;
+                unknown.identifier |= failed.identifier;
                 // Identifiers name their own namespace and only match whole.
                 // Labels cannot create or conceal an identifier duplicate.
                 if described
@@ -503,14 +593,14 @@ impl<A: Backend> Reader<A> {
                 {
                     identifiers.push((element.clone(), described.enabled));
                 }
-                if let Some(rank) = filter.match_of(&described) {
-                    if best.is_none_or(|best| rank > best) {
-                        best = Some(rank);
+                if let Some(rank) = filter.match_of(&described)
+                    && best.is_none_or(|best| rank >= best)
+                {
+                    if best != Some(rank) {
                         matches.clear();
+                        best = Some(rank);
                     }
-                    if best == Some(rank) {
-                        matches.push((element.clone(), described.enabled));
-                    }
+                    matches.push((element.clone(), described.enabled));
                 }
             }
             for child in self.list(
@@ -522,30 +612,16 @@ impl<A: Backend> Reader<A> {
             }
         }
         if !identifiers.is_empty() {
-            if failed_identifier {
+            if unknown.identifier {
                 return Err(Unread::Failed.error());
             }
             matches = identifiers;
-        } else if (failed_names || failed_identifier) && best.is_some() {
-            return Err(refused(
-                "field",
-                "The fields cannot be told apart because a name could not be read; a whole-name match is required",
-            ));
-        } else if matches.is_empty() && failed_identifier {
+        } else if (unknown.labels || unknown.identifier) && best.is_some() {
+            return Err(refused(Reason::Field));
+        } else if matches.is_empty() && unknown.identifier {
             return Err(Unread::Failed.error());
         }
-        match matches.as_slice() {
-            [(_, Some(false))] => Err(refused("disabled", "That field is disabled")),
-            [(element, _)] => Ok(element.clone()),
-            [] => Err(refused(
-                "field",
-                "No field in the target window has that name",
-            )),
-            _ => Err(refused(
-                "field",
-                "The named field could not be selected uniquely",
-            )),
-        }
+        chosen(matches)
     }
 }
 
@@ -555,7 +631,9 @@ struct Target<A: Backend> {
     window: Option<A::Element>,
     field: Option<A::Element>,
     number: Option<i64>,
-    writes: Vec<(A::Element, Write)>,
+    /// Whether the window is raised: it was named or lies under the point,
+    /// not only inferred as proof for a named field.
+    raise: bool,
     changed: bool,
     point: Option<(f64, f64)>,
 }
@@ -564,13 +642,11 @@ impl<A: Backend> Target<A> {
     /// Keep an inferred field window as proof, without adding a raise that
     /// an app-only request did not previously make.
     fn resolve(ask: A, expect: &Expect, need: Need, deadline: Instant) -> Result<Self> {
+        let pid = expect.pid();
         let mut reader = Reader { ask, deadline };
-        let app = reader
-            .ask
-            .app(expect.pid())
-            .ok_or_else(|| refused("app", "The target app is no longer running"))?;
+        let app = reader.ask.app(pid)?;
         reader.left()?;
-        reader.owned(&app, expect.pid())?;
+        reader.owned(&app, pid)?;
         if expect.field().is_some() {
             // Ignore the result because this read only wakes the browser's page tree.
             let _ = reader.text(&app, "AXRole");
@@ -580,79 +656,38 @@ impl<A: Backend> Target<A> {
             Need::Drag { from, .. } => Some(from),
             Need::Keys | Need::Nothing => None,
         };
-        let mut number = if let Some(number) = expect.window() {
-            Some(number)
-        } else if let Some((x, y)) = point {
-            let listed = reader.ask.windows()?;
-            reader.left()?;
-            let menu = listed
-                .iter()
-                .any(|window| window.is_menu_bar() && window.bounds.contains(x, y));
-            if menu {
-                None
-            } else {
-                let candidate = listed
-                    .iter()
-                    .find(|window| {
-                        window.pid == expect.pid()
-                            && window.alpha > 0.0
-                            && window.is_apps_or_menu()
-                            && window.bounds.contains(x, y)
-                    })
-                    .ok_or_else(|| refused("point", "No window of the app is at that point"))?;
-                (candidate.layer != windows::MENU_LAYER).then_some(candidate.number)
-            }
-        } else {
-            None
+        let mut number = match (expect.window(), point) {
+            (Some(number), _) => Some(number),
+            (None, Some((x, y))) => reader.point_window(pid, x, y)?,
+            (None, None) => None,
         };
+        let raise = number.is_some();
         let window = match number {
-            Some(number) => Some(reader.resolve(&app, expect.pid(), number)?),
-            None => {
-                let focused = reader.reference(&app, "AXFocusedWindow")?;
-                match focused {
-                    Some(window) => Some(window),
-                    None => reader.reference(&app, "AXMainWindow")?,
-                }
-            }
+            Some(number) => Some(reader.resolve(&app, pid, number)?),
+            None => match reader.reference(&app, "AXFocusedWindow")? {
+                Some(window) => Some(window),
+                None => reader.reference(&app, "AXMainWindow")?,
+            },
         };
-        let mut writes = vec![(app.clone(), Write::Flag("AXFrontmost"))];
-        if let (Some(window), Some(_)) = (&window, number) {
-            writes.extend([
-                (window.clone(), Write::Raise),
-                (window.clone(), Write::Flag("AXMain")),
-                (window.clone(), Write::Flag("AXFocused")),
-            ]);
-        }
         if number.is_none() && expect.field().is_some() {
-            let window = window
-                .as_ref()
-                .ok_or_else(|| refused("field", "No window of the app holds the named field"))?;
-            reader.owned(window, expect.pid())?;
-            let described = reader.window(window)?;
+            let window = field_window(window.as_ref())?;
+            reader.owned(window, pid)?;
+            let shown = reader.window(window)?;
             let listed = reader.ask.windows()?;
-            let frame = described.frame.ok_or_else(|| Unread::Malformed.error())?;
-            number = Some(
-                match windows::described(
-                    &listed,
-                    expect.pid(),
-                    &frame,
-                    described.title.as_deref(),
-                    Kind::of(described.subrole.as_deref()),
-                ) {
-                    Listed::One(number) => number,
-                    Listed::Missing => return Err(Unread::Unlisted.error()),
-                    Listed::Several => return Err(Unread::Alike.error()),
-                },
-            );
+            number = Some(match described(&shown, frame(&shown)?, pid, &listed) {
+                Listed::One(number) => number,
+                Listed::Missing => return Err(Unread::Unlisted.error()),
+                Listed::Several => return Err(Unread::Alike.error()),
+            });
         }
         Ok(Self {
             reader,
             app,
             window,
             number,
+            raise,
             point,
             field: None,
-            writes,
             changed: false,
         })
     }
@@ -666,7 +701,13 @@ impl<A: Backend> Target<A> {
         let point = self.point;
         let explicit = expect.window().is_some() || point.is_some();
         let window = self.window.as_ref().filter(|_| explicit);
-        let refs = reader.window_refs(app, pid)?;
+        let scope = Scope {
+            refs: reader.window_refs(app, pid)?,
+            window,
+            pid,
+            explicit,
+        };
+        let refs = &scope.refs;
         if let Some(window) = window {
             let attached = refs
                 .iter()
@@ -680,71 +721,83 @@ impl<A: Backend> Target<A> {
                 }
             }
         }
-        for entry in &refs {
-            reader.admit_window(&entry.element, entry.parent.as_ref(), window, pid, explicit)?;
+        for entry in refs {
+            reader.admit_window(&entry.element, entry.parent.as_ref(), &scope)?;
         }
         if let Some(window) = window
             && !refs.iter().any(|entry| entry.element == *window)
         {
-            reader.admit_window(window, None, Some(window), pid, explicit)?;
+            reader.admit_window(window, None, &scope)?;
             if !reader.sheets(window, pid)?.is_empty() {
-                return Err(refused("sheet", "A sheet is open over the target window"));
+                return Err(refused(Reason::Sheet));
             }
         }
         let focused = reader.reference(app, "AXFocusedWindow")?;
         let main = reader.reference(app, "AXMainWindow")?;
         for current in [focused.as_ref(), main.as_ref()].into_iter().flatten() {
-            let parent = refs
-                .iter()
-                .find(|entry| entry.element == *current)
-                .and_then(|entry| entry.parent.as_ref());
-            reader.admit_window(current, parent, window, pid, explicit)?;
+            reader.admit_window(current, parent_of(refs, current), &scope)?;
             for sheet in reader.sheets(current, pid)? {
-                reader.admit_window(&sheet, Some(current), window, pid, explicit)?;
+                reader.admit_window(&sheet, Some(current), &scope)?;
             }
         }
-        if let Some(mut element) = reader.reference(app, "AXFocusedUIElement")? {
-            for depth in 0..256 {
-                reader.owned(&element, pid)?;
-                if Some(&element) == window {
-                    break;
-                }
-                let role = reader.text(&element, "AXRole")?;
-                if role.as_deref() == Some("AXApplication") {
-                    break;
-                }
-                let parent = refs
-                    .iter()
-                    .find(|entry| entry.element == element)
-                    .and_then(|entry| entry.parent.as_ref());
-                reader.admit_window(&element, parent, window, pid, explicit)?;
-                if parent.is_some() || matches!(role.as_deref(), Some("AXWindow" | "AXSheet")) {
-                    if role.as_deref() != Some("AXSheet")
-                        && parent.is_none()
-                        && window == focused.as_ref()
-                        && window.is_some()
-                    {
-                        return Err(Unread::Failed.error());
-                    }
-                    break;
-                }
-                element = reader
-                    .reference(&element, "AXParent")?
-                    .ok_or_else(|| Unread::Failed.error())?;
-                if depth == 255 {
-                    return Err(Unread::Deep.error());
-                }
+        if let Some(element) = reader.reference(app, "AXFocusedUIElement")? {
+            reader.admit_focus_path(element, focused.as_ref(), &scope)?;
+        }
+        Ok(())
+    }
+
+    /// A window both named and pointed at must lie under the point.
+    fn check_point(&mut self, expect: &Expect) -> Result<()> {
+        if let (Some(number), Some((x, y))) = (expect.window(), self.point) {
+            let listed = self.reader.listed()?;
+            let window = named_window(&listed, expect.pid(), number)?;
+            if !window.bounds.contains(x, y) {
+                return Err(refused(Reason::Window));
             }
         }
         Ok(())
     }
 
+    /// Whether the window and field already have focus, so nothing need be
+    /// written; a named field found whole is kept as the target's.
+    fn in_place(&mut self, expect: &Expect) -> Result<bool> {
+        if self.point.is_some() && self.raise {
+            let focused = self.reader.reference(&self.app, "AXFocusedWindow")?;
+            if focused.as_ref() != self.window.as_ref() {
+                return Ok(false);
+            }
+        }
+        let Some(name) = expect.field() else {
+            return Ok(true);
+        };
+        if let Some(focused) = self.reader.reference(&self.app, "AXFocusedUIElement")? {
+            let field = self.reader.field(&focused)?;
+            if named_field(name).match_of(&field) == Some(NameMatch::Exact) {
+                self.field = Some(focused);
+            }
+        }
+        Ok(self.field.is_some())
+    }
+
+    /// The focus requests that bring the destination forward, in order.
+    fn writes(&self) -> Vec<(A::Element, Write)> {
+        let mut writes = vec![(self.app.clone(), Write::Flag("AXFrontmost"))];
+        if let Some(window) = self.window.as_ref().filter(|_| self.raise) {
+            writes.extend([
+                (window.clone(), Write::Raise),
+                (window.clone(), Write::Flag("AXMain")),
+                (window.clone(), Write::Flag("AXFocused")),
+            ]);
+        }
+        if let Some(field) = &self.field {
+            writes.push((field.clone(), Write::Flag("AXFocused")));
+        }
+        writes
+    }
+
     /// Recheck admission and identity for each supported focus write.
     fn focus(&mut self, expect: &Expect, guard: &impl Fn() -> Result<()>) -> Result<()> {
-        if self.writes.is_empty() {
-            return Ok(());
-        }
-        for (element, operation) in std::mem::take(&mut self.writes) {
+        for (element, operation) in self.writes() {
             self.admit(expect)?;
             guard()?;
             self.reader.bound(&element, REQUEST)?;
@@ -758,9 +811,8 @@ impl<A: Backend> Target<A> {
             }
             self.admit(expect)?;
             if self.field.as_ref() == Some(&element) {
-                let described = Reader::field(&mut self.reader, &element)?;
-                if described.enabled == Some(false) {
-                    return Err(refused("disabled", "That field is disabled"));
+                if self.reader.field(&element)?.enabled == Some(false) {
+                    return Err(refused(Reason::Disabled));
                 }
                 if self.reader.within(element.clone(), self.window.as_ref())? != Within::Window {
                     return Err(Unread::Failed.error());
@@ -777,7 +829,8 @@ impl<A: Backend> Target<A> {
                     Code::Uncertain,
                     "The app did not acknowledge the focus request",
                 )
-                .uncertain());
+                .uncertain()
+                .with_source(Status(status)));
             }
             self.changed |= status == AXError::Success;
             guard()?;
@@ -793,12 +846,9 @@ impl<A: Backend> Target<A> {
                 )
             {
                 if self.field.as_ref() == Some(&element) {
-                    return Err(refused(
-                        "field",
-                        "The named field did not accept keyboard focus",
-                    ));
+                    return Err(refused(Reason::Field).with_source(Status(status)));
                 }
-                return Err(Unread::Failed.error());
+                return Err(Unread::Failed.reading(status));
             }
             self.reader.left()?;
         }
@@ -817,13 +867,24 @@ impl<A: Backend> Target<A> {
             // The retained AX elements' safe equality uses CFEqual. A child
             // editor is deliberately refused: ancestry alone is not identity.
             if focused.as_ref() != Some(field) {
-                return Err(refused(
-                    "field",
-                    "The selected field did not receive keyboard focus",
-                ));
+                return Err(refused(Reason::Field));
             }
         }
         Ok(role)
+    }
+
+    /// Admission and proof, each checked against the other: admission is
+    /// another observation whose scan may outlive the earlier proof.
+    fn proven(
+        &mut self,
+        expect: &Expect,
+        deadline: Instant,
+        verify: &mut impl FnMut(Option<i64>, Instant) -> Result<Option<&'static str>>,
+    ) -> Result<Option<&'static str>> {
+        self.admit(expect)?;
+        self.verify(deadline, verify)?;
+        self.admit(expect)?;
+        self.verify(deadline, verify)
     }
 }
 
@@ -838,66 +899,16 @@ fn prepare<A: Backend>(
 ) -> Result<Target<A>> {
     guard()?;
     let mut target = Target::resolve(ask, expect, need, deadline)?;
-    let raise = target
-        .writes
-        .iter()
-        .any(|(_, write)| *write == Write::Raise);
-    let number = target.number;
-    let point = target.point;
     target.admit(expect)?;
     guard()?;
-    if let (Some(number), Some((x, y))) = (expect.window(), point) {
-        let listed = target.reader.ask.windows()?;
-        target.reader.left()?;
-        let window = listed
-            .iter()
-            .find(|window| window.pid == expect.pid() && window.number == number)
-            .ok_or_else(|| refused("window", "The named window is not on screen"))?;
-        if !window.bounds.contains(x, y) {
-            return Err(refused(
-                "window",
-                &format!("Window {number} is not at that point"),
-            ));
-        }
-    }
-    if ready(number)
-        && (point.is_none()
-            || !raise
-            || target
-                .reader
-                .reference(&target.app, "AXFocusedWindow")?
-                .as_ref()
-                == target.window.as_ref())
-    {
-        if let Some(name) = expect.field()
-            && let Some(focused) = target.reader.reference(&target.app, "AXFocusedUIElement")?
-        {
-            let described = target.reader.field(&focused)?;
-            let filter = ElementFilter {
-                name: Some(name.to_owned()),
-                ..Default::default()
-            };
-            if filter.match_of(&described) == Some(NameMatch::Exact) {
-                target.field = Some(focused);
-            }
-        }
-        if expect.field().is_none() || target.field.is_some() {
-            target.writes.clear();
-            return Ok(target);
-        }
+    target.check_point(expect)?;
+    if ready(target.number) && target.in_place(expect)? {
+        return Ok(target);
     }
     target.reader.left()?;
     if let Some(name) = expect.field() {
-        let window = target
-            .window
-            .as_ref()
-            .ok_or_else(|| refused("field", "No window of the app holds the named field"))?;
+        let window = field_window(target.window.as_ref())?;
         target.field = Some(target.reader.find_field(window, expect.pid(), name)?);
-    }
-    if let Some(field) = &target.field {
-        target
-            .writes
-            .push((field.clone(), Write::Flag("AXFocused")));
     }
     target.focus(expect, guard)?;
     Ok(target)
@@ -931,23 +942,13 @@ fn settle<A: Backend>(
         guard()?;
         let checking = deadline.min(target.reader.ask.now() + CHECK_BUDGET);
         target.reader.deadline = checking;
-        let result = (|| {
-            target.admit(expect)?;
-            let mut result = target.verify(checking, &mut verify);
-            if result.is_ok() {
-                target.admit(expect)?;
-                // Admission is another observation. Its scan may outlive the
-                // earlier proof, so verify the destination again before returning.
-                result = target.verify(checking, &mut verify);
-            }
-            result
-        })();
+        let result = target.proven(expect, checking, &mut verify);
         guard()?;
         let result = result.and_then(|role| target.reader.left().map(|_| role));
         target.reader.deadline = deadline;
         let error = match result {
             Ok(role) => return Ok(role),
-            Err(error) if error.details.get("unread").is_some_and(|why| why == "slow") => {
+            Err(error) if slow(&error) => {
                 if !target.changed || target.reader.left().is_err() {
                     return Err(last_refusal.unwrap_or(error));
                 }
@@ -955,15 +956,7 @@ fn settle<A: Backend>(
             }
             Err(error) => error,
         };
-        if !target.changed
-            || !(error.details.get("unread").is_some_and(|why| why == "slow")
-                || (error.code == Code::FocusChanged
-                    && matches!(
-                        error.details.get("reason").and_then(|value| value.as_str()),
-                        Some("app" | "window" | "point" | "field")
-                    )))
-            || target.reader.left().is_err()
-        {
+        if !target.changed || !settling(&error) || target.reader.left().is_err() {
             return Err(error);
         }
         // A refused destination never authorizes input. Keep its actual reason
@@ -978,6 +971,16 @@ fn settle<A: Backend>(
         }
         last_refusal = Some(error);
     }
+}
+
+fn slow(error: &Error) -> bool {
+    Unread::of(error) == Some(Unread::Slow)
+}
+
+/// Whether a refusal may only mean a focus request has yet to take effect.
+fn settling(error: &Error) -> bool {
+    slow(error)
+        || (error.code == Code::FocusChanged && Reason::of(error).is_some_and(Reason::may_settle))
 }
 
 #[cfg(test)]

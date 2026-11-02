@@ -1,13 +1,13 @@
 //! Command execution, activity attribution and helper-change policy.
 use super::{
     cli::{
-        AgentPicks, AgentsCommand, AppTarget, Command, CursorHookEvent, EnvironmentCommand,
-        JobCommand, OnOff, OnboardingCommand, WindowState,
+        self, AgentPicks, AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, JobCommand,
+        OnOff, OnboardingCommand, WindowState,
     },
     doctor, help,
     output::{self, print},
     policy::Policy,
-    update,
+    prompt, update,
 };
 use atlas::{
     agent,
@@ -21,7 +21,7 @@ use atlas::{
     menubar,
     task::{self, Task},
     transport::with_output,
-    ui::{self, progress::Spinner},
+    ui::progress::Spinner,
     viewer,
 };
 use serde_json::{Value, json};
@@ -59,6 +59,7 @@ fn changed(picks: &AgentPicks, change: Change) -> Result<Value> {
             },
             change,
         )
+        .map(|changed| changed.report)
     } else {
         atlas::agents::change(&picks.agents(), change)
     }
@@ -98,13 +99,13 @@ fn elements_info(_: i32) -> Result<Value> {
 }
 
 #[cfg(target_os = "macos")]
-async fn input_service(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<Value> {
-    atlas::native::service::serve(uid, controller_uid, socket).await?;
+async fn input_service(service: cli::Service) -> Result<Value> {
+    atlas::native::service::serve(service.uid, service.controller_uid, service.socket).await?;
     Ok(Value::Null)
 }
 
 #[cfg(not(target_os = "macos"))]
-async fn input_service(_: u32, _: u32, _: PathBuf) -> Result<Value> {
+async fn input_service(_: cli::Service) -> Result<Value> {
     Err(Error::new(
         Code::Platform,
         "The input service requires macOS",
@@ -138,18 +139,18 @@ pub(super) async fn execute(
     // controller's configuration. A command that talks to the helper loads
     // it before anything else.
     let doing = policy.doing.clone();
-    let changes = policy.changes_helper;
+    let changes = policy.changes_helper();
     let waits = policy.waits(actor);
     let host = if policy.labelled(actor) {
         match Config::load(&config).and_then(Client::new) {
-            Ok(client) => HostSession::from_env_verified(&client).await,
+            Ok(client) => atlas::host_session::from_env_verified(&client).await,
             Err(_) => HostSession::from_env(),
         }
     } else {
         None
     };
     let task = task_of(
-        policy.makes,
+        policy.makes(),
         host.as_ref(),
         std::env::var_os("ATLAS_TASK").as_deref(),
     )?;
@@ -206,7 +207,7 @@ async fn execute_with(
 
     // The person's stop refuses an agent's change at its start; one already
     // under way is the input service's to cut off.
-    if policy.changes_helper {
+    if policy.changes_helper() {
         client()?.require_going().await?;
     }
 
@@ -242,12 +243,10 @@ fn note_outcome(
     let _ = task::settle_rolled_back_facts(client, &facts);
 }
 
-/// size-exception: this is the exhaustive command router. Its arms adapt CLI
-/// arguments to complete domain operations; separate routers could omit a command.
-/// Command-policy cases and guide/example parsing cover this boundary.
-///
 /// [`execute`]'s work once the command is labelled: `client` gives its
-/// client, and `host` is its host session, if any.
+/// client, and `host` is its host session, if any. An arm that calls
+/// `client` makes the client first; an arm that passes it on refuses what
+/// it can before making one.
 async fn carry_out(
     config: &Path,
     command: Command,
@@ -257,409 +256,194 @@ async fn carry_out(
 ) -> Result<Value> {
     match command {
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
-        Command::AgentGuide {
-            skill,
-            commands,
-            errors,
-        } => {
-            let guide = match (skill, commands, errors) {
-                (true, _, _) => agent::skill(),
-                (_, true, _) => help::command_reference(),
-                (_, _, true) => agent::ERRORS.to_owned(),
-                _ => agent::GUIDE.to_owned(),
-            };
-            print(&guide);
-            Ok(Value::Null)
-        }
+        Command::AgentGuide(args) => Ok(guide(&args)),
         Command::SessionInfo => atlas::native::session_info(),
         Command::PermissionsInfo => Ok(atlas::daemon::facts::permissions_now()),
         Command::ElementsInfo { pid } => elements_info(pid),
-        Command::HelperServe { .. } => {
-            // Main returns from serve_blocking before it can call carry_out.
-            unreachable!("main serves the helper daemon on its own thread")
+        // Main runs the helper daemon on its own thread and becomes a job
+        // before it creates the async runtime.
+        Command::HelperServe(_) | Command::JobLaunch { .. } => {
+            unreachable!("main runs these before anything else")
         }
-        Command::JobLaunch { .. } => {
-            // Main returns from launch_job before creating the async runtime.
-            unreachable!("main becomes a background job before anything else")
-        }
-        Command::InputService {
-            uid,
-            controller_uid,
-            socket,
-        } => input_service(uid, controller_uid, socket).await,
-        Command::SetupHelper {
-            request,
-            account,
-            logged_out,
-        } => atlas::setup::helper::run_guarded(
-            &request,
-            &atlas::setup::helper::Guard {
-                account: Some(serde_json::from_str(&account)?),
-                logged_out,
-            },
-        ),
-        Command::Update {
-            check: true,
-            version,
-            ..
-        } => atlas::update::newer(&atlas::update::Source::from_env(version)),
-        Command::Update {
-            allow_unnotarized,
-            force,
-            version,
-            check: false,
-        } => {
-            as_yourself("update")?;
-            update::update(
-                config,
-                allow_unnotarized,
-                force,
-                version,
-                host,
-                allow_disrupt,
-            )
-            .await
-        }
-        Command::UpdateFinish => {
-            as_yourself("update")?;
-            update::update_finish(config, host, allow_disrupt).await
-        }
-        Command::Init => {
-            as_yourself("init")?;
-            super::init::run(config, allow_disrupt).await
-        }
+        Command::InputService(args) => input_service(args).await,
+        Command::SetupHelper(args) => setup_helper(&args),
+        Command::Update(args) => update::run(config, args, host, allow_disrupt).await,
+        Command::UpdateFinish => update::update_finish(config, host, allow_disrupt).await,
+        Command::Init => super::init::run(config, allow_disrupt).await,
         Command::Onboarding { step } => onboarding(config, step).await,
-        Command::Agents { action } => {
-            agents(
-                config,
-                host,
-                action.unwrap_or(AgentsCommand::Status { brief: false }),
-            )
-            .await
-        }
-        Command::Uninstall {
-            keep_config,
-            yes,
-            remove_helper,
-        } => {
-            as_yourself("uninstall")?;
-            super::uninstall::run(config, keep_config, yes, remove_helper).await
-        }
-        Command::Menubar {
-            login: Some(login), ..
-        } => menubar::login(login.as_str()),
-        Command::Switch {
-            account,
-            lock,
-            list,
-            yes,
-        } => switch(config, account, lock, list, yes),
-        Command::Setup {
-            helper,
-            apply: false,
-            rollback: false,
-        } => atlas::setup::preview(config, helper.as_deref()).await,
-        Command::Setup { apply, .. } => {
-            let client = client()?;
-            // Recovery ownership: the migration settles only the pending
-            // mutations its own log records and refuses any other.
-            let ownership = client.service_change(true).await?;
-
-            if apply {
-                atlas::setup::migrate::apply(config, &client, &ownership).await
-            } else {
-                atlas::setup::migrate::rollback(config, &client, &ownership).await
-            }
-        }
-        Command::Config => {
-            let client = client()?;
-            Ok(json!({ "ok": true, "config": client.config, "path": config }))
-        }
+        Command::Agents { action } => agents(config, host, action).await,
+        Command::Uninstall(args) => super::uninstall::run(config, args).await,
+        Command::Menubar(args) => menu_bar(config, client, args).await,
+        Command::Switch(args) => switch(config, args),
+        Command::Setup(args) => setup(config, client, args).await,
+        Command::Config => Ok(json!({ "ok": true, "config": client()?.config, "path": config })),
         Command::Status => Ok(client()?.status().await),
-        Command::Activity {
-            all,
-            session,
-            limit,
-        } => {
-            use host_session::activity::Scope;
-
-            let scope = match (session.as_ref(), all) {
-                (Some(key), _) => Scope::Session(key),
-                (None, true) => Scope::Everyone,
-                (None, false) => Scope::Own,
-            };
-            host_session::activity::list(&client()?, host, scope, limit.into())
-        }
-        Command::Doctor {
-            login_timing: true, ..
-        } => atlas::login_log::timing(),
-        Command::Doctor { verbose, .. } => Ok(doctor::report(&client()?, verbose).await),
+        Command::Activity(args) => activity(&client()?, host, &args),
+        Command::Doctor(args) if args.login_timing => atlas::login_log::timing(),
+        Command::Doctor(args) => Ok(doctor::report(&client()?, args.verbose).await),
         Command::VerifyNative { fixture } => atlas::capability::verify(&client()?, &fixture).await,
-        Command::Environment {
-            command: Some(command),
-            ..
-        } => environment_command(&client()?, command).await,
-        Command::Environment {
-            manifest,
-            apply,
-            command: None,
-        } => {
-            let manifest = manifest.ok_or_else(|| {
-                Error::new(
-                    Code::Usage,
-                    "atlas environment needs a profile file, or a command such as discover or run.",
-                )
-            })?;
-            environment::sync(&client()?, &manifest, apply).await
-        }
+        Command::Environment(args) => provision(client, args).await,
         Command::Install => client()?.install(),
         Command::StartInput => client()?.start_input().await,
-        Command::Watch { port, frames, once } => {
-            atlas::watch::watch(client()?, port, frames, once).await?;
-            Ok(Value::Null)
-        }
+        Command::Watch { port, frames, once } => atlas::watch::watch(client()?, port, frames, once)
+            .await
+            .map(|()| Value::Null),
         Command::Stop => client()?.hold(true).await,
         Command::Resume => client()?.hold(false).await,
-        Command::Mcp {
-            port,
-            read_only,
-            guard_app_controls,
-        } => {
-            atlas::mcp::serve(
-                client()?,
-                config.to_path_buf(),
-                port,
-                read_only,
-                guard_app_controls,
-            )
-            .await?;
-            Ok(Value::Null)
-        }
-        Command::Monitor { port } => {
-            let client = client()?;
-            viewer::monitor(config, port, client.output_dir()?).await
-        }
-        Command::Menubar {
-            port,
-            render,
-            serve,
-            ..
-        } => menu_bar(config, client()?, port, render, serve).await,
-        Command::Screenshot {
-            target,
-            region,
-            max_dimension,
-            new_file,
-        } => {
-            let target = target.target();
-            let size = screenshot_size(max_dimension);
-            agent::screenshot(&client()?, target.as_ref(), region, size, new_file).await
-        }
-        Command::Apps { all } => client()?
-            .apps()
-            .await
-            .map(|reply| atlas::app_selection::listed(reply, all)),
-        Command::Click {
-            x,
-            y,
-            target,
-            window,
-            name,
-            role,
-            button,
-            count,
-            modifiers,
-        } => {
-            let filter = agent::ElementFilter { role, name };
-            let press = Press {
-                button: button.into(),
-                count,
-                modifiers,
-            };
-            click(&client()?, (x, y), target, window, &filter, &press).await
-        }
-        Command::Elements {
-            target,
-            role,
-            name,
-            max,
-            full,
-        } => {
-            let client = client()?;
-            let target = target
-                .target()
-                .ok_or_else(|| Error::new(Code::Usage, "Select the app with --app or --pid"))?;
-            let filter = agent::ElementFilter { role, name };
-            agent::elements(&client, &target, &filter, max, full).await
-        }
+        Command::Mcp(args) => mcp(config, client()?, args).await,
+        Command::Monitor { port } => viewer::monitor(config, port, client()?.output_dir()?).await,
+        Command::Screenshot(args) => screenshot(&client()?, args).await,
+        Command::Apps { all } => Ok(atlas::app_selection::listed(client()?.apps().await?, all)),
+        Command::Click(args) => click(&client()?, args).await,
+        Command::Elements(args) => elements(&client()?, args).await,
         Command::Readiness { tools, apps } => {
             atlas::readiness::readiness(&client()?, &tools, &apps).await
         }
         Command::Move { x, y } => agent::act(&client()?, None, &agent::move_to(x, y)).await,
-        Command::Drag {
-            from_x,
-            from_y,
-            to_x,
-            to_y,
-            button,
-            target,
-            window,
-        } => {
-            agent::act(
-                &client()?,
-                target.expected(window, None)?.as_ref(),
-                &agent::drag((from_x, from_y), (to_x, to_y), button.into()),
-            )
-            .await
-        }
-        Command::Scroll {
-            x,
-            y,
-            dx,
-            dy,
-            target,
-            window,
-        } => {
-            if dx == 0 && dy == 0 {
-                return Err(Error::new(
-                    Code::Usage,
-                    "Give lines to scroll with --dy (down) or --dx (right), negative for up or left",
-                ));
-            }
-
-            agent::act(
-                &client()?,
-                target.expected(window, None)?.as_ref(),
-                &agent::scroll((x, y), (dx, dy)),
-            )
-            .await
-        }
-        Command::Type {
-            text,
-            stdin,
-            target,
-            window,
-            field,
-        } => {
-            let expected = target.expected(window, field)?;
-            let client = client()?;
-            let text = text_to_type(text, stdin)?;
-            agent::type_text(&client, &text, expected.as_ref()).await
-        }
-        Command::Key {
-            keys,
-            target,
-            window,
-            field,
-        } => {
-            let expected = target.expected(window, field)?;
-            agent::act(&client()?, expected.as_ref(), &agent::keys(&keys)?).await
-        }
+        Command::Drag(args) => drag(&client()?, args).await,
+        Command::Scroll(args) => scroll(client, args).await,
+        Command::Type(args) => type_text(client, args).await,
+        Command::Key(args) => press_keys(client, args).await,
         Command::Windows { app, title, all } => {
             agent::list(&client()?, &agent::WindowFilter { app, title, all }).await
         }
-        Command::Open {
-            app,
-            targets,
-            environment,
-        } => agent::open(&client()?, app.as_deref(), &targets, &environment).await,
+        Command::Open(args) => open(&client()?, &args).await,
         Command::InstallApp { path } => atlas::install_app::install(&client()?, &path).await,
-        Command::Cleanup {
-            apply,
-            session,
-            task,
-        } => {
-            let mode = if apply {
-                atlas::cleanup::Mode::Apply
-            } else {
-                atlas::cleanup::Mode::Preview
-            };
-            atlas::cleanup::cleanup(&client()?, session.as_ref(), task.as_ref(), mode).await
-        }
-        Command::Close { app, .. } => {
-            let client = client()?;
-            let closing = app
-                .as_deref()
-                .map_or(agent::Closing::All, agent::Closing::App);
-            agent::close(&client, closing).await
-        }
-        Command::Wait {
-            app,
-            title,
-            gone,
-            timeout,
-        } => {
-            let client = client()?;
-            let filter = agent::WindowFilter {
-                app,
-                title,
-                all: false,
-            };
-            agent::wait(&client, &filter, gone, Duration::from_secs(timeout)).await
-        }
-        Command::Input { actions, target } => {
-            let client = client()?;
-            let bytes = actions_batch(actions)?;
-            agent::act(
-                &client,
-                target.expected(None, None)?.as_ref(),
-                &serde_json::from_slice(&bytes)?,
-            )
-            .await
-        }
+        Command::Cleanup(args) => cleanup(&client()?, &args).await,
+        Command::Close { app, .. } => close(&client()?, app.as_deref()).await,
+        Command::Wait(args) => wait(&client()?, args).await,
+        Command::Input { actions, target } => input(&client()?, actions, target).await,
         Command::Job { command } => job(&client()?, command).await,
         Command::Collect { files, max_size } => {
             atlas::collect::collect(&client()?, &files, max_size).await
         }
         // Control is held only while the command starts: other agents may
         // act while it runs.
-        Command::Run { argv, timeout } => client()?
-            .run_beside(argv, Duration::from_secs(timeout))
+        Command::Run(args) => client()?
+            .run_beside(args.argv, Duration::from_secs(args.timeout))
             .await
             .map(with_output),
-        Command::Restart => {
-            let client = client()?;
-            let _spinner = Spinner::new("Restarting the helper…");
-            client.restart().await
-        }
+        Command::Restart => restart(&client()?).await,
         Command::Logout { force, yes } => logout(&client()?, force, yes).await,
     }
 }
 
-/// Which button a click presses, how often, and with which keys held.
-struct Press {
-    button: atlas::actions::Button,
-    count: u8,
-    modifiers: Vec<String>,
+fn guide(args: &cli::AgentGuide) -> Value {
+    let guide = match (args.skill, args.commands, args.errors) {
+        (true, _, _) => agent::skill(),
+        (_, true, _) => help::command_reference(),
+        (_, _, true) => agent::ERRORS.to_owned(),
+        _ => agent::GUIDE.to_owned(),
+    };
+    print(&guide);
+    Value::Null
 }
 
-/// `atlas click`: at X Y, or on the element `filter` finds in `target`'s
-/// app.
-async fn click(
-    client: &Client,
-    at: (Option<f64>, Option<f64>),
-    target: AppTarget,
-    window: Option<i64>,
-    filter: &agent::ElementFilter,
-    press: &Press,
+fn setup_helper(args: &cli::SetupHelper) -> Result<Value> {
+    atlas::setup::helper::run_guarded(
+        &args.request,
+        &atlas::setup::helper::Guard {
+            account: Some(serde_json::from_str(&args.account)?),
+            logged_out: args.logged_out,
+        },
+    )
+}
+
+/// `atlas setup`: a preview, or a migration applied or rolled back.
+async fn setup(
+    config: &Path,
+    client: &impl Fn() -> Result<Client>,
+    args: cli::Setup,
 ) -> Result<Value> {
-    match (at, target.target()) {
+    if !args.apply && !args.rollback {
+        return atlas::setup::preview(config, args.helper.as_deref()).await;
+    }
+
+    let client = client()?;
+    // The migration settles only mutations its own log records, and refuses others.
+    let ownership = client.service_change(true).await?;
+    if args.apply {
+        atlas::setup::migrate::apply(config, &client, &ownership).await
+    } else {
+        atlas::setup::migrate::rollback(config, &client, &ownership).await
+    }
+}
+
+fn activity(client: &Client, host: Option<&HostSession>, args: &cli::Activity) -> Result<Value> {
+    use host_session::activity::Scope;
+
+    let scope = match (args.session.as_ref(), args.all) {
+        (Some(key), _) => Scope::Session(key),
+        (None, true) => Scope::Everyone,
+        (None, false) => Scope::Own,
+    };
+    host_session::activity::list(client, host, scope, args.limit.into())
+}
+
+/// `atlas environment`: a manifest's copy, or one of its commands.
+async fn provision(client: &impl Fn() -> Result<Client>, args: cli::Environment) -> Result<Value> {
+    if let Some(command) = args.command {
+        return environment_command(&client()?, command).await;
+    }
+
+    let manifest = args.manifest.ok_or_else(|| {
+        Error::new(
+            Code::Usage,
+            "atlas environment needs a profile file, or a command such as discover or run.",
+        )
+    })?;
+    environment::sync(&client()?, &manifest, args.apply).await
+}
+
+async fn mcp(config: &Path, client: Client, args: cli::Mcp) -> Result<Value> {
+    atlas::mcp::serve(
+        client,
+        config.to_path_buf(),
+        args.port,
+        args.read_only,
+        args.guard_app_controls,
+    )
+    .await?;
+    Ok(Value::Null)
+}
+
+async fn screenshot(client: &Client, args: cli::Screenshot) -> Result<Value> {
+    agent::screenshot(
+        client,
+        args.target.target().as_ref(),
+        args.region,
+        screenshot_size(args.max_dimension),
+        args.new_file,
+    )
+    .await
+}
+
+/// `atlas click`: at X Y, or on the element its filter finds in its target's
+/// app.
+async fn click(client: &Client, args: cli::Click) -> Result<Value> {
+    let button = args.button.into();
+
+    match ((args.x, args.y), args.target.target()) {
         ((Some(x), Some(y)), target) => {
             agent::act(
                 client,
-                agent::Expected::new(target, window, None)?.as_ref(),
-                &agent::click(x, y, press.button, press.count, &press.modifiers),
+                agent::Expected::new(target, args.window, None)?.as_ref(),
+                &agent::click(x, y, button, args.count, &args.modifiers),
             )
             .await
         }
         ((None, None), Some(target)) => {
+            let filter = agent::ElementFilter {
+                role: args.role,
+                name: args.name,
+            };
             agent::click_element(
                 client,
                 &target,
-                filter,
-                press.button,
-                press.count,
-                &press.modifiers,
+                &filter,
+                button,
+                args.count,
+                &args.modifiers,
             )
             .await
         }
@@ -670,6 +454,111 @@ async fn click(
     }
 }
 
+async fn elements(client: &Client, args: cli::Elements) -> Result<Value> {
+    let target = args
+        .target
+        .target()
+        .ok_or_else(|| Error::new(Code::Usage, "Select the app with --app or --pid"))?;
+    let filter = agent::ElementFilter {
+        role: args.role,
+        name: args.name,
+    };
+    agent::elements(client, &target, &filter, args.max, args.full).await
+}
+
+async fn drag(client: &Client, args: cli::Drag) -> Result<Value> {
+    agent::act(
+        client,
+        args.target.expected(args.window, None)?.as_ref(),
+        &agent::drag(
+            (args.from_x, args.from_y),
+            (args.to_x, args.to_y),
+            args.button.into(),
+        ),
+    )
+    .await
+}
+
+async fn scroll(client: &impl Fn() -> Result<Client>, args: cli::Scroll) -> Result<Value> {
+    if args.dx == 0 && args.dy == 0 {
+        return Err(Error::new(
+            Code::Usage,
+            "Give lines to scroll with --dy (down) or --dx (right), negative for up or left",
+        ));
+    }
+    agent::act(
+        &client()?,
+        args.target.expected(args.window, None)?.as_ref(),
+        &agent::scroll((args.x, args.y), (args.dx, args.dy)),
+    )
+    .await
+}
+
+async fn type_text(client: &impl Fn() -> Result<Client>, args: cli::Type) -> Result<Value> {
+    let expected = args.target.expected(args.window, args.field)?;
+    let client = client()?;
+    let text = text_to_type(args.text, args.stdin)?;
+    agent::type_text(&client, &text, expected.as_ref()).await
+}
+
+async fn press_keys(client: &impl Fn() -> Result<Client>, args: cli::Keys) -> Result<Value> {
+    let expected = args.target.expected(args.window, args.field)?;
+    agent::act(&client()?, expected.as_ref(), &agent::keys(&args.keys)?).await
+}
+
+async fn open(client: &Client, args: &cli::Open) -> Result<Value> {
+    agent::open(
+        client,
+        args.app.as_deref(),
+        &args.targets,
+        &args.environment,
+    )
+    .await
+}
+
+async fn cleanup(client: &Client, args: &cli::Cleanup) -> Result<Value> {
+    let mode = if args.apply {
+        atlas::cleanup::Mode::Apply
+    } else {
+        atlas::cleanup::Mode::Preview
+    };
+    atlas::cleanup::cleanup(client, args.session.as_ref(), args.task.as_ref(), mode).await
+}
+
+async fn close(client: &Client, app: Option<&str>) -> Result<Value> {
+    agent::close(client, app.map_or(agent::Closing::All, agent::Closing::App)).await
+}
+
+async fn wait(client: &Client, args: cli::Wait) -> Result<Value> {
+    let filter = agent::WindowFilter {
+        app: args.app,
+        title: args.title,
+        all: false,
+    };
+    agent::wait(
+        client,
+        &filter,
+        args.gone,
+        Duration::from_secs(args.timeout),
+    )
+    .await
+}
+
+async fn input(client: &Client, actions: String, target: cli::AppTarget) -> Result<Value> {
+    let bytes = actions_batch(actions)?;
+    agent::act(
+        client,
+        target.expected(None, None)?.as_ref(),
+        &serde_json::from_slice(&bytes)?,
+    )
+    .await
+}
+
+async fn restart(client: &Client) -> Result<Value> {
+    let _spinner = Spinner::new("Restarting the helper…");
+    client.restart().await
+}
+
 /// The text `atlas type` types: as given, or read from stdin, at most 1 MiB.
 fn text_to_type(text: Option<String>, stdin: bool) -> Result<String> {
     const LIMIT: u64 = 1 << 20;
@@ -678,7 +567,7 @@ fn text_to_type(text: Option<String>, stdin: bool) -> Result<String> {
         Some(text) if !stdin => Ok(text),
         _ => {
             let mut text = String::new();
-            read_at_most(std::io::stdin(), LIMIT).read_to_string(&mut text)?;
+            std::io::stdin().take(LIMIT + 1).read_to_string(&mut text)?;
             if text.len() as u64 > LIMIT {
                 return Err(Error::new(Code::Input, "Text from stdin exceeds 1 MiB"));
             }
@@ -713,8 +602,12 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
 
 /// `atlas agents`: which agents are connected, connecting and
 /// disconnecting them, a project's section, and Cursor's hook.
-async fn agents(config: &Path, host: Option<&HostSession>, action: AgentsCommand) -> Result<Value> {
-    match action {
+async fn agents(
+    config: &Path,
+    host: Option<&HostSession>,
+    action: Option<AgentsCommand>,
+) -> Result<Value> {
+    match action.unwrap_or(AgentsCommand::Status { brief: false }) {
         AgentsCommand::Status { brief: true } => {
             print(&format!("{}\n", atlas::agents::brief(config, host).await));
             Ok(Value::Null)
@@ -755,8 +648,8 @@ async fn environment_command(client: &Client, command: EnvironmentCommand) -> Re
         EnvironmentCommand::Profile { profile, apply } => {
             environment::profile::sync(client, &profile, apply).await
         }
-        EnvironmentCommand::Run { argv, timeout } => {
-            environment::run(client, argv, Duration::from_secs(timeout))
+        EnvironmentCommand::Run(args) => {
+            environment::run(client, args.argv, Duration::from_secs(args.timeout))
                 .await
                 .map(with_output)
         }
@@ -777,30 +670,33 @@ async fn environment_command(client: &Client, command: EnvironmentCommand) -> Re
     }
 }
 
-/// `atlas menubar`: draw its menu into `render`, serve it (when `serve`,
-/// or once started at login), or start it in the background.
+/// `atlas menubar`: its login item, or draw its menu into a folder, serve
+/// it (when asked, or once started at login), or start it in the background.
 async fn menu_bar(
     config: &Path,
-    client: Client,
-    port: u16,
-    render: Option<PathBuf>,
-    serve: bool,
+    client: &impl Fn() -> Result<Client>,
+    args: cli::Menubar,
 ) -> Result<Value> {
+    if let Some(login) = args.login {
+        return menubar::login(login.as_str());
+    }
+
+    let client = client()?;
     let program = menubar::Program::new(config)?;
 
-    match render {
+    match args.render {
         Some(directory) => viewer::render_menubar(client, &program, &directory).await,
-        None if serve || menubar::started_at_login() => {
+        None if args.serve || menubar::started_at_login() => {
             // Its own session: closing the terminal that started it does
             // not hang it up.
-            if serve {
+            if args.serve {
                 let _ = nix::unistd::setsid();
             }
-            viewer::serve(client, port, program, output::serving_menu_bar).await
+            viewer::serve(client, args.port, program, output::serving_menu_bar).await
         }
         None => {
             let output = client.output_dir()?.to_path_buf();
-            let (already, record) = menubar::launch(config, port, &output).await?;
+            let (already, record) = menubar::launch(config, args.port, &output).await?;
             output::started_menu_bar(already, &record);
             Ok(Value::Null)
         }
@@ -828,14 +724,14 @@ async fn job(client: &Client, command: JobCommand) -> Result<Value> {
 /// `atlas logout`: log the helper out once the person agrees, unless `yes`.
 async fn logout(client: &Client, force: bool, yes: bool) -> Result<Value> {
     if !yes
-        && !ui::prompt::confirm(
+        && !prompt::confirm(
             "Log out the helper? Its apps quit, and agents can't use it until you log in to it \
              again.",
             false,
             "pass --yes",
         )?
     {
-        return Err(ui::prompt::cancelled());
+        return Err(prompt::cancelled());
     }
 
     let _spinner = Spinner::new("Logging out the helper…");
@@ -846,55 +742,41 @@ async fn logout(client: &Client, force: bool, yes: bool) -> Result<Value> {
 /// 32 KiB.
 fn actions_batch(actions: String) -> Result<Vec<u8>> {
     const LIMIT: u64 = 32 * 1024;
-    let too_long = || {
-        Error::new(
-            Code::Input,
-            "Input exceeds 32 KiB; use short observed batches",
-        )
-    };
 
     let bytes = match actions.strip_prefix('@') {
         Some(path) => {
             let mut bytes = Vec::new();
-            let file = std::fs::File::open(path)
-                .map_err(|error| Error::new(Code::Io, format!("Could not read {path}: {error}")))?;
-            read_at_most(file, LIMIT).read_to_end(&mut bytes)?;
+            std::fs::File::open(path)
+                .map_err(|error| Error::new(Code::Io, format!("Could not read {path}: {error}")))?
+                .take(LIMIT + 1)
+                .read_to_end(&mut bytes)?;
             bytes
         }
         None => actions.into_bytes(),
     };
     if bytes.len() as u64 > LIMIT {
-        return Err(too_long());
+        return Err(Error::new(
+            Code::Input,
+            "Input exceeds 32 KiB; use short observed batches",
+        ));
     }
     Ok(bytes)
 }
 
-/// `reader`, read no further than one byte past `limit`: enough to tell
-/// that what it holds is too long.
-fn read_at_most(reader: impl Read, limit: u64) -> impl Read {
-    reader.take(limit + 1)
-}
-
-/// Lock the screen so the person can switch to the helper (or `account`)
-/// there. macOS asks for that account's password on the lock screen; there
+/// Lock the screen so the person can switch to the helper (or an account
+/// named). macOS asks for that account's password on the lock screen; there
 /// is nothing to choose here beyond whether to lock now.
-fn switch(
-    config: &std::path::Path,
-    account: Option<String>,
-    lock: bool,
-    list: bool,
-    yes: bool,
-) -> Result<Value> {
+fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
     use atlas::switch;
 
     let helper = Config::load(config).ok().map(|config| config.helper_uid);
     let accounts = switch::accounts(helper)?;
 
-    if list {
+    if args.list {
         return Ok(json!({"ok": true, "accounts": accounts}));
     }
 
-    let target = match account {
+    let target = match args.account {
         Some(name) => Some(
             accounts
                 .iter()
@@ -907,11 +789,11 @@ fn switch(
                     )
                 })?,
         ),
-        None if lock => None,
+        None if args.lock => None,
         None => accounts.iter().find(|candidate| candidate.helper).cloned(),
     };
 
-    if !yes {
+    if !args.yes {
         let question = match &target {
             Some(account) => format!(
                 "Lock the screen so you can switch to {}?",
@@ -920,8 +802,8 @@ fn switch(
             None => "Lock the screen now?".to_owned(),
         };
 
-        if !ui::prompt::confirm(&question, true, "pass --yes")? {
-            return Err(ui::prompt::cancelled());
+        if !prompt::confirm(&question, true, "pass --yes")? {
+            return Err(prompt::cancelled());
         }
     }
 
@@ -933,7 +815,7 @@ fn switch(
 
 /// Refuse `atlas <command>` run as root (with sudo): it would act for root's
 /// home, not the person's, and leave files only root can change.
-fn as_yourself(command: &str) -> Result<()> {
+pub(super) fn as_yourself(command: &str) -> Result<()> {
     refuse_root(command, nix::unistd::geteuid().is_root())
 }
 
@@ -949,893 +831,4 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::cli::Cli;
-    use clap::Parser;
-
-    fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
-        Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
-    }
-
-    #[tokio::test]
-    async fn a_sessions_first_read_is_seen_even_when_the_helper_is_unavailable() {
-        use atlas::host_session::Host;
-
-        let dir = tempfile::tempdir().unwrap();
-        let mut client = Client::new(Config {
-            helper_uid: 60001,
-            socket_path: dir.path().join("helper.sock"),
-            identity_probe: dir.path().join("probe"),
-            input_socket: dir.path().join("input.sock"),
-            output_dir: dir.path().join("out"),
-        })
-        .unwrap();
-        let host = HostSession::new(Host::Named, "worker").unwrap();
-        client.controller =
-            atlas::control::Controller::at(60001, &dir.path().join("state")).labelled(Some(&host));
-        client.host_session = Some(host.clone());
-        let command = parse(&["apps"]).unwrap().command.unwrap();
-        let policy = Policy::of(&command);
-        assert!(policy.labelled(Actor::Agent));
-        let result = tokio::time::timeout(
-            Duration::from_secs(1),
-            execute_with(
-                &dir.path().join("settings.toml"),
-                command,
-                &policy,
-                Some(&host),
-                &|| Ok(client.clone()),
-                false,
-            ),
-        )
-        .await
-        .unwrap();
-        assert!(result.is_err());
-        let own = HostSession::new(Host::Named, "updater").unwrap();
-        client.controller = client.controller.labelled(Some(&own));
-        client.host_session = Some(own);
-        let error = tokio::time::timeout(Duration::from_secs(1), client.service_change(false))
-            .await
-            .unwrap()
-            .unwrap_err();
-        assert_eq!(error.code, Code::Busy);
-        assert_eq!(error.error, "worker is active in the helper.");
-    }
-
-    #[tokio::test]
-    async fn a_sessions_first_read_defers_another_sessions_service_change() {
-        use atlas::host_session::Host;
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        use tokio::{
-            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-            net::UnixListener,
-        };
-
-        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-        let mut client = Client::new(Config {
-            helper_uid: 60001,
-            socket_path: dir.path().join("helper.sock"),
-            identity_probe: dir.path().join("probe"),
-            input_socket: dir.path().join("input.sock"),
-            output_dir: dir.path().join("out"),
-        })
-        .unwrap();
-        let host = HostSession::new(Host::Named, "worker").unwrap();
-        client.controller =
-            atlas::control::Controller::at(60001, &dir.path().join("state")).labelled(Some(&host));
-        client.host_session = Some(host.clone());
-        client.transport.peer_uid = nix::unistd::getuid().as_raw();
-        let command = parse(&["apps"]).unwrap().command.unwrap();
-        let policy = Policy::of(&command);
-        assert!(policy.labelled(Actor::Agent));
-        let listener = UnixListener::bind(&client.transport.path).unwrap();
-        let helper = async {
-            let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
-                "parentPID": 123, "onConsole": false, "securitySessionID": 42,
-                "displayID": 7, "width": 100, "height": 100});
-            for (operation, reply) in [
-                (
-                    "hello",
-                    json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
-                        "session": {"managerName": "Aqua", "onConsole": false},
-                        "display": {"width": 100, "height": 100, "scale": 1}}),
-                ),
-                (
-                    "run",
-                    json!({"ok": true, "exitCode": 0, "timedOut": false,
-                        "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
-                ),
-                ("apps", json!({"ok": true, "apps": []})),
-            ] {
-                let (peer, _) = listener.accept().await.unwrap();
-                let mut peer = BufReader::new(peer);
-                let mut line = String::new();
-                peer.read_line(&mut line).await.unwrap();
-                assert_eq!(
-                    serde_json::from_str::<Value>(&line).unwrap()["op"],
-                    operation
-                );
-                peer.get_mut()
-                    .write_all(format!("{reply}\n").as_bytes())
-                    .await
-                    .unwrap();
-            }
-        };
-        let factory = || Ok(client.clone());
-        let config = dir.path().join("settings.toml");
-        let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
-            tokio::join!(
-                execute_with(&config, command, &policy, Some(&host), &factory, false,),
-                helper
-            )
-        })
-        .await
-        .unwrap();
-        assert_eq!(result.unwrap()["ok"], true);
-        assert!(
-            !client
-                .output_dir()
-                .unwrap()
-                .join(atlas::activity_log::FILE)
-                .exists()
-        );
-
-        let mut updater = client.clone();
-        let own = HostSession::new(Host::Named, "updater").unwrap();
-        updater.controller = updater.controller.labelled(Some(&own));
-        updater.host_session = Some(own);
-        let error = tokio::time::timeout(Duration::from_secs(1), updater.service_change(false))
-            .await
-            .unwrap()
-            .unwrap_err();
-        assert_eq!(error.code, Code::Busy);
-        assert_eq!(error.error, "worker is active in the helper.");
-        assert!(updater.controller.holder_note().is_none());
-    }
-
-    #[test]
-    fn a_rollback_a_command_finished_is_settled_in_the_task_that_claimed_the_plan() {
-        let dir = tempfile::tempdir().unwrap();
-        let client = Client::new(Config {
-            helper_uid: 60001,
-            socket_path: dir.path().join("helper.sock"),
-            identity_probe: dir.path().join("probe"),
-            input_socket: dir.path().join("input.sock"),
-            output_dir: dir.path().join("out"),
-        })
-        .unwrap();
-        let (task, session, plan) = ("5be0d1a2c3f4", "3f9a1c07b2e4", atlas::files::token());
-        let tasks = client.output_dir().unwrap().join("tasks");
-        std::fs::create_dir(&tasks).unwrap();
-        let record = tasks.join(format!("{task}.json"));
-        let written = json!({"version": 1, "key": task, "session": session, "name": "probe",
-            "started": 1, "updated": 1,
-            "owned": [{"kind": "plan", "id": plan, "at": 1, "state": "made"}]});
-        std::fs::write(&record, written.to_string()).unwrap();
-        let state = || {
-            let read: Value = serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
-            read["owned"][0]["state"].clone()
-        };
-        let command = |args: &[&str]| parse(args).unwrap().command.unwrap();
-        let rolled_back = Ok(json!({"ok": true, "planId": plan, "phase": "rolledBack",
-            "keptTargets": [], "retainedDirectories": []}));
-
-        let preview = command(&["environment", "rollback", &plan]);
-        note_outcome(&client, None, Policy::of(&preview).kind, None, &rolled_back);
-        assert_eq!(state(), "made", "a preview undoes nothing");
-
-        let host = HostSession::new(atlas::host_session::Host::Named, "unreadable").unwrap();
-        let sessions = client.output_dir().unwrap().join("sessions");
-        std::fs::create_dir(&sessions).unwrap();
-        let session_record = sessions.join(format!("{}.json", host.key()));
-        let unreadable = b"{private durable canary";
-        std::fs::write(&session_record, unreadable).unwrap();
-        let undo = command(&["environment", "rollback", &plan, "--apply"]);
-        note_outcome(
-            &client,
-            Some(&host),
-            Policy::of(&undo).kind,
-            None,
-            &rolled_back,
-        );
-        assert_eq!(state(), "gone");
-        assert_eq!(std::fs::read(session_record).unwrap(), unreadable);
-        assert_eq!(rolled_back.as_ref().unwrap()["ok"], true);
-    }
-
-    #[test]
-    fn a_task_name_that_is_not_plain_refuses_only_commands_that_make_something() {
-        use atlas::host_session::Host;
-
-        let host = HostSession::new(Host::Codex, "tasks").unwrap();
-        let task = |args: &[&str], name: &str| {
-            let command = parse(args).unwrap().command.unwrap();
-            task_of(
-                Policy::of(&command).makes,
-                Some(&host),
-                Some(OsStr::new(name)),
-            )
-        };
-
-        for making in [
-            &["open", "--app", "TextEdit"][..],
-            &["run", "--", "ls"],
-            &["environment", "manifest.toml"],
-            &["environment", "manifest.toml", "--apply"],
-            &["environment", "apply", "plan"],
-            &["environment", "rollback", "plan", "--apply"],
-            &["environment", "profile", "profile.toml"],
-            &["environment", "run", "--", "ls"],
-            &["cleanup"],
-            &["cleanup", "--apply"],
-        ] {
-            assert_eq!(
-                task(making, "not plain").unwrap_err().code,
-                "usage",
-                "{making:?}"
-            );
-            let named = task(making, "probe").unwrap().unwrap();
-            assert_eq!(named.name().map(|name| name.as_str()), Some("probe"));
-        }
-
-        for other in [
-            &["status"][..],
-            &["activity"],
-            &["stop"],
-            &["resume"],
-            &["restart"],
-            &["apps"],
-            &["click", "1", "2"],
-            &["close", "--app", "TextEdit"],
-            &["environment", "list"],
-        ] {
-            assert_eq!(task(other, "not plain").unwrap(), None, "{other:?}");
-            assert!(task(other, "probe").unwrap().is_some(), "{other:?}");
-        }
-
-        let open = parse(&["open", "--app", "TextEdit"])
-            .unwrap()
-            .command
-            .unwrap();
-        assert_eq!(
-            task_of(Policy::of(&open).makes, None, Some(OsStr::new("not plain"))).unwrap(),
-            None,
-            "without a host session there is no task to name"
-        );
-    }
-
-    /// The agents `flags` pick for a connect.
-    fn picked(flags: &[&str]) -> Vec<atlas::agents::Agent> {
-        let args: Vec<&str> = ["agents", "install"].iter().chain(flags).copied().collect();
-        match parse(&args).unwrap().command.unwrap() {
-            Command::Agents {
-                action: Some(AgentsCommand::Install { picks }),
-            } => picks.agents(),
-            _ => panic!("a connect"),
-        }
-    }
-
-    #[test]
-    fn pi_and_opencode_can_be_selected_independently_or_together() {
-        use atlas::agents::Agent;
-        assert_eq!(picked(&["--pi"]), [Agent::Pi]);
-        assert_eq!(picked(&["--opencode"]), [Agent::Opencode]);
-        assert_eq!(
-            picked(&["--pi", "--opencode"]),
-            [Agent::Opencode, Agent::Pi]
-        );
-        for verb in ["install", "remove"] {
-            assert!(parse(&["agents", verb, "--pi", "--opencode"]).is_ok());
-        }
-    }
-
-    #[test]
-    fn cursor_has_its_own_selector_and_internal_hooks_stay_out_of_help() {
-        assert_eq!(picked(&["--cursor"]), [atlas::agents::Agent::Cursor]);
-        for verb in ["install", "remove"] {
-            assert!(parse(&["agents", verb, "--cursor", "--codex"]).is_ok());
-        }
-        assert!(parse(&["agents", "cursor-hook", "session-start"]).is_ok());
-        let help = super::help::command()
-            .find_subcommand_mut("agents")
-            .unwrap()
-            .render_long_help()
-            .to_string();
-        assert!(!help.contains("cursor-hook"));
-    }
-
-    #[test]
-    fn apps_takes_all_to_list_every_process() {
-        assert!(matches!(
-            parse(&["apps", "--all"]).unwrap().command,
-            Some(Command::Apps { all: true })
-        ));
-        assert!(matches!(
-            parse(&["apps"]).unwrap().command,
-            Some(Command::Apps { all: false })
-        ));
-    }
-
-    #[test]
-    fn each_command_that_acts_in_the_helper_says_what_it_does() {
-        let said = |args: &[&str]| {
-            let command = parse(args).unwrap().command.unwrap();
-            Policy::of(&command).doing.map(|doing| {
-                let mut row = atlas::activity_log::Row {
-                    ok: Some(true),
-                    action_count: Some(1),
-                    ..Default::default()
-                };
-                doing.fill(&mut row, true, None);
-                atlas::doing::says(&row)
-            })
-        };
-        let says = |args: &[&str], words: &str| assert_eq!(said(args).as_deref(), Some(words));
-
-        says(&["screenshot"], "took a screenshot");
-        says(
-            &["click", "--app", "TextEdit", "--name", "Save"],
-            "clicked Save in TextEdit",
-        );
-        says(&["click", "10", "20", "--count", "2"], "double-clicked");
-        says(&["click", "10", "20", "--button", "right"], "right-clicked");
-        says(&["move", "1", "2"], "moved the pointer");
-        says(&["drag", "1", "2", "3", "4"], "dragged");
-        says(&["scroll", "1", "2", "--dy", "3"], "scrolled");
-        says(&["type", "secret"], "typed text");
-        says(&["key", "cmd+s"], "pressed ⌘S");
-        says(
-            &["open", "--app", "TextEdit", "notes.txt"],
-            "opened TextEdit",
-        );
-        says(&["open", "https://example.com"], "opened a link");
-        says(&["close", "--app", "TextEdit"], "closed TextEdit");
-        says(&["run", "--", "ls", "/private"], "ran a command");
-        says(&["environment", "run", "--", "ls"], "ran a command");
-        assert_eq!(
-            said(&["windows"]),
-            None,
-            "a read does nothing in the helper"
-        );
-        assert_eq!(
-            said(&["restart"]),
-            None,
-            "recovery is worded by its operation"
-        );
-    }
-
-    #[test]
-    fn an_actions_app_is_named_in_its_activity() {
-        let app = |args: &[&str]| {
-            let command = parse(args).unwrap().command.unwrap();
-            let mut row = atlas::activity_log::Row::default();
-            Policy::of(&command)
-                .doing
-                .unwrap()
-                .fill(&mut row, true, None);
-            row.app.map(|app| json!(app))
-        };
-
-        for args in [
-            &["type", "--app", "TextEdit", "hi"][..],
-            &["key", "--app", "TextEdit", "cmd+s"],
-            &["scroll", "1", "2", "--dy", "3", "--app", "TextEdit"],
-            &["drag", "1", "2", "3", "4", "--app", "TextEdit"],
-            &["click", "1", "2", "--app", "TextEdit"],
-        ] {
-            assert_eq!(app(args), Some(json!("TextEdit")), "{args:?}");
-        }
-        assert_eq!(
-            app(&["type", "--pid", "42", "hi"]),
-            None,
-            "a pid names no app"
-        );
-    }
-
-    #[test]
-    fn typed_text_names_the_field_it_was_sent_to_once_the_helper_checked_it() {
-        let said = |args: &[&str], role: Option<&str>| {
-            let command = parse(args).unwrap().command.unwrap();
-            let mut row = atlas::activity_log::Row {
-                ok: Some(true),
-                ..Default::default()
-            };
-            Policy::of(&command)
-                .doing
-                .unwrap()
-                .fill(&mut row, true, role);
-            atlas::doing::says(&row)
-        };
-        let typed = ["type", "--app", "Notes", "--field", "Email", "secret"];
-
-        assert_eq!(
-            said(&typed, Some("AXTextField")),
-            "typed into Email in Notes"
-        );
-        assert_eq!(said(&typed, None), "typed in Notes");
-        assert_eq!(
-            said(&["type", "--app", "Notes", "secret"], Some("AXTextField")),
-            "typed in Notes"
-        );
-        assert_eq!(
-            said(
-                &["key", "--app", "Notes", "--field", "Email", "tab"],
-                Some("AXTextField")
-            ),
-            "pressed Tab in Notes"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_stop_cancels_an_environment_run_after_dispatch() {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        use tokio::{
-            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-            net::UnixListener,
-        };
-
-        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-        let mut client = Client::new(Config {
-            helper_uid: 60001,
-            socket_path: dir.path().join("helper.sock"),
-            identity_probe: dir.path().join("probe"),
-            input_socket: dir.path().join("input.sock"),
-            output_dir: dir.path().join("out"),
-        })
-        .unwrap();
-        client.controller = atlas::control::Controller::at(60001, &dir.path().join("state"));
-        client.transport.peer_uid = nix::unistd::getuid().as_raw();
-        let command = parse(&["environment", "run", "--", "tool"])
-            .unwrap()
-            .command
-            .unwrap();
-        client.doing = Policy::of(&command).doing;
-        let Command::Environment {
-            command: Some(EnvironmentCommand::Run { argv, timeout }),
-            ..
-        } = command
-        else {
-            panic!("environment run did not parse");
-        };
-        let listener = UnixListener::bind(&client.transport.path).unwrap();
-        let ownership = client.controller.acquire(false).unwrap();
-        let helper = async {
-            let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
-                "parentPID": 123, "onConsole": false, "securitySessionID": 42,
-                "displayID": 7, "width": 100, "height": 100});
-            for (operation, reply) in [
-                (
-                    "hello",
-                    json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
-                        "session": {"managerName": "Aqua", "onConsole": false},
-                        "display": {"width": 100, "height": 100, "scale": 1}}),
-                ),
-                (
-                    "run",
-                    json!({"ok": true, "exitCode": 0, "timedOut": false,
-                        "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
-                ),
-            ] {
-                let (peer, _) = listener.accept().await.unwrap();
-                let mut peer = BufReader::new(peer);
-                let mut line = String::new();
-                peer.read_line(&mut line).await.unwrap();
-                assert_eq!(
-                    serde_json::from_str::<Value>(&line).unwrap()["op"],
-                    operation
-                );
-                peer.get_mut()
-                    .write_all(format!("{reply}\n").as_bytes())
-                    .await
-                    .unwrap();
-            }
-
-            let (peer, _) = listener.accept().await.unwrap();
-            let mut peer = BufReader::new(peer);
-            let mut line = String::new();
-            peer.read_line(&mut line).await.unwrap();
-            let request: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(request["op"], "run");
-            assert_eq!(request["argv"], json!(["tool"]));
-            assert_eq!(client.controller.pending().unwrap().len(), 1);
-            client.controller.note_stop(true).unwrap();
-            line.clear();
-            assert_eq!(peer.read_line(&mut line).await.unwrap(), 0);
-        };
-        let running = client.run_owned_within(&ownership, argv, Duration::from_secs(timeout));
-        let (outcome, ()) = tokio::time::timeout(Duration::from_secs(2), async {
-            tokio::join!(running, helper)
-        })
-        .await
-        .unwrap();
-        let error = outcome.unwrap_err();
-        assert_eq!(error.code, "stopped");
-        assert!(error.uncertain);
-        assert_eq!(client.controller.pending().unwrap().len(), 1);
-        assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
-        drop(ownership);
-        assert_eq!(
-            client.controller.acquire(false).unwrap_err().code,
-            "uncertain"
-        );
-    }
-
-    #[tokio::test]
-    async fn atlas_run_lets_others_act_while_it_runs() {
-        use base64::{Engine, engine::general_purpose::STANDARD};
-        use tokio::{
-            io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-            net::UnixListener,
-        };
-
-        let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-        let mut client = Client::new(Config {
-            helper_uid: 60001,
-            socket_path: dir.path().join("helper.sock"),
-            identity_probe: dir.path().join("probe"),
-            input_socket: dir.path().join("input.sock"),
-            output_dir: dir.path().join("out"),
-        })
-        .unwrap();
-        client.controller = atlas::control::Controller::at(60001, &dir.path().join("state"));
-        client.transport.peer_uid = nix::unistd::getuid().as_raw();
-        let command = parse(&["run", "--", "tool"]).unwrap().command.unwrap();
-        client.doing = Policy::of(&command).doing;
-        let other = atlas::control::Controller::at(60001, &dir.path().join("state"));
-        let listener = UnixListener::bind(&client.transport.path).unwrap();
-        let helper = async {
-            let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
-                "parentPID": 123, "onConsole": false, "securitySessionID": 42,
-                "displayID": 7, "width": 100, "height": 100});
-            for (operation, reply) in [
-                (
-                    "hello",
-                    json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
-                        "session": {"managerName": "Aqua", "onConsole": false},
-                        "display": {"width": 100, "height": 100, "scale": 1}}),
-                ),
-                (
-                    "run",
-                    json!({"ok": true, "exitCode": 0, "timedOut": false,
-                        "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
-                ),
-            ] {
-                let (peer, _) = listener.accept().await.unwrap();
-                let mut peer = BufReader::new(peer);
-                let mut line = String::new();
-                peer.read_line(&mut line).await.unwrap();
-                assert_eq!(
-                    serde_json::from_str::<Value>(&line).unwrap()["op"],
-                    operation
-                );
-                peer.get_mut()
-                    .write_all(format!("{reply}\n").as_bytes())
-                    .await
-                    .unwrap();
-            }
-
-            let (peer, _) = listener.accept().await.unwrap();
-            let mut peer = BufReader::new(peer);
-            let mut line = String::new();
-            peer.read_line(&mut line).await.unwrap();
-            let request: Value = serde_json::from_str(&line).unwrap();
-            assert_eq!(request["op"], "run");
-            assert_eq!(request["argv"], json!(["tool"]));
-
-            // The run lets go once it has sent its request; a child another
-            // test is starting may hold the lock's file a moment past its
-            // release, until it runs its own program.
-            let mut beside = None;
-            for _ in 0..50 {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-                beside = other.acquire_beside_commands().ok();
-                if beside.is_some() {
-                    break;
-                }
-            }
-            assert!(beside.is_some(), "another agent acts while it runs");
-            drop(beside);
-            assert_eq!(other.acquire(true).unwrap_err().code, "busy");
-
-            peer.get_mut()
-                .write_all(
-                    format!(
-                        "{}\n",
-                        json!({"ok": true, "exitCode": 0, "timedOut": false})
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-        };
-        let client = || Ok(client.clone());
-        let running = carry_out(Path::new("unused.toml"), command, &client, None, false);
-        let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(running, helper)
-        })
-        .await
-        .unwrap();
-        assert_eq!(outcome.unwrap()["exitCode"], 0);
-        assert!(other.pending().unwrap().is_empty());
-    }
-
-    #[test]
-    fn a_stop_refuses_what_changes_the_helper_and_lets_looking_and_recovery_through() {
-        let changes = |args: &[&str]| {
-            let command = parse(args).unwrap().command.unwrap();
-            Policy::of(&command).changes_helper
-        };
-
-        for acting in [
-            &["click", "1", "2"][..],
-            &["type", "x"],
-            &["key", "cmd+s"],
-            &["open", "--app", "TextEdit"],
-            &["close", "--app", "TextEdit"],
-            &["run", "--", "ls"],
-            &["input", "[]"],
-            &["logout"],
-            &["environment", "run", "--", "ls"],
-            &["environment", "apply", "plan"],
-            &["verify-native"],
-            &["install"],
-            &["update"],
-            &["setup", "--apply"],
-            &["setup", "--rollback"],
-            &["environment", "rollback", "plan", "--apply"],
-            &["environment", "profile", "profile.toml", "--apply"],
-            &["job", "start", "--", "/bin/sleep", "9"],
-            &["job", "stop", "7c2e91a04b3f"],
-        ] {
-            assert!(changes(acting), "{acting:?}");
-        }
-
-        for looking in [
-            &["screenshot"][..],
-            &["windows"],
-            &["elements", "--app", "TextEdit"],
-            &["restart"],
-            &["start-input"],
-            &["readiness", "--tool", "git"],
-            &["stop"],
-            &["environment"],
-            &["environment", "rollback", "plan"],
-            &["environment", "list", "--all"],
-            &["environment", "profile", "profile.toml"],
-            &["update", "--check"],
-            &["setup"],
-            &["job", "list", "--all"],
-            &["job", "log", "7c2e91a04b3f"],
-            &["collect", "atlas-work/report.pdf"],
-        ] {
-            assert!(!changes(looking), "{looking:?}");
-        }
-    }
-
-    #[test]
-    fn servers_helper_commands_and_setup_previews_carry_no_host_session() {
-        let attributed = |args: &[&str]| {
-            Policy::of(&parse(args).unwrap().command.unwrap()).labelled(Actor::Agent)
-        };
-
-        for unattributed in [
-            &["mcp"][..],
-            &["watch"],
-            &["menubar"],
-            &["monitor"],
-            &["session-info"],
-            &["permissions-info"],
-            &["elements-info", "1"],
-            &["init"],
-            &["uninstall"],
-            &["update", "--check"],
-            &["setup"],
-            &["switch"],
-        ] {
-            assert!(!attributed(unattributed), "{unattributed:?}");
-        }
-
-        for agents in [
-            &["update"][..],
-            &["update-finish"],
-            &["setup", "--apply"],
-            &["setup", "--rollback"],
-            &["click", "1", "2"][..],
-            &["type", "x"],
-            &["screenshot"],
-            &["open", "--app", "TextEdit"],
-            &["close", "--app", "TextEdit"],
-            &["run", "--", "ls"],
-            &["environment"],
-            &["activity"],
-            &["agents"],
-            &["agents", "status", "--brief"],
-        ] {
-            assert!(attributed(agents), "{agents:?}");
-        }
-    }
-
-    #[test]
-    fn only_an_environment_request_that_changes_the_helper_can_own_a_plan() {
-        let kind = |args: &[&str]| Policy::of(&parse(args).unwrap().command.unwrap()).kind;
-
-        for changes in [
-            &["environment", "profile.toml", "--apply"][..],
-            &["environment", "apply", "plan"],
-            &["environment", "rollback", "plan", "--apply"],
-            &["environment", "profile", "profile.toml", "--apply"],
-        ] {
-            assert_eq!(
-                kind(changes),
-                Kind::Environment { changes: true },
-                "{changes:?}"
-            );
-        }
-        for looks in [
-            &["environment", "profile.toml"][..],
-            &["environment", "rollback", "plan"],
-            &["environment", "profile", "profile.toml"],
-        ] {
-            assert_eq!(
-                kind(looks),
-                Kind::Environment { changes: false },
-                "{looks:?}"
-            );
-        }
-        for other in [
-            &["environment", "discover"][..],
-            &["environment", "list"],
-            &["environment", "run", "--", "ls"],
-        ] {
-            assert_eq!(kind(other), Kind::Other, "{other:?}");
-        }
-        assert!(!Kind::Other.recorded(None), "a read records nothing");
-        assert!(Kind::Environment { changes: false }.recorded(None));
-    }
-
-    #[test]
-    fn the_viewers_commands_never_carry_a_host_session() {
-        for args in [
-            &["click", "1", "2"][..],
-            &["type", "x"],
-            &["restart"],
-            &["activity"],
-        ] {
-            let command = parse(args).unwrap().command.unwrap();
-            assert!(Policy::of(&command).labelled(Actor::Agent), "{args:?}");
-            assert!(!Policy::of(&command).labelled(Actor::Viewer), "{args:?}");
-        }
-    }
-
-    #[test]
-    fn only_commands_that_take_control_wait_and_listen_for_signals() {
-        let waits = |args: &[&str]| Policy::of(&parse(args).unwrap().command.unwrap()).controls;
-
-        for controlling in [
-            &["input", "[]"][..],
-            &["click", "1", "2"],
-            &["click", "--app", "Calculator", "--name", "7"],
-            &["move", "1", "2"],
-            &["drag", "1", "2", "3", "4"],
-            &["scroll", "1", "2", "--dy", "3"],
-            &["type", "x"],
-            &["key", "cmd+s"],
-            &["open", "--app", "TextEdit"],
-            &["close", "--app", "TextEdit"],
-            &["run", "--", "ls"],
-            &["restart"],
-            &["start-input"],
-            &["install"],
-            &["readiness", "--tool", "git"],
-            &["environment"],
-            &["environment", "run", "--", "ls"],
-            &["verify-native"],
-            &["logout", "--yes"],
-            &["job", "start", "--", "/bin/sleep", "9"],
-            &["job", "stop", "7c2e91a04b3f"],
-        ] {
-            assert!(waits(controlling), "{controlling:?}");
-        }
-
-        for at_once in [
-            &["screenshot"][..],
-            &["apps"],
-            &["windows"],
-            &["elements", "--app", "TextEdit"],
-            &["wait", "--app", "TextEdit"],
-            &["status"],
-            &["doctor"],
-            &["mcp"],
-            &["watch"],
-            &["menubar"],
-            &["monitor"],
-            &["init"],
-            &["uninstall"],
-            &["update"],
-            &["setup", "--apply"],
-            &["switch"],
-            &["logout"],
-            &["job", "list"],
-            &["job", "log", "7c2e91a04b3f"],
-            &["collect", "a.bin"],
-        ] {
-            assert!(!waits(at_once), "{at_once:?}");
-        }
-    }
-
-    #[test]
-    fn job_and_collect_rows_name_no_arguments_or_files() {
-        let fields = |args: &[&str]| {
-            let command = parse(args).unwrap().command.unwrap();
-            let mut row = atlas::activity_log::Row::default();
-            Policy::of(&command)
-                .doing
-                .unwrap()
-                .fill(&mut row, true, None);
-            serde_json::to_value(row).unwrap()
-        };
-        for (args, verb) in [
-            (
-                &[
-                    "job",
-                    "start",
-                    "--name",
-                    "web",
-                    "--",
-                    "/usr/bin/nc",
-                    "-lk",
-                    "8790",
-                ][..],
-                "job-start",
-            ),
-            (&["job", "stop", "7c2e91a04b3f"], "job-stop"),
-            (&["collect", "atlas-work/secret-report.pdf"], "collect"),
-        ] {
-            let fields = fields(args);
-            assert_eq!(fields["verb"], verb);
-            let text = fields.to_string();
-            for word in ["web", "nc", "8790", "secret-report", "7c2e91a04b3f"] {
-                assert!(!text.contains(word), "{args:?}: {text}");
-            }
-        }
-        let list = parse(&["job", "list"]).unwrap().command.unwrap();
-        assert!(Policy::of(&list).doing.is_none());
-    }
-
-    #[test]
-    fn starting_jobs_and_collecting_are_refused_for_a_task_name_that_is_not_plain() {
-        for args in [
-            &["job", "start", "--", "/bin/sleep", "9"][..],
-            &["collect", "a.bin"],
-        ] {
-            let command = parse(args).unwrap().command.unwrap();
-            assert!(Policy::of(&command).makes, "{args:?}");
-        }
-        let list = parse(&["job", "list"]).unwrap().command.unwrap();
-        assert!(!Policy::of(&list).makes);
-    }
-
-    #[test]
-    fn only_an_agent_waits_and_never_for_what_the_person_does_from_the_app() {
-        for args in [
-            &["type", "x"][..],
-            &["run", "--", "ls"],
-            &["restart"],
-            &["logout", "--yes"],
-        ] {
-            let command = parse(args).unwrap().command.unwrap();
-            assert!(Policy::of(&command).waits(Actor::Agent), "{args:?}");
-            assert!(!Policy::of(&command).waits(Actor::Viewer), "{args:?}");
-        }
-        let looking = parse(&["screenshot"]).unwrap().command.unwrap();
-        assert!(!Policy::of(&looking).waits(Actor::Agent));
-    }
-
-    #[test]
-    fn setup_commands_refuse_to_run_as_root() {
-        let error = refuse_root("update", true).unwrap_err();
-        assert_eq!(error.error, "Run atlas update as yourself, not with sudo.");
-        assert!(refuse_root("init", false).is_ok());
-    }
-}
+mod tests;

@@ -1,11 +1,16 @@
 //! Changes sent to the helper as recorded mutations: refused while agents
 //! are stopped, kept pending until a reply proves what they did, and cut
-//! short by a stop. A reply's completion is checked against its request.
-use super::{Actor, Client, record::recorded_code, run::RUN_MARGIN};
+//! short by a stop. A reply's completion is checked against its mutation.
+use super::{
+    Actor, Client,
+    record::{NOT_RECORDED, recorded_code},
+    run::RUN_MARGIN,
+};
 use crate::{
+    actions::Expect,
     control::{Lease, Ownership, Pending, SharedLease},
-    daemon::protocol::{JobReply, JobState, JobView, StopCameTo, Stopped},
     error::{Code, Error, Result},
+    protocol::{JobReply, JobState, JobView, StopCameTo, Stopped},
     transport,
 };
 use serde::Deserialize;
@@ -14,19 +19,27 @@ use std::time::{Duration, Instant};
 use tokio::sync::MutexGuard;
 
 /// Completion and ownership are chosen by the producer, independently of the
-/// tolerant activity-log vocabulary and the original wire projection.
+/// tolerant activity-log vocabulary and the original wire projection, with
+/// the facts a reply must prove.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Mutation {
-    Input(Option<u64>),
+pub(crate) enum Mutation<'a> {
+    Input {
+        count: u64,
+        expect: Option<&'a Expect>,
+    },
     Run,
-    JobStart,
-    JobStop,
+    JobStart {
+        uid: u32,
+    },
+    JobStop {
+        id: &'a str,
+    },
     Restart,
     Logout,
 }
 
-impl Mutation {
-    pub(crate) fn validate(self, request: &Value, reply: &Value) -> Result<()> {
+impl Mutation<'_> {
+    pub(crate) fn validate(self, reply: &Value) -> Result<()> {
         if reply["ok"] != true {
             return Ok(());
         }
@@ -34,21 +47,21 @@ impl Mutation {
         let valid = match self {
             // A checked batch is confirmed only with its expectation echoed: a
             // service that ignored it posted the input unchecked.
-            Self::Input(count) => {
-                reply["performed"].as_u64() == count
-                    && (request["expect"].is_null() || reply["expect"] == request["expect"])
+            Self::Input { count, expect } => {
+                reply["performed"].as_u64() == Some(count)
+                    && expect.is_none_or(|expect| reply["expect"] == json!(expect))
             }
-            Self::JobStart => {
-                matches!(JobReply::deserialize(reply), Ok(JobReply::Start { job }) if job_started(request, &job))
+            Self::JobStart { uid } => {
+                matches!(JobReply::deserialize(reply), Ok(JobReply::Start { job }) if job_started(uid, &job))
             }
-            Self::JobStop => match JobReply::deserialize(reply) {
+            Self::JobStop { id } => match JobReply::deserialize(reply) {
                 Ok(JobReply::Stop(Stopped { job, came_to })) => {
                     let confirmed = match came_to {
                         StopCameTo::Signalled(signal) => signal == "SIGTERM",
                         StopCameTo::AlreadyEnded(ended) => ended,
                         StopCameTo::AlreadyStopping(stopping) => stopping,
                     };
-                    request["id"] == job.id.as_str() && confirmed
+                    id == job.id.as_str() && confirmed
                 }
                 _ => false,
             },
@@ -79,16 +92,16 @@ impl Mutation {
 
 /// Whether a job start's reply proves the job it started: a leader that
 /// is a group of its own, an exact start time, the boot it started in, the
-/// helper account the request was for, and a state. Else a job may run
-/// that the person's side knows nothing of.
-fn job_started(request: &Value, job: &JobView) -> bool {
+/// helper account `uid` it was for, and a state. Else a job may run that
+/// the person's side knows nothing of.
+fn job_started(uid: u32, job: &JobView) -> bool {
     job.pid.is_some_and(|pid| pid > 1)
         && job.pgid == job.pid
         && job
             .start
             .is_some_and(|[seconds, micros]| seconds > 0 && micros < 1_000_000)
         && !job.boot.is_empty()
-        && request["uid"] == job.uid
+        && uid == job.uid
         && match job.state {
             JobState::Running | JobState::Stopping | JobState::Ended => true,
             JobState::Starting | JobState::Launched => false,
@@ -102,20 +115,17 @@ async fn authorize<'a>(
     lease: Option<(&'a SharedLease, &str)>,
     observed_at: Option<Instant>,
 ) -> Result<Option<MutexGuard<'a, Lease>>> {
-    let mut authorization = match lease {
-        Some((state, _)) => Some(state.lock().await),
+    let authorization = match lease {
+        Some((state, owner)) => {
+            let mut state = state.lock().await;
+            state.require(owner)?;
+            Some(state)
+        }
         None => None,
     };
 
-    if let (Some(state), Some((_, owner))) = (&mut authorization, lease) {
-        state.require(owner)?;
-    }
-
     if observed_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(8)) {
-        return Err(Error::new(
-            Code::StaleFrame,
-            "The observation expired before dispatch",
-        ));
+        return Err(Error::stale_frame());
     }
 
     Ok(authorization)
@@ -130,7 +140,7 @@ impl Client {
     /// `observed_at` the frame it acts on must still be fresh.
     pub(crate) async fn mutate(
         &self,
-        mutation: Mutation,
+        mutation: Mutation<'_>,
         request: Value,
         lease: Option<(&SharedLease, &str)>,
         observed_at: Option<Instant>,
@@ -148,8 +158,8 @@ impl Client {
         let agent = self.actor == Actor::Agent && self.doing.is_some();
         let (agent_command, stop_before) = match mutation {
             Mutation::Run => (agent, agent),
-            Mutation::JobStart | Mutation::JobStop => (false, agent),
-            Mutation::Input(_) | Mutation::Restart | Mutation::Logout => (false, false),
+            Mutation::JobStart { .. } | Mutation::JobStop { .. } => (false, agent),
+            Mutation::Input { .. } | Mutation::Restart | Mutation::Logout => (false, false),
         };
         if stop_before && self.stop_marked() {
             return Err(Error::stopped());
@@ -173,19 +183,19 @@ impl Client {
         } else {
             self.answer(sent).await?
         };
-        mutation.validate(&request, &reply)?;
+        mutation.validate(&reply)?;
 
         self.settle(&request, reply, command, claim, started).await
     }
 
     /// A connection to where `request` goes: the input service for input,
     /// and the helper daemon for everything else.
-    async fn connect(&self, request: &Value, mutation: Mutation) -> Result<transport::Pending> {
+    async fn connect(&self, request: &Value, mutation: Mutation<'_>) -> Result<transport::Pending> {
         let mut transport = match mutation {
-            Mutation::Input(_) => self.input_transport(),
+            Mutation::Input { .. } => self.input_transport(),
             Mutation::Run
-            | Mutation::JobStart
-            | Mutation::JobStop
+            | Mutation::JobStart { .. }
+            | Mutation::JobStop { .. }
             | Mutation::Restart
             | Mutation::Logout => self.transport.clone(),
         };
@@ -211,11 +221,16 @@ impl Client {
     /// a `command` that lets go of control. Restart, log-out and standalone
     /// input (input without a lease) run under the claim their caller holds
     /// through verification or cleanup, so they take none here.
-    fn claim(&self, mutation: Mutation, leased: bool, command: bool) -> Result<Option<Pending>> {
+    fn claim(
+        &self,
+        mutation: Mutation<'_>,
+        leased: bool,
+        command: bool,
+    ) -> Result<Option<Pending>> {
         let callers = match mutation {
             Mutation::Restart | Mutation::Logout => true,
-            Mutation::Input(_) => !leased,
-            Mutation::Run | Mutation::JobStart | Mutation::JobStop => false,
+            Mutation::Input { .. } => !leased,
+            Mutation::Run | Mutation::JobStart { .. } | Mutation::JobStop { .. } => false,
         };
         if callers {
             return Ok(None);
@@ -247,17 +262,13 @@ impl Client {
             }
         };
 
-        match sent {
-            Ok(sent) => Ok(sent),
-            Err(error) => {
-                if let Some(claim) = claim
-                    && !error.uncertain
-                {
-                    self.controller.clear_if(claim)?;
-                }
-                Err(error)
-            }
+        if let (Err(error), Some(claim)) = (&sent, claim)
+            && !error.uncertain
+        {
+            self.controller.clear_if(claim)?;
         }
+
+        sent
     }
 
     /// The reply to a sent request, unless a signal's stop cuts it short
@@ -345,8 +356,7 @@ impl Client {
             .await
             .is_err()
         {
-            warnings
-                .push("Operation result is valid; local metadata could not be recorded".to_owned());
+            warnings.push(NOT_RECORDED.to_owned());
         }
 
         if !warnings.is_empty() {
@@ -358,41 +368,4 @@ impl Client {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
-        let request = json!({"op":"run"});
-
-        for reply in [
-            json!({"ok":true,"exitCode":0,"timedOut":false,"signal":null}),
-            json!({"ok":true,"exitCode":null,"timedOut":false,"signal":"SIGTERM"}),
-            json!({"ok":true,"exitCode":null,"timedOut":true,"signal":"SIGKILL"}),
-        ] {
-            Mutation::Run.validate(&request, &reply).unwrap();
-        }
-
-        for reply in [
-            json!({"ok":true}),
-            json!({"ok":true,"exitCode":null,"timedOut":false,"signal":15}),
-        ] {
-            assert!(
-                Mutation::Run
-                    .validate(&request, &reply)
-                    .unwrap_err()
-                    .uncertain
-            );
-        }
-
-        assert!(
-            Mutation::Input(Some(1))
-                .validate(
-                    &json!({"op":"input","actions":[{}]}),
-                    &json!({"ok":true,"performed":0})
-                )
-                .unwrap_err()
-                .uncertain
-        );
-    }
-}
+mod tests;

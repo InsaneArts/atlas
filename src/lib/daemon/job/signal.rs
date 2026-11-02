@@ -7,7 +7,7 @@ use super::{
     record::Record,
     verdict::{Observation, Verdict, verdict},
 };
-use crate::daemon::protocol::Expected;
+use crate::protocol::Expected;
 use nix::sys::signal::Signal;
 
 /// What a signal to a job came to.
@@ -28,7 +28,7 @@ impl Jobs {
     pub(super) fn observe(&self, state: &State, record: &Record) -> Option<Observation> {
         let identity = record.identity()?;
         let members = self.kernel.group(identity.pgid()).ok()?;
-        let leader = self.kernel.process(identity.pid()).ok()?;
+        let leader = self.kernel.process(identity.leader().pid).ok()?;
         Some(Observation {
             leader,
             members,
@@ -42,10 +42,9 @@ impl Jobs {
         state: &State,
         record: &Record,
         expect: Option<&Expected>,
-    ) -> (Verdict, Option<Observation>) {
+    ) -> Verdict {
         let seen = self.observe(state, record);
-        let judged = verdict(record, expect, &self.boot, self.uid, seen.as_ref());
-        (judged, seen)
+        verdict(record, expect, &self.boot, self.uid, seen.as_ref())
     }
 
     /// Send `signal` to `record`'s group, only when a fresh verdict says it
@@ -59,14 +58,14 @@ impl Jobs {
         expect: Option<&Expected>,
         signal: Signal,
     ) -> Signalled {
-        let judged = self.judge(state, record, expect).0;
+        let judged = self.judge(state, record, expect);
         let Verdict::Signal { pgid } = judged else {
             return Signalled::NotSent(judged);
         };
         if self.kernel.killpg(pgid, signal).is_ok() {
             return Signalled::Sent;
         }
-        match self.judge(state, record, expect).0 {
+        match self.judge(state, record, expect) {
             Verdict::Signal { .. } => Signalled::NotSent(Verdict::Unknown),
             after => Signalled::NotSent(after),
         }

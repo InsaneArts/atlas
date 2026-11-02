@@ -2,12 +2,12 @@
 //! got, how a stop is going and how it ended. The arguments it was started
 //! with are never kept: they may carry secrets.
 use crate::{
-    daemon::protocol::{
+    host::Key,
+    process::{Instance, Start},
+    protocol::{
         EndedView, Expected, How, JobId, JobRefusal, JobState, JobView, Left, Progress,
         StoppingView,
     },
-    host_session::Key,
-    process::{Instance, Start},
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,16 +23,16 @@ const BOOT_MAX: usize = 64;
 /// [`JobIdentity::new`] makes one, so every identity in hand is in bounds
 /// and names a group led by its own leader.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct JobIdentity {
-    boot: String,
+pub(super) struct JobIdentity<'a> {
+    boot: &'a str,
     leader: Instance,
 }
 
-impl JobIdentity {
+impl<'a> JobIdentity<'a> {
     /// The identity these say, when the boot is named, the PID is a user
     /// process's, the start time is a real one, and the group is the
     /// leader's own.
-    pub(super) fn new(boot: &str, pid: i32, start: Start, pgid: i32) -> Option<Self> {
+    pub(super) fn new(boot: &'a str, pid: i32, start: Start, pgid: i32) -> Option<Self> {
         let sound = !boot.is_empty()
             && boot.len() <= BOOT_MAX
             && (2..=PID_MAX).contains(&pid)
@@ -40,23 +40,14 @@ impl JobIdentity {
             && start[0] > 0
             && start[1] < 1_000_000;
         sound.then(|| Self {
-            boot: boot.to_owned(),
+            boot,
             leader: Instance::new(pid, start),
         })
     }
 
     /// The identity the person's side sent, when it is a sound one.
-    pub(super) fn expected(expected: &Expected) -> Option<Self> {
+    pub(super) fn expected(expected: &'a Expected) -> Option<Self> {
         Self::new(&expected.boot, expected.pid, expected.start, expected.pgid)
-    }
-
-    pub(super) fn boot(&self) -> &str {
-        &self.boot
-    }
-
-    /// The leader's PID.
-    pub(super) fn pid(&self) -> i32 {
-        self.leader.pid
     }
 
     /// The job's process group: always its leader's PID.
@@ -64,23 +55,9 @@ impl JobIdentity {
         self.leader.pid
     }
 
-    pub(super) fn start(&self) -> Start {
-        self.leader.start
-    }
-
     /// The leader as a process instance.
     pub(super) fn leader(&self) -> Instance {
         self.leader
-    }
-
-    /// As the person's side keeps it.
-    pub(super) fn as_expected(&self) -> Expected {
-        Expected {
-            boot: self.boot.clone(),
-            pid: self.leader.pid,
-            start: self.leader.start,
-            pgid: self.leader.pid,
-        }
     }
 }
 
@@ -128,6 +105,14 @@ impl Stopping {
             stuck: None,
             refused: None,
         }
+    }
+
+    /// TERM reached the job's group `now`: its grace runs from here.
+    pub(super) fn term_reached(&mut self, now: u64) {
+        self.term_sent = true;
+        self.signal = Some("SIGTERM".into());
+        self.since = now;
+        self.refused = None;
     }
 }
 
@@ -187,7 +172,7 @@ pub(super) struct Record {
 
 impl Record {
     /// Its identity, when it has a process and the identity is sound.
-    pub(super) fn identity(&self) -> Option<JobIdentity> {
+    pub(super) fn identity(&self) -> Option<JobIdentity<'_>> {
         JobIdentity::new(&self.boot, self.pid?, self.start?, self.pgid?)
     }
 
@@ -196,18 +181,20 @@ impl Record {
     /// record that fails this is shown and never acted on.
     pub(super) fn sound(&self) -> bool {
         let process = self.pid.is_some() || self.start.is_some() || self.pgid.is_some();
-        let needs_process = matches!(
-            self.state,
-            JobState::Launched | JobState::Running | JobState::Stopping
-        );
         self.version == VERSION
             && self.state != JobState::Starting
-            && (!(process || needs_process) || self.identity().is_some())
+            && (!(process || self.state.live()) || self.identity().is_some())
     }
 
     /// What the job is, when it has a process.
     pub(super) fn expected(&self) -> Option<Expected> {
-        self.identity().map(|identity| identity.as_expected())
+        let leader = self.identity()?.leader;
+        Some(Expected {
+            boot: self.boot.clone(),
+            pid: leader.pid,
+            start: leader.start,
+            pgid: leader.pid,
+        })
     }
 
     /// The job as replies show it.

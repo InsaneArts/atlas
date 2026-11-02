@@ -476,7 +476,7 @@ fn a_drag_is_refused_when_it_would_drop_on_the_dock() {
         json!({"reason": "point", "found": {"app": "Dock", "pid": 2}})
     );
     let error = docked_need(APP, &icons(), drag((400.0, 770.0))).unwrap_err();
-    assert!(error.error.contains("the drop point"), "{}", error.error);
+    assert!(error.error.contains("at that point"), "{}", error.error);
 
     assert_eq!(
         refusal(docked_need(APP, &icons(), drag((900.0, 300.0))))["found"]["app"],
@@ -615,7 +615,7 @@ fn a_refusal_names_what_was_there_but_no_title() {
         let error = outcome.unwrap_err();
         let said = serde_json::to_string(&error).unwrap();
         assert!(!said.contains("Secret plans"), "{said}");
-        assert!(error.error.starts_with("Calculator"), "{}", error.error);
+        assert_eq!(error.details["found"]["app"], "Calculator");
     }
 }
 
@@ -869,9 +869,7 @@ fn a_window_of_the_app_in_front_at_a_higher_layer_is_refused_as_another_window()
         let error = expecting(&in_document(), &mut look).unwrap_err();
         assert_eq!(error.details["reason"], "window", "{what}");
         assert!(
-            error
-                .error
-                .starts_with("Another window of the app is in front"),
+            error.error.starts_with("The named window"),
             "{what}: {}",
             error.error
         );
@@ -947,7 +945,7 @@ fn pointer_preparation_refuses_a_point_covered_by_a_same_app_floating_panel() {
         assert_eq!(error.code, Code::FocusChanged);
         assert_eq!(error.details["reason"], "window");
         assert_eq!(error.details["found"]["window"], 4130);
-        assert!(error.error.contains("at that point"));
+        assert!(error.error.contains("The named window"));
     }
 }
 

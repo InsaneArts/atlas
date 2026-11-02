@@ -4,6 +4,20 @@ pub use super::geometry::Frame;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, time::Duration};
 
+/// The AX status codes meaning an element simply lacks an attribute: no
+/// value, unsupported, not implemented.
+pub(crate) const ABSENT: [i32; 3] = [-25212, -25205, -25208];
+
+/// Whether an `"attribute:code"` error key says something went wrong,
+/// rather than that the element simply lacks the attribute.
+pub(crate) fn telling(key: &str) -> bool {
+    let code = key
+        .rsplit_once(':')
+        .and_then(|(_, code)| code.parse::<i32>().ok());
+
+    code.is_none_or(|code| !ABSENT.contains(&code))
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Element {
@@ -73,8 +87,18 @@ pub struct Limits {
     pub(crate) time: Duration,
 }
 
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            depth: 14,
+            count: 1500,
+            time: Duration::from_secs(4),
+        }
+    }
+}
+
 /// Why a scan is incomplete.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Stop {
     /// Some elements are nested deeper than the scan reads.
@@ -90,28 +114,9 @@ pub enum Stop {
 }
 
 impl Stop {
-    pub(crate) const ALL: [Stop; 5] = [
-        Stop::Depth,
-        Stop::Count,
-        Stop::Time,
-        Stop::Unread,
-        Stop::Withheld,
-    ];
-
-    /// The word a reply names it by.
-    pub(crate) fn word(self) -> &'static str {
-        match self {
-            Stop::Depth => "depth",
-            Stop::Count => "count",
-            Stop::Time => "time",
-            Stop::Unread => "unread",
-            Stop::Withheld => "withheld",
-        }
-    }
-
     /// The reason a reply names by `word`, if it is one of these.
     pub(crate) fn parse(word: &str) -> Option<Stop> {
-        Stop::ALL.into_iter().find(|stop| stop.word() == word)
+        Self::deserialize(serde_json::Value::from(word)).ok()
     }
 
     /// Why the scan stopped, in plain words.
@@ -137,15 +142,5 @@ pub(crate) fn why(stops: impl IntoIterator<Item = Stop>) -> Option<String> {
         [] => None,
         [one] => Some((*one).to_owned()),
         [rest @ .., last] => Some(format!("{} and {last}", rest.join(", "))),
-    }
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            depth: 14,
-            count: 1500,
-            time: Duration::from_secs(4),
-        }
     }
 }

@@ -8,6 +8,7 @@ use crate::{
     files::open_plain,
     name::name_type,
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -42,6 +43,17 @@ const PNG_HEAD: u64 = 33;
 pub(crate) struct Icons(Mutex<HashMap<PathBuf, Option<String>>>);
 
 impl Icons {
+    /// Add its icon to each of the first `limit` of `apps` that has one.
+    pub(crate) async fn add(&self, apps: &mut [Value], limit: usize) {
+        for app in apps.iter_mut().take(limit) {
+            if let Some(bundle) = app["bundle"].as_str().map(PathBuf::from)
+                && let Some(icon) = self.get(bundle).await
+            {
+                app["icon"] = json!(icon);
+            }
+        }
+    }
+
     /// An app's icon as a base64 PNG, made once. Only apps installed where
     /// apps are (not files any app could have put in a shared folder) are
     /// read on the person's side.
@@ -77,36 +89,31 @@ pub(crate) fn frame(png: &[u8]) -> Result<Value> {
         encoded = jpeg(png, FRAME_SMALL)?;
     }
 
-    let (bytes, width, height) = encoded;
-    if base64_length(bytes.len()) > FRAME_BUDGET {
+    if base64_length(encoded.0.len()) > FRAME_BUDGET {
         return Err(Error::new(
             Code::Capture,
             "The screen is too detailed to send",
         ));
     }
 
-    let id = crate::name::hex(&Sha256::digest(&bytes)[..8]);
-
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    Ok(json!({
-        "id": id,
-        "mimeType": "image/jpeg",
-        "data": STANDARD.encode(&bytes),
-        "width": width,
-        "height": height,
-    }))
+    let mut shown = picture(&encoded);
+    shown["id"] = json!(crate::name::hex(&Sha256::digest(&encoded.0)[..8]));
+    Ok(shown)
 }
 
 /// A screenshot's thumbnail: a small JPEG, as base64, with its size.
 pub(crate) fn thumbnail(png: &[u8]) -> Result<Value> {
-    let (bytes, width, height) = jpeg(png, THUMB)?;
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    Ok(json!({
+    Ok(picture(&jpeg(png, THUMB)?))
+}
+
+/// A JPEG and its size as a view takes it.
+fn picture((bytes, width, height): &(Vec<u8>, u32, u32)) -> Value {
+    json!({
         "mimeType": "image/jpeg",
-        "data": STANDARD.encode(&bytes),
+        "data": STANDARD.encode(bytes),
         "width": width,
         "height": height,
-    }))
+    })
 }
 
 /// The regular apps in `apps`, each with its bundle identifier, when it was
@@ -264,16 +271,13 @@ pub(crate) fn captures(output: &Path, limit: usize) -> Vec<(u128, String)> {
 /// and only a plain file the agent's capture wrote: never through a link,
 /// and no more of it than a screenshot takes.
 pub(crate) fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
-    use std::io::Read;
-
     let unknown = || Error::new(Code::BadRequest, "No screenshot has that name");
     if capture_time(name).is_none() {
         return Err(unknown());
     }
 
     let file = open_plain(&output.join(name)).ok_or_else(unknown)?;
-    let mut png = Vec::new();
-    file.take(FRAME_LIMIT as u64 + 1).read_to_end(&mut png)?;
+    let png = crate::files::read_up_to(file, FRAME_LIMIT as u64 + 1)?;
     if png.len() > FRAME_LIMIT {
         return Err(Error::new(
             Code::Capture,
@@ -287,13 +291,10 @@ pub(crate) fn read_capture(output: &Path, name: &str) -> Result<Vec<u8>> {
 /// The size in pixels of the screenshot `name` in `output`, read from its
 /// PNG header under [`read_capture`]'s rules.
 pub(crate) fn capture_size(output: &Path, name: &str) -> Option<(u32, u32)> {
-    use std::io::Read;
-
     capture_time(name)?;
     let file = open_plain(&output.join(name))?;
-    let mut head = Vec::new();
-    file.take(PNG_HEAD).read_to_end(&mut head).ok()?;
-    crate::client::png_dimensions(&head).ok()
+    let head = crate::files::read_up_to(file, PNG_HEAD).ok()?;
+    crate::screen::png::png_dimensions(&head).ok()
 }
 
 /// Whether `bundle` is an app installed where apps go: the system's and
@@ -318,7 +319,6 @@ pub(crate) fn installed(bundle: &Path) -> bool {
 /// `bundle`'s icon as a base64 PNG. Call [`installed`] first.
 #[cfg(target_os = "macos")]
 fn icon(bundle: &Path) -> Option<String> {
-    use base64::{Engine, engine::general_purpose::STANDARD};
     let png = crate::native::icons::png(bundle, ICON).ok()?;
     Some(STANDARD.encode(png))
 }
@@ -341,212 +341,9 @@ pub(crate) fn jpeg(png: &[u8], (limit, quality): (u32, f64)) -> Result<(Vec<u8>,
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn jpeg(_png: &[u8], _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
+pub(crate) fn jpeg(_png: &[u8], _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
     Err(Error::new(Code::Platform, "Atlas runs on macOS only"))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_frame_is_a_jpeg_within_the_budget_named_by_its_content() {
-        let png = crate::native::capture::sample_png(2560, 1440);
-        let first = frame(&png).unwrap();
-        assert_eq!(first["mimeType"], "image/jpeg");
-        assert_eq!(
-            (first["width"].clone(), first["height"].clone()),
-            (json!(1024), json!(576))
-        );
-        assert!(first["data"].as_str().unwrap().len() <= FRAME_BUDGET);
-        assert_eq!(first["id"].as_str().unwrap().len(), 16);
-        assert_eq!(
-            frame(&png).unwrap()["id"],
-            first["id"],
-            "the same screen, the same id"
-        );
-        assert_eq!(base64_length(4), 8);
-    }
-
-    #[test]
-    fn apps_list_front_to_back_with_their_windows_and_bundles() {
-        let apps = json!([
-            {"name": "Finder", "pid": 1, "policy": "regular", "executable": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"},
-            {"name": "loginwindow", "pid": 2, "policy": "accessory", "executable": "/x"},
-            {"name": "Opie", "pid": 3, "policy": "regular", "active": true, "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
-            {"name": "Notes", "pid": 4, "policy": "regular", "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
-        ]);
-        let windows = json!([
-            {"number": 11, "pid": 3, "title": "Starter", "bounds": {"x": 0.0, "y": 25.0, "width": 1080.0, "height": 590.0}},
-            {"number": 12, "pid": 4, "title": "QA checklist", "bounds": {"x": 40.0, "y": 60.0, "width": 900.0, "height": 640.0}},
-            {"number": 13, "pid": 3, "title": "Ring", "bounds": {"x": 700.0, "y": 80.0, "width": 520.0, "height": 860.0}},
-        ]);
-
-        let listed = open_apps(&apps, &windows).unwrap();
-        let order = listed
-            .iter()
-            .map(|app| app["name"].clone())
-            .collect::<Vec<_>>();
-        assert_eq!(order, [json!("Opie"), json!("Notes"), json!("Finder")]);
-        assert_eq!(listed[0]["active"], true);
-        assert_eq!(listed[0]["bundle"], "/Applications/Opie.app");
-        assert_eq!(
-            listed[0]["windows"][1],
-            json!({"id": 13, "title": "Ring", "x": 700.0, "y": 80.0, "width": 520.0, "height": 860.0, "order": 2})
-        );
-        assert_eq!(
-            listed[2]["windows"],
-            json!([]),
-            "Finder, without a window, last"
-        );
-    }
-
-    #[test]
-    fn repeated_app_process_ids_are_refused_before_joining_windows() {
-        let app = json!({"name": "Notes", "pid": 4, "policy": "regular"});
-        let apps = json!([app, app]);
-        let windows = json!([{"pid": 4, "number": 1, "title": "Notes"}]);
-        assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
-    }
-
-    #[test]
-    fn app_lists_bound_total_entries_and_text_before_copying_them() {
-        let apps = json!([{"name": "Notes", "pid": 4, "policy": "regular"}]);
-        let windows = json!([
-            {"pid": 4, "title": "x".repeat(FRAME_LIMIT / 2)},
-            {"pid": 4, "title": "x".repeat(FRAME_LIMIT / 2)},
-        ]);
-        assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
-        let windows = Value::Array(vec![Value::Null; FRAME_LIMIT / 128 + 1]);
-        assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
-        let apps = json!([{"pid": 4, "name": "x".repeat(FRAME_LIMIT), "policy": "regular"}]);
-        assert_eq!(open_apps(&apps, &json!([])).unwrap_err().code, "apps");
-    }
-
-    #[test]
-    fn only_files_an_agents_capture_wrote_are_screenshots() {
-        assert_eq!(
-            capture_time("1700000000000000000-capture.png"),
-            Some(1_700_000_000_000_000_000)
-        );
-        for name in [
-            "-capture.png",
-            "../1-capture.png",
-            "1-capture.png.partial",
-            "a1-capture.png",
-            crate::activity_log::FILE,
-        ] {
-            assert_eq!(capture_time(name), None, "{name}");
-        }
-
-        let dir = tempfile::tempdir().unwrap();
-        let second = 1_000_000_000_u128;
-        let named = |at: u128| format!("{}-capture.png", at * second);
-        std::fs::write(dir.path().join(named(10)), b"x").unwrap();
-        std::fs::write(dir.path().join(named(40)), b"x").unwrap();
-        std::fs::write(dir.path().join(crate::activity_log::FILE), b"x").unwrap();
-        std::os::unix::fs::symlink("/etc/hosts", dir.path().join(named(50))).unwrap();
-
-        let shots = captures(dir.path(), 30);
-        assert_eq!(
-            shots,
-            [(40 * second, named(40)), (10 * second, named(10))],
-            "no links, no other files, newest first"
-        );
-        assert_eq!(captures(dir.path(), 1).len(), 1);
-    }
-
-    #[test]
-    fn a_screenshot_name_outside_the_capture_pattern_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let png = crate::native::capture::sample_png(64, 40);
-        std::fs::write(dir.path().join("5-capture.png"), &png).unwrap();
-        std::fs::write(dir.path().join("u.toml"), b"secret").unwrap();
-        std::fs::write(dir.path().join("5-capture.png.partial"), &png).unwrap();
-
-        assert_eq!(read_capture(dir.path(), "5-capture.png").unwrap(), png);
-        assert_eq!(capture_size(dir.path(), "5-capture.png"), Some((64, 40)));
-        for name in [
-            "u.toml",
-            "../u.toml",
-            "5-capture.png.partial",
-            "/etc/hosts",
-            "x5-capture.png",
-            "6-capture.png",
-        ] {
-            assert_eq!(
-                read_capture(dir.path(), name).unwrap_err().code,
-                "bad-request",
-                "{name}"
-            );
-            assert_eq!(capture_size(dir.path(), name), None, "{name}");
-        }
-    }
-
-    #[test]
-    fn a_linked_screenshot_is_refused() {
-        let dir = tempfile::tempdir().unwrap();
-        let png = crate::native::capture::sample_png(64, 40);
-        std::fs::write(dir.path().join("5-capture.png"), &png).unwrap();
-        std::os::unix::fs::symlink(
-            dir.path().join("5-capture.png"),
-            dir.path().join("6-capture.png"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            read_capture(dir.path(), "6-capture.png").unwrap_err().code,
-            "bad-request"
-        );
-        assert_eq!(capture_size(dir.path(), "6-capture.png"), None);
-    }
-
-    #[test]
-    fn a_screenshot_that_is_not_a_plain_file_is_refused_without_waiting() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("7-capture.png")).unwrap();
-        nix::unistd::mkfifo(
-            &dir.path().join("8-capture.png"),
-            nix::sys::stat::Mode::S_IRWXU,
-        )
-        .unwrap();
-
-        for name in ["7-capture.png", "8-capture.png"] {
-            assert_eq!(
-                read_capture(dir.path(), name).unwrap_err().code,
-                "bad-request",
-                "{name}"
-            );
-        }
-        assert!(captures(dir.path(), 30).is_empty());
-    }
-
-    #[test]
-    fn an_icon_is_drawn_at_the_size_asked() {
-        let icon =
-            crate::native::capture::icon_png(&crate::native::capture::sample_png(256, 256), 64)
-                .unwrap();
-        assert_eq!(crate::client::png_dimensions(&icon).unwrap(), (64, 64));
-    }
-
-    #[test]
-    fn icons_come_only_from_apps_installed_where_apps_go() {
-        assert!(installed(Path::new("/Applications/Opie.app")));
-        assert!(installed(Path::new("/System/Applications/Notes.app")));
-        assert!(installed(Path::new(
-            "/System/Library/CoreServices/Finder.app"
-        )));
-        assert!(!installed(Path::new("/System/Library/Evil.app")));
-        assert!(!installed(Path::new("/Users/Shared/Evil.app")));
-        assert!(!installed(Path::new("/tmp/Evil.app")));
-        assert!(!installed(Path::new("/Applications/../tmp/Evil.app")));
-        assert!(!installed(Path::new("Applications/Opie.app")));
-
-        let nested = json!([{"name": "Helper", "pid": 1, "policy": "regular",
-            "executable": "/Applications/Big.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"}]);
-        assert_eq!(
-            open_apps(&nested, &json!([])).unwrap()[0]["bundle"],
-            "/Applications/Big.app/Contents/Frameworks/Helper.app"
-        );
-    }
-}
+mod tests;

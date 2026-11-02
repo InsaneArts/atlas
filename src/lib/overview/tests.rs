@@ -110,7 +110,7 @@ fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
         .unwrap();
     };
     let sessions: Vec<HostSession> = (0..10).map(|n| session(format!("worker-{n}"))).collect();
-    let recent = crate::host_session::now_ms() - 1_000;
+    let recent = crate::time::now_ms() - 1_000;
     for (index, each) in sessions.iter().enumerate() {
         worked(each);
         let at = recent + index as u64;
@@ -488,7 +488,7 @@ fn a_session_at_work_has_never_ended_whatever_its_record_says() {
     // Resumed in a new process, the one this command runs in: its
     // command holds the helper before anything is recorded.
     let parent = nix::unistd::getppid().as_raw();
-    let host = crate::host_session::ancestry::process(parent).unwrap();
+    let host = crate::host::ancestry::process(parent).unwrap();
     let resumed = HostSession::new(Host::Claude, "resumed")
         .unwrap()
         .run_by(Some(Instance::new(parent, host.start)));
@@ -1273,7 +1273,7 @@ fn surviving_work(explicit: bool) {
         captures: &Default::default(),
         copies: &Default::default(),
         tasks: &[],
-        now: crate::host_session::now_ms(),
+        now: crate::time::now_ms(),
     }
     .history_with(&reading.processes, |key| reading.work(key, facts));
     assert_eq!(
@@ -1354,12 +1354,7 @@ fn marker_contention_preserves_a_gone_hosts_verified_running_work() {
         .unwrap()
         .run_by(Some(old));
     Store::at(client.output_dir().unwrap())
-        .update(
-            &own,
-            crate::host_session::now_ms(),
-            &client.controller,
-            |_| {},
-        )
+        .update(&own, crate::time::now_ms(), &client.controller, |_| {})
         .unwrap();
     let controller = client.controller.clone().labelled(Some(&own));
     let claim = controller.quarantine_command().unwrap();

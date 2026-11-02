@@ -108,15 +108,11 @@ impl SessionReading {
             processes: Snapshot::default(),
         }
         .sample(output, sample);
-        reading.holder = reading
-            .holder
-            .filter(|note| reading.processes.running(note.process));
-        reading
-            .waiting
-            .retain(|note| reading.processes.state(note.process) == crate::process::State::Running);
-        reading
-            .running
-            .retain(|note| reading.processes.running(note.process));
+        reading.processes.keep_live(
+            &mut reading.holder,
+            &mut reading.waiting,
+            &mut reading.running,
+        );
         Some(reading)
     }
 
@@ -181,6 +177,11 @@ impl SessionReading {
         let waiting = &self.waiting;
         let running = &self.running;
         let scene = self.scene(facts);
+        let command_runs = |key: Option<&Key>| {
+            causes
+                .iter()
+                .any(|cause| cause.command && cause.session.as_ref() == key)
+        };
         let now_ms = u64::try_from(facts.now / 1_000_000).unwrap_or(u64::MAX);
         let mut unknown: BTreeMap<&Key, usize> = BTreeMap::new();
         for cause in causes.iter().filter(|cause| !cause.running) {
@@ -209,9 +210,7 @@ impl SessionReading {
                     ended: lifetime.ended,
                     source: Source::Recorded(seen, uncertain, lifetime),
                     last_seen: record.last_seen,
-                    running_command: causes
-                        .iter()
-                        .any(|cause| cause.command && cause.session.as_ref() == Some(&record.key)),
+                    running_command: command_runs(Some(&record.key)),
                     shown,
                 })
             })
@@ -225,9 +224,7 @@ impl SessionReading {
                 source: Source::First(note),
                 last_seen: note.since,
                 shown: scene.shown(&Who::Host(key.clone()), false),
-                running_command: causes
-                    .iter()
-                    .any(|cause| cause.command && cause.session.as_ref() == Some(key)),
+                running_command: command_runs(Some(key)),
             });
         }
         if let Some((started, last_seen)) = scene.terminal() {
@@ -241,9 +238,7 @@ impl SessionReading {
                 },
                 last_seen,
                 shown: scene.shown(&Who::Terminal, false),
-                running_command: causes
-                    .iter()
-                    .any(|cause| cause.command && cause.session.is_none()),
+                running_command: command_runs(None),
             });
         }
         listed.sort_by_key(|listed| (listed.shown.state, std::cmp::Reverse(listed.last_seen)));

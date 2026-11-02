@@ -1,20 +1,19 @@
-use super::{
-    crop, facts,
-    protocol::{Crop, Region, Request, failure, refused},
-};
+use super::{crop, facts};
 use crate::{
-    error::{Code, Result},
+    error::{Code, Error, Result},
     native::{capture, windows},
+    protocol::{Crop, Policy, Region, Request, failure, refused},
     session::InputEpoch,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// Real display capture in the daemon, synthetic pixels in contract tests.
 pub(super) type Capture = fn(u32, Option<CGRect>, Option<u32>) -> Result<capture::Shot>;
 
 /// Observations from this helper login, shared by capture and window reads.
+#[derive(Clone, Copy)]
 pub(super) struct Screen {
     pub(super) capture: Capture,
     pub(super) windows: fn() -> Result<Vec<windows::Window>>,
@@ -22,6 +21,27 @@ pub(super) struct Screen {
     pub(super) dock: fn(&[windows::Window]) -> windows::Dock,
     pub(super) on_console: fn() -> bool,
     pub(super) session: fn() -> Result<Value>,
+}
+
+impl Screen {
+    pub(super) fn epoch(self) -> Result<InputEpoch> {
+        (self.session)().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
+    }
+
+    /// A fresh console check precedes the exact session and display comparison.
+    pub(super) fn guard(
+        self,
+        epoch: &InputEpoch,
+        policy: Policy,
+    ) -> std::result::Result<(), Value> {
+        if let Some(refusal) = policy.allowed((self.on_console)()) {
+            return Err(refusal);
+        }
+        if self.epoch().map_err(refused)? != *epoch {
+            return Err(refused(Error::session_changed()));
+        }
+        Ok(())
+    }
 }
 
 /// Windows that lie entirely outside the main display.
@@ -54,8 +74,8 @@ fn crop_keys(
     area: Region,
     app: Option<(i64, crop::AppCrop)>,
     bundle_id: fn(i64) -> Option<String>,
-) -> serde_json::Map<String, Value> {
-    let mut keys = serde_json::Map::new();
+) -> Map<String, Value> {
+    let mut keys = Map::new();
     keys.insert("region".into(), json!(area));
 
     if let Some((pid, found)) = app {
@@ -87,42 +107,24 @@ pub(super) async fn screenshot(
     per_point: bool,
     crop: Option<Crop>,
 ) -> Value {
-    let capture = screen.capture;
-    let list = screen.windows;
-    let bundle_id = screen.bundle_id;
-    let dock = screen.dock;
-    let on_console = screen.on_console;
-    let session = screen.session;
-    let epoch = match session().and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
-    {
+    let screen = *screen;
+    let epoch = match screen.epoch() {
         Ok(epoch) => epoch,
         Err(error) => return refused(error),
     };
+    let policy = Request::Screenshot {
+        max_dimension,
+        per_point,
+        crop,
+    }
+    .policy();
     let taken = tokio::task::spawn_blocking(move || {
-        let request = Request::Screenshot {
-            max_dimension,
-            per_point,
-            crop,
-        };
-        let validate = || {
-            if let Some(refusal) = request.policy().allowed(on_console()) {
-                return Err(refusal);
-            }
-            let current = InputEpoch::from_proof(&session().map_err(refused)?, std::process::id())
-                .map_err(refused)?;
-            if current != epoch {
-                return Err(failure(
-                    Code::SessionChanged,
-                    "Session changed during capture; observe again",
-                ));
-            }
-            Ok(())
-        };
+        let validate = || screen.guard(&epoch, policy);
         validate()?;
 
         // One read of the window list serves the crop and the report of
         // windows off the display.
-        let windows = list();
+        let windows = (screen.windows)();
         // The main display's corner is the origin of global points, so a
         // window's bounds are points of this display.
         let display = Region {
@@ -143,7 +145,8 @@ pub(super) async fn screenshot(
                 let on_screen = windows
                     .as_ref()
                     .map_err(|_| failure(Code::Windows, "The window list is unavailable"))?;
-                let found = crop::app(on_screen, pid, &display, &dock(on_screen)).ok_or_else(|| {
+                let dock = (screen.dock)(on_screen);
+                let found = crop::app(on_screen, pid, &display, &dock).ok_or_else(|| {
                     failure(
                         Code::NoWindow,
                         format!(
@@ -163,10 +166,11 @@ pub(super) async fn screenshot(
         } else {
             max_dimension
         };
-        let shot = capture(epoch.display_id as u32, area.map(rect), limit).map_err(refused)?;
+        let shot =
+            (screen.capture)(epoch.display_id as u32, area.map(rect), limit).map_err(refused)?;
         let off_display = off_display_windows(windows.as_deref().unwrap_or_default());
 
-        let cropped = area.map(|area| crop_keys(area, app, bundle_id));
+        let cropped = area.map(|area| crop_keys(area, app, screen.bundle_id));
         validate()?;
 
         Ok((shot, off_display, cropped))

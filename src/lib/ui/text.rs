@@ -1,8 +1,12 @@
 //! Text that fits a terminal: names from the helper made safe to print,
 //! values cut to a width, paths with `~`, sizes and counts in plain words.
-use std::{borrow::Cow, path::Path};
+use std::borrow::Cow;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+pub use crate::config::tilde;
+pub(crate) use crate::name::count;
+pub use crate::name::listed;
 
 /// `text` with every character that could mislead the terminal written as
 /// its escape: control characters, bidirectional controls and line or
@@ -60,43 +64,12 @@ pub(crate) fn clip(text: &str, width: usize) -> String {
     format!("{}…", out.trim_end())
 }
 
-/// A path with the home directory written as `~`.
-pub fn tilde(path: impl AsRef<Path>) -> String {
-    let path = path.as_ref();
-    match std::env::var_os("HOME").map(std::path::PathBuf::from) {
-        Some(home) if !home.as_os_str().is_empty() => match path.strip_prefix(&home) {
-            Ok(rest) if rest.as_os_str().is_empty() => "~".into(),
-            Ok(rest) => format!("~/{}", rest.display()),
-            Err(_) => path.display().to_string(),
-        },
-        _ => path.display().to_string(),
-    }
-}
-
-/// The first non-empty line of a program's output, at most `limit`
-/// characters, for a report; None when it printed nothing.
-pub(crate) fn first_line(output: &[u8], limit: usize) -> Option<String> {
-    String::from_utf8_lossy(output)
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(|line| line.chars().take(limit).collect())
-}
-
-/// `1 window`, `3 windows`.
-pub(crate) fn count(n: usize, noun: &str) -> String {
+/// `1 copy`, `3 copies`: a count of a noun that takes no plain `s`.
+pub(crate) fn amount(n: u64, one: &str, many: &str) -> String {
     if n == 1 {
-        format!("1 {noun}")
+        format!("1 {one}")
     } else {
-        format!("{n} {noun}s")
-    }
-}
-
-/// `a`, `a and b`, `a, b and c`.
-pub(crate) fn listed(parts: &[String]) -> String {
-    match parts {
-        [] => String::new(),
-        [only] => only.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        format!("{n} {many}")
     }
 }
 
@@ -127,47 +100,4 @@ pub(crate) fn duration(ms: f64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn helper_names_cannot_drive_the_terminal() {
-        assert_eq!(printable("Untitled"), "Untitled");
-        assert_eq!(printable("a\u{1b}[31mb"), "a\\u{1b}[31mb");
-        assert_eq!(printable("x\u{202e}y\nz"), "x\\u{202e}y\\nz");
-    }
-
-    #[test]
-    fn values_are_cut_to_fit_with_an_ellipsis() {
-        assert_eq!(clip("short", 10), "short");
-        assert_eq!(clip("a long window title", 8), "a long…");
-        assert!(clip("日本語のタイトル", 7).width() <= 7);
-        assert_eq!(clip("abc", 0), "…");
-        assert_eq!(clip("abc", 1), "…");
-    }
-
-    #[test]
-    fn the_first_line_of_output_is_bounded() {
-        assert_eq!(
-            first_line(b"\n\nerror: x\nmore", 300).as_deref(),
-            Some("error: x")
-        );
-        assert_eq!(
-            first_line(&[b'x'; 500], 200).map(|line| line.len()),
-            Some(200)
-        );
-        assert_eq!(first_line(b"  \n", 10), None);
-    }
-
-    #[test]
-    fn plain_words_for_numbers() {
-        assert_eq!(count(1, "window"), "1 window");
-        assert_eq!(count(2, "window"), "2 windows");
-        assert_eq!(dimensions(2560.0, 1440.0), "2560 × 1440");
-        assert_eq!(number(1.5), "1.5");
-        assert_eq!(duration(12.3), "12 ms");
-        assert_eq!(duration(1234.0), "1.2 s");
-        assert_eq!(duration(125_000.0), "2m 05s");
-        assert_eq!(duration(59_960.0), "1m 00s", "never 60.0 s");
-    }
-}
+mod tests;

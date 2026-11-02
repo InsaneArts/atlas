@@ -4,7 +4,7 @@
 use super::{COLLECTED, UNLABELLED};
 use crate::{
     digest::file_sha256,
-    host_session::Key,
+    host::Key,
     name::{lower_hex, name_type, random_hex},
 };
 use serde::{Deserialize, Serialize};
@@ -99,14 +99,14 @@ pub(super) struct Receipt {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Intact {
     /// The files whose copies are as they were collected.
-    pub kept: Vec<Kept>,
+    pub(crate) kept: Vec<Kept>,
     /// The files whose copies are gone.
-    pub missing: Vec<Kept>,
+    pub(crate) missing: Vec<Kept>,
     /// The files whose copies no longer have their size and digest.
-    pub changed: Vec<Kept>,
+    pub(crate) changed: Vec<Kept>,
     /// The receipt itself is gone or cannot be read, so which files it
     /// kept is not known.
-    pub unknown: bool,
+    pub(crate) unknown: bool,
 }
 
 impl Intact {
@@ -116,14 +116,18 @@ impl Intact {
     }
 }
 
+/// The folder in the collected folder that keeps `task`'s collections.
+pub(super) fn owner_folder(task: Option<&Key>) -> String {
+    task.map_or_else(|| UNLABELLED.to_owned(), Key::to_string)
+}
+
 /// Whether the copies the collection `receipt` of `task` kept in `output`
 /// still have their recorded size and digest. A receipt that cannot be
 /// read leaves nothing known kept.
 pub(crate) fn intact(output: &Path, task: Option<&Key>, receipt: &ReceiptId) -> Intact {
-    let owner = task.map_or_else(|| UNLABELLED.to_owned(), Key::to_string);
     let path = output
         .join(COLLECTED)
-        .join(owner)
+        .join(owner_folder(task))
         .join(receipt.as_str())
         .join("receipt.json");
     let read = crate::files::read_own(&path, 1024 * 1024)

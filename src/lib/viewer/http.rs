@@ -1,7 +1,7 @@
 //! The viewer's HTTP server on the loopback interface: connections within
 //! their limits, each request only from the viewer's own origin and private
 //! address, routed once and answered in a task of its own.
-use super::{LEASE_SECONDS, SERVICE, Viewer, control::Control, frames::Frames};
+use super::{LEASE_SECONDS, LeaseRefusal, SERVICE, Viewer, frames::Frames};
 use crate::{
     client::{Client, Frame},
     control::Lease,
@@ -174,22 +174,19 @@ fn serve_connection(
                 .is_ok_and(|named| named.is_ok())
         };
 
-        // Whether it named the address in time; None when closing first.
-        let named = tokio::select! {
+        tokio::select! {
             _ = served.as_mut() => return,
-            _ = closed.changed() => None,
-            named = first => Some(named),
-        };
+            _ = closed.changed() => {}
+            named = first => {
+                if !named {
+                    return;
+                }
 
-        match named {
-            Some(false) => return,
-            Some(true) => {
                 tokio::select! {
                     _ = served.as_mut() => return,
                     _ = closed.changed() => {}
                 }
             }
-            None => {}
         }
 
         // Closing: the request in progress finishes, then it closes.
@@ -227,9 +224,7 @@ pub(super) fn header<'a>(headers: &'a HeaderMap, key: &str) -> Option<&'a str> {
 async fn handle(viewer: Arc<Viewer>, request: Request) -> Response {
     tokio::spawn(respond(viewer, request))
         .await
-        .unwrap_or_else(|_| {
-            json_response(500, json!({"ok": false, "error": "Viewer request failed"}))
-        })
+        .unwrap_or_else(|_| refused(500, "Viewer request failed"))
 }
 
 /// What a request at the viewer's private address asks for, by its method
@@ -244,70 +239,71 @@ enum Route {
     Change(Change),
 }
 
-/// A read for the app: it changes nothing in the helper.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Read {
-    Status,
-    Activity,
-    Sessions,
-    Apps,
-    /// What cleaning up a session would do.
-    Cleanup,
-    Screenshots,
-    Screenshot,
-    Frame,
+/// A route's identity, method and path, declared together.
+macro_rules! routes {
+    (
+        GET { $($read:ident => $read_path:literal,)+ }
+        POST { $($change:ident => $change_path:literal,)+ }
+    ) => {
+        /// A read for the app: it changes nothing in the helper.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum Read { $($read),+ }
+
+        /// A change in the helper, which shutdown waits for.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum Change { $($change),+ }
+
+        impl Route {
+            /// The route `method` asks for at `path`; None for any other.
+            fn parse(method: &Method, path: &str) -> Option<Self> {
+                if *method == Method::GET {
+                    return match path {
+                        "" => Some(Self::Service),
+                        $($read_path => Some(Self::Read(Read::$read)),)+
+                        _ => None,
+                    };
+                }
+
+                if *method != Method::POST {
+                    return None;
+                }
+
+                match path {
+                    "app/viewer" => Some(Self::OpenViewer),
+                    $($change_path => Some(Self::Change(Change::$change)),)+
+                    _ => None,
+                }
+            }
+        }
+    };
 }
 
-/// A change in the helper, which shutdown waits for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Change {
-    Recover,
-    Cleanup,
-    /// The person's stop for agents, or their resume.
-    Hold,
-    Input,
-    Acquire,
-    Renew,
-    Release,
-    Revoke,
+routes! {
+    GET {
+        Status => "status.json",
+        Activity => "activity.json",
+        Sessions => "sessions.json",
+        Apps => "apps.json",
+        // What cleaning up a session would do.
+        Cleanup => "cleanup.json",
+        Screenshots => "screenshots.json",
+        Screenshot => "screenshot.png",
+        Frame => "frame.png",
+    }
+    POST {
+        Recover => "recover",
+        Cleanup => "cleanup",
+        // The person's stop for agents, or their resume.
+        Hold => "control/hold",
+        Input => "input",
+        Acquire => "control/acquire",
+        Renew => "control/renew",
+        Release => "control/release",
+        Revoke => "control/revoke",
+    }
 }
 
 impl Route {
-    /// The route `method` asks for at `path`; None for any other.
-    fn parse(method: &Method, path: &str) -> Option<Self> {
-        if *method == Method::GET {
-            return Some(match path {
-                "" => Self::Service,
-                "status.json" => Self::Read(Read::Status),
-                "activity.json" => Self::Read(Read::Activity),
-                "sessions.json" => Self::Read(Read::Sessions),
-                "apps.json" => Self::Read(Read::Apps),
-                "cleanup.json" => Self::Read(Read::Cleanup),
-                "screenshots.json" => Self::Read(Read::Screenshots),
-                "screenshot.png" => Self::Read(Read::Screenshot),
-                "frame.png" => Self::Read(Read::Frame),
-                _ => return None,
-            });
-        }
-
-        if *method != Method::POST {
-            return None;
-        }
-
-        Some(match path {
-            "app/viewer" => Self::OpenViewer,
-            "recover" => Self::Change(Change::Recover),
-            "cleanup" => Self::Change(Change::Cleanup),
-            "control/hold" => Self::Change(Change::Hold),
-            "input" => Self::Change(Change::Input),
-            "control/acquire" => Self::Change(Change::Acquire),
-            "control/renew" => Self::Change(Change::Renew),
-            "control/release" => Self::Change(Change::Release),
-            "control/revoke" => Self::Change(Change::Revoke),
-            _ => return None,
-        })
-    }
-
     /// Whether it ends control or stops agents, which have slots of their
     /// own.
     fn urgent(self) -> bool {
@@ -326,22 +322,19 @@ impl Route {
 /// Answer one request: only from the viewer's own origin and private
 /// address, within a free slot, and for a known route.
 pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
-    let method = request.method().clone();
     let origin = format!("http://{}", viewer.authority);
     if header(request.headers(), "host") != Some(&viewer.authority)
-        || (method == Method::POST && header(request.headers(), "origin") != Some(&origin))
+        || (request.method() == Method::POST
+            && header(request.headers(), "origin") != Some(&origin))
         || header(request.headers(), "origin").is_some_and(|given| given != origin)
     {
-        return json_response(
-            403,
-            json!({"ok": false, "error": "Local same-origin access only"}),
-        );
+        return refused(403, "Local same-origin access only");
     }
 
     let Some(path) = request.uri().path().strip_prefix(&viewer.prefix) else {
-        return json_response(404, json!({"ok": false, "error": "Unknown viewer address"}));
+        return refused(404, "Unknown viewer address");
     };
-    let route = Route::parse(&method, path);
+    let route = Route::parse(request.method(), path);
 
     // The address itself answers, with the process serving it, so a
     // running viewer can be found and stopped however busy it is.
@@ -365,36 +358,40 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         );
     };
 
-    let change = match route {
-        Some(Route::Read(read)) => return answer(&viewer, read, request.uri().query()).await,
-        Some(Route::OpenViewer) => None,
-        Some(Route::Change(change)) => Some(change),
-        Some(Route::Service) | None => {
-            return json_response(404, json!({"ok": false, "error": "Unknown operation"}));
-        }
-    };
+    match route {
+        Some(Route::Read(read)) => answer(&viewer, read, request.uri().query()).await,
+        Some(Route::OpenViewer) => match read_body(request).await {
+            Ok(_) => open_app_viewer(&viewer),
+            Err(response) => response,
+        },
+        Some(Route::Change(change)) => match read_body(request).await {
+            Ok(body) => apply(&viewer, change, &body).await,
+            Err(response) => response,
+        },
+        Some(Route::Service) | None => refused(404, "Unknown operation"),
+    }
+}
 
-    let body = match read_body(request).await {
-        Ok(body) => body,
-        Err(response) => return response,
-    };
-    let owner = body["lease"].as_str();
-    let lease = owner.unwrap_or_default();
-    let frame = body["frame"].as_str().unwrap_or_default();
+/// Ask the app to open its viewer window.
+fn open_app_viewer(viewer: &Viewer) -> Response {
+    match viewer.send(Line::Viewer) {
+        Ok(()) => json_response(200, json!({"ok": true, "viewer": "open"})),
+        Err(error) => json_response(409, json!(error)),
+    }
+}
 
-    let Some(change) = change else {
-        return match viewer.send(Line::Viewer) {
-            Ok(()) => json_response(200, json!({"ok": true, "viewer": "open"})),
-            Err(error) => json_response(409, json!(error)),
-        };
-    };
-
+/// Make `change` in the helper as `body` asks. Absent tokens read as empty,
+/// so the lease and frame checks keep their precedence.
+async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
     // Held to the end of the request, cleanup included, so shutdown waits
     // for it.
     let Some(_changing) = viewer.changing().await else {
-        return json_response(503, json!({"ok": false, "error": "The viewer is closing"}));
+        return refused(503, "The viewer is closing");
     };
 
+    let owner = body["lease"].as_str();
+    let lease = owner.unwrap_or_default();
+    let frame = body["frame"].as_str().unwrap_or_default();
     let outcome = match change {
         Change::Recover => viewer.recover().await,
         Change::Cleanup => viewer.clean_up(body["session"].as_str()).await,
@@ -403,29 +400,17 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             Some(on) => viewer.client().hold(on).await,
             None => Err(Error::new(Code::Input, "Hold requires a boolean on")),
         },
-        Change::Input => {
-            viewer
-                .control(Control::Input {
-                    owner: lease,
-                    frame,
-                    actions: &body["actions"],
-                })
-                .await
-        }
-        Change::Acquire => viewer.control(Control::Acquire { frame }).await,
-        Change::Renew => {
-            viewer
-                .control(Control::Renew {
-                    owner: lease,
-                    frame,
-                })
-                .await
-        }
-        Change::Release => viewer.control(Control::Release { owner: lease }).await,
-        Change::Revoke => viewer.control(Control::Revoke).await,
+        Change::Input => viewer.input(lease, frame, &body["actions"]).await,
+        Change::Acquire => viewer.acquire(frame).await,
+        Change::Renew => viewer.renew(lease, frame).await,
+        Change::Release => viewer
+            .release(Some(lease))
+            .await
+            .map(|()| json!({"ok": true})),
+        Change::Revoke => viewer.revoke().await,
     };
 
-    mutation_reply(&viewer, owner, outcome).await
+    mutation_reply(viewer, owner, outcome).await
 }
 
 /// Read one bounded JSON object with the existing last-member interpretation.
@@ -434,83 +419,64 @@ async fn read_body(request: Request) -> std::result::Result<Value, Response> {
         || header(request.headers(), "content-type").and_then(|kind| kind.split(';').next())
             != Some("application/json")
     {
-        return Err(json_response(
-            400,
-            json!({"ok": false, "error": "Send JSON with Content-Length"}),
-        ));
+        return Err(refused(400, "Send JSON with Content-Length"));
     }
 
     let length = header(request.headers(), "content-length")
         .and_then(|given| given.parse::<usize>().ok())
-        .filter(|length| (1..=MAX_BODY).contains(length));
-    let Some(length) = length else {
-        return Err(json_response(
-            400,
-            json!({"ok": false, "error": format!("Request body must contain 1–{MAX_BODY} bytes")}),
-        ));
-    };
+        .filter(|length| (1..=MAX_BODY).contains(length))
+        .ok_or_else(|| {
+            refused(
+                400,
+                &format!("Request body must contain 1–{MAX_BODY} bytes"),
+            )
+        })?;
 
-    let body = match tokio::time::timeout(
+    let body = tokio::time::timeout(
         Duration::from_secs(5),
         to_bytes(request.into_body(), MAX_BODY),
     )
     .await
-    {
-        Ok(Ok(bytes)) if bytes.len() == length => bytes,
-        _ => {
-            return Err(json_response(
-                400,
-                json!({"ok": false, "error": "Incomplete or oversized body"}),
-            ));
-        }
-    };
+    .ok()
+    .and_then(std::result::Result::ok)
+    .filter(|bytes| bytes.len() == length)
+    .ok_or_else(|| refused(400, "Incomplete or oversized body"))?;
 
-    let body = match serde_json::from_slice(&body) {
-        Ok(value @ Value::Object(_)) => value,
-        _ => {
-            return Err(json_response(
-                400,
-                json!({"ok": false, "error": "Request must be a JSON object"}),
-            ));
-        }
-    };
+    match serde_json::from_slice::<Value>(&body) {
+        Ok(value @ Value::Object(_)) => Ok(value),
+        _ => Err(refused(400, "Request must be a JSON object")),
+    }
+}
 
-    Ok(body)
+/// What a change's outcome does to the lease its request named.
+enum LeaseAfter {
+    Kept,
+    Ended,
 }
 
 /// Map a mutation's outcome and finish only the lease that request named.
 async fn mutation_reply(viewer: &Viewer, owner: Option<&str>, outcome: Result<Value>) -> Response {
-    match outcome {
-        Ok(result) => {
-            // Only the lease this request named ends; a request without one
-            // never ends someone else's.
-            if result["ok"] != true
-                && let Some(owner) = owner
-            {
-                let _ = viewer.release(Some(owner)).await;
-            }
-
-            json_response(if result["ok"] == true { 200 } else { 409 }, result)
-        }
+    let (status, lease, reply) = match outcome {
+        Ok(result) if result["ok"] == true => (200, LeaseAfter::Kept, result),
+        Ok(result) => (409, LeaseAfter::Ended, result),
         Err(error) => {
-            if !matches!(
-                error.code,
-                Code::Busy | Code::LeaseLost | Code::InvalidJson | Code::Input
-            ) && let Some(owner) = owner
-            {
-                let _ = viewer.release(Some(owner)).await;
-            }
-
-            json_response(
-                if matches!(error.code, Code::InvalidJson | Code::Input) {
-                    400
-                } else {
-                    409
-                },
-                json!(error),
-            )
+            let (status, lease) = match LeaseRefusal::from(error.code) {
+                LeaseRefusal::Unread => (400, LeaseAfter::Kept),
+                LeaseRefusal::Busy | LeaseRefusal::Lost => (409, LeaseAfter::Kept),
+                LeaseRefusal::Unanswered | LeaseRefusal::Failed => (409, LeaseAfter::Ended),
+            };
+            (status, lease, json!(error))
         }
+    };
+
+    // Only the lease this request named ends; a request without one never
+    // ends someone else's. The reply says what went wrong already, and a
+    // release that fails keeps its own outcome pending for recovery.
+    if let (LeaseAfter::Ended, Some(owner)) = (lease, owner) {
+        let _ = viewer.release(Some(owner)).await;
     }
+
+    json_response(status, reply)
 }
 
 /// Answer `read`, which the request's `query` may say more of.
@@ -555,17 +521,17 @@ fn frame_reply(key: String, frame: &Frame) -> Response {
         Body::from(Bytes::from_owner(frame.png.clone())),
         &[
             ("X-Frame-Id", key),
-            ("X-Display-Width", frame.display.width.to_string()),
-            ("X-Display-Height", frame.display.height.to_string()),
+            ("X-Display-Width", frame.epoch.display.width.to_string()),
+            ("X-Display-Height", frame.epoch.display.height.to_string()),
             (
                 "X-Session-Revision",
                 format!(
                     "{}:{}:{}:{}:{}:{}:{}:{}",
                     frame.epoch.uid,
                     frame.epoch.capture_pid,
-                    frame.display.width,
-                    frame.display.height,
-                    frame.display.scale,
+                    frame.epoch.display.width,
+                    frame.epoch.display.height,
+                    frame.epoch.display.scale,
                     frame.epoch.security_session_id,
                     frame.epoch.display_id,
                     frame.epoch.input_pid
@@ -573,6 +539,11 @@ fn frame_reply(key: String, frame: &Frame) -> Response {
             ),
         ],
     )
+}
+
+/// A refusal in `message`'s words, with status `code`.
+fn refused(code: u16, message: &str) -> Response {
+    json_response(code, json!({"ok": false, "error": message}))
 }
 
 /// A reply of `value` as JSON, with status `code`.

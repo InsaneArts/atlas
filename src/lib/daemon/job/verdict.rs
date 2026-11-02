@@ -3,8 +3,8 @@
 //! group. Pure, so every rule is tested on its own.
 use super::record::{JobIdentity, Record};
 use crate::{
-    daemon::protocol::{Expected, JobRefusal},
     process::Info,
+    protocol::{Expected, JobRefusal},
 };
 
 /// One look at a job's processes: its leader's PID now, and its group.
@@ -48,12 +48,40 @@ pub(super) enum Verdict {
 }
 
 impl Verdict {
-    /// The reason a refusal gives for this verdict.
-    pub(super) fn reason(&self) -> JobRefusal {
+    /// Whether the job's group may be signalled.
+    pub(super) fn signals(&self) -> bool {
         match self {
-            Self::OtherAccount => JobRefusal::OtherAccount,
-            Self::Unknown => JobRefusal::Unobserved,
-            _ => JobRefusal::Identity,
+            Self::Signal { .. } => true,
+            Self::Ended
+            | Self::LeaderGone { .. }
+            | Self::Reused
+            | Self::Restarted
+            | Self::Identity
+            | Self::OtherAccount
+            | Self::Unknown => false,
+        }
+    }
+
+    /// The reason and the words a refusal gives for this verdict.
+    pub(super) fn refusal(&self) -> (JobRefusal, &'static str) {
+        match self {
+            Self::OtherAccount => (
+                JobRefusal::OtherAccount,
+                "Part of the job belongs to another account, so nothing was signalled",
+            ),
+            Self::Unknown => (
+                JobRefusal::Unobserved,
+                "Atlas could not read the job's processes, so nothing was signalled; try again",
+            ),
+            Self::Signal { .. }
+            | Self::Ended
+            | Self::LeaderGone { .. }
+            | Self::Reused
+            | Self::Restarted
+            | Self::Identity => (
+                JobRefusal::Identity,
+                "The job is no longer the process Atlas started, so nothing was signalled",
+            ),
         }
     }
 }
@@ -103,18 +131,18 @@ pub(super) fn verdict(
     {
         return Verdict::Identity;
     }
-    if identity.boot() != boot {
+    if record.boot != boot {
         return Verdict::Restarted;
     }
     let Some(seen) = seen else {
         return Verdict::Unknown;
     };
-    if !consistent(seen.leader.as_ref(), &seen.members, identity.pid()) {
+    if !consistent(seen.leader.as_ref(), &seen.members, identity.leader().pid) {
         return Verdict::Unknown;
     }
 
     let leader = match &seen.leader {
-        Some(leader) if leader.instance.start != identity.start() => return Verdict::Reused,
+        Some(leader) if leader.instance.start != identity.leader().start => return Verdict::Reused,
         Some(leader) if leader.pgid != identity.pgid() => return Verdict::Identity,
         // A leader this daemon has not reaped counts as live: its unreaped
         // PID, and so its group's ID, cannot go to another process. Any
