@@ -734,6 +734,7 @@ fn secure_field_with_slow_window_counts(
             listed.clone(),
             until,
             Duration::ZERO,
+            None,
         )
     });
     assert_eq!(fake.writes, writes, "settlement must never repeat a write");
@@ -953,6 +954,7 @@ fn an_exactly_focused_field_skips_search_and_retains_its_identity_without_writes
             listed.clone(),
             until,
             Duration::ZERO,
+            None,
         )
     };
     let target = prepare(
@@ -1001,6 +1003,7 @@ fn a_leading_focused_field_is_prepared_and_input_is_authorized_for_the_exact_fie
             listed.clone(),
             until,
             Duration::ZERO,
+            None,
         )
     };
     let target = prepare(
@@ -1046,16 +1049,34 @@ fn a_window_refusal_survives_a_later_production_verification_that_exceeds_its_de
         reads += 1;
         assert!(reads <= 2, "settlement must remain bounded");
         let mut keyboard = read_find_bar(&mut observation, until);
+        let before = observation.now.get();
+        assert!(before < until, "verification begins before its deadline");
         let slow = if reads == 1 {
             keyboard.window.as_mut().unwrap().frame.as_mut().unwrap().x = 600.0;
             Duration::ZERO
         } else {
-            until.saturating_duration_since(Instant::now()) + Duration::from_millis(1)
+            until.duration_since(before) + Duration::from_millis(1)
         };
-        crate::native::focus::tests::verify_keyboard(&expect, keyboard, listed.clone(), until, slow)
+        let result = crate::native::focus::tests::verify_keyboard(
+            &expect,
+            keyboard,
+            listed.clone(),
+            until,
+            slow,
+            Some(before),
+        );
+        observation.now.set(before + slow);
+        if reads == 2 {
+            assert!(observation.now.get() > until);
+            let error = result.as_ref().unwrap_err();
+            assert_eq!(error.details["unread"], "slow");
+            assert!(!error.uncertain);
+        }
+        result
     })
     .unwrap_err();
     assert_eq!(reads, 2);
+    assert!(fake.now.get() > deadline);
     assert_eq!(error.details["reason"], "window");
     assert!(error.error.contains("Window 43 has keyboard focus"));
     assert!(!error.details.contains_key("unread"));

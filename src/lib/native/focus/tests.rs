@@ -141,11 +141,13 @@ pub(in crate::native) fn verify_keyboard(
     listed: Vec<Window>,
     deadline: Instant,
     slow: Duration,
+    clock: Option<Instant>,
 ) -> Result<Option<&'static str>> {
     let mut look = Seen::focused(Some(expect.pid()))
         .showing(listed)
         .typing_in(keyboard);
     look.slow = slow;
+    look.clock = clock;
     require(expect, Need::Keys, &display(), &mut look, deadline)
 }
 
