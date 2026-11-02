@@ -13,15 +13,15 @@
 //! while that account is still the one Atlas recorded, by asking launchd to
 //! end it, never by killing its processes.
 use crate::{
+    app_bundle::signed_executable,
     approval::{self, Refusal},
+    helper_setup::identity::Identity,
     setup::{
         self,
         executor::{
             APPROVAL, BECOME_ROOT, EXECUTOR, MARK, ROOT_PATH, finish_executor, last_words, staging,
             start_executor, tracked_output, wait_until_ended,
         },
-        identity::Identity,
-        installed_app::signed_executable,
     },
 };
 use serde_json::Value;

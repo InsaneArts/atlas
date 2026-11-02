@@ -4,7 +4,6 @@
 //! with SwiftPM. It renders the local viewer's status and frame and
 //! runs `atlas` commands; it reaches nothing else. The capability URL
 //! travels on its stdin, never in argv, and closing stdin makes it quit.
-pub use crate::app_bundle::APP_EXECUTABLE;
 use crate::error::{Code, Error, Result};
 use std::{
     fs,
@@ -184,7 +183,7 @@ impl Startup {
             }
             if let Some(running) = self
                 .viewer_running(&record)
-                .filter(|running| viewer_pid(running) == pid.map(i64::from))
+                .filter(|running| crate::viewer::process(running) == pid)
             {
                 self.check(ready, "after readiness")?;
                 return Ok((false, running));
@@ -407,11 +406,6 @@ fn startup_cancelled() -> Error {
     Error::new(Code::Menubar, "The menu bar start was cancelled")
 }
 
-/// What a viewer says of the process it runs in.
-fn viewer_pid(viewer: &serde_json::Value) -> Option<i64> {
-    viewer["pid"].as_i64()
-}
-
 /// What decides a failed start, from the serving process's last reply:
 /// anything else in the reply, or any field of another shape, says nothing.
 struct ServeReply {
@@ -450,10 +444,10 @@ fn last_reply(log: &Path) -> Option<serde_json::Value> {
 /// itself, is signalled; a stale record naming anything else is not.
 pub fn stop(output: &Path) -> Option<u16> {
     let record = output.join(crate::viewer::MENUBAR_RECORD);
-    let port = recorded_port(&fs::read(&record).ok()?)?;
+    let port = crate::viewer::recorded_port(&crate::viewer::read_record(&record)?)?;
 
     let running = crate::viewer::running(&record, port)?;
-    let pid = i32::try_from(viewer_pid(&running)?).ok()?;
+    let pid = i32::try_from(crate::viewer::process(&running)?).ok()?;
     if !is_atlas(pid) {
         return None;
     }
@@ -469,18 +463,6 @@ pub fn stop(output: &Path) -> Option<u16> {
     }
 
     Some(port)
-}
-
-/// The port the menu bar's record says its viewer serves.
-fn recorded_port(record: &[u8]) -> Option<u16> {
-    let record: serde_json::Value = serde_json::from_slice(record).ok()?;
-    record["url"]
-        .as_str()?
-        .strip_prefix("http://127.0.0.1:")?
-        .split('/')
-        .next()?
-        .parse()
-        .ok()
 }
 
 /// How long [`stop`] waits for the menu bar to exit: 60 seconds, beyond a
@@ -506,89 +488,6 @@ pub(crate) fn is_atlas(pid: i32) -> bool {
             let command = String::from_utf8_lossy(&output.stdout);
             Path::new(command.trim()).file_name() == Some(name.as_os_str())
         })
-}
-
-/// The app shipped beside `executable` in Atlas.app, if this is the
-/// bundle's `atlas` and the app is there as a regular file.
-fn bundled(executable: &Path) -> Option<PathBuf> {
-    let directory = executable.parent()?;
-    let app = directory.join(APP_EXECUTABLE);
-    let regular = fs::symlink_metadata(&app).is_ok_and(|metadata| metadata.is_file());
-    (directory.ends_with("Contents/MacOS") && regular).then_some(app)
-}
-
-/// The package in the checkout this binary was built from, built with SwiftPM.
-fn development() -> Result<PathBuf> {
-    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("app");
-    if !package.join("Package.swift").is_file() {
-        return Err(Error::new(
-            Code::Menubar,
-            format!(
-                "Run the menu bar from Atlas.app; install it with: {}",
-                crate::update::INSTALL_COMMAND
-            ),
-        ));
-    }
-
-    let swift = |args: &[&str]| {
-        std::process::Command::new("/usr/bin/swift")
-            .args(args)
-            .arg("--package-path")
-            .arg(&package)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|_| {
-                Error::new(
-                    Code::Menubar,
-                    "Building the menu bar needs the Xcode Command Line Tools; run xcode-select --install",
-                )
-            })
-    };
-
-    let built = swift(&["build", "-c", "release", "--product", APP_EXECUTABLE])?;
-    if !built.status.success() {
-        return Err(Error::new(
-            Code::Menubar,
-            format!(
-                "The menu bar did not build: {}",
-                crate::name::first_line(&built.stderr, 300)
-                    .unwrap_or_else(|| "no output".to_owned())
-            ),
-        ));
-    }
-
-    let bin = swift(&["build", "-c", "release", "--show-bin-path"])?;
-    let directory = String::from_utf8_lossy(&bin.stdout).trim().to_owned();
-
-    Ok(Path::new(&directory).join(APP_EXECUTABLE))
-}
-
-/// The app's executable: the signed one shipped in Atlas.app, or in a
-/// development checkout the package built here.
-///
-/// # Errors
-///
-/// Returns an error when the supported Atlas app executable cannot be located or validated.
-pub fn executable() -> Result<PathBuf> {
-    if let Some(app) = std::env::current_exe()
-        .and_then(fs::canonicalize)
-        .ok()
-        .as_deref()
-        .and_then(bundled)
-    {
-        // It receives the viewer's private URL: run only the app Atlas
-        // signed, never a file merely placed there.
-        if !crate::setup::app_signed(&app) {
-            return Err(Error::new(
-                Code::Menubar,
-                "The app inside Atlas.app is not signed by Atlas",
-            ));
-        }
-
-        return Ok(app);
-    }
-
-    development()
 }
 
 /// What to do with "Open at Login".
@@ -656,7 +555,7 @@ pub fn login(state: &str) -> Result<serde_json::Value> {
 /// Apply `login`; only the app (as part of Atlas.app) can register its
 /// login agent.
 pub(crate) fn set_login(login: Login) -> Result<serde_json::Value> {
-    let output = std::process::Command::new(executable()?)
+    let output = std::process::Command::new(crate::app_bundle::app_program()?)
         .args(["--login", login.as_str()])
         .stdin(Stdio::null())
         .output()?;
@@ -716,7 +615,7 @@ impl Program {
     /// viewer program.
     pub fn new(config: &Path) -> Result<Self> {
         Ok(Self {
-            executable: executable()?,
+            executable: crate::app_bundle::app_program()?,
             config: fs::canonicalize(config)?,
         })
     }

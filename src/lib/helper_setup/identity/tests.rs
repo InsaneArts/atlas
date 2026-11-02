@@ -104,7 +104,7 @@ fn a_record_of_another_account_is_replaced_only_by_a_new_choice() {
 #[test]
 fn this_accounts_own_identity_is_read_from_its_directory() {
     let me = nix::unistd::getuid().as_raw();
-    let account = super::super::account_with_uid(me).unwrap().unwrap();
+    let account = account_with_uid(me).unwrap().unwrap();
     let identity = current(&account).unwrap();
     assert_eq!(identity.uid, me);
     assert_eq!(identity.name, account.name);

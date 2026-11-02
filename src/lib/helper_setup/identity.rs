@@ -4,8 +4,13 @@
 //! nothing that ends a login of the helper's user ID, or deletes its account,
 //! acts unless the account there is still the one recorded; root checks the
 //! same again itself.
-use super::{Account, problem};
-use crate::{config, error::Result, files::save_private};
+use super::problem;
+use crate::{
+    account::{Account, account_with_uid},
+    config,
+    error::Result,
+    files::save_private,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -161,7 +166,7 @@ pub(crate) fn standing_of(account: &Account) -> Standing {
 /// still that one; `None` when nothing is recorded, the account is gone or
 /// another, or it cannot be read.
 pub(crate) fn verified(uid: u32) -> Option<Identity> {
-    let account = super::account_with_uid(uid).ok().flatten()?;
+    let account = account_with_uid(uid).ok().flatten()?;
 
     match standing_of(&account) {
         Standing::Same(identity) => Some(identity),

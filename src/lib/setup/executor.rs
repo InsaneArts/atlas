@@ -545,11 +545,11 @@ pub(crate) fn staging() -> String {
     STAGING
         .replace(
             "ATLAS_WORKER_REQUIREMENT",
-            &crate::setup::requirement_for(crate::setup::IDENTIFIER),
+            &crate::app_bundle::requirement_for(crate::app_bundle::IDENTIFIER),
         )
         .replace(
             "ATLAS_APP_REQUIREMENT",
-            &crate::setup::requirement_for(crate::setup::APP_IDENTIFIER),
+            &crate::app_bundle::requirement_for(crate::app_bundle::APP_IDENTIFIER),
         )
 }
 

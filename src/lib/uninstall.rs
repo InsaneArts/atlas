@@ -6,17 +6,19 @@ mod inspection;
 use inspection::{Found, survey};
 
 use crate::{
+    account,
     approval::Refusal,
     client::Client,
     config::{self, Config},
     control::{Controller, Ownership},
     error::{Code, Error, Result},
-    onboarding::as_root::{self, Target, Via},
-    setup::{
-        self,
-        helper::{Agent, JobReport, LABEL, Layout, Request, Unfinished},
+    helper_setup,
+    helper_setup::{
+        Agent, JobReport, LABEL, Layout, Request, Unfinished,
         identity::{Identity, Standing},
     },
+    onboarding::as_root::{self, Target, Via},
+    setup,
 };
 use serde_json::{Value, json};
 use std::{
@@ -81,7 +83,7 @@ fn retire_helper_job(
     helper: &Identity,
     controller: &Controller,
 ) -> Result<Option<std::result::Result<bool, String>>> {
-    let Some(account) = setup::account_with_uid(helper.uid)? else {
+    let Some(account) = account::account_with_uid(helper.uid)? else {
         return Ok(None);
     };
 
@@ -715,18 +717,18 @@ impl Live<'_> {
     fn forget_requested_opener(&mut self) {
         let me = nix::unistd::getuid().as_raw();
         let client = self.found.client.as_ref();
-        let Some(pairing) = crate::setup::pairing::request().filter(|pairing| {
+        let Some(pairing) = crate::helper_setup::pairing::request().filter(|pairing| {
             pairing.controller_uid == me
                 && client.is_none_or(|client| client.config.helper_uid != pairing.helper_uid)
         }) else {
             return;
         };
-        let Ok(Some(account)) = setup::account_with_uid(pairing.helper_uid) else {
+        let Ok(Some(account)) = account::account_with_uid(pairing.helper_uid) else {
             return;
         };
 
         let request = Request::ForgetOpener { uid: account.uid };
-        let Some(expected) = setup::identity::verified(account.uid) else {
+        let Some(expected) = helper_setup::identity::verified(account.uid) else {
             self.warnings.push("Atlas's one-time start was left in place: choose the helper account explicitly before removing it".into());
             return;
         };
@@ -799,7 +801,7 @@ impl Live<'_> {
         }
 
         // The request naming the helper, when this account made it.
-        let request = Path::new(crate::setup::pairing::REQUEST);
+        let request = Path::new(crate::helper_setup::pairing::REQUEST);
         if remove_own_file(request).unwrap_or(false) {
             self.removed.push(json!(request));
         }
@@ -950,7 +952,7 @@ async fn settle(
         warnings,
         async {
             let uid = client.config.helper_uid;
-            let exists = setup::account_with_uid(uid)?.is_some();
+            let exists = account::account_with_uid(uid)?.is_some();
             let status = client.status().await;
             let pid = setup::reported_pid(&status["inputService"]["pid"]);
             Ok((exists, crate::session::logged_in(uid), pid))

@@ -41,7 +41,7 @@ fn parse_accounts(listing: &str) -> Result<Vec<(String, u32)>> {
         let uid = u32::try_from(uid).map_err(|_| unreadable())?;
         // System accounts live below the first user ID or start with an
         // underscore.
-        if uid >= crate::setup::FIRST_USER_UID && !name.starts_with('_') {
+        if uid >= crate::account::FIRST_USER_UID && !name.starts_with('_') {
             accounts.push((name.to_owned(), uid));
         }
     }
@@ -77,7 +77,7 @@ pub fn accounts(helper: Option<u32>) -> Result<Vec<Account>> {
             .map_err(|_| Error::new(Code::Switch, "Could not read the accounts"))?,
         me,
         helper,
-        crate::setup::real_name,
+        crate::account::real_name,
     )
 }
 
@@ -113,7 +113,7 @@ fn listed(
 pub fn standard_accounts() -> Result<Vec<Account>> {
     Ok(accounts(None)?
         .into_iter()
-        .filter(|account| crate::setup::administrator(&account.name) == Some(false))
+        .filter(|account| crate::account::administrator(&account.name) == Some(false))
         .collect())
 }
 
@@ -292,17 +292,17 @@ pub(crate) fn ready_to_switch(target: &Target, blockers: Option<&[Blocker]>) -> 
 fn person_of_this_helper() -> Option<u32> {
     let me = nix::unistd::getuid().as_raw();
     if let Some(pairing) =
-        crate::setup::pairing::request().filter(|pairing| pairing.helper_uid == me)
+        crate::helper_setup::pairing::request().filter(|pairing| pairing.helper_uid == me)
     {
         return Some(pairing.controller_uid);
     }
 
-    let layout = crate::setup::helper::Layout {
+    let layout = crate::helper_setup::Layout {
         uid: me,
         home: crate::config::home().ok()?,
         guard: None,
     };
-    let plist = std::fs::read_to_string(layout.agent_plist(crate::setup::helper::LABEL)).ok()?;
+    let plist = std::fs::read_to_string(layout.agent_plist(crate::helper_setup::LABEL)).ok()?;
     controller_in(&plist)
 }
 
@@ -324,7 +324,7 @@ fn controller_in(plist: &str) -> Option<u32> {
 fn target(account: &Account) -> Target {
     use std::os::unix::fs::MetadataExt;
 
-    let found = crate::setup::account_with_uid(account.uid).ok().flatten();
+    let found = crate::account::account_with_uid(account.uid).ok().flatten();
     let home_owned = found.as_ref().is_some_and(|found| {
         std::fs::symlink_metadata(&found.home)
             .is_ok_and(|metadata| metadata.is_dir() && metadata.uid() == account.uid)
@@ -337,7 +337,7 @@ fn target(account: &Account) -> Target {
         logged_in: crate::session::desktop_runs(account.uid) == Some(true),
         exists: found.is_some(),
         home_owned,
-        administrator: crate::setup::administrator(&account.name),
+        administrator: crate::account::administrator(&account.name),
         on_console: crate::session::console_owner() == Some(account.uid),
     }
 }

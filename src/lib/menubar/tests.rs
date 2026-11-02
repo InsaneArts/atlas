@@ -952,35 +952,6 @@ async fn dropping_the_launcher_child_ends_only_its_own_process() {
 }
 
 #[test]
-fn the_bundle_ships_the_app_beside_atlas() {
-    let dir = tempfile::tempdir().unwrap();
-    let macos = dir.path().join("Atlas.app/Contents/MacOS");
-    fs::create_dir_all(&macos).unwrap();
-    let executable = macos.join("atlas");
-    assert_eq!(bundled(&executable), None, "no app yet");
-    fs::write(macos.join(APP_EXECUTABLE), b"").unwrap();
-    assert_eq!(bundled(&executable), Some(macos.join(APP_EXECUTABLE)));
-
-    let loose = dir.path().join("bin");
-    fs::create_dir_all(&loose).unwrap();
-    fs::write(loose.join(APP_EXECUTABLE), b"").unwrap();
-    assert_eq!(bundled(&loose.join("atlas")), None, "only inside the app");
-
-    fs::remove_file(macos.join(APP_EXECUTABLE)).unwrap();
-    std::os::unix::fs::symlink(loose.join(APP_EXECUTABLE), macos.join(APP_EXECUTABLE)).unwrap();
-    assert_eq!(bundled(&executable), None, "never through a link");
-    assert!(
-        !crate::setup::app_signed(&loose.join(APP_EXECUTABLE)),
-        "an unsigned file is not the app"
-    );
-
-    let installed = Path::new("/Applications/Atlas.app/Contents/MacOS").join(APP_EXECUTABLE);
-    if installed.exists() {
-        assert!(crate::setup::app_signed(&installed));
-    }
-}
-
-#[test]
 fn open_at_login_takes_only_its_three_states() {
     for (state, login) in [
         ("on", Login::On),

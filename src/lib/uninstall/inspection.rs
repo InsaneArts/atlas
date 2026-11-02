@@ -33,8 +33,8 @@ impl Found {
 
 /// Find what uninstall would remove and what it keeps, changing nothing.
 pub(super) fn survey(config_path: &Path) -> Result<Found> {
-    let app = crate::update::installed_app()?;
-    let executable = crate::update::installed_executable()?;
+    let app = crate::app_bundle::installed_app()?;
+    let executable = crate::app_bundle::installed_executable()?;
 
     // Settings that exist but do not load name no helper, so its job stays.
     let (client, unloaded) = match Config::load(config_path) {
@@ -45,8 +45,8 @@ pub(super) fn survey(config_path: &Path) -> Result<Found> {
 
     let config = client.as_ref().map(|client| &client.config);
     let account =
-        config.and_then(|config| setup::account_with_uid(config.helper_uid).ok().flatten());
-    let known = account.as_ref().map(setup::identity::standing_of);
+        config.and_then(|config| account::account_with_uid(config.helper_uid).ok().flatten());
+    let known = account.as_ref().map(helper_setup::identity::standing_of);
     let helper = account
         .filter(|_| !matches!(known, Some(Standing::Replaced | Standing::Unknown)))
         .map(|account| account.name);

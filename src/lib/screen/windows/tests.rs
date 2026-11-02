@@ -74,8 +74,8 @@ fn placed(number: i64, layer: i64, title: Option<&str>, alpha: f64) -> Window {
 }
 
 /// Where every window here is placed, as Accessibility reports it.
-fn frame() -> Frame {
-    Frame::from(&placed(0, 0, None, 1.0).bounds)
+fn frame() -> Bounds {
+    placed(0, 0, None, 1.0).bounds
 }
 
 #[test]

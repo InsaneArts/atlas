@@ -1,11 +1,7 @@
 //! What two accounts share while one asks the other to be its helper: the
 //! request naming them, and whether the onboarding window is open.
-use super::{
-    account_with_uid,
-    helper::{ROOT, text_sha256},
-    identity::Identity,
-};
-use crate::{error::Result, files::read_limited};
+use super::{ROOT, identity::Identity, text_sha256};
+use crate::{account::account_with_uid, error::Result, files::read_limited};
 use serde_json::{Value, json};
 use std::{fs, os::unix::fs::MetadataExt, path::Path, process::Command};
 

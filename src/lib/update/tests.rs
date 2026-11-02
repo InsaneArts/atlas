@@ -574,7 +574,7 @@ fn releases_come_from_the_website() {
             latest: false,
         }
     );
-    assert!(INSTALL_COMMAND.contains("https://atlas.insanearts.io/install.sh"));
+    assert!(crate::app_bundle::INSTALL_COMMAND.contains("https://atlas.insanearts.io/install.sh"));
 }
 
 #[test]

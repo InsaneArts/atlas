@@ -2,25 +2,25 @@ use super::*;
 #[test]
 fn a_selected_account_is_never_replaced_while_its_configuration_is_written() {
     let dir = tempfile::tempdir().unwrap();
-    let helper = setup::Account {
+    let helper = account::Account {
         uid: 7001,
         name: "selected".into(),
         home: dir.path().join("selected"),
     };
-    let expected = setup::identity::Identity {
+    let expected = helper_setup::identity::Identity {
         uid: helper.uid,
         name: helper.name.clone(),
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
     };
     let configuration = proposed(&helper).unwrap();
     write_config(&dir.path().join("atlas.toml"), &configuration).unwrap();
-    let replacement = setup::Account {
+    let replacement = account::Account {
         name: "replacement".into(),
         home: dir.path().join("replacement"),
         ..helper.clone()
     };
     let recorded = std::cell::RefCell::new(None);
-    let record = |_: &setup::Account, identity: &setup::identity::Identity| {
+    let record = |_: &account::Account, identity: &helper_setup::identity::Identity| {
         recorded.replace(Some(identity.clone()));
         Ok(())
     };
@@ -46,7 +46,7 @@ fn a_configuration_is_never_written_over_another() {
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("Atlas/atlas.toml");
-    let helper = setup::Account {
+    let helper = account::Account {
         name: "atlas".into(),
         uid: 503,
         home: "/Users/atlas".into(),
@@ -72,7 +72,7 @@ fn a_configuration_is_never_written_over_another() {
 /// A new configuration points everything at the helper's private layout.
 #[test]
 fn a_new_configuration_uses_the_managed_layout() {
-    let helper = setup::Account {
+    let helper = account::Account {
         name: "atlas".into(),
         uid: 503,
         home: "/Users/atlas".into(),

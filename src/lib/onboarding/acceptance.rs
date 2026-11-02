@@ -1,14 +1,14 @@
 //! Allow records consent; the requesting Atlas owns and drives setup.
 use super::{MAX_RECORD, Pairing, problem, request};
 use crate::{
+    account,
+    app_bundle::signed_executable,
     control::{Controller, ExecutorClaims},
     error::Result,
+    helper_setup,
+    helper_setup::{JobReport, Request},
     native::endpoint,
-    setup::{
-        self, executor,
-        helper::{JobReport, Request},
-        installed_app::signed_executable,
-    },
+    setup::{self, executor},
 };
 use serde_json::{Value, json};
 use std::{
@@ -35,10 +35,10 @@ fn verify(pairing: &Pairing) -> Result<()> {
             "The helper request changed; choose the helper again",
         ));
     }
-    let helper = setup::account_with_uid(pairing.helper_uid)?
+    let helper = account::account_with_uid(pairing.helper_uid)?
         .ok_or_else(|| problem("The chosen helper no longer exists"))?;
-    if setup::identity::current(&helper).as_ref() != Some(&pairing.helper_identity)
-        || setup::administrator(&helper.name) != Some(false)
+    if helper_setup::identity::current(&helper).as_ref() != Some(&pairing.helper_identity)
+        || account::administrator(&helper.name) != Some(false)
     {
         return Err(problem("The chosen helper account changed before setup"));
     }
@@ -176,7 +176,7 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(30)))?;
         stream.set_write_timeout(Some(Duration::from_secs(10)))?;
-        let guard = setup::helper::Guard {
+        let guard = helper_setup::Guard {
             account: Some(pairing.helper_identity.clone()),
             logged_out: false,
         };
@@ -186,7 +186,7 @@ pub async fn accept_worker(ticket: &str) -> Result<Value> {
             &mut stream,
             &pairing.ticket,
             || verify(&pairing),
-            |action| setup::helper::run_guarded(&serde_json::to_string(action)?, &guard),
+            |action| helper_setup::run_guarded(&serde_json::to_string(action)?, &guard),
         )
         .map(|()| json!({"ok":true}));
     }
@@ -290,9 +290,9 @@ pub(super) async fn resume(config: &crate::config::Config, pairing: Pairing) -> 
     stream.set_read_timeout(Some(Duration::from_secs(60)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
     let controller = Controller::new(config.helper_uid)?;
-    let helper = setup::account_with_uid(config.helper_uid)?
+    let helper = account::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The helper no longer exists"))?;
-    let layout = setup::helper::Layout::new(helper.uid, helper.home);
+    let layout = helper_setup::Layout::new(helper.uid, helper.home);
     let mut agent = super::expected_agent(&layout, pairing.controller_uid)?;
     agent.program = signed_executable()?;
     let client = crate::client::Client::new(config.clone())?;
@@ -325,7 +325,7 @@ fn drive(
     mut channel: impl Read + Write,
     pairing: &Pairing,
     verify: impl FnOnce() -> Result<()>,
-    agent: setup::helper::Agent,
+    agent: helper_setup::Agent,
     logs: &Path,
 ) -> Result<()> {
     let ticket = pairing.ticket.as_str();
@@ -343,7 +343,7 @@ fn drive(
         let run = |action: &Request| -> Result<Value> {
             let mut stream = channel.borrow_mut();
             send(&mut *stream, &json!({"ticket":ticket,"request":action}))?;
-            setup::helper::acknowledged(receive(&mut *stream)?).map_err(|unfinished| {
+            helper_setup::acknowledged(receive(&mut *stream)?).map_err(|unfinished| {
                 problem(unfinished.reason().unwrap_or("Helper setup failed")).uncertain()
             })
         };
@@ -367,7 +367,7 @@ fn drive(
 
 fn complete_setup(
     controller_name: &str,
-    agent: setup::helper::Agent,
+    agent: helper_setup::Agent,
     logs: &Path,
     run: impl Fn(&Request) -> Result<Value>,
 ) -> Result<()> {

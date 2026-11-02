@@ -331,7 +331,7 @@ fn refuses_occupied_uid(mode: &str) {
 }
 
 use super::*;
-use crate::setup::helper::Request;
+use crate::helper_setup::Request;
 use std::{fs, process::Command};
 
 /// The steps with Apple's tools standing in as scripts in `dir` that
@@ -1350,7 +1350,7 @@ fn readying_asks_the_helper_for_its_first_login_as_setup_helper_reads_it() {
         STEPS.contains(&format!("request=\"{written}\"")),
         "{written}"
     );
-    assert!(STEPS.contains(&format!("<{}-", crate::setup::FIRST_USER_UID)));
+    assert!(STEPS.contains(&format!("<{}-", crate::account::FIRST_USER_UID)));
 }
 
 #[test]
@@ -1440,8 +1440,12 @@ print -r -- '{"ok": true}'"#,
     let ownership = fs::read_to_string(dir.path().join("ownership")).unwrap();
     assert!(ownership.starts_with("-R\n0:0\n"));
     let verified = fs::read_to_string(dir.path().join("verification")).unwrap();
-    assert!(verified.contains(&crate::setup::requirement_for(crate::setup::IDENTIFIER)));
-    assert!(verified.contains(&crate::setup::requirement_for(crate::setup::APP_IDENTIFIER)));
+    assert!(verified.contains(&crate::app_bundle::requirement_for(
+        crate::app_bundle::IDENTIFIER
+    )));
+    assert!(verified.contains(&crate::app_bundle::requirement_for(
+        crate::app_bundle::APP_IDENTIFIER
+    )));
 }
 
 #[test]

@@ -10,13 +10,13 @@
 //! [`control`] retains exclusion and pending work through cleanup. Observations
 //! from [`session`] describe one epoch and must be rechecked before effects.
 
-mod account;
+pub mod account;
 pub(crate) mod acl;
 pub mod actions;
 pub mod activity_log;
 pub mod agent;
 pub mod agents;
-mod app_bundle;
+pub mod app_bundle;
 pub mod app_selection;
 pub(crate) mod approval;
 mod bounded;
@@ -38,6 +38,7 @@ pub mod files;
 mod fs_move;
 pub(crate) mod handoff;
 pub(crate) mod helper_info;
+pub mod helper_setup;
 mod host;
 pub mod host_session;
 pub mod install_app;

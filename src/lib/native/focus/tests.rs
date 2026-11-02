@@ -2,7 +2,7 @@
 //! the reason when anything is out of place, and that the check itself
 //! never moves focus.
 use super::*;
-use crate::{actions::Action, screen::geometry::Frame};
+use crate::{actions::Action, screen::geometry::Bounds};
 
 const APP: i64 = 812;
 const OTHER: i64 = 900;
@@ -666,7 +666,7 @@ fn element(role: &str, frame: (f64, f64, f64, f64)) -> Element {
         enabled: Some(true),
         focused: Some(true),
         selected: None,
-        frame: Some(Frame {
+        frame: Some(Bounds {
             x: frame.0,
             y: frame.1,
             width: frame.2,

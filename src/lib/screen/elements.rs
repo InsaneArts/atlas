@@ -1,6 +1,6 @@
 //! What a scan reports: the elements it read with their frames, the
 //! snapshot that holds them, and the bounds a scan keeps to.
-pub use super::geometry::Frame;
+use super::geometry::Bounds;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeSet, time::Duration};
 
@@ -27,7 +27,7 @@ pub struct Element {
     /// Frame of the top-level window (or open menu) this element belongs to.
     /// Like the attributes below, it is left out when the scan did not read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) window: Option<Frame>,
+    pub(crate) window: Option<Bounds>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,7 +48,7 @@ pub struct Element {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) selected: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) frame: Option<Frame>,
+    pub(crate) frame: Option<Bounds>,
     /// Selector attributes (role, title, description, value, identifier)
     /// that could not be read, so this element might match a selector unseen.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

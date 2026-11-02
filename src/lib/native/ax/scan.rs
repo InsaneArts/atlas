@@ -7,7 +7,7 @@ use super::{
     ffi,
     text::{bounded_string, getter_failed, prefix_range, prefix_text},
 };
-use crate::screen::{elements::Stop, geometry::Frame};
+use crate::screen::{elements::Stop, geometry::Bounds};
 use objc2_application_services::{AXError, AXUIElement, AXValue};
 use objc2_core_foundation::{CFArray, CFBoolean, CFIndex, CFNumber, CFRetained, CFString, CFType};
 use std::{collections::BTreeSet, time::Instant};
@@ -281,7 +281,7 @@ impl Scan {
         prefix_text(&value).ok_or(None)
     }
 
-    pub(super) fn frame(&mut self, from: Source) -> Option<Frame> {
+    pub(super) fn frame(&mut self, from: Source) -> Option<Bounds> {
         let position = self.attribute(from, "AXPosition")?;
         let size = self.attribute(from, "AXSize")?;
         let (position, size) = (
@@ -291,7 +291,7 @@ impl Scan {
         let point = ffi::point(position)?;
         let extent = ffi::size(size)?;
 
-        Some(Frame {
+        Some(Bounds {
             x: point.x,
             y: point.y,
             width: extent.width,

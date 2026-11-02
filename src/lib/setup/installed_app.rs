@@ -1,34 +1,12 @@
-//! The installed app setup relies on, and the terminal command that links
-//! to it.
-use super::{account::problem, executor};
+//! The terminal command that links to the installed app.
+use super::account::problem;
 use crate::{
-    app_bundle::{INSTALL_COMMAND, reachable_by_others},
+    app_bundle::{INSTALL_COMMAND, app_executable, developer_id},
     config,
     error::Result,
 };
 use serde_json::{Value, json};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-
-pub(super) const EXECUTABLE: &str = "/Applications/Atlas.app/Contents/MacOS/atlas";
-
-/// The stable installed identity, including when a temporary worker calls us.
-pub(crate) fn app_executable() -> Result<PathBuf> {
-    app_executable_using(reachable_by_others)
-}
-
-pub(crate) fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
-    let executable = PathBuf::from(EXECUTABLE);
-    if !reachable(&executable) {
-        return Err(problem(
-            "Atlas.app must be in /Applications so the helper account can run it",
-        ));
-    }
-
-    Ok(executable)
-}
+use std::{fs, path::Path};
 
 /// `~/.local/bin/atlas` → the app, so `atlas` works in a terminal.
 pub(crate) fn link_command(executable: &Path) -> Result<Value> {
@@ -85,39 +63,13 @@ fn replaceable(link: &Path) -> bool {
 /// filesystem failures.
 pub fn link_installed_command() -> Result<Value> {
     let executable = app_executable()?;
-    if !crate::setup::developer_id(&executable) {
+    if !developer_id(&executable) {
         return Err(problem(format!(
             "This Atlas.app is not signed by Atlas's developer. Install Atlas with: {} (or atlas update), then run atlas init again.",
             INSTALL_COMMAND
         )));
     }
     link_command(&executable)
-}
-
-/// The installed Atlas.app's executable, refused unless its developer signed it.
-pub(crate) fn signed_executable() -> Result<PathBuf> {
-    signed_executable_using(app_executable()?, crate::setup::developer_id)
-}
-
-pub(crate) fn signed_executable_using(
-    executable: PathBuf,
-    developer_id: impl FnOnce(&Path) -> bool,
-) -> Result<PathBuf> {
-    // Installation location for the shared app. The approved executor
-    // independently protects and verifies its own copy before using it.
-    if !executable.starts_with("/Applications") {
-        return Err(executor::problem(
-            "Atlas.app must be in Applications to set up the helper. Move it there, then open it again.",
-        ));
-    }
-
-    if !developer_id(&executable) {
-        return Err(executor::problem(
-            "This Atlas.app is not signed by Atlas's developer. Install it again.",
-        ));
-    }
-
-    Ok(executable)
 }
 
 #[cfg(test)]

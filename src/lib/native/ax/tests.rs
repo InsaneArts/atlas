@@ -1,7 +1,7 @@
 //! Checks of the scan's bookkeeping, the bounds it keeps on text, and how
 //! what it reads is placed and reported.
 use super::{
-    ABSENT, Element, Frame, INCOMPLETE, Limits,
+    ABSENT, Bounds, Element, INCOMPLETE, Limits,
     batch::{BATCH, Batch, Slot, Source, slot},
     elements, ffi,
     menus::{Step, judge, skip_nested_menu},
@@ -23,13 +23,13 @@ use std::{
 /// hangs from; anything else keeps its window.
 #[test]
 fn a_sheet_is_the_window_of_what_it_holds() {
-    let window = Frame {
+    let window = Bounds {
         x: 0.0,
         y: 0.0,
         width: 600.0,
         height: 400.0,
     };
-    let sheet = Frame {
+    let sheet = Bounds {
         x: 100.0,
         y: 50.0,
         width: 400.0,
@@ -78,7 +78,7 @@ fn a_sheet_is_the_window_of_what_it_holds() {
 
 #[test]
 fn frames_report_whole_point_centres() {
-    let frame = Frame {
+    let frame = Bounds {
         x: 10.0,
         y: 20.0,
         width: 31.0,
@@ -89,7 +89,7 @@ fn frames_report_whole_point_centres() {
 
 #[test]
 fn a_hit_is_placed_by_the_frames_above_it() {
-    let frame = |x: f64, width: f64| Frame {
+    let frame = |x: f64, width: f64| Bounds {
         x,
         y: 20.0,
         width,
@@ -98,7 +98,7 @@ fn a_hit_is_placed_by_the_frames_above_it() {
     let menu = frame(10.0, 200.0);
     let window = frame(300.0, 600.0);
     let read = [window.clone()];
-    let step = |is_menu, at: Option<&Frame>, top| judge(is_menu, at, top, &menu, &read);
+    let step = |is_menu, at: Option<&Bounds>, top| judge(is_menu, at, top, &menu, &read);
 
     assert_eq!(step(true, Some(&menu), false), Step::Found { menu: true });
     assert_eq!(
@@ -123,7 +123,7 @@ fn a_hit_is_placed_by_the_frames_above_it() {
 
 #[test]
 fn only_closed_or_already_read_nested_menus_are_skipped() {
-    let frame = |x: f64, width: f64| Frame {
+    let frame = |x: f64, width: f64| Bounds {
         x,
         y: 20.0,
         width,
@@ -148,7 +148,7 @@ fn only_closed_or_already_read_nested_menus_are_skipped() {
 
 #[test]
 fn frames_match_within_a_point() {
-    let frame = Frame {
+    let frame = Bounds {
         x: 10.0,
         y: 20.0,
         width: 31.0,
@@ -406,7 +406,7 @@ fn an_element_reads_back_without_its_absent_fields() {
     assert_eq!(serde_json::from_value::<Element>(older).unwrap(), element);
 
     let full = Element {
-        window: Some(Frame {
+        window: Some(Bounds {
             x: 0.0,
             y: 0.0,
             width: 600.0,
@@ -415,7 +415,7 @@ fn an_element_reads_back_without_its_absent_fields() {
         title: Some("Save".into()),
         enabled: Some(true),
         focused: Some(false),
-        frame: Some(Frame {
+        frame: Some(Bounds {
             x: 10.0,
             y: 20.0,
             width: 30.0,
@@ -522,7 +522,7 @@ fn a_batched_read_keeps_the_bookkeeping_of_single_reads() {
     assert_eq!(scan.text(from, "AXRole").as_deref(), Some("AXTextField"));
     assert_eq!(
         scan.frame(from),
-        Some(Frame {
+        Some(Bounds {
             x: 10.0,
             y: 20.0,
             width: 30.0,
@@ -859,13 +859,13 @@ fn the_prefix_range_covers_the_limit_and_a_little_more() {
 #[test]
 fn an_unlisted_sheet_inherits_only_a_uniquely_listed_parent_frame() {
     use crate::native::windows::{Bounds, Window};
-    let parent = Frame {
+    let parent = Bounds {
         x: 100.0,
         y: 100.0,
         width: 400.0,
         height: 300.0,
     };
-    let sheet = Frame {
+    let sheet = Bounds {
         x: 80.0,
         y: 120.0,
         width: 500.0,

@@ -17,22 +17,26 @@ pub(crate) mod as_root;
 pub use acceptance::accept_worker;
 
 use crate::{
+    account, app_bundle,
+    app_bundle::signed_executable,
     approval::Refusal,
     client::Client,
     config::{self, Config},
     control::{Controller, Ownership},
     error::{Code, Error, Result},
-    setup::{
-        self,
-        account::problem as init_problem,
-        executor::{APPROVAL, Secret, answer_prompts, problem, read_secret, setup_transaction},
-        helper::{Agent, LABEL, Layout},
+    helper_setup,
+    helper_setup::{
+        Agent, LABEL, Layout,
         identity::Identity,
-        installed_app::signed_executable,
         pairing::{
             MAX_RECORD, Pairing, REQUEST, WINDOW_MARKER, read_request, read_text, request,
             write_request,
         },
+    },
+    setup::{
+        self,
+        account::problem as init_problem,
+        executor::{APPROVAL, Secret, answer_prompts, problem, read_secret, setup_transaction},
     },
 };
 use as_root::{Exit, Target};
@@ -44,8 +48,8 @@ const NOT_CREATED: &str = "The account was not created. Approve the macOS dialog
 /// This account as directory services record it. Its home is not `$HOME`
 /// (see [`config::home`]): the helper's layout and launchd job live there,
 /// and the window that runs these steps may have any environment.
-fn this_account() -> Result<setup::Account> {
-    setup::account_with_uid(nix::unistd::getuid().as_raw())?
+fn this_account() -> Result<account::Account> {
+    account::account_with_uid(nix::unistd::getuid().as_raw())?
         .ok_or_else(|| problem("This account cannot be resolved"))
 }
 
@@ -60,13 +64,13 @@ fn settings(config_path: &Path) -> Result<Option<Config>> {
 /// Whether this account (`controller`) asked `helper` to be its helper: its
 /// request names it, or a setup with it (not an earlier account with its
 /// user ID) is recorded.
-fn asked(controller: u32, helper: &setup::Account) -> bool {
+fn asked(controller: u32, helper: &account::Account) -> bool {
     requested(controller, helper) || setup::migrate::in_effect_for(helper.uid, &helper.home)
 }
 
 /// Whether the shared request is this account's (`controller`), naming
 /// `helper`.
-fn requested(controller: u32, helper: &setup::Account) -> bool {
+fn requested(controller: u32, helper: &account::Account) -> bool {
     request().is_some_and(|pairing| {
         pairing.controller_uid == controller
             && pairing.helper_uid == helper.uid
@@ -95,7 +99,7 @@ impl Asked {
 /// Whether `helper`'s Atlas folder was prepared for this account, as `atlas
 /// init` does just before installing the helper's background job there.
 /// Only the account it was prepared for may look inside it.
-fn prepared(helper: &setup::Account) -> bool {
+fn prepared(helper: &account::Account) -> bool {
     let layout = Layout::new(helper.uid, helper.home.clone());
 
     fs::metadata(layout.daemon()).is_ok_and(|metadata| metadata.is_dir())
@@ -115,7 +119,7 @@ fn answers(config: &Config) -> bool {
 /// (an `atlas init` stopped earlier), give way, as the window offers the
 /// choice again then.
 fn keep_other_helper(uid: u32, previous: &Config) -> Result<()> {
-    match setup::account_with_uid(previous.helper_uid)? {
+    match account::account_with_uid(previous.helper_uid)? {
         Some(other) if asked(uid, &other) || answers(previous) || prepared(&other) => {
             Err(problem(format!(
                 "Atlas already uses {} as its helper; choose {} again",
@@ -158,14 +162,14 @@ fn check_choice(
 /// `name`, an existing standard account other than `controller`'s, that
 /// no deleted account's session still holds, with a user ID from 501 up and
 /// a home of its own in /Users: one that may be the helper.
-fn choosable(name: &str, controller: u32) -> Result<setup::Account> {
-    let helper = setup::account_named(name)?
+fn choosable(name: &str, controller: u32) -> Result<account::Account> {
+    let helper = account::account_named(name)?
         .ok_or_else(|| problem(format!("There is no account {name}")))?;
     if helper.uid == controller {
         return Err(problem("The helper must be another account than yours"));
     }
 
-    match setup::administrator(&helper.name) {
+    match account::administrator(&helper.name) {
         Some(false) => {}
         Some(true) => {
             return Err(problem(format!(
@@ -196,7 +200,7 @@ fn choosable(name: &str, controller: u32) -> Result<setup::Account> {
         && fs::symlink_metadata(&helper.home).map_or(true, |metadata| {
             metadata.is_dir() && metadata.uid() == helper.uid
         });
-    if helper.uid < setup::FIRST_USER_UID || !home_ours {
+    if helper.uid < account::FIRST_USER_UID || !home_ours {
         return Err(problem(format!(
             "{name} is not a person's account, so it cannot be the helper"
         )));
@@ -220,7 +224,7 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
     let helper = choosable(name, uid)?;
     ready_to_choose(config_path, uid, Some(helper.uid))?;
 
-    let expected = setup::identity::current(&helper)
+    let expected = helper_setup::identity::current(&helper)
         .ok_or_else(|| problem("macOS could not identify the chosen helper account"))?;
     // Atlas already answering there needs nothing readied.
     let mut readied = true;
@@ -254,8 +258,8 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
 /// the helper reads, and the settings.
 fn use_helper(
     config_path: &Path,
-    helper: &setup::Account,
-    expected: &setup::identity::Identity,
+    helper: &account::Account,
+    expected: &helper_setup::identity::Identity,
 ) -> Result<Value> {
     let me = this_account()?;
     let executable = signed_executable()?;
@@ -283,12 +287,12 @@ fn use_helper(
     // Which account this is, so nothing later acts on another account that
     // is given its user ID. Unrecorded, nothing later ends a login under
     // its user ID or deletes it.
-    if setup::identity::current(helper).as_ref() != Some(expected) {
+    if helper_setup::identity::current(helper).as_ref() != Some(expected) {
         return Err(problem(
             "The chosen account changed while Atlas waited; choose it again",
         ));
     }
-    setup::identity::remember_as(helper, expected, true)?;
+    helper_setup::identity::remember_as(helper, expected, true)?;
 
     // The shared executable (which also makes /Users/Shared/Atlas) and the
     // request first, the settings last: a choice cut short leaves no
@@ -507,7 +511,7 @@ fn controllers_of(
 ///
 /// Rejects an invalid or conflicting account name and returns privilege, account-creation
 /// or verification failures. Never retries an unknown creation outcome blindly.
-pub fn create_helper(name: &str, full_name: &str) -> Result<setup::Account> {
+pub fn create_helper(name: &str, full_name: &str) -> Result<account::Account> {
     let orphans = crate::session::sessions(None)
         .map(|sessions| sessions.leftover_uids(crate::session::Kind::Orphan))
         .ok_or_else(|| init_problem("macOS could not list its logins, so no account was made"))?;
@@ -521,7 +525,7 @@ pub fn create_helper(name: &str, full_name: &str) -> Result<setup::Account> {
         ))
     })?;
 
-    setup::account_named(name)?.ok_or_else(|| init_problem("The new account was not found"))
+    account::account_named(name)?.ok_or_else(|| init_problem("The new account was not found"))
 }
 
 /// Close the logins deleted accounts left open, once the person agrees:
@@ -572,7 +576,7 @@ pub fn close_leftovers(config_path: &Path) -> Result<Value> {
     let helper = settings(config_path)?.map(|config| config.helper_uid);
     let sessions = crate::session::sessions(helper)
         .ok_or_else(|| problem("macOS could not list its logins. Try again."))?;
-    let identity = helper.and_then(setup::identity::verified);
+    let identity = helper.and_then(helper_setup::identity::verified);
     let all: Vec<u32> = leftover_logins(&sessions, identity.as_ref())
         .iter()
         .map(|(uid, _)| *uid)
@@ -622,7 +626,7 @@ pub fn close_helper(config_path: &Path) -> Result<Value> {
             ));
         }
 
-        setup::identity::verified(uid).ok_or_else(|| {
+        helper_setup::identity::verified(uid).ok_or_else(|| {
             problem(
                 "Atlas can't tell that the account with the helper's user ID is still its \
                  helper. Run atlas init, then try again.",
@@ -810,7 +814,7 @@ pub fn forget(config_path: &Path) -> Result<Value> {
     let uid = this_account()?.uid;
     let config = Config::load(config_path)?;
     let _ownership = Controller::new(config.helper_uid)?.acquire(true)?;
-    let helper = setup::account_with_uid(config.helper_uid)?
+    let helper = account::account_with_uid(config.helper_uid)?
         .ok_or_else(|| problem("The helper account no longer exists."))?;
 
     let set_up = setup::migrate::in_effect_for(helper.uid, &helper.home)
@@ -866,7 +870,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
         ));
     }
 
-    if setup::account_named(name)?.is_some() {
+    if account::account_named(name)?.is_some() {
         return Err(problem(format!("{name} already exists; choose it instead")));
     }
 
@@ -898,7 +902,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
         Err(Refusal::Cancelled) => return Err(problem(NOT_CREATED)),
         Err(Refusal::Failed(reason)) => {
             // Made, but not readied: it can be chosen again, which readies it.
-            return Err(problem(match setup::account_named(name)? {
+            return Err(problem(match account::account_named(name)? {
                 Some(_) => {
                     format!("{name} was created, but Atlas could not get it ready: {reason}")
                 }
@@ -915,7 +919,7 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
     }
 
     let account = choosable(&account.name, uid)?;
-    let expected = setup::identity::current(&account)
+    let expected = helper_setup::identity::current(&account)
         .ok_or_else(|| problem("macOS could not identify the new account"))?;
     let chosen = use_helper(config_path, &account, &expected)?;
     Ok(json!({
@@ -928,10 +932,10 @@ pub fn create(config_path: &Path, name: &str, full_name: &str) -> Result<Value> 
 
 /// The standard account `name` a creation made. sysadminctl reports success
 /// even when it did nothing: the account itself is the answer.
-fn created(name: &str) -> Result<setup::Account> {
-    let account = setup::account_named(name)?.ok_or_else(|| problem(NOT_CREATED))?;
+fn created(name: &str) -> Result<account::Account> {
+    let account = account::account_named(name)?.ok_or_else(|| problem(NOT_CREATED))?;
 
-    if setup::administrator(&account.name) != Some(false) {
+    if account::administrator(&account.name) != Some(false) {
         return Err(problem(format!(
             "{name} was created, but not as a standard account"
         )));
@@ -956,14 +960,14 @@ pub fn accept(controller_uid: u32, controller_name: &str) -> Result<Value> {
         (controller_uid, controller_name),
         (me.uid, &me.name),
         config::installed_path().is_ok_and(|path| path.exists()),
-        setup::administrator(&me.name),
+        account::administrator(&me.name),
         request(),
         acceptance::signal,
     )
 }
 
 fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
-    let program = setup::installed_app::app_executable()?;
+    let program = app_bundle::app_executable()?;
     Ok(Agent::managed(layout, program, controller_uid))
 }
 
@@ -976,7 +980,7 @@ fn expected_agent(layout: &Layout, controller_uid: u32) -> Result<Agent> {
 pub fn window(open: bool) -> Result<Value> {
     let path = this_account()?
         .home
-        .join(setup::helper::ROOT)
+        .join(helper_setup::ROOT)
         .join(WINDOW_MARKER);
 
     if open {
@@ -1016,7 +1020,7 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
         client.restart().await?;
     }
 
-    if let Some(helper) = setup::account_with_uid(config.helper_uid)? {
+    if let Some(helper) = account::account_with_uid(config.helper_uid)? {
         setup::migrate::archive_foreign(helper.uid, &helper.home)?;
     }
 

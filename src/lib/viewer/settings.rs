@@ -1,7 +1,11 @@
 //! Following the settings file: a new output folder keeps the helper and
 //! moves the viewer's record, and another helper is served once control in
 //! the previous one has ended.
-use super::{MENUBAR_RECORD, Viewer, local::read_record, unpoisoned};
+use super::{
+    MENUBAR_RECORD, Viewer,
+    local::{process, read_record},
+    unpoisoned,
+};
 use crate::{client::Client, config::Config, error::Error, files};
 use std::{path::Path, sync::Arc};
 
@@ -123,7 +127,7 @@ impl Viewer {
 
 /// Remove the record at `path` when it names this process.
 pub(super) fn remove_record(path: &Path) {
-    if read_record(path).is_some_and(|record| record["pid"] == std::process::id()) {
+    if read_record(path).is_some_and(|record| process(&record) == Some(std::process::id())) {
         let _ = std::fs::remove_file(path);
     }
 }

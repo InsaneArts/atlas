@@ -120,7 +120,7 @@ fn a_focused_field_is_read_whole_with_where_it_sits() {
     assert_eq!(window.subrole.as_deref(), Some("AXStandardWindow"));
     assert_eq!(
         window.frame,
-        Some(Frame {
+        Some(Bounds {
             x: 100.0,
             y: 100.0,
             width: 400.0,

@@ -78,16 +78,17 @@ impl Mutation<'_> {
             Self::Restart | Self::Logout => true,
         };
 
-        if valid {
-            Ok(())
-        } else {
-            Err(Error::new(
-                Code::Protocol,
-                "Helper did not confirm operation completion",
-            )
-            .uncertain())
-        }
+        valid.then_some(()).ok_or_else(unconfirmed)
     }
+}
+
+/// A reply that does not prove what the helper did, which is then not known.
+pub(crate) fn unconfirmed() -> Error {
+    Error::new(
+        Code::Protocol,
+        "Helper did not confirm operation completion",
+    )
+    .uncertain()
 }
 
 /// Whether a job start's reply proves the job it started: a leader that

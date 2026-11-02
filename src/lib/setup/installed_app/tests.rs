@@ -1,29 +1,6 @@
 use super::*;
 
 #[test]
-fn installed_application_identity_uses_the_fixed_path_and_refuses_unreachable_builds() {
-    let expected = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
-    let executable = app_executable_using(|path| {
-        assert_eq!(path, expected);
-        true
-    })
-    .unwrap();
-    assert_eq!(executable, expected);
-
-    let error = app_executable_using(|path| {
-        assert_eq!(path, expected);
-        false
-    })
-    .unwrap_err();
-    assert_eq!(error.code, "init");
-    assert_eq!(
-        error.error,
-        "Atlas.app must be in /Applications so the helper account can run it"
-    );
-    assert!(!error.uncertain);
-}
-
-#[test]
 fn the_command_replaces_only_a_missing_dead_or_atlas_link() {
     let dir = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(dir.path()).unwrap();

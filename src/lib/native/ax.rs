@@ -18,7 +18,8 @@ mod system;
 mod text;
 mod tree;
 
-pub use crate::screen::elements::{Element, Frame, Limits, Snapshot};
+pub use crate::screen::elements::{Element, Limits, Snapshot};
+pub(crate) use crate::screen::geometry::Bounds;
 pub(super) use bring::{bring, check_application, described, target_application};
 pub(super) use ffi::act;
 pub(super) use keyboard::{

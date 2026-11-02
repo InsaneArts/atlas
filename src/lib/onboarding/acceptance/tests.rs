@@ -54,7 +54,7 @@ fn pairing() -> Pairing {
         controller_name: "requester".into(),
         helper_uid: 7001,
         helper_name: "helper".into(),
-        helper_identity: setup::identity::Identity {
+        helper_identity: helper_setup::identity::Identity {
             uid: 7001,
             name: "helper".into(),
             generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
@@ -82,11 +82,11 @@ fn acceptance_reads_only_a_bounded_plain_file_without_waiting_for_a_writer() {
     nix::unistd::mkfifo(&path, nix::sys::stat::Mode::S_IRUSR).unwrap();
     assert!(!accepted_at(&path, &pairing));
 }
-fn agent(dir: &Path) -> setup::helper::Agent {
-    setup::helper::Agent {
+fn agent(dir: &Path) -> helper_setup::Agent {
+    helper_setup::Agent {
         uid: 7001,
         controller_uid: pairing().controller_uid,
-        label: setup::helper::LABEL.into(),
+        label: helper_setup::LABEL.into(),
         program: dir.join("Atlas"),
         socket: dir.join("helper/c.sock"),
     }
@@ -402,7 +402,7 @@ fn observe_repair(plist_kind: &str, loaded: bool, pid: Option<u32>, unavailable:
     let repaired = runtime.block_on(observed.job()).unwrap();
     assert_eq!(
         repaired.definition,
-        setup::helper::Definition::Regular,
+        helper_setup::Definition::Regular,
         "repair restores the plist"
     );
     assert_eq!(repaired.loaded, Some(true), "repair loads the helper job");
@@ -471,7 +471,7 @@ fn serve_repair_worker(dir: &Path, output: fs::File) {
         let mut job: Value = serde_json::from_slice(&fs::read(&path)?)?;
         match request {
             Request::Inspect { .. } => {
-                return Ok(json!({"ok":true,"jobs":{setup::helper::LABEL:job}}));
+                return Ok(json!({"ok":true,"jobs":{helper_setup::LABEL:job}}));
             }
             Request::Install { .. } => {
                 job["plistKind"] = json!("regular");
@@ -583,7 +583,7 @@ fn an_acceptance_test_worker() {
         };
         if action == "inspect" {
             return Ok(
-                json!({"ok":true,"jobs":{setup::helper::LABEL:{"plistSha256":"b".repeat(64)}}}),
+                json!({"ok":true,"jobs":{helper_setup::LABEL:{"plistSha256":"b".repeat(64)}}}),
             );
         }
         fs::write(dir.join("changed"), action).unwrap();

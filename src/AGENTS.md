@@ -15,14 +15,20 @@ grammar and attended interaction in `src/bin`, and release tooling in `xtask`.
   Interpreting an observation must not introduce a native effect.
 - `environment` owns staging, application and rollback. Reuse its existing
   concrete transaction and record owners rather than adding a persistence layer.
-- `setup` owns account, signing, layout, executor and migration rules;
-  `onboarding` orchestrates its workflow. Terminal prompts belong in `src/bin`.
+- `helper_setup` owns the helper's layout, launchd actions, first login and
+  pairing, runs inside the helper and never reaches `client`. `setup` owns the
+  controller's side: the executor, configuration and migration. `onboarding`
+  orchestrates their workflow. Terminal prompts belong in `src/bin`.
 - `viewer` owns its HTTP service and personal-control lifetime; `mcp` adapts its
   declared tools. `ui` formats output; domain authority must not depend on it.
 - Shared names, errors and time belong in their existing leaf modules; wire
-  types in `protocol`, host identity in `host`, accounts in `account`. A leaf
-  never reaches up to `client`, `setup` or a domain owner. Keep observation,
-  wire projections and durable recovery models distinct.
+  types in `protocol`, host identity in `host`, accounts in `account`, where
+  Atlas is installed and who signed it in `app_bundle`. A leaf never reaches up
+  to `client`, `setup` or a domain owner. Keep observation, wire projections
+  and durable recovery models distinct.
+- Dependencies run one way: core leaves, then `native`, then `daemon` and
+  `helper_setup`, then the controller side, then the viewer, MCP and command
+  surfaces. The daemon never imports a controller module.
 
 Use the narrowest visibility that real binary, tooling or supported library
 callers require. Tests alone do not justify a shipping forwarding adapter.

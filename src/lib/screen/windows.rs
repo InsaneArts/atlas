@@ -1,7 +1,6 @@
 //! Observed windows, front to back, and portable interpretation of where
 //! their visible regions route input. Native readers supply the observations.
 pub(crate) use super::geometry::Bounds;
-use super::geometry::Frame;
 use serde::{Deserialize, Serialize};
 
 /// The layer an open menu's window sits on (the pop-up menu level): menu
@@ -168,11 +167,11 @@ pub(crate) enum Listed {
 fn framed<'a>(
     windows: &'a [Window],
     pid: i64,
-    frame: &'a Frame,
+    frame: &'a Bounds,
 ) -> impl Iterator<Item = &'a Window> {
     windows
         .iter()
-        .filter(move |window| window.pid == pid && frame.matches(&Frame::from(&window.bounds)))
+        .filter(move |window| window.pid == pid && frame.matches(&window.bounds))
 }
 
 /// The one listed window a window Accessibility describes is: of every
@@ -182,7 +181,7 @@ fn framed<'a>(
 pub(crate) fn described(
     windows: &[Window],
     pid: i64,
-    frame: &Frame,
+    frame: &Bounds,
     title: Option<&str>,
     kind: Kind,
 ) -> Listed {
@@ -204,7 +203,7 @@ pub(crate) fn described(
 /// and clicking the element: of the app's own windows and open menus at
 /// that frame (see [`framed`]), an ordinary window wins over a same-sized
 /// overlay. None when no window, or more than one, is left.
-pub(crate) fn owning_window(windows: &[Window], pid: i64, frame: &Frame) -> Option<i64> {
+pub(crate) fn owning_window(windows: &[Window], pid: i64, frame: &Bounds) -> Option<i64> {
     let matching: Vec<&Window> = framed(windows, pid, frame)
         .filter(|window| window.is_apps_or_menu())
         .collect();

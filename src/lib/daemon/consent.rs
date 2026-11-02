@@ -24,7 +24,7 @@ fn silent(command: &mut Command) -> &mut Command {
 /// Where the note `name` is kept, which outlives this process.
 fn note(name: &str) -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
-    Some(home.join(crate::setup::helper::ROOT).join(name))
+    Some(home.join(crate::helper_setup::ROOT).join(name))
 }
 
 /// Ask for Accessibility with the system prompt, unless it is allowed.
@@ -162,8 +162,8 @@ async fn guided() -> bool {
     tokio::task::spawn_blocking(|| {
         let uid = nix::unistd::getuid().as_raw();
         crate::config::home().is_ok_and(|home| {
-            crate::setup::pairing::window_open(&home)
-                || crate::setup::first_login::opener_waiting(&crate::setup::helper::Layout {
+            crate::helper_setup::pairing::window_open(&home)
+                || crate::helper_setup::first_login::opener_waiting(&crate::helper_setup::Layout {
                     uid,
                     home,
                     guard: None,
@@ -413,7 +413,7 @@ enum Arrival {
 fn arrival_notice(controller: u32, arrival: Arrival) {
     let account = crate::account::account_with_uid(controller).ok().flatten();
     let title = account.as_ref().map(|account| {
-        crate::setup::real_name(&account.name).unwrap_or_else(|| account.name.clone())
+        crate::account::real_name(&account.name).unwrap_or_else(|| account.name.clone())
     });
     let (heading, message) = match arrival {
         Arrival::SetUp => ("Atlas is set up", done_message(title.as_deref())),
@@ -448,7 +448,7 @@ fn switch_back(title: &str) -> String {
 /// Where the login a notice was last shown in is kept: a daemon restarted
 /// to pick up Screen Recording never repeats what its predecessor showed.
 fn notice_record(home: &Path) -> PathBuf {
-    home.join(crate::setup::helper::ROOT).join("notice-shown")
+    home.join(crate::helper_setup::ROOT).join("notice-shown")
 }
 
 /// Whether a notice was shown already in the login with this loginwindow.
@@ -468,11 +468,13 @@ fn notice(title: &str, message: &str, switch_back: Option<&str>) {
 
     let login = crate::session::login(nix::unistd::getuid().as_raw()).map(|login| login.pid);
     // The onboarding window, when open here, tells the person itself.
-    if crate::setup::pairing::window_open(&home) || login.is_some_and(|pid| shown_in(&home, pid)) {
+    if crate::helper_setup::pairing::window_open(&home)
+        || login.is_some_and(|pid| shown_in(&home, pid))
+    {
         return;
     }
 
-    let Ok(app) = crate::menubar::executable() else {
+    let Ok(app) = crate::app_bundle::app_program() else {
         return;
     };
 

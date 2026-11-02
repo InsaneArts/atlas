@@ -26,7 +26,7 @@ async fn helper_installation_and_restarts_defer_before_dispatching_active_work()
     Store::at(client.output_dir().unwrap())
         .update(&host, crate::time::now_ms(), &client.controller, |_| {})
         .unwrap();
-    let helper = setup::Account {
+    let helper = crate::account::Account {
         uid: 7001,
         name: "helper".into(),
         home: directory.path().join("home"),
@@ -83,7 +83,7 @@ async fn a_job_installation_test_caller() {
         return;
     };
     let client = crate::test_support::client(&directory);
-    let helper = setup::Account {
+    let helper = crate::account::Account {
         uid: 7001,
         name: "helper".into(),
         home: directory.join("home"),

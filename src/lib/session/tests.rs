@@ -511,7 +511,7 @@ fn the_account_on_screen_is_never_an_orphan() {
 
 #[test]
 fn an_account_getpwuid_found_is_never_searched_for_again() {
-    let found = Ok(Some(crate::setup::Account {
+    let found = Ok(Some(crate::account::Account {
         name: "helper".to_owned(),
         uid: 503,
         home: "/Users/helper".into(),

@@ -211,7 +211,7 @@ fn write_settings(
 /// The executable the app should run: the one inside the installed
 /// Atlas.app, which updates keep current, else this one.
 fn executable() -> Result<PathBuf> {
-    if let Ok(app) = crate::update::installed_app() {
+    if let Ok(app) = crate::app_bundle::installed_app() {
         let inside = app.join("Contents/MacOS/atlas");
         if inside.is_file() {
             return Ok(inside);

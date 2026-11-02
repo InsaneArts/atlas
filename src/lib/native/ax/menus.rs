@@ -2,7 +2,7 @@
 //! points of each window there, and which menus met inside another window
 //! or menu are left out of the scan.
 use super::{batch::Source, ffi, scan::Scan};
-use crate::screen::geometry::Frame;
+use crate::screen::geometry::Bounds;
 use objc2_application_services::AXUIElement;
 use objc2_core_foundation::CFRetained;
 
@@ -19,8 +19,8 @@ impl Scan {
     pub(super) fn drawn_at(
         &mut self,
         app: &AXUIElement,
-        bounds: &Frame,
-        read: &[Frame],
+        bounds: &Bounds,
+        read: &[Bounds],
     ) -> Option<Drawn> {
         let points = [0.5, 0.25, 0.75];
         let mut hits = Vec::new();
@@ -104,10 +104,10 @@ pub(super) enum Step {
 /// `frame`, and whether it is `top` (its parent is the application).
 pub(super) fn judge(
     menu: bool,
-    frame: Option<&Frame>,
+    frame: Option<&Bounds>,
     top: bool,
-    bounds: &Frame,
-    read: &[Frame],
+    bounds: &Bounds,
+    read: &[Bounds],
 ) -> Step {
     if frame.is_some_and(|frame| frame.matches(bounds)) {
         return Step::Found { menu };
@@ -127,7 +127,7 @@ pub(super) fn judge(
 /// Whether a menu met inside a window or another menu is left out of the
 /// scan: closed (no frame, or no size), or open and read as a menu of its
 /// own. Any other menu, such as one a view draws itself, is read.
-pub(super) fn skip_nested_menu(frame: Option<&Frame>, open: &[Frame]) -> bool {
+pub(super) fn skip_nested_menu(frame: Option<&Bounds>, open: &[Bounds]) -> bool {
     frame.is_none_or(|frame| {
         frame.width <= 0.0 || frame.height <= 0.0 || open.iter().any(|menu| menu.matches(frame))
     })

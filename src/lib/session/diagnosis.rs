@@ -60,7 +60,7 @@ struct Check<'a> {
 /// The doctor report for a status snapshot: each check, what to do about a
 /// failed one, and `ready` for transport, identity, permissions and the
 /// input service. Whether native Save/Open dialogs work is a separate
-/// observation ([`crate::capability`]) that `ready` never implies.
+/// observation (the native capability check) that `ready` never implies.
 pub fn diagnose(value: Value, uid: u32) -> Value {
     Observation::decode(&value).diagnose(value, uid).value
 }

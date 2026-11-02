@@ -13,7 +13,6 @@ use atlas::{
     config::Config,
     error::{Code, Error},
     interrupt::{Interrupt, Stopped},
-    menubar,
     ui::{self, Format, render, style},
 };
 use clap::FromArgMatches;
@@ -41,9 +40,9 @@ fn main() -> ExitCode {
     // once the desktop is up.
     let Some(command) = cli.command.take() else {
         if opened_as_app() {
-            if atlas::setup::first_login::started_as_opener() {
+            if atlas::helper_setup::first_login::started_as_opener() {
                 // Its output goes nowhere; the next login tries again.
-                return match atlas::setup::first_login::open_at_login() {
+                return match atlas::helper_setup::first_login::open_at_login() {
                     Ok(_) => ExitCode::SUCCESS,
                     Err(_) => ExitCode::FAILURE,
                 };
@@ -343,11 +342,11 @@ fn open_app(config: &std::path::Path) -> ExitCode {
 
     let me = nix::unistd::getuid().as_raw();
     let helper_here =
-        atlas::setup::pairing::request().is_some_and(|pairing| pairing.helper_uid == me);
+        atlas::helper_setup::pairing::request().is_some_and(|pairing| pairing.helper_uid == me);
     let finished = !helper_here
         && Config::load(config).is_ok_and(|config| {
             atlas::setup::migrate::settled(config.helper_uid)
-                && atlas::setup::account_with_uid(config.helper_uid)
+                && atlas::account::account_with_uid(config.helper_uid)
                     .is_ok_and(|account| account.is_some())
         });
     let error = if finished {
@@ -357,7 +356,7 @@ fn open_app(config: &std::path::Path) -> ExitCode {
             .arg("menubar")
             .exec()
     } else {
-        match menubar::executable() {
+        match atlas::app_bundle::app_program() {
             Ok(window) => std::process::Command::new(window)
                 .arg("--onboarding")
                 .env("ATLAS_CLI", &executable)

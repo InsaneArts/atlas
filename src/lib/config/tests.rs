@@ -4,7 +4,10 @@ use crate::files::{save_private, write_atomic, write_beside};
 #[test]
 fn only_output_placement_preserves_the_helper_on_reload() -> Result<()> {
     let directory = tempfile::tempdir()?;
-    let original = crate::test_support::client_in(directory.path()).config;
+    let original = Config::parse(
+        crate::test_support::SETTINGS.as_bytes(),
+        &directory.path().join("u.toml"),
+    )?;
     let moved = Config {
         output_dir: directory.path().join("elsewhere"),
         ..original.clone()

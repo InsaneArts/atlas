@@ -7,7 +7,7 @@
 //! stop must agree with. A job of another task is stopped only when that
 //! task is named.
 use crate::{
-    client::{Client, Mutation},
+    client::{Client, Mutation, unconfirmed},
     error::{Code, Error, Result},
     host::Key,
     lenient::Lenient,
@@ -817,16 +817,6 @@ fn entry(job: &JobView) -> Option<JobEntry> {
         ended_at: ended.map(|ended| ended.ended_at),
         later: Map::new(),
     })
-}
-
-/// A job reply the helper sent without the job it was about: what it did
-/// is not known.
-fn unconfirmed() -> Error {
-    Error::new(
-        Code::Protocol,
-        "Helper did not confirm operation completion",
-    )
-    .uncertain()
 }
 
 /// Note `entry` in the record of the task `owner` names, else of this

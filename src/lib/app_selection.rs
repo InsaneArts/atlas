@@ -16,9 +16,9 @@ fn protected(running: &AppRow, atlas: Option<&str>) -> bool {
         && !executable.starts_with("/usr/local/"))
         || atlas.is_some_and(|bundle| executable.starts_with(bundle))
         || running.bundle_id().is_some_and(|id| {
-            id == crate::setup::IDENTIFIER
+            id == crate::app_bundle::IDENTIFIER
                 || id
-                    .strip_prefix(crate::setup::IDENTIFIER)
+                    .strip_prefix(crate::app_bundle::IDENTIFIER)
                     .is_some_and(|rest| rest.starts_with('.'))
         })
 }

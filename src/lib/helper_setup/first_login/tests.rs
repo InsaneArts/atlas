@@ -83,13 +83,13 @@ fn the_opener_runs_atlas_once_at_login_and_is_named_atlas() {
     assert_eq!(value["LimitLoadToSessionType"], "Aqua");
     assert_eq!(
         value["AssociatedBundleIdentifiers"],
-        json!([super::super::IDENTIFIER])
+        json!([crate::app_bundle::IDENTIFIER])
     );
 }
 
 #[test]
 fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_check() {
-    const TEST: &str = "setup::first_login::tests::a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_check";
+    const TEST: &str = "helper_setup::first_login::tests::a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_check";
     const DIRECTORY: &str = "ATLAS_FIRST_LOGIN_TEST_DIRECTORY";
     let Some(directory) = std::env::var_os(DIRECTORY).map(PathBuf::from) else {
         let dir = tempfile::tempdir().unwrap();
@@ -116,12 +116,12 @@ fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_ch
     let installed = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
     // Stand in only for disk reachability and codesign. Resolve paths,
     // write the real plist and apply Allow's actual identity checks.
-    let program = crate::setup::installed_app::app_executable_using(|path| {
+    let program = crate::app_bundle::app_executable_using(|path| {
         assert_eq!(path, installed);
         true
     })
     .unwrap();
-    let program = crate::setup::installed_app::signed_executable_using(program, |path| {
+    let program = crate::app_bundle::signed_executable_using(program, |path| {
         assert_eq!(path, installed);
         true
     })
@@ -133,16 +133,16 @@ fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_ch
     assert_eq!(opened, installed);
 
     let (allowed, approvals) = crate::approval::without_authorization(|| {
-        crate::setup::installed_app::signed_executable_using(opened, |path| path == installed)
+        crate::app_bundle::signed_executable_using(opened, |path| path == installed)
     });
     assert_eq!(allowed.unwrap(), installed);
     assert_eq!(approvals, 0);
     assert!(
-        crate::setup::installed_app::signed_executable_using(program, |_| false).is_err(),
+        crate::app_bundle::signed_executable_using(program, |_| false).is_err(),
         "the installed app must still pass signature verification"
     );
     assert!(
-        crate::setup::installed_app::signed_executable_using(running, |_| true).is_err(),
+        crate::app_bundle::signed_executable_using(running, |_| true).is_err(),
         "a staged copy is never accepted as the installed identity"
     );
 }

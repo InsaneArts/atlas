@@ -21,7 +21,7 @@ mod windows;
 pub(crate) use apps::{AppList, AppRow};
 #[cfg(test)]
 pub(crate) use capture::prune_captures;
-pub(crate) use mutate::Mutation;
+pub(crate) use mutate::{Mutation, unconfirmed};
 pub(crate) use record::{NOT_RECORDED, PersonInput};
 pub(crate) use run::{Finished, Run};
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};

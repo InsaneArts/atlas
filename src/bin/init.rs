@@ -6,11 +6,13 @@ use atlas::setup::{
     configure_helper, first_login_setup, prepare_helper, refresh_helper, restart_helper,
 };
 use atlas::{
+    account,
     client::Client,
     config::{self, Config},
     error::{Code, Error, Result},
+    helper_setup::{self, LABEL},
     menubar::LoginItem,
-    setup::{self, helper::LABEL},
+    setup,
     ui::{
         self,
         progress::{Spinner, done, heading, say, skipped},
@@ -43,7 +45,7 @@ fn attended(program: &str, args: &[&str], why: &str) -> Result<()> {
 
 /// Choose an existing standard account, or (only when asked for, and
 /// confirmed) create one.
-fn choose_helper() -> Result<(setup::Account, setup::identity::Identity)> {
+fn choose_helper() -> Result<(account::Account, helper_setup::identity::Identity)> {
     let candidates = atlas::switch::standard_accounts()?;
     let mut items: Vec<String> = candidates
         .iter()
@@ -63,7 +65,7 @@ fn choose_helper() -> Result<(setup::Account, setup::identity::Identity)> {
 
     if let Some(account) = candidates.get(choice) {
         return selected(
-            setup::account_named(&account.name)?
+            account::account_named(&account.name)?
                 .ok_or_else(|| problem("That account disappeared"))?,
         );
     }
@@ -73,7 +75,7 @@ fn choose_helper() -> Result<(setup::Account, setup::identity::Identity)> {
         "atlas",
         |name| {
             valid_account_name(name)?;
-            match setup::account_named(name) {
+            match account::account_named(name) {
                 Ok(Some(_)) => Err(format!(
                     "{name} already exists; choose it from the list instead."
                 )),
@@ -98,8 +100,10 @@ fn choose_helper() -> Result<(setup::Account, setup::identity::Identity)> {
 }
 
 /// Capture the account and its permanent identity at selection time.
-fn selected(helper: setup::Account) -> Result<(setup::Account, setup::identity::Identity)> {
-    let identity = setup::identity::current(&helper)
+fn selected(
+    helper: account::Account,
+) -> Result<(account::Account, helper_setup::identity::Identity)> {
+    let identity = helper_setup::identity::current(&helper)
         .ok_or_else(|| problem("macOS could not identify the selected helper account"))?;
     Ok((helper, identity))
 }
@@ -321,7 +325,10 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     say("");
 
     let linked = setup::link_command()?;
-    done("Atlas.app", &text::tilde(atlas::update::installed_app()?));
+    done(
+        "Atlas.app",
+        &text::tilde(atlas::app_bundle::installed_app()?),
+    );
     done_steps.push(json!({"step": "app", "command": linked}));
     let (config, helper, expected) = helper_step(config_path)?;
     let name = helper.name.clone();
@@ -387,7 +394,9 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 }
 
 /// Adapt the account choice and configuration operation to terminal progress.
-fn helper_step(config_path: &Path) -> Result<(Config, setup::Account, setup::identity::Identity)> {
+fn helper_step(
+    config_path: &Path,
+) -> Result<(Config, account::Account, helper_setup::identity::Identity)> {
     let (config, helper, identity) = configure_helper(config_path, choose_helper, say)?;
     if close_attended(helper.uid, Some(&identity), || {
         heading("A deleted account is still logged in");
@@ -464,9 +473,9 @@ fn job_rights(granted: &mut bool) -> Result<()> {
 async fn start_helper(
     client: &Client,
     config: &Config,
-    helper: &setup::Account,
+    helper: &account::Account,
     done_steps: &mut Vec<Value>,
-    expected: &setup::identity::Identity,
+    expected: &helper_setup::identity::Identity,
 ) -> Result<()> {
     // Set up before: the helper's job is installed and starts by itself
     // once the helper signs in (after a restart, say). No password then.
@@ -504,8 +513,8 @@ async fn start_helper(
 /// they can switch to it, and wait until they have.
 async fn log_in_once(
     client: &Client,
-    helper: &setup::Account,
-    expected: &setup::identity::Identity,
+    helper: &account::Account,
+    expected: &helper_setup::identity::Identity,
     installed: bool,
     done_steps: &mut Vec<Value>,
 ) -> Result<()> {
@@ -557,8 +566,8 @@ async fn log_in_once(
 async fn install_job(
     client: &Client,
     config: &Config,
-    helper: &setup::Account,
-    expected: &setup::identity::Identity,
+    helper: &account::Account,
+    expected: &helper_setup::identity::Identity,
 ) -> Result<()> {
     // The rights may have lapsed during a long wait: ask again then.
     if !setup::administrator_rights_current() {

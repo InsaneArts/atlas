@@ -131,7 +131,7 @@ fn a_notice_is_remembered_for_its_login_only() {
     let home = tempfile::tempdir().unwrap();
     assert!(!shown_in(home.path(), 1158), "none shown yet");
 
-    std::fs::create_dir_all(home.path().join(crate::setup::helper::ROOT)).unwrap();
+    std::fs::create_dir_all(home.path().join(crate::helper_setup::ROOT)).unwrap();
     std::fs::write(notice_record(home.path()), "1158").unwrap();
     assert!(shown_in(home.path(), 1158));
     assert!(!shown_in(home.path(), 2001), "a later login shows its own");

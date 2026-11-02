@@ -14,7 +14,10 @@ mod settings;
 pub(crate) use app::{launched_url, open_viewer};
 pub use app::{monitor, render_menubar, serve};
 pub(crate) use control::LeaseRefusal;
-pub(crate) use local::{SharedFrame, fetch, fetch_frame, local, post_local, recorded, running};
+pub(crate) use local::{
+    SharedFrame, fetch, fetch_frame, local, post_local, process, read_record, recorded,
+    recorded_port, running,
+};
 
 use crate::{
     client::Client,
@@ -71,7 +74,7 @@ struct Viewer {
     authority: String,
     /// The helper account's short name and what directory services said of
     /// its full name, once they answered.
-    account_name: std::sync::Mutex<Option<(String, crate::setup::Title)>>,
+    account_name: std::sync::Mutex<Option<(String, crate::account::Title)>>,
     /// The app this viewer serves, when it serves one.
     app: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Line>>>,
     /// The helper daemon and display input was last started or re-pinned

@@ -136,7 +136,7 @@ fn this_mac_lists_only_other_ordinary_logins() {
     assert!(
         accounts
             .iter()
-            .all(|account| account.uid >= crate::setup::FIRST_USER_UID)
+            .all(|account| account.uid >= crate::account::FIRST_USER_UID)
     );
 }
 
@@ -275,7 +275,7 @@ fn only_the_persons_own_verified_desktop_counts_as_switching_back() {
 
 #[test]
 fn a_helper_job_names_the_person_it_works_for() {
-    use crate::setup::helper::{Agent, plist};
+    use crate::helper_setup::{Agent, plist};
 
     let agent = Agent {
         label: "com.insanearts.atlas.helper".into(),

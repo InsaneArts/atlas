@@ -154,7 +154,7 @@ fn recorded_transactions(path: &Path) -> Vec<(String, u64)> {
 }
 
 fn account_home(uid: u32) -> Result<PathBuf> {
-    let account = crate::setup::account_with_uid(uid)
+    let account = crate::account::account_with_uid(uid)
         .map_err(|cause| problem("Cannot resolve the helper account home").with_source(cause))?
         .ok_or_else(|| problem("Cannot resolve the helper account home"))?;
     if account.uid != uid {

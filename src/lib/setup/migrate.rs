@@ -8,22 +8,20 @@
 //! pending marker recorded in a durable log, so an interrupted pass resumes or
 //! rolls back without blind replays. The job carrying a reply is never the one
 //! being unloaded, and only artifacts this migration created are undone.
-use super::{
-    Account, account_with_uid,
-    configuration::managed,
-    endpoint,
-    helper::{Agent, Definition, JobReport, LABEL, Layout, Request, Unfinished, acknowledged},
-    helper_job,
-    identity::{self, Identity},
-    problem, reported_pid,
-    signature::signed_daemon,
-};
+use super::{configuration::managed, endpoint, helper_job, reported_pid};
 use crate::{
+    account::{Account, account_with_uid},
+    app_bundle::signed_daemon,
     client::{Client, Run, timestamp},
     config::{Config, home},
     control::Ownership,
     error::{Code, Error, Result},
     files::save_private,
+    helper_setup::{
+        Agent, Definition, JobReport, LABEL, Layout, Request, Unfinished, acknowledged,
+        identity::{self, Identity},
+        problem,
+    },
     session::{input_current, require_hidden},
     transport::run_output,
 };
@@ -515,7 +513,7 @@ impl Migration {
 
         self.new.frame(Some(256)).await?;
 
-        super::signature::require_current(daemon_pid(&status)?, &self.log.plan.cdhash)?;
+        crate::app_bundle::require_current(daemon_pid(&status)?, &self.log.plan.cdhash)?;
 
         let controller = nix::unistd::getuid().as_raw();
         if endpoint(&self.new.config.socket_path, self.log.plan.uid, controller).private
@@ -890,7 +888,7 @@ async fn plan_fresh(config_path: &Path) -> Result<Plan> {
     let status = Client::new(config.clone())?.status().await;
     require_background(&status, config.helper_uid)?;
 
-    let program = super::installed_app::app_executable()?;
+    let program = crate::app_bundle::app_executable()?;
     let cdhash = signed_daemon(&program)?;
     let new_config = base.text.clone();
 
@@ -1088,7 +1086,7 @@ async fn plan(config_path: &Path) -> Result<Plan> {
     require_background(&status, config.helper_uid)?;
 
     let pid = daemon_pid(&status)?;
-    let program = super::installed_app::app_executable()?;
+    let program = crate::app_bundle::app_executable()?;
     let cdhash = signed_daemon(&program)?;
 
     let old_label = helper_job(&client, pid).await["label"]

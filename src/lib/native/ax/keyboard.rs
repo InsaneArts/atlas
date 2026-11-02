@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     error::{Code, Error, Result},
-    screen::{elements::Element, geometry::Frame},
+    screen::{elements::Element, geometry::Bounds},
 };
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};
@@ -307,12 +307,12 @@ impl<A: Ask> Reader<A> {
     }
 
     /// The frame from position and size, both there or both absent.
-    fn frame(&mut self, element: &A::Element) -> Result<Option<Frame>> {
+    fn frame(&mut self, element: &A::Element) -> Result<Option<Bounds>> {
         let position = self.answer(element, "AXPosition")?;
         let size = self.answer(element, "AXSize")?;
         match (position, size) {
             (Answer::Absent, Answer::Absent) => Ok(None),
-            (Answer::Point(x, y), Answer::Size(width, height)) => Ok(Some(Frame {
+            (Answer::Point(x, y), Answer::Size(width, height)) => Ok(Some(Bounds {
                 x,
                 y,
                 width,

@@ -14,7 +14,7 @@ const NO_UNKNOWN_OUTCOME: &str = "No action of unknown outcome";
 pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     let uid = client.config.helper_uid;
     let status = client.status().await;
-    let account = atlas::setup::account_with_uid(uid).ok().flatten();
+    let account = atlas::account::account_with_uid(uid).ok().flatten();
 
     // Not answering because the helper is logged out or gone: only the
     // person can log it in again.
@@ -68,7 +68,7 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     }
 
     if let Some(account) = &account {
-        match atlas::setup::administrator(&account.name) {
+        match atlas::account::administrator(&account.name) {
             Some(false) => {}
             Some(true) => first_steps.push(format!(
                 "{} must be a standard account, not an administrator: change it in System \

@@ -8,7 +8,7 @@ use crate::{
     interrupt::Interrupt,
     screen::select::{ElementFilter, NameMatch},
     screen::{
-        elements::{Element, Frame, Stop},
+        elements::{Element, Stop},
         windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, owning_window},
     },
     session::Display,
@@ -1437,7 +1437,7 @@ fn open_menus_are_an_apps_own_windows() {
         "a menu bar app with only its menu open"
     );
 
-    let frame = Frame {
+    let frame = Bounds {
         x: 10.0,
         y: 20.0,
         width: 300.0,
@@ -1487,7 +1487,7 @@ fn open_menus_are_an_apps_own_windows() {
 fn shown(index: usize, role: &str, title: Option<&str>, description: Option<&str>) -> Element {
     let mut element = element(role, title, description);
     element.index = index;
-    element.frame = Some(Frame {
+    element.frame = Some(Bounds {
         x: 10.0,
         y: 10.0,
         width: 20.0,
@@ -1672,8 +1672,8 @@ fn scanned(elements: Vec<Element>) -> Scanned {
     }
 }
 
-fn frame(x: f64, y: f64, width: f64, height: f64) -> Frame {
-    Frame {
+fn frame(x: f64, y: f64, width: f64, height: f64) -> Bounds {
+    Bounds {
         x,
         y,
         width,
@@ -2410,7 +2410,7 @@ fn an_apps_visible_floating_windows_are_listed_and_hidden_ones_are_not() {
     let panel = window(5, 6, "Opie", 3);
     assert_eq!(app_pid(std::slice::from_ref(&panel), &name).unwrap(), 6);
 
-    let frame = Frame {
+    let frame = Bounds {
         x: 10.0,
         y: 20.0,
         width: 300.0,
@@ -2493,7 +2493,7 @@ fn elements_belong_to_the_window_with_their_frame() {
         other
     }];
 
-    let frame = |x: f64| Frame {
+    let frame = |x: f64| Bounds {
         x,
         y: 20.0,
         width: 300.0,

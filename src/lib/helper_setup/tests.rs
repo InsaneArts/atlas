@@ -1,11 +1,11 @@
 #[test]
 fn an_expected_identity_is_checked_again_even_without_a_logout_wait() {
-    let identity = super::super::identity::Identity {
+    let identity = Identity {
         uid: 7001,
         name: "helper".into(),
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
     };
-    let account = super::super::Account {
+    let account = Account {
         uid: identity.uid,
         name: identity.name.clone(),
         home: "/Users/helper".into(),
@@ -16,7 +16,7 @@ fn an_expected_identity_is_checked_again_even_without_a_logout_wait() {
     };
     for observed in [
         None,
-        Some(super::super::identity::Identity {
+        Some(Identity {
             generated_uid: "11111111-2222-3333-4444-555555555555".into(),
             ..identity.clone()
         }),
@@ -132,7 +132,7 @@ fn every_worker_request_without_an_identity_refuses_before_dispatch() {
                 &guard,
                 || {
                     Ok((
-                        super::super::Account {
+                        Account {
                             uid,
                             name: "helper".into(),
                             home: dir.path().into(),
@@ -167,17 +167,17 @@ fn every_worker_request_without_an_identity_refuses_before_dispatch() {
 
 #[test]
 fn setup_refuses_an_account_replaced_while_authorization_or_login_was_pending() {
-    let identity = super::super::identity::Identity {
+    let identity = Identity {
         uid: 7001,
         name: "helper".into(),
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
     };
-    let account = super::super::Account {
+    let account = Account {
         uid: identity.uid,
         name: identity.name.clone(),
         home: "/Users/helper".into(),
     };
-    let replacement = super::super::identity::Identity {
+    let replacement = Identity {
         generated_uid: "11111111-2222-3333-4444-555555555555".into(),
         ..identity.clone()
     };
@@ -202,7 +202,7 @@ fn setup_refuses_an_account_replaced_while_authorization_or_login_was_pending() 
 #[test]
 fn logout_verification_refreshes_identity_and_home_before_a_write() {
     use std::cell::Cell;
-    let identity = super::super::identity::Identity {
+    let identity = Identity {
         uid: 7001,
         name: "helper".into(),
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
@@ -212,7 +212,7 @@ fn logout_verification_refreshes_identity_and_home_before_a_write() {
         logged_out: true,
     };
     let dir = tempfile::tempdir().unwrap();
-    let account = super::super::Account {
+    let account = Account {
         uid: identity.uid,
         name: identity.name.clone(),
         home: dir.path().join("original"),

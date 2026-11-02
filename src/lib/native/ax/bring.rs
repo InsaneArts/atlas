@@ -5,7 +5,6 @@
 use super::{
     ABSENT, Status, Unread, Within, ffi,
     keyboard::{Ask, Live, PARENTS, REQUEST, Reader, UnknownNames, remaining},
-    system::bounds,
 };
 use crate::{
     actions::Expect,
@@ -14,7 +13,8 @@ use crate::{
     native::focus::{CHECK_BUDGET, FIELDS, Need, Reason, refused},
     process::{Info, Instance},
     screen::{
-        elements::{Element, Frame},
+        elements::Element,
+        geometry::Bounds,
         select::{ElementFilter, NameMatch},
         windows::{self, Kind, Listed, Window},
     },
@@ -222,7 +222,7 @@ fn same_application(target: Instance, current: Option<Instance>) -> Result<()> {
 }
 
 /// The frame a window must have to be told from the window list.
-fn frame(window: &Element) -> Result<&Frame> {
+fn frame(window: &Element) -> Result<&Bounds> {
     window
         .frame
         .as_ref()
@@ -233,7 +233,7 @@ fn frame(window: &Element) -> Result<&Frame> {
 /// its frame, title and kind (by its subrole) leave.
 pub(in crate::native) fn described(
     window: &Element,
-    frame: &Frame,
+    frame: &Bounds,
     pid: i64,
     listed: &[Window],
 ) -> Listed {
@@ -555,7 +555,7 @@ impl<A: Backend> Reader<A> {
             .window(sheet)?
             .frame
             .ok_or_else(|| Unread::Malformed.error())?;
-        if bounds(frame).contains(x, y) {
+        if frame.contains(x, y) {
             Ok(())
         } else {
             Err(refused(Reason::Sheet))

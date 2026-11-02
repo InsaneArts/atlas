@@ -93,7 +93,7 @@ async fn update_using(
     }
 
     spinner.set("Moving the helper onto the new version…");
-    let executable = atlas::update::installed_executable()?;
+    let executable = atlas::app_bundle::installed_executable()?;
 
     // update-finish always answers in JSON.
     let mut finish = std::process::Command::new(&executable);

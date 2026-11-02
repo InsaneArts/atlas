@@ -430,7 +430,7 @@ fn atlas_bundle(app: &Path) -> bool {
         .nth(1)
         .and_then(|rest| rest.trim_start().strip_prefix("<string>"))
         .and_then(|rest| rest.split("</string>").next())
-        == Some(crate::setup::IDENTIFIER)
+        == Some(crate::app_bundle::IDENTIFIER)
 }
 
 /// Where Codex's marketplace named atlas comes from, as the settings in
@@ -547,7 +547,7 @@ impl Presence {
 /// The plugin marketplace shipped with this CLI: inside Atlas.app, or
 /// in a development checkout its `agents/` folder.
 pub(crate) fn marketplace() -> Result<PathBuf> {
-    if let Ok(app) = crate::update::installed_app() {
+    if let Ok(app) = crate::app_bundle::installed_app() {
         let bundled = app.join("Contents/Resources/agents");
         if bundled.is_dir() {
             return Ok(bundled);

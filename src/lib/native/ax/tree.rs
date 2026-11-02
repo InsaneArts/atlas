@@ -13,7 +13,7 @@ use crate::{
     native,
     screen::{
         elements::{Element, Limits, Snapshot, Stop},
-        geometry::Frame,
+        geometry::Bounds,
         windows::{self, MENU_LAYER},
     },
 };
@@ -32,13 +32,13 @@ const MENU_BAR_ITEMS: usize = 64;
 struct Visit {
     element: CFRetained<AXUIElement>,
     depth: usize,
-    window: Option<Frame>,
+    window: Option<Bounds>,
     menu: bool,
 }
 
 impl Visit {
     /// Where a walk starts: a window or menu read at the top, with its frame.
-    fn root(element: CFRetained<AXUIElement>, frame: Option<Frame>, menu: bool) -> Self {
+    fn root(element: CFRetained<AXUIElement>, frame: Option<Bounds>, menu: bool) -> Self {
         Self {
             element,
             depth: 0,
@@ -180,24 +180,28 @@ fn open_menus(
         window.pid == i64::from(pid) && window.layer == MENU_LAYER && window.alpha > 0.0
     });
     for menu in menus {
-        let bounds = Frame::from(&menu.bounds);
+        let bounds = &menu.bounds;
 
         // A window the app lists among its windows is read already.
         if roots.iter().any(|root| {
             root.window
                 .as_ref()
-                .is_some_and(|frame| frame.matches(&bounds))
+                .is_some_and(|frame| frame.matches(bounds))
         }) {
             continue;
         }
 
-        let read: Vec<Frame> = roots
+        let read: Vec<Bounds> = roots
             .iter()
             .filter_map(|root| root.window.clone())
             .collect();
-        match scan.drawn_at(app, &bounds, &read) {
-            Some(Drawn::Menu(element)) => roots.push(Visit::root(element, Some(bounds), true)),
-            Some(Drawn::Window(element)) => roots.push(Visit::root(element, Some(bounds), false)),
+        match scan.drawn_at(app, bounds, &read) {
+            Some(Drawn::Menu(element)) => {
+                roots.push(Visit::root(element, Some(bounds.clone()), true));
+            }
+            Some(Drawn::Window(element)) => {
+                roots.push(Visit::root(element, Some(bounds.clone()), false));
+            }
             Some(Drawn::Through(hits)) => unvisited.extend(hits),
             None => scan.stop(Stop::Unread),
         }
@@ -214,7 +218,7 @@ fn walk(
     listed: &[windows::Window],
     pid: i64,
 ) -> Vec<Element> {
-    let open_menus: Vec<Frame> = roots
+    let open_menus: Vec<Bounds> = roots
         .iter()
         .filter(|root| root.menu)
         .filter_map(|root| root.window.clone())
@@ -303,7 +307,7 @@ fn read(
     visit: &Visit,
     values: Option<&Batch>,
     index: usize,
-    open_menus: &[Frame],
+    open_menus: &[Bounds],
     listed: &[windows::Window],
     pid: i64,
 ) -> Option<Element> {
@@ -379,11 +383,11 @@ fn read(
 /// when that frame uniquely identifies a listed window. No geometry guessing.
 pub(super) fn sheet_window(
     role: Option<&str>,
-    frame: Option<&Frame>,
-    inherited: Option<Frame>,
+    frame: Option<&Bounds>,
+    inherited: Option<Bounds>,
     listed: &[windows::Window],
     pid: i64,
-) -> Option<Frame> {
+) -> Option<Bounds> {
     match (role, frame) {
         (Some("AXSheet"), Some(frame)) => {
             match windows::described(listed, pid, frame, None, windows::Kind::Other) {

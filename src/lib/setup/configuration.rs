@@ -1,14 +1,15 @@
 //! Shared configuration construction and persistence for setup workflows.
 use super::account::problem;
 use crate::{
+    account,
     config::{self, Config},
     error::Result,
-    setup::{self, helper::Layout},
+    helper_setup::{self, Layout},
 };
 use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::Path};
 
 /// The configuration for `helper` in the managed private layout.
-pub(crate) fn proposed(helper: &setup::Account) -> Result<Config> {
+pub(crate) fn proposed(helper: &account::Account) -> Result<Config> {
     let layout = Layout::new(helper.uid, helper.home.clone());
 
     Ok(Config {
@@ -29,7 +30,7 @@ pub(crate) fn managed(config: &Config, layout: &Layout) -> Config {
 }
 
 /// `config`, its sockets moved into `helper`'s home when they are elsewhere.
-pub(crate) fn in_home(config: &Config, helper: &setup::Account) -> Config {
+pub(crate) fn in_home(config: &Config, helper: &account::Account) -> Config {
     if config.socket_path.starts_with(&helper.home) {
         config.clone()
     } else {
@@ -100,10 +101,10 @@ pub(crate) fn replace_config(path: &Path, previous: &Config, config: &Config) ->
 /// Keep the selected account through configuration, refusing UID reassignment
 /// before recording it. The recorder also checks its permanent identity.
 fn record_selected(
-    helper: &setup::Account,
-    expected: &setup::identity::Identity,
-    lookup: impl FnOnce(u32) -> Result<Option<setup::Account>>,
-    record: impl FnOnce(&setup::Account, &setup::identity::Identity) -> Result<()>,
+    helper: &account::Account,
+    expected: &helper_setup::identity::Identity,
+    lookup: impl FnOnce(u32) -> Result<Option<account::Account>>,
+    record: impl FnOnce(&account::Account, &helper_setup::identity::Identity) -> Result<()>,
 ) -> Result<()> {
     if lookup(helper.uid)?.as_ref() != Some(helper) {
         return Err(problem(
@@ -123,9 +124,9 @@ fn record_selected(
 /// Configuration written earlier in the workflow can remain for supported recovery.
 pub fn configure_helper(
     config_path: &Path,
-    mut choose_helper: impl FnMut() -> Result<(setup::Account, setup::identity::Identity)>,
+    mut choose_helper: impl FnMut() -> Result<(account::Account, helper_setup::identity::Identity)>,
     say: impl Fn(&str),
-) -> Result<(Config, setup::Account, setup::identity::Identity)> {
+) -> Result<(Config, account::Account, helper_setup::identity::Identity)> {
     // The path is the one the command line resolved (the installed one by
     // default); a configuration is created only where none exists, and an
     // existing one that does not load is reported, never replaced.
@@ -145,7 +146,7 @@ pub fn configure_helper(
     // The account the settings name was deleted, or its user ID now belongs
     // to another account than the helper Atlas recorded: choose (or create)
     // another, before anything is changed or recorded.
-    let account = setup::account_with_uid(config.helper_uid)?;
+    let account = account::account_with_uid(config.helper_uid)?;
     let gone = account.is_none();
     let other = match &account {
         Some(account) if choice.is_none() => replaced(account)?,
@@ -174,11 +175,11 @@ pub fn configure_helper(
         Some(selected) => selected,
         None => {
             let helper = account.ok_or_else(|| problem("The helper account was not created"))?;
-            let identity = match setup::identity::standing_of(&helper) {
-                setup::identity::Standing::Same(identity) => identity,
-                setup::identity::Standing::Unrecorded(_)
-                | setup::identity::Standing::Replaced
-                | setup::identity::Standing::Unknown => {
+            let identity = match helper_setup::identity::standing_of(&helper) {
+                helper_setup::identity::Standing::Same(identity) => identity,
+                helper_setup::identity::Standing::Unrecorded(_)
+                | helper_setup::identity::Standing::Replaced
+                | helper_setup::identity::Standing::Unknown => {
                     return Err(problem(
                         "Choose the helper account again before setting it up",
                     ));
@@ -190,8 +191,8 @@ pub fn configure_helper(
     record_selected(
         &helper,
         &identity,
-        setup::account_with_uid,
-        |helper, identity| setup::identity::remember_as(helper, identity, chosen),
+        account::account_with_uid,
+        |helper, identity| helper_setup::identity::remember_as(helper, identity, chosen),
     )?;
 
     // Keep the socket paths in the selected account's home.
@@ -202,7 +203,7 @@ pub fn configure_helper(
     }
 
     let name = &helper.name;
-    match setup::administrator(name) {
+    match account::administrator(name) {
         Some(false) => {}
         Some(true) => {
             return Err(problem(format!(
@@ -220,7 +221,7 @@ pub fn configure_helper(
     // Which account this is, so nothing later acts on another account that
     // is given its user ID. Unrecorded, nothing later ends a login under
     // its user ID or deletes it.
-    setup::identity::remember_as(&helper, &identity, chosen)?;
+    helper_setup::identity::remember_as(&helper, &identity, chosen)?;
 
     Ok((config, helper, identity))
 }
@@ -228,12 +229,12 @@ pub fn configure_helper(
 /// Whether the account with the helper's user ID is not the helper Atlas
 /// recorded: another account took the user ID. A record that cannot be
 /// compared stops init before anything changes.
-fn replaced(account: &setup::Account) -> Result<bool> {
-    use setup::identity::{OnFile, Standing};
+fn replaced(account: &account::Account) -> Result<bool> {
+    use helper_setup::identity::{OnFile, Standing};
 
-    match setup::identity::standing_of(account) {
+    match helper_setup::identity::standing_of(account) {
         Standing::Replaced | Standing::Unrecorded(_) => Ok(true),
-        Standing::Unknown if setup::identity::on_file(account.uid) != OnFile::Nothing => {
+        Standing::Unknown if helper_setup::identity::on_file(account.uid) != OnFile::Nothing => {
             Err(problem(format!(
                 "macOS could not say whether {} is still the helper Atlas set up; run atlas init \
                  again",

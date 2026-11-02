@@ -6,7 +6,7 @@ use super::{
     *,
 };
 use crate::{
-    host_session::Key,
+    host::Key,
     process::{Info, Instance, Start},
     protocol::Left,
 };

@@ -3,7 +3,7 @@
 use super::{
     MENUBAR_RECORD, Viewer,
     http::{CONNECTIONS, accept, bind},
-    local::{post_local, running},
+    local::{address, post_local, running},
     settings::remove_record,
     unanswered, unpoisoned,
 };
@@ -162,8 +162,7 @@ fn already_running(output: &Path, port: u16, taken: Error) -> Result<Value> {
 /// first when it is not running.
 pub(crate) async fn launched_url(config: &Path, port: u16, output: &Path) -> Result<String> {
     let (_, record) = crate::menubar::launch(config, port, output).await?;
-    record["url"]
-        .as_str()
+    address(&record)
         .map(str::to_owned)
         .ok_or_else(|| Error::new(Code::Menubar, "The menu bar's record names no viewer"))
 }

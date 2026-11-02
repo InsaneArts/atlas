@@ -255,7 +255,7 @@ impl Daemon {
         // where the helper's layout puts it: the configuration's input socket
         // comes from the same layout.
         let home = std::env::var_os("HOME")?;
-        let marker = crate::setup::helper::Layout::new(uid, PathBuf::from(home)).stop_marker();
+        let marker = crate::helper_setup::Layout::new(uid, PathBuf::from(home)).stop_marker();
         Some(tokio::spawn(job::supervise(
             self.jobs.clone()?,
             marker,

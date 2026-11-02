@@ -1,6 +1,6 @@
 //! Reads of what the whole login shows rather than one app's tree: the
 //! application with keyboard focus, and where the Dock takes clicks.
-use super::{Frame, Status, batch::Source, ffi, scan::Scan};
+use super::{Bounds, Status, batch::Source, ffi, scan::Scan};
 use crate::{
     error::{Code, Error, Result},
     native::windows as native_windows,
@@ -92,7 +92,7 @@ pub(crate) fn dock(windows: &[windows::Window], timeout: Duration) -> Dock {
         let Some(frame) = scan.frame(Source::Element(&child)) else {
             return Dock::Unread;
         };
-        lists.push(bounds(frame));
+        lists.push(frame);
     }
 
     if scan.incomplete {
@@ -163,18 +163,8 @@ fn launchable(subrole: Option<&str>) -> bool {
     )
 }
 
-fn pressable_at(frame: Option<Frame>, supported: bool, x: f64, y: f64) -> bool {
-    supported && frame.is_some_and(|frame| bounds(frame).contains(x, y))
-}
-
-/// An element's frame as the window list states bounds.
-pub(super) fn bounds(frame: Frame) -> windows::Bounds {
-    windows::Bounds {
-        x: frame.x,
-        y: frame.y,
-        width: frame.width,
-        height: frame.height,
-    }
+fn pressable_at(frame: Option<Bounds>, supported: bool, x: f64, y: f64) -> bool {
+    supported && frame.is_some_and(|frame| frame.contains(x, y))
 }
 
 #[cfg(test)]

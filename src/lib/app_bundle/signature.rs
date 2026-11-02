@@ -1,5 +1,4 @@
-use super::problem;
-use crate::error::Result;
+use crate::error::{Code, Error, Result};
 use serde::Serialize;
 use std::{
     fs,
@@ -7,9 +6,13 @@ use std::{
     process::Command,
 };
 
+fn problem(message: impl Into<String>) -> Error {
+    Error::new(Code::Setup, message)
+}
+
 #[derive(Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct Signature {
+pub(crate) struct Signature {
     identifier: Option<String>,
     cdhash: Option<String>,
     kind: Option<String>,
@@ -34,7 +37,7 @@ fn parse_signature(text: &str) -> Signature {
     }
 }
 
-pub(super) fn signature(path: &Path) -> Option<Signature> {
+pub(crate) fn signature(path: &Path) -> Option<Signature> {
     let output = Command::new("/usr/bin/codesign")
         .arg("-dvvv")
         .arg(path)
@@ -107,7 +110,7 @@ pub(crate) fn runs_current(pid: u32, executable: &Path) -> bool {
 }
 
 #[allow(unsafe_code, reason = "FFI: proc_pidpath has no safe binding")]
-pub(super) fn executable_of(pid: u32) -> Option<PathBuf> {
+pub(crate) fn executable_of(pid: u32) -> Option<PathBuf> {
     let size = u32::try_from(libc::PROC_PIDPATHINFO_MAXSIZE).ok()?;
     let mut buffer = vec![0_u8; usize::try_from(size).ok()?];
 
@@ -122,7 +125,7 @@ pub(super) fn executable_of(pid: u32) -> Option<PathBuf> {
 
 /// The code directory hash of `program`, once it is shown to be validly
 /// signed as Atlas with a Developer ID.
-pub(super) fn signed_daemon(program: &Path) -> Result<String> {
+pub(crate) fn signed_daemon(program: &Path) -> Result<String> {
     if !developer_id(program) {
         return Err(problem(format!(
             "{} is not Atlas signed with a Developer ID, so macOS consent would not \
@@ -137,7 +140,7 @@ pub(super) fn signed_daemon(program: &Path) -> Result<String> {
 }
 
 /// Require the planned on-disk build before verifying its loaded Developer ID.
-pub(super) fn require_current(pid: u32, expected: &str) -> Result<()> {
+pub(crate) fn require_current(pid: u32, expected: &str) -> Result<()> {
     // The file it runs must be the planned build, and its loaded code
     // must be valid, Atlas's, and still that file.
     let installed = executable_of(pid).and_then(|path| signature(&path)?.cdhash);

@@ -1,20 +1,15 @@
 //! Helper setup. [`preview`] is read-only: it reports what exists, what is
 //! reachable and what cannot be known from here, writing nothing and starting
 //! nothing; a fact we cannot observe is `null`, never `false`. [`migrate`]
-//! moves capture to the managed private layout through [`helper`] actions run
-//! inside the helper login.
+//! moves capture to the managed private layout through the actions
+//! [`crate::helper_setup`] runs inside the helper login.
 pub(crate) mod configuration;
-pub mod first_login;
-pub mod helper;
-pub mod identity;
 pub(crate) mod installed_app;
 pub(crate) mod job;
 pub mod migrate;
-pub mod pairing;
 
 pub(crate) mod account;
-pub use crate::account::{Account, FIRST_USER_UID, account_named, account_with_uid};
-pub use account::{FULL_NAME, administrator, real_name, validate_account_name};
+pub use account::{FULL_NAME, validate_account_name};
 pub use configuration::configure_helper;
 pub use executor::{administrator_rights_current, request_administrator_rights};
 pub use installed_app::link_installed_command as link_command;
@@ -27,20 +22,17 @@ pub enum Progress<'a> {
     Done(&'a str, &'a str),
 }
 
-pub(crate) use account::{Title, asked_real_name};
 pub(crate) mod executor;
-mod signature;
-pub(crate) use signature::requirement_for;
-pub use signature::{APP_IDENTIFIER, IDENTIFIER, developer_id};
-pub(crate) use signature::{app_signed, runs_current};
-use signature::{executable_of, signature};
 
 use crate::{
+    account::{Account, account_named, account_with_uid, administrator},
     acl::Acl,
+    app_bundle::{executable_of, signature},
     client::Client,
     config::Config,
     digest::file_sha256,
     error::{Code, Error, Result},
+    helper_setup::{self, identity, problem},
     session::{require_hidden, validate_target_uid},
     transport::run_output,
 };
@@ -52,10 +44,6 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
-
-fn problem(message: impl Into<String>) -> Error {
-    Error::new(Code::Setup, message)
-}
 
 /// The privileged dispatcher checks the chosen account after authorization,
 /// immediately before entering its launchd session. The worker repeats the
@@ -95,10 +83,10 @@ pub(crate) enum Invocation {
 pub(crate) fn request_as_helper(
     executable: &Path,
     helper: &Account,
-    request: &helper::Request,
+    request: &helper_setup::Request,
     invocation: Invocation,
     expected: &identity::Identity,
-) -> Result<std::result::Result<Value, helper::Unfinished>> {
+) -> Result<std::result::Result<Value, helper_setup::Unfinished>> {
     let (cached_rights, mode, last) = match invocation {
         Invocation::CachedLogin => (true, "login", "--"),
         Invocation::Login => (false, "login", "--"),
@@ -150,8 +138,10 @@ pub(crate) fn request_as_helper(
 
 /// The JSON a `setup-helper` run printed: on standard output, or (a refusal)
 /// on standard error. Acknowledged only when the run succeeded too.
-fn worker_reply(output: &std::process::Output) -> std::result::Result<Value, helper::Unfinished> {
-    use helper::{Unfinished, acknowledged};
+fn worker_reply(
+    output: &std::process::Output,
+) -> std::result::Result<Value, helper_setup::Unfinished> {
+    use helper_setup::{Unfinished, acknowledged};
 
     let reply: Value = serde_json::from_slice(&output.stdout)
         .or_else(|_| serde_json::from_slice(&output.stderr))

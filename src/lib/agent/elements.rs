@@ -12,7 +12,8 @@ use crate::{
     error::{Code, Error, Result},
     protocol::{Crop, Region},
     screen::{
-        elements::{Element, Frame, Stop, telling, why},
+        elements::{Element, Stop, telling, why},
+        geometry::Bounds,
         select::{ElementFilter, NameMatch, closeness, names, shown_name},
         windows::{MENU_LAYER, Window, owning_window},
     },
@@ -254,7 +255,7 @@ pub(super) fn listing(
     if full {
         listed["elements"] = json!(shown);
     } else {
-        let mut windows: Vec<&Frame> = Vec::new();
+        let mut windows: Vec<&Bounds> = Vec::new();
         listed["elements"] = shown
             .iter()
             .map(|element| compact(element, &mut windows))
@@ -308,7 +309,7 @@ fn plain_group(element: &Element) -> bool {
 
 /// An element as the default listing names it, with its window's place in
 /// `windows` (added when new).
-fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Frame>) -> Value {
+fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Bounds>) -> Value {
     let mut listed = element_identity(element);
     listed["index"] = json!(element.index);
     if let Some(value) = element
@@ -370,7 +371,7 @@ pub(super) fn menu_bar_window(windows: &[Window], x: f64, y: f64) -> Option<i64>
 
 /// Whether a frame has any area to click: a collapsed element is not on
 /// screen, whatever lies under its point.
-fn drawn(frame: &Frame) -> bool {
+fn drawn(frame: &Bounds) -> bool {
     frame.width > 0.0 && frame.height > 0.0
 }
 
@@ -636,7 +637,7 @@ pub(super) fn element_check(
 /// tall) the middle of its box, at the leading end of a frame that may also
 /// span a long empty stretch after a short label. A tab drawn as a radio
 /// button is clicked in its middle.
-pub(super) fn click_point(role: Option<&str>, frame: &Frame) -> (f64, f64) {
+pub(super) fn click_point(role: Option<&str>, frame: &Bounds) -> (f64, f64) {
     match role {
         Some("AXCheckBox" | "AXRadioButton") if frame.width > 2.0 * frame.height => (
             (frame.x + frame.height / 2.0).round(),

@@ -2,12 +2,20 @@
 //! Every action inspects before it acts, fails closed when inspection fails,
 //! and is safe to repeat. Plists are only moved into the private backup
 //! directory, never deleted, and only when their bytes are the expected ones.
-use super::{Account, account_with_uid, identity::Identity, problem};
+//!
+//! Nothing here reaches the controller's client: the helper's daemon shares
+//! this layout, and the controller's setup drives these actions from the other side.
+pub mod first_login;
+pub mod identity;
+pub mod pairing;
+
 use crate::{
+    account::{Account, account_named, account_with_uid},
     acl::{acl_lines, acl_policy},
     digest::file_sha256,
-    error::{Error, Result},
+    error::{Code, Error, Result},
 };
+use identity::Identity;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -18,6 +26,10 @@ use std::{
     process::Command,
     time::{Duration, Instant},
 };
+
+pub(crate) fn problem(message: impl Into<String>) -> Error {
+    Error::new(Code::Setup, message)
+}
 
 /// Private Atlas directory in the helper home and its entries.
 pub(crate) const ROOT: &str = ".atlas";
@@ -371,7 +383,7 @@ type Observed = (Account, Option<Identity>);
 /// A changed directory mapping is refused, rather than joining two accounts' facts.
 fn observe(uid: u32) -> Result<Observed> {
     let account = account_with_uid(uid)?.ok_or_else(|| problem("Helper account not found"))?;
-    let identity = super::identity::current(&account)
+    let identity = identity::current(&account)
         .ok_or_else(|| problem("macOS could not read the helper's account identity"))?;
     if account_with_uid(uid)?.as_ref() != Some(&account) {
         return Err(problem("The helper account changed while it was checked"));
@@ -452,7 +464,7 @@ fn run_guarded_with(
     // Never as root with the helper's real user ID: files would be root's,
     // written in a home the helper controls.
     if request.uid() != uid
-        || uid < super::FIRST_USER_UID
+        || uid < crate::account::FIRST_USER_UID
         || nix::unistd::geteuid() != nix::unistd::getuid()
     {
         return Err(problem(
@@ -488,8 +500,8 @@ fn execute(request: Request, layout: &Layout) -> Result<Value> {
             ..
         } => check_retire(layout, &label, &sha256, missing_ok),
         Request::Restore { label, sha256, .. } => restore(layout, &label, &sha256),
-        Request::FirstLogin { opener, .. } => super::first_login::first_login(layout, opener),
-        Request::ForgetOpener { .. } => super::first_login::forget_opener(layout),
+        Request::FirstLogin { opener, .. } => first_login::first_login(layout, opener),
+        Request::ForgetOpener { .. } => first_login::forget_opener(layout),
         Request::Kickstart { uid } => kickstart(layout, uid),
     }
 }
@@ -727,7 +739,7 @@ fn inspect(layout: &Layout, labels: &[String]) -> Result<Value> {
 
 fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
     require_name(controller)?;
-    let controller_uid = super::account_named(controller)?
+    let controller_uid = account_named(controller)?
         .ok_or_else(|| problem(format!("No controller account named {controller}")))?
         .uid;
     if controller_uid == layout.uid {

@@ -2,12 +2,13 @@
 //! release after the same checks as install.sh — checksum, signature, the
 //! Developer ID requirement and notarization — swapping by rename so a
 //! running helper daemon never sees a half-written executable.
-pub use crate::app_bundle::{INSTALL_COMMAND, installed_app, installed_executable};
 use crate::{
-    app_bundle::{BUNDLE_EXECUTABLE as EXECUTABLE, reachable_by_others, require_helper_access},
+    app_bundle::{
+        self, BUNDLE_EXECUTABLE as EXECUTABLE, installed_app, reachable_by_others,
+        require_helper_access,
+    },
     error::{Code, Error, Result},
     files::{LockOpen, open_lock_file},
-    setup,
 };
 use serde_json::{Value, json};
 use std::{
@@ -348,7 +349,7 @@ fn verify(work: &Path, name: &str, allow_unnotarized: bool) -> Result<PathBuf> {
         "The app's signature is invalid",
     )?;
 
-    if !setup::developer_id(&app.join(EXECUTABLE)) {
+    if !app_bundle::developer_id(&app.join(EXECUTABLE)) {
         return Err(problem("The app is not Atlas signed by its Developer ID"));
     }
 

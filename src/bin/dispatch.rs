@@ -340,9 +340,9 @@ fn guide(args: &cli::AgentGuide) -> Value {
 }
 
 fn setup_helper(args: &cli::SetupHelper) -> Result<Value> {
-    atlas::setup::helper::run_guarded(
+    atlas::helper_setup::run_guarded(
         &args.request,
-        &atlas::setup::helper::Guard {
+        &atlas::helper_setup::Guard {
             account: Some(serde_json::from_str(&args.account)?),
             logged_out: args.logged_out,
         },

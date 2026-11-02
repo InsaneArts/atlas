@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn dock_gaps_and_separators_are_not_pressable() {
     let frame = || {
-        Some(super::super::Frame {
+        Some(super::super::Bounds {
             x: 1120.0,
             y: 920.0,
             width: 16.0,
@@ -36,7 +36,7 @@ fn only_launchable_dock_subroles_are_pressable_even_with_axpress() {
         (Some("AXUnknownDockItem"), false),
         (None, false),
     ] {
-        let frame = Some(super::super::Frame {
+        let frame = Some(super::super::Bounds {
             x: 1120.0,
             y: 920.0,
             width: 40.0,

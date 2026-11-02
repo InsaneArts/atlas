@@ -1,17 +1,12 @@
 //! The helper's background job as its controller installs, replaces and
 //! restarts it, each action run by a worker inside the helper login.
-use super::{
-    Account,
-    account::problem,
-    account_with_uid,
-    executor::setup_transaction_held,
-    helper::{Agent, JobReport, LABEL, Layout, Request},
-    identity::Identity,
-    reported_pid,
-};
+use super::{account::problem, executor::setup_transaction_held, reported_pid};
 use crate::{
+    account::{Account, account_with_uid},
+    app_bundle,
     client::Client,
     error::{Error, Result},
+    helper_setup::{Agent, JobReport, LABEL, Layout, Request, identity::Identity},
     setup,
 };
 use serde_json::{Value, json};
@@ -256,7 +251,7 @@ pub async fn refresh_helper(
     expected: &Identity,
     mut progress: impl FnMut(setup::Progress<'_>) -> Result<()>,
 ) -> Result<Option<Value>> {
-    let executable = Path::new(setup::installed_app::EXECUTABLE);
+    let executable = Path::new(app_bundle::EXECUTABLE);
     let (agent, layout) = helper_agent(helper, executable)?;
     let expected_hash = agent.plist_sha256(&layout.logs());
     let job = setup::migrate::managed_job(client).await?;
@@ -284,7 +279,7 @@ pub async fn refresh_helper(
     }
 
     let pid = reported_pid(&client.status().await["daemon"]["pid"]);
-    if pid.is_some_and(|pid| !setup::runs_current(pid, executable)) {
+    if pid.is_some_and(|pid| !app_bundle::runs_current(pid, executable)) {
         progress(setup::Progress::Waiting(
             "Restarting the helper on this version…",
         ))?;
@@ -308,7 +303,7 @@ pub async fn prepare_helper(
     helper: &Account,
     expected: &Identity,
 ) -> Result<PathBuf> {
-    let executable = Path::new(setup::installed_app::EXECUTABLE);
+    let executable = Path::new(app_bundle::EXECUTABLE);
     let controller = this_account()?;
     let (agent, layout) = helper_agent(helper, executable)?;
     prepare_and_install(client, &controller.name, agent, &layout.logs(), |request| {
@@ -326,7 +321,7 @@ pub async fn prepare_helper(
 /// Returns account-identity, privileged-executor or helper-installation failures. An
 /// executor whose exit is unknown retains ownership.
 pub fn first_login_setup(client: &Client, helper: &Account, expected: &Identity) -> Result<Value> {
-    let executable = Path::new(setup::installed_app::EXECUTABLE);
+    let executable = Path::new(app_bundle::EXECUTABLE);
     setup::executor::setup_transaction(&client.controller, || {
         let request = Request::FirstLogin {
             uid: helper.uid,

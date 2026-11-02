@@ -8,20 +8,33 @@ use std::{path::Path, time::Duration};
 const REPLY_LIMIT: usize = 1 << 16;
 
 /// The JSON record at `path`, when it reads as one.
-pub(super) fn read_record(path: &Path) -> Option<Value> {
+pub(crate) fn read_record(path: &Path) -> Option<Value> {
     let bytes = std::fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
+/// The private address `record` names.
+pub(crate) fn address(record: &Value) -> Option<&str> {
+    record["url"].as_str()
+}
+
 /// Whether `record` names a viewer on `port`.
 fn serves(record: &Value, port: u16) -> bool {
-    record["url"]
-        .as_str()
-        .is_some_and(|url| url.starts_with(&format!("http://127.0.0.1:{port}/")))
+    address(record).is_some_and(|url| url.starts_with(&format!("http://127.0.0.1:{port}/")))
+}
+
+/// The port `record` says its viewer serves.
+pub(crate) fn recorded_port(record: &Value) -> Option<u16> {
+    address(record)?
+        .strip_prefix("http://127.0.0.1:")?
+        .split('/')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// The process `reply` names, as a viewer or its record says it.
-fn process(reply: &Value) -> Option<u32> {
+pub(crate) fn process(reply: &Value) -> Option<u32> {
     reply["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())
@@ -33,9 +46,8 @@ fn process(reply: &Value) -> Option<u32> {
 pub(crate) fn running(record: &Path, port: u16) -> Option<Value> {
     read_record(record).filter(|running| {
         serves(running, port)
-            && process(running).is_some_and(|recorded| {
-                answering(running["url"].as_str().unwrap_or_default()) == Some(recorded)
-            })
+            && process(running)
+                .is_some_and(|recorded| address(running).and_then(answering) == Some(recorded))
     })
 }
 
@@ -55,7 +67,7 @@ pub(super) fn answering(url: &str) -> Option<u32> {
 pub(crate) fn recorded(output: &Path, port: u16) -> bool {
     read_record(&output.join(MENUBAR_RECORD))
         .filter(|record| serves(record, port))
-        .and_then(|record| record["pid"].as_i64())
+        .and_then(|record| process(&record))
         .and_then(|pid| i32::try_from(pid).ok())
         .is_some_and(crate::menubar::is_atlas)
 }
@@ -65,7 +77,7 @@ pub(crate) fn recorded(output: &Path, port: u16) -> bool {
 /// off the async runtime.
 pub(crate) fn local(output: &Path, port: u16) -> Option<String> {
     running(&output.join(MENUBAR_RECORD), port)
-        .and_then(|running| running["url"].as_str().map(str::to_owned))
+        .and_then(|running| address(&running).map(str::to_owned))
 }
 
 /// What the local viewer at `url` serves at `route`, read within `deadline`

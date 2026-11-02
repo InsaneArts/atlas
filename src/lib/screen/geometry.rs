@@ -42,6 +42,22 @@ impl Bounds {
             && self.y + self.height >= other.y + other.height
     }
 
+    pub(crate) fn center(&self) -> (f64, f64) {
+        (
+            (self.x + self.width / 2.0).round(),
+            (self.y + self.height / 2.0).round(),
+        )
+    }
+
+    /// Whether two are the same within a point.
+    pub(crate) fn matches(&self, other: &Bounds) -> bool {
+        let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
+        near(self.x, other.x)
+            && near(self.y, other.y)
+            && near(self.width, other.width)
+            && near(self.height, other.height)
+    }
+
     /// Whether the two share an area, not just an edge or a corner.
     pub(crate) fn intersects(&self, other: &Bounds) -> bool {
         self.width > 0.0
@@ -52,43 +68,5 @@ impl Bounds {
             && other.x < self.x + self.width
             && self.y < other.y + other.height
             && other.y < self.y + self.height
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Frame {
-    pub(crate) x: f64,
-    pub(crate) y: f64,
-    pub(crate) width: f64,
-    pub(crate) height: f64,
-}
-
-impl Frame {
-    pub(crate) fn center(&self) -> (f64, f64) {
-        (
-            (self.x + self.width / 2.0).round(),
-            (self.y + self.height / 2.0).round(),
-        )
-    }
-
-    /// Whether two frames are the same within a point.
-    pub(crate) fn matches(&self, other: &Frame) -> bool {
-        let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
-        near(self.x, other.x)
-            && near(self.y, other.y)
-            && near(self.width, other.width)
-            && near(self.height, other.height)
-    }
-}
-
-impl From<&Bounds> for Frame {
-    /// A window's bounds, as Accessibility gives an element's frame.
-    fn from(bounds: &Bounds) -> Self {
-        Self {
-            x: bounds.x,
-            y: bounds.y,
-            width: bounds.width,
-            height: bounds.height,
-        }
     }
 }

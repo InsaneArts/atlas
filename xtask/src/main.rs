@@ -6,9 +6,9 @@
 mod quality;
 
 use atlas::{
+    app_bundle::{APP_EXECUTABLE, IDENTIFIER},
     files::exchange,
-    menubar::{APP_EXECUTABLE, LOGIN_JOB},
-    setup::IDENTIFIER,
+    menubar::LOGIN_JOB,
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -607,7 +607,7 @@ fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
     };
 
     sign(
-        Some(atlas::setup::APP_IDENTIFIER),
+        Some(atlas::app_bundle::APP_IDENTIFIER),
         &app.join("Contents/MacOS").join(APP_EXECUTABLE),
     )?;
     sign(None, app)?;
@@ -620,7 +620,7 @@ fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
         &["--verify", "--strict", "--deep", text(app)?],
     )?;
 
-    if !atlas::setup::developer_id(&app.join("Contents/MacOS/atlas")) {
+    if !atlas::app_bundle::developer_id(&app.join("Contents/MacOS/atlas")) {
         return Err(
             "the app does not satisfy setup's Developer ID requirement (identity and team)".into(),
         );

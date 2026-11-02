@@ -1,5 +1,6 @@
 use super::status::permissions_from;
-use crate::setup::{executor::without, pairing::window_open};
+use crate::helper_setup::pairing::window_open;
+use crate::setup::executor::without;
 #[test]
 fn settings_are_absent_only_when_the_configuration_is_missing() {
     use std::os::unix::fs::symlink;
@@ -281,7 +282,7 @@ fn pairing(controller: u32) -> Pairing {
         controller_name: "person".into(),
         helper_uid: controller + 1,
         helper_name: "helper".into(),
-        helper_identity: setup::identity::Identity {
+        helper_identity: helper_setup::identity::Identity {
             uid: controller + 1,
             name: "helper".into(),
             generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
@@ -378,7 +379,7 @@ fn a_helper_answers_only_while_its_socket_listens() {
 #[test]
 fn a_helper_prepared_for_this_account_is_recognised() {
     let dir = tempfile::tempdir().unwrap();
-    let helper = setup::Account {
+    let helper = account::Account {
         name: "helper".into(),
         uid: 502,
         home: dir.path().to_owned(),
@@ -423,7 +424,7 @@ fn only_an_unanswered_request_may_be_taken_back() {
 #[test]
 fn the_window_marker_names_a_living_window() {
     let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join(setup::helper::ROOT);
+    let root = dir.path().join(helper_setup::ROOT);
     fs::create_dir_all(&root).unwrap();
 
     // A living process that is not Atlas's window does not count.

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn every_worker_is_given_the_required_identity() {
-    let expected = super::super::identity::Identity {
+    let expected = Identity {
         uid: 502,
         name: "helper".into(),
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
@@ -47,7 +47,7 @@ fn every_worker_is_given_the_required_identity() {
         let argv = helper_argv(&client, &request, &expected).unwrap();
         assert_eq!(argv[3], "--account");
         assert_eq!(
-            serde_json::from_str::<super::super::identity::Identity>(&argv[4]).unwrap(),
+            serde_json::from_str::<Identity>(&argv[4]).unwrap(),
             expected
         );
     }
@@ -59,7 +59,7 @@ async fn update_preflight_refuses_a_missing_retirement_backup() {
     let mut migration = sandbox(dir.path());
     migration.log.state = State::Applied;
     migration.log.plan.home = dir.path().join("helper");
-    migration.log.plan.old_plist_sha256 = super::super::helper::text_sha256("old definition");
+    migration.log.plan.old_plist_sha256 = crate::helper_setup::text_sha256("old definition");
     let layout = migration.layout();
     let backup = layout.root().join("backup").join(format!(
         "{}-{}.plist",
@@ -77,8 +77,8 @@ async fn update_preflight_refuses_a_missing_retirement_backup() {
             missing_ok,
             ..
         } => {
-            super::super::helper::retirement_with(&layout, &label, &sha256, missing_ok, || {
-                Ok(super::super::helper::Job::Absent)
+            crate::helper_setup::retirement_with(&layout, &label, &sha256, missing_ok, || {
+                Ok(crate::helper_setup::Job::Absent)
             })?;
             Ok(json!({"ok": true}))
         }

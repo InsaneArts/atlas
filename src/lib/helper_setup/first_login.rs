@@ -4,10 +4,7 @@
 //! there once the desktop is up. Nothing here replaces a file the account
 //! already has, follows a link, or writes preferences while the account runs
 //! anything (cfprefsd would hold the old ones).
-use super::{
-    helper::{File, Layout, document, escape, file, text_sha256},
-    pairing, problem,
-};
+use super::{File, Layout, document, escape, file, pairing, problem, text_sha256};
 use crate::error::{Error, Result};
 use serde_json::{Value, json};
 use std::{
@@ -145,7 +142,10 @@ fn opener_plist(program: &Path) -> String {
             string("LimitLoadToSessionType", "Aqua"),
             string("ProcessType", "Interactive"),
             // Named so Background Items lists the job as Atlas.
-            array("AssociatedBundleIdentifiers", &[super::IDENTIFIER]),
+            array(
+                "AssociatedBundleIdentifiers",
+                &[crate::app_bundle::IDENTIFIER],
+            ),
             string("StandardOutPath", "/dev/null"),
             string("StandardErrorPath", "/dev/null"),
         ]
@@ -331,7 +331,7 @@ fn ready_with(
 pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
     let logged_in = crate::session::login(layout.uid).is_some();
     let program = if opener {
-        Some(crate::setup::installed_app::signed_executable()?)
+        Some(crate::app_bundle::signed_executable()?)
     } else {
         None
     };
@@ -353,10 +353,10 @@ pub(super) fn first_login(layout: &Layout, opener: bool) -> Result<Value> {
     // The opener runs once, so a loaded one that has run is loaded again.
     let started = match &readied.opener {
         Some(path) if logged_in => {
-            if readied.opener_written || super::helper::job_pid(layout, OPENER).is_none() {
-                super::helper::unload(layout, OPENER)?;
+            if readied.opener_written || super::job_pid(layout, OPENER).is_none() {
+                super::unload(layout, OPENER)?;
             }
-            super::helper::loaded(layout, OPENER, path)?;
+            super::loaded(layout, OPENER, path)?;
             true
         }
         _ => false,
@@ -386,7 +386,7 @@ pub(crate) fn forget_opener(layout: &Layout) -> Result<Value> {
         File::Other => return Err(not_a_file(&path)),
     };
 
-    super::helper::unload(layout, OPENER)?;
+    super::unload(layout, OPENER)?;
     Ok(json!({ "ok": true, "removed": removed, "plist": path }))
 }
 
@@ -407,7 +407,7 @@ const WINDOW_PATIENCE: Duration = Duration::from_secs(120);
 /// login, and does not count.
 pub(crate) fn opener_waiting(layout: &Layout) -> bool {
     fs::symlink_metadata(layout.agent_plist(OPENER)).is_ok_and(|metadata| metadata.is_file())
-        && super::helper::job_pid(layout, OPENER).is_some()
+        && super::job_pid(layout, OPENER).is_some()
 }
 
 /// Whether launchd started this process as the helper's opener: it names

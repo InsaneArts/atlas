@@ -12,7 +12,7 @@ pub async fn status(config_path: &Path) -> Result<Value> {
     let me = json!({
         "uid": uid,
         "name": account.name,
-        "realName": setup::real_name(&account.name),
+        "realName": account::real_name(&account.name),
     });
     let app = app();
 
@@ -60,13 +60,13 @@ fn choosing(
 async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Result<Value> {
     let config = Config::load(config_path)?;
     let (leftovers, blockers) = logins(Some(config.helper_uid));
-    let Some(helper) = setup::account_with_uid(config.helper_uid)? else {
+    let Some(helper) = account::account_with_uid(config.helper_uid)? else {
         let mut reply = choosing(me, app, true, (leftovers, blockers))?;
         reply["helper"] = json!({"exists": false, "uid": config.helper_uid});
         return Ok(reply);
     };
 
-    let admin = setup::administrator(&helper.name);
+    let admin = account::administrator(&helper.name);
 
     // This account asked this helper: its request names it (the window), or
     // a setup with it is recorded (`atlas init`, or the window's finish).
@@ -123,7 +123,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
             "exists": true,
             "uid": helper.uid,
             "name": helper.name,
-            "realName": setup::real_name(&helper.name),
+            "realName": account::real_name(&helper.name),
             "administrator": admin,
             "paired": paired,
             "forgettable": forgettable,
@@ -166,7 +166,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
             (None, _) => false,
             (Some(_), None) => true,
             (Some(text), Some(pairing)) => expected_agent(layout, pairing.controller_uid)
-                .is_ok_and(|agent| text == setup::helper::plist(&agent, &layout.logs())),
+                .is_ok_and(|agent| text == helper_setup::plist(&agent, &layout.logs())),
         }
     });
     let accepted = pairing.is_some_and(acceptance::accepted);
@@ -180,7 +180,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
     }
     let running = layout
         .as_ref()
-        .is_ok_and(|layout| setup::helper::job_pid(layout, LABEL).is_some());
+        .is_ok_and(|layout| helper_setup::job_pid(layout, LABEL).is_some());
 
     // macOS counts a process the window starts as the window's own, so only
     // the job's answer tells what Atlas itself may do here. Without one (not
@@ -203,7 +203,7 @@ async fn helper_side(uid: u32, pairing: Option<&Pairing>) -> Value {
         json!({
             "uid": pairing.controller_uid,
             "name": pairing.controller_name,
-            "realName": setup::real_name(&pairing.controller_name),
+            "realName": account::real_name(&pairing.controller_name),
         })
     });
 
@@ -241,7 +241,7 @@ fn candidates(only: Option<u32>) -> Result<Vec<Value>> {
 /// The app this runs from, whether it is signed by Atlas's developer, and
 /// whether `atlas` in a terminal reaches it.
 fn app() -> Value {
-    match setup::installed_app::app_executable() {
+    match app_bundle::app_executable() {
         Ok(executable) => {
             let link = config::home()
                 .map(|home| home.join(".local/bin/atlas"))
@@ -253,7 +253,7 @@ fn app() -> Value {
             json!({
                 "installed": true,
                 "path": executable.parent().and_then(Path::parent).and_then(Path::parent),
-                "signed": setup::developer_id(&executable),
+                "signed": app_bundle::developer_id(&executable),
                 "linked": linked,
             })
         }
