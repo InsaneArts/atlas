@@ -696,22 +696,103 @@ async fn malformed_replies_remain_uncertain() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_drip_feed_cannot_extend_the_wall_clock_deadline() {
-    // Fed in full, the drip would take four seconds; the deadline ends it
-    // well before, with room for a loaded machine.
-    let started = std::time::Instant::now();
+    use std::task::Poll;
+    use tokio::{
+        io::AsyncBufReadExt,
+        sync::{mpsc, oneshot},
+        task::JoinSet,
+    };
 
+    let (finished, watching) = std::sync::mpsc::channel();
+    let watchdog = std::thread::spawn(move || {
+        if watching.recv_timeout(Duration::from_secs(20))
+            == Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        {
+            std::process::abort();
+        }
+    });
+    let dir = tempfile::Builder::new()
+        .prefix("ust-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let socket = dir.path().join("s");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let mut workers = JoinSet::<()>::new();
+    // Keep paused Tokio time from auto-advancing while the real socket reactor
+    // establishes readiness. Only this test's explicit advances spend the budget.
+    workers.spawn(async {
+        loop {
+            tokio::task::yield_now().await;
+        }
+    });
+    let (dispatched, heard) = oneshot::channel();
+    let (permit, mut allowed) = mpsc::channel(1);
+    let (written, mut received) = mpsc::channel(1);
+    workers.spawn(async move {
+        let (peer, _) = listener.accept().await.unwrap();
+        let mut peer = tokio::io::BufReader::new(peer);
+        let mut request = String::new();
+        assert!(peer.read_line(&mut request).await.unwrap() > 0);
+        assert_eq!(
+            serde_json::from_str::<Value>(&request).unwrap(),
+            json!({"op":"input","actions":[]})
+        );
+        dispatched.send(()).unwrap();
+        while let Some(number) = allowed.recv().await {
+            peer.get_mut().write_all(b" ").await.unwrap();
+            written.send(number).await.unwrap();
+        }
+    });
+    let transport = Transport {
+        path: socket,
+        timeout: Duration::from_millis(80),
+        peer_uid: current_uid(),
+    };
+    let request = json!({"op":"input","actions":[]});
+    let mut call = Box::pin(transport.call(&request));
+    tokio::select! {
+        result = &mut call => panic!("the peer has not answered: {result:?}"),
+        ready = heard => ready.unwrap(),
+    }
+    for number in 1..=3 {
+        tokio::time::advance(Duration::from_millis(20)).await;
+        permit.send(number).await.unwrap();
+        tokio::select! {
+            result = &mut call => panic!("expired before the total deadline: {result:?}"),
+            sent = received.recv() => assert_eq!(sent, Some(number)),
+        }
+        assert!(
+            std::future::poll_fn(|cx| Poll::Ready(call.as_mut().poll(cx)))
+                .await
+                .is_pending()
+        );
+    }
+    tokio::time::advance(Duration::from_millis(19)).await;
     assert!(
-        exchange(
-            vec![b" ".to_vec(); 200],
-            Duration::from_millis(80),
-            Duration::from_millis(20)
-        )
-        .await
-        .is_err()
+        std::future::poll_fn(|cx| Poll::Ready(call.as_mut().poll(cx)))
+            .await
+            .is_pending()
     );
-    assert!(started.elapsed() < Duration::from_millis(1500));
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let result = std::future::poll_fn(|cx| Poll::Ready(call.as_mut().poll(cx))).await;
+    let Poll::Ready(Err(error)) = result else {
+        panic!("drips extended the total deadline: {result:?}");
+    };
+    assert_eq!(error.code, atlas::error::Code::Transport);
+    assert_eq!(error.error, "Helper exceeded the request deadline");
+    assert!(error.uncertain, "the complete request was dispatched");
+    // The peer was still held open: no EOF or server timeout supplied the failure.
+    drop(permit);
+    workers.abort_all();
+    while let Some(outcome) = workers.join_next().await {
+        if let Err(error) = outcome {
+            assert!(error.is_cancelled());
+        }
+    }
+    finished.send(()).unwrap();
+    watchdog.join().unwrap();
 }
 
 #[test]
