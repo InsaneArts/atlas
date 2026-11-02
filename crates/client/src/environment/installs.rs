@@ -18,11 +18,6 @@ mod print;
 mod processes;
 #[cfg(test)]
 mod tests;
-#[allow(
-    unsafe_code,
-    reason = "FFI: Security's SecTranslocateCreateOriginalPathForURL has no safe binding"
-)]
-mod translocate;
 
 use super::{
     reply::{

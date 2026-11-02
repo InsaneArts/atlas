@@ -59,7 +59,7 @@ async fn update_preflight_refuses_a_missing_retirement_backup() {
     let mut migration = sandbox(dir.path());
     migration.log.state = State::Applied;
     migration.log.plan.home = dir.path().join("helper");
-    migration.log.plan.old_plist_sha256 = atlas_daemon::helper_setup::text_sha256("old definition");
+    migration.log.plan.old_plist_sha256 = atlas_daemon::test_support::text_sha256("old definition");
     let layout = migration.layout();
     let backup = layout.root().join("backup").join(format!(
         "{}-{}.plist",
@@ -77,7 +77,7 @@ async fn update_preflight_refuses_a_missing_retirement_backup() {
             missing_ok,
             ..
         } => {
-            atlas_daemon::helper_setup::retirement_with(
+            atlas_daemon::test_support::retirement_with(
                 &layout,
                 &label,
                 &sha256,

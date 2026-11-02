@@ -353,10 +353,23 @@ impl<K: RecordName> RecordFolder<K> {
         fresh: Duration,
         read: impl FnOnce() -> Vec<T>,
     ) -> Arc<[T]> {
-        self.cached_observed(kept, fresh, self.modified(), |taken| taken.elapsed(), read)
+        self.cached_at(kept, fresh, self.modified(), |taken| taken.elapsed(), read)
     }
 
+    /// [`Records::cached`], with the folder's revision and a result's age told.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn cached_observed<T>(
+        &self,
+        kept: &Mutex<Option<Cached<T>>>,
+        fresh: Duration,
+        modified: Option<SystemTime>,
+        age: impl FnOnce(Instant) -> Duration,
+        read: impl FnOnce() -> Vec<T>,
+    ) -> Arc<[T]> {
+        self.cached_at(kept, fresh, modified, age, read)
+    }
+
+    fn cached_at<T>(
         &self,
         kept: &Mutex<Option<Cached<T>>>,
         fresh: Duration,

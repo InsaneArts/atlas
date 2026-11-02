@@ -51,7 +51,7 @@ macro_rules! hosts {
             }
 
             /// The host's word in records and keys.
-            pub(crate) fn as_str(self) -> &'static str {
+            pub fn as_str(self) -> &'static str {
                 match self { $(Self::$host => $word),* }
             }
         }
@@ -323,10 +323,13 @@ impl HostSession {
         let complete = walk
             .last()
             .is_some_and(|ancestor| ancestor.pid == 1 || ancestor.parent == 1);
-        let ambiguous = host == Host::Codex && (!complete || matching.len() != 1);
-        let selected = matching
-            .first()
-            .filter(|_| !ambiguous && host != Host::Cursor && matching.len() == 1);
+        let single = matching.len() == 1;
+        let (ambiguous, pinnable) = match host {
+            Host::Codex => (!complete || !single, complete && single),
+            Host::Cursor => (false, false),
+            Host::Claude | Host::Opencode | Host::Pi | Host::Named => (false, single),
+        };
+        let selected = matching.first().filter(|_| pinnable);
         let instance = selected.and_then(|ancestor| {
             let facts = process(ancestor.pid)?;
             (facts.uid == uid
@@ -396,7 +399,7 @@ fn nearest(
 /// The project a command works in: the name of the nearest folder from
 /// `directory` up that holds a `.git` entry, else of `directory` itself.
 /// None for the home folder and `/`, which name no project.
-pub fn project_folder(directory: &Path) -> Option<String> {
+pub(crate) fn project_folder(directory: &Path) -> Option<String> {
     let project = directory
         .ancestors()
         .take(FOLDER_DEPTH)

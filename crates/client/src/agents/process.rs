@@ -155,12 +155,15 @@ impl Drop for Running {
 /// is asked for its PATH. The tool gets every place searched, as a tool
 /// installed with npm needs node beside it.
 fn executable(agent: Agent) -> (PathBuf, std::ffi::OsString) {
-    if agent == Agent::Cursor {
-        let places = install_places().into_iter().chain(path_places());
-        return (
-            cursor_executable().unwrap_or_else(|| PathBuf::from("cursor-agent")),
-            std::env::join_paths(places).unwrap_or_default(),
-        );
+    match agent {
+        Agent::Cursor => {
+            let places = install_places().into_iter().chain(path_places());
+            return (
+                cursor_executable().unwrap_or_else(|| PathBuf::from("cursor-agent")),
+                std::env::join_paths(places).unwrap_or_default(),
+            );
+        }
+        Agent::Claude | Agent::Codex | Agent::Opencode | Agent::Pi => {}
     }
     let name = agent.name();
     let mut places = path_places();

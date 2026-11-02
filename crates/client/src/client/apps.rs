@@ -27,7 +27,8 @@ pub struct AppRow {
     name: Option<String>,
     bundle_id: Option<String>,
     executable: Option<String>,
-    active: Option<bool>,
+    active: bool,
+    hidden: bool,
     policy: Option<String>,
     launched_at: Option<u64>,
     projection: Map<String, Value>,
@@ -121,26 +122,23 @@ impl AppRow {
             .get("pid")?
             .as_u64()
             .filter(|pid| *pid > 0 && i32::try_from(*pid).is_ok())?;
-        let text = |key: &str| {
-            fields
-                .get(key)
-                .is_none_or(|value| value.is_null() || value.is_string())
+        // Absent and null text both read as none; another type refuses the row.
+        let text = |key: &str| match fields.get(key) {
+            None | Some(Value::Null) => Some(None),
+            Some(value) => value.as_str().map(|text| Some(text.to_owned())),
         };
-        let flag = |key: &str| fields.get(key).is_none_or(Value::is_boolean);
-        if !["name", "bundleId", "executable"].into_iter().all(text)
-            || !["active", "hidden"].into_iter().all(flag)
-            || !fields.get("policy").is_none_or(Value::is_string)
-        {
+        let flag = |key: &str| fields.get(key).map_or(Some(false), Value::as_bool);
+        if fields.get("policy").is_some_and(Value::is_null) {
             return None;
         }
-        let text = |key: &str| fields.get(key).and_then(Value::as_str).map(str::to_owned);
         Some(Self {
             pid,
-            name: text("name"),
-            bundle_id: text("bundleId"),
-            executable: text("executable"),
-            active: fields.get("active").and_then(Value::as_bool),
-            policy: text("policy"),
+            name: text("name")?,
+            bundle_id: text("bundleId")?,
+            executable: text("executable")?,
+            active: flag("active")?,
+            hidden: flag("hidden")?,
+            policy: text("policy")?,
             launched_at: fields.get("launchedAt").and_then(Value::as_u64),
             projection: fields,
         })
@@ -159,7 +157,14 @@ impl AppRow {
         self.executable.as_deref()
     }
     pub(crate) fn active(&self) -> bool {
-        self.active == Some(true)
+        self.active
+    }
+    pub(crate) fn hidden(&self) -> bool {
+        self.hidden
+    }
+    /// The row as the helper sent it, for output and its size.
+    pub(crate) fn fields(&self) -> &Map<String, Value> {
+        &self.projection
     }
     pub(crate) fn policy(&self) -> Option<&str> {
         self.policy.as_deref()

@@ -132,6 +132,20 @@ impl Service {
         request: Request,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
+        // Stop, release, recovery and shutdown keep working after session or
+        // permission loss, so only control and its uses need both intact.
+        match &request {
+            Request::Renew { .. }
+            | Request::Unknown { .. }
+            | Request::Acquire { .. }
+            | Request::Input { .. } => self.check()?,
+            Request::Hello
+            | Request::Shutdown { .. }
+            | Request::Hold { .. }
+            | Request::Release { .. }
+            | Request::Reset { .. } => {}
+        }
+
         match request {
             Request::Hello => self.hello().await,
             Request::Shutdown { pid } => self.shutdown(pid, phase).await,
@@ -242,7 +256,6 @@ impl Service {
     }
 
     fn renew(&self, owner: String, phase: &watch::Sender<ConnectionPhase>) -> Result<Value> {
-        self.check()?;
         self.gate.renew(&owner)?;
         phase.send_replace(ConnectionPhase::Mutation("renew"));
         Ok(json!({ "ok": true }))
@@ -257,7 +270,6 @@ impl Service {
     }
 
     fn unknown(&self, epoch: Result<InputEpoch>) -> Result<Value> {
-        self.check()?;
         self.check_epoch(epoch?)?;
         Err(Error::new(Code::Input, "Unknown native operation"))
     }
@@ -301,8 +313,6 @@ impl Service {
         who: Who,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
-        self.check()?;
-
         self.check_epoch(expected?)?;
         let mut engine = self.engine.lock().await;
         self.operations.check()?;
@@ -332,7 +342,6 @@ impl Service {
         report_app: bool,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
-        self.check()?;
         let epoch = self.check_epoch(expected?)?;
         let grant = self.gate.grant(&owner)?;
         let actions = actions?;

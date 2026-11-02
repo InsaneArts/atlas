@@ -169,7 +169,7 @@ impl<'a> Batch<'a> {
         check(&self.actions, display)
     }
 
-    pub fn into_wire(self) -> &'a Value {
+    pub fn wire(&self) -> &'a Value {
         self.wire
     }
 }

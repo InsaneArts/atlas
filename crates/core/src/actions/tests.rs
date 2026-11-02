@@ -25,7 +25,7 @@ fn decoded_batches_keep_optional_wire_members_exactly_as_supplied() {
         let batch = Batch::decode(&wire).unwrap();
         batch.check(&display).unwrap();
         assert_eq!(batch.actions().len(), 1);
-        assert_eq!(batch.into_wire(), &wire);
+        assert_eq!(batch.wire(), &wire);
     }
     let wire = json!([{"type":"move","x":700,"y":20}]);
     let batch = Batch::decode(&wire).unwrap();

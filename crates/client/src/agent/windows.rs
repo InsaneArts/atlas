@@ -55,7 +55,7 @@ impl WindowFilter {
 ///
 /// Returns identity, window-read or remembered-observation storage failures. Malformed
 /// helper data is never interpreted as an empty window list.
-pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
+pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Vec<Window>> {
     let windows = if client.host_session.is_some() {
         let verified = client.verify().await?;
         let snapshot = client
@@ -67,7 +67,7 @@ pub async fn list(client: &Client, filter: &WindowFilter) -> Result<Value> {
         client.windows_in(None, false, WINDOW_LOOKUP).await?.windows
     };
 
-    Ok(json!({ "ok": true, "windows": filter.selected(windows) }))
+    Ok(filter.selected(windows))
 }
 
 /// Poll the window list until a matching window appears (or, with `gone`,

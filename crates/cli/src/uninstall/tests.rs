@@ -292,6 +292,7 @@ fn a_linked_cache_is_refused_without_unlinking_control_state() {
     drop(held);
 }
 
+use super::log_out::{Came, Next, Way, after, strictly};
 use super::*;
 fn silent(_: Progress<'_>) {}
 fn agree(_: Question) -> Result<bool> {

@@ -1,7 +1,7 @@
 //! An element's attributes asked for in one request: which ones, what each
 //! slot of the reply holds, and where a single attribute is then read from.
 use super::{
-    ABSENT, ffi,
+    absent, ffi,
     text::{TEXT_LIMIT, TEXT_ROLES},
 };
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
@@ -114,7 +114,7 @@ impl Batch {
         let secure = subrole == Some("AXSecureTextField")
             || matches!(
                 self.slot("AXSubrole"),
-                Some(Slot::Failed(status)) if !ABSENT.contains(status)
+                Some(Slot::Failed(status)) if !absent(*status)
             );
         if !text || secure {
             return None;

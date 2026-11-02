@@ -624,7 +624,7 @@ fn a_window_read_is_refused_in_another_session() {
                 display_id,
             }),
         };
-        let refusal = request.policy().pinned_elsewhere(session).unwrap();
+        let refusal = request.policy().check(|| false, session).unwrap();
         assert_eq!(refusal["code"], "session-changed");
         assert_eq!(refusal["uncertain"], false);
     }

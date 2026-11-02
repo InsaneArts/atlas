@@ -5,7 +5,6 @@ use crate::{
     task::Task,
 };
 use atlas_core::protocol::{self, Request};
-use atlas_daemon::daemon::read::{self, Places};
 use std::{
     os::unix::fs::PermissionsExt,
     sync::{Arc, Mutex},
@@ -75,16 +74,11 @@ impl Place {
                         panic!("only reads are asked for: {line}");
                     };
                     let mut lines = Vec::new();
-                    let places = Places {
-                        home,
-                        temporary: None,
-                    };
                     let now = SystemTime::now() + *ahead.lock().unwrap();
-                    let reply = read::read_at(
+                    let reply = atlas_daemon::test_support::read_at(
                         &request,
-                        &places,
+                        home,
                         nix::unistd::getuid().as_raw(),
-                        &|| Ok(()),
                         &mut |event| {
                             lines.push(event);
                             true

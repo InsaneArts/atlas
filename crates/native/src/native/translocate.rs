@@ -19,7 +19,7 @@ unsafe extern "C" {
 
 /// The bundle a translocated bundle at `translocated` was opened from, for
 /// the account running this process; none when macOS cannot say.
-pub(super) fn original(translocated: &Path) -> Option<PathBuf> {
+pub fn original(translocated: &Path) -> Option<PathBuf> {
     let path = CFString::from_str(translocated.to_str()?);
     let url =
         CFURL::with_file_system_path(None, Some(&path), CFURLPathStyle::CFURLPOSIXPathStyle, true)?;

@@ -25,7 +25,7 @@ use std::{
 /// The log's file name in the output folder.
 pub const FILE: &str = "metadata.jsonl";
 /// What the log is renamed to once it grows past [`ROTATE_AT`].
-pub const PREVIOUS: &str = "metadata.previous.jsonl";
+pub(crate) const PREVIOUS: &str = "metadata.previous.jsonl";
 /// The file whose lock writers take turns by.
 pub(crate) const LOCK: &str = "metadata.lock";
 /// How long the log grows before it starts over.

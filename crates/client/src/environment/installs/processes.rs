@@ -26,7 +26,7 @@ impl Looks<'static> {
     pub(crate) fn system() -> Self {
         Self {
             processes: &helper_processes,
-            original: &super::translocate::original,
+            original: &atlas_native::native::translocate::original,
             bundle_id: &|bundle| {
                 super::bundle_value(&bundle.join("Contents/Info.plist"), "CFBundleIdentifier")
             },

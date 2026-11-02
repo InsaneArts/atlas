@@ -8,7 +8,7 @@ use atlas_core::{
     error::{Code, Error, Result},
     transport::{OutputError, accepted, run_output},
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{borrow::Cow, time::Duration};
 
 /// How long `run` lets a command take unless told otherwise.
@@ -137,10 +137,9 @@ impl Finished {
     }
 }
 
-/// The request that runs `argv` in the helper, stopping it after `timeout`:
-/// a program and its arguments, none holding a NUL, for 1 second to 10
-/// minutes.
-fn run_request(argv: Vec<String>, timeout: Duration) -> Result<Value> {
+/// Whether the helper may run `argv`, stopping it after `timeout`: a program
+/// and its arguments, none holding a NUL, for 1 second to 10 minutes.
+fn check_run(argv: &[String], timeout: Duration) -> Result<()> {
     if argv.first().is_none_or(String::is_empty) || argv.iter().any(|a| a.contains('\0')) {
         return Err(Error::new(
             Code::Input,
@@ -155,37 +154,39 @@ fn run_request(argv: Vec<String>, timeout: Duration) -> Result<Value> {
         ));
     }
 
-    let timeout_ms = atlas_core::time::ms(timeout);
-    Ok(json!({"op": "run", "argv": argv, "timeoutMs": timeout_ms}))
+    Ok(())
 }
 
 impl Client {
     /// Run argv in the verified hidden helper as `run` says.
     pub(crate) async fn run(&self, argv: Vec<String>, run: Run<'_>) -> Result<Value> {
-        let mut request = run_request(argv, run.timeout)?;
+        check_run(&argv, run.timeout)?;
         let taken = match run.mode {
             Mode::Held => Some(self.controller.acquire(false)?),
             Mode::Beside => Some(self.controller.acquire_beside_commands()?),
             Mode::Owned | Mode::Pending | Mode::Inspect => None,
         };
 
-        match run.pin {
-            Some(verified) => request["session"] = json!(verified.pin()?),
+        let pin = match run.pin {
+            Some(verified) => Some(verified.pin()?),
             None => {
                 self.identity().await?;
+                None
             }
-        }
+        };
+        let mutation = Mutation::Run {
+            argv,
+            timeout: run.timeout,
+            pin,
+        };
 
         match run.mode {
             // Control taken for a held run stays held until the command
             // ends; one beside others lets go of it once its request is sent.
-            Mode::Held | Mode::Owned => self.mutate(Mutation::Run, request, None, None, None).await,
-            Mode::Beside => self.mutate(Mutation::Run, request, None, None, taken).await,
-            Mode::Pending => self.run_unrecorded(&request, run.timeout).await,
-            Mode::Inspect => self
-                .run_unrecorded(&request, run.timeout)
-                .await
-                .map_err(Error::certain),
+            Mode::Held | Mode::Owned => self.mutate(mutation, None, None, None).await,
+            Mode::Beside => self.mutate(mutation, None, None, taken).await,
+            Mode::Pending => self.run_unrecorded(&mutation).await,
+            Mode::Inspect => self.run_unrecorded(&mutation).await.map_err(Error::certain),
         }
     }
 
@@ -245,14 +246,14 @@ impl Client {
         self.run(argv, Run::inspect().within(RUN_TIMEOUT)).await
     }
 
-    /// Send the run `request` to the verified helper, recording nothing.
+    /// Send the run `mutation` to the verified helper, recording nothing.
     /// The reply comes after the command ends, as for any other run.
-    async fn run_unrecorded(&self, request: &Value, timeout: Duration) -> Result<Value> {
-        let mut transport = self.transport.clone();
-        transport.timeout = transport.timeout.max(timeout + RUN_MARGIN);
-
-        let reply = transport.call(request).await?;
-        Mutation::Run.validate(&reply)?;
+    async fn run_unrecorded(&self, mutation: &Mutation<'_>) -> Result<Value> {
+        let reply = self
+            .transport_for(mutation)
+            .call(&mutation.request())
+            .await?;
+        mutation.validate(&reply)?;
 
         accepted(reply)
     }

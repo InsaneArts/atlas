@@ -314,7 +314,9 @@ async fn carry_out(
         Command::Type(args) => type_text(client, args).await,
         Command::Key(args) => press_keys(client, args).await,
         Command::Windows { app, title, all } => {
-            agent::list(&client()?, &agent::WindowFilter { app, title, all }).await
+            agent::list(&client()?, &agent::WindowFilter { app, title, all })
+                .await
+                .map(|windows| json!({"ok": true, "windows": windows}))
         }
         Command::Open(args) => open(&client()?, &args).await,
         Command::InstallApp { path } => atlas_client::install_app::install(&client()?, &path).await,

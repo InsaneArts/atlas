@@ -1,7 +1,7 @@
 //! Checks of the scan's bookkeeping, the bounds it keeps on text, and how
 //! what it reads is placed and reported.
 use super::{
-    ABSENT, Bounds, Element, INCOMPLETE, Limits,
+    Bounds, Element, INCOMPLETE, Limits,
     batch::{BATCH, Batch, Slot, Source, slot},
     elements, ffi,
     menus::{Step, judge, skip_nested_menu},
@@ -18,6 +18,13 @@ use std::{
     collections::{BTreeSet, HashSet},
     time::{Duration, Instant},
 };
+
+/// The named errors the raw absent codes stand for.
+const ABSENT: [AXError; 3] = [
+    AXError::NoValue,
+    AXError::AttributeUnsupported,
+    AXError::NotImplemented,
+];
 
 /// What a sheet holds is judged against the sheet, not the window it
 /// hangs from; anything else keeps its window.

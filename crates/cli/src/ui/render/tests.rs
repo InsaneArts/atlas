@@ -1324,7 +1324,7 @@ fn a_blocked_cleanup_step_says_why_and_what_it_kept() {
 
 #[test]
 fn a_doctor_warns_about_panels_and_webkit_once_in_each_format() {
-    let web = capability::WEB_CONTENT;
+    let web = atlas_client::test_support::WEB_CONTENT;
     for (state, native) in [
         (
             "unknown",
@@ -1334,7 +1334,7 @@ fn a_doctor_warns_about_panels_and_webkit_once_in_each_format() {
             "stale",
             "Native Save/Open's check is stale; use atlas run or atlas open.",
         ),
-        ("failed", capability::NATIVE_DIALOGS_FAILED),
+        ("failed", atlas_client::test_support::NATIVE_DIALOGS_FAILED),
         (
             "passed",
             "Native Save/Open passed a dated check, not a connection check.",

@@ -216,7 +216,7 @@ fn assessment(
 }
 
 /// Static guidance, not a test of the page or remote connection.
-pub const WEB_CONTENT: &str = "Safari/WebKit can stay blank without authenticated Screen Sharing. \
+pub(crate) const WEB_CONTENT: &str = "Safari/WebKit can stay blank without authenticated Screen Sharing. \
                            Use Chrome/Firefox for web pages; do not retry a blank page.";
 
 fn read_record(uid: u32) -> Option<Record> {
@@ -267,7 +267,7 @@ fn with_capabilities(mut report: Value, state: NativeState, native: Value) -> Va
     report
 }
 
-pub const NATIVE_DIALOGS_FAILED: &str =
+pub(crate) const NATIVE_DIALOGS_FAILED: &str =
     "Native Save/Open failed its last check; cancel inert panels and use atlas run or atlas open.";
 
 fn compact_warning(state: NativeState) -> String {

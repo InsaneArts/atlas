@@ -114,16 +114,20 @@ impl Jobs {
     /// Returns boot-identity, job-storage or adoption failures. Launcher and UID are supplied
     /// by the daemon owner; this constructor does not independently validate those arguments.
     pub fn open(daemon: &Path, launcher: PathBuf, uid: u32) -> Result<Self> {
-        Self::open_with(daemon, launcher, uid, LOG_LIMIT)
+        Self::open_limited(daemon, launcher, uid, LOG_LIMIT)
     }
 
     /// [`Jobs::open`], emptying a log past `log_limit` bytes.
     ///
     /// # Errors
     ///
-    /// Returns boot-identity, job-storage or adoption failures. The supplied launcher, UID
-    /// and log limit are policy inputs, not values validated by this constructor.
+    /// Returns boot-identity, job-storage or adoption failures.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn open_with(daemon: &Path, launcher: PathBuf, uid: u32, log_limit: u64) -> Result<Self> {
+        Self::open_limited(daemon, launcher, uid, log_limit)
+    }
+
+    fn open_limited(daemon: &Path, launcher: PathBuf, uid: u32, log_limit: u64) -> Result<Self> {
         Self::open_in(
             daemon,
             launcher,
@@ -135,7 +139,7 @@ impl Jobs {
         )
     }
 
-    /// [`Jobs::open_with`], reading processes and signalling through
+    /// [`Jobs::open_limited`], reading processes and signalling through
     /// `kernel`, in the boot `boot`.
     fn open_in(
         daemon: &Path,
@@ -172,6 +176,7 @@ impl Jobs {
     /// # Errors
     ///
     /// Returns a supervision-state error if the job owner cannot be accessed safely.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn folder(&self) -> Result<PathBuf> {
         Ok(self.state()?.store.directory().to_owned())
     }
@@ -182,6 +187,7 @@ impl Jobs {
     ///
     /// Returns a supervision-state error rather than reporting zero jobs when supervision is
     /// unavailable.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn running(&self) -> Result<usize> {
         Ok(self.state()?.running)
     }

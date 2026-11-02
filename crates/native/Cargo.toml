@@ -31,7 +31,7 @@ tokio = { workspace = true, features = ["test-util"] }
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = ["std", "NSImage", "NSRunningApplication", "NSWorkspace", "libc"] }
 objc2-application-services = { workspace = true, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue", "libc"] }
-objc2-core-foundation = { workspace = true, features = ["std", "CFArray", "CFCGTypes", "CFData", "CFDictionary", "CFNotificationCenter", "CFNumber", "CFString"] }
+objc2-core-foundation = { workspace = true, features = ["std", "CFArray", "CFCGTypes", "CFData", "CFDictionary", "CFError", "CFNotificationCenter", "CFNumber", "CFString", "CFURL"] }
 objc2-core-graphics = { workspace = true, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
 objc2-foundation = { workspace = true, features = ["std", "NSEnumerator", "NSString"] }
 objc2-image-io = { workspace = true, features = ["std", "CGImageDestination", "CGImageSource", "objc2-core-graphics"] }

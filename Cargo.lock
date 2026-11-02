@@ -92,7 +92,6 @@ dependencies = [
  "fs2",
  "libc",
  "nix",
- "objc2-core-foundation",
  "rand",
  "serde",
  "serde_json",

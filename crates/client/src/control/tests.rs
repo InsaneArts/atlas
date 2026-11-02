@@ -893,7 +893,7 @@ fn a_stop_noted_before_or_during_a_wait_ends_it_at_once() {
     assert_eq!(told(&events), WaitEvent::Ended);
     let refused = waiting.join().unwrap().unwrap_err();
     assert_eq!(refused.code, "stopped");
-    assert_eq!(refused.error, atlas_core::error::STOPPED);
+    assert_eq!(refused.error, Error::stopped().error);
 
     // What a Stop does not refuse, such as recovery, keeps waiting for the lock.
     let (recovery, events) = watched(&controller, Duration::from_secs(60));

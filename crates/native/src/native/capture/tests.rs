@@ -84,3 +84,12 @@ fn a_png_becomes_a_smaller_jpeg_of_the_same_aspect() {
         "capture"
     );
 }
+
+#[test]
+fn an_icon_is_drawn_at_the_size_asked() {
+    let icon = icon_png(&sample_png(256, 256), 64).unwrap();
+    assert_eq!(
+        atlas_core::screen::png::png_dimensions(&icon).unwrap(),
+        (64, 64)
+    );
+}

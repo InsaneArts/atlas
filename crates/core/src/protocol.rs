@@ -152,37 +152,69 @@ pub struct ReadRequest {
     pub pin: Option<SessionPin>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Request {
-    Hello,
-    HostSession(Vec<crate::host::verification::HostClaim>),
-    Screenshot {
+/// Each request's shape, wire word and decoder are one row, so a declared
+/// request cannot go undecoded.
+macro_rules! requests {
+    ($request:ident => $($(#[$attr:meta])* $word:literal $variant:ident $(($($tuple:ty),*))? $({$($field:tt)*})? = $decode:expr),+ $(,)?) => {
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub enum Request { $($(#[$attr])* $variant $(($($tuple),*))? $({$($field)*})?),+ }
+
+        fn decode(op: &str, $request: &Value) -> Result<Request, Value> {
+            match op {
+                $($word => $decode,)+
+                other => Err(bad(format!("unknown op '{other}'"))),
+            }
+        }
+    };
+}
+
+requests! { request =>
+    "hello" Hello = Ok(Request::Hello),
+    "host-session" HostSession(Vec<crate::host::verification::HostClaim>) =
+        crate::host::verification::claims(&request["claims"])
+            .map(Request::HostSession)
+            .ok_or_else(|| bad("invalid host session claims")),
+    "apps" Apps { pin: Option<SessionPin> } = Ok(Request::Apps { pin: pin(request)? }),
+    "windows" Windows { dock: bool, pin: Option<SessionPin> } = Ok(Request::Windows {
+        dock: boolean(request, "dock")?,
+        pin: pin(request)?,
+    }),
+    "restart" Restart = Ok(Request::Restart),
+    /// Log this helper out; `force` ends its session without asking its apps.
+    "logout" Logout { force: bool } = Ok(Request::Logout {
+        force: boolean(request, "force")?,
+    }),
+    "screenshot" Screenshot {
         max_dimension: Option<u32>,
         /// At most one pixel per display point of the area captured, too.
         per_point: bool,
         crop: Option<Crop>,
-    },
-    Apps {
-        pin: Option<SessionPin>,
-    },
-    Windows {
-        dock: bool,
-        pin: Option<SessionPin>,
-    },
-    Run {
+    } = Ok(Request::Screenshot {
+        max_dimension: optional(&request["maxDimension"], |value| {
+            whole(value, 1..=MAX_DIMENSION, "\"maxDimension\" must be 1–8192")
+        })?
+        .map(|dimension| dimension as u32),
+        per_point: boolean(request, "perPoint")?,
+        crop: crop(request)?,
+    }),
+    "run" Run {
         argv: Vec<String>,
         timeout: Duration,
         pin: Option<SessionPin>,
-    },
-    Restart,
-    /// Log this helper out; `force` ends its session without asking its apps.
-    Logout {
-        force: bool,
-    },
+    } = Ok(Request::Run {
+        argv: argv(request, "run")?,
+        timeout: millis(
+            request,
+            "timeoutMs",
+            Duration::from_millis(1)..=RUN_TIMEOUT_MAX,
+            Some(RUN_TIMEOUT),
+        )?,
+        pin: pin(request)?,
+    }),
     /// Background jobs: start, stop, stop every one, show, read a log.
-    Job(JobRequest),
+    "job" Job(JobRequest) = job(request).map(Request::Job),
     /// Part of a file in the helper, or its digest.
-    Read(ReadRequest),
+    "read" Read(ReadRequest) = read(request).map(Request::Read),
 }
 
 /// Admission and lost-reply handling are chosen together for every request.
@@ -273,7 +305,7 @@ impl Policy {
     }
 
     /// A pin is checked against a fresh session observation at each admission point.
-    pub fn pinned_elsewhere(self, session: fn() -> Result<Value, Error>) -> Option<Value> {
+    fn pinned_elsewhere(self, session: fn() -> Result<Value, Error>) -> Option<Value> {
         let pin = self.pin?;
         let here = session()
             .and_then(|proof| crate::session::InputEpoch::from_proof(&proof, std::process::id()))
@@ -332,44 +364,7 @@ pub fn parse(line: &[u8]) -> Result<Request, Value> {
     let op = request["op"]
         .as_str()
         .ok_or_else(|| bad("request is missing an \"op\" string"))?;
-    match op {
-        "hello" => Ok(Request::Hello),
-        "host-session" => crate::host::verification::claims(&request["claims"])
-            .map(Request::HostSession)
-            .ok_or_else(|| bad("invalid host session claims")),
-        "apps" => Ok(Request::Apps {
-            pin: pin(&request)?,
-        }),
-        "windows" => Ok(Request::Windows {
-            dock: boolean(&request, "dock")?,
-            pin: pin(&request)?,
-        }),
-        "restart" => Ok(Request::Restart),
-        "logout" => Ok(Request::Logout {
-            force: boolean(&request, "force")?,
-        }),
-        "screenshot" => Ok(Request::Screenshot {
-            max_dimension: optional(&request["maxDimension"], |value| {
-                whole(value, 1..=MAX_DIMENSION, "\"maxDimension\" must be 1–8192")
-            })?
-            .map(|dimension| dimension as u32),
-            per_point: boolean(&request, "perPoint")?,
-            crop: crop(&request)?,
-        }),
-        "run" => Ok(Request::Run {
-            argv: argv(&request, "run")?,
-            timeout: millis(
-                &request,
-                "timeoutMs",
-                Duration::from_millis(1)..=RUN_TIMEOUT_MAX,
-                Some(RUN_TIMEOUT),
-            )?,
-            pin: pin(&request)?,
-        }),
-        "job" => job(&request).map(Request::Job),
-        "read" => read(&request).map(Request::Read),
-        other => Err(bad(format!("unknown op '{other}'"))),
-    }
+    decode(op, &request)
 }
 
 /// What `decode` makes of `value`, unless it is absent or null.

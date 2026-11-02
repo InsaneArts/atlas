@@ -8,9 +8,9 @@ mod quality;
 use atlas_cli::menubar::LOGIN_JOB;
 use atlas_core::{
     app_bundle::{APP_EXECUTABLE, IDENTIFIER},
+    digest::read_sha256,
     files::exchange,
 };
-use sha2::{Digest, Sha256};
 use std::{
     env, fs,
     os::unix::fs::PermissionsExt,
@@ -285,7 +285,7 @@ fn universal(parts: &[PathBuf], output: &Path) -> Result<()> {
 fn check_universal(output: &Path) -> Result<()> {
     let archs = self::output("/usr/bin/lipo", &["-archs", text(output)?])?;
     let found: Vec<&str> = archs.split_whitespace().collect();
-    if !(found.contains(&"arm64") && found.contains(&"x86_64")) {
+    if !TARGETS.iter().all(|(_, arch)| found.contains(arch)) {
         return Err(format!("{} is not universal: {archs}", output.display()));
     }
 
@@ -427,10 +427,7 @@ fn archive(app: &Path, zip: &Path) -> Result<()> {
 }
 
 fn sha256(path: &Path) -> Result<String> {
-    let mut file = io(fs::File::open(path))?;
-    let mut hasher = Sha256::new();
-    io(std::io::copy(&mut file, &mut hasher))?;
-    Ok(format!("{:x}", hasher.finalize()))
+    io(read_sha256(&io(fs::File::open(path))?))
 }
 
 /// Build, sign and verify Atlas.app in `stage` (notarizing it through

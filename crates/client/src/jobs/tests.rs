@@ -1,5 +1,5 @@
 use super::*;
-use crate::{doing::Doing, task::Task};
+use crate::{client::Mutation, doing::Doing, task::Task};
 use std::{
     path::Path,
     sync::{Arc, Mutex},
@@ -380,20 +380,33 @@ async fn a_stopped_helper_refuses_job_starts_and_stops_but_lists_them() {
     let heard = stand_in(&client.config.socket_path, |_| {
         Some(json!({"ok": true, "op": "job", "action": "show", "jobs": [job_view(ID, "running")]}))
     });
-    for (mutation, request) in [
-        (
-            crate::client::Mutation::JobStart { uid: 0 },
-            json!({"op": "job", "action": "start", "argv": ["/bin/sleep", "9"]}),
-        ),
-        (
-            crate::client::Mutation::JobStop { id: ID },
-            json!({"op": "job", "action": "stop", "id": ID}),
-        ),
+    let id = JobId::parse(ID).unwrap();
+    let expected: Expected = serde_json::from_value(
+        json!({"boot": "B", "pid": 4312, "start": [1761650000, 123456], "pgid": 4312}),
+    )
+    .unwrap();
+    for mutation in [
+        Mutation::JobStart {
+            start: JobStart {
+                argv: vec!["/bin/sleep".to_owned(), "9".to_owned()],
+                lifetime: Duration::from_secs(1),
+                name: None,
+                task: None,
+                session: None,
+            },
+            uid: 0,
+            pin: SessionPin {
+                security_session_id: 1,
+                display_id: 1,
+            },
+        },
+        Mutation::JobStop {
+            id: &id,
+            expected: &expected,
+            grace: JOB_GRACE,
+        },
     ] {
-        let error = client
-            .mutate(mutation, request, None, None, None)
-            .await
-            .unwrap_err();
+        let error = client.mutate(mutation, None, None, None).await.unwrap_err();
         assert_eq!(error.code, "stopped");
         assert!(!error.uncertain);
     }

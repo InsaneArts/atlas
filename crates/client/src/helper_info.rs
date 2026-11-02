@@ -3,10 +3,12 @@
 //! took, and the pictures made from them. `atlas mcp`'s view and the menu
 //! bar's viewer service both read through here, so each shows the same
 //! things under the same rules.
+use crate::client::{AppList, AppRow};
 use atlas_core::{
     error::{Code, Error, Result},
     files::open_plain,
     name::name_type,
+    screen::windows::Window,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -132,76 +134,60 @@ fn picture((bytes, width, height): &(Vec<u8>, u32, u32)) -> Value {
 ///
 /// # Errors
 ///
-/// Returns an error when the list is too large or names an invalid process.
-pub fn open_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
+/// Returns an error when the list is too large or repeats a process.
+pub fn open_apps(apps: &AppList, windows: &[Window]) -> Result<Vec<Value>> {
+    let rows = apps.rows();
     // Reserve the added field names and null defaults per entry before
     // copying anything. Each source entry can contribute to the output once.
-    let count = apps.as_array().map_or(0, Vec::len) + windows.as_array().map_or(0, Vec::len);
     let too_large = || Error::new(Code::Apps, "The app list is too large to read");
-    let overhead = count
+    let overhead = (rows.len() + windows.len())
         .checked_mul(128)
         .filter(|bytes| *bytes <= FRAME_LIMIT)
         .ok_or_else(too_large)?;
     let mut budget = ListBudget(FRAME_LIMIT - overhead);
-    serde_json::to_writer(&mut budget, apps).map_err(|_| too_large())?;
+    let fields: Vec<_> = rows.iter().map(AppRow::fields).collect();
+    serde_json::to_writer(&mut budget, &fields).map_err(|_| too_large())?;
     serde_json::to_writer(&mut budget, windows).map_err(|_| too_large())?;
 
     let mut pids = HashSet::new();
-    for app in apps.as_array().into_iter().flatten() {
-        if !pids.insert(
-            app["pid"]
-                .as_u64()
-                .filter(|pid| *pid > 0)
-                .ok_or_else(|| Error::new(Code::Apps, "The app list has an invalid process ID"))?,
-        ) {
-            return Err(Error::new(Code::Apps, "The app list repeats a process ID"));
-        }
+    if !rows.iter().all(|app| pids.insert(app.pid())) {
+        return Err(Error::new(Code::Apps, "The app list repeats a process ID"));
     }
-    let windows = windows.as_array().map(Vec::as_slice).unwrap_or_default();
-    let mut grouped = HashMap::<u64, Vec<_>>::new();
+    let mut grouped = HashMap::<i64, Vec<_>>::new();
     for (at, window) in windows.iter().enumerate() {
-        if let Some(pid) = window["pid"].as_u64() {
-            grouped.entry(pid).or_default().push((at, window));
-        }
+        grouped.entry(window.pid).or_default().push((at, window));
     }
-    let mut listed = apps
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|app| app["policy"] == "regular")
+    let mut listed = rows
+        .iter()
+        .filter(|app| app.policy() == Some("regular"))
         .map(|app| {
-            let own = app["pid"]
-                .as_u64()
+            let own = i64::try_from(app.pid())
+                .ok()
                 .and_then(|pid| grouped.remove(&pid))
                 .unwrap_or_default();
             let front = own.first().map_or(usize::MAX, |(at, _)| *at);
-            let bundle = app["executable"].as_str().and_then(bundle_of);
             let listed = json!({
-                "name": app["name"],
-                "pid": app["pid"],
-                "active": app["active"] == true,
-                "hidden": app["hidden"] == true,
-                "bundle": bundle,
-                "bundleId": app["bundleId"].as_str().and_then(crate::doing::bundle_id),
-                "launchedAt": app["launchedAt"].as_u64(),
+                "name": app.name(),
+                "pid": app.pid(),
+                "active": app.active(),
+                "hidden": app.hidden(),
+                "bundle": app.executable().and_then(bundle_of),
+                "bundleId": app.bundle_id().and_then(crate::doing::bundle_id),
+                "launchedAt": app.launched_at(),
                 "windows": own
                     .iter()
                     .map(|(at, window)| json!({
-                        "id": window["number"],
-                        "title": window["title"],
-                        "x": window["bounds"]["x"],
-                        "y": window["bounds"]["y"],
-                        "width": window["bounds"]["width"],
-                        "height": window["bounds"]["height"],
+                        "id": window.number,
+                        "title": window.title,
+                        "x": window.bounds.x,
+                        "y": window.bounds.y,
+                        "width": window.bounds.width,
+                        "height": window.bounds.height,
                         "order": at,
                     }))
                     .collect::<Vec<_>>(),
             });
-            (
-                front,
-                app["name"].as_str().unwrap_or_default().to_lowercase(),
-                listed,
-            )
+            (front, app.name().unwrap_or_default().to_lowercase(), listed)
         })
         .collect::<Vec<_>>();
 

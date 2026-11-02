@@ -56,11 +56,11 @@ const TEMPORARY_FOLDERS: &str = "/private/var/folders";
 
 /// Where the helper's files may be read from: its home and its own
 /// temporary folder, as they really are.
-pub struct Places {
-    pub home: PathBuf,
+pub(crate) struct Places {
+    pub(crate) home: PathBuf,
     /// The account's own temporary folder; none when it is not known, and
     /// then no account's is read.
-    pub temporary: Option<PathBuf>,
+    pub(crate) temporary: Option<PathBuf>,
 }
 
 impl Places {
@@ -123,7 +123,7 @@ fn own_temporary() -> Option<PathBuf> {
 /// request was taken: it is asked before the file is opened, before each
 /// part and before the digest, and its refusal is the reply. `now` decides
 /// whether a file is still.
-pub fn read_at(
+pub(crate) fn read_at(
     request: &ReadRequest,
     places: &Places,
     uid: u32,

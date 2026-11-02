@@ -2,7 +2,7 @@
 //! of an element, bounded by the traversal's deadline, and the record of
 //! what failed, what was cut and why the traversal is incomplete.
 use super::{
-    ABSENT, INCOMPLETE,
+    INCOMPLETE, absent,
     batch::{BATCH, Batch, Slot, Source},
     ffi,
     text::{bounded_string, getter_failed, prefix_range, prefix_text},
@@ -71,7 +71,7 @@ impl Scan {
 
     /// Whether the last read failed, rather than finding nothing there.
     pub(super) fn read_failed(&self) -> bool {
-        self.last_error.is_some_and(|code| !ABSENT.contains(&code))
+        self.last_error.is_some_and(|code| !absent(code))
     }
 
     pub(super) fn failed(&mut self, status: AXError, attribute: &str) {
@@ -81,7 +81,7 @@ impl Scan {
 
         if INCOMPLETE.contains(&status) {
             self.stop(Stop::Unread);
-        } else if !ABSENT.contains(&status)
+        } else if !absent(status)
             && !getter_failed(status, attribute)
             && SELECTORS.contains(&attribute)
         {
@@ -379,7 +379,7 @@ impl Scan {
             Ok(count) => count,
             Err(status) => {
                 self.failed(status, attribute);
-                if !ABSENT.contains(&status) {
+                if !absent(status) {
                     self.stop(Stop::Unread);
                 }
 

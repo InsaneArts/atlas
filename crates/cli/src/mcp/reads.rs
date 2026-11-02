@@ -171,10 +171,10 @@ impl Server {
     /// The apps open in the helper with their windows, front to back, and
     /// their icons.
     pub(super) async fn helper_apps(&self) -> Result<Value> {
-        let apps = self.client.apps().await?;
+        let apps = self.client.running_apps().await?;
         let filter = atlas_client::agent::WindowFilter::default();
         let windows = atlas_client::agent::list(&self.client, &filter).await?;
-        let mut listed = open_apps(&apps["apps"], &windows["windows"])?;
+        let mut listed = open_apps(&apps, &windows)?;
 
         listed.iter_mut().for_each(only_title_and_size);
         self.icons.add(&mut listed, ICONS).await;

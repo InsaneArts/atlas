@@ -6,6 +6,7 @@
 //! capped before anything is copied, and a long text is read only from its
 //! start. An element's attributes are asked for in one request. A scan that
 //! hit a limit or a communication failure reports itself incomplete.
+use atlas_core::screen::elements::ABSENT;
 use objc2_application_services::AXError;
 
 mod batch;
@@ -40,13 +41,10 @@ const INCOMPLETE: [AXError; 3] = [
     AXError::APIDisabled,
 ];
 
-/// AX errors meaning the element simply lacks the attribute: no value,
-/// unsupported, not implemented.
-const ABSENT: [AXError; 3] = [
-    AXError::NoValue,
-    AXError::AttributeUnsupported,
-    AXError::NotImplemented,
-];
+/// Whether `error` means the element simply lacks the attribute.
+fn absent(error: AXError) -> bool {
+    ABSENT.contains(&error.0)
+}
 
 #[cfg(test)]
 mod tests;

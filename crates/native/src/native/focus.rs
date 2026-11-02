@@ -23,7 +23,13 @@ use std::time::{Duration, Instant};
 pub(super) const CHECK_BUDGET: Duration = Duration::from_millis(500);
 
 /// The total focus allowance per input batch, including preparation and settling.
-pub const PREPARE_BUDGET: Duration = Duration::from_millis(1250);
+pub(crate) const PREPARE_BUDGET: Duration = Duration::from_millis(1250);
+
+/// [`PREPARE_BUDGET`], for the test that holds it to the client's reply timeout.
+#[cfg(any(test, feature = "test-support"))]
+pub const fn prepare_budget() -> Duration {
+    PREPARE_BUDGET
+}
 
 /// The longest one Accessibility question may take.
 const FOCUS_TIMEOUT: Duration = Duration::from_millis(250);

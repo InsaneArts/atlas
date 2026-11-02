@@ -57,6 +57,7 @@ impl Store {
         })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn directory(&self) -> &Path {
         self.folder.directory()
     }

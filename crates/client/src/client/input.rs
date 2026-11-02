@@ -55,18 +55,15 @@ fn checks_all(native: &NativeObservation, expect: &Expect) -> bool {
 /// act on, who holds control when it says, and whether the failure may
 /// already have changed state.
 fn native_refusal(result: &Value) -> Error {
-    let code = match result["code"].as_str() {
-        Some("busy") => Code::Busy,
-        Some("lease-lost") => Code::LeaseLost,
-        Some("cancelled") => Code::Cancelled,
-        Some("stopped") => Code::Stopped,
-        Some("identity") => Code::Identity,
-        Some("session-changed") => Code::SessionChanged,
-        Some("permission") => Code::Permission,
-        Some("focus-changed") => Code::FocusChanged,
-        _ => Code::Native,
-    };
-    let error = Error::refused(code, result, "Native control request failed");
+    let error = Error::refused(
+        result["code"]
+            .as_str()
+            .and_then(Code::parse)
+            .filter(|code| code.native())
+            .unwrap_or(Code::Native),
+        result,
+        "Native control request failed",
+    );
     match result["holder"].as_str().and_then(Holder::parse) {
         Some(holder) => error.held_by(holder),
         None => error,
@@ -346,22 +343,14 @@ impl Client {
             .then(|| self.controller.quarantine())
             .transpose()?;
         let mutation = Mutation::Input {
-            count: actions.actions().len() as u64,
+            actions,
+            owner,
+            epoch: session.epoch.input_epoch(),
+            app: self.doing.is_some(),
             expect: expect.as_ref(),
         };
-        let mut request = json!({
-            "op": "input",
-            "actions": actions.into_wire(),
-            "owner": owner,
-            "epoch": session.epoch.input_epoch(),
-            // An agent's command names the app it acted in.
-            "app": self.doing.is_some(),
-        });
-        if let Some(expect) = &expect {
-            request["expect"] = json!(expect);
-        }
         let result = self
-            .mutate(mutation, request, lease, expected.map(|(_, at)| at), None)
+            .mutate(mutation, lease, expected.map(|(_, at)| at), None)
             .await;
 
         match &generation {

@@ -105,10 +105,7 @@ pub fn app_executable() -> Result<PathBuf> {
     app_executable_using(reachable_by_others)
 }
 
-/// # Errors
-///
-/// Returns an error when Atlas.app is not where the helper account can run it.
-pub fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
+pub(crate) fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
     let executable = PathBuf::from(EXECUTABLE);
     if !reachable(&executable) {
         return Err(Error::new(
@@ -130,11 +127,7 @@ pub fn signed_executable() -> Result<PathBuf> {
     signed_executable_using(app_executable()?, developer_id)
 }
 
-/// # Errors
-///
-/// Returns an error when Atlas.app is not installed there or its developer did
-/// not sign it.
-pub fn signed_executable_using(
+pub(crate) fn signed_executable_using(
     executable: PathBuf,
     developer_id: impl FnOnce(&Path) -> bool,
 ) -> Result<PathBuf> {

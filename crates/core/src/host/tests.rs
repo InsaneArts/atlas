@@ -384,3 +384,21 @@ fn a_failed_host_folder_read_never_uses_a_childs_folder() {
     assert_eq!(session.folder(), None);
     assert!(!session.folder_from_host);
 }
+
+#[test]
+fn a_session_works_in_its_projects_folder_by_name_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let project = directory.path().join("left");
+    let inner = project.join("src/deep");
+    fs::create_dir_all(&inner).unwrap();
+    fs::create_dir(project.join(".git")).unwrap();
+
+    assert_eq!(project_folder(&inner).as_deref(), Some("left"));
+    let loose = directory.path().join("loose");
+    fs::create_dir(&loose).unwrap();
+    assert_eq!(project_folder(&loose).as_deref(), Some("loose"));
+    assert_eq!(project_folder(Path::new("/")), None);
+    if let Some(home) = std::env::var_os("HOME") {
+        assert_eq!(project_folder(Path::new(&home)), None);
+    }
+}

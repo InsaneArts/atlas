@@ -116,12 +116,12 @@ fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_ch
     let installed = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
     // Stand in only for disk reachability and codesign. Resolve paths,
     // write the real plist and apply Allow's actual identity checks.
-    let program = atlas_core::app_bundle::app_executable_using(|path| {
+    let program = atlas_core::test_support::app_executable_using(|path| {
         assert_eq!(path, installed);
         true
     })
     .unwrap();
-    let program = atlas_core::app_bundle::signed_executable_using(program, |path| {
+    let program = atlas_core::test_support::signed_executable_using(program, |path| {
         assert_eq!(path, installed);
         true
     })
@@ -133,16 +133,16 @@ fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_ch
     assert_eq!(opened, installed);
 
     let (allowed, approvals) = atlas_native::approval::without_authorization(|| {
-        atlas_core::app_bundle::signed_executable_using(opened, |path| path == installed)
+        atlas_core::test_support::signed_executable_using(opened, |path| path == installed)
     });
     assert_eq!(allowed.unwrap(), installed);
     assert_eq!(approvals, 0);
     assert!(
-        atlas_core::app_bundle::signed_executable_using(program, |_| false).is_err(),
+        atlas_core::test_support::signed_executable_using(program, |_| false).is_err(),
         "the installed app must still pass signature verification"
     );
     assert!(
-        atlas_core::app_bundle::signed_executable_using(running, |_| true).is_err(),
+        atlas_core::test_support::signed_executable_using(running, |_| true).is_err(),
         "a staged copy is never accepted as the installed identity"
     );
 }

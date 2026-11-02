@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 /// Whether a process exists, whoever owns it (EPERM still means it exists).
-pub fn process_exists(pid: u32) -> bool {
+pub(crate) fn process_exists(pid: u32) -> bool {
     let Ok(pid) = i32::try_from(pid) else {
         return false;
     };

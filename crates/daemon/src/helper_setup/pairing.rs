@@ -105,7 +105,7 @@ pub fn write_request(path: &Path, request: &Pairing) -> Result<()> {
 
 /// Whether this account's onboarding window is open: the process it names
 /// still lives and is Atlas's window (a reused process ID is not).
-pub fn window_open(home: &Path) -> bool {
+pub(crate) fn window_open(home: &Path) -> bool {
     let Some(pid) = read_text(&home.join(ROOT).join(WINDOW_MARKER), 64)
         .and_then(|text| text.trim().parse::<i32>().ok())
         .filter(|pid| *pid > 1)

@@ -19,11 +19,11 @@ use atlas_core::{
     actions::{self, Expect},
     digest::file_sha256,
     error::Holder,
-    protocol::{Crop, Region},
+    protocol::{Crop, Expected, JobId, JobStart, Region, SessionPin},
     screen::windows::HitWindow,
     session::{
-        Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, HOLD, NativeObservation,
-        SHUTDOWN,
+        Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, HOLD, InputEpoch,
+        NativeObservation, SHUTDOWN,
     },
 };
 use fs2::FileExt;
@@ -593,6 +593,15 @@ async fn a_focus_refusal_keeps_its_code_on_every_native_path() {
 fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
     let app = Expect::new(812).unwrap();
     let checked = Some(&app);
+    let actions = json!([{"type": "key", "key": "a"}, {"type": "key", "key": "b"}]);
+    let epoch = InputEpoch {
+        uid: 502,
+        security_session_id: 42,
+        display_id: 7,
+        width: 100.0,
+        height: 100.0,
+        process_id: 456,
+    };
 
     for (expect, reply, confirmed) in [
         (None, json!({"ok": true, "performed": 2}), true),
@@ -610,7 +619,14 @@ fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
         ),
         (checked, json!({"ok": false, "code": "focus-changed"}), true),
     ] {
-        let outcome = Mutation::Input { count: 2, expect }.validate(&reply);
+        let outcome = Mutation::Input {
+            actions: actions::Batch::decode(&actions).unwrap(),
+            owner: "owner",
+            epoch: epoch.clone(),
+            app: false,
+            expect,
+        }
+        .validate(&reply);
         assert_eq!(outcome.is_ok(), confirmed, "{expect:?} {reply}");
         if let Err(error) = outcome {
             assert_eq!(error.code, "protocol");
@@ -1057,9 +1073,8 @@ async fn a_stop_while_a_request_waits_to_be_sent_sends_nothing_and_leaves_nothin
     )));
     let token = lease.lock().await.acquire(&acting.controller).unwrap();
     let authorizing = lease.lock().await;
-    let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
-    let mut caller =
-        Box::pin(acting.mutate(Mutation::Run, run, Some((&lease, &token)), None, None));
+    let run = || run_of(&["true"], 1000);
+    let mut caller = Box::pin(acting.mutate(run(), Some((&lease, &token)), None, None));
     assert!(
         tokio::time::timeout(SOON, &mut caller).await.is_err(),
         "it waits for the lease"
@@ -1095,8 +1110,8 @@ async fn a_run_that_ends_within_the_grace_is_settled() {
     drop(input);
     let (acting, helper, interrupt) = running(dir.path(), client);
     let _ownership = acting.controller.acquire(false).unwrap();
-    let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
-    let mut caller = Box::pin(acting.mutate(Mutation::Run, run, None, None, None));
+    let run = || run_of(&["true"], 1000);
+    let mut caller = Box::pin(acting.mutate(run(), None, None, None));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     tokio::time::pause();
     interrupt.ask(Signal::SIGTERM);
@@ -1122,8 +1137,8 @@ async fn a_run_still_going_after_the_grace_is_cut_and_stays_pending() {
     drop(input);
     let (acting, helper, interrupt) = running(dir.path(), client);
     let ownership = acting.controller.acquire(false).unwrap();
-    let run = json!({"op": "run", "argv": ["sleep", "30"], "timeoutMs": 60_000});
-    let mut caller = Box::pin(acting.mutate(Mutation::Run, run, None, None, None));
+    let run = || run_of(&["sleep", "30"], 60_000);
+    let mut caller = Box::pin(acting.mutate(run(), None, None, None));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     interrupt.ask(Signal::SIGTERM);
 
@@ -1157,15 +1172,7 @@ async fn a_restart_stopped_before_its_request_settles_only_its_own_claim() {
     let claim = client.controller.quarantine().unwrap();
     interrupt.ask(Signal::SIGTERM);
 
-    let outcome = client
-        .mutate(
-            Mutation::Restart,
-            json!({"op": "restart"}),
-            None,
-            None,
-            None,
-        )
-        .await;
+    let outcome = client.mutate(Mutation::Restart, None, None, None).await;
     let error = client.settle_restart(&claim, outcome).unwrap_err();
     assert_eq!(error.code, "interrupted");
     assert!(!error.uncertain, "the restart was never sent");
@@ -1448,33 +1455,55 @@ async fn a_successful_but_uncertain_resume_keeps_the_local_stop() {
 
 #[tokio::test]
 async fn malformed_uncertainty_after_a_sent_mutation_keeps_its_original_claim() {
-    for (mutation, request) in [
-        (
-            Mutation::Run,
-            json!({"op": "run", "argv": ["true"], "timeoutMs": 1000}),
-        ),
-        (
-            Mutation::JobStart { uid: 0 },
-            json!({"op": "job", "action": "start", "argv": ["true"]}),
-        ),
-        (
-            Mutation::JobStop { id: "job" },
-            json!({"op": "job", "action": "stop", "id": "job"}),
-        ),
-    ] {
-        for flag in atlas_core::test_support::invalid_uncertainty_flags() {
+    let id = JobId::new();
+    let expected = Expected {
+        boot: "boot".to_owned(),
+        pid: 2,
+        start: [1, 0],
+        pgid: 2,
+    };
+    let pin = SessionPin {
+        security_session_id: 1,
+        display_id: 1,
+    };
+    for flag in atlas_core::test_support::invalid_uncertainty_flags() {
+        for (mutation, op) in [
+            (run_of(&["true"], 1000), "run"),
+            (
+                Mutation::JobStart {
+                    start: JobStart {
+                        argv: vec!["true".to_owned()],
+                        lifetime: Duration::from_secs(1),
+                        name: None,
+                        task: None,
+                        session: None,
+                    },
+                    uid: 0,
+                    pin,
+                },
+                "job",
+            ),
+            (
+                Mutation::JobStop {
+                    id: &id,
+                    expected: &expected,
+                    grace: Duration::from_secs(1),
+                },
+                "job",
+            ),
+        ] {
+            let is_run = matches!(mutation, Mutation::Run { .. });
             let (dir, client, input, _session) = native_client();
             drop(input);
             let (acting, helper, _interrupt) = running(dir.path(), client);
             let ownership = acting.controller.acquire_beside_commands().unwrap();
-            let (held, release) = if matches!(mutation, Mutation::Run) {
+            let (held, release) = if is_run {
                 (None, Some(ownership))
             } else {
                 (Some(ownership), None)
             };
-            let mut caller =
-                Box::pin(acting.mutate(mutation, request.clone(), None, None, release));
-            let mut peer = dispatched(&mut caller, &helper, request["op"].as_str().unwrap()).await;
+            let mut caller = Box::pin(acting.mutate(mutation, None, None, release));
+            let mut peer = dispatched(&mut caller, &helper, op).await;
             let original = acting.controller.pending().unwrap();
             assert_eq!(original.len(), 1);
             answer(
@@ -1487,7 +1516,7 @@ async fn malformed_uncertainty_after_a_sent_mutation_keeps_its_original_claim() 
             let error = result.unwrap_err();
             assert_eq!(error.code, Code::Protocol);
             assert!(error.uncertain);
-            if matches!(mutation, Mutation::Run) {
+            if is_run {
                 let log = fs::read_to_string(acting.output_dir().unwrap().join(activity_log::FILE))
                     .unwrap();
                 let ended: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
@@ -2265,13 +2294,7 @@ async fn a_stop_holds_on_the_persons_side_while_the_helpers_input_is_down() {
     );
     let acting = agent.clone().doing(Doing::new("run"));
     let refused = acting
-        .mutate(
-            Mutation::Run,
-            json!({"op": "run", "argv": ["true"]}),
-            None,
-            None,
-            None,
-        )
+        .mutate(run_of(&["true"], 1000), None, None, None)
         .await
         .unwrap_err();
     assert_eq!(refused.code, "stopped");
@@ -2312,9 +2335,9 @@ async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() 
     let mut person = client.clone();
     person.actor = Actor::Viewer;
     let acting = client.doing(Doing::new("run"));
-    let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
+    let run = || run_of(&["true"], 1000);
     let ownership = acting.controller.acquire(false).unwrap();
-    let mut caller = Box::pin(acting.mutate(Mutation::Run, run.clone(), None, None, None));
+    let mut caller = Box::pin(acting.mutate(run(), None, None, None));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     let pending = acting.controller.pending().unwrap();
     assert_eq!(pending.len(), 1);
@@ -2347,10 +2370,7 @@ async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() 
         "the helper sees the cancelled connection"
     );
 
-    let error = acting
-        .mutate(Mutation::Run, run, None, None, None)
-        .await
-        .unwrap_err();
+    let error = acting.mutate(run(), None, None, None).await.unwrap_err();
     assert_eq!(error.code, "stopped");
     assert!(!error.uncertain, "the next command never starts");
     assert!(
@@ -2373,8 +2393,17 @@ async fn waits<T: std::fmt::Debug>(caller: &mut (impl Future<Output = Result<T>>
 
 /// A command an agent started with `run`, which the stand-in leaves
 /// unanswered until the test answers it.
-fn command() -> Value {
-    json!({"op": "run", "argv": ["sleep", "30"], "timeoutMs": 60_000})
+fn command() -> Mutation<'static> {
+    run_of(&["sleep", "30"], 60_000)
+}
+
+/// A run of `argv` the helper stops after `millis` milliseconds.
+fn run_of(argv: &[&str], millis: u64) -> Mutation<'static> {
+    Mutation::Run {
+        argv: argv.iter().map(|&argument| argument.to_owned()).collect(),
+        timeout: Duration::from_millis(millis),
+        pin: None,
+    }
 }
 
 #[tokio::test]
@@ -2389,7 +2418,7 @@ async fn a_run_lets_go_of_control_once_its_request_is_sent() {
     let (acting, helper, _interrupt) = running(dir.path(), client);
     let other = another(&acting, dir.path());
     let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(Mutation::Run, command(), None, None, Some(ownership)));
+    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     waits(&mut caller).await;
 
@@ -2431,13 +2460,8 @@ async fn a_run_refused_before_it_is_sent_settles_under_control() {
     let token = lease.lock().await.acquire(&elsewhere).unwrap();
     let authorizing = lease.lock().await;
     let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(
-        Mutation::Run,
-        command(),
-        Some((&lease, &token)),
-        None,
-        Some(ownership),
-    ));
+    let mut caller =
+        Box::pin(acting.mutate(command(), Some((&lease, &token)), None, Some(ownership)));
     assert!(tokio::time::timeout(SOON, &mut caller).await.is_err());
     assert_eq!(
         other.controller.acquire_beside_commands().unwrap_err().code,
@@ -2475,7 +2499,7 @@ async fn a_stopped_run_stays_pending_beside_other_agents() {
     let mut person = acting.clone();
     person.actor = Actor::Viewer;
     let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(Mutation::Run, command(), None, None, Some(ownership)));
+    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     waits(&mut caller).await;
     let pending = other.controller.pending().unwrap();
@@ -2512,7 +2536,7 @@ async fn a_lost_run_reply_blocks_every_agent() {
     let (acting, helper, _interrupt) = running(dir.path(), client);
     let other = another(&acting, dir.path());
     let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(Mutation::Run, command(), None, None, Some(ownership)));
+    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
     let peer = dispatched(&mut caller, &helper, "run").await;
     waits(&mut caller).await;
 
@@ -2557,7 +2581,7 @@ async fn lost_before_its_row(lost: bool) {
             .enable_all()
             .build()
             .unwrap()
-            .block_on(acting.mutate(Mutation::Run, command(), None, None, Some(ownership)))
+            .block_on(acting.mutate(command(), None, None, Some(ownership)))
     });
     let (peer, _) = tokio::time::timeout(Duration::from_secs(2), helper.accept())
         .await
@@ -2616,7 +2640,7 @@ async fn a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone
     let (acting, helper, interrupt) = running(dir.path(), client);
     let other = another(&acting, dir.path());
     let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(Mutation::Run, command(), None, None, Some(ownership)));
+    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     waits(&mut caller).await;
     interrupt.ask(Signal::SIGTERM);
@@ -2654,13 +2678,11 @@ async fn two_runs_go_on_beside_each_other() {
     let other = another(&acting, dir.path());
 
     let first_control = acting.controller.acquire_beside_commands().unwrap();
-    let mut first =
-        Box::pin(acting.mutate(Mutation::Run, command(), None, None, Some(first_control)));
+    let mut first = Box::pin(acting.mutate(command(), None, None, Some(first_control)));
     let mut first_peer = dispatched(&mut first, &helper, "run").await;
     waits(&mut first).await;
     let second_control = second.controller.acquire_beside_commands().unwrap();
-    let mut beside =
-        Box::pin(second.mutate(Mutation::Run, command(), None, None, Some(second_control)));
+    let mut beside = Box::pin(second.mutate(command(), None, None, Some(second_control)));
     let mut second_peer = dispatched(&mut beside, &helper, "run").await;
     waits(&mut beside).await;
 
@@ -2713,7 +2735,7 @@ async fn other_commands_keep_control_for_their_whole_run() {
     let (acting, helper, _interrupt) = running(dir.path(), client);
     let other = another(&acting, dir.path());
     let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(Mutation::Run, command(), None, None, None));
+    let mut caller = Box::pin(acting.mutate(command(), None, None, None));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     waits(&mut caller).await;
 
@@ -2743,13 +2765,7 @@ async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fa
     person.actor = Actor::Viewer;
     let acting = client.doing(Doing::new("run"));
     let ownership = acting.controller.acquire(false).unwrap();
-    let mut caller = Box::pin(acting.mutate(
-        Mutation::Run,
-        json!({"op": "run", "argv": ["true"], "timeoutMs": 1000}),
-        None,
-        None,
-        None,
-    ));
+    let mut caller = Box::pin(acting.mutate(run_of(&["true"], 1000), None, None, None));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     let pending = acting.controller.pending().unwrap();
     assert_eq!(pending.len(), 1);
@@ -2909,20 +2925,14 @@ async fn a_stopped_agents_command_is_refused_before_it_starts_and_a_read_is_not(
     let dir = tempfile::tempdir().unwrap();
     let client = client_in(dir.path());
     std::fs::write(client.config.input_socket.with_extension("stopped"), b"").unwrap();
-    let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
+    let run = || run_of(&["true"], 1000);
 
     let acting = client.clone().doing(Doing::new("run"));
-    let refused = acting
-        .mutate(Mutation::Run, run.clone(), None, None, None)
-        .await
-        .unwrap_err();
+    let refused = acting.mutate(run(), None, None, None).await.unwrap_err();
     assert_eq!(refused.code, "stopped");
     assert!(!refused.uncertain, "nothing started");
 
-    let reading = client
-        .mutate(Mutation::Run, run, None, None, None)
-        .await
-        .unwrap_err();
+    let reading = client.mutate(run(), None, None, None).await.unwrap_err();
     assert_ne!(
         reading.code, "stopped",
         "a read goes on (and finds no helper here)"
@@ -3339,7 +3349,7 @@ fn a_command_terminated_by_a_signal_is_recorded_as_an_exit_failure() {
     let client = client_in(dir.path()).doing(Doing::new("run"));
     let request = json!({"op": "run", "argv": ["tool"]});
     let reply = json!({"ok": true, "exitCode": null, "timedOut": false, "signal": "SIGTERM"});
-    Mutation::Run.validate(&reply).unwrap();
+    run_of(&["tool"], 1000).validate(&reply).unwrap();
     client.record_start_blocking(&request).unwrap();
     client
         .record_blocking(&request, &reply, Duration::ZERO)
@@ -4110,7 +4120,7 @@ async fn public_apps_discard_malformed_starts_without_rejecting_valid_rows() {
 fn preparation_fits_before_the_client_reply_timeout() {
     let dir = tempfile::tempdir().unwrap();
     let client = crate::test_support::client_in(dir.path());
-    let budget = atlas_native::native::focus::PREPARE_BUDGET;
+    let budget = atlas_native::native::focus::prepare_budget();
     assert_eq!(budget, std::time::Duration::from_millis(1250));
     assert!(budget < client.input_transport().timeout);
     assert_eq!(

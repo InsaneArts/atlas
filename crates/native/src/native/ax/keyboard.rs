@@ -6,7 +6,7 @@
 //! is bounded by what is left of one deadline. Only copies are made;
 //! nothing is set but each element's own messaging timeout.
 use super::{
-    ABSENT, ffi,
+    absent, ffi,
     text::{bounded_string, getter_failed},
 };
 use atlas_core::{
@@ -575,7 +575,7 @@ impl Ask for Live {
         match ffi::copy(element, &name) {
             Ok(Some(value)) => answer(value),
             Ok(None) => Answer::Absent,
-            Err(status) if ABSENT.contains(&status) => Answer::Absent,
+            Err(status) if absent(status) => Answer::Absent,
             Err(status) => Answer::Failed(status),
         }
     }

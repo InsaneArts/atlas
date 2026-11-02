@@ -106,4 +106,10 @@ pub mod processes;
 #[cfg(target_os = "macos")]
 pub mod service;
 #[cfg(target_os = "macos")]
+#[allow(
+    unsafe_code,
+    reason = "FFI: Security's SecTranslocateCreateOriginalPathForURL has no safe binding"
+)]
+pub mod translocate;
+#[cfg(target_os = "macos")]
 pub mod windows;

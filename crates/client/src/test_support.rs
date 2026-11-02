@@ -14,12 +14,59 @@ pub use executor::{
 };
 pub use helper::{Helper, completed, exited};
 
-use crate::{client::Client, control::Controller};
+use crate::{
+    client::Client,
+    control::{Controller, Pending},
+    task::{Claims, Owned, State, Task, store::Store},
+};
 use atlas_core::{
     config::Config,
+    error::Result,
     test_support::{CONFIGURED_UID, SETTINGS, UID},
 };
-use std::path::Path;
+use atlas_native::approval::Refusal;
+use std::{os::unix::net::UnixStream, path::Path, time::Instant};
+
+/// The activity log's rotated file.
+pub const PREVIOUS: &str = crate::activity_log::PREVIOUS;
+/// The warning a doctor gives of web content.
+pub const WEB_CONTENT: &str = crate::capability::WEB_CONTENT;
+/// The warning a doctor gives of a failed Save/Open check.
+pub const NATIVE_DIALOGS_FAILED: &str = crate::capability::NATIVE_DIALOGS_FAILED;
+
+/// Claim `owned` for `task`, kept in `store`.
+pub fn claim_in(store: Store, task: Task, owned: &Owned, state: State) -> Result<()> {
+    Claims::in_store(store, task).claim(owned, state)
+}
+
+/// How many of `controller`'s waiting notes it can read, when it can.
+pub fn waiting_notes(controller: &Controller) -> Option<usize> {
+    controller.checked_waiting_notes().map(|notes| notes.len())
+}
+
+/// Whether the person stopped agents, as noted on their side.
+pub fn stop_noted(controller: &Controller) -> bool {
+    controller.stop_noted()
+}
+
+/// A pending mutation marked as a running command.
+pub fn quarantine_command(controller: &Controller) -> Result<Pending> {
+    controller.quarantine_command()
+}
+
+/// Whether a process exists, whoever owns it.
+pub fn process_exists(pid: u32) -> bool {
+    crate::client::service::process_exists(pid)
+}
+
+/// Talk with the approved step over `stream` until it ends.
+pub fn converse_until(
+    stream: UnixStream,
+    secret: Option<&[u8]>,
+    deadline: Instant,
+) -> (bool, std::result::Result<String, Refusal>) {
+    crate::setup::executor::converse_until(stream, secret, deadline)
+}
 
 /// A client whose endpoints and controller state are entirely temporary.
 pub fn client(directory: &Path) -> Client {

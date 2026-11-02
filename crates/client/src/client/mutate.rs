@@ -8,38 +8,121 @@ use super::{
 };
 use crate::control::{Lease, Ownership, Pending, SharedLease};
 use atlas_core::{
-    actions::Expect,
+    actions::{Batch, Expect},
     error::{Code, Error, Result},
-    protocol::{JobReply, JobState, JobView, StopCameTo, Stopped},
-    transport,
+    protocol::{
+        Expected, JobId, JobReply, JobStart, JobState, JobView, SessionPin, StopCameTo, Stopped,
+    },
+    session::InputEpoch,
+    time::ms,
+    transport::{self, Transport},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::MutexGuard;
 
-/// Completion and ownership are chosen by the producer, independently of the
-/// tolerant activity-log vocabulary and the original wire projection, with
-/// the facts a reply must prove.
-#[derive(Clone, Copy, Debug)]
+/// One change to the helper. Its wire request, completion proof, destination
+/// and ownership all come from this one value, independently of the tolerant
+/// activity-log vocabulary, so they cannot disagree.
+#[derive(Debug)]
 pub(crate) enum Mutation<'a> {
     Input {
-        count: u64,
+        actions: Batch<'a>,
+        owner: &'a str,
+        epoch: InputEpoch,
+        /// An agent's command names the app it acted in.
+        app: bool,
         expect: Option<&'a Expect>,
     },
-    Run,
+    Run {
+        argv: Vec<String>,
+        timeout: Duration,
+        pin: Option<SessionPin>,
+    },
     JobStart {
+        start: JobStart,
         uid: u32,
+        pin: SessionPin,
     },
     JobStop {
-        id: &'a str,
+        id: &'a JobId,
+        expected: &'a Expected,
+        grace: Duration,
     },
     Restart,
-    Logout,
+    Logout {
+        force: bool,
+    },
 }
 
 impl Mutation<'_> {
-    pub(crate) fn validate(self, reply: &Value) -> Result<()> {
+    /// The request this mutation sends.
+    pub(super) fn request(&self) -> Value {
+        match self {
+            Self::Input {
+                actions,
+                owner,
+                epoch,
+                app,
+                expect,
+            } => {
+                let mut request = json!({
+                    "op": "input",
+                    "actions": actions.wire(),
+                    "owner": owner,
+                    "epoch": epoch,
+                    "app": app,
+                });
+                if let Some(expect) = expect {
+                    request["expect"] = json!(expect);
+                }
+                request
+            }
+            Self::Run { argv, timeout, pin } => {
+                let mut request = json!({"op": "run", "argv": argv, "timeoutMs": ms(*timeout)});
+                if let Some(pin) = pin {
+                    request["session"] = json!(pin);
+                }
+                request
+            }
+            Self::JobStart { start, uid, pin } => {
+                let mut request = json!({
+                    "op": "job",
+                    "action": "start",
+                    "argv": start.argv,
+                    "lifetimeMs": ms(start.lifetime),
+                    "uid": uid,
+                    "session": pin,
+                });
+                if let Some(name) = &start.name {
+                    request["name"] = json!(name);
+                }
+                if let Some(task) = &start.task {
+                    request["task"] = json!(task);
+                }
+                if let Some(session) = &start.session {
+                    request["hostSession"] = json!(session);
+                }
+                request
+            }
+            Self::JobStop {
+                id,
+                expected,
+                grace,
+            } => json!({
+                "op": "job",
+                "action": "stop",
+                "id": id,
+                "expect": expected,
+                "graceMs": ms(*grace),
+            }),
+            Self::Restart => json!({"op": "restart"}),
+            Self::Logout { force } => json!({"op": "logout", "force": force}),
+        }
+    }
+
+    pub(crate) fn validate(&self, reply: &Value) -> Result<()> {
         if reply["ok"] != true {
             return Ok(());
         }
@@ -47,25 +130,27 @@ impl Mutation<'_> {
         let valid = match self {
             // A checked batch is confirmed only with its expectation echoed: a
             // service that ignored it posted the input unchecked.
-            Self::Input { count, expect } => {
-                reply["performed"].as_u64() == Some(count)
+            Self::Input {
+                actions, expect, ..
+            } => {
+                reply["performed"].as_u64() == Some(actions.actions().len() as u64)
                     && expect.is_none_or(|expect| reply["expect"] == json!(expect))
             }
-            Self::JobStart { uid } => {
-                matches!(JobReply::deserialize(reply), Ok(JobReply::Start { job }) if job_started(uid, &job))
+            Self::JobStart { uid, .. } => {
+                matches!(JobReply::deserialize(reply), Ok(JobReply::Start { job }) if job_started(*uid, &job))
             }
-            Self::JobStop { id } => match JobReply::deserialize(reply) {
+            Self::JobStop { id, .. } => match JobReply::deserialize(reply) {
                 Ok(JobReply::Stop(Stopped { job, came_to })) => {
                     let confirmed = match came_to {
                         StopCameTo::Signalled(signal) => signal == "SIGTERM",
                         StopCameTo::AlreadyEnded(ended) => ended,
                         StopCameTo::AlreadyStopping(stopping) => stopping,
                     };
-                    id == job.id.as_str() && confirmed
+                    id.as_str() == job.id.as_str() && confirmed
                 }
                 _ => false,
             },
-            Self::Run => {
+            Self::Run { .. } => {
                 reply["timedOut"].is_boolean()
                     && reply.get("exitCode").is_some()
                     && (reply["exitCode"].is_i64()
@@ -75,7 +160,7 @@ impl Mutation<'_> {
                                     .as_str()
                                     .is_some_and(|s| s.starts_with("SIG") && s.len() <= 32))))
             }
-            Self::Restart | Self::Logout => true,
+            Self::Restart | Self::Logout { .. } => true,
         };
 
         valid.then_some(()).ok_or_else(unconfirmed)
@@ -133,7 +218,7 @@ async fn authorize<'a>(
 }
 
 impl Client {
-    /// Send `request` to the helper, or to its input service for input, as
+    /// Send `mutation` to the helper, or to its input service for input, as
     /// a recorded mutation: refused while agents are stopped when it is one
     /// of theirs, carried out under its own claim unless its caller holds
     /// one, and settled only once its reply proves what it did. With
@@ -142,7 +227,6 @@ impl Client {
     pub(crate) async fn mutate(
         &self,
         mutation: Mutation<'_>,
-        request: Value,
         lease: Option<(&SharedLease, &str)>,
         observed_at: Option<Instant>,
         // Control to let go of once the request has reached the helper; its
@@ -150,7 +234,7 @@ impl Client {
         release: Option<Ownership>,
     ) -> Result<Value> {
         debug_assert!(
-            release.is_none() || matches!(mutation, Mutation::Run),
+            release.is_none() || matches!(mutation, Mutation::Run { .. }),
             "only a command started with run lets go of control while it runs"
         );
         let started = Instant::now();
@@ -158,18 +242,19 @@ impl Client {
         let command = release.is_some();
         let agent = self.actor == Actor::Agent && self.doing.is_some();
         let (agent_command, stop_before) = match mutation {
-            Mutation::Run => (agent, agent),
+            Mutation::Run { .. } => (agent, agent),
             Mutation::JobStart { .. } | Mutation::JobStop { .. } => (false, agent),
-            Mutation::Input { .. } | Mutation::Restart | Mutation::Logout => (false, false),
+            Mutation::Input { .. } | Mutation::Restart | Mutation::Logout { .. } => (false, false),
         };
         if stop_before && self.stop_marked() {
             return Err(Error::stopped());
         }
 
         // Connect without holding the lease. Release can cancel slow preflight.
-        let connection = self.connect(&request, mutation).await?;
+        let connection = self.connect(&mutation).await?;
         let authorization = authorize(lease, observed_at).await?;
-        let mut claim = self.claim(mutation, lease.is_some(), command)?;
+        let mut claim = self.claim(&mutation, lease.is_some(), command)?;
+        let request = mutation.request();
         let sent = self.send(connection, &request, claim.as_ref()).await?;
 
         drop(authorization);
@@ -189,29 +274,27 @@ impl Client {
         self.settle(&request, reply, command, claim, started).await
     }
 
-    /// A connection to where `request` goes: the input service for input,
-    /// and the helper daemon for everything else.
-    async fn connect(&self, request: &Value, mutation: Mutation<'_>) -> Result<transport::Pending> {
-        let mut transport = match mutation {
+    /// Where `mutation` goes: the input service for input, and the helper
+    /// daemon for everything else.
+    pub(super) fn transport_for(&self, mutation: &Mutation<'_>) -> Transport {
+        match mutation {
             Mutation::Input { .. } => self.input_transport(),
-            Mutation::Run
-            | Mutation::JobStart { .. }
+            // A long command's reply comes after it ends, and after the
+            // helper has stopped whatever it left running.
+            Mutation::Run { timeout, .. } => {
+                let mut transport = self.transport.clone();
+                transport.timeout = transport.timeout.max(*timeout + RUN_MARGIN);
+                transport
+            }
+            Mutation::JobStart { .. }
             | Mutation::JobStop { .. }
             | Mutation::Restart
-            | Mutation::Logout => self.transport.clone(),
-        };
-
-        // A long command's reply comes after it ends, and after the helper
-        // has stopped whatever it left running.
-        if let Some(run) = request["timeoutMs"]
-            .as_u64()
-            .filter(|_| matches!(mutation, Mutation::Run))
-        {
-            transport.timeout = transport
-                .timeout
-                .max(Duration::from_millis(run) + RUN_MARGIN);
+            | Mutation::Logout { .. } => self.transport.clone(),
         }
+    }
 
+    async fn connect(&self, mutation: &Mutation<'_>) -> Result<transport::Pending> {
+        let transport = self.transport_for(mutation);
         transport
             .connect()
             .await
@@ -227,14 +310,14 @@ impl Client {
     /// through verification or cleanup, so they take none here.
     fn claim(
         &self,
-        mutation: Mutation<'_>,
+        mutation: &Mutation<'_>,
         leased: bool,
         command: bool,
     ) -> Result<Option<Pending>> {
         let callers = match mutation {
-            Mutation::Restart | Mutation::Logout => true,
+            Mutation::Restart | Mutation::Logout { .. } => true,
             Mutation::Input { .. } => !leased,
-            Mutation::Run | Mutation::JobStart { .. } | Mutation::JobStop { .. } => false,
+            Mutation::Run { .. } | Mutation::JobStart { .. } | Mutation::JobStop { .. } => false,
         };
         if callers {
             return Ok(None);

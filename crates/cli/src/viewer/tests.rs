@@ -12,8 +12,8 @@ use super::{
     reads::{ACTIVITY_ROWS, activity_row, listed_apps},
     *,
 };
-use atlas_client::overview::READ_DEADLINE;
-use atlas_core::{config::Config, files, test_support::SETTINGS};
+use atlas_client::{client::AppList, overview::READ_DEADLINE};
+use atlas_core::{config::Config, files, screen::windows::Window, test_support::SETTINGS};
 use axum::{
     body::{Body, to_bytes},
     extract::Request,
@@ -149,21 +149,22 @@ pub(crate) async fn recover_from_app(client: Client) -> Value {
 
 #[tokio::test]
 async fn the_cleanup_routes_preview_and_apply_as_the_person() {
-    use atlas_client::task::{Claims, Owned, State, Task, store::Store as Tasks};
+    use atlas_client::task::{Owned, State, Task, store::Store as Tasks};
     use atlas_core::host::{Host, Key};
 
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let output = viewer.client().output_dir().unwrap().to_owned();
     let session = Key::of(Host::Codex, "left");
-    Claims::in_store(Tasks::at(&output), Task::of(&session, None).unwrap())
-        .claim(
-            &Owned::Launch {
-                app: "TextEdit".into(),
-            },
-            State::Made,
-        )
-        .unwrap();
+    atlas_client::test_support::claim_in(
+        Tasks::at(&output),
+        Task::of(&session, None).unwrap(),
+        &Owned::Launch {
+            app: "TextEdit".into(),
+        },
+        State::Made,
+    )
+    .unwrap();
 
     let (status, preview) = read_json(&viewer, &format!("cleanup.json?session={session}")).await;
     assert_eq!(status, 200, "{preview}");
@@ -256,7 +257,7 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
         let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
         assert_eq!(status, 200, "{reply}");
         assert_eq!(reply["held"], true);
-        assert!(client.controller.stop_noted());
+        assert!(atlas_client::test_support::stop_noted(&client.controller));
         let marker = std::fs::read_dir(dir.path().join("state"))
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -298,7 +299,11 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
                 if let Some(on) = wire["on"].as_bool() {
                     assert_eq!(status, 200, "{body}: {reply}");
                     assert_eq!(reply["held"], on, "{body}");
-                    assert_eq!(client.controller.stop_noted(), on, "{body}");
+                    assert_eq!(
+                        atlas_client::test_support::stop_noted(&client.controller),
+                        on,
+                        "{body}"
+                    );
                     let (status, reply) =
                         posted(&viewer, "control/hold", &json!({"on": stopped})).await;
                     assert_eq!(status, 200, "{reply}");
@@ -311,7 +316,11 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
                 assert_eq!(reply["code"], "input");
                 assert_eq!(reply["error"], "Hold requires a boolean on");
                 assert_eq!(reply["uncertain"], false);
-                assert_eq!(client.controller.stop_noted(), stopped, "{body}");
+                assert_eq!(
+                    atlas_client::test_support::stop_noted(&client.controller),
+                    stopped,
+                    "{body}"
+                );
                 if stopped {
                     assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
                 } else {
@@ -335,7 +344,9 @@ async fn stop_validation_preserves_other_body_errors_and_routes() {
             reply,
             json!({"ok":false,"error":"Request must be a JSON object"})
         );
-        assert!(!viewer.client().controller.stop_noted());
+        assert!(!atlas_client::test_support::stop_noted(
+            &viewer.client().controller
+        ));
     }
 
     let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
@@ -347,7 +358,9 @@ async fn stop_validation_preserves_other_body_errors_and_routes() {
         received.try_recv().unwrap(),
         crate::menubar::Line::Viewer
     ));
-    assert!(!viewer.client().controller.stop_noted());
+    assert!(!atlas_client::test_support::stop_noted(
+        &viewer.client().controller
+    ));
 }
 
 #[tokio::test]
@@ -442,7 +455,7 @@ async fn the_person_takes_control_beside_a_running_command() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let controller = viewer.client().controller.clone();
-    let command = controller.quarantine_command().unwrap();
+    let command = atlas_client::test_support::quarantine_command(&controller).unwrap();
 
     viewer.lease.lock().await.acquire(&controller).unwrap();
     assert!(viewer.lease.lock().await.active());
@@ -1469,7 +1482,7 @@ async fn activity_json_reports_an_unreadable_log_and_recovers_after_it_is_replac
     assert_eq!(reply["overview"]["activity"], json!([]));
     std::fs::remove_dir(path).unwrap();
     std::fs::write(
-        output.join(atlas_client::activity_log::PREVIOUS),
+        output.join(atlas_client::test_support::PREVIOUS),
         "bad row\n{}\n{\"at\":\"1\",\"operation\":\"input\",\"ok\":true}\n",
     )
     .unwrap();
@@ -1685,7 +1698,11 @@ fn apps_json_lists_windows_front_to_back() {
         window(7, 3, "Starter"),
     ]);
 
-    let listed = listed_apps(&apps, &windows).unwrap();
+    let listed = listed_apps(
+        &AppList::decode(json!({"ok": true, "apps": apps})).unwrap(),
+        &serde_json::from_value::<Vec<Window>>(windows).unwrap(),
+    )
+    .unwrap();
     let order = listed
         .iter()
         .map(|app| app["name"].as_str().unwrap())
@@ -1722,12 +1739,16 @@ fn apps_name_their_bundle_id_whether_hidden_when_launched_and_their_windows_orde
             "executable": "/Users/helper/Applications/Probe.app/Contents/MacOS/Probe"},
     ]);
     let window = |number: i64, pid: i64| {
-        json!({"number": number, "pid": pid, "title": "Secret plans", "layer": 0,
+        json!({"number": number, "pid": pid, "title": "Secret plans", "layer": 0, "alpha": 1.0,
             "bounds": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}})
     };
     let windows = json!([window(9, 5), window(8, 4), window(7, 5)]);
 
-    let listed = listed_apps(&apps, &windows).unwrap();
+    let listed = listed_apps(
+        &AppList::decode(json!({"ok": true, "apps": apps})).unwrap(),
+        &serde_json::from_value::<Vec<Window>>(windows).unwrap(),
+    )
+    .unwrap();
     assert_eq!(listed[0]["name"], "Probe");
     assert_eq!(listed[0]["bundleId"], Value::Null, "only an identifier");
     assert_eq!(listed[0]["hidden"], false);
@@ -1893,7 +1914,7 @@ fn a_commands_logical_id_holds_from_start_to_end_and_an_input_runs_holds_as_it_g
     // The run keeps its first identity even across a log rotation.
     std::fs::rename(
         dir.path().join(FILE),
-        dir.path().join(atlas_client::activity_log::PREVIOUS),
+        dir.path().join(atlas_client::test_support::PREVIOUS),
     )
     .unwrap();
     write(&[more_input]);
@@ -2426,7 +2447,7 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             let daemon = UnixListener::bind(&client.transport.path).unwrap();
             let mut input = UnixListener::bind(&client.config.input_socket).unwrap();
             let previous_pid = i32::MAX as u32;
-            assert!(!atlas_client::client::service::process_exists(previous_pid));
+            assert!(!atlas_client::test_support::process_exists(previous_pid));
             let mut capture_pid = 123;
             let mut replaced = false;
             let mut changes = Vec::new();
@@ -2540,7 +2561,10 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             assert!(client.controller.pending().unwrap().is_empty());
             assert!(client.controller.holder_note().is_none());
             if waiter {
-                assert_eq!(client.controller.checked_waiting_notes().unwrap().len(), 1);
+                assert_eq!(
+                    atlas_client::test_support::waiting_notes(&client.controller),
+                    Some(1)
+                );
             }
         }
     }

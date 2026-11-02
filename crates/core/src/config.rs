@@ -168,25 +168,33 @@ impl Config {
 
     /// Parse configuration text as if it were the file at `path`: relative
     /// paths resolve against its directory and `~/` against the home.
+    /// Destructuring makes every added setting choose its normalization here.
     ///
     /// # Errors
     ///
     /// Returns an error for text that is not a valid configuration.
     pub fn parse(bytes: &[u8], path: &Path) -> Result<Self> {
         let mut config: Self = parse_toml(bytes, path)?;
-        crate::session::validate_uid(config.helper_uid)?;
+        let Self {
+            helper_uid,
+            socket_path,
+            identity_probe,
+            input_socket,
+            output_dir,
+        } = &mut config;
+        crate::session::validate_uid(*helper_uid)?;
 
         let parent = path
             .parent()
             .ok_or_else(|| Error::new(Code::Config, "Configuration has no parent directory"))?;
 
         for (value, whole) in [
-            (&mut config.socket_path, true),
-            (&mut config.output_dir, true),
+            (socket_path, true),
+            (output_dir, true),
             // The probe's own entry is kept: it may be a link to the app that
             // install replaces, and must never resolve to (and overwrite) it.
-            (&mut config.identity_probe, false),
-            (&mut config.input_socket, true),
+            (identity_probe, false),
+            (input_socket, true),
         ] {
             if value.as_os_str().is_empty() || value.to_string_lossy().contains('\0') {
                 return Err(Error::new(

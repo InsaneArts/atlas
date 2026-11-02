@@ -140,18 +140,21 @@ recovery ordering and real target delivery still need review and helper proof.
 
 ### Daemon request
 
-Add its variant/parser in `core/src/protocol.rs`, complete request policy,
-execution in `daemon/src/daemon/serve.rs`, and verified client producer and result decoder.
-Keep fresh off-console and session-pin checks around the operation. Mutations
-also choose typed completion proof and pending ownership. Use an in-daemon read
-when it suffices; do not introduce another worker executable by default.
+Add its `requests!` row (shape, word, decoder) in `core/src/protocol.rs`, complete
+request policy, execution in `daemon/src/daemon/serve.rs`, and verified client
+producer and result decoder. Keep fresh off-console and session-pin checks around
+the operation. A mutation is a `Mutation` variant in `client/src/client/mutate.rs`,
+whose wire request, completion proof, destination and ownership matches are
+exhaustive. Use an in-daemon read when it suffices; do not introduce another
+worker executable by default.
 
 ### Native operation
 
-Add the typed wire variant and its decode in `native/src/native/service/request.rs`, its
-exhaustive dispatch choices and complete handler in `native/src/native/service.rs`, and
-the client request. Decide cancellation, cleanup and registered-work lifetime
-first. Preserve deferred field failures where existing guards must precede them.
+Add its `requests!` row (shape, word, decoder) in `native/src/native/service/request.rs`,
+its exhaustive admission and dispatch choices and complete handler in
+`native/src/native/service.rs`, and the client request. Decide cancellation, cleanup and
+registered-work lifetime first. Preserve deferred field failures where existing guards
+must precede them.
 Advertise a capability and require it on the client together when compatibility
 needs it. Verify no input on refusal and retain unknown outcomes through dropped
 requests and replies.
@@ -176,15 +179,16 @@ need tests.
 
 ### Agent host
 
-Add metadata in `client/src/agents.rs`, host-specific assets/integration, identity and
-ordered sources in `core/src/host.rs`, ancestry/PID decisions and CLI
-selection. Compiler errors cover closed identity choices; review complete lists,
-host workflows and generated resources explicitly. Test install, removal,
+Add identity, display name and ordered sources in `core/src/host.rs`, the `agents!` row
+in `client/src/agents.rs`, host-specific assets/integration, ancestry/PID decisions and
+CLI selection. Compiler errors cover closed identity choices; review host workflows and
+generated resources explicitly. Test install, removal,
 refresh, ownership preservation and nested or ambiguous host sessions.
 
 ### Error code or reply field
 
-Add a code and stable word together in `core/src/error.rs`, exhaustive advice in
+Add a code, its stable word and whether an input service's refusal keeps it together
+in `core/src/error.rs`, exhaustive advice in
 `core/src/error/advice.rs`, its lease reading in `cli/src/viewer/control.rs`, its emission,
 an independent stable-word fixture and docs.
 For a reply field, update its typed schema/producer and each intended consumer
@@ -196,8 +200,8 @@ compatibility decision; never forward arbitrary internal causes or request bodie
 
 Update `core/src/config.rs`, defaults, validation/path normalization, the installed
 constructor in `client/src/setup/configuration.rs`, its consumer, examples and fixtures.
-The exhaustive destructuring in `Config::same_helper` requires a reload-identity
-decision. Normalization and documentation are manual obligations. Test absent,
+The exhaustive destructuring in `Config::same_helper` and `Config::parse` requires a
+reload-identity and a normalization decision. Documentation is a manual obligation. Test absent,
 invalid, relative-path and reload behavior as applicable. Never manufacture a
 helper identity through a production default just to simplify fixtures.
 

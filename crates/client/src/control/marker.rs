@@ -167,12 +167,14 @@ impl Controller {
     ///
     /// Returns failures reading unresolved mutation ownership. A live claim is not an
     /// acknowledgement.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn unresolved(&self) -> Result<Vec<String>> {
         self.pending_snapshot().map(|snapshot| snapshot.unresolved)
     }
 
     /// Unresolved generations, the total and the commands still running,
     /// from one locked marker read.
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn pending_snapshot(&self) -> Result<Snapshot> {
         let _lock = self.lock_marker()?;
         self.read_snapshot()
@@ -270,7 +272,7 @@ impl Controller {
     /// # Errors
     ///
     /// Returns the failure to write the claim or its marker.
-    pub fn quarantine_command(&self) -> Result<Pending> {
+    pub(crate) fn quarantine_command(&self) -> Result<Pending> {
         self.quarantine_marked(&token(), Mark::Command)
     }
 

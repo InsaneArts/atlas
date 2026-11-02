@@ -128,6 +128,28 @@ fn a_failure_names_its_holder_and_details_only_when_set() {
 
 /// Agents learn every code from the plugin's table, and only those.
 #[test]
+fn an_input_service_refusal_keeps_only_the_codes_callers_act_on() {
+    let kept: Vec<_> = Code::ALL
+        .into_iter()
+        .filter(|code| code.native())
+        .map(Code::as_str)
+        .collect();
+    assert_eq!(
+        kept,
+        [
+            "busy",
+            "cancelled",
+            "focus-changed",
+            "identity",
+            "lease-lost",
+            "permission",
+            "session-changed",
+            "stopped",
+        ]
+    );
+}
+
+#[test]
 fn the_codes_are_the_documented_ones() {
     let table = include_str!("../../../../agents/atlas/skills/atlas/references/troubleshooting.md");
     let documented: Vec<&str> = table

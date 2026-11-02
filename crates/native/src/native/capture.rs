@@ -192,7 +192,7 @@ pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)>
 /// # Errors
 ///
 /// Returns an error when the image can't be read or drawn.
-pub fn icon_png(image: &[u8], size: usize) -> Result<Vec<u8>> {
+pub(super) fn icon_png(image: &[u8], size: usize) -> Result<Vec<u8>> {
     let failed = || Error::new(Code::Capture, "The icon could not be read");
     let data = CFData::from_bytes(image);
     // SAFETY: live data holding the image, and no options dictionary.

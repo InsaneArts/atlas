@@ -115,7 +115,7 @@ async fn atlas_windows_reads_once_and_remembers_that_reading() {
             .await
             .unwrap();
         assert_eq!(reads, 1);
-        assert_eq!(reply["windows"], json!([window(42, 812, "Editor", 0)]));
+        assert_eq!(json!(reply), json!([window(42, 812, "Editor", 0)]));
         if named {
             let memory = client.remembered_windows().unwrap();
             assert_eq!(memory.windows.as_ref().unwrap().len(), 1);
@@ -3267,7 +3267,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                     match command {
                         0 => client.capture(Size::Full, Some(&Crop::App { pid: 812 }), false).await,
                         1 => elements(&client, &Target::Pid(812), &ElementFilter::default(), 10, false).await,
-                        2 => list(&client, &WindowFilter::default()).await,
+                        2 => list(&client, &WindowFilter::default()).await.map(|windows| json!({"ok": true, "windows": windows})),
                         _ => client.capture(Size::Full, None, false).await,
                     }
                 }, |request| {

@@ -8,7 +8,7 @@ use super::{
     unpoisoned,
 };
 use atlas_client::{
-    client::Client,
+    client::{AppList, Client},
     helper_info,
     host_session::{
         names::{name_of, names},
@@ -22,6 +22,7 @@ use atlas_core::host::Key;
 use atlas_core::{
     account::{Title, asked_real_name},
     error::{Code, Error, Result},
+    screen::windows::Window,
 };
 use axum::{body::Body, response::Response};
 use serde_json::{Map, Value, json};
@@ -202,8 +203,7 @@ impl Viewer {
             let running = client.running_apps().await?;
             let filter = atlas_client::agent::WindowFilter::default();
             let windows = atlas_client::agent::list(&client, &filter).await?;
-            let apps = running.clone().project();
-            let listed = listed_apps(&apps["apps"], &windows["windows"])?;
+            let listed = listed_apps(&running, &windows)?;
             Ok::<_, Error>((listed, running))
         };
         let (mut apps, running) = tokio::time::timeout(READ_DEADLINE, read)
@@ -515,7 +515,7 @@ fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
 /// with its bundle identifier, whether it is hidden, when it was launched
 /// and its windows front to back. A window's id is its window number, and
 /// its order its place among every app's windows, front to back.
-pub(super) fn listed_apps(apps: &Value, windows: &Value) -> Result<Vec<Value>> {
+pub(super) fn listed_apps(apps: &AppList, windows: &[Window]) -> Result<Vec<Value>> {
     Ok(helper_info::open_apps(apps, windows)?
         .into_iter()
         .map(|mut app| {

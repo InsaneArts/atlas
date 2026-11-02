@@ -1,4 +1,24 @@
 use super::*;
+use atlas_core::host::Key;
+
+fn run() -> Mutation<'static> {
+    Mutation::Run {
+        argv: vec!["true".to_owned()],
+        timeout: Duration::from_secs(1),
+        pin: None,
+    }
+}
+
+fn epoch() -> InputEpoch {
+    InputEpoch {
+        uid: 502,
+        security_session_id: 7,
+        display_id: 3,
+        width: 1512.0,
+        height: 982.0,
+        process_id: 41,
+    }
+}
 
 #[test]
 fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
@@ -7,20 +27,24 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
         json!({"ok":true,"exitCode":null,"timedOut":false,"signal":"SIGTERM"}),
         json!({"ok":true,"exitCode":null,"timedOut":true,"signal":"SIGKILL"}),
     ] {
-        Mutation::Run.validate(&reply).unwrap();
+        run().validate(&reply).unwrap();
     }
 
     for reply in [
         json!({"ok":true}),
         json!({"ok":true,"exitCode":null,"timedOut":false,"signal":15}),
     ] {
-        assert!(Mutation::Run.validate(&reply).unwrap_err().uncertain);
+        assert!(run().validate(&reply).unwrap_err().uncertain);
     }
 
+    let actions = json!([{"type": "key", "key": "a"}]);
     assert!(
         Mutation::Input {
-            count: 1,
-            expect: None
+            actions: Batch::decode(&actions).unwrap(),
+            owner: "owner",
+            epoch: epoch(),
+            app: false,
+            expect: None,
         }
         .validate(&json!({"ok":true,"performed":0}))
         .unwrap_err()
@@ -53,8 +77,103 @@ async fn the_client_transport_understands_the_daemon() {
         (&reply["exitCode"], &reply["timedOut"]),
         (&json!(4), &json!(false))
     );
-    Mutation::Run.validate(&reply).unwrap();
+    run().validate(&reply).unwrap();
 
     let hello = transport.call(&json!({"op": "hello"})).await.unwrap();
     assert_eq!(hello["daemon"]["pid"], std::process::id());
+}
+
+/// Every byte other Atlas processes read, independent of how `request` builds it.
+#[test]
+fn each_mutation_sends_its_exact_request() {
+    let actions = json!([{"type": "key", "key": "a"}]);
+    let expect = Expect::new(812).unwrap();
+    let id = JobId::parse("0123456789ab").unwrap();
+    let expected = Expected {
+        boot: "boot".to_owned(),
+        pid: 9,
+        start: [5, 6],
+        pgid: 9,
+    };
+    let pin = SessionPin {
+        security_session_id: 7,
+        display_id: 3,
+    };
+    let start = |name: Option<&str>, task: bool| JobStart {
+        argv: vec!["/bin/sleep".to_owned(), "9".to_owned()],
+        lifetime: Duration::from_secs(2),
+        name: name.map(str::to_owned),
+        task: task.then(|| Key::parse("aaaaaaaaaaaa").unwrap()),
+        session: task.then(|| Key::parse("bbbbbbbbbbbb").unwrap()),
+    };
+    let input = |expect| Mutation::Input {
+        actions: Batch::decode(&actions).unwrap(),
+        owner: "owner",
+        epoch: epoch(),
+        app: true,
+        expect,
+    };
+    let epoch_wire = r#"{"displayId":3,"height":982.0,"processId":41,"securitySessionId":7,"uid":502,"width":1512.0}"#;
+    let cases = [
+        (
+            input(None),
+            format!(
+                r#"{{"actions":[{{"key":"a","type":"key"}}],"app":true,"epoch":{epoch_wire},"op":"input","owner":"owner"}}"#
+            ),
+        ),
+        (
+            input(Some(&expect)),
+            format!(
+                r#"{{"actions":[{{"key":"a","type":"key"}}],"app":true,"epoch":{epoch_wire},"expect":{{"pid":812}},"op":"input","owner":"owner"}}"#
+            ),
+        ),
+        (
+            Mutation::Run {
+                argv: vec!["true".to_owned()],
+                timeout: Duration::from_millis(1500),
+                pin: None,
+            },
+            r#"{"argv":["true"],"op":"run","timeoutMs":1500}"#.to_owned(),
+        ),
+        (
+            Mutation::Run {
+                argv: vec!["true".to_owned()],
+                timeout: Duration::from_secs(1),
+                pin: Some(pin),
+            },
+            r#"{"argv":["true"],"op":"run","session":{"displayId":3,"securitySessionId":7},"timeoutMs":1000}"#.to_owned(),
+        ),
+        (
+            Mutation::JobStart {
+                start: start(None, false),
+                uid: 502,
+                pin,
+            },
+            r#"{"action":"start","argv":["/bin/sleep","9"],"lifetimeMs":2000,"op":"job","session":{"displayId":3,"securitySessionId":7},"uid":502}"#.to_owned(),
+        ),
+        (
+            Mutation::JobStart {
+                start: start(Some("name"), true),
+                uid: 502,
+                pin,
+            },
+            r#"{"action":"start","argv":["/bin/sleep","9"],"hostSession":"bbbbbbbbbbbb","lifetimeMs":2000,"name":"name","op":"job","session":{"displayId":3,"securitySessionId":7},"task":"aaaaaaaaaaaa","uid":502}"#.to_owned(),
+        ),
+        (
+            Mutation::JobStop {
+                id: &id,
+                expected: &expected,
+                grace: Duration::from_secs(5),
+            },
+            r#"{"action":"stop","expect":{"boot":"boot","pgid":9,"pid":9,"start":[5,6]},"graceMs":5000,"id":"0123456789ab","op":"job"}"#.to_owned(),
+        ),
+        (Mutation::Restart, r#"{"op":"restart"}"#.to_owned()),
+        (
+            Mutation::Logout { force: true },
+            r#"{"force":true,"op":"logout"}"#.to_owned(),
+        ),
+    ];
+    for (mutation, wire) in cases {
+        assert_eq!(mutation.request().to_string(), wire);
+    }
 }

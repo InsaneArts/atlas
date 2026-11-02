@@ -5,12 +5,21 @@
     clippy::missing_panics_doc,
     reason = "test fixtures: failing is how they report a broken test"
 )]
-use crate::daemon::serve::{Daemon, handle};
-use atlas_core::{error::Result, protocol::ConnectionPhase};
+use crate::{
+    daemon::{
+        read::{self, Places},
+        serve::{Daemon, handle},
+    },
+    helper_setup::{File, Job, Layout},
+};
+use atlas_core::{
+    error::Result,
+    protocol::{ConnectionPhase, ReadRequest},
+};
 use atlas_native::native::capture;
 use objc2_core_foundation::CGRect;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc, time::SystemTime};
 use tokio::{net::UnixListener, sync::watch};
 
 /// A screenshot of the made-up display.
@@ -22,6 +31,38 @@ pub fn synthetic(display: u32, _: Option<CGRect>, _: Option<u32>) -> Result<capt
         height: 36,
         scale: 1.0,
     })
+}
+
+/// `request` served from the folder `home` for the account `uid`, as the
+/// daemon's own read serves it.
+pub fn read_at(
+    request: &ReadRequest,
+    home: PathBuf,
+    uid: u32,
+    events: &mut dyn FnMut(Value) -> bool,
+    now: SystemTime,
+) -> Value {
+    let places = Places {
+        home,
+        temporary: None,
+    };
+    read::read_at(request, &places, uid, &|| Ok(()), events, now)
+}
+
+/// The helper's check of a job's retirement, reading the job from `read_job`.
+pub fn retirement_with(
+    layout: &Layout,
+    label: &str,
+    sha256: &str,
+    missing_ok: bool,
+    read_job: impl FnOnce() -> Result<Job>,
+) -> Result<(File, Job)> {
+    crate::helper_setup::retirement_with(layout, label, sha256, missing_ok, read_job)
+}
+
+/// The digest the helper's setup keeps of `text`.
+pub fn text_sha256(text: &str) -> String {
+    crate::helper_setup::text_sha256(text)
 }
 
 /// The made-up helper session: off the console, on display 7.

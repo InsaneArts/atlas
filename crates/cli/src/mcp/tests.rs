@@ -2,7 +2,7 @@ use super::control::{ACTIONS, LEASE, LeaseRequest, checked};
 use super::presentation::{only_title_and_size, own_session, said, summary};
 use super::resources::{APP_MIME, FRAME_META, SCREEN, SCREEN_SCRIPT, VERSIONS};
 use super::*;
-use atlas_client::helper_info::open_apps;
+use atlas_client::{client::AppList, helper_info::open_apps};
 use atlas_core::host::Key;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -1446,7 +1446,9 @@ fn app_reply_cost_preserves_the_window_projection() {
     )) {
         let windows: Vec<atlas_core::screen::windows::Window> =
             serde_json::from_value(fixture["input"]["windows"].clone()).unwrap();
-        let mut apps = open_apps(&fixture["input"]["apps"], &json!(windows)).unwrap();
+        let running =
+            AppList::decode(json!({"ok": true, "apps": fixture["input"]["apps"]})).unwrap();
+        let mut apps = open_apps(&running, &windows).unwrap();
         for app in &mut apps {
             only_title_and_size(app);
         }
@@ -1456,6 +1458,34 @@ fn app_reply_cost_preserves_the_window_projection() {
         });
         atlas_core::test_support::reply_cost(&reply, &fixture);
     }
+}
+
+/// The lists below stay whole, so no tool escapes the checks that loop over
+/// them.
+#[test]
+fn the_tool_lists_name_every_tool_of_their_policy() {
+    let named = |chosen: fn(Audience, Access) -> bool| {
+        let mut names: Vec<String> = Tool::ALL
+            .into_iter()
+            .filter(|tool| {
+                let (audience, access) = tool.policy();
+                chosen(audience, access)
+            })
+            .map(|tool| tool.catalog()["name"].as_str().unwrap().to_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let sorted = |list: &[&str]| {
+        let mut names: Vec<String> = list.iter().map(|&name| name.to_owned()).collect();
+        names.sort();
+        names
+    };
+    assert_eq!(
+        named(|audience, _| matches!(audience, Audience::Views)),
+        sorted(&VIEW_ONLY)
+    );
+    assert_eq!(named(|_, access| access == Access::Read), sorted(&LOOKING));
 }
 
 /// The tools only a client that draws views is offered: they are the

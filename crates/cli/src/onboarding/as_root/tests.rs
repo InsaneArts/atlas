@@ -1,4 +1,4 @@
-use atlas_client::setup::executor::converse_until;
+use atlas_client::test_support::converse_until;
 use std::os::unix::net::UnixStream;
 
 fn converse(stream: UnixStream, secret: Option<&[u8]>) -> (bool, Result<String, Refusal>) {

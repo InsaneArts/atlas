@@ -5,7 +5,6 @@ use crate::{
     test_support::client,
 };
 use atlas_core::error::{Code, Error};
-use atlas_core::host::project_folder;
 use fs2::FileExt;
 use serde_json::json;
 use std::{
@@ -1294,24 +1293,6 @@ fn a_new_record_works_in_its_sessions_folder() {
     let nowhere = session("nowhere");
     noted(&client, &nowhere, Kind::Other, "click", json!({"ok": true}));
     assert_eq!(store(&client).read(nowhere.key()).unwrap().folder, None);
-}
-
-#[test]
-fn a_session_works_in_its_projects_folder_by_name_only() {
-    let directory = tempfile::tempdir().unwrap();
-    let project = directory.path().join("left");
-    let inner = project.join("src/deep");
-    fs::create_dir_all(&inner).unwrap();
-    fs::create_dir(project.join(".git")).unwrap();
-
-    assert_eq!(project_folder(&inner).as_deref(), Some("left"));
-    let loose = directory.path().join("loose");
-    fs::create_dir(&loose).unwrap();
-    assert_eq!(project_folder(&loose).as_deref(), Some("loose"));
-    assert_eq!(project_folder(Path::new("/")), None);
-    if let Some(home) = std::env::var_os("HOME") {
-        assert_eq!(project_folder(Path::new(&home)), None);
-    }
 }
 
 #[test]

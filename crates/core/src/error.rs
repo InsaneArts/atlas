@@ -167,16 +167,22 @@ impl Error {
 }
 
 /// Why an agent is refused while the person has stopped agents.
-pub const STOPPED: &str =
+const STOPPED: &str =
     "The person stopped agents in the helper. Ask them before doing anything more there.";
 
 /// What an agent hears when the person has control of the helper.
 pub const PERSON_HAS_CONTROL: &str =
     "The person has control of the helper. Wait until they give it back, then try again.";
 
-/// Keep the code identity, stable word and ordered catalog in one declaration.
+/// A code the input service's refusals keep, as callers act on it.
+const NATIVE: bool = true;
+/// A code that reads as [`Code::Native`] in an input service's refusal.
+const LOCAL: bool = false;
+
+/// Keep the code identity, stable word, native treatment and ordered catalog
+/// in one declaration.
 macro_rules! codes {
-    ($($code:ident => $word:literal),+ $(,)?) => {
+    ($($code:ident => ($word:literal, $native:ident)),+ $(,)?) => {
         /// Every failure code Atlas reports, written identically on every boundary.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub enum Code { $($code),+ }
@@ -194,6 +200,11 @@ macro_rules! codes {
             pub fn parse(name: &str) -> Option<Self> {
                 match name { $($word => Some(Self::$code),)+ _ => None }
             }
+
+            /// Whether an input service's refusal keeps this code.
+            pub const fn native(self) -> bool {
+                match self { $(Self::$code => $native),+ }
+            }
         }
 
         #[cfg(any(test, feature = "test-support"))]
@@ -202,61 +213,61 @@ macro_rules! codes {
 }
 
 codes! {
-    Agents => "agents",
-    Apps => "apps",
-    BadRequest => "bad-request",
-    Blocked => "blocked",
-    Busy => "busy",
-    Cancelled => "cancelled",
-    Capture => "capture",
-    Cleanup => "cleanup",
-    Collect => "collect",
-    Config => "config",
-    ConfigInvalid => "config-invalid",
-    Daemon => "daemon",
-    Elements => "elements",
-    Environment => "environment",
-    FocusChanged => "focus-changed",
-    Identity => "identity",
-    Init => "init",
-    Input => "input",
-    Install => "install",
-    Interrupted => "interrupted",
-    InvalidJson => "invalid-json",
-    Io => "io",
-    Job => "job",
-    LeaseLost => "lease-lost",
-    LoggedOut => "logged-out",
-    Logout => "logout",
-    LogoutHeld => "logout-held",
-    Menubar => "menubar",
-    Native => "native",
-    NoEnvironment => "no-environment",
-    NoWindow => "no-window",
-    NotReady => "not-ready",
-    OnConsole => "on-console",
-    Onboarding => "onboarding",
-    Permission => "permission",
-    Platform => "platform",
-    PortInUse => "port-in-use",
-    Protocol => "protocol",
-    Restart => "restart",
-    SessionChanged => "session-changed",
-    Setup => "setup",
-    SpawnFailed => "spawn-failed",
-    StaleFrame => "stale-frame",
-    Startup => "startup",
-    State => "state",
-    Stopped => "stopped",
-    Switch => "switch",
-    Terminal => "terminal",
-    Transport => "transport",
-    Uncertain => "uncertain",
-    Uninstall => "uninstall",
-    Update => "update",
-    Usage => "usage",
-    WaitFailed => "wait-failed",
-    Windows => "windows",
+    Agents => ("agents", LOCAL),
+    Apps => ("apps", LOCAL),
+    BadRequest => ("bad-request", LOCAL),
+    Blocked => ("blocked", LOCAL),
+    Busy => ("busy", NATIVE),
+    Cancelled => ("cancelled", NATIVE),
+    Capture => ("capture", LOCAL),
+    Cleanup => ("cleanup", LOCAL),
+    Collect => ("collect", LOCAL),
+    Config => ("config", LOCAL),
+    ConfigInvalid => ("config-invalid", LOCAL),
+    Daemon => ("daemon", LOCAL),
+    Elements => ("elements", LOCAL),
+    Environment => ("environment", LOCAL),
+    FocusChanged => ("focus-changed", NATIVE),
+    Identity => ("identity", NATIVE),
+    Init => ("init", LOCAL),
+    Input => ("input", LOCAL),
+    Install => ("install", LOCAL),
+    Interrupted => ("interrupted", LOCAL),
+    InvalidJson => ("invalid-json", LOCAL),
+    Io => ("io", LOCAL),
+    Job => ("job", LOCAL),
+    LeaseLost => ("lease-lost", NATIVE),
+    LoggedOut => ("logged-out", LOCAL),
+    Logout => ("logout", LOCAL),
+    LogoutHeld => ("logout-held", LOCAL),
+    Menubar => ("menubar", LOCAL),
+    Native => ("native", LOCAL),
+    NoEnvironment => ("no-environment", LOCAL),
+    NoWindow => ("no-window", LOCAL),
+    NotReady => ("not-ready", LOCAL),
+    OnConsole => ("on-console", LOCAL),
+    Onboarding => ("onboarding", LOCAL),
+    Permission => ("permission", NATIVE),
+    Platform => ("platform", LOCAL),
+    PortInUse => ("port-in-use", LOCAL),
+    Protocol => ("protocol", LOCAL),
+    Restart => ("restart", LOCAL),
+    SessionChanged => ("session-changed", NATIVE),
+    Setup => ("setup", LOCAL),
+    SpawnFailed => ("spawn-failed", LOCAL),
+    StaleFrame => ("stale-frame", LOCAL),
+    Startup => ("startup", LOCAL),
+    State => ("state", LOCAL),
+    Stopped => ("stopped", NATIVE),
+    Switch => ("switch", LOCAL),
+    Terminal => ("terminal", LOCAL),
+    Transport => ("transport", LOCAL),
+    Uncertain => ("uncertain", LOCAL),
+    Uninstall => ("uninstall", LOCAL),
+    Update => ("update", LOCAL),
+    Usage => ("usage", LOCAL),
+    WaitFailed => ("wait-failed", LOCAL),
+    Windows => ("windows", LOCAL),
 }
 
 impl Serialize for Code {

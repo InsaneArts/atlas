@@ -9,6 +9,7 @@ use crate::{
 use atlas_core::{
     config::Config,
     error::{Code, Error, Result},
+    host::Host,
 };
 use serde_json::{Value, json};
 use std::{
@@ -46,20 +47,24 @@ fn problem(message: impl Into<String>) -> Error {
     Error::new(Code::Agents, message)
 }
 
-/// Host identity, catalog membership and settings discovery are one declaration.
+/// Catalog membership and settings discovery are one declaration; each
+/// agent's name and display name are its [`Host`]'s.
 macro_rules! agents {
-    ($($agent:ident => ($name:literal, $display:literal, $home:expr, $restart:expr)),+ $(,)?) => {
+    ($($agent:ident => ($home:expr, $restart:expr)),+ $(,)?) => {
         /// The agents Atlas can connect, and their command-line tools.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Agent { $($agent),+ }
 
         impl Agent {
             /// Every agent, in the order they are listed.
-            pub const ALL: [Agent; [$($name),+].len()] = [$(Agent::$agent),+];
+            pub const ALL: [Agent; [$(Agent::$agent),+].len()] = [$(Agent::$agent),+];
 
             pub fn metadata(self) -> Metadata {
                 match self { $(Self::$agent => Metadata {
-                    name: $name, display: $display, home: $home, restart: $restart,
+                    name: Host::$agent.as_str(),
+                    display: Host::$agent.label(),
+                    home: $home,
+                    restart: $restart,
                 }),+ }
             }
         }
@@ -67,11 +72,11 @@ macro_rules! agents {
 }
 
 agents! {
-    Claude => ("claude", "Claude Code", || configured_home("CLAUDE_CONFIG_DIR", ".claude"), None),
-    Codex => ("codex", "Codex", || configured_home("CODEX_HOME", ".codex"), None),
-    Opencode => ("opencode", "opencode", opencode::home, Some("Restart opencode for this change to take effect.")),
-    Pi => ("pi", "Pi", pi::home, None),
-    Cursor => ("cursor", "Cursor", || cursor::home().ok(), Some("Reload the Cursor window or start a new Cursor Agent session for this change to take effect.")),
+    Claude => (|| configured_home("CLAUDE_CONFIG_DIR", ".claude"), None),
+    Codex => (|| configured_home("CODEX_HOME", ".codex"), None),
+    Opencode => (opencode::home, Some("Restart opencode for this change to take effect.")),
+    Pi => (pi::home, None),
+    Cursor => (|| cursor::home().ok(), Some("Reload the Cursor window or start a new Cursor Agent session for this change to take effect.")),
 }
 
 impl Agent {
@@ -118,18 +123,19 @@ impl Agent {
 
         match source {
             Some(Source::Folder(folder)) if same_place(folder, marketplace) => {}
-            Some(Source::Folder(folder)) if self.ours(folder) => {
-                if self == Agent::Codex {
-                    steps.push(argv(&["plugin", "marketplace", "remove", NAME]));
-                }
-            }
+            Some(Source::Folder(folder)) if self.ours(folder) => match self {
+                Agent::Codex => steps.push(argv(&["plugin", "marketplace", "remove", NAME])),
+                Agent::Claude | Agent::Pi | Agent::Opencode | Agent::Cursor => {}
+            },
             Some(Source::Folder(folder)) => {
                 return Err(self.another(&folder.display().to_string()));
             }
             Some(Source::Elsewhere(place)) => return Err(self.another(place)),
             Some(Source::Absent) => {}
-            None if self == Agent::Claude => return Err(self.unreadable()),
-            None => {}
+            None => match self {
+                Agent::Claude => return Err(self.unreadable()),
+                Agent::Codex | Agent::Pi | Agent::Opencode | Agent::Cursor => {}
+            },
         }
 
         steps.extend(self.connect(marketplace));
@@ -228,6 +234,15 @@ impl Agent {
             (Self::Claude | Self::Codex | Self::Pi | Self::Opencode, _) | (Self::Cursor, false) => {
                 self.presence()
             }
+        }
+    }
+
+    /// Whether a removal of every agent includes this one: Cursor's only
+    /// when Atlas recorded registering it.
+    fn removable(self) -> bool {
+        match self {
+            Self::Cursor => cursor::recorded(),
+            Self::Claude | Self::Codex | Self::Pi | Self::Opencode => true,
         }
     }
 
@@ -689,9 +704,7 @@ pub fn change_these(chosen: &[Agent], covering: Covering, change: Change) -> Res
         Agent::ALL
             .into_iter()
             .map(|agent| (agent, agent.presence_for_change(remove)))
-            .filter(|(agent, presence)| {
-                presence.here() && (!remove || *agent != Agent::Cursor || cursor::recorded())
-            })
+            .filter(|(agent, presence)| presence.here() && (!remove || agent.removable()))
             .collect()
     } else {
         chosen

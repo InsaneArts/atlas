@@ -1,4 +1,30 @@
 use super::*;
+use atlas_core::screen::geometry::Bounds;
+
+fn listed(apps: &Value, windows: &[Window]) -> Result<Vec<Value>> {
+    open_apps(
+        &AppList::decode(json!({"ok": true, "apps": apps})).unwrap(),
+        windows,
+    )
+}
+
+fn window(number: i64, pid: i64, title: String, frame: [f64; 4]) -> Window {
+    let [x, y, width, height] = frame;
+    Window {
+        number,
+        pid,
+        owner: None,
+        title: Some(title),
+        layer: 0,
+        alpha: 1.0,
+        bounds: Bounds {
+            x,
+            y,
+            width,
+            height,
+        },
+    }
+}
 
 #[test]
 fn a_frame_is_a_jpeg_within_the_budget_named_by_its_content() {
@@ -27,13 +53,13 @@ fn apps_list_front_to_back_with_their_windows_and_bundles() {
         {"name": "Opie", "pid": 3, "policy": "regular", "active": true, "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
         {"name": "Notes", "pid": 4, "policy": "regular", "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
     ]);
-    let windows = json!([
-        {"number": 11, "pid": 3, "title": "Starter", "bounds": {"x": 0.0, "y": 25.0, "width": 1080.0, "height": 590.0}},
-        {"number": 12, "pid": 4, "title": "QA checklist", "bounds": {"x": 40.0, "y": 60.0, "width": 900.0, "height": 640.0}},
-        {"number": 13, "pid": 3, "title": "Ring", "bounds": {"x": 700.0, "y": 80.0, "width": 520.0, "height": 860.0}},
-    ]);
+    let windows = [
+        window(11, 3, "Starter".into(), [0.0, 25.0, 1080.0, 590.0]),
+        window(12, 4, "QA checklist".into(), [40.0, 60.0, 900.0, 640.0]),
+        window(13, 3, "Ring".into(), [700.0, 80.0, 520.0, 860.0]),
+    ];
 
-    let listed = open_apps(&apps, &windows).unwrap();
+    let listed = listed(&apps, &windows).unwrap();
     let order = listed
         .iter()
         .map(|app| app["name"].clone())
@@ -56,22 +82,19 @@ fn apps_list_front_to_back_with_their_windows_and_bundles() {
 fn repeated_app_process_ids_are_refused_before_joining_windows() {
     let app = json!({"name": "Notes", "pid": 4, "policy": "regular"});
     let apps = json!([app, app]);
-    let windows = json!([{"pid": 4, "number": 1, "title": "Notes"}]);
-    assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
+    let windows = [window(1, 4, "Notes".into(), [0.0; 4])];
+    assert_eq!(listed(&apps, &windows).unwrap_err().code, "apps");
 }
 
 #[test]
 fn app_lists_bound_total_entries_and_text_before_copying_them() {
     let apps = json!([{"name": "Notes", "pid": 4, "policy": "regular"}]);
-    let windows = json!([
-        {"pid": 4, "title": "x".repeat(FRAME_LIMIT / 2)},
-        {"pid": 4, "title": "x".repeat(FRAME_LIMIT / 2)},
-    ]);
-    assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
-    let windows = Value::Array(vec![Value::Null; FRAME_LIMIT / 128 + 1]);
-    assert_eq!(open_apps(&apps, &windows).unwrap_err().code, "apps");
+    let windows = vec![window(1, 4, "x".repeat(FRAME_LIMIT / 2), [0.0; 4]); 2];
+    assert_eq!(listed(&apps, &windows).unwrap_err().code, "apps");
+    let windows = vec![window(1, 4, String::new(), [0.0; 4]); FRAME_LIMIT / 128 + 1];
+    assert_eq!(listed(&apps, &windows).unwrap_err().code, "apps");
     let apps = json!([{"pid": 4, "name": "x".repeat(FRAME_LIMIT), "policy": "regular"}]);
-    assert_eq!(open_apps(&apps, &json!([])).unwrap_err().code, "apps");
+    assert_eq!(listed(&apps, &[]).unwrap_err().code, "apps");
 }
 
 #[test]
@@ -173,19 +196,6 @@ fn a_screenshot_that_is_not_a_plain_file_is_refused_without_waiting() {
 }
 
 #[test]
-fn an_icon_is_drawn_at_the_size_asked() {
-    let icon = atlas_native::native::capture::icon_png(
-        &atlas_native::native::capture::sample_png(256, 256),
-        64,
-    )
-    .unwrap();
-    assert_eq!(
-        atlas_core::screen::png::png_dimensions(&icon).unwrap(),
-        (64, 64)
-    );
-}
-
-#[test]
 fn icons_come_only_from_apps_installed_where_apps_go() {
     assert!(installed(Path::new("/Applications/Opie.app")));
     assert!(installed(Path::new("/System/Applications/Notes.app")));
@@ -201,7 +211,7 @@ fn icons_come_only_from_apps_installed_where_apps_go() {
     let nested = json!([{"name": "Helper", "pid": 1, "policy": "regular",
         "executable": "/Applications/Big.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper"}]);
     assert_eq!(
-        open_apps(&nested, &json!([])).unwrap()[0]["bundle"],
+        listed(&nested, &[]).unwrap()[0]["bundle"],
         "/Applications/Big.app/Contents/Frameworks/Helper.app"
     );
 }

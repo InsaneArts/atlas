@@ -2,7 +2,7 @@
 //! windows, its menu bar titles and the menus it has open), the walk down
 //! from there, and what each element met on the way reports.
 use super::{
-    ABSENT,
+    absent,
     batch::{Batch, Source},
     ffi,
     menus::{Drawn, skip_nested_menu},
@@ -410,7 +410,7 @@ pub(super) fn reachable(
     if has_windows || role == Ok(true) {
         Ok(())
     } else {
-        Err(error.filter(|error| !ABSENT.contains(error)).or(role.err()))
+        Err(error.filter(|error| !absent(*error)).or(role.err()))
     }
 }
 

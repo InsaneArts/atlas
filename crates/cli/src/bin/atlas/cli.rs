@@ -922,12 +922,20 @@ pub(super) struct AgentPicks {
 
 impl AgentPicks {
     fn picks(&self, agent: Agent) -> bool {
-        match agent {
-            Agent::Claude => self.claude,
-            Agent::Codex => self.codex,
-            Agent::Opencode => self.opencode,
-            Agent::Pi => self.pi,
-            Agent::Cursor => self.cursor,
+        let Self {
+            claude,
+            codex,
+            opencode,
+            pi,
+            cursor,
+            app: _,
+        } = self;
+        *match agent {
+            Agent::Claude => claude,
+            Agent::Codex => codex,
+            Agent::Opencode => opencode,
+            Agent::Pi => pi,
+            Agent::Cursor => cursor,
         }
     }
 

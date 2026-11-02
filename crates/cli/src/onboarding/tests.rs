@@ -1,6 +1,5 @@
 use super::status::permissions_from;
 use atlas_client::setup::executor::without;
-use atlas_daemon::helper_setup::pairing::window_open;
 #[test]
 fn settings_are_absent_only_when_the_configuration_is_missing() {
     use std::os::unix::fs::symlink;
@@ -419,30 +418,6 @@ fn only_an_unanswered_request_may_be_taken_back() {
         ..mine
     };
     assert!(!prepared.may_forget(), "prepared for this account");
-}
-
-#[test]
-fn the_window_marker_names_a_living_window() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join(helper_setup::ROOT);
-    fs::create_dir_all(&root).unwrap();
-
-    // A living process that is not Atlas's window does not count.
-    fs::write(
-        root.join(WINDOW_MARKER),
-        format!("{}\n", std::process::id()),
-    )
-    .unwrap();
-    assert!(!window_open(dir.path()));
-
-    fs::write(root.join(WINDOW_MARKER), "999999\n").unwrap();
-    assert!(!window_open(dir.path()));
-
-    fs::remove_file(root.join(WINDOW_MARKER)).unwrap();
-    assert!(!window_open(dir.path()));
-
-    nix::unistd::mkfifo(&root.join(WINDOW_MARKER), nix::sys::stat::Mode::S_IRUSR).unwrap();
-    assert!(!window_open(dir.path()));
 }
 
 fn opie() -> Identity {

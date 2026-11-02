@@ -136,15 +136,7 @@ impl Client {
             );
         }
 
-        let reply = self
-            .mutate(
-                Mutation::Restart,
-                json!({"op": "restart"}),
-                None,
-                None,
-                None,
-            )
-            .await?;
+        let reply = self.mutate(Mutation::Restart, None, None, None).await?;
         if reply["ok"] != true {
             return Ok(reply);
         }
@@ -248,13 +240,7 @@ impl Client {
         };
 
         let requested = self
-            .mutate(
-                Mutation::Logout,
-                json!({"op": "logout", "force": force}),
-                None,
-                None,
-                None,
-            )
+            .mutate(Mutation::Logout { force }, None, None, None)
             .await;
         if !requested.as_ref().is_ok_and(|reply| reply["ok"] == true) {
             // Refused before anything happened: nothing is pending.

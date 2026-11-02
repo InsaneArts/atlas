@@ -146,7 +146,7 @@ fn not_plain() -> Error {
 /// command without a task. Every claim is best effort: what it fails to
 /// write, the session's record, `close` and the transaction list still
 /// find by their own means.
-pub struct Claims {
+pub(crate) struct Claims {
     task: Option<(Task, Store)>,
 }
 
@@ -163,7 +163,7 @@ impl Claims {
 
     /// The claims of `task`, kept in `store`: written there or refused,
     /// never dropped for want of a task.
-    pub fn in_store(store: Store, task: Task) -> Self {
+    pub(crate) fn in_store(store: Store, task: Task) -> Self {
         Self {
             task: Some((task, store)),
         }
@@ -176,7 +176,7 @@ impl Claims {
     /// # Errors
     ///
     /// Returns the failure to write the record, or a refusal when it is full.
-    pub fn claim(&self, owned: &Owned, state: State) -> Result<()> {
+    pub(crate) fn claim(&self, owned: &Owned, state: State) -> Result<()> {
         self.claim_all(std::slice::from_ref(owned), state)
     }
 

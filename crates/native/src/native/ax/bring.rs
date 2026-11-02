@@ -3,7 +3,7 @@
 //! Resolution, each write and final observation share one reader deadline;
 //! retained elements identify the destination but never replace fresh admission.
 use super::{
-    ABSENT, Status, Unread, Within, ffi,
+    Status, Unread, Within, absent, ffi,
     keyboard::{Ask, Live, PARENTS, REQUEST, Reader, UnknownNames, remaining},
 };
 use crate::native::focus::{CHECK_BUDGET, FIELDS, Need, Reason, refused};
@@ -87,7 +87,7 @@ impl Backend for Live {
         bound()?;
         let count = match ffi::count(element, &name) {
             Ok(count) if count >= 0 && count as usize <= limit => count,
-            Err(error) if ABSENT.contains(&error) => return Ok(Vec::new()),
+            Err(error) if absent(error) => return Ok(Vec::new()),
             Err(error) => return Err(Unread::Malformed.reading(error)),
             _ => return Err(Unread::Malformed.error()),
         };
@@ -126,7 +126,7 @@ impl Backend for Live {
         match operation {
             Write::Flag(name) => match ffi::settable(element, &CFString::from_static_str(name)) {
                 Ok(value) => Ok(value),
-                Err(error) if ABSENT.contains(&error) => Ok(false),
+                Err(error) if absent(error) => Ok(false),
                 Err(error) => Err(Unread::Failed.reading(error)),
             },
             Write::Raise => {

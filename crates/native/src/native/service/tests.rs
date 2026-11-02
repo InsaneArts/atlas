@@ -2615,9 +2615,9 @@ async fn blocked_operation(ending: Ending) {
         requests.join_next().await.unwrap().unwrap().unwrap();
         let reply = observed.lock().unwrap().take().unwrap().unwrap_err();
         let (code, instruction) = if matches!(ending, Ending::Stop) {
-            (Code::Stopped, atlas_core::error::STOPPED)
+            (Code::Stopped, Error::stopped().error)
         } else {
-            (Code::Cancelled, "Native control was stopped")
+            (Code::Cancelled, "Native control was stopped".to_owned())
         };
         assert_eq!(reply["code"], json!(code));
         assert_eq!(reply["error"], instruction);

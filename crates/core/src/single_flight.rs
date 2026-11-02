@@ -11,7 +11,7 @@ use tokio::time::Instant;
 /// One slow look shared by callers, keyed by its complete inputs. At most
 /// one runs at a time; its result is reused for `fresh_for`.
 pub struct Shared<T, K = u32> {
-    pub fresh_for: Duration,
+    fresh_for: Duration,
     kept: Mutex<Kept<T, K>>,
     #[cfg(any(test, feature = "test-support"))]
     workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
@@ -35,6 +35,12 @@ impl<T: Clone + Send + 'static, K: Eq + Clone + Send + 'static> Shared<T, K> {
             #[cfg(any(test, feature = "test-support"))]
             workers: Mutex::new(Vec::new()),
         }
+    }
+
+    /// How long a look's result is reused for.
+    #[cfg(any(test, feature = "test-support"))]
+    pub const fn fresh_for(&self) -> Duration {
+        self.fresh_for
     }
 
     /// What `look` finds for helper `uid`. While the last look's result is

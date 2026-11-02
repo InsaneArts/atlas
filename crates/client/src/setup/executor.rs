@@ -110,7 +110,7 @@ pub fn finish_executor(
 /// it ended (rather than Atlas giving up on it), and what it said. The step
 /// never writes the secret back; only what sysadminctl wrote before the
 /// first step's line could hold it, and it is cut out there.
-pub fn converse_until(
+pub(crate) fn converse_until(
     mut stream: UnixStream,
     secret: Option<&[u8]>,
     deadline: Instant,

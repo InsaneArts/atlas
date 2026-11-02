@@ -375,14 +375,14 @@ fn launchctl_print_needs_a_definition_path() {
     let text = "gui/502/x = {\n\tpath = /Users/h/Library/LaunchAgents/x.plist\n\
                     \tstate = running\n\tpid = 42\n}";
     assert_eq!(
-        parse_job(text).unwrap(),
+        launchd::parse_job(text).unwrap(),
         Job::Loaded {
             pid: Some(42),
             path: "/Users/h/Library/LaunchAgents/x.plist".into()
         }
     );
-    assert!(parse_job("gui/502/x = {\n\tstate = waiting\n}").is_err());
-    assert!(parse_job("\tpath = relative.plist\n").is_err());
+    assert!(launchd::parse_job("gui/502/x = {\n\tstate = waiting\n}").is_err());
+    assert!(launchd::parse_job("\tpath = relative.plist\n").is_err());
 }
 
 #[test]
@@ -652,4 +652,32 @@ fn only_another_versions_definition_is_replaced() {
         "a link is never replaced"
     );
     assert!(!JobReport::from(&Value::Null).outdated(&ours));
+}
+
+#[test]
+fn the_window_marker_names_a_living_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join(ROOT);
+    fs::create_dir_all(&root).unwrap();
+
+    // A living process that is not Atlas's window does not count.
+    fs::write(
+        root.join(pairing::WINDOW_MARKER),
+        format!("{}\n", std::process::id()),
+    )
+    .unwrap();
+    assert!(!pairing::window_open(dir.path()));
+
+    fs::write(root.join(pairing::WINDOW_MARKER), "999999\n").unwrap();
+    assert!(!pairing::window_open(dir.path()));
+
+    fs::remove_file(root.join(pairing::WINDOW_MARKER)).unwrap();
+    assert!(!pairing::window_open(dir.path()));
+
+    nix::unistd::mkfifo(
+        &root.join(pairing::WINDOW_MARKER),
+        nix::sys::stat::Mode::S_IRUSR,
+    )
+    .unwrap();
+    assert!(!pairing::window_open(dir.path()));
 }

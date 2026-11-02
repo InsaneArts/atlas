@@ -36,8 +36,5 @@ nix = { workspace = true, features = ["event", "socket"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["process", "rt-multi-thread", "test-util"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-core-foundation = { workspace = true, features = ["std", "CFError", "CFString", "CFURL"] }
-
 [lints]
 workspace = true

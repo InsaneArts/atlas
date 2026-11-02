@@ -502,7 +502,7 @@ impl Controller {
 
     /// Waiting notes only when the bounded read accounted for every entry.
     /// An incomplete read cannot establish that service replacement is idle.
-    pub fn checked_waiting_notes(&self) -> Option<Vec<Note>> {
+    pub(crate) fn checked_waiting_notes(&self) -> Option<Vec<Note>> {
         turns::checked_waiting(&self.waiting)
     }
 
@@ -545,7 +545,7 @@ impl Controller {
     }
 
     /// Whether the person stopped agents, as noted on their side.
-    pub fn stop_noted(&self) -> bool {
+    pub(crate) fn stop_noted(&self) -> bool {
         self.stopped.exists()
     }
 

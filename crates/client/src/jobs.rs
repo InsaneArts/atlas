@@ -20,8 +20,8 @@ use atlas_core::{
     lenient::Lenient,
     protocol::{
         Expected, How, JOB_GRACE, JOB_LIFETIME_MAX, JOB_LIFETIME_MIN, JOBS, JobId, JobRefusal,
-        JobReply, JobState, JobView, Logged, Progress, SessionPin, Showing, Shown, StopCameTo,
-        StopReason, Stopped, job_name,
+        JobReply, JobStart, JobState, JobView, Logged, Progress, SessionPin, Showing, Shown,
+        StopCameTo, StopReason, Stopped, job_name,
     },
     time::now_ms,
     transport::Transport,
@@ -100,23 +100,18 @@ async fn started(
     lifetime: Duration,
     name: Option<String>,
 ) -> Result<Value> {
-    let mut request = json!({
-        "op": "job",
-        "action": "start",
-        "argv": argv,
-        "lifetimeMs": atlas_core::time::ms(lifetime),
-        "uid": client.config.helper_uid,
-    });
-    if let Some(name) = &name {
-        request["name"] = json!(name);
-    }
-    if let Some(task) = &client.task {
-        request["task"] = json!(task.key());
-        request["hostSession"] = json!(task.session());
-    }
-    request["session"] = json!(pin);
-    let uid = client.config.helper_uid;
-    let reply = mutate(client, Mutation::JobStart { uid }, request).await?;
+    let mutation = Mutation::JobStart {
+        start: JobStart {
+            argv,
+            lifetime,
+            name,
+            task: client.task.as_ref().map(|task| task.key().clone()),
+            session: client.task.as_ref().map(|task| task.session().clone()),
+        },
+        uid: client.config.helper_uid,
+        pin,
+    };
+    let reply = mutate(client, mutation).await?;
     let Ok(JobReply::Start { job }) = JobReply::deserialize(&reply) else {
         return Err(unconfirmed());
     };
@@ -354,15 +349,12 @@ pub(crate) async fn stop_held(
     expected: &Expected,
     grace: Duration,
 ) -> Result<Stopped> {
-    let request = json!({
-        "op": "job",
-        "action": "stop",
-        "id": id,
-        "expect": expected,
-        "graceMs": atlas_core::time::ms(grace),
-    });
-    let mutation = Mutation::JobStop { id: id.as_str() };
-    let reply = mutate(client, mutation, request).await?;
+    let mutation = Mutation::JobStop {
+        id,
+        expected,
+        grace,
+    };
+    let reply = mutate(client, mutation).await?;
     match JobReply::deserialize(&reply) {
         Ok(JobReply::Stop(stopped)) => Ok(stopped),
         _ => Err(unconfirmed()),
@@ -370,8 +362,8 @@ pub(crate) async fn stop_held(
 }
 
 /// Send a job `mutation`: the helper's reply, unless it refused.
-async fn mutate(client: &Client, mutation: Mutation<'_>, request: Value) -> Result<Value> {
-    let reply = client.mutate(mutation, request, None, None, None).await?;
+async fn mutate(client: &Client, mutation: Mutation<'_>) -> Result<Value> {
+    let reply = client.mutate(mutation, None, None, None).await?;
     if reply["ok"] == true {
         Ok(reply)
     } else {
