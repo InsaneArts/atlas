@@ -4,7 +4,7 @@ use super::*;
 #[test]
 fn the_plugin_command_reference_matches_this_cli() {
     let checked_in =
-        include_str!("../../../../../../../../../agents/atlas/skills/atlas/references/commands.md");
+        include_str!("../../../../../../agents/atlas/skills/atlas/references/commands.md");
     assert_eq!(
         checked_in,
         command_reference(),

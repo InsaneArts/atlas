@@ -151,7 +151,7 @@ fn setup_detection_propagates_broken_configuration_paths() {
     let valid = dir.path().join("valid.toml");
     fs::write(
         &valid,
-        include_str!("../../../../../../../../../examples/config.toml"),
+        include_str!("../../../../../../examples/config.toml"),
     )
     .unwrap();
     assert_eq!(
