@@ -642,13 +642,37 @@ async fn finding_the_viewer_and_ending_control_never_wait_for_a_slot() {
 /// close.
 #[tokio::test]
 async fn connections_past_the_limit_wait_their_turn() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     let dir = tempfile::tempdir().unwrap();
     let (viewer, server) = served(dir.path(), 4).await;
     let address: std::net::SocketAddr = viewer.authority.parse().unwrap();
-    let idle: Vec<_> = (0..4)
-        .map(|_| std::net::TcpStream::connect(address).unwrap())
-        .collect();
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let held = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut held = Vec::new();
+        for _ in 0..4 {
+            let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+            let request = format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\n\r\n",
+                viewer.prefix, viewer.authority
+            );
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = Vec::new();
+            loop {
+                let mut chunk = [0; 4096];
+                let read = stream.read(&mut chunk).await.unwrap();
+                assert_ne!(read, 0, "the accepted connection stays open");
+                response.extend_from_slice(&chunk[..read]);
+                if let Some((status, ..)) = parse_response(&response) {
+                    assert_eq!(status, 200, "the connection reached its private route");
+                    break;
+                }
+            }
+            held.push(stream);
+        }
+        held
+    })
+    .await
+    .expect("all four connections were admitted before probing capacity");
 
     assert_eq!(
         answering_off(&viewer.url).await,
@@ -656,7 +680,7 @@ async fn connections_past_the_limit_wait_their_turn() {
         "all are taken"
     );
 
-    drop(idle);
+    drop(held);
     assert_eq!(
         answering_off(&viewer.url).await,
         Answer::Process(std::process::id())
@@ -670,14 +694,24 @@ async fn connections_past_the_limit_wait_their_turn() {
 /// The status read ends in time too.
 #[tokio::test]
 async fn frames_asked_together_share_one_capture_that_ends_in_time() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
     let dir = tempfile::tempdir().unwrap();
     let socket = dir.path().join("s.sock");
     let listener = tokio::net::UnixListener::bind(&socket).unwrap();
     let (accepted, mut connections) = tokio::sync::mpsc::unbounded_channel();
-    tokio::spawn(async move {
+    let accepts = Arc::new(AtomicUsize::new(0));
+    let observed = accepts.clone();
+    let server = tokio::spawn(async move {
         let mut held = Vec::new();
 
         while let Ok((stream, _)) = listener.accept().await {
+            observed.fetch_add(1, Ordering::SeqCst);
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            assert_ne!(stream.read_line(&mut request).await.unwrap(), 0);
+            assert!(request.ends_with('\n'), "the request was dispatched whole");
             held.push(stream);
             let _ = accepted.send(());
         }
@@ -688,9 +722,31 @@ async fn frames_asked_together_share_one_capture_that_ends_in_time() {
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let (_, viewer) = bind(client, 0, None).await.unwrap();
 
-    let started = std::time::Instant::now();
-    let (first, second, status) = tokio::join!(viewer.frame(), viewer.frame(), viewer.status());
+    let wall_started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
+    let requests = async { tokio::join!(viewer.frame(), viewer.frame(), viewer.status()) };
+    tokio::pin!(requests);
+    let mut asked = 0;
+    tokio::time::timeout(READ_DEADLINE, async {
+        for _ in 0..2 {
+            tokio::select! {
+                _ = &mut requests => panic!("the unanswered requests ended before dispatch"),
+                accepted = connections.recv() => {
+                    assert!(accepted.is_some(), "the fixture still accepts requests");
+                    asked += 1;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the capture and status requests reached the service");
+    tokio::time::pause();
+    let (first, second, status) = requests.await;
     assert!(started.elapsed() < Duration::from_secs(7));
+    assert!(
+        wall_started.elapsed() < Duration::from_secs(7),
+        "the real status work also retains its wall-time deadline"
+    );
     assert_ne!(status["ready"], true);
 
     for outcome in [first, second] {
@@ -701,12 +757,17 @@ async fn frames_asked_together_share_one_capture_that_ends_in_time() {
         );
     }
 
-    let mut asked = 0;
-
     while connections.try_recv().is_ok() {
         asked += 1;
     }
 
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+    assert_eq!(
+        accepts.load(Ordering::SeqCst),
+        2,
+        "exactly two connections were accepted"
+    );
     assert_eq!(asked, 2, "one capture and one status read");
 }
 
@@ -714,6 +775,8 @@ async fn frames_asked_together_share_one_capture_that_ends_in_time() {
 /// before it is waited out and a fresh one taken.
 #[tokio::test]
 async fn a_capture_from_before_the_latest_input_is_not_shared() {
+    use std::{future::Future, task::Poll};
+
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let running = |revision| {
@@ -722,34 +785,44 @@ async fn a_capture_from_before_the_latest_input_is_not_shared() {
         sender
     };
 
-    let ask = || {
-        let viewer = viewer.clone();
-        tokio::spawn(async move { viewer.frame().await })
-    };
-
     let current = running(0);
-    let shared = ask();
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let shared = viewer.frame();
+    tokio::pin!(shared);
+    std::future::poll_fn(|cx| {
+        assert!(shared.as_mut().poll(cx).is_pending());
+        Poll::Ready(())
+    })
+    .await;
+    assert_eq!(current.receiver_count(), 2, "the current capture is shared");
     current
         .send(Some(Err((Code::Capture, "the shared picture".into()))))
         .unwrap();
     *viewer.capture.lock().unwrap() = None;
-    assert_eq!(
-        shared.await.unwrap().err().unwrap().error,
-        "the shared picture"
-    );
+    assert_eq!(shared.await.err().unwrap().error, "the shared picture");
 
     let old = running(0);
     viewer.frames.lock().await.input_revision = 1;
-    let fresh = ask();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(!fresh.is_finished(), "it waits out the running capture");
+    let fresh = viewer.frame();
+    tokio::pin!(fresh);
+    std::future::poll_fn(|cx| {
+        assert!(
+            fresh.as_mut().poll(cx).is_pending(),
+            "it waits out the running capture"
+        );
+        Poll::Ready(())
+    })
+    .await;
+    assert_eq!(
+        old.receiver_count(),
+        2,
+        "the stale capture is being waited out"
+    );
 
     *viewer.capture.lock().unwrap() = None;
     old.send(Some(Err((Code::Capture, "an old picture".into()))))
         .unwrap();
     assert_ne!(
-        fresh.await.unwrap().err().unwrap().error,
+        fresh.await.err().unwrap().error,
         "an old picture",
         "it took its own"
     );
@@ -1191,8 +1264,10 @@ async fn a_frame_waiting_out_an_older_capture_still_ends_in_time() {
     });
     viewer.frames.lock().await.input_revision = 1;
 
-    let started = std::time::Instant::now();
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
     let error = viewer.frame().await.err().unwrap();
+    assert!(started.elapsed() >= READ_DEADLINE);
     assert!(started.elapsed() < READ_DEADLINE + Duration::from_secs(1));
     assert_eq!(error.error, "The helper did not answer in time");
 }
