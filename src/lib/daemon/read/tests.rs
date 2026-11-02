@@ -229,19 +229,38 @@ fn a_link_anywhere_in_the_path_is_refused() {
 
 #[test]
 fn only_regular_files_are_read() {
-    let (_dir, places) = home();
+    const NAME: &str = "daemon::read::tests::only_regular_files_are_read";
+    if std::env::var("ATLAS_READ_FILE_FIXTURE").as_deref() != Ok(NAME) {
+        // A regression that blocks opening the FIFO cannot reach a posthoc elapsed
+        // assertion. Own the whole operation in a child: TestChild's outer watchdog
+        // kills and reaps it on failure instead of leaving a blocked test thread.
+        let directory = tempfile::tempdir().unwrap();
+        let mut child = crate::test_support::TestChild::spawn(
+            crate::test_support::rerun(NAME)
+                .arg("--nocapture")
+                .env("ATLAS_READ_FILE_FIXTURE", NAME)
+                .env("ATLAS_READ_FILE_ROOT", directory.path()),
+        );
+        child.expect("checking non-regular files");
+        child.expect("non-regular files refused");
+        assert!(child.wait().success());
+        return;
+    }
+
+    let places = Places {
+        home: std::fs::canonicalize(std::env::var_os("ATLAS_READ_FILE_ROOT").unwrap()).unwrap(),
+        temporary: None,
+    };
     std::fs::create_dir(places.home.join("folder")).unwrap();
     nix::unistd::mkfifo(&places.home.join("pipe"), nix::sys::stat::Mode::S_IRWXU).unwrap();
     settle();
-    let started = std::time::Instant::now();
+    crate::test_support::message("checking non-regular files");
     for path in ["folder", "pipe"] {
-        let (reply, _) = served(&request(path, 0, 16), &places);
+        let (reply, bytes) = served(&request(path, 0, 16), &places);
         assert_eq!(reply["reason"], "not-regular", "{path}: {reply}");
+        assert!(bytes.is_empty(), "{path} sent no file contents");
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "a pipe never waits"
-    );
+    crate::test_support::message("non-regular files refused");
 }
 
 #[test]
