@@ -12,7 +12,10 @@ use crate::{
 };
 use nix::errno::Errno;
 use serde_json::json;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::{
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    task::Poll,
+};
 
 const UID: u32 = 502;
 const BOOT: &str = "6A1E0000-0000-0000-0000-000000000000";
@@ -939,12 +942,33 @@ async fn a_failed_supervisor_never_reports_a_settled_job() {
     let before = std::fs::read(&path).unwrap();
     table.panic_on_read.store(true, Ordering::SeqCst);
     let (_stopping, stopped) = tokio::sync::watch::channel(false);
-    let outcome = tokio::time::timeout(
-        Duration::from_secs(10),
-        supervise(jobs.clone(), folder.path().join("stop"), || false, stopped),
-    )
-    .await
-    .unwrap();
+    let mut supervisor = Box::pin(supervise(
+        jobs.clone(),
+        folder.path().join("stop"),
+        || false,
+        stopped,
+    ));
+    // Poll directly so the first timer is registered without running a blocking worker.
+    // Resume real time before joining that worker: paused-time auto-advance must not
+    // race its readiness or turn the outer watchdog into an immediate timeout.
+    tokio::time::pause();
+    assert!(
+        std::future::poll_fn(|cx| Poll::Ready(supervisor.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    tokio::time::advance(Duration::from_millis(999)).await;
+    assert!(
+        std::future::poll_fn(|cx| Poll::Ready(supervisor.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    assert!(!jobs.unavailable.load(Ordering::SeqCst));
+    tokio::time::advance(Duration::from_millis(1)).await;
+    tokio::time::resume();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), supervisor)
+        .await
+        .unwrap();
     let error = outcome.unwrap_err();
     assert_eq!(error.code, Code::Job);
     let cause = std::error::Error::source(&error)
@@ -1067,12 +1091,30 @@ async fn stopping_supervision_joins_the_in_flight_worker() {
     let (release, waiting) = std::sync::mpsc::channel();
     *table.watching.lock().unwrap() = Some((entered, waiting));
     let (stopping, stopped) = tokio::sync::watch::channel(false);
-    let supervisor = tokio::spawn(supervise(
+    let mut supervisor = Box::pin(supervise(
         jobs.clone(),
         folder.path().join("stop"),
         || false,
         stopped,
     ));
+    // Register and advance only the first sampling timer. The real worker handshake
+    // and its shutdown watchdog run after resuming real time, without auto-advance.
+    tokio::time::pause();
+    assert!(
+        std::future::poll_fn(|cx| Poll::Ready(supervisor.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    tokio::time::advance(Duration::from_millis(999)).await;
+    assert!(
+        std::future::poll_fn(|cx| Poll::Ready(supervisor.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    assert!(table.watching.lock().unwrap().is_some());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    tokio::time::resume();
+    let supervisor = tokio::spawn(supervisor);
     tokio::time::timeout(Duration::from_secs(10), watching)
         .await
         .unwrap()
