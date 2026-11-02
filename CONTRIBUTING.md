@@ -50,18 +50,20 @@ compile is not evidence that the packaged helper passes macOS consent checks.
 
 ## Where things live
 
-| Path            | What it holds                                                                  |
-| --------------- | ------------------------------------------------------------------------------ |
-| `crates/core`   | names, errors, time, wire types and what Atlas observes                        |
-| `crates/native` | capture, accessibility, input and the held-input journal                       |
-| `crates/daemon` | the helper daemon, and the helper's layout, launchd jobs and first login       |
-| `crates/client` | requests to the helper, control, copies into it, and setup from the controller |
-| `crates/cli`    | the `atlas` command, viewer, MCP server, menu bar and onboarding               |
-| `app/`          | Atlas.app in Swift 6: AtlasApp and its `Packages/`                             |
-| `agents/`       | bundled skills, MCP registration and supported host integrations               |
-| `scripts/`      | repository checks and live checks against a real helper                        |
-| `tests/`        | Node tests, shared fixtures and the native test fixture                        |
-| `xtask/`        | release builds (`cargo xtask dist`)                                            |
+| Path             | What it holds                                                            |
+| ---------------- | ------------------------------------------------------------------------ |
+| `crates/core`    | names, errors, time, wire types and what Atlas observes                  |
+| `crates/native`  | capture, accessibility, input and the held-input journal                 |
+| `crates/daemon`  | the helper daemon, and the helper's layout, launchd jobs and first login |
+| `crates/control` | who may act on the helper, cancellation and what is still pending        |
+| `crates/client`  | requests to the helper, copies into it, and setup from the controller    |
+| `crates/agents`  | connecting coding agents to Atlas, and the guide they read               |
+| `crates/cli`     | the `atlas` command, viewer, MCP server, menu bar and onboarding         |
+| `app/`           | Atlas.app in Swift 6: AtlasApp and its `Packages/`                       |
+| `agents/`        | bundled skills, MCP registration and supported host integrations         |
+| `scripts/`       | repository checks and live checks against a real helper                  |
+| `tests/`         | Node tests, shared fixtures and the native test fixture                  |
+| `xtask/`         | release builds (`cargo xtask dist`)                                      |
 
 See [Architecture](docs/architecture.md) for the process model, Rust responsibilities
 and Swift package dependencies. Public user guides live in [docs/](docs/README.md).
