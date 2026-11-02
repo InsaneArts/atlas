@@ -1279,3 +1279,219 @@ fn reopened_jobs_are_adopted_by_fresh_identity() {
     assert_eq!(std::fs::read(unreadable).unwrap(), b"{");
     assert!(table.signals().is_empty());
 }
+
+fn raw_job_files(folder: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+    std::fs::read_dir(folder.join("jobs"))
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let bytes = std::fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn refused_raw_job_fields_never_signal_or_rewrite_the_running_job() {
+    use crate::daemon::serve::tests::exchange_with_jobs;
+
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    let jobs = Arc::new(jobs);
+    let before = raw_job_files(folder.path());
+    let reads = table.reads.load(Ordering::SeqCst);
+    let expected = json!(record().expected().unwrap());
+    let start = json!({"op":"job","action":"start","argv":["/usr/bin/true"],
+        "uid":UID,"lifetimeMs":1000,"name":"job","task":"123456abcdef",
+        "hostSession":"abcdef123456","session":{"securitySessionId":42,"displayId":7}});
+    let stop = json!({"op":"job","action":"stop","id":ID,"expect":expected,"graceMs":1000});
+    let all = json!({"op":"job","action":"stop-all","reason":"person"});
+    let mut refused = Vec::new();
+    for (request, fields) in [
+        (&start, &["op", "action", "argv", "uid", "lifetimeMs"][..]),
+        (&stop, &["op", "action", "id", "expect"][..]),
+        (&all, &["op", "action", "reason"][..]),
+    ] {
+        for field in fields {
+            let mut missing = (*request).clone();
+            missing.as_object_mut().unwrap().remove(*field);
+            refused.push(missing.to_string());
+            for value in [Value::Null, json!(true), json!([]), json!({})] {
+                let mut malformed = (*request).clone();
+                malformed[*field] = value;
+                refused.push(malformed.to_string());
+            }
+        }
+    }
+    for field in ["name", "task", "hostSession", "session"] {
+        for value in [json!(true), json!(7), json!([]), json!({})] {
+            let mut malformed = start.clone();
+            malformed[field] = value;
+            refused.push(malformed.to_string());
+        }
+    }
+    for field in ["boot", "pid", "start", "pgid"] {
+        let mut missing = stop.clone();
+        missing["expect"].as_object_mut().unwrap().remove(field);
+        refused.push(missing.to_string());
+        for value in [Value::Null, json!(true), json!([]), json!({})] {
+            let mut malformed = stop.clone();
+            malformed["expect"][field] = value;
+            refused.push(malformed.to_string());
+        }
+    }
+    for (request, field, value) in [
+        (&start, "argv", json!([])),
+        (&start, "argv", json!([""])),
+        (&start, "argv", json!(["/usr/bin/true", null])),
+        (&start, "lifetimeMs", json!(999)),
+        (&start, "lifetimeMs", json!(86400001)),
+        (&start, "uid", json!(-1)),
+        (&start, "uid", json!(4294967296_u64)),
+        (&start, "name", json!("")),
+        (&start, "name", json!("é".repeat(65))),
+        (&start, "name", json!("a\nb")),
+        (&start, "task", json!("ABCDEF123456")),
+        (&start, "hostSession", json!("../session")),
+        (&start, "session", json!({"securitySessionId":42})),
+        (
+            &start,
+            "session",
+            json!({"securitySessionId":42,"displayId":7,"uid":UID}),
+        ),
+        (&stop, "id", json!("7C2E91A04B3F")),
+        (&stop, "id", json!("7c2e91a04b3")),
+        (&stop, "graceMs", json!(999)),
+        (&stop, "graceMs", json!(60001)),
+        (&stop, "graceMs", json!("1000")),
+        (
+            &stop,
+            "expect",
+            json!({"boot":BOOT,"pid":4312,"start":START,"pgid":4312,"uid":UID}),
+        ),
+        (&all, "reason", json!("later")),
+    ] {
+        let mut malformed = (*request).clone();
+        malformed[field] = value;
+        refused.push(malformed.to_string());
+    }
+    refused.push(format!(
+        r#"{{"op":"job","action":"stop","id":"{ID}","expect":{{"boot":"{BOOT}","pid":4312,"\u0070id":null,"start":{start},"pgid":4312}}}}"#,
+        start = json!(START)
+    ));
+    for request in refused {
+        let replies = exchange_with_jobs(jobs.clone(), &request).await;
+        assert_eq!(replies.len(), 1, "{request}: {replies:?}");
+        assert_eq!(replies[0]["code"], "bad-request", "{request}: {replies:?}");
+        assert_eq!(replies[0]["uncertain"], false, "{request}");
+        assert!(table.signals().is_empty(), "{request}");
+        assert_eq!(table.reads.load(Ordering::SeqCst), reads, "{request}");
+        assert_eq!(raw_job_files(folder.path()), before, "{request}");
+    }
+
+    let replies = exchange_with_jobs(jobs, &stop.to_string()).await;
+    assert_eq!(replies[0]["ok"], true, "{replies:?}");
+    assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
+    assert!(table.reads.load(Ordering::SeqCst) > reads);
+    assert_ne!(raw_job_files(folder.path()), before);
+}
+
+#[tokio::test]
+async fn raw_job_stop_defaults_and_duplicate_members_keep_the_selected_effect() {
+    use crate::daemon::serve::tests::exchange_with_jobs;
+
+    let expected = json!(record().expected().unwrap());
+    for (fields, grace) in [
+        (String::new(), 5000),
+        (r#", "graceMs":null"#.into(), 5000),
+        (r#", "graceMs":0,"graceMs":1000"#.into(), 1000),
+        (r#", "graceMs":1000,"\u0067raceMs":null"#.into(), 5000),
+        (r#", "other":null,"other":true"#.into(), 5000),
+        (
+            format!(
+                r#", "expect":{{"pid":null,"boot":"{BOOT}","start":{start},"pgid":4312,"\u0070id":4312}}"#,
+                start = json!(START)
+            ),
+            5000,
+        ),
+    ] {
+        let table = Table::with(vec![leader()]);
+        let (folder, jobs) = jobs_with(&record(), &table);
+        let jobs = Arc::new(jobs);
+        let request = format!(
+            r#"{{"op":"unknown","op":"job","action":"stop","id":"{ID}","expect":{expected}{fields}}}"#
+        );
+        let replies = exchange_with_jobs(jobs.clone(), &request).await;
+        assert_eq!(replies[0]["ok"], true, "{request}: {replies:?}");
+        assert_eq!(table.signals(), [(4312, Signal::SIGTERM)], "{request}");
+        let stored: Record = serde_json::from_slice(
+            &std::fs::read(folder.path().join("jobs").join(format!("{ID}.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stored.state, JobState::Stopping, "{request}");
+        assert_eq!(stored.stopping.unwrap().grace_ms, grace, "{request}");
+        assert!(jobs.state().unwrap().children.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn raw_job_stop_all_reasons_signal_only_the_recorded_group() {
+    use crate::daemon::serve::tests::exchange_with_jobs;
+
+    for reason in [
+        json!("person"),
+        json!("on-console"),
+        json!("stopped"),
+        json!({"person":null}),
+    ] {
+        let table = Table::with(vec![leader(), process(9000, later(1), 9000, 1)]);
+        let (folder, jobs) = jobs_with(&record(), &table);
+        let jobs = Arc::new(jobs);
+        let request = format!(
+            r#"{{"op":"job","action":"stop-all","reason":"later","reason":{reason},"other":1}}"#
+        );
+        let replies = exchange_with_jobs(jobs.clone(), &request).await;
+        assert_eq!(replies[0]["ok"], true, "{request}: {replies:?}");
+        assert_eq!(replies[0]["stopping"], 1);
+        assert_eq!(table.signals(), [(4312, Signal::SIGTERM)], "{request}");
+        assert_eq!(raw_job_files(folder.path()).len(), 1);
+        assert!(jobs.state().unwrap().children.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn raw_job_expectation_mismatches_never_signal_or_rewrite_the_record() {
+    use crate::daemon::serve::tests::exchange_with_jobs;
+
+    let table = Table::with(vec![leader()]);
+    let (folder, jobs) = jobs_with(&record(), &table);
+    let jobs = Arc::new(jobs);
+    let before = raw_job_files(folder.path());
+    let expected = json!(record().expected().unwrap());
+    for (field, value) in [
+        ("boot", json!("")),
+        ("boot", json!("another-boot")),
+        ("pid", json!(0)),
+        ("pid", json!(4313)),
+        ("pgid", json!(-1)),
+        ("pgid", json!(4313)),
+        ("start", json!([0, 0])),
+        ("start", json!([START[0], 1000000])),
+        ("start", json!(later(1))),
+    ] {
+        let mut mismatch = expected.clone();
+        mismatch[field] = value;
+        let request = json!({"op":"job","action":"stop","id":ID,"expect":mismatch});
+        let replies = exchange_with_jobs(jobs.clone(), &request.to_string()).await;
+        assert_eq!(replies[0]["ok"], false, "{request}: {replies:?}");
+        assert_eq!(replies[0]["reason"], "identity", "{request}");
+        assert_eq!(replies[0]["uncertain"], false, "{request}");
+        assert!(table.signals().is_empty(), "{request}");
+        assert_eq!(raw_job_files(folder.path()), before, "{request}");
+    }
+    let request = json!({"op":"job","action":"stop","id":ID,"expect":expected});
+    let replies = exchange_with_jobs(jobs, &request.to_string()).await;
+    assert_eq!(replies[0]["ok"], true, "{replies:?}");
+    assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
+    assert_ne!(raw_job_files(folder.path()), before);
+}

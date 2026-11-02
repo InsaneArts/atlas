@@ -331,8 +331,19 @@ fn default_task(session: &Key) -> Task {
 
 fn plan_claimed(place: &Place, task: &Task) -> Token {
     let id = Token::new();
-    place.claim(task, Owned::Plan { id: id.clone() });
-    std::thread::sleep(std::time::Duration::from_millis(2));
+    let tasks = Tasks::at(&place.output);
+    let at = tasks
+        .all()
+        .iter()
+        .map(|record| record.updated)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    tasks
+        .update(task, at, |record| {
+            record.claim(&Owned::Plan { id: id.clone() }, State::Made, at)
+        })
+        .unwrap();
     id
 }
 

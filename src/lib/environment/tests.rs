@@ -859,80 +859,92 @@ fn file_progress_at(sandbox: &Sandbox, operation: Operation, boundary: &str) -> 
     plan
 }
 
-#[test]
-fn every_persisted_progress_transition_can_resume_after_restart() {
-    for operation in [
-        Operation::Create,
-        Operation::Update,
-        Operation::Permissions,
-        Operation::Unchanged,
+fn persisted_progress_resumes(operation: Operation) {
+    for boundary in [
+        "initial",
+        "unrecorded prepared inode",
+        "prepared evidence",
+        "installation",
+        "apply ledger",
+        "applied acknowledgement",
+        "applied phase",
+        "rollback intent",
+        "unrecorded restore inode",
+        "restore evidence",
+        "reverting intent",
+        "file restoration",
+        "restore ledger",
+        "restored acknowledgement",
+        "kept ledger",
+        "kept acknowledgement",
     ] {
-        for boundary in [
-            "initial",
-            "unrecorded prepared inode",
-            "prepared evidence",
-            "installation",
-            "apply ledger",
-            "applied acknowledgement",
-            "applied phase",
-            "rollback intent",
-            "unrecorded restore inode",
-            "restore evidence",
-            "reverting intent",
-            "file restoration",
-            "restore ledger",
-            "restored acknowledgement",
-            "kept ledger",
-            "kept acknowledgement",
-        ] {
-            if (operation == Operation::Unchanged
-                && ["unrecorded prepared inode", "prepared evidence"].contains(&boundary))
-                || (matches!(operation, Operation::Create | Operation::Unchanged)
-                    && ["unrecorded restore inode", "restore evidence"].contains(&boundary))
-            {
-                continue;
-            }
-            let sandbox = Sandbox::new();
-            let plan = file_progress_at(&sandbox, operation, boundary);
-            let store = state::Store::open(&sandbox.home, Lock::Shared).unwrap();
-            let transaction = store.transaction(&plan.id).unwrap().unwrap();
-            let bytes = fs::read(store.folder(&plan.id).join("transaction.json")).unwrap();
-            assert_eq!(serde_json::to_vec_pretty(&transaction).unwrap(), bytes);
-            let resume_apply = matches!(transaction.phase, Phase::Applying | Phase::Applied);
-            drop(store);
-            if resume_apply {
-                assert_eq!(
-                    sandbox.apply(&plan)["ok"],
-                    true,
-                    "{operation:?}: {boundary}"
-                );
-            }
-            let result = sandbox.rollback(&plan, true);
-            assert_eq!(
-                result["rolledBack"], true,
-                "{operation:?}: {boundary}: {result}"
-            );
-            let path = sandbox.home.join("file");
-            if boundary.starts_with("kept") {
-                assert_eq!(fs::read(path).unwrap(), b"helper edit");
-                assert_eq!(result["keptTargets"], json!(["file"]));
-            } else if operation == Operation::Create {
-                assert!(!path.exists());
-            } else {
-                let expected = if operation == Operation::Update {
-                    b"before".as_slice()
-                } else {
-                    b"after".as_slice()
-                };
-                assert_eq!(fs::read(&path).unwrap(), expected);
-                assert_eq!(
-                    fs::metadata(path).unwrap().mode() & 0o777,
-                    plan.files[0].before.as_ref().unwrap().mode
-                );
-            }
-            assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
+        if (operation == Operation::Unchanged
+            && ["unrecorded prepared inode", "prepared evidence"].contains(&boundary))
+            || (matches!(operation, Operation::Create | Operation::Unchanged)
+                && ["unrecorded restore inode", "restore evidence"].contains(&boundary))
+        {
+            continue;
         }
+        let sandbox = Sandbox::new();
+        let plan = file_progress_at(&sandbox, operation, boundary);
+        let store = state::Store::open(&sandbox.home, Lock::Shared).unwrap();
+        let transaction = store.transaction(&plan.id).unwrap().unwrap();
+        let bytes = fs::read(store.folder(&plan.id).join("transaction.json")).unwrap();
+        assert_eq!(serde_json::to_vec_pretty(&transaction).unwrap(), bytes);
+        let resume_apply = matches!(transaction.phase, Phase::Applying | Phase::Applied);
+        drop(store);
+        if resume_apply {
+            assert_eq!(
+                sandbox.apply(&plan)["ok"],
+                true,
+                "{operation:?}: {boundary}"
+            );
+        }
+        let result = sandbox.rollback(&plan, true);
+        assert_eq!(
+            result["rolledBack"], true,
+            "{operation:?}: {boundary}: {result}"
+        );
+        let path = sandbox.home.join("file");
+        if boundary.starts_with("kept") {
+            assert_eq!(fs::read(path).unwrap(), b"helper edit");
+            assert_eq!(result["keptTargets"], json!(["file"]));
+        } else if operation == Operation::Create {
+            assert!(!path.exists());
+        } else {
+            let expected = if operation == Operation::Update {
+                b"before".as_slice()
+            } else {
+                b"after".as_slice()
+            };
+            assert_eq!(fs::read(&path).unwrap(), expected);
+            assert_eq!(
+                fs::metadata(path).unwrap().mode() & 0o777,
+                plan.files[0].before.as_ref().unwrap().mode
+            );
+        }
+        assert_eq!(sandbox.rollback(&plan, true)["rolledBack"], true);
     }
+}
+
+#[test]
+fn every_persisted_create_transition_can_resume_after_restart() {
+    persisted_progress_resumes(Operation::Create);
+}
+
+#[test]
+fn every_persisted_update_transition_can_resume_after_restart() {
+    persisted_progress_resumes(Operation::Update);
+}
+
+#[test]
+fn every_persisted_permission_transition_can_resume_after_restart() {
+    persisted_progress_resumes(Operation::Permissions);
+}
+
+#[test]
+fn every_persisted_unchanged_transition_can_resume_after_restart() {
+    persisted_progress_resumes(Operation::Unchanged);
 }
 
 #[test]
@@ -1852,7 +1864,10 @@ fn only_old_readable_plans_without_unknown_requests_are_pruned() {
     let stage = stage_in(&sandbox.root, &id);
 
     fs::create_dir(sandbox.root.join(format!("environment-run-{id}"))).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::File::open(&stage)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(1))
+        .unwrap();
 
     assert_eq!(
         older(
@@ -1884,7 +1899,10 @@ fn old_command_folders_are_pruned() {
     let run = sandbox.root.join(format!("environment-run-{id}"));
     fs::create_dir(&run).unwrap();
     stage_in(&sandbox.root, &crate::files::token());
-    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::File::open(&run)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(1))
+        .unwrap();
 
     assert_eq!(
         older(&sandbox.root, "environment-run-", std::time::Duration::ZERO)
@@ -3527,10 +3545,16 @@ fn a_plans_lock_looked_at_for_an_instant_is_waited_out() {
     FileExt::try_lock_shared(&looking).unwrap();
 
     let locked = std::thread::scope(|scope| {
-        let waiting = scope.spawn(|| lock_stage(&stage).map(|_| ()));
-        std::thread::sleep(Duration::from_millis(50));
+        let (notice, contended) = std::sync::mpsc::channel();
+        let waiting = scope.spawn(|| {
+            crate::files::on_next_lock_contention(notice);
+            lock_stage(&stage).map(|_| ())
+        });
+        let contention = contended.recv_timeout(Duration::from_secs(5));
         drop(looking);
-        waiting.join().unwrap()
+        let result = waiting.join().unwrap();
+        assert!(contention.is_ok(), "the plan lock was actually contended");
+        result
     });
     assert!(locked.is_ok(), "{locked:?}");
 

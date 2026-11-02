@@ -266,6 +266,15 @@ impl Controller {
         self
     }
 
+    /// A fixture whose positive configured wait allowance has already ended.
+    #[cfg(test)]
+    pub(crate) fn waiting_with_spent_allowance(mut self, wait: Duration) -> Self {
+        assert!(!wait.is_zero(), "the fixture retains a configured wait");
+        self.wait = wait;
+        self.until = Some(Instant::now());
+        self
+    }
+
     /// What remains of this command's shared control-wait allowance.
     pub(crate) fn remaining(&self) -> Duration {
         self.remaining_at(Instant::now())

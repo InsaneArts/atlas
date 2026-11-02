@@ -232,15 +232,24 @@ async fn a_recent_read_protects_an_unreadable_neighbour_with_old_tasks_from_clea
 
 #[tokio::test]
 async fn a_session_that_acts_while_adoption_waits_for_control_is_not_adopted() {
+    use crate::control::WaitEvent;
     use crate::host_session::store::{Kind, note};
 
     let directory = tempfile::tempdir().unwrap();
-    let (client, neighbour) = ended_neighbour(directory.path());
+    let (mut client, neighbour) = ended_neighbour(directory.path());
+    let (waiting, began) = std::sync::mpsc::channel();
+    client.controller = client.controller.on_wait(move |event| {
+        if event == WaitEvent::Began {
+            waiting.send(()).unwrap();
+        }
+    });
     let scope = Scope::of(&client, Some(neighbour.key()), None).unwrap();
     let held = client.controller.acquire(false).unwrap();
     let acting = client.clone();
     let waker = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        began
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("adoption reached its held controller lock");
         note(
             &acting,
             &neighbour,

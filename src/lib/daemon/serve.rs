@@ -899,7 +899,7 @@ async fn deliver<W: AsyncWrite + Unpin>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::daemon::protocol::{Crop, JobRequest, Region};
     use crate::daemon::run::tests::child::Processes;
@@ -1429,6 +1429,15 @@ mod tests {
     /// Send one request line over a socket pair and collect every reply line.
     async fn exchange(daemon: Arc<Daemon>, request: &str) -> Vec<Value> {
         exchange_as(daemon, request, true).await
+    }
+
+    pub(in crate::daemon) async fn exchange_with_jobs(
+        jobs: Arc<Jobs>,
+        request: &str,
+    ) -> Vec<Value> {
+        let mut daemon = daemon(false);
+        Arc::get_mut(&mut daemon).unwrap().jobs = Some(jobs);
+        exchange(daemon, request).await
     }
 
     /// [`exchange`] from the controller, or from the helper's own account.

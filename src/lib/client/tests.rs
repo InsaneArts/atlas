@@ -975,8 +975,9 @@ async fn a_stop_while_release_is_unanswered_waits_for_it() {
     let mut input = dispatched(&mut caller, &listener, "input").await;
     answer(&mut input, json!({"ok": true, "performed": 2})).await;
     let mut release = dispatched(&mut caller, &listener, "release").await;
+    tokio::time::pause();
     interrupt.ask(Signal::SIGTERM);
-    tokio::time::sleep(SOON).await;
+    tokio::time::advance(SOON).await;
 
     answer(&mut release, json!({"ok": true})).await;
     assert_eq!(caller.await.unwrap()["ok"], true);
@@ -998,8 +999,9 @@ async fn a_release_still_unanswered_after_the_grace_stays_pending() {
     let mut input = dispatched(&mut caller, &listener, "input").await;
     answer(&mut input, json!({"ok": true, "performed": 2})).await;
     let _release = dispatched(&mut caller, &listener, "release").await;
+    tokio::time::pause();
     interrupt.ask(Signal::SIGTERM);
-    let asked = Instant::now();
+    let asked = tokio::time::Instant::now();
 
     let error = tokio::time::timeout(GRACE * 4, caller)
         .await
@@ -1095,8 +1097,9 @@ async fn a_run_that_ends_within_the_grace_is_settled() {
     let run = json!({"op": "run", "argv": ["true"], "timeoutMs": 1000});
     let mut caller = Box::pin(acting.mutate(Mutation::Run, run, None, None, None));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
+    tokio::time::pause();
     interrupt.ask(Signal::SIGTERM);
-    tokio::time::sleep(SOON).await;
+    tokio::time::advance(SOON).await;
 
     answer(
         &mut peer,
@@ -1218,8 +1221,7 @@ async fn a_controller_that_does_not_wait_tries_the_grant_once() {
         let (_dir, mut client, listener, session) = native_client();
         if let Some(wait) = wait {
             // A wait already spent on the lock leaves none for the grant.
-            client.controller = client.controller.waiting(wait);
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            client.controller = client.controller.waiting_with_spent_allowance(wait);
         }
         let mut caller = Box::pin(standalone_input(&client, &session));
         let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
@@ -1849,7 +1851,7 @@ fn an_expectation_is_sent_only_to_a_service_that_names_the_capability() {
 /// A login is gone only once it is seen gone twice in a row and its
 /// daemon stopped answering; a look in between that sees it again
 /// starts the count over.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_login_is_gone_only_when_seen_gone_twice_and_silent() {
     use std::{cell::RefCell, collections::VecDeque};
 

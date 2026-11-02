@@ -201,6 +201,23 @@ pub(crate) struct Held;
 /// How often a lock that looks held is tried again.
 const LOCK_POLL: Duration = Duration::from_millis(5);
 
+#[cfg(test)]
+std::thread_local! {
+    static NEXT_LOCK_CONTENTION: std::cell::RefCell<Option<std::sync::mpsc::Sender<()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Tell a fixture once this thread's next lock attempt actually would block.
+#[cfg(test)]
+pub(crate) fn on_next_lock_contention(notice: std::sync::mpsc::Sender<()>) {
+    NEXT_LOCK_CONTENTION.with(|next| {
+        assert!(
+            next.borrow_mut().replace(notice).is_none(),
+            "the fixture already waits for lock contention"
+        );
+    });
+}
+
 /// Take `lock` on `file`, trying again until `patience` has passed; none at
 /// all tries once.
 pub(crate) fn lock_within(
@@ -227,6 +244,18 @@ pub(crate) fn lock_retrying(
         };
         if taken.is_ok() {
             return Ok(());
+        }
+        #[cfg(test)]
+        if taken
+            .as_ref()
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock)
+        {
+            NEXT_LOCK_CONTENTION.with(|next| {
+                if let Some(notice) = next.borrow_mut().take() {
+                    // The fixture receiver may be gone after its outer watchdog fails.
+                    let _ = notice.send(());
+                }
+            });
         }
         if !retry(deadline) {
             return Err(Held);

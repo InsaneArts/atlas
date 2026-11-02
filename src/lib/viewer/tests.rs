@@ -863,6 +863,10 @@ fn input_service(
                             "error": "This token cannot release another controller",
                             "uncertain": false,
                         }),
+                        "input" => json!({
+                            "ok": true,
+                            "performed": request["actions"].as_array().map_or(0, Vec::len),
+                        }),
                         _ => json!({"ok": true}),
                     }
                 };
@@ -2209,4 +2213,194 @@ async fn control_tokens_keep_their_validation_order_for_missing_and_non_string_f
         }
     }
     Ok(())
+}
+
+async fn fresh_input_frame(viewer: &Viewer, key: &str) {
+    let epoch = epoch();
+    let frame = crate::client::Frame {
+        png: Arc::from(&b"stand-in frame"[..]),
+        width: 1,
+        height: 1,
+        display: epoch.display.clone(),
+        epoch,
+        at: std::time::Instant::now(),
+    };
+    let mut frames = viewer.frames.lock().await;
+    frames.items.clear();
+    frames.items.push_back((key.into(), Arc::new(frame)));
+}
+
+#[tokio::test]
+async fn raw_input_with_a_live_lease_rejects_the_whole_invalid_batch_before_native_dispatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("input.sock");
+    let (mut asked, _never) = input_service(&socket, "none");
+    let viewer = http::configured(
+        client_with_input(dir.path(), &socket),
+        "127.0.0.1:1".into(),
+        None,
+    );
+    let client = viewer.client();
+    let owner = viewer.take_control(&client, &epoch()).await.unwrap();
+    assert_eq!(asked.try_recv().ok().as_deref(), Some("acquire"));
+    let owner_json = json!(owner).to_string();
+    let mut rejected = vec![
+        "null".to_owned(),
+        "false".into(),
+        "1".into(),
+        r#""actions""#.into(),
+        "{}".into(),
+        "[]".into(),
+        json!(vec![json!({"type":"key","key":"a"}); 33]).to_string(),
+    ];
+    let alternatives = [
+        json!({"type":"pointer","phase":"down","x":0,"y":0}),
+        json!({"type":"move","x":0,"y":0}),
+        json!({"type":"click","x":0,"y":0}),
+        json!({"type":"drag","fromX":0,"fromY":0,"toX":0,"toY":0}),
+        json!({"type":"scroll","x":0,"y":0}),
+        json!({"type":"type","text":"a"}),
+        json!({"type":"key","key":"a"}),
+        json!({"type":"wait","ms":0}),
+    ];
+    for action in &alternatives {
+        for field in action.as_object().unwrap().keys() {
+            let mut missing = action.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            rejected.push(json!([{"type":"key","key":"a"}, missing]).to_string());
+            for wrong in [Value::Null, json!(true), json!([]), json!({})] {
+                let mut malformed = action.clone();
+                malformed[field] = wrong;
+                rejected.push(json!([{"type":"key","key":"a"}, malformed]).to_string());
+            }
+        }
+    }
+    for action in [
+        json!({"type":"key","key":"a","future":true}),
+        json!({"type":"pointer","phase":"down","x":0,"y":0,"button":null}),
+        json!({"type":"pointer","phase":"down","x":0,"y":0,"count":0}),
+        json!({"type":"click","x":0,"y":0,"count":6}),
+        json!({"type":"click","x":0,"y":0,"modifiers":[null]}),
+        json!({"type":"drag","fromX":0,"fromY":0,"toX":1,"toY":0}),
+        json!({"type":"scroll","x":0,"y":0,"dx":101}),
+        json!({"type":"type","text":""}),
+        json!({"type":"key","key":"invalid"}),
+        json!({"type":"wait","ms":251}),
+    ] {
+        rejected.push(json!([{"type":"key","key":"a"}, action]).to_string());
+    }
+    rejected.push(r#"[{"type":"key","key":"a"},{"type":"key","key":"a","\u006bey":null}]"#.into());
+    for actions in std::iter::once(None).chain(rejected.into_iter().map(Some)) {
+        viewer.lease.lock().await.renew(&owner).unwrap();
+        fresh_input_frame(&viewer, "observed").await;
+        let revision = viewer.frames.lock().await.input_revision;
+        let actions = actions
+            .map(|actions| format!(r#", "actions":{actions}"#))
+            .unwrap_or_default();
+        let body = format!(r#"{{"lease":{owner_json},"frame":"observed"{actions}}}"#);
+        let (status, reply) = posted_raw(&viewer, "input", &body).await;
+        assert_eq!(status, 400, "{body}: {reply}");
+        assert!(
+            ["input", "invalid-json"].contains(&reply["code"].as_str().unwrap()),
+            "{body}: {reply}"
+        );
+        assert_eq!(reply["uncertain"], false, "{body}");
+        assert!(
+            matches!(
+                asked.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ),
+            "{body}"
+        );
+        viewer.lease.lock().await.require(&owner).unwrap();
+        assert!(client.controller.pending().unwrap().is_empty(), "{body}");
+        assert_eq!(viewer.frames.lock().await.input_revision, revision + 1);
+    }
+
+    for action in alternatives {
+        viewer.lease.lock().await.renew(&owner).unwrap();
+        fresh_input_frame(&viewer, "observed").await;
+        let body = format!(
+            r#"{{"lease":{owner_json},"frame":"observed","actions":[{action}],"other":1,"other":2}}"#
+        );
+        let (status, reply) = posted_raw(&viewer, "input", &body).await;
+        assert_eq!(
+            (status, reply["performed"].clone()),
+            (200, json!(1)),
+            "{body}: {reply}"
+        );
+        assert_eq!(asked.try_recv().ok().as_deref(), Some("input"), "{body}");
+        viewer.lease.lock().await.require(&owner).unwrap();
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
+    fresh_input_frame(&viewer, "observed").await;
+    let body = format!(
+        r#"{{"lease":"wrong","lease":{owner_json},"frame":"stale","\u0066rame":"observed","actions":null,"actions":[{{"type":"key","key":null,"key":"a"}}]}}"#
+    );
+    let (status, reply) = posted_raw(&viewer, "input", &body).await;
+    assert_eq!(
+        (status, reply["performed"].clone()),
+        (200, json!(1)),
+        "{reply}"
+    );
+    assert_eq!(asked.try_recv().ok().as_deref(), Some("input"));
+    viewer.release(Some(&owner)).await.unwrap();
+    assert_eq!(asked.try_recv().ok().as_deref(), Some("release"));
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn raw_input_frame_refusals_clean_up_only_the_live_lease_without_dispatching_input() {
+    for frame in [
+        None,
+        Some(Value::Null),
+        Some(json!(true)),
+        Some(json!(1)),
+        Some(json!([])),
+        Some(json!({})),
+        Some(json!("")),
+        Some(json!("stale")),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("input.sock");
+        let (mut asked, _never) = input_service(&socket, "none");
+        let viewer = http::configured(
+            client_with_input(dir.path(), &socket),
+            "127.0.0.1:1".into(),
+            None,
+        );
+        let client = viewer.client();
+        let owner = viewer.take_control(&client, &epoch()).await.unwrap();
+        assert_eq!(asked.try_recv().ok().as_deref(), Some("acquire"));
+        fresh_input_frame(&viewer, "observed").await;
+        let valid = json!({"lease":owner,"frame":"observed","actions":[{"type":"key","key":"a"}]});
+        let (status, reply) = posted(&viewer, "input", &valid).await;
+        assert_eq!(
+            (status, reply["performed"].clone()),
+            (200, json!(1)),
+            "{reply}"
+        );
+        assert_eq!(asked.try_recv().ok().as_deref(), Some("input"));
+        fresh_input_frame(&viewer, "observed").await;
+        let revision = viewer.frames.lock().await.input_revision;
+        let mut malformed = valid;
+        match frame {
+            Some(frame) => malformed["frame"] = frame,
+            None => {
+                malformed.as_object_mut().unwrap().remove("frame");
+            }
+        }
+        let (status, reply) = posted(&viewer, "input", &malformed).await;
+        assert_eq!(status, 409, "{malformed}: {reply}");
+        assert_eq!(reply["code"], "stale-frame", "{malformed}");
+        assert_eq!(reply["uncertain"], false, "{malformed}");
+        assert_eq!(asked.try_recv().ok().as_deref(), Some("release"));
+        assert!(matches!(
+            asked.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(!viewer.lease.lock().await.active());
+        assert!(client.controller.pending().unwrap().is_empty());
+        assert_eq!(viewer.frames.lock().await.input_revision, revision);
+    }
 }

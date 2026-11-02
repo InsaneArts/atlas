@@ -110,9 +110,16 @@ fn the_status_lists_recent_host_sessions_and_who_holds_the_helper() {
         .unwrap();
     };
     let sessions: Vec<HostSession> = (0..10).map(|n| session(format!("worker-{n}"))).collect();
-    for each in &sessions {
+    let recent = crate::host_session::now_ms() - 1_000;
+    for (index, each) in sessions.iter().enumerate() {
         worked(each);
-        std::thread::sleep(Duration::from_millis(2));
+        let at = recent + index as u64;
+        crate::host_session::store::Store::at(client.output_dir().unwrap())
+            .update(each, at, &client.controller, |record| {
+                record.started = at;
+                record.last_seen = at;
+            })
+            .unwrap();
     }
 
     // One long idle, with an unknown outcome of its own.
