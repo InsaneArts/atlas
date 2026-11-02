@@ -269,6 +269,12 @@ impl Pending {
                     if !ok.is_boolean() {
                         return Err(Error::new(Code::Protocol, "Invalid success flag"));
                     }
+                    if object
+                        .get("uncertain")
+                        .is_some_and(|flag| !flag.is_boolean())
+                    {
+                        return Err(Error::new(Code::Protocol, "Invalid uncertainty flag"));
+                    }
 
                     object.insert(
                         "elapsedMs".into(),
@@ -448,9 +454,9 @@ pub fn with_output(mut reply: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{OUTPUT_LIMIT, OutputError, Transport, accepted, refused, run_output, with_output};
-    use crate::error::{Code, Error};
+    use crate::error::{Code, Error, Result};
     use base64::{Engine, engine::general_purpose::STANDARD};
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::{cell::Cell, error::Error as _, io, sync::Arc, time::Duration};
     use tokio::time::{Instant, timeout};
 
@@ -682,6 +688,69 @@ mod tests {
         };
 
         (dir, listener, transport)
+    }
+
+    /// A verified peer answers only after reading the complete request line.
+    async fn reply_line(reply: &str) -> Result<Value> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let (_dir, listener, transport) = listening();
+        let reply = reply.to_owned();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut peer = BufReader::new(stream);
+            let mut request = String::new();
+            assert!(peer.read_line(&mut request).await.unwrap() > 0);
+            assert!(request.ends_with('\n'));
+            peer.get_mut().write_all(reply.as_bytes()).await.unwrap();
+        });
+        let result = transport.call(&json!({"op": "status"})).await;
+        server.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn malformed_uncertainty_in_a_final_reply_is_an_unknown_protocol_outcome() {
+        for ok in [false, true] {
+            for flag in crate::test_support::invalid_uncertainty_flags() {
+                let reply = json!({"ok": ok, "uncertain": flag});
+                let error = reply_line(&format!("{reply}\n")).await.unwrap_err();
+                assert_eq!(error.code, Code::Protocol);
+                assert_eq!(error.error, "Invalid uncertainty flag");
+                assert!(error.uncertain, "the complete request was sent");
+                assert!(
+                    !serde_json::to_string(&error)
+                        .unwrap()
+                        .contains("private-uncertainty-input-canary")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn valid_reply_uncertainty_keeps_legacy_presence_and_last_member_semantics() {
+        for ok in [false, true] {
+            for fields in [
+                "",
+                ",\"uncertain\":false",
+                ",\"uncertain\":true",
+                ",\"uncertain\":null,\"uncertain\":false",
+                ",\"uncertain\":{},\"uncertain\":true",
+                ",\"uncertain\":\"opaque\",\"uncertain\":false",
+            ] {
+                let line = format!("{{\"ok\":{ok},\"extension\":{{\"kept\":1}}{fields}}}");
+                let mut actual = reply_line(&format!("{line}\n")).await.unwrap();
+                assert!(actual["elapsedMs"].is_number());
+                actual.as_object_mut().unwrap().remove("elapsedMs");
+                assert_eq!(actual, serde_json::from_str::<Value>(&line).unwrap());
+            }
+        }
+
+        let event = json!({"event": "future-event", "uncertain": "opaque-extension"});
+        let reply = reply_line(&format!("{event}\n{{\"ok\":true}}\n"))
+            .await
+            .unwrap();
+        assert_eq!(reply["events"], json!([event]));
     }
 
     /// The client refuses exactly the requests the helper daemon would: a

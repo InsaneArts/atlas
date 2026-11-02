@@ -35,6 +35,21 @@ pub(crate) fn unsupported_report_roots() -> Vec<serde_json::Value> {
     ]
 }
 
+/// Present final-reply flags that cannot establish whether an outcome is known.
+pub(crate) fn invalid_uncertainty_flags() -> Vec<serde_json::Value> {
+    use serde_json::json;
+    vec![
+        json!(null),
+        json!(0),
+        json!(1),
+        json!(1.5),
+        json!("private-uncertainty-input-canary"),
+        json!([]),
+        json!([true]),
+        json!({"value": false}),
+    ]
+}
+
 /// This test binary, told to run only the test named `test`, exactly.
 pub(crate) fn rerun(test: &str) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());

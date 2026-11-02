@@ -155,6 +155,14 @@ impl Client {
             });
         }
 
+        if result["uncertain"] == true {
+            return Err(Error::new(
+                Code::Uncertain,
+                "Input service reported an uncertain outcome",
+            )
+            .uncertain());
+        }
+
         Ok(result)
     }
 

@@ -1364,6 +1364,141 @@ async fn an_acquisition_settles_only_an_acknowledged_outcome() {
 }
 
 #[tokio::test]
+async fn malformed_uncertainty_in_an_acquisition_keeps_its_original_claim() {
+    for ok in [false, true] {
+        for flag in crate::test_support::invalid_uncertainty_flags() {
+            let (_dir, client, listener, session) = native_client();
+            let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
+            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+            let original = client.controller.pending().unwrap();
+            assert_eq!(original.len(), 1);
+            answer(
+                &mut acquire,
+                json!({"ok": ok, "code": "busy", "error": "refused", "uncertain": flag}),
+            )
+            .await;
+            let result = caller.await;
+            assert_eq!(client.controller.pending().unwrap(), original);
+            let error = result.unwrap_err();
+            assert_eq!(error.code, Code::Protocol);
+            assert!(error.uncertain);
+            recovery_settles_the_abandoned_claim(&client);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_successful_but_uncertain_acquisition_keeps_its_original_claim() {
+    let (_dir, client, listener, session) = native_client();
+    let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
+    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+    let original = client.controller.pending().unwrap();
+    assert_eq!(original.len(), 1);
+    answer(&mut acquire, json!({"ok": true, "uncertain": true})).await;
+    let result = caller.await;
+    assert_eq!(client.controller.pending().unwrap(), original);
+    let error = result.unwrap_err();
+    assert_eq!(error.code, Code::Uncertain);
+    assert_eq!(error.error, "Input service reported an uncertain outcome");
+    assert!(error.uncertain);
+    recovery_settles_the_abandoned_claim(&client);
+}
+
+#[tokio::test]
+async fn a_successful_but_uncertain_release_keeps_its_original_claim() {
+    let (_dir, client, listener, session) = native_client();
+    let mut caller = Box::pin(standalone_input(&client, &session));
+    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
+    answer(&mut acquire, json!({"ok": true})).await;
+    let mut input = dispatched(&mut caller, &listener, "input").await;
+    let original = client.controller.pending().unwrap();
+    assert_eq!(original.len(), 1);
+    answer(&mut input, json!({"ok": true, "performed": 2})).await;
+    let mut release = dispatched(&mut caller, &listener, "release").await;
+    answer(&mut release, json!({"ok": true, "uncertain": true})).await;
+    let result = caller.await;
+    assert_eq!(client.controller.pending().unwrap(), original);
+    let error = result.unwrap_err();
+    assert_eq!(error.code, Code::Uncertain);
+    assert!(error.uncertain);
+    recovery_settles_the_abandoned_claim(&client);
+}
+
+#[tokio::test]
+async fn a_successful_but_uncertain_resume_keeps_the_local_stop() {
+    let (_dir, mut client, listener, _session) = native_client();
+    client.actor = Actor::Viewer;
+    client.controller.note_stop(true).unwrap();
+    let mut caller = Box::pin(client.hold(false));
+    let mut hello = dispatched(&mut caller, &listener, "hello").await;
+    answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
+    let mut hold = dispatched(&mut caller, &listener, "hold").await;
+    answer(
+        &mut hold,
+        json!({"ok": true, "held": false, "kept": true, "uncertain": true}),
+    )
+    .await;
+    let result = caller.await;
+    assert!(client.controller.stop_noted());
+    let error = result.unwrap_err();
+    assert_eq!(error.code, Code::Uncertain);
+    assert!(error.uncertain);
+}
+
+#[tokio::test]
+async fn malformed_uncertainty_after_a_sent_mutation_keeps_its_original_claim() {
+    for (mutation, request) in [
+        (
+            Mutation::Run,
+            json!({"op": "run", "argv": ["true"], "timeoutMs": 1000}),
+        ),
+        (
+            Mutation::JobStart,
+            json!({"op": "job", "action": "start", "argv": ["true"]}),
+        ),
+        (
+            Mutation::JobStop,
+            json!({"op": "job", "action": "stop", "id": "job"}),
+        ),
+    ] {
+        for flag in crate::test_support::invalid_uncertainty_flags() {
+            let (dir, client, input, _session) = native_client();
+            drop(input);
+            let (acting, helper, _interrupt) = running(dir.path(), client);
+            let ownership = acting.controller.acquire_beside_commands().unwrap();
+            let (held, release) = if matches!(mutation, Mutation::Run) {
+                (None, Some(ownership))
+            } else {
+                (Some(ownership), None)
+            };
+            let mut caller =
+                Box::pin(acting.mutate(mutation, request.clone(), None, None, release));
+            let mut peer = dispatched(&mut caller, &helper, request["op"].as_str().unwrap()).await;
+            let original = acting.controller.pending().unwrap();
+            assert_eq!(original.len(), 1);
+            answer(
+                &mut peer,
+                json!({"ok": false, "code": "job", "error": "unknown", "uncertain": flag}),
+            )
+            .await;
+            let result = caller.await;
+            assert_eq!(acting.controller.pending().unwrap(), original);
+            let error = result.unwrap_err();
+            assert_eq!(error.code, Code::Protocol);
+            assert!(error.uncertain);
+            if matches!(mutation, Mutation::Run) {
+                let log = fs::read_to_string(acting.output_dir().unwrap().join(activity_log::FILE))
+                    .unwrap();
+                let ended: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+                assert_eq!(ended["code"], "uncertain");
+            }
+            drop(held);
+            recovery_settles_the_abandoned_claim(&acting);
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_busy_input_service_says_who_holds_control() {
     for (holder, expected) in [
         (json!("person"), Some(Holder::Person)),
