@@ -2,14 +2,14 @@
 //! plugin ships inside Atlas.app, matching this CLI. Claude Code and Codex
 //! use a local marketplace; Pi references the package, and opencode loads
 //! a symlinked plugin. Each gets the Atlas skill, MCP and a session brief.
-use crate::{
+use atlas_client::{
     client::Client,
-    host_session::{Asker, HostSession, Recovery, brief},
+    host_session::{Asker, Recovery, brief},
 };
 use atlas_core::{
     config::Config,
     error::{Code, Error, Result},
-    host::Host,
+    host::{Host, HostSession},
 };
 use serde_json::{Value, json};
 use std::{
@@ -18,7 +18,9 @@ use std::{
     time::Duration,
 };
 
+pub mod claude_app;
 mod cursor;
+pub mod guide;
 mod opencode;
 mod pi;
 mod process;
@@ -903,7 +905,7 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
     };
 
     if let Some(session) = session {
-        let _ = crate::host_session::store::touch(&client, session);
+        let _ = atlas_client::host_session::store::touch(&client, session);
     }
 
     let causes = client.controller.pending_causes().unwrap_or_default();
@@ -922,7 +924,7 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
         );
     }
 
-    if crate::capability::doctor(status, config.helper_uid)["ready"] == true {
+    if atlas_client::capability::doctor(status, config.helper_uid)["ready"] == true {
         let mut line = format!(
             "Atlas {version}: ready. After any change a person could see, check it in the \
              hidden helper with the atlas skill before saying it works."

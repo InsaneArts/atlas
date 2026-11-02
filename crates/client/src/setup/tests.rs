@@ -292,7 +292,7 @@ async fn observing_a_blocked_transport_preserves_its_code_and_advice() {
         output_dir: dir.path().join("runs"),
     })
     .unwrap();
-    client.controller = crate::control::Controller::at(uid, &dir.path().join("state"));
+    client.controller = atlas_control::Controller::at(uid, &dir.path().join("state"));
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let listener = UnixListener::bind(&client.transport.path).unwrap();
     let status = json!({

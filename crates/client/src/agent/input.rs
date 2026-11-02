@@ -2,7 +2,8 @@
 //! text typed batch by batch in small parts, with a report of exactly how
 //! much was confirmed typed.
 use super::expect::Expected;
-use crate::{client::Client, interrupt::Interrupt};
+use crate::client::Client;
+use atlas_control::interrupt::Interrupt;
 use atlas_core::{
     actions::Button,
     error::{Code, Error, Holder, Result},

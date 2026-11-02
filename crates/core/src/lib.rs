@@ -3,7 +3,8 @@
 //!
 //! Nothing here reaches up to a macOS call or a controller decision. A
 //! dependency points only down the workspace: this crate, then
-//! `atlas-native`, `atlas-daemon`, `atlas-client` and `atlas-cli`.
+//! `atlas-native`, `atlas-daemon`, `atlas-control`, `atlas-client`,
+//! `atlas-agents` and `atlas-cli`.
 
 pub mod account;
 pub mod acl;

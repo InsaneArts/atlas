@@ -4,9 +4,9 @@
 //! by the task's own install.
 use crate::{
     client::{Client, Finished},
-    control::Ownership,
     handoff, task,
 };
+use atlas_control::Ownership;
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
 use std::{path::Path, time::Instant};

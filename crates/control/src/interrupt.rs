@@ -83,7 +83,7 @@ enum Held {
 /// Work under way that a stop waits for, until dropped.
 #[must_use = "a stop waits for the work only while it is held"]
 #[derive(Debug)]
-pub(crate) struct Hold {
+pub struct Hold {
     interrupt: Interrupt,
     held: Held,
 }
@@ -111,6 +111,12 @@ impl Interrupt {
             changed: Notify::new(),
             grace,
         }))
+    }
+
+    /// [`Interrupt::new`], for the tests of crates above.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_for_test(grace: Duration) -> Self {
+        Self::new(grace)
     }
 
     /// The stop this process's signals reach once it [`Interrupt::listen`]s,
@@ -153,6 +159,12 @@ impl Interrupt {
         });
     }
 
+    /// [`Interrupt::ask`], for the tests of crates above.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn ask_for_test(&self, signal: Signal) {
+        self.ask(signal);
+    }
+
     /// Ask for a stop, as a signal does: the first names it, and a later
     /// one cuts what is under way at once.
     pub(crate) fn ask(&self, signal: Signal) {
@@ -187,7 +199,11 @@ impl Interrupt {
     }
 
     /// Refuse to start a step once a stop was asked.
-    pub(crate) fn check(&self) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Returns the interruption once a stop was asked; nothing more was started.
+    pub fn check(&self) -> Result<()> {
         match self.asked() {
             None => Ok(()),
             Some(signal) => Err(interrupted(signal, "; nothing more was started.")),
@@ -203,18 +219,18 @@ impl Interrupt {
                 signal,
                 " while waiting for another Atlas command to finish; nothing was done.",
             )
-            .with("waited", serde_json::json!(crate::control::seconds(waited)))),
+            .with("waited", serde_json::json!(crate::seconds(waited)))),
         }
     }
 
-    /// A pending change under way; [`crate::control::Pending`] holds one.
+    /// A pending change under way; [`crate::Pending`] holds one.
     pub(crate) fn claim(&self) -> Hold {
         self.hold(Held::Claim)
     }
 
     /// A step that stops at its own next [`Interrupt::check`] and reports
     /// how far it got: a stop waits for it as for a change.
-    pub(crate) fn step(&self) -> Hold {
+    pub fn step(&self) -> Hold {
         self.hold(Held::Step)
     }
 
@@ -222,14 +238,14 @@ impl Interrupt {
     /// failed, even after a second signal: a request half sent changed
     /// nothing, and is settled as never sent, so it must not be dropped
     /// with its claim. Sending is bounded by its transport.
-    pub(crate) fn sending(&self) -> Hold {
+    pub fn sending(&self) -> Hold {
         self.hold(Held::Sending)
     }
 
     /// Once a stop was asked, the end of its grace (at once after a second
     /// signal), with the signal that asked: a step still under way is cut
     /// there, with [`Interrupt::cut_short`].
-    pub(crate) async fn cut(&self) -> Signal {
+    pub async fn cut(&self) -> Signal {
         self.when(|state| match state.asked {
             Some(asked) if Instant::now() >= asked.cut => ControlFlow::Break(asked.signal),
             asked => ControlFlow::Continue(asked.map(|asked| asked.cut)),
@@ -239,7 +255,7 @@ impl Interrupt {
 
     /// The failure of a step [`Interrupt::cut`] cut short, remembered so the
     /// command ends uncertain however it ends.
-    pub(crate) fn cut_short(&self, signal: Signal) -> Error {
+    pub fn cut_short(&self, signal: Signal) -> Error {
         self.change(|state| state.cut = true);
         cut_error(signal)
     }

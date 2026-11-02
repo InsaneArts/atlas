@@ -14,6 +14,7 @@ mod commands;
 mod executor;
 #[cfg(test)]
 mod faults;
+pub mod interrupt;
 mod lease;
 mod marker;
 mod notes;
@@ -27,9 +28,11 @@ pub use executor::{ExecutorClaims, record_executor};
 pub use lease::Lease;
 pub use lease::{ActionPermit, SharedLease};
 pub use notes::Note;
-pub(crate) use wait::poll;
-#[cfg(test)]
-pub(crate) use wait::{WaitEvent, WaitHook};
+#[cfg(any(test, feature = "test-support"))]
+pub use wait::WaitEvent;
+#[cfg(any(test, feature = "test-support"))]
+use wait::WaitHook;
+pub use wait::poll;
 
 use busy::busy_command;
 use by_generation::ByGeneration;
@@ -66,11 +69,11 @@ pub const CONTROL_WAIT_MAX: Duration = Duration::from_secs(600);
 pub(crate) const RUNNING_COMMANDS_MAX: usize = 8;
 
 /// The most notes of commands read at once, each read a process lookup.
-pub(crate) const NOTES_READ: usize = 128;
+pub const NOTES_READ: usize = 128;
 
 /// What an acquisition may go on beside.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Beside {
+pub enum Beside {
     /// Nothing pending at all, running or not.
     Nothing,
     /// Commands agents started with `run` that are still running. Every
@@ -202,7 +205,7 @@ pub struct Controller {
     /// Whether a Stop ends the wait and refuses control taken after one.
     heeds_stop: bool,
     /// Told when [`Controller::acquire`] starts waiting and when it stops.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     on_wait: Option<WaitHook>,
     /// The stop a signal asks: it refuses control from then on, and waits
     /// for the changes this controller has under way.
@@ -248,7 +251,7 @@ impl Controller {
             wait: Duration::ZERO,
             until: None,
             heeds_stop: false,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             on_wait: None,
             interrupt: Interrupt::process().clone(),
             label: None,
@@ -274,8 +277,12 @@ impl Controller {
     }
 
     /// A fixture whose positive configured wait allowance has already ended.
-    #[cfg(test)]
-    pub(crate) fn waiting_with_spent_allowance(mut self, wait: Duration) -> Self {
+    ///
+    /// # Panics
+    ///
+    /// Panics when `wait` is zero: the fixture retains a configured wait.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn waiting_with_spent_allowance(mut self, wait: Duration) -> Self {
         assert!(!wait.is_zero(), "the fixture retains a configured wait");
         self.wait = wait;
         self.until = Some(Instant::now());
@@ -283,7 +290,7 @@ impl Controller {
     }
 
     /// What remains of this command's shared control-wait allowance.
-    pub(crate) fn remaining(&self) -> Duration {
+    pub fn remaining(&self) -> Duration {
         self.remaining_at(Instant::now())
     }
 
@@ -307,9 +314,9 @@ impl Controller {
     /// refused at once, waits for nothing and tells nothing. A process that
     /// exits while waiting (`std::process::exit`, a signal) never tells
     /// [`WaitEvent::Ended`].
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub(crate) fn on_wait(mut self, hook: impl Fn(WaitEvent) + Send + Sync + 'static) -> Self {
+    pub fn on_wait(mut self, hook: impl Fn(WaitEvent) + Send + Sync + 'static) -> Self {
         self.on_wait = Some(std::sync::Arc::new(hook));
         self
     }
@@ -324,21 +331,26 @@ impl Controller {
 
     /// This controller, stopped by `interrupt` instead of this process's
     /// signals.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub(crate) fn interrupted_by(mut self, interrupt: Interrupt) -> Self {
+    pub fn interrupted_by(mut self, interrupt: Interrupt) -> Self {
         self.interrupt = interrupt;
         self
     }
 
     /// The stop a signal asks of this controller's command.
-    pub(crate) fn interrupt(&self) -> &Interrupt {
+    pub fn interrupt(&self) -> &Interrupt {
         &self.interrupt
     }
 
     /// Whether this process may keep its locks and claims here at all. An
     /// agent's sandbox may forbid writing, and the error then says so.
-    pub(crate) fn writable(&self) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses a state folder that is not a real one of this account, and one this process
+    /// cannot write.
+    pub fn writable(&self) -> Result<()> {
         self.refuse_linked_directory()?;
         probe_write(&self.directory)
     }
@@ -379,7 +391,12 @@ impl Controller {
 
     /// Take control for service replacement, refusing a stalled marker writer
     /// even when interruption of other sessions is permitted.
-    pub(crate) fn acquire_for_service_change(
+    ///
+    /// # Errors
+    ///
+    /// Refuses what [`Controller::acquire`] refuses, and a marker lock still held after
+    /// `marker_wait`.
+    pub fn acquire_for_service_change(
         &self,
         recovery: bool,
         marker_wait: Duration,
@@ -422,7 +439,12 @@ impl Controller {
     /// as any change does, so recovery cannot begin while it runs, and its
     /// own changes are claimed as any change's are. A command still running,
     /// the person's control and a Stop refuse it as they refuse any change.
-    pub(crate) fn acquire_for_cleanup(&self) -> Result<(Ownership, bool)> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses another controller and a command still running. An unknown outcome is not a
+    /// refusal here; it is the returned `bool`.
+    pub fn acquire_for_cleanup(&self) -> Result<(Ownership, bool)> {
         let lock = self.take_lock()?;
         let unknown = match self.require_known_beside(Beside::Nothing) {
             Ok(()) => false,
@@ -476,11 +498,11 @@ impl Controller {
     }
 
     /// Bounded display candidates; the reply's frozen batch checks liveness.
-    pub(crate) fn waiting_candidates(&self) -> Vec<Note> {
+    pub fn waiting_candidates(&self) -> Vec<Note> {
         turns::candidates(&self.waiting)
     }
 
-    pub(crate) fn running_candidates(&self) -> Vec<Note> {
+    pub fn running_candidates(&self) -> Vec<Note> {
         let marked = self.commands();
         let mut notes: Vec<_> = by_generation::read::<ByGeneration<Note>>(&self.running)
             .into_iter()
@@ -494,7 +516,7 @@ impl Controller {
 
     /// The notes of the commands waiting for control now, oldest first:
     /// for apps to show who waits, never to decide who goes next.
-    pub(crate) fn waiting_notes(&self) -> Vec<Note> {
+    pub fn waiting_notes(&self) -> Vec<Note> {
         let mut notes = turns::waiting(&self.waiting);
         notes.sort_by_key(|note| note.since);
         notes
@@ -502,7 +524,7 @@ impl Controller {
 
     /// Waiting notes only when the bounded read accounted for every entry.
     /// An incomplete read cannot establish that service replacement is idle.
-    pub(crate) fn checked_waiting_notes(&self) -> Option<Vec<Note>> {
+    pub fn checked_waiting_notes(&self) -> Option<Vec<Note>> {
         turns::checked_waiting(&self.waiting)
     }
 
@@ -510,7 +532,7 @@ impl Controller {
     /// oldest first: such a command holds no control while it runs, so
     /// only its note names a session on its first command. For apps to
     /// show who acts, never to decide who may.
-    pub(crate) fn running_notes(&self) -> Vec<Note> {
+    pub fn running_notes(&self) -> Vec<Note> {
         let marked = self.commands();
         let mut notes: Vec<Note> = by_generation::read::<ByGeneration<Note>>(&self.running)
             .into_iter()
@@ -526,7 +548,7 @@ impl Controller {
     /// command leaves no record, and only its note names that session, as
     /// its record would have. For naming whose an unknown outcome is, never
     /// to decide anything.
-    pub(crate) fn pending_notes(&self) -> Vec<Note> {
+    pub fn pending_notes(&self) -> Vec<Note> {
         let Ok(pending) = self.pending() else {
             return Vec::new();
         };
@@ -539,13 +561,25 @@ impl Controller {
 
     /// Where the holder note is kept, for tests that stand in for another
     /// command's.
-    #[cfg(test)]
-    pub(crate) fn holder_path(&self) -> &Path {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn holder_path(&self) -> &Path {
         &self.holder
     }
 
+    /// Where the marker of pending changes is kept, for tests that break it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn marker_path(&self) -> &Path {
+        &self.marker
+    }
+
+    /// Where the marker's lock is kept, for tests that hold or break it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn marker_lock_path(&self) -> &Path {
+        &self.marker_lock
+    }
+
     /// Whether the person stopped agents, as noted on their side.
-    pub(crate) fn stop_noted(&self) -> bool {
+    pub fn stop_noted(&self) -> bool {
         self.stopped.exists()
     }
 
@@ -567,6 +601,16 @@ impl Controller {
                 _ => Ok(()),
             }
         }
+    }
+
+    /// [`Controller::acquire_for_person`], for the tests of crates above.
+    ///
+    /// # Errors
+    ///
+    /// Refuses what [`Controller::acquire_for_person`] refuses.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn acquire_for_person_for_test(&self) -> Result<Ownership> {
+        self.acquire_for_person()
     }
 
     /// [`Controller::acquire`] for the person's control through a viewer:
@@ -594,7 +638,12 @@ impl Controller {
     /// Refuse while an outcome is unknown. A command still running is not
     /// unknown: beside commands it is let through; otherwise it answers
     /// `busy`, held by an agent, so nobody is told to recover it.
-    pub(crate) fn require_known_beside(&self, beside: Beside) -> Result<()> {
+    ///
+    /// # Errors
+    ///
+    /// Refuses an unknown outcome, an unreadable marker, and a running command unless `beside`
+    /// lets it through.
+    pub fn require_known_beside(&self, beside: Beside) -> Result<()> {
         if !self.marker.try_exists()? {
             return Ok(());
         }

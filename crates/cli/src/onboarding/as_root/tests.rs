@@ -77,7 +77,7 @@ fn a_callers_death_does_not_release_a_paused_executors_claims() {
         let mut fixture = executor_fixture(dir.path(), mode);
         fixture.ready().unwrap();
         fixture.interrupt().unwrap();
-        let controller = atlas_client::control::Controller::at(7001, &dir.path().join("state"));
+        let controller = atlas_control::Controller::at(7001, &dir.path().join("state"));
         let before = controller.pending().unwrap();
         let recovery_blocked = controller.acquire(true).is_err();
         controller.clear().unwrap();
@@ -125,7 +125,7 @@ fn a_privileged_executor_test_caller() {
         return;
     };
     let dir = std::path::PathBuf::from(dir);
-    let controller = atlas_client::control::Controller::at(7001, &dir.join("state"));
+    let controller = atlas_control::Controller::at(7001, &dir.join("state"));
     // After the handshake, libtest output must survive a timed-out reply pipe.
     let script = [EXECUTOR, "exec \"$1\" --exact \"$2\" --nocapture >&2\n"].concat();
     let mode = std::env::var("ATLAS_EXECUTOR_TEST_MODE").unwrap();
@@ -197,7 +197,7 @@ fn a_timed_out_executor_holds_control_and_claims_until_it_exits() {
     let dir = tempfile::tempdir().unwrap();
     let mut fixture = executor_fixture(dir.path(), "timeout");
     fixture.ready().unwrap();
-    let controller = atlas_client::control::Controller::at(7001, &dir.path().join("state"));
+    let controller = atlas_control::Controller::at(7001, &dir.path().join("state"));
     let pending = controller.pending().unwrap();
     let busy = controller.acquire(true).is_err();
     controller.clear().unwrap();

@@ -192,7 +192,7 @@ fn open_at_login(done_steps: &mut Vec<Value>, settings: &Path) {
 /// Offer to connect the agents here that answered and are not connected
 /// yet, the Claude app beside them.
 fn teach_agents(done_steps: &mut Vec<Value>) -> Result<()> {
-    let atlas_client::agents::Unconnected { agents, app } = atlas_client::agents::unconnected();
+    let atlas_agents::Unconnected { agents, app } = atlas_agents::unconnected();
     let mut names: Vec<String> = agents
         .iter()
         .map(|agent| agent.display_name().to_owned())
@@ -213,13 +213,13 @@ fn teach_agents(done_steps: &mut Vec<Value>) -> Result<()> {
         // Setup is already done; this step can only be skipped, never fail it.
         let (ok, connected) = {
             let _spinner = Spinner::new("Connecting…");
-            let changed = atlas_client::agents::change_these(
+            let changed = atlas_agents::change_these(
                 &agents,
-                atlas_client::agents::Covering {
+                atlas_agents::Covering {
                     every_agent: false,
                     app,
                 },
-                atlas_client::agents::Change::Connect,
+                atlas_agents::Change::Connect,
             );
             match changed {
                 Ok(changed) => (changed.ok, changed.report),

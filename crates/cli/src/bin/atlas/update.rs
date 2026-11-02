@@ -228,7 +228,7 @@ async fn update_finish_using(
         done.push(step.join(" "));
     }
 
-    let agents = atlas_client::agents::refresh();
+    let agents = atlas_agents::refresh();
     Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
 }
 

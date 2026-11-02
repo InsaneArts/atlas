@@ -19,13 +19,13 @@ pub use acceptance::accept_worker;
 use as_root::{Exit, Target};
 use atlas_client::{
     client::Client,
-    control::{Controller, Ownership},
     setup::{
         self,
         account::problem as init_problem,
         executor::{APPROVAL, Secret, answer_prompts, problem, read_secret, setup_transaction},
     },
 };
+use atlas_control::{Controller, Ownership};
 use atlas_core::{
     account, app_bundle,
     app_bundle::signed_executable,
@@ -743,8 +743,8 @@ fn claimed<T>(
         .iter()
         .map(|controller| controller.quarantine())
         .collect::<Result<Vec<_>>>()?;
-    let _executors = atlas_client::control::ExecutorClaims::new(&claims)?;
-    let settle = |claims: &[atlas_client::control::Pending]| -> Result<()> {
+    let _executors = atlas_control::ExecutorClaims::new(&claims)?;
+    let settle = |claims: &[atlas_control::Pending]| -> Result<()> {
         for (controller, claim) in controllers.iter().zip(claims) {
             controller.clear_if(claim)?;
         }
@@ -1058,7 +1058,7 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
 pub fn login(config_path: &Path, on: bool) -> Result<Value> {
     let default = || {
         config::installed_path()
-            .is_ok_and(|default| atlas_client::agents::same_place(&default, config_path))
+            .is_ok_and(|default| atlas_agents::same_place(&default, config_path))
     };
 
     if on && !default() {

@@ -11,10 +11,9 @@ use super::{
 };
 use crate::{
     activity_log::{self, Failure, Op},
-    control::{Ownership, SharedLease},
-    interrupt::Interrupt,
     test_support::client_in,
 };
+use atlas_control::{Ownership, SharedLease, interrupt::Interrupt};
 use atlas_core::{
     actions::{self, Expect},
     digest::file_sha256,
@@ -756,7 +755,7 @@ const SOON: Duration = Duration::from_millis(50);
 /// `client`'s controller stopped by a stop of its own, which the test
 /// asks.
 fn stoppable(client: &mut Client) -> Interrupt {
-    let interrupt = Interrupt::new(GRACE);
+    let interrupt = Interrupt::new_for_test(GRACE);
     client.controller = client.controller.clone().interrupted_by(interrupt.clone());
     interrupt
 }
@@ -774,7 +773,7 @@ async fn a_stop_before_native_acquisition_starts_nothing() {
     let (_dir, mut client, listener, session) = native_client();
     let interrupt = stoppable(&mut client);
     let _ownership = client.controller.acquire(false).unwrap();
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
 
     let actions = json!([{"type": "key", "key": "a"}]);
     let error = client
@@ -804,7 +803,7 @@ async fn a_stop_while_acquisition_is_unanswered_waits_for_it_then_posts_nothing(
     let interrupt = stoppable(&mut client);
     let mut caller = Box::pin(standalone_input(&client, &session));
     let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
     answer(&mut acquire, json!({"ok": true})).await;
 
     let mut release = dispatched(&mut caller, &listener, "release").await;
@@ -823,7 +822,7 @@ async fn a_stop_while_input_is_under_way_lets_the_batch_finish_and_settles_it() 
     let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
     answer(&mut acquire, json!({"ok": true})).await;
     let mut input = dispatched(&mut caller, &listener, "input").await;
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
     answer(&mut input, json!({"ok": true, "performed": 2})).await;
 
     let mut release = dispatched(&mut caller, &listener, "release").await;
@@ -868,7 +867,7 @@ async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() 
                     .is_some_and(|reply| reply["ok"] == true);
                 let known_release = release_reply.is_some();
                 if !known_batch || known_release {
-                    interrupt.ask(signal);
+                    interrupt.ask_for_test(signal);
                 }
                 let outcome = if let Some(reply) = batch_reply {
                     answer(&mut input, reply).await;
@@ -881,7 +880,7 @@ async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() 
                         );
                     }
                     if known_batch && !known_release {
-                        interrupt.ask(signal);
+                        interrupt.ask_for_test(signal);
                     }
                     if let Some(reply) = release_reply {
                         answer(&mut release, reply).await;
@@ -957,7 +956,7 @@ async fn input_still_unanswered_after_the_grace_stays_pending_for_every_agent() 
     let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
     answer(&mut acquire, json!({"ok": true})).await;
     let mut input = dispatched(&mut caller, &listener, "input").await;
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
 
     // Past the grace, its release is still sent whole, but not waited
     // for.
@@ -993,7 +992,7 @@ async fn a_stop_while_release_is_unanswered_waits_for_it() {
     answer(&mut input, json!({"ok": true, "performed": 2})).await;
     let mut release = dispatched(&mut caller, &listener, "release").await;
     tokio::time::pause();
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
     tokio::time::advance(SOON).await;
 
     answer(&mut release, json!({"ok": true})).await;
@@ -1017,7 +1016,7 @@ async fn a_release_still_unanswered_after_the_grace_stays_pending() {
     answer(&mut input, json!({"ok": true, "performed": 2})).await;
     let _release = dispatched(&mut caller, &listener, "release").await;
     tokio::time::pause();
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
     let asked = tokio::time::Instant::now();
 
     let error = tokio::time::timeout(GRACE * 4, caller)
@@ -1041,7 +1040,7 @@ async fn an_acquisition_still_unanswered_after_the_grace_stays_pending() {
     let interrupt = stoppable(&mut client);
     let mut caller = Box::pin(standalone_input(&client, &session));
     let _acquire = dispatched(&mut caller, &listener, "acquire").await;
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
 
     // The release that follows an unknown acquisition is cut at once,
     // so it stays unknown too.
@@ -1068,7 +1067,7 @@ async fn a_stop_while_a_request_waits_to_be_sent_sends_nothing_and_leaves_nothin
     let (dir, client, input, _session) = native_client();
     drop(input);
     let (acting, helper, interrupt) = running(dir.path(), client);
-    let lease: SharedLease = Arc::new(tokio::sync::Mutex::new(crate::control::Lease::new(
+    let lease: SharedLease = Arc::new(tokio::sync::Mutex::new(atlas_control::Lease::new(
         Duration::from_secs(10),
     )));
     let token = lease.lock().await.acquire(&acting.controller).unwrap();
@@ -1079,7 +1078,7 @@ async fn a_stop_while_a_request_waits_to_be_sent_sends_nothing_and_leaves_nothin
         tokio::time::timeout(SOON, &mut caller).await.is_err(),
         "it waits for the lease"
     );
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
     drop(authorizing);
 
     let error = caller.await.unwrap_err();
@@ -1114,7 +1113,7 @@ async fn a_run_that_ends_within_the_grace_is_settled() {
     let mut caller = Box::pin(acting.mutate(run(), None, None, None));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     tokio::time::pause();
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
     tokio::time::advance(SOON).await;
 
     answer(
@@ -1140,7 +1139,7 @@ async fn a_run_still_going_after_the_grace_is_cut_and_stays_pending() {
     let run = || run_of(&["sleep", "30"], 60_000);
     let mut caller = Box::pin(acting.mutate(run(), None, None, None));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
 
     let error = tokio::time::timeout(GRACE * 5, caller)
         .await
@@ -1170,7 +1169,7 @@ async fn a_restart_stopped_before_its_request_settles_only_its_own_claim() {
     let unknown = vec![earlier.generation().to_owned()];
     drop(earlier);
     let claim = client.controller.quarantine().unwrap();
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
 
     let outcome = client.mutate(Mutation::Restart, None, None, None).await;
     let error = client.settle_restart(&claim, outcome).unwrap_err();
@@ -2224,7 +2223,7 @@ async fn a_login_is_gone_only_when_seen_gone_twice_and_silent() {
 async fn an_input_change_stays_pending_only_while_its_outcome_is_unknown() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_in(dir.path());
-    client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+    client.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
 
     assert_eq!(
         client.pending_until_known(async { Ok(1) }).await.unwrap(),
@@ -2273,10 +2272,10 @@ async fn only_the_person_resumes_agents() {
 async fn a_stop_holds_on_the_persons_side_while_the_helpers_input_is_down() {
     let dir = tempfile::tempdir().unwrap();
     let mut person = client_in(dir.path());
-    person.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+    person.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
     person.actor = Actor::Viewer;
     let mut agent = client_in(dir.path());
-    agent.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+    agent.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
 
     let stopped = person.hold(true).await.unwrap();
     assert_eq!(stopped["held"], true);
@@ -2423,7 +2422,7 @@ async fn a_run_lets_go_of_control_once_its_request_is_sent() {
     waits(&mut caller).await;
 
     drop(other.controller.acquire_beside_commands().unwrap());
-    drop(other.controller.acquire_for_person().unwrap());
+    drop(other.controller.acquire_for_person_for_test().unwrap());
     let refused = other.controller.acquire(true).unwrap_err();
     assert_eq!(refused.code, "busy");
     assert_eq!(refused.holder, Some(Holder::Agent));
@@ -2453,7 +2452,7 @@ async fn a_run_refused_before_it_is_sent_settles_under_control() {
     let other = another(&acting, dir.path());
     // A lease of a helper of its own holds the request back before it
     // is sent, while the run keeps its control.
-    let lease: SharedLease = Arc::new(tokio::sync::Mutex::new(crate::control::Lease::new(
+    let lease: SharedLease = Arc::new(tokio::sync::Mutex::new(atlas_control::Lease::new(
         Duration::from_secs(10),
     )));
     let elsewhere = Controller::at(60001, &dir.path().join("elsewhere"));
@@ -2468,7 +2467,7 @@ async fn a_run_refused_before_it_is_sent_settles_under_control() {
         "busy",
         "control is still held"
     );
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
     drop(authorizing);
 
     let error = caller.await.unwrap_err();
@@ -2545,7 +2544,7 @@ async fn a_lost_run_reply_blocks_every_agent() {
     assert!(error.uncertain, "{error:?}");
     for refused in [
         other.controller.acquire_beside_commands(),
-        other.controller.acquire_for_person(),
+        other.controller.acquire_for_person_for_test(),
         other.controller.acquire(false),
     ] {
         assert_eq!(refused.unwrap_err().code, "uncertain");
@@ -2643,7 +2642,7 @@ async fn a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone
     let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
     let mut peer = dispatched(&mut caller, &helper, "run").await;
     waits(&mut caller).await;
-    interrupt.ask(Signal::SIGTERM);
+    interrupt.ask_for_test(Signal::SIGTERM);
 
     let error = tokio::time::timeout(GRACE * 5, caller)
         .await
@@ -2659,7 +2658,7 @@ async fn a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone
     );
     for refused in [
         other.controller.acquire_beside_commands(),
-        other.controller.acquire_for_person(),
+        other.controller.acquire_for_person_for_test(),
     ] {
         assert_eq!(refused.unwrap_err().code, "uncertain");
     }
@@ -3559,7 +3558,7 @@ async fn a_screenshot_is_recorded_as_the_agent_looking_and_a_failed_one_as_faile
 async fn a_status_read_without_a_viewer_says_no_viewer_has_control() {
     let dir = tempfile::tempdir().unwrap();
     let mut client = client_in(dir.path());
-    client.controller = crate::control::Controller::at(60001, &dir.path().join("state"));
+    client.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
 
     let status = crate::overview::read(&client).await.value;
     assert_eq!(status["controlActive"], false);

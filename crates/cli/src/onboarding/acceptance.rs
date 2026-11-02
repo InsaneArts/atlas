@@ -1,9 +1,7 @@
 //! Allow records consent; the requesting Atlas owns and drives setup.
 use super::{MAX_RECORD, Pairing, problem, request};
-use atlas_client::{
-    control::{Controller, ExecutorClaims},
-    setup::{self, executor},
-};
+use atlas_client::setup::{self, executor};
+use atlas_control::{Controller, ExecutorClaims};
 use atlas_core::{account, app_bundle::signed_executable, error::Result};
 use atlas_daemon::{
     helper_setup,
@@ -337,7 +335,7 @@ fn drive(
     }
     let pending = controller.quarantine()?;
     let _executors = ExecutorClaims::new(std::slice::from_ref(&pending))?;
-    atlas_client::control::record_executor(worker)?;
+    atlas_control::record_executor(worker)?;
     let channel = RefCell::new(channel);
     let outcome = (|| {
         let run = |action: &Request| -> Result<Value> {

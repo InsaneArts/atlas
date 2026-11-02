@@ -374,7 +374,7 @@ fn payload(marketplace: &Path) -> Result<Record> {
             },
         );
     }
-    let references = crate::agent::REFERENCES
+    let references = crate::guide::REFERENCES
         .iter()
         .map(|file| format!("skills/atlas/references/{file}"));
     let files = [

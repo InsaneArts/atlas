@@ -3,7 +3,7 @@
 //! command line, so Atlas edits the one entry it owns in the app's own
 //! settings file, keeping every other setting and a copy of the file as it
 //! was; the app reads it when it next starts.
-use crate::agents::Changed;
+use crate::Changed;
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Map, Value, json};
 use std::{
@@ -122,7 +122,7 @@ fn connected_in(home: &Path) -> bool {
 /// settings are reported without changing the file. Registrations share
 /// the connection lock in `locks`; tests use a directory of their own.
 fn change_in(home: &Path, atlas: Option<&Path>, locks: &Path) -> Result<bool> {
-    let _lock = crate::agents::connection_lock_in(locks)?;
+    let _lock = crate::connection_lock_in(locks)?;
     let named = settings_in(home);
     let (path, before) = read_settings(&named)?;
     let changing = parse(before.as_deref()).and_then(|mut settings| {

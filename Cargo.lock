@@ -53,10 +53,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "atlas-cli"
+name = "atlas-agents"
 version = "0.1.0"
 dependencies = [
  "atlas-client",
+ "atlas-core",
+ "fs2",
+ "nix",
+ "rand",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "atlas-cli"
+version = "0.1.0"
+dependencies = [
+ "atlas-agents",
+ "atlas-client",
+ "atlas-control",
  "atlas-core",
  "atlas-daemon",
  "atlas-native",
@@ -85,10 +104,27 @@ dependencies = [
 name = "atlas-client"
 version = "0.1.0"
 dependencies = [
+ "atlas-control",
  "atlas-core",
  "atlas-daemon",
  "atlas-native",
  "base64",
+ "fs2",
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "atlas-control"
+version = "0.1.0"
+dependencies = [
+ "atlas-core",
  "fs2",
  "libc",
  "nix",
@@ -98,8 +134,6 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
- "toml",
- "unicode-segmentation",
 ]
 
 [[package]]

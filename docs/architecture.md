@@ -35,13 +35,15 @@ The Unix transport checks the kernel-reported peer UID. The helper servers also 
 
 The Rust code is a workspace under [`crates/`](../crates), one package per layer. A package depends only on the layers before it, so the compiler keeps these layers apart:
 
-| Folder          | Package        | Layer                                                                      |
-| --------------- | -------------- | -------------------------------------------------------------------------- |
-| `crates/core`   | `atlas-core`   | Names, errors, time, wire types, observed screens and sessions.            |
-| `crates/native` | `atlas-native` | macOS calls and input execution.                                           |
-| `crates/daemon` | `atlas-daemon` | The helper daemon and the helper's own setup.                              |
-| `crates/client` | `atlas-client` | The controller side: helper requests, control, environment, agents, setup. |
-| `crates/cli`    | `atlas-cli`    | The `atlas` binary, viewer, MCP server, menu bar and onboarding.           |
+| Folder           | Package         | Layer                                                            |
+| ---------------- | --------------- | ---------------------------------------------------------------- |
+| `crates/core`    | `atlas-core`    | Names, errors, time, wire types, observed screens and sessions.  |
+| `crates/native`  | `atlas-native`  | macOS calls and input execution.                                 |
+| `crates/daemon`  | `atlas-daemon`  | The helper daemon and the helper's own setup.                    |
+| `crates/control` | `atlas-control` | Exclusion, cancellation, pending mutations and viewer leases.    |
+| `crates/client`  | `atlas-client`  | The controller side: helper requests, environment and setup.     |
+| `crates/agents`  | `atlas-agents`  | Connecting coding agents: plugins, project sections, the guide.  |
+| `crates/cli`     | `atlas-cli`     | The `atlas` binary, viewer, MCP server, menu bar and onboarding. |
 
 The binary keeps argument parsing, presentation and dispatch separate so library behavior does not depend on terminal formatting.
 
@@ -62,7 +64,7 @@ The binary keeps argument parsing, presentation and dispatch separate so library
 | `onboarding`, `setup`; `crates/cli/src/bin/atlas/init.rs`                                | Setup rules, account identity and managed helper installation or repair; attended terminal setup stays in the binary. |
 | `update`, `uninstall`                                                                    | Verified app replacement, helper handover and ordered removal.                                                        |
 
-Names without a path in this table are modules, each in the crate of its layer. Prefer the owner of the behavior over another layer that happens to call it. For example, an input cancellation rule belongs in control/native code; a button label belongs in the app's presentation code.
+Names without a path in this table are crates or modules, each in the crate of its layer. Prefer the owner of the behavior over another layer that happens to call it. For example, an input cancellation rule belongs in control/native code; a button label belongs in the app's presentation code.
 
 The [Rust contributor instructions](../crates/AGENTS.md) describe extension paths and the compiler-enforced decisions for commands, input actions, requests, tools, settings and records. A new operation follows its existing owner and exhaustive policy matches; it does not need a new service layer. Observation models, wire replies and durable recovery records have different compatibility and privacy obligations.
 

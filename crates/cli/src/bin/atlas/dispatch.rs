@@ -9,10 +9,10 @@ use super::{
     policy::Policy,
     prompt, update,
 };
+use atlas_agents::{Change, Covering};
 use atlas_cli::{menubar, ui::progress::Spinner, viewer};
 use atlas_client::{
     agent,
-    agents::{Change, Covering},
     client::{Actor, Client},
     doing::Doing,
     environment,
@@ -48,11 +48,11 @@ pub(super) fn screenshot_size(given: Option<u32>) -> Size {
 /// every installed one, the Claude app included.
 fn changed(picks: &AgentPicks, change: Change) -> Result<Value> {
     // Connecting an app that isn't here would only leave its settings behind.
-    if picks.app && change == Change::Connect && !atlas_client::claude_app::installed() {
+    if picks.app && change == Change::Connect && !atlas_agents::claude_app::installed() {
         return Err(Error::new(Code::Agents, "The Claude app isn't installed"));
     }
     if picks.app {
-        atlas_client::agents::change_these(
+        atlas_agents::change_these(
             &picks.agents(),
             Covering {
                 every_agent: false,
@@ -62,7 +62,7 @@ fn changed(picks: &AgentPicks, change: Change) -> Result<Value> {
         )
         .map(|changed| changed.report)
     } else {
-        atlas_client::agents::change(&picks.agents(), change)
+        atlas_agents::change(&picks.agents(), change)
     }
 }
 
@@ -341,10 +341,10 @@ async fn carry_out(
 
 fn guide(args: &cli::AgentGuide) -> Value {
     let guide = match (args.skill, args.commands, args.errors) {
-        (true, _, _) => agent::skill(),
+        (true, _, _) => atlas_agents::guide::skill(),
         (_, true, _) => help::command_reference(),
-        (_, _, true) => agent::ERRORS.to_owned(),
-        _ => agent::GUIDE.to_owned(),
+        (_, _, true) => atlas_agents::guide::ERRORS.to_owned(),
+        _ => atlas_agents::guide::GUIDE.to_owned(),
     };
     print(&guide);
     Value::Null
@@ -620,30 +620,27 @@ async fn agents(
 ) -> Result<Value> {
     match action.unwrap_or(AgentsCommand::Status { brief: false }) {
         AgentsCommand::Status { brief: true } => {
-            print(&format!(
-                "{}\n",
-                atlas_client::agents::brief(config, host).await
-            ));
+            print(&format!("{}\n", atlas_agents::brief(config, host).await));
             Ok(Value::Null)
         }
         AgentsCommand::Status { brief: false } => {
             let _spinner = Spinner::new("Checking agent connections…");
-            Ok(atlas_client::agents::status())
+            Ok(atlas_agents::status())
         }
         AgentsCommand::CursorHook { event } => {
             let event = match event {
                 CursorHookEvent::SessionStart => "session-start",
                 CursorHookEvent::BeforeShell => "before-shell",
             };
-            let reply = atlas_client::agents::hook(config, event, std::io::stdin().lock()).await;
+            let reply = atlas_agents::hook(config, event, std::io::stdin().lock()).await;
             print(&format!("{reply}\n"));
             Ok(Value::Null)
         }
         AgentsCommand::Project { dir } => {
-            atlas_client::agents::project(&dir.unwrap_or_else(|| PathBuf::from(".")))
+            atlas_agents::project(&dir.unwrap_or_else(|| PathBuf::from(".")))
         }
         AgentsCommand::Forget { dir } => {
-            atlas_client::agents::forget(&dir.unwrap_or_else(|| PathBuf::from(".")))
+            atlas_agents::forget(&dir.unwrap_or_else(|| PathBuf::from(".")))
         }
         AgentsCommand::Install { picks } => {
             let _spinner = Spinner::new("Connecting…");

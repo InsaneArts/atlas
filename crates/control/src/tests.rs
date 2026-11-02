@@ -27,108 +27,24 @@ fn the_documented_default_wait_is_the_one_used() {
     for (file, text) in [
         (
             "limits.md",
-            include_str!("../../../../agents/atlas/skills/atlas/references/limits.md"),
+            include_str!("../../../agents/atlas/skills/atlas/references/limits.md"),
         ),
         (
             "troubleshooting.md",
-            include_str!("../../../../agents/atlas/skills/atlas/references/troubleshooting.md"),
+            include_str!("../../../agents/atlas/skills/atlas/references/troubleshooting.md"),
         ),
-        ("docs/cli.md", include_str!("../../../../docs/cli.md")),
+        ("docs/cli.md", include_str!("../../../docs/cli.md")),
         (
             "docs/troubleshooting.md",
-            include_str!("../../../../docs/troubleshooting.md"),
+            include_str!("../../../docs/troubleshooting.md"),
         ),
         (
             "docs/architecture.md",
-            include_str!("../../../../docs/architecture.md"),
+            include_str!("../../../docs/architecture.md"),
         ),
     ] {
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(text.contains(&said), "{file} does not say {said}");
-    }
-}
-
-fn pending_counts(controller: &Controller) -> (usize, usize, usize) {
-    let (pending, total) = crate::overview::pending(controller);
-    (total, pending.unresolved, pending.in_flight)
-}
-
-#[test]
-fn reporting_pending_claims_never_settles_them_or_admits_control() {
-    let directory = tempfile::tempdir().unwrap();
-    let controller = Controller::at(505, directory.path());
-    let observer = Controller::at(505, directory.path());
-    let report = |expected| {
-        let before = fs::read(&controller.marker).ok();
-        assert_eq!(pending_counts(&observer), expected);
-        assert_eq!(fs::read(&controller.marker).ok(), before);
-    };
-
-    report((0, 0, 0));
-    let abandoned = controller.quarantine().unwrap();
-    let generation = abandoned.to_string();
-    report((1, 0, 1));
-    assert!(observer.unresolved().unwrap().is_empty());
-    assert_eq!(observer.acquire(false).unwrap_err().code, "uncertain");
-
-    drop(abandoned);
-    report((1, 1, 0));
-    assert_eq!(observer.unresolved().unwrap(), vec![generation.clone()]);
-    assert_eq!(observer.acquire(false).unwrap_err().code, "uncertain");
-
-    let working = controller.quarantine().unwrap();
-    report((2, 1, 1));
-    assert_eq!(observer.unresolved().unwrap(), vec![generation.clone()]);
-    controller.clear_if(&working).unwrap();
-    drop(working);
-    report((1, 1, 0));
-    assert_eq!(observer.pending().unwrap(), vec![generation]);
-    assert_eq!(observer.acquire(false).unwrap_err().code, "uncertain");
-
-    controller.clear().unwrap();
-    report((0, 0, 0));
-    assert!(observer.acquire(false).is_ok());
-}
-
-#[test]
-fn reporting_empty_legacy_and_malformed_markers_preserves_their_contents() {
-    let directory = tempfile::tempdir().unwrap();
-    let controller = Controller::at(505, directory.path());
-    for (contents, generations) in [
-        ("[]", vec![]),
-        ("not JSON", vec!["legacy-unknown"]),
-        (
-            r#"["1234.legacy","5678.legacy"]"#,
-            vec!["1234.legacy", "5678.legacy"],
-        ),
-    ] {
-        fs::write(&controller.marker, contents).unwrap();
-        assert_eq!(
-            pending_counts(&controller),
-            (generations.len(), generations.len(), 0)
-        );
-        assert_eq!(controller.pending().unwrap(), generations);
-        assert_eq!(controller.unresolved().unwrap(), generations);
-        assert_eq!(fs::read_to_string(&controller.marker).unwrap(), contents);
-        assert_eq!(controller.acquire(false).unwrap_err().code, "uncertain");
-    }
-}
-
-#[test]
-fn unreadable_markers_and_unopenable_locks_are_reported_as_unresolved() {
-    for marker_fails in [true, false] {
-        let directory = tempfile::tempdir().unwrap();
-        let controller = Controller::at(505, directory.path());
-        let blocked = if marker_fails {
-            &controller.marker
-        } else {
-            &controller.marker_lock
-        };
-        fs::create_dir(blocked).unwrap();
-        assert!(controller.pending().is_err());
-        assert!(controller.unresolved().is_err());
-        assert_eq!(pending_counts(&controller), (1, 1, 0));
-        assert!(blocked.is_dir());
     }
 }
 
@@ -168,7 +84,10 @@ fn a_privileged_executor_is_identified_and_keeps_recovery_excluded() {
     drop(pending);
     assert!(live.exists(), "the executor outlives its caller's claim");
     assert!(executor_running(&File::open(record).unwrap()));
-    assert_eq!(pending_counts(&controller), (1, 0, 1));
+    let snapshot = controller
+        .pending_snapshot_within(Duration::from_millis(50))
+        .unwrap();
+    assert_eq!((snapshot.total, snapshot.unresolved.len()), (1, 0));
     assert_eq!(
         controller.acquire(true).unwrap_err().code,
         "busy",
@@ -521,7 +440,7 @@ fn recovery_never_settles_a_mutation_still_being_carried_out() {
 #[test]
 fn an_agent_finding_the_person_in_control_is_told_to_wait_for_them() {
     if !atlas_core::test_support::isolated(
-        "control::tests::an_agent_finding_the_person_in_control_is_told_to_wait_for_them",
+        "tests::an_agent_finding_the_person_in_control_is_told_to_wait_for_them",
     ) {
         return;
     }
@@ -608,7 +527,7 @@ fn hold_if_holder() {
 #[test]
 fn waiting_for_control_takes_the_lock_once_the_holder_lets_go() {
     if !atlas_core::test_support::isolated(
-        "control::tests::waiting_for_control_takes_the_lock_once_the_holder_lets_go",
+        "tests::waiting_for_control_takes_the_lock_once_the_holder_lets_go",
     ) {
         return;
     }
@@ -628,7 +547,7 @@ fn waiting_for_control_takes_the_lock_once_the_holder_lets_go() {
 #[test]
 fn two_processes_that_change_the_helper_both_succeed_one_after_the_other() {
     const TEST: &str =
-        "control::tests::two_processes_that_change_the_helper_both_succeed_one_after_the_other";
+        "tests::two_processes_that_change_the_helper_both_succeed_one_after_the_other";
     hold_if_holder();
     if !atlas_core::test_support::isolated(TEST) {
         return;
@@ -791,7 +710,7 @@ fn the_person_and_stop_keep_their_precedence_at_a_supplied_deadline() {
 
 #[test]
 fn a_wait_of_zero_answers_busy_at_once() {
-    if !atlas_core::test_support::isolated("control::tests::a_wait_of_zero_answers_busy_at_once") {
+    if !atlas_core::test_support::isolated("tests::a_wait_of_zero_answers_busy_at_once") {
         return;
     }
     let directory = tempfile::tempdir().unwrap();
@@ -815,9 +734,7 @@ fn a_wait_of_zero_answers_busy_at_once() {
 
 #[test]
 fn the_person_in_control_is_never_waited_for() {
-    if !atlas_core::test_support::isolated(
-        "control::tests::the_person_in_control_is_never_waited_for",
-    ) {
+    if !atlas_core::test_support::isolated("tests::the_person_in_control_is_never_waited_for") {
         return;
     }
     let directory = tempfile::tempdir().unwrap();
@@ -836,7 +753,7 @@ fn the_person_in_control_is_never_waited_for() {
 #[test]
 fn the_person_taking_control_during_a_wait_ends_it_at_once() {
     if !atlas_core::test_support::isolated(
-        "control::tests::the_person_taking_control_during_a_wait_ends_it_at_once",
+        "tests::the_person_taking_control_during_a_wait_ends_it_at_once",
     ) {
         return;
     }
@@ -866,7 +783,7 @@ fn the_person_taking_control_during_a_wait_ends_it_at_once() {
 #[test]
 fn a_stop_noted_before_or_during_a_wait_ends_it_at_once() {
     if !atlas_core::test_support::isolated(
-        "control::tests::a_stop_noted_before_or_during_a_wait_ends_it_at_once",
+        "tests::a_stop_noted_before_or_during_a_wait_ends_it_at_once",
     ) {
         return;
     }
@@ -907,7 +824,7 @@ fn a_stop_noted_before_or_during_a_wait_ends_it_at_once() {
 #[test]
 fn a_stop_noted_as_the_holder_lets_go_refuses_the_control_a_wait_takes() {
     if !atlas_core::test_support::isolated(
-        "control::tests::a_stop_noted_as_the_holder_lets_go_refuses_the_control_a_wait_takes",
+        "tests::a_stop_noted_as_the_holder_lets_go_refuses_the_control_a_wait_takes",
     ) {
         return;
     }
@@ -946,7 +863,7 @@ fn a_stop_noted_as_the_holder_lets_go_refuses_the_control_a_wait_takes() {
 
 #[test]
 fn a_holder_killed_while_others_wait_hands_control_on_at_once() {
-    const TEST: &str = "control::tests::a_holder_killed_while_others_wait_hands_control_on_at_once";
+    const TEST: &str = "tests::a_holder_killed_while_others_wait_hands_control_on_at_once";
     hold_if_holder();
     if !atlas_core::test_support::isolated(TEST) {
         return;
@@ -985,7 +902,7 @@ fn a_holder_killed_while_others_wait_hands_control_on_at_once() {
 #[test]
 fn recovery_waits_for_the_lock_but_never_for_an_executor_still_running() {
     if !atlas_core::test_support::isolated(
-        "control::tests::recovery_waits_for_the_lock_but_never_for_an_executor_still_running",
+        "tests::recovery_waits_for_the_lock_but_never_for_an_executor_still_running",
     ) {
         return;
     }
@@ -1022,7 +939,7 @@ fn recovery_waits_for_the_lock_but_never_for_an_executor_still_running() {
 #[test]
 fn a_wait_tells_its_hook_when_it_begins_and_when_it_ends() {
     if !atlas_core::test_support::isolated(
-        "control::tests::a_wait_tells_its_hook_when_it_begins_and_when_it_ends",
+        "tests::a_wait_tells_its_hook_when_it_begins_and_when_it_ends",
     ) {
         return;
     }

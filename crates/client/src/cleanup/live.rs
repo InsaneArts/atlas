@@ -11,10 +11,10 @@ use crate::{
     app_selection::Process,
     client::{Actor, AppList, Client},
     collect::{self, Intact},
-    control::Ownership,
     environment::{self, InstallState, PlanState, RemovalReply, Undone},
     host_session::Key,
 };
+use atlas_control::Ownership;
 use atlas_core::{
     error::{Code, Error, Result},
     files::Token,

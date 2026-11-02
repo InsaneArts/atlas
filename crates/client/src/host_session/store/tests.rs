@@ -4,7 +4,10 @@ use crate::{
     host_session::{Host, HostSession, Instance},
     test_support::client,
 };
-use atlas_core::error::{Code, Error};
+use atlas_core::{
+    error::{Code, Error},
+    files::open_lock,
+};
 use fs2::FileExt;
 use serde_json::json;
 use std::{
@@ -1403,4 +1406,35 @@ fn an_old_command_cannot_replace_a_resumed_process() {
     let read = store(&client).read(root.key()).unwrap();
     assert_eq!(read.host_process, root.process());
     assert_eq!(read.folder.as_deref(), Some("parent"));
+}
+
+#[test]
+fn entry_attachment_does_not_wait_for_a_held_marker_lock_or_lose_pending_attribution() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = client(directory.path());
+    let pid = nix::unistd::getppid().as_raw();
+    let process = Instance::new(pid, atlas_core::host::ancestry::process(pid).unwrap().start);
+    let own = session("owner")
+        .run_by(Some(process))
+        .in_folder(Some("parent"));
+    client.controller = client.controller.labelled(Some(&own));
+    let claim = client.controller.quarantine().unwrap();
+    let generation = claim.generation().to_owned();
+    drop(claim);
+    let lock = open_lock(client.controller.marker_lock_path()).unwrap();
+    FileExt::lock_exclusive(&lock.0).unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let caller = client.clone();
+    let worker = std::thread::spawn(move || {
+        let result = touch(&caller, &own);
+        send.send(result.map_err(|error| error.code)).unwrap();
+    });
+    let result = receive.recv_timeout(Duration::from_secs(30));
+    drop(lock);
+    worker.join().unwrap();
+    assert_eq!(result.unwrap().unwrap_err(), "busy");
+    assert!(Store::at(client.output_dir().unwrap()).all().is_empty());
+    let causes = client.controller.pending_causes().unwrap();
+    assert_eq!(causes[0].generation, generation);
+    assert_eq!(causes[0].session, Some(session("owner").key().clone()));
 }

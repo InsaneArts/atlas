@@ -6,7 +6,7 @@ use super::{
     record::{NOT_RECORDED, recorded_code},
     run::RUN_MARGIN,
 };
-use crate::control::{Lease, Ownership, Pending, SharedLease};
+use atlas_control::{Lease, Ownership, Pending, SharedLease};
 use atlas_core::{
     actions::{Batch, Expect},
     error::{Code, Error, Result},

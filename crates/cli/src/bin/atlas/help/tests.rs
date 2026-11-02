@@ -20,7 +20,7 @@ fn every_command_and_option_the_guide_shows_exists() {
     let mut root = command();
     root.build();
 
-    let shown = [atlas_client::agent::GUIDE, atlas_client::agent::ERRORS];
+    let shown = [atlas_agents::guide::GUIDE, atlas_agents::guide::ERRORS];
     for span in shown
         .iter()
         .flat_map(|text| text.split('`').skip(1).step_by(2))
@@ -76,7 +76,7 @@ fn every_command_and_option_the_guide_shows_exists() {
 /// groups are left out and input from a file is dropped.
 #[test]
 fn every_input_example_the_guide_shows_parses() {
-    let shown = [atlas_client::agent::GUIDE, atlas_client::agent::ERRORS];
+    let shown = [atlas_agents::guide::GUIDE, atlas_agents::guide::ERRORS];
     let mut parsed = 0;
     for span in shown
         .iter()

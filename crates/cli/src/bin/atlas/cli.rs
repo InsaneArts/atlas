@@ -3,11 +3,9 @@
 //! generated help remain beside their commands; parser and guide parity tests
 //! check the same schema. A command with many arguments keeps them in a struct
 //! of its own, which its handler takes whole.
-use atlas_client::{
-    agent,
-    agents::Agent,
-    control::{CONTROL_WAIT, CONTROL_WAIT_MAX},
-};
+use atlas_agents::Agent;
+use atlas_client::agent;
+use atlas_control::{CONTROL_WAIT, CONTROL_WAIT_MAX};
 use atlas_core::host::Key;
 use atlas_core::{
     actions::Button,

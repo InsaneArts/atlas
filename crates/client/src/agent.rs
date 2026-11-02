@@ -4,7 +4,6 @@
 //! usual ownership and epoch checks; nothing here bypasses them.
 mod elements;
 mod expect;
-mod guide;
 mod input;
 mod launch;
 mod quit;
@@ -14,10 +13,6 @@ mod windows;
 pub use crate::app_selection::Closing;
 pub use elements::{click_element, elements, screenshot};
 pub use expect::{Expected, act};
-#[cfg(test)]
-pub(crate) use guide::CORE;
-pub(crate) use guide::REFERENCES;
-pub use guide::{ERRORS, GUIDE, skill};
 pub use input::{click, drag, keys, move_to, scroll, type_text};
 pub use launch::open;
 pub use quit::close;

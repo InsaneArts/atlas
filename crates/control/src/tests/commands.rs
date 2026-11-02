@@ -1,7 +1,7 @@
 //! Commands agents started with `run`: other agents act beside one while it
 //! runs, recovery and everything strict wait for it, and one that died
 //! blocks everyone as any unknown outcome does.
-use crate::control::{faults::interrupt_replacing, marker::REPLACING, *};
+use crate::{faults::interrupt_replacing, marker::REPLACING, *};
 use atlas_core::error::Holder;
 
 /// Two controllers of one helper, as two commands would hold them.
@@ -83,7 +83,7 @@ fn an_update_waits_for_a_running_command() {
 #[test]
 fn a_command_whose_process_died_blocks_every_agent() {
     if !atlas_core::test_support::isolated(
-        "control::tests::commands::a_command_whose_process_died_blocks_every_agent",
+        "tests::commands::a_command_whose_process_died_blocks_every_agent",
     ) {
         return;
     }
@@ -115,7 +115,7 @@ fn an_unmarked_claim_still_blocks_agents_beside_it() {
 #[test]
 fn an_orphaned_privileged_executor_is_never_taken_for_a_command() {
     if !atlas_core::test_support::isolated(
-        "control::tests::commands::an_orphaned_privileged_executor_is_never_taken_for_a_command",
+        "tests::commands::an_orphaned_privileged_executor_is_never_taken_for_a_command",
     ) {
         return;
     }
@@ -143,7 +143,7 @@ fn an_orphaned_privileged_executor_is_never_taken_for_a_command() {
 #[test]
 fn an_unknown_outcome_beside_a_running_command_still_blocks_agents() {
     if !atlas_core::test_support::isolated(
-        "control::tests::commands::an_unknown_outcome_beside_a_running_command_still_blocks_agents",
+        "tests::commands::an_unknown_outcome_beside_a_running_command_still_blocks_agents",
     ) {
         return;
     }
@@ -162,7 +162,7 @@ fn an_unknown_outcome_beside_a_running_command_still_blocks_agents() {
 #[test]
 fn settling_a_signalled_change_keeps_another_unknown_outcome_pending() {
     if !atlas_core::test_support::isolated(
-        "control::tests::commands::settling_a_signalled_change_keeps_another_unknown_outcome_pending",
+        "tests::commands::settling_a_signalled_change_keeps_another_unknown_outcome_pending",
     ) {
         return;
     }
@@ -198,7 +198,7 @@ fn settling_a_signalled_change_keeps_another_unknown_outcome_pending() {
 #[test]
 fn recovery_keeps_a_running_command_and_its_mark() {
     if !atlas_core::test_support::isolated(
-        "control::tests::commands::recovery_keeps_a_running_command_and_its_mark",
+        "tests::commands::recovery_keeps_a_running_command_and_its_mark",
     ) {
         return;
     }
@@ -232,7 +232,7 @@ fn settling_a_command_removes_its_mark() {
 
 #[test]
 fn a_labelled_command_is_noted_while_it_runs_and_forgotten_once_it_stops() {
-    use crate::host_session::{Host, HostSession};
+    use atlas_core::host::{Host, HostSession};
 
     let directory = tempfile::tempdir().unwrap();
     let agent = HostSession::new(Host::Named, "agent-a")
@@ -276,9 +276,8 @@ fn a_labelled_command_is_noted_while_it_runs_and_forgotten_once_it_stops() {
 
 #[test]
 fn a_malformed_command_list_fails_closed() {
-    if !atlas_core::test_support::isolated(
-        "control::tests::commands::a_malformed_command_list_fails_closed",
-    ) {
+    if !atlas_core::test_support::isolated("tests::commands::a_malformed_command_list_fails_closed")
+    {
         return;
     }
     let directory = tempfile::tempdir().unwrap();
@@ -357,7 +356,7 @@ fn left_behind(directory: &Path) -> usize {
 #[test]
 fn a_change_interrupted_while_recorded_keeps_a_running_command_pending() {
     if !atlas_core::test_support::isolated(
-        "control::tests::commands::a_change_interrupted_while_recorded_keeps_a_running_command_pending",
+        "tests::commands::a_change_interrupted_while_recorded_keeps_a_running_command_pending",
     ) {
         return;
     }
@@ -388,7 +387,7 @@ fn a_change_interrupted_while_recorded_keeps_a_running_command_pending() {
 #[test]
 fn a_settlement_interrupted_while_recorded_keeps_a_running_command_pending() {
     if !atlas_core::test_support::isolated(
-        "control::tests::commands::a_settlement_interrupted_while_recorded_keeps_a_running_command_pending",
+        "tests::commands::a_settlement_interrupted_while_recorded_keeps_a_running_command_pending",
     ) {
         return;
     }

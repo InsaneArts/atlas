@@ -1,6 +1,5 @@
 use super::*;
 use crate::{
-    control::Note,
     doing::Doing,
     host_session::{
         Host, Instance,
@@ -8,6 +7,7 @@ use crate::{
     },
     test_support::client,
 };
+use atlas_control::Note;
 use atlas_core::{
     error::advice as hints,
     error::{Code, Error},

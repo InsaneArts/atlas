@@ -1,8 +1,8 @@
 //! Cursor loads a copied local plugin. Its settings and marketplace cache
 //! stay untouched; registration is independent of a running host session.
 use super::{Agent, Presence, Probe, Removal, connection_lock, problem};
-use crate::host_session::{Host, HostSession};
 use atlas_core::error::Result;
+use atlas_core::host::{Host, HostSession};
 use serde_json::{Value, json};
 use std::{
     io::Read,

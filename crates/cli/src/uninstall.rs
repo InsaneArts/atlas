@@ -8,11 +8,8 @@ use inspection::{Found, survey};
 use log_out::{log_out_helper, logged_out_twice, retiring, still_logged_in, unrecorded_message};
 
 use crate::onboarding::as_root::{self, Target, Via};
-use atlas_client::{
-    client::Client,
-    control::{Controller, Ownership},
-    setup,
-};
+use atlas_client::{client::Client, setup};
+use atlas_control::{Controller, Ownership};
 use atlas_core::{
     account,
     config::{self, Config},
@@ -525,7 +522,7 @@ impl Teardown for Live<'_> {
         self.stop_menubar();
         self.disconnect()?;
         // Stopped while the agents were changed: the app and settings stay.
-        if atlas_client::agents::stopping() {
+        if atlas_agents::stopping() {
             return Err(problem("Stopped before Atlas.app was removed"));
         }
         self.trash()?;
@@ -680,9 +677,7 @@ impl Live<'_> {
     /// own change), and `atlas` leaves the terminal.
     fn disconnect(&mut self) -> Result<()> {
         // An error here means no agent is installed, so there is nothing to remove.
-        if let Ok(reply) =
-            atlas_client::agents::change(&[], atlas_client::agents::Change::Disconnect)
-        {
+        if let Ok(reply) = atlas_agents::change(&[], atlas_agents::Change::Disconnect) {
             let changed = agents_in(&reply).any(|agent| agent["changed"] == true);
 
             if reply["ok"] == true {
@@ -1064,7 +1059,7 @@ fn kept_agents(reply: &Value) -> Vec<(String, String)> {
 }
 
 fn shown(name: &str) -> &str {
-    atlas_client::agents::Agent::named(name).map_or(name, |agent| agent.display_name())
+    atlas_agents::Agent::named(name).map_or(name, |agent| agent.display_name())
 }
 
 /// Remove `folder` only if it is a real folder this account owns holding

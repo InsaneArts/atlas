@@ -85,7 +85,7 @@ fn another_atlas_registration_keeps_settings_unchanged_until_it_finishes() {
     fs::create_dir_all(named.parent().unwrap()).unwrap();
     fs::write(&named, "{}").unwrap();
     let atlas = Path::new("/x/atlas");
-    let held = crate::agents::connection_lock_in(dir.path()).unwrap();
+    let held = crate::connection_lock_in(dir.path()).unwrap();
 
     let refused = std::thread::scope(|scope| {
         scope

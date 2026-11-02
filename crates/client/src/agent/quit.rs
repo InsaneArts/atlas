@@ -4,9 +4,9 @@
 use crate::{
     app_selection::{Closing, Process, atlas_bundle, selected},
     client::{AppList, Client},
-    control::Ownership,
     handoff, task,
 };
+use atlas_control::Ownership;
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
 use std::{

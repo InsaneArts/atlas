@@ -51,7 +51,7 @@ impl Note {
     }
 
     /// Whether the command it names still runs.
-    pub(crate) fn live(&self) -> bool {
+    pub fn live(&self) -> bool {
         self.process.running()
     }
 

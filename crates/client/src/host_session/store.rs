@@ -10,14 +10,9 @@ use super::{
     record::{Leftovers, Record, Seen, VERSION},
 };
 use crate::{
-    client::Client,
-    control::{Cause, Controller},
-    doing::Doing,
-    environment::Phase,
-    handoff,
-    helper_info::Capture,
-    task::State,
+    client::Client, doing::Doing, environment::Phase, handoff, helper_info::Capture, task::State,
 };
+use atlas_control::{Cause, Controller};
 use atlas_core::{
     error::{Code, Error, Result},
     files::{Durability, Token},

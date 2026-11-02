@@ -8,27 +8,23 @@
 //! replay.
 //!
 //! [`client::Client`] verifies identity and owns controller-side operations;
-//! [`control`] retains exclusion and pending work through cleanup. Observations
-//! from [`atlas_core::session`] describe one epoch and must be rechecked before
-//! effects.
+//! [`atlas_control`] retains exclusion and pending work through cleanup.
+//! Observations from [`atlas_core::session`] describe one epoch and must be
+//! rechecked before effects.
 
 pub mod activity_log;
 pub mod agent;
-pub mod agents;
 pub mod app_selection;
 pub mod capability;
-pub mod claude_app;
 pub mod cleanup;
 pub mod client;
 pub mod collect;
-pub mod control;
 pub mod doing;
 pub mod environment;
 pub mod handoff;
 pub mod helper_info;
 pub mod host_session;
 pub mod install_app;
-pub mod interrupt;
 pub mod jobs;
 mod last_capture;
 pub mod overview;

@@ -100,7 +100,7 @@ fn cursor_installs_only_its_curated_payload_and_repeats_without_changes() {
     assert!(!fixture.store().target.join("cursor/personal.txt").exists());
     assert!(!fixture.store().target.join(".claude-plugin").exists());
     assert!(!fixture.store().target.join("hooks/register.js").exists());
-    for file in crate::agent::REFERENCES {
+    for file in crate::guide::REFERENCES {
         let installed = fixture
             .store()
             .target
@@ -140,7 +140,7 @@ fn cursor_refreshes_an_owned_old_copy_and_removes_without_the_source() {
 fn cursors_payload_carries_every_reference_the_skill_lists() {
     let source = atlas_core::app_bundle::checkout().join("agents");
     let record = payload(&source).unwrap();
-    for file in crate::agent::REFERENCES {
+    for file in crate::guide::REFERENCES {
         let path = format!("skills/atlas/references/{file}");
         let entry = record.entries.get(&path);
         assert!(entry.is_some_and(|entry| entry.digest.is_some()), "{path}");
@@ -177,12 +177,12 @@ fn cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host() {
     const CHILD: &str = "ATLAS_CURSOR_LIFECYCLE_TEST";
     if std::env::var_os(CHILD).is_some() {
         let root = super::super::home().unwrap();
-        let expected = payload(&crate::agents::marketplace().unwrap()).unwrap();
+        let expected = payload(&crate::marketplace().unwrap()).unwrap();
         assert_ne!(
             snapshot(&Store::new(&root).target).unwrap(),
             expected.entries
         );
-        let refreshed = crate::agents::refresh();
+        let refreshed = crate::refresh();
         let cursor = refreshed["agents"]
             .as_array()
             .unwrap()
@@ -194,7 +194,7 @@ fn cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host() {
             snapshot(&Store::new(&root).target).unwrap(),
             expected.entries
         );
-        let removed = crate::agents::change(&[], crate::agents::Change::Disconnect).unwrap();
+        let removed = crate::change(&[], crate::Change::Disconnect).unwrap();
         let cursor = removed["agents"]
             .as_array()
             .unwrap()
@@ -221,7 +221,7 @@ fn cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host() {
     }
     // Keep HOME and process-wide discovery isolated without changing this
     // parallel test runner's environment or invoking any installed host.
-    let result = atlas_core::test_support::rerun("agents::cursor::store::tests::cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host")
+    let result = atlas_core::test_support::rerun("cursor::store::tests::cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host")
         .env_clear()
         .env(CHILD, "1")
         .env("HOME", fixture._directory.path())

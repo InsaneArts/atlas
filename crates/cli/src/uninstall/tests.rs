@@ -268,7 +268,7 @@ async fn an_unrecorded_helper_never_uses_its_daemons_word_to_adopt_an_account() 
 fn a_linked_cache_is_refused_without_unlinking_control_state() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("state");
-    let controller = atlas_client::control::Controller::at(7001, &target);
+    let controller = atlas_control::Controller::at(7001, &target);
     let held = controller.acquire(true).unwrap();
     let claim = controller.quarantine().unwrap();
     let caches = dir.path().join("Atlas");
@@ -283,7 +283,7 @@ fn a_linked_cache_is_refused_without_unlinking_control_state() {
     );
     assert_eq!(controller.pending().unwrap(), [claim.generation()]);
     assert!(
-        atlas_client::control::Controller::at(7001, &caches)
+        atlas_control::Controller::at(7001, &caches)
             .acquire(true)
             .is_err()
     );
@@ -393,14 +393,14 @@ fn a_helper_held_while_its_caches_go_stays_held() {
     }
     let dir = tempfile::tempdir().unwrap();
     let caches = dir.path().join("Caches/Atlas");
-    let controller = atlas_client::control::Controller::at(60001, &caches);
+    let controller = atlas_control::Controller::at(60001, &caches);
     let held = controller.acquire(true).unwrap();
     fs::create_dir_all(caches.join("update/staging")).unwrap();
     fs::write(caches.join("update/staging/Atlas.zip"), b"").unwrap();
 
     assert!(!remove_caches(&caches, &mut Vec::new(), &silent).unwrap());
     assert!(!caches.join("update").exists(), "the scratch goes");
-    let other = atlas_client::control::Controller::at(60001, &caches);
+    let other = atlas_control::Controller::at(60001, &caches);
     assert_eq!(
         other.acquire(true).unwrap_err().code,
         "busy",
@@ -414,7 +414,7 @@ fn a_helper_held_while_its_caches_go_stays_held() {
 fn an_action_of_unknown_outcome_keeps_its_record_through_uninstall() {
     let dir = tempfile::tempdir().unwrap();
     let caches = dir.path().join("Caches/Atlas");
-    let controller = atlas_client::control::Controller::at(60001, &caches);
+    let controller = atlas_control::Controller::at(60001, &caches);
     // One cut short, and one still being carried out.
     let lost = controller.quarantine().unwrap();
     let generation = lost.generation().to_owned();
@@ -665,7 +665,7 @@ fn only_the_strict_look_says_the_helper_is_gone() {
 struct Script {
     looks: std::collections::VecDeque<bool>,
     steps: Vec<String>,
-    controller: atlas_client::control::Controller,
+    controller: atlas_control::Controller,
     state: PathBuf,
     held: Option<Ownership>,
     shutdown: Option<Result<()>>,
@@ -678,7 +678,7 @@ impl Script {
         Self {
             looks: looks.iter().copied().collect(),
             steps: Vec::new(),
-            controller: atlas_client::control::Controller::at(60001, &state),
+            controller: atlas_control::Controller::at(60001, &state),
             state,
             held: None,
             shutdown: None,
@@ -689,7 +689,7 @@ impl Script {
     /// Note `step`, and whether another controller found the helper
     /// taken while it ran.
     fn note(&mut self, step: &str) {
-        let other = atlas_client::control::Controller::at(60001, &self.state);
+        let other = atlas_control::Controller::at(60001, &self.state);
         let taken = other.acquire(true).is_err();
         self.steps
             .push(format!("{step}{}", if taken { "" } else { " (free)" }));

@@ -9,10 +9,8 @@
 //! rolls back without blind replays. The job carrying a reply is never the one
 //! being unloaded, and only artifacts this migration created are undone.
 use super::{configuration::managed, endpoint, helper_job, reported_pid};
-use crate::{
-    client::{Client, Run, timestamp},
-    control::Ownership,
-};
+use crate::client::{Client, Run, timestamp};
+use atlas_control::Ownership;
 use atlas_core::{
     account::{Account, account_with_uid},
     app_bundle::signed_daemon,
@@ -403,7 +401,7 @@ impl Migration {
     /// Claim a generation in the log, then record the pending mutation under
     /// it. A crash between the two leaves only a harmless log-only claim.
     /// The claim is held while the step runs.
-    fn begin(&mut self) -> Result<crate::control::Pending> {
+    fn begin(&mut self) -> Result<atlas_control::Pending> {
         let generation = atlas_core::files::token();
         self.log.pending.push(generation.clone());
         save_log(&self.path, &self.log)?;

@@ -98,8 +98,7 @@ pub(crate) fn service_blocker_with(
         processes: Snapshot::default(),
     }
     .sample(output, sample);
-    let remains =
-        |note: &crate::control::Note| reading.processes.state(note.process) != State::Gone;
+    let remains = |note: &atlas_control::Note| reading.processes.state(note.process) != State::Gone;
     reading.holder = reading.holder.filter(remains);
     reading.waiting.retain(remains);
     reading.running.retain(remains);

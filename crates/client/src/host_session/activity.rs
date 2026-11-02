@@ -13,13 +13,13 @@ use super::{
 use crate::{
     activity_log::{self, Row},
     client::Client,
-    control::Cause,
     handoff,
     task::{
         Owned,
         record::{installs_of, unfinished_cleanup_of},
     },
 };
+use atlas_control::Cause;
 use atlas_core::{
     error::{Code, Error, Result},
     files::Token,

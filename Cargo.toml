@@ -4,7 +4,9 @@ members = [
     "crates/core",
     "crates/native",
     "crates/daemon",
+    "crates/control",
     "crates/client",
+    "crates/agents",
     "crates/cli",
     "xtask",
 ]
@@ -17,8 +19,10 @@ license = "MIT"
 repository = "https://github.com/InsaneArts/atlas"
 
 [workspace.dependencies]
+atlas-agents = { path = "crates/agents" }
 atlas-cli = { path = "crates/cli" }
 atlas-client = { path = "crates/client" }
+atlas-control = { path = "crates/control" }
 atlas-core = { path = "crates/core" }
 atlas-daemon = { path = "crates/daemon" }
 atlas-native = { path = "crates/native" }

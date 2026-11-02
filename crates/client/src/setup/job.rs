@@ -221,7 +221,7 @@ async fn replace_job(
     let pending = client.controller.quarantine()?;
 
     {
-        let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+        let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
         install_job(run, agent, &layout.logs()).map_err(Error::uncertain)?;
     }
 

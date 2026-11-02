@@ -11,8 +11,8 @@ pub use sessions::{add_host_sessions, add_sessions_for};
 use crate::{
     activity_log::{self, Op, Row},
     client::Client,
-    control::Controller,
 };
+use atlas_control::Controller;
 use atlas_core::{
     error::{Code, Error},
     single_flight::Shared,

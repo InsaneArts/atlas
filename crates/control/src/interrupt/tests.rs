@@ -1,5 +1,5 @@
 use super::*;
-use crate::control::Controller;
+use crate::Controller;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -260,7 +260,7 @@ impl Scenario {
             }
             Self::Waiting => {
                 let waiting = controller.waiting(LONG).on_wait(move |event| {
-                    if event == crate::control::WaitEvent::Began {
+                    if event == crate::WaitEvent::Began {
                         atlas_core::test_support::message("ready");
                     }
                 });

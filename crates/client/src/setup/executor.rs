@@ -60,7 +60,7 @@ pub fn start_executor(
     let mut output = child.stdout.take().expect("piped executor output");
     let mut input = child.stdin.take().expect("piped executor input");
     let started = executor(&mut output).and_then(|pid| {
-        crate::control::record_executor(pid).map_err(|error| Refusal::Failed(error.to_string()))?;
+        atlas_control::record_executor(pid).map_err(|error| Refusal::Failed(error.to_string()))?;
         writeln!(input, "@atlas continue {}", pid.as_raw()).map_err(failed)?;
         Ok(pid)
     });
@@ -94,7 +94,7 @@ pub fn finish_executor(
         Ok(executor) => executor,
         Err(refusal) => return (Err(refusal), false),
     };
-    if let Err(error) = crate::control::record_executor(executor) {
+    if let Err(error) = atlas_control::record_executor(executor) {
         drop(stream);
         return (Err(Refusal::Failed(error.to_string())), reap(executor));
     }
@@ -502,7 +502,7 @@ pub fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResul
 /// Returns the failure to take control or claim the work, or what the work
 /// returns.
 pub fn setup_transaction<T>(
-    controller: &crate::control::Controller,
+    controller: &atlas_control::Controller,
     act: impl FnOnce() -> AtlasResult<T>,
 ) -> AtlasResult<T> {
     let _ownership = controller.acquire(true)?;
@@ -513,11 +513,11 @@ pub fn setup_transaction<T>(
 ///
 /// Returns the failure to claim the work, or what the work returns.
 pub fn setup_transaction_held<T>(
-    controller: &crate::control::Controller,
+    controller: &atlas_control::Controller,
     act: impl FnOnce() -> AtlasResult<T>,
 ) -> AtlasResult<T> {
     let pending = controller.quarantine()?;
-    let _executors = crate::control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+    let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
     let outcome = act();
     if outcome.is_ok() {
         controller.clear_if(&pending)?;

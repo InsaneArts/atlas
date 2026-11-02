@@ -2,11 +2,13 @@
 //! claimed each pending change, which holds control and which waits, and
 //! the order waiters take control in.
 use super::{acquiring, told, watched};
-use crate::{
-    control::*,
-    host_session::{Host, HostSession, Instance},
+use crate::*;
+use atlas_core::{
+    error::Holder,
+    files::token,
+    host::{Host, HostSession},
+    process::Instance,
 };
-use atlas_core::{error::Holder, files::token};
 use std::os::unix::fs::DirBuilderExt;
 
 fn session(id: &str) -> HostSession {
@@ -153,7 +155,7 @@ fn claim_if_claimer() {
 
 #[test]
 fn a_killed_holders_cause_survives_it() {
-    const TEST: &str = "control::tests::notes::a_killed_holders_cause_survives_it";
+    const TEST: &str = "tests::notes::a_killed_holders_cause_survives_it";
     claim_if_claimer();
     if !atlas_core::test_support::isolated(TEST) {
         return;
@@ -304,7 +306,7 @@ fn waiting_notes(controller: &Controller) -> Vec<Note> {
 #[test]
 fn six_waiters_take_the_lock_in_the_order_they_began() {
     if !atlas_core::test_support::isolated(
-        "control::tests::notes::six_waiters_take_the_lock_in_the_order_they_began",
+        "tests::notes::six_waiters_take_the_lock_in_the_order_they_began",
     ) {
         return;
     }
@@ -379,9 +381,8 @@ fn six_waiters_take_the_lock_in_the_order_they_began() {
 
 #[test]
 fn a_dead_or_stale_waiters_note_is_skipped() {
-    if !atlas_core::test_support::isolated(
-        "control::tests::notes::a_dead_or_stale_waiters_note_is_skipped",
-    ) {
+    if !atlas_core::test_support::isolated("tests::notes::a_dead_or_stale_waiters_note_is_skipped")
+    {
         return;
     }
     let directory = tempfile::tempdir().unwrap();
@@ -417,7 +418,7 @@ fn a_dead_or_stale_waiters_note_is_skipped() {
 #[test]
 fn a_waiter_with_no_note_still_gets_the_lock() {
     if !atlas_core::test_support::isolated(
-        "control::tests::notes::a_waiter_with_no_note_still_gets_the_lock",
+        "tests::notes::a_waiter_with_no_note_still_gets_the_lock",
     ) {
         return;
     }
@@ -438,7 +439,7 @@ fn a_waiter_with_no_note_still_gets_the_lock() {
 #[test]
 fn a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait() {
     if !atlas_core::test_support::isolated(
-        "control::tests::notes::a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait",
+        "tests::notes::a_newcomer_waits_its_turn_but_the_person_and_a_stop_end_every_wait",
     ) {
         return;
     }
@@ -537,40 +538,6 @@ fn a_bounded_pending_read_preserves_claim_classification() {
 }
 
 #[test]
-fn entry_attachment_does_not_wait_for_a_held_marker_lock_or_lose_pending_attribution() {
-    let directory = tempfile::tempdir().unwrap();
-    let mut client = crate::test_support::client(directory.path());
-    let pid = nix::unistd::getppid().as_raw();
-    let process = Instance::new(pid, atlas_core::host::ancestry::process(pid).unwrap().start);
-    let own = session("owner")
-        .run_by(Some(process))
-        .in_folder(Some("parent"));
-    client.controller = client.controller.labelled(Some(&own));
-    let claim = client.controller.quarantine().unwrap();
-    let generation = claim.generation().to_owned();
-    drop(claim);
-    let lock = client.controller.lock_marker().unwrap();
-    let (send, receive) = std::sync::mpsc::channel();
-    let caller = client.clone();
-    let worker = std::thread::spawn(move || {
-        let result = crate::host_session::store::touch(&caller, &own);
-        send.send(result.map_err(|error| error.code)).unwrap();
-    });
-    let result = receive.recv_timeout(Duration::from_secs(30));
-    drop(lock);
-    worker.join().unwrap();
-    assert_eq!(result.unwrap().unwrap_err(), "busy");
-    assert!(
-        crate::host_session::store::Store::at(client.output_dir().unwrap())
-            .all()
-            .is_empty()
-    );
-    let causes = client.controller.pending_causes().unwrap();
-    assert_eq!(causes[0].generation, generation);
-    assert_eq!(causes[0].session, Some(session("owner").key().clone()));
-}
-
-#[test]
 fn display_note_candidates_never_sample_processes() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(atlas_core::test_support::UID, directory.path())
@@ -620,31 +587,5 @@ fn waiting_display_candidates_keep_their_file_and_count_bounds() {
     let (candidates, count) =
         atlas_core::process::measure_states(|| turns::candidates_at(&controller.waiting, now));
     assert_eq!(count, 0);
-    assert_eq!(candidates.len(), crate::host_session::liveness::BUDGET);
-    let (_, reads) = atlas_core::process::measure_states(|| {
-        let candidates = turns::candidates_at(&controller.waiting, now);
-        let processes = crate::host_session::liveness::Snapshot::sample(
-            candidates.iter().map(|note| note.process),
-            |instance| instance.state(),
-        );
-        let scene = crate::session_view::Scene {
-            rows: &[],
-            processes: &processes,
-            holder: None,
-            waiting: &candidates,
-            running: &[],
-            causes: &[],
-            pending: false,
-            agent_holds: false,
-            now: u128::from(now_ms) * 1_000_000,
-        };
-        for _ in 0..200 {
-            let shown = scene.shown(
-                &crate::session_view::Who::Host(session("own").key().clone()),
-                false,
-            );
-            assert_eq!(shown.state, crate::session_view::SessionState::Idle);
-        }
-    });
-    assert_eq!(reads, crate::host_session::liveness::BUDGET);
+    assert_eq!(candidates.len(), NOTES_READ);
 }

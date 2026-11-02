@@ -28,7 +28,8 @@ pub(crate) use run::{Finished, Run};
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 pub(crate) use windows::WINDOW_LOOKUP;
 
-use crate::{control::Controller, doing::Doing, host_session::HostSession, task::Task};
+use crate::{doing::Doing, host_session::HostSession, task::Task};
+use atlas_control::Controller;
 use atlas_core::{
     config::Config,
     error::{Code, Error, Result},

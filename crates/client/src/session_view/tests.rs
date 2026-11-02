@@ -721,3 +721,64 @@ fn pending_work_and_held_control_remain_independent() {
         }
     }
 }
+
+#[test]
+fn showing_a_session_samples_each_bounded_waiter_once_however_often_it_is_shown() {
+    use crate::host_session::liveness::{BUDGET, Snapshot};
+    use atlas_control::Controller;
+    use atlas_core::{host::HostSession, time::now_ms};
+    use std::{fs, os::unix::fs::DirBuilderExt};
+
+    let directory = tempfile::tempdir().unwrap();
+    let own = HostSession::new(Host::Codex, "own").unwrap();
+    let controller =
+        Controller::at(atlas_core::test_support::UID, directory.path()).labelled(Some(&own));
+    let hold = controller.acquire(true).unwrap();
+    let holder = controller.holder_path().to_string_lossy();
+    let waiting = holder.replace(".holder.json", ".waiting");
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&waiting)
+        .unwrap();
+    let now_ms = now_ms();
+    for index in 0..200 {
+        let note = Note {
+            session: Some(own.key().clone()),
+            host: Some(own.host()),
+            folder: None,
+            named: None,
+            process: Instance::new(i32::MAX - index, [1, 0]),
+            since: now_ms,
+        };
+        fs::write(
+            std::path::Path::new(&waiting).join(format!("{index:016x}.json")),
+            serde_json::to_vec(&note).unwrap(),
+        )
+        .unwrap();
+    }
+    let candidates = controller.waiting_candidates();
+    assert_eq!(candidates.len(), BUDGET);
+    let (_, reads) = atlas_core::process::measure_states(|| {
+        let processes = Snapshot::sample(candidates.iter().map(|note| note.process), |instance| {
+            instance.state()
+        });
+        let scene = Scene {
+            rows: &[],
+            processes: &processes,
+            holder: None,
+            waiting: &candidates,
+            running: &[],
+            causes: &[],
+            pending: false,
+            agent_holds: false,
+            now: u128::from(now_ms) * 1_000_000,
+        };
+        for _ in 0..200 {
+            let shown = scene.shown(&Who::Host(own.key().clone()), false);
+            assert_eq!(shown.state, SessionState::Idle);
+        }
+    });
+    assert_eq!(reads, BUDGET);
+    drop(hold);
+}

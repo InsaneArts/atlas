@@ -1,7 +1,7 @@
 use super::*;
 
 fn temporary_client(config: Config) -> Result<Client> {
-    let controller = atlas_client::control::Controller::at(
+    let controller = atlas_control::Controller::at(
         config.helper_uid,
         &config.output_dir.parent().unwrap().join("state"),
     );
@@ -49,7 +49,7 @@ async fn a_waiter_arriving_during_download_refuses_the_swap_under_ownership() {
     );
     std::fs::create_dir(&waiting).unwrap();
     let worker = HostSession::new(Host::Named, "worker").unwrap();
-    let note = atlas_client::control::Note {
+    let note = atlas_control::Note {
         session: Some(worker.key().clone()),
         host: Some(Host::Named),
         folder: None,

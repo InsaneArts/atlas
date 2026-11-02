@@ -3,7 +3,7 @@
 //! inspection, each stopped after its timeout. [`Run`] says which, and
 //! [`Client::run`] runs it.
 use super::{Client, Mutation, Verified};
-use crate::control::Ownership;
+use atlas_control::Ownership;
 use atlas_core::{
     error::{Code, Error, Result},
     transport::{OutputError, accepted, run_output},

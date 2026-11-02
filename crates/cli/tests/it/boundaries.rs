@@ -1,7 +1,5 @@
-use atlas_client::{
-    client::Client,
-    control::{Controller, Lease},
-};
+use atlas_client::client::Client;
+use atlas_control::{Controller, Lease};
 use atlas_core::screen::{frame::Size, png::png_dimensions};
 use atlas_core::{
     actions,

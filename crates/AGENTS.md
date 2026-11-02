@@ -4,13 +4,15 @@ Read the repository's `AGENTS.md` first. Paths here are relative to `crates/`.
 Each folder is one layer and one package, and each package depends only on the
 layers above it in this list:
 
-| Folder   | Package        | What it holds                                                      |
-| -------- | -------------- | ------------------------------------------------------------------ |
-| `core`   | `atlas-core`   | names, errors, time, wire types, observations, install location    |
-| `native` | `atlas-native` | macOS calls and input execution                                    |
-| `daemon` | `atlas-daemon` | the helper daemon, and the helper's layout and launchd actions     |
-| `client` | `atlas-client` | the controller side: verified requests, control, setup, agents     |
-| `cli`    | `atlas-cli`    | the `atlas` binary, viewer, MCP server, menu bar, onboarding, `ui` |
+| Folder    | Package         | What it holds                                                      |
+| --------- | --------------- | ------------------------------------------------------------------ |
+| `core`    | `atlas-core`    | names, errors, time, wire types, observations, install location    |
+| `native`  | `atlas-native`  | macOS calls and input execution                                    |
+| `daemon`  | `atlas-daemon`  | the helper daemon, and the helper's layout and launchd actions     |
+| `control` | `atlas-control` | exclusion, cancellation, pending mutations and viewer leases       |
+| `client`  | `atlas-client`  | the controller side: verified requests and the work built on them  |
+| `agents`  | `atlas-agents`  | connecting coding agents: plugins, project sections and the guide  |
+| `cli`     | `atlas-cli`     | the `atlas` binary, viewer, MCP server, menu bar, onboarding, `ui` |
 
 Command grammar and attended interaction stay in `cli/src/bin/atlas`, release
 tooling in `xtask`, which sits above every crate.
@@ -29,8 +31,8 @@ the orphan rule refuses moves to the type's owner; do not add a wrapper or trait
 Shared dependencies and lints live in the root `Cargo.toml`. Each crate lists only
 the dependencies and features it uses, including `[dev-dependencies]`.
 
-`core`, `native`, `daemon` and `client` have a `test-support` feature for what the
-tests of crates above need, enabled only through `[dev-dependencies]`. Gate such
+Every crate except `cli` has a `test-support` feature for what the tests of crates
+above need, enabled only through `[dev-dependencies]`. Gate such
 items with `#[cfg(any(test, feature = "test-support"))]`, and any `cfg(test)`
 switch that a test above relies on. A test that reaches a higher layer lives in
 that layer's crate. Shipped builds never carry the feature. `cargo test` does build
@@ -40,8 +42,11 @@ that layer's crate. Shipped builds never carry the feature. `cargo test` does bu
 
 - `agent` resolves targets and adapts agent operations; `client` verifies the
   helper, transports requests, and owns controller-side mutation lifetimes.
-- `control` owns exclusion, leases and pending mutations. `host_session` owns
-  attribution and session records; `task` owns the work attributed to a task.
+- `control` owns exclusion, leases, pending mutations and, in `interrupt`,
+  cancellation. `host_session` owns attribution and session records; `task` owns
+  the work attributed to a task.
+- `agents` owns host connections, plugins, project sections, Claude Desktop's
+  settings and the guide; `agent` in `client` owns guarded desktop actions.
 - `daemon` serves capture, reads, commands and jobs. `native` owns macOS calls,
   input execution, cancellation, grants and held-input recovery.
 - `screen` owns portable observed geometry, windows, elements and selection.
@@ -180,7 +185,7 @@ need tests.
 ### Agent host
 
 Add identity, display name and ordered sources in `core/src/host.rs`, the `agents!` row
-in `client/src/agents.rs`, host-specific assets/integration, ancestry/PID decisions and
+in `agents/src/lib.rs`, host-specific assets/integration, ancestry/PID decisions and
 CLI selection. Compiler errors cover closed identity choices; review host workflows and
 generated resources explicitly. Test install, removal,
 refresh, ownership preservation and nested or ambiguous host sessions.

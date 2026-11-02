@@ -1,5 +1,5 @@
 use super::*;
-use atlas_client::control::Cause;
+use atlas_control::Cause;
 use atlas_core::host::Host;
 
 fn cause(session: &Key) -> Cause {

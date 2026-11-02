@@ -2,7 +2,8 @@
 //! renewing and ending control under a lease, input sent under it, and
 //! recovery and cleanup, which wait until no control is held.
 use super::{LEASE_SECONDS, Viewer, unpoisoned};
-use atlas_client::{client::Client, control::ActionPermit};
+use atlas_client::client::Client;
+use atlas_control::ActionPermit;
 use atlas_core::screen::frame::Frame;
 use atlas_core::{
     error::{Code, Error, Result},

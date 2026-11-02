@@ -1,6 +1,5 @@
 use crate::{
     activity_log,
-    control::Controller,
     host_session::{
         Key,
         liveness::{Lifetime, Snapshot},
@@ -10,6 +9,7 @@ use crate::{
     },
     session_view::{self, Scene, Who},
 };
+use atlas_control::Controller;
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 /// What a status says that the sessions' states depend on.
@@ -28,10 +28,10 @@ pub struct SessionFacts {
 pub struct SessionReading {
     pub seen: Arc<[Seen]>,
     pub(crate) rows: Vec<crate::activity_log::Row>,
-    pub(crate) causes: Vec<crate::control::Cause>,
-    pub(crate) holder: Option<crate::control::Note>,
-    pub(crate) waiting: Vec<crate::control::Note>,
-    pub(crate) running: Vec<crate::control::Note>,
+    pub(crate) causes: Vec<atlas_control::Cause>,
+    pub(crate) holder: Option<atlas_control::Note>,
+    pub(crate) waiting: Vec<atlas_control::Note>,
+    pub(crate) running: Vec<atlas_control::Note>,
     pub processes: Snapshot,
 }
 
@@ -43,13 +43,13 @@ pub(crate) const SESSION_ROWS: usize = 64;
 /// running commands', naming a session that has no record among `seen`:
 /// each such session once.
 pub(crate) fn unrecorded<'a>(
-    holder: Option<&'a crate::control::Note>,
-    waiting: &'a [crate::control::Note],
-    running: &'a [crate::control::Note],
+    holder: Option<&'a atlas_control::Note>,
+    waiting: &'a [atlas_control::Note],
+    running: &'a [atlas_control::Note],
     seen: &[Seen],
-) -> Vec<&'a crate::control::Note> {
+) -> Vec<&'a atlas_control::Note> {
     let notes = holder.into_iter().chain(waiting).chain(running);
-    let mut found: Vec<&crate::control::Note> = Vec::new();
+    let mut found: Vec<&atlas_control::Note> = Vec::new();
     for note in notes {
         let Some(key) = &note.session else { continue };
         let known = seen.iter().any(|seen| seen.record.key == *key)
@@ -165,7 +165,7 @@ pub(crate) struct Listed<'a> {
 
 pub(crate) enum Source<'a> {
     Recorded(&'a Seen, usize, Lifetime),
-    First(&'a crate::control::Note),
+    First(&'a atlas_control::Note),
     Terminal { started: u64, now: u64 },
 }
 

@@ -242,8 +242,8 @@ async fn a_recent_read_protects_an_unreadable_neighbour_with_old_tasks_from_clea
 
 #[tokio::test]
 async fn a_session_that_acts_while_adoption_waits_for_control_is_not_adopted() {
-    use crate::control::WaitEvent;
     use crate::host_session::store::{Kind, note};
+    use atlas_control::WaitEvent;
 
     let directory = tempfile::tempdir().unwrap();
     let (mut client, neighbour) = ended_neighbour(directory.path());

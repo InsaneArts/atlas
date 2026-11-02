@@ -1,5 +1,5 @@
 use super::*;
-use crate::host_session::Instance;
+use atlas_core::process::Instance;
 
 #[test]
 fn waiters_with_equal_timestamps_use_their_names_to_order() {

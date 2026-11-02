@@ -103,7 +103,12 @@ impl Controller {
     /// Every pending generation, whether a live process is still carrying
     /// it out, and the host session that claimed it when one is recorded;
     /// from one locked read of the marker, or none when there is no marker.
-    pub(crate) fn pending_causes(&self) -> Result<Vec<Cause>> {
+    ///
+    /// # Errors
+    ///
+    /// Returns lock, storage or decoding failures rather than treating unreadable pending
+    /// ownership as empty.
+    pub fn pending_causes(&self) -> Result<Vec<Cause>> {
         if !self.marker_exists()? {
             return Ok(Vec::new());
         }
@@ -128,7 +133,12 @@ impl Controller {
     }
 
     /// Service replacement must check for a writer even before a marker exists.
-    pub(crate) fn pending_causes_for_service_change(&self, wait: Duration) -> Result<Vec<Cause>> {
+    ///
+    /// # Errors
+    ///
+    /// Returns a marker lock still held after `wait`, and storage or decoding failures rather
+    /// than treating unreadable pending ownership as empty.
+    pub fn pending_causes_for_service_change(&self, wait: Duration) -> Result<Vec<Cause>> {
         let _lock = self.lock_marker_within(wait)?;
         self.read_causes()
     }
@@ -180,7 +190,14 @@ impl Controller {
         self.read_snapshot()
     }
 
-    pub(crate) fn pending_snapshot_within(&self, wait: Duration) -> Result<Snapshot> {
+    /// Unresolved generations, the total and the commands still running,
+    /// from one locked marker read, waiting at most `wait` for its lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns a marker lock still held after `wait` and failures reading the marker. Callers
+    /// never treat a failed read as nothing pending.
+    pub fn pending_snapshot_within(&self, wait: Duration) -> Result<Snapshot> {
         let _lock = self.lock_marker_within(wait)?;
         self.read_snapshot()
     }
@@ -272,7 +289,7 @@ impl Controller {
     /// # Errors
     ///
     /// Returns the failure to write the claim or its marker.
-    pub(crate) fn quarantine_command(&self) -> Result<Pending> {
+    pub fn quarantine_command(&self) -> Result<Pending> {
         self.quarantine_marked(&token(), Mark::Command)
     }
 
@@ -360,7 +377,7 @@ impl Controller {
     /// unknown as any other unknown outcome: its mark goes, then its claim,
     /// while its marker entry stays for recovery, and its note with it, to
     /// name its session. It is never settled here.
-    pub(crate) fn abandon_command(&self, claim: Pending) {
+    pub fn abandon_command(&self, claim: Pending) {
         if let Ok(_lock) = self.lock_marker() {
             let kept: Vec<String> = pending(&self.marker)
                 .unwrap_or_default()
@@ -502,13 +519,13 @@ pub(super) fn replace_private(path: &Path, bytes: &[u8]) -> Result<()> {
 
 /// The pending changes, as one locked read of the marker counts them.
 #[derive(Clone, Debug)]
-pub(crate) struct Snapshot {
+pub struct Snapshot {
     /// Generations no mutation in progress will settle.
-    pub(crate) unresolved: Vec<String>,
+    pub unresolved: Vec<String>,
     /// How many are pending in all.
-    pub(crate) total: usize,
+    pub total: usize,
     /// How many are commands agents started with `run`, still running.
-    pub(crate) commands: usize,
+    pub commands: usize,
 }
 
 /// Pending generations in a marker; an unreadable one stays pending as unknown.

@@ -6,9 +6,9 @@ use atlas_core::error::Code;
 use serde_json::Value;
 
 fn agent_name(id: &str) -> &str {
-    match atlas_client::agents::Agent::named(id) {
+    match atlas_agents::Agent::named(id) {
         Some(agent) => agent.display_name(),
-        None if id == atlas_client::claude_app::ID => "Claude app",
+        None if id == atlas_agents::claude_app::ID => "Claude app",
         None => id,
     }
 }
@@ -124,7 +124,7 @@ pub(super) fn agents_change(value: &Value) -> Rendered {
         if agent["ok"] == true && agent["restart"] == true {
             let words = agent["agent"]
                 .as_str()
-                .and_then(atlas_client::agents::Agent::named)
+                .and_then(atlas_agents::Agent::named)
                 .and_then(|agent| agent.metadata().restart)
                 .unwrap_or("Quit and reopen the Claude app for this to take effect.");
             out.push(style::dim(words));

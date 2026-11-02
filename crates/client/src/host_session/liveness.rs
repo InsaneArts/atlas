@@ -3,7 +3,7 @@ use super::{
     Instance,
     record::{ACTIVE_FOR, Record},
 };
-use crate::control::{NOTES_READ, Note};
+use atlas_control::{NOTES_READ, Note};
 use atlas_core::{process::State, single_flight::Shared};
 use std::{
     collections::HashMap,

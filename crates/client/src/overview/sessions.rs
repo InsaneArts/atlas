@@ -5,10 +5,10 @@ use super::pending;
 use crate::host_session::reading::{Listed, SessionFacts, SessionReading, Source};
 use crate::{
     client::Client,
-    control::Controller,
     host_session::{Key, liveness::Lifetime, record::Seen},
     session_view,
 };
+use atlas_control::Controller;
 use serde_json::{Value, json};
 
 /// The most host sessions a status lists.
@@ -195,7 +195,7 @@ fn host_session(seen: &Seen, name: &str, uncertain: usize, lifetime: Lifetime) -
 /// runs as a command started with `run`, and so has no record yet, from
 /// its note: named by its host and folder, and
 /// started when its command did, as its record will say.
-fn first_command(note: &crate::control::Note, name: &str) -> Value {
+fn first_command(note: &atlas_control::Note, name: &str) -> Value {
     json!({
         "key": note.session,
         "host": note.host,

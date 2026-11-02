@@ -1,5 +1,5 @@
 use super::{liveness::Snapshot, recovery::owns_every_unknown, *};
-use crate::control::Cause;
+use atlas_control::Cause;
 use atlas_core::{
     process::{self, Instance},
     test_support::{
@@ -80,15 +80,7 @@ fn a_running_command_is_nobodys_unknown_outcome_and_recovery_waits_for_it() {
 }
 
 #[test]
-fn the_guide_restarts_after_a_stopped_command_only_when_recovery_says_so() {
-    let core = crate::agent::CORE
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    assert!(core.contains(
-        "If your host stopped a command of yours, run `atlas doctor`; restart only when it says all is yours."
-    ));
-
+fn recovery_says_to_restart_only_when_every_unknown_is_the_askers_own() {
     let (own, other) = (Key::of(Host::Pi, "own"), Key::of(Host::Pi, "other"));
     let cause = |session: Option<&Key>| Cause {
         generation: atlas_core::files::token(),

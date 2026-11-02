@@ -23,9 +23,9 @@ mod worker;
 
 use crate::{
     client::{Client, Run},
-    control::Ownership,
     task::{self, Claims},
 };
+use atlas_control::Ownership;
 use atlas_core::{
     account::helper_search_path,
     config::parse_toml,

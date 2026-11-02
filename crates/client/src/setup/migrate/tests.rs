@@ -331,7 +331,7 @@ fn sandbox(dir: &Path) -> Migration {
     };
 
     let mut migration = Migration::new(dir.join("setup.json"), log).unwrap();
-    let controller = crate::control::Controller::at(60001, &dir.join("state"));
+    let controller = atlas_control::Controller::at(60001, &dir.join("state"));
     migration.old.controller = controller.clone();
     migration.new.controller = controller;
 

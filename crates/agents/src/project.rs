@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// The section `atlas agents project` keeps in a project's AGENTS.md: when
 /// to test in the helper, and how. The README shows the same text.
-const PROJECT_SECTION: &str = include_str!("../agent_project.md");
+const PROJECT_SECTION: &str = include_str!("agent_project.md");
 const SECTION_START: &str = "<!-- atlas:start -->";
 const SECTION_END: &str = "<!-- atlas:end -->";
 

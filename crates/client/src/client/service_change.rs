@@ -5,7 +5,7 @@ pub(crate) use sessions::service_blocker;
 pub(crate) use sessions::service_blocker_with;
 
 use super::Client;
-use crate::control::Ownership;
+use atlas_control::Ownership;
 use atlas_core::{
     error::{Code, Error, Holder, Result},
     protocol::{JobState, Shown},

@@ -13,7 +13,7 @@ use atlas_core::{
 };
 use fs2::FileExt;
 use rand::Rng;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 use std::{
     io::ErrorKind,
@@ -23,7 +23,7 @@ use std::{
 /// How long to sleep before trying the lock again: about a tenth of a
 /// second, spread by 25 ms either way so waiters do not try in step, and
 /// never past the end of the wait.
-pub(crate) fn poll(remaining: Duration) -> Duration {
+pub fn poll(remaining: Duration) -> Duration {
     poll_with(remaining, rand::rng().random_range(75..=125))
 }
 
@@ -35,8 +35,8 @@ pub(super) fn poll_with(remaining: Duration, jitter_ms: u64) -> Duration {
 
 /// Where a wait for another controller has got to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(test)]
-pub(crate) enum WaitEvent {
+#[cfg(any(test, feature = "test-support"))]
+pub enum WaitEvent {
     /// The first try found the lock held, and the controller waits.
     Began,
     /// The wait is over: control was taken, or the answer is a refusal.
@@ -45,15 +45,15 @@ pub(crate) enum WaitEvent {
 
 /// What [`Controller::acquire`] tells about its wait; it runs on the
 /// waiting thread.
-#[cfg(test)]
-pub(crate) type WaitHook = Arc<dyn Fn(WaitEvent) + Send + Sync>;
+#[cfg(any(test, feature = "test-support"))]
+pub(super) type WaitHook = Arc<dyn Fn(WaitEvent) + Send + Sync>;
 
 /// A wait under way: its hook hears [`WaitEvent::Began`] when it is made
 /// and [`WaitEvent::Ended`] when it is dropped.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 struct WaitNotice<'a>(Option<&'a WaitHook>);
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl<'a> WaitNotice<'a> {
     fn begin(hook: Option<&'a WaitHook>) -> Self {
         if let Some(hook) = hook {
@@ -63,7 +63,7 @@ impl<'a> WaitNotice<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl Drop for WaitNotice<'_> {
     fn drop(&mut self) {
         if let Some(hook) = self.0 {
@@ -98,7 +98,7 @@ impl Controller {
         started: Instant,
         join: impl FnOnce() -> turns::Turn,
     ) -> Result<()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-support"))]
         let _notice = WaitNotice::begin(self.on_wait.as_ref());
         let turn = join();
         loop {

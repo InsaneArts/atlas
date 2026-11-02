@@ -1,7 +1,7 @@
 //! Restarting the helper and logging it out, each under a claim of its own
 //! that stays until the outcome is known.
 use super::{Client, Mutation, service::require_accessibility};
-use crate::control::Ownership;
+use atlas_control::Ownership;
 use atlas_core::{
     error::{Code, Error, Result},
     session::{Observation, Session},

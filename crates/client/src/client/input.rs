@@ -3,7 +3,7 @@
 //! the app it is for when asked, and the native requests behind it that
 //! take, release and reset that grant.
 use super::{Actor, Client, Mutation, service::require_accessibility};
-use crate::control::{Beside, Ownership, SharedLease};
+use atlas_control::{Beside, Ownership, SharedLease};
 use atlas_core::{
     actions::{self, Expect},
     error::{Code, Error, Holder, Result},
@@ -128,7 +128,7 @@ impl Client {
                     if left.is_zero() {
                         return Err(error);
                     }
-                    tokio::time::sleep(crate::control::poll(left)).await;
+                    tokio::time::sleep(atlas_control::poll(left)).await;
                     // The service may not have heard of a Stop the person's
                     // side has saved.
                     if self.stop_marked() {

@@ -2,10 +2,8 @@ use super::{
     Check, Generation, Panel, Record, boot_time, generation_at, now, problem, ready_epoch,
     record_path,
 };
-use crate::{
-    client::{Client, Run, timestamp},
-    control::Ownership,
-};
+use crate::client::{Client, Run, timestamp};
+use atlas_control::Ownership;
 use atlas_core::{
     error::{Code, Error, Result},
     files::write_private,

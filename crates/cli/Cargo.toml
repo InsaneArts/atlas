@@ -15,7 +15,9 @@ name = "atlas"
 path = "src/bin/atlas/main.rs"
 
 [dependencies]
+atlas-agents.workspace = true
 atlas-client.workspace = true
+atlas-control.workspace = true
 atlas-core.workspace = true
 atlas-daemon.workspace = true
 atlas-native.workspace = true
@@ -38,7 +40,9 @@ unicode-segmentation.workspace = true
 unicode-width.workspace = true
 
 [dev-dependencies]
+atlas-agents = { workspace = true, features = ["test-support"] }
 atlas-client = { workspace = true, features = ["test-support"] }
+atlas-control = { workspace = true, features = ["test-support"] }
 atlas-core = { workspace = true, features = ["test-support"] }
 atlas-native = { workspace = true, features = ["test-support"] }
 nix = { workspace = true, features = ["fs", "poll"] }

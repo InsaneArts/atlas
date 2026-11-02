@@ -3,7 +3,7 @@
 //! shares both. Names are worked out when read, so one may gain its time
 //! later. No host title, transcript or host store is ever read.
 use super::{Host, HostId, HostSession, Key, record::Record};
-use crate::control::Note;
+use atlas_control::Note;
 use std::collections::BTreeMap;
 
 /// What a session is named by: a record, or the note of a session on its

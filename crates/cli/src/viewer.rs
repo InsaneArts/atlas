@@ -20,7 +20,8 @@ pub(crate) use local::{
 };
 
 use crate::menubar::Line;
-use atlas_client::{client::Client, control::SharedLease, helper_info};
+use atlas_client::{client::Client, helper_info};
+use atlas_control::SharedLease;
 use atlas_core::{
     error::{Code, Error},
     session::Epoch,

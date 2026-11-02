@@ -10,7 +10,7 @@ mod uninstall;
 mod update;
 
 use atlas_cli::ui::{self, Format, render, style};
-use atlas_client::interrupt::{Interrupt, Stopped};
+use atlas_control::interrupt::{Interrupt, Stopped};
 use atlas_core::{
     config::Config,
     error::{Code, Error},
@@ -176,7 +176,7 @@ fn run(
 
                     // Being stopped: the stop ends Atlas in a moment and says
                     // so, so what the cut-short command gave is not reported.
-                    if atlas_client::agents::stopping() {
+                    if atlas_agents::stopping() {
                         std::future::pending::<()>().await;
                     }
 
@@ -286,7 +286,7 @@ fn launch_job(log: &std::path::Path, argv0: &str, program: &[String]) -> ExitCod
 /// its own.
 fn exit_status(failed: bool, stopped: Option<Signal>) -> ExitCode {
     match stopped {
-        Some(signal) => ExitCode::from(atlas_client::interrupt::status(signal)),
+        Some(signal) => ExitCode::from(atlas_control::interrupt::status(signal)),
         None if failed => ExitCode::FAILURE,
         None => ExitCode::SUCCESS,
     }
@@ -400,7 +400,7 @@ fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
         // An agent tool Atlas started in its own process group does not see
         // the terminal's Ctrl-C: stop it too, before saying stopped. No tool
         // starts after this, and the command stops at its next step.
-        atlas_client::agents::stop_running();
+        atlas_agents::stop_running();
 
         if let Some(message) = said {
             let _ = console::Term::stderr().show_cursor();

@@ -257,7 +257,7 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
         let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
         assert_eq!(status, 200, "{reply}");
         assert_eq!(reply["held"], true);
-        assert!(atlas_client::test_support::stop_noted(&client.controller));
+        assert!(client.controller.stop_noted());
         let marker = std::fs::read_dir(dir.path().join("state"))
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -299,11 +299,7 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
                 if let Some(on) = wire["on"].as_bool() {
                     assert_eq!(status, 200, "{body}: {reply}");
                     assert_eq!(reply["held"], on, "{body}");
-                    assert_eq!(
-                        atlas_client::test_support::stop_noted(&client.controller),
-                        on,
-                        "{body}"
-                    );
+                    assert_eq!(client.controller.stop_noted(), on, "{body}");
                     let (status, reply) =
                         posted(&viewer, "control/hold", &json!({"on": stopped})).await;
                     assert_eq!(status, 200, "{reply}");
@@ -316,11 +312,7 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
                 assert_eq!(reply["code"], "input");
                 assert_eq!(reply["error"], "Hold requires a boolean on");
                 assert_eq!(reply["uncertain"], false);
-                assert_eq!(
-                    atlas_client::test_support::stop_noted(&client.controller),
-                    stopped,
-                    "{body}"
-                );
+                assert_eq!(client.controller.stop_noted(), stopped, "{body}");
                 if stopped {
                     assert_eq!(std::fs::read(&marker).unwrap(), b"stop", "{body}");
                 } else {
@@ -344,9 +336,7 @@ async fn stop_validation_preserves_other_body_errors_and_routes() {
             reply,
             json!({"ok":false,"error":"Request must be a JSON object"})
         );
-        assert!(!atlas_client::test_support::stop_noted(
-            &viewer.client().controller
-        ));
+        assert!(!viewer.client().controller.stop_noted());
     }
 
     let (lines, mut received) = tokio::sync::mpsc::unbounded_channel();
@@ -358,9 +348,7 @@ async fn stop_validation_preserves_other_body_errors_and_routes() {
         received.try_recv().unwrap(),
         crate::menubar::Line::Viewer
     ));
-    assert!(!atlas_client::test_support::stop_noted(
-        &viewer.client().controller
-    ));
+    assert!(!viewer.client().controller.stop_noted());
 }
 
 #[tokio::test]
@@ -455,7 +443,7 @@ async fn the_person_takes_control_beside_a_running_command() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let controller = viewer.client().controller.clone();
-    let command = atlas_client::test_support::quarantine_command(&controller).unwrap();
+    let command = controller.quarantine_command().unwrap();
 
     viewer.lease.lock().await.acquire(&controller).unwrap();
     assert!(viewer.lease.lock().await.active());
@@ -848,7 +836,7 @@ async fn a_settings_change_moves_the_viewer_to_the_new_helper() {
     std::fs::write(&settings, SETTINGS).unwrap();
 
     let mut client = Client::new(Config::load(&settings).unwrap()).unwrap();
-    let controller = atlas_client::control::Controller::at(60001, &base.join("state"));
+    let controller = atlas_control::Controller::at(60001, &base.join("state"));
     client.controller = controller.clone();
     let (_, viewer) = bind(client, 0, Some(&settings)).await.unwrap();
 
@@ -1114,7 +1102,7 @@ async fn ending_control_reaches_the_helper_it_was_taken_on() {
     *viewer.lease_client.lock().unwrap() = Some(taken.clone());
 
     let mut other = client(dir.path());
-    other.controller = atlas_client::control::Controller::at(60001, &dir.path().join("other"));
+    other.controller = atlas_control::Controller::at(60001, &dir.path().join("other"));
     *viewer.client.lock().unwrap() = Arc::new(other);
 
     let error = viewer.release(None).await.unwrap_err();
@@ -2562,7 +2550,10 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             assert!(client.controller.holder_note().is_none());
             if waiter {
                 assert_eq!(
-                    atlas_client::test_support::waiting_notes(&client.controller),
+                    client
+                        .controller
+                        .checked_waiting_notes()
+                        .map(|notes| notes.len()),
                     Some(1)
                 );
             }

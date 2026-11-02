@@ -6,7 +6,6 @@
 //! active work; controller exclusion still decides who may act.
 use crate::{
     activity_log::{Op, Row},
-    control::{Cause, Note},
     environment::Phase,
     helper_info::Capture,
     host_session::{
@@ -18,6 +17,7 @@ use crate::{
     },
     task::record::{CleanupState, Record as TaskRecord},
 };
+use atlas_control::{Cause, Note};
 use atlas_core::error::Code;
 use serde::Serialize;
 use serde_json::{Value, json};

@@ -1,5 +1,5 @@
 //! Unprivileged subprocess stand-ins for interrupted mutation transactions.
-use crate::control::Controller;
+use atlas_control::Controller;
 use atlas_core::{
     process::Instance,
     test_support::{UID, directory, rerun},

@@ -2,7 +2,7 @@
 //! every surface that words a step for them: the asking session recovers
 //! its own, waits for others', or the person recovers.
 use super::Key;
-use crate::control::Cause;
+use atlas_control::Cause;
 use atlas_core::error::advice as hints;
 
 /// Whether every one of `causes` (the pending changes) was claimed by

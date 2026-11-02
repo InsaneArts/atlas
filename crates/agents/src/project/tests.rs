@@ -255,7 +255,7 @@ fn a_replaced_file_keeps_its_exact_permissions() {
 
 #[test]
 fn the_agent_docs_show_the_project_section() {
-    let docs = include_str!("../../../../../docs/agents.md");
+    let docs = include_str!("../../../../docs/agents.md");
     assert!(docs.contains(&format!("```text\n{}\n```", PROJECT_SECTION.trim_end())));
 }
 

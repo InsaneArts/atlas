@@ -5,10 +5,10 @@
 //! a new folder, so a running app's files never change under it.
 use crate::{
     client::Client,
-    control::Ownership,
     host_session::{HostSession, Key},
     task::{Claims, Owned, State},
 };
+use atlas_control::Ownership;
 use atlas_core::{
     error::{Code, Error, Result},
     files::Token,

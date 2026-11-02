@@ -3,7 +3,8 @@
 //! address, routed once and answered in a task of its own.
 use super::{LEASE_SECONDS, LeaseRefusal, SERVICE, Viewer, frames::Frames};
 use crate::menubar::Line;
-use atlas_client::{client::Client, control::Lease, helper_info};
+use atlas_client::{client::Client, helper_info};
+use atlas_control::Lease;
 use atlas_core::screen::frame::Frame;
 use atlas_core::{
     error::{Code, Error, Result},

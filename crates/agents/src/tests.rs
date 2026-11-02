@@ -340,7 +340,7 @@ fn the_plugin_matches_this_cli() {
     let skill = std::fs::read_to_string(root.join("atlas/skills/atlas/SKILL.md")).unwrap();
     assert_eq!(
         skill,
-        crate::agent::skill(),
+        crate::guide::skill(),
         "the plugin's skill is what atlas agent-guide --skill prints"
     );
 }

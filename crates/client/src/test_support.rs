@@ -16,9 +16,9 @@ pub use helper::{Helper, completed, exited};
 
 use crate::{
     client::Client,
-    control::{Controller, Pending},
     task::{Claims, Owned, State, Task, store::Store},
 };
+use atlas_control::Controller;
 use atlas_core::{
     config::Config,
     error::Result,
@@ -37,21 +37,6 @@ pub const NATIVE_DIALOGS_FAILED: &str = crate::capability::NATIVE_DIALOGS_FAILED
 /// Claim `owned` for `task`, kept in `store`.
 pub fn claim_in(store: Store, task: Task, owned: &Owned, state: State) -> Result<()> {
     Claims::in_store(store, task).claim(owned, state)
-}
-
-/// How many of `controller`'s waiting notes it can read, when it can.
-pub fn waiting_notes(controller: &Controller) -> Option<usize> {
-    controller.checked_waiting_notes().map(|notes| notes.len())
-}
-
-/// Whether the person stopped agents, as noted on their side.
-pub fn stop_noted(controller: &Controller) -> bool {
-    controller.stop_noted()
-}
-
-/// A pending mutation marked as a running command.
-pub fn quarantine_command(controller: &Controller) -> Result<Pending> {
-    controller.quarantine_command()
 }
 
 /// Whether a process exists, whoever owns it.
@@ -103,7 +88,7 @@ pub fn waiting_note(state: &Path, host: Option<&crate::host_session::HostSession
             .replace(".holder.json", ".waiting"),
     );
     fs::create_dir_all(&waiting).unwrap();
-    let note = crate::control::Note {
+    let note = atlas_control::Note {
         session: host.map(|host| host.key().clone()),
         host: host.map(|host| host.host()),
         folder: host.and_then(|host| host.folder().map(str::to_owned)),

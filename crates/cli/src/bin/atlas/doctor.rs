@@ -127,11 +127,11 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
 fn pending_result(
     result: Option<
         std::result::Result<
-            atlas_core::error::Result<Vec<atlas_client::control::Cause>>,
+            atlas_core::error::Result<Vec<atlas_control::Cause>>,
             tokio::task::JoinError,
         >,
     >,
-) -> atlas_core::error::Result<Vec<atlas_client::control::Cause>> {
+) -> atlas_core::error::Result<Vec<atlas_control::Cause>> {
     result.and_then(Result::ok).unwrap_or_else(|| {
         Err(atlas_core::error::Error::new(
             atlas_core::error::Code::State,
@@ -144,7 +144,7 @@ fn pending_result(
 /// comes only from a successful snapshot and the existing ownership rules.
 fn pending_report(
     report: &mut Value,
-    causes: atlas_core::error::Result<Vec<atlas_client::control::Cause>>,
+    causes: atlas_core::error::Result<Vec<atlas_control::Cause>>,
     asking: Asker<'_>,
 ) {
     let (ok, step) = match causes {

@@ -20,8 +20,8 @@ async fn a_sessions_first_read_is_seen_even_when_the_helper_is_unavailable() {
     })
     .unwrap();
     let host = HostSession::new(Host::Named, "worker").unwrap();
-    client.controller = atlas_client::control::Controller::at(60001, &dir.path().join("state"))
-        .labelled(Some(&host));
+    client.controller =
+        atlas_control::Controller::at(60001, &dir.path().join("state")).labelled(Some(&host));
     client.host_session = Some(host.clone());
     let command = parse(&["apps"]).unwrap().command.unwrap();
     let policy = Policy::of(&command);
@@ -70,8 +70,8 @@ async fn a_sessions_first_read_defers_another_sessions_service_change() {
     })
     .unwrap();
     let host = HostSession::new(Host::Named, "worker").unwrap();
-    client.controller = atlas_client::control::Controller::at(60001, &dir.path().join("state"))
-        .labelled(Some(&host));
+    client.controller =
+        atlas_control::Controller::at(60001, &dir.path().join("state")).labelled(Some(&host));
     client.host_session = Some(host.clone());
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["apps"]).unwrap().command.unwrap();
@@ -259,7 +259,7 @@ fn a_task_name_that_is_not_plain_refuses_only_commands_that_make_something() {
 }
 
 /// The agents `flags` pick for a connect.
-fn picked(flags: &[&str]) -> Vec<atlas_client::agents::Agent> {
+fn picked(flags: &[&str]) -> Vec<atlas_agents::Agent> {
     let args: Vec<&str> = ["agents", "install"].iter().chain(flags).copied().collect();
     match parse(&args).unwrap().command.unwrap() {
         Command::Agents {
@@ -271,7 +271,7 @@ fn picked(flags: &[&str]) -> Vec<atlas_client::agents::Agent> {
 
 #[test]
 fn pi_and_opencode_can_be_selected_independently_or_together() {
-    use atlas_client::agents::Agent;
+    use atlas_agents::Agent;
     assert_eq!(picked(&["--pi"]), [Agent::Pi]);
     assert_eq!(picked(&["--opencode"]), [Agent::Opencode]);
     assert_eq!(
@@ -285,7 +285,7 @@ fn pi_and_opencode_can_be_selected_independently_or_together() {
 
 #[test]
 fn cursor_has_its_own_selector_and_internal_hooks_stay_out_of_help() {
-    assert_eq!(picked(&["--cursor"]), [atlas_client::agents::Agent::Cursor]);
+    assert_eq!(picked(&["--cursor"]), [atlas_agents::Agent::Cursor]);
     for verb in ["install", "remove"] {
         assert!(parse(&["agents", verb, "--cursor", "--codex"]).is_ok());
     }
@@ -437,7 +437,7 @@ async fn a_stop_cancels_an_environment_run_after_dispatch() {
         output_dir: dir.path().join("out"),
     })
     .unwrap();
-    client.controller = atlas_client::control::Controller::at(60001, &dir.path().join("state"));
+    client.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["environment", "run", "--", "tool"])
         .unwrap()
@@ -531,11 +531,11 @@ async fn atlas_run_lets_others_act_while_it_runs() {
         output_dir: dir.path().join("out"),
     })
     .unwrap();
-    client.controller = atlas_client::control::Controller::at(60001, &dir.path().join("state"));
+    client.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["run", "--", "tool"]).unwrap().command.unwrap();
     client.doing = Policy::of(&command).doing;
-    let other = atlas_client::control::Controller::at(60001, &dir.path().join("state"));
+    let other = atlas_control::Controller::at(60001, &dir.path().join("state"));
     let listener = UnixListener::bind(&client.transport.path).unwrap();
     let helper = async {
         let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
