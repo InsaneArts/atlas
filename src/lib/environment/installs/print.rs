@@ -107,10 +107,17 @@ pub(in crate::environment) fn print_at(
         // A folder that cannot be read to its end is never printed: a walk
         // that skipped an entry would print less than is there.
         let mut names: Vec<std::ffi::CString> = Vec::new();
+        let remaining = limits.entries.saturating_sub(count);
         for entry in folder.iter() {
-            let name = entry.map_err(Unprinted::read)?.file_name().to_owned();
-            if name.as_bytes() != b"." && name.as_bytes() != b".." {
-                names.push(name);
+            let entry = entry.map_err(Unprinted::read)?;
+            let name = entry.file_name();
+            // Keep the first excess name for the entry-limit refusal below,
+            // but read to EOF so a later read error keeps its precedence.
+            if name.to_bytes() != b"."
+                && name.to_bytes() != b".."
+                && names.len() as u64 <= remaining
+            {
+                names.push(name.to_owned());
             }
         }
         let mut looked: Vec<(std::ffi::CString, FileStat)> = Vec::new();
