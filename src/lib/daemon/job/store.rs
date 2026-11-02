@@ -21,8 +21,8 @@ const RECORDS_MAX: usize = 64;
 /// How long an ended job's record and log are kept.
 const KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// How job records are kept: written whole and ordered on the disk before
-/// the daemon goes on, a power cut leaving each whole or absent.
+/// Job records are replaced whole with kernel-level ordering for process-crash
+/// recovery. This does not request an fsync or a power-loss durability guarantee.
 static JOB_RECORDS: Records = Records {
     folder: "jobs",
     noun: "job",
@@ -155,20 +155,27 @@ impl Store {
 
     /// Remove ended records older than a week, with their logs, and the
     /// oldest ended ones past [`RECORDS_MAX`]. A record of a job that may
-    /// still run, or one that cannot be read, is never removed.
+    /// still run, cannot be read, or has an unacknowledged write is never
+    /// removed. The in-memory result must reach disk before retention can
+    /// discard it and the previous durable record.
     pub(super) fn prune(&mut self, now: u64) {
         let week = crate::time::ms(KEEP);
         let mut ended: Vec<(u64, JobId)> = self
             .records()
             .into_iter()
             .filter_map(|read| match read {
-                Found::Record(record) if record.state == JobState::Ended => Some((
-                    record
-                        .ended
-                        .as_ref()
-                        .map_or(record.started_at, |ended| ended.at),
-                    record.id,
-                )),
+                Found::Record(record)
+                    if record.state == JobState::Ended
+                        && !self.unwritten.contains_key(&record.id) =>
+                {
+                    Some((
+                        record
+                            .ended
+                            .as_ref()
+                            .map_or(record.started_at, |ended| ended.at),
+                        record.id,
+                    ))
+                }
                 _ => None,
             })
             .collect();

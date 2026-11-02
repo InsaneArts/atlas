@@ -341,6 +341,174 @@ fn a_job_record_reads_back_as_it_was_written() {
     assert!(view.get("argv").is_none(), "arguments are never kept");
 }
 
+#[test]
+fn age_retention_keeps_a_job_completion_until_its_write_is_acknowledged() {
+    assert_unwritten_job_survives_retention(u64::MAX, 0);
+}
+
+#[test]
+fn record_pressure_keeps_a_job_completion_until_its_write_is_acknowledged() {
+    assert_unwritten_job_survives_retention(5, 65);
+}
+
+fn assert_unwritten_job_survives_retention(now: u64, pressure: usize) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    let mut job = record();
+    store.write(&job).unwrap();
+    let path = store.directory().join(format!("{}.json", job.id));
+    let saved = path.with_extension("saved");
+    let previous = std::fs::read(&path).unwrap();
+    let log = store.log_path(&job.id);
+    std::fs::write(&log, b"requested command output\n").unwrap();
+
+    // Make the replacement fail independently of process privilege or umask.
+    // Restore the durable running record before testing retention decisions.
+    std::fs::rename(&path, &saved).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    job.state = JobState::Ended;
+    job.ended = Some(Ended {
+        how: How::LeaderGone,
+        at: 5,
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: Vec::new(),
+    });
+    assert!(!store.put(&job));
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::rename(&saved, &path).unwrap();
+
+    for number in 0..pressure {
+        let mut newer = job.clone();
+        newer.id = JobId::parse(&format!("{number:012x}")).unwrap();
+        newer.ended.as_mut().unwrap().at = 6;
+        store.write(&newer).unwrap();
+    }
+    store.prune(now);
+    if pressure > 0 {
+        assert_eq!(store.records().len(), 64);
+    }
+    assert!(matches!(store.read(&job.id), Some(Found::Record(found)) if *found == job));
+    assert_eq!(std::fs::read(&path).unwrap(), previous);
+    assert_eq!(std::fs::read(&log).unwrap(), b"requested command output\n");
+
+    assert!(store.put(&job));
+    store.prune(u64::MAX);
+    assert!(!store.holds(&job.id));
+    assert!(!path.exists());
+    assert!(!log.exists());
+}
+
+#[test]
+fn job_log_pruning_keeps_unreadable_and_possibly_live_records() {
+    for now in [0, u64::MAX] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path()).unwrap();
+        let running = record();
+        store.write(&running).unwrap();
+        let mut future = running.clone();
+        future.id = JobId::parse("abcdef123456").unwrap();
+        future.version += 1;
+        store.write(&future).unwrap();
+        let unreadable = JobId::parse("fedcba654321").unwrap();
+        std::fs::write(
+            store.directory().join(format!("{unreadable}.json")),
+            b"{unreadable-recovery-record",
+        )
+        .unwrap();
+        let unrelated = store.directory().join("future-version.evidence");
+        std::fs::write(&unrelated, b"unknown recovery evidence").unwrap();
+        let mut evidence = Vec::new();
+        for id in [&running.id, &future.id, &unreadable] {
+            let path = store.directory().join(format!("{id}.json"));
+            evidence.push((path.clone(), std::fs::read(path).unwrap()));
+            let log = store.log_path(id);
+            std::fs::write(&log, b"explicitly requested output\n").unwrap();
+            evidence.push((log, b"explicitly requested output\n".to_vec()));
+        }
+        for number in 0..65 {
+            let mut ended = running.clone();
+            ended.id = JobId::parse(&format!("{number:012x}")).unwrap();
+            ended.state = JobState::Ended;
+            ended.ended = Some(Ended {
+                how: How::LeaderGone,
+                at: 5,
+                signal: None,
+                exit_code: None,
+                exit_signal: None,
+                left: Vec::new(),
+            });
+            store.write(&ended).unwrap();
+        }
+
+        store.prune(now);
+        assert_eq!(store.records().len(), if now == 0 { 64 } else { 3 });
+        assert!(matches!(store.read(&running.id), Some(Found::Record(found)) if *found == running));
+        assert!(matches!(store.read(&future.id), Some(Found::Unreadable(id)) if id == future.id));
+        assert!(matches!(store.read(&unreadable), Some(Found::Unreadable(id)) if id == unreadable));
+        for (path, bytes) in evidence {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+        assert_eq!(
+            std::fs::read(unrelated).unwrap(),
+            b"unknown recovery evidence"
+        );
+    }
+}
+
+#[test]
+fn a_settled_job_is_retained_at_the_seven_day_boundary() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    let mut ended = record();
+    ended.state = JobState::Ended;
+    ended.ended = Some(Ended {
+        how: How::LeaderGone,
+        at: 5,
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: Vec::new(),
+    });
+    store.write(&ended).unwrap();
+    let week = crate::time::ms(Duration::from_secs(7 * 24 * 60 * 60));
+    store.prune(5 + week);
+    assert!(matches!(store.read(&ended.id), Some(Found::Record(found)) if *found == ended));
+    store.prune(6 + week);
+    assert!(!store.holds(&ended.id));
+}
+
+#[test]
+fn log_reset_preserves_the_writers_append_handle_and_only_resets_above_the_threshold() {
+    use std::io::Write;
+
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let id = record().id;
+    let path = store.log_path(&id);
+    std::fs::write(&path, b"12345").unwrap();
+    let mut writer = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    assert!(!store.bound_log(&id, 5));
+    assert_eq!(std::fs::read(&path).unwrap(), b"12345");
+    writer.write_all(b"6").unwrap();
+    assert!(store.bound_log(&id, 5));
+    assert!(std::fs::read(&path).unwrap().is_empty());
+    writer.write_all(b"next").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"next");
+    drop(writer);
+
+    std::fs::remove_file(&path).unwrap();
+    let elsewhere = directory.path().join("unrelated-output");
+    std::fs::write(&elsewhere, b"must survive").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    assert!(!store.bound_log(&id, 5));
+    assert_eq!(std::fs::read(elsewhere).unwrap(), b"must survive");
+}
+
 /// A stand-in kernel: a process table the test changes, every signal kept.
 #[derive(Default)]
 struct Table {

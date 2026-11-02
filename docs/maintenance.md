@@ -111,6 +111,33 @@ keeps rows queued until append succeeds; a timer's failed append does not itself
 acknowledge those rows. These are distinct from durable recovery records: do not
 delete pending-operation evidence as an activity-log repair.
 
+## Background-job records and output
+
+The helper daemon keeps job records and their output logs in its `jobs` directory
+beside its socket. Newly created directories are private and new record/log files
+request mode `0600` under the daemon's account. Record replacement uses
+kernel-level ordering for process-crash recovery, not a power-loss durability
+promise. Record reads are limited to 128 KiB; unreadable or future-version records
+are unresolved, not permission to signal or forget a process.
+
+The supervisor resets a log when it observes that it exceeds 32 MiB. This is a
+periodically checked reset threshold, not a guaranteed maximum between checks.
+Resetting through the daemon's handle preserves existing append handles, so a
+child can keep writing at the new end. Links and non-regular log files are not
+reset. If inspection or reset fails, the log is not reported as successfully
+reset. Explicitly requested job output may contain intentional command content;
+it is not sanitized diagnostic metadata and must not be copied into diagnostics.
+
+Retention attempts to remove settled, ended records and their logs after more
+than seven days, or removes the oldest eligible ended records under pressure
+above 64 records. These are retention triggers, not a promise that every deletion
+succeeds or that 64 is a hard cap. Running, unreadable and future records survive.
+A failed record replacement retains the latest result in memory over the prior
+durable record. **That unacknowledged result is not eligible for retention, even
+if it says the job ended.** Only a successful replacement makes it eligible;
+record pressure and elapsed time cannot acknowledge the write. Do not delete
+unresolved job records or logs to force the directory below a size target.
+
 ## Held-input recovery journal
 
 The helper's input service owns the held-input journal beside its socket. This
