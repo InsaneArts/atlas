@@ -18,6 +18,23 @@ use std::{
 /// The helper account test clients are configured for.
 pub(crate) const UID: u32 = 7001;
 
+/// Unsupported roots for the exported doctor report projections.
+pub(crate) fn unsupported_report_roots() -> Vec<serde_json::Value> {
+    use serde_json::json;
+    vec![
+        json!(false),
+        json!(true),
+        json!(0),
+        json!(-1),
+        json!(u64::MAX),
+        json!(1.5),
+        json!(""),
+        json!("private-report-input-canary"),
+        json!([]),
+        json!([null, false, "private-report-input-canary"]),
+    ]
+}
+
 /// This test binary, told to run only the test named `test`, exactly.
 pub(crate) fn rerun(test: &str) -> Command {
     let mut command = Command::new(std::env::current_exe().unwrap());

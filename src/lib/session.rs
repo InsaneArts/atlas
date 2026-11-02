@@ -559,6 +559,19 @@ impl Guidance {
     }
 }
 
+/// Null retains the existing uninitialized-report projection. Other
+/// non-object roots cannot receive report fields safely.
+pub(crate) fn require_report(report: &Value) -> Result<()> {
+    if report.is_object() || report.is_null() {
+        Ok(())
+    } else {
+        Err(Error::new(
+            Code::State,
+            "A doctor report must be an object or null",
+        ))
+    }
+}
+
 pub(crate) struct Diagnosis {
     pub(crate) value: Value,
     pub(crate) observation: Observation,
@@ -847,7 +860,14 @@ impl Absence {
     /// Put this in a doctor report: `absence` and `account` for the
     /// overview, and the running check's step (in its place among the
     /// next steps) in words for the command line.
+    ///
+    /// Objects and legacy null reports are enriched. Other roots are
+    /// replaced with a certain state-error report.
     pub fn explain(&self, report: &mut Value) {
+        if let Err(error) = require_report(report) {
+            *report = json!(error);
+            return;
+        }
         report["absence"] = json!(self.as_str());
 
         let step = match self {
@@ -1593,5 +1613,40 @@ mod tests {
         assert!(validate_target_uid(502, 502).is_err());
         assert!(validate_target_uid(500, 502).is_err());
         assert!(validate_target_uid(0, 502).is_err());
+    }
+
+    #[test]
+    fn unsupported_report_roots_return_a_certain_error_instead_of_panicking() {
+        let mut outcomes = Vec::new();
+        for absence in [Absence::Missing, Absence::LoggedOut("helper".into())] {
+            for value in crate::test_support::unsupported_report_roots() {
+                outcomes.push(std::panic::catch_unwind(|| {
+                    let mut report = value;
+                    absence.explain(&mut report);
+                    report
+                }));
+            }
+        }
+        for outcome in outcomes {
+            let report = outcome.expect("An invalid report shape must not panic");
+            assert_eq!(
+                report,
+                json!({"ok": false, "code": "state", "error": "A doctor report must be an object or null", "uncertain": false})
+            );
+            assert!(!report.to_string().contains("private-report-input-canary"));
+        }
+    }
+
+    #[test]
+    fn a_legacy_null_report_keeps_its_existing_absence_fields() {
+        let mut missing = json!(null);
+        Absence::Missing.explain(&mut missing);
+        assert_eq!(missing, json!({"absence": "missing", "checks": null}));
+        let mut logged_out = json!(null);
+        Absence::LoggedOut("helper".into()).explain(&mut logged_out);
+        assert_eq!(
+            logged_out,
+            json!({"absence": "loggedOut", "account": "helper", "checks": null})
+        );
     }
 }

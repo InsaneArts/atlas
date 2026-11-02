@@ -304,7 +304,12 @@ fn compact_warning(state: NativeState) -> String {
 /// warnings. Otherwise it is the report without the raw helper status it was
 /// judged from: the verdict, each check, what to do, and which helper and
 /// display. `doctor --verbose` keeps everything for diagnosis.
+/// Objects and legacy null reports retain their projection; other roots
+/// return a certain state-error report.
 pub fn summary(report: Value) -> Value {
+    if let Err(error) = crate::session::require_report(&report) {
+        return json!(error);
+    }
     // Public report ingress; the remaining fields are presentation only.
     let ready = report["ready"] == true;
     summarize(report, ready)
@@ -587,6 +592,30 @@ mod tests {
         assert_eq!(
             summarize(json!({"ready": false, "warnings": ["kept"]}), true),
             json!({"ok": true, "ready": true, "warnings": ["kept"]})
+        );
+    }
+
+    #[test]
+    fn unsupported_report_roots_return_a_certain_error_instead_of_panicking() {
+        let outcomes: Vec<_> = crate::test_support::unsupported_report_roots()
+            .into_iter()
+            .map(|value| std::panic::catch_unwind(|| summary(value)))
+            .collect();
+        for outcome in outcomes {
+            let reply = outcome.expect("An invalid report shape must not panic");
+            assert_eq!(
+                reply,
+                json!({"ok": false, "code": "state", "error": "A doctor report must be an object or null", "uncertain": false})
+            );
+            assert!(!reply.to_string().contains("private-report-input-canary"));
+        }
+    }
+
+    #[test]
+    fn a_legacy_null_report_keeps_its_existing_summary_fields() {
+        assert_eq!(
+            summary(json!(null)),
+            json!({"display": null, "helper": {"name": null, "uid": null}})
         );
     }
 }
