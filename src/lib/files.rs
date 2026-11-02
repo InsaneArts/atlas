@@ -225,18 +225,19 @@ pub(crate) fn lock_within(
     lock: Lock,
     patience: Duration,
 ) -> std::result::Result<(), Held> {
-    lock_retrying(file, lock, patience, |deadline| Instant::now() < deadline)
+    lock_retrying(file, lock, Instant::now() + patience, |deadline| {
+        Instant::now() < deadline
+    })
 }
 
 /// [`lock_within`], trying again only while `retry` says to, given the
-/// moment `patience` runs out.
+/// absolute deadline. Even an expired deadline still permits the first probe.
 pub(crate) fn lock_retrying(
     file: &LockFile,
     lock: Lock,
-    patience: Duration,
+    deadline: Instant,
     mut retry: impl FnMut(Instant) -> bool,
 ) -> std::result::Result<(), Held> {
-    let deadline = Instant::now() + patience;
     loop {
         let taken = match lock {
             Lock::Shared => fs2::FileExt::try_lock_shared(&file.0),
@@ -334,7 +335,7 @@ pub(crate) fn own_folder(folder: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Held, Lock, lock_within, open_lock};
+    use super::{Held, Lock, lock_retrying, lock_within, open_lock};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -409,10 +410,27 @@ mod tests {
         lock_within(&second, Lock::Shared, Duration::ZERO).expect("readers share it");
         fs2::FileExt::unlock(&second.0).unwrap();
 
-        let started = Instant::now();
-        let refused = lock_within(&second, Lock::Exclusive, Duration::from_millis(30));
-        assert!(matches!(refused, Err(Held)));
-        assert!(started.elapsed() >= Duration::from_millis(30), "it waited");
+        let base = Instant::now();
+        let deadline = base + Duration::from_millis(30);
+        for offset in [0, 29, 30, 31] {
+            let first_now = base + Duration::from_millis(offset);
+            let mut now = first_now;
+            let mut observed = Vec::new();
+            let refused = lock_retrying(&second, Lock::Exclusive, deadline, |until| {
+                assert_eq!(until, deadline, "all retries share the supplied deadline");
+                observed.push(now);
+                let retry = now < until;
+                now = until;
+                retry
+            });
+            assert!(matches!(refused, Err(Held)));
+            let expected = if first_now < deadline {
+                vec![first_now, deadline]
+            } else {
+                vec![first_now]
+            };
+            assert_eq!(observed, expected, "virtual offset {offset}ms");
+        }
 
         fs2::FileExt::unlock(&first.0).unwrap();
         lock_within(&second, Lock::Exclusive, Duration::ZERO)

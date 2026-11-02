@@ -48,7 +48,8 @@ impl Store {
         let lock = open_regular(&path.join("lock"), write)?.map(LockFile);
         if let Some(lock) = &lock {
             validate_private(&lock.0, false)?;
-            lock_retrying(lock, access, LOCK_PATIENCE, retry).map_err(|_| problem(RUNNING))?;
+            let deadline = std::time::Instant::now() + LOCK_PATIENCE;
+            lock_retrying(lock, access, deadline, retry).map_err(|_| problem(RUNNING))?;
         }
 
         Ok(Self {
