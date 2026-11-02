@@ -332,6 +332,9 @@ mod tests {
 
         held.button = Some(Button::Left);
         store(&path, &held).unwrap();
+        let original = fs::metadata(&path).unwrap();
+        assert_eq!(original.uid(), epoch.uid);
+        assert_eq!(original.mode() & 0o777, 0o600);
         assert!(
             load(&path, &epoch).unwrap().is_none(),
             "nothing is replayed"
@@ -345,6 +348,12 @@ mod tests {
             .filter(|name| name.starts_with("held.10.") && name.ends_with(".json"))
             .collect();
         assert_eq!(kept.len(), 1, "the earlier login's journal is kept");
+        let archive = directory.path().join(&kept[0]);
+        let archived = fs::symlink_metadata(&archive).unwrap();
+        assert!(archived.is_file());
+        assert_eq!(archived.ino(), original.ino());
+        assert_eq!(archived.uid(), original.uid());
+        assert_eq!(archived.mode(), original.mode());
 
         let evidence: Held =
             serde_json::from_slice(&fs::read(directory.path().join(&kept[0])).unwrap()).unwrap();
@@ -353,6 +362,16 @@ mod tests {
         store(&path, &held).unwrap();
         assert!(load(&path, &epoch).unwrap().is_none());
         assert!(!path.exists(), "a second one never replaces the first");
+        assert_eq!(fs::metadata(&archive).unwrap().ino(), original.ino());
+        let archives: Vec<_> = fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(archives.len(), 2);
+        for archive in archives {
+            let evidence: Held = serde_json::from_slice(&fs::read(archive).unwrap()).unwrap();
+            assert!(evidence == held);
+        }
     }
 
     /// Only the journal file itself is read: never a link to one, even a

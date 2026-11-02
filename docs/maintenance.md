@@ -78,6 +78,64 @@ interrupt active sessions or background jobs, run the needed CLI command with
 
 For an interrupted setup or a managed-layout repair, `atlas setup` inspects the current state. `atlas setup --apply` applies or resumes the migration; `atlas setup --rollback` restores the previous job and configuration when such a migration has something to restore. Use these advanced operations for the setup issue Atlas reports. Guided first-time setup remains `atlas init` or the app's setup window.
 
+## Activity metadata
+
+The client appends activity metadata in its configured output directory, in
+`metadata.jsonl`, with `metadata.previous.jsonl` as the one retained rotation and
+`metadata.lock` serializing writers. Newly created files belong to the writing
+account and request mode `0600` (further restricted by its umask). Rotation keeps
+the old file's owner and permissions. Atlas rejects links and non-regular files
+on these write paths; it does not change ownership or repair permissions of an
+existing file. Keep the output directory under the intended account's control.
+
+Rotation tests the old file **before** appending: when it already exceeds 1 MiB,
+it becomes the previous file. One complete row can therefore take the current
+file past 1 MiB. This is a rotation threshold, not a strict file-size cap. Readers
+share a 4 MiB budget across current and previous logs. Tolerant activity readers
+skip malformed rows or unavailable logs; strict diagnostic readers distinguish
+unreadable or incomplete history instead of asserting that no event occurred.
+
+Only complete, newline-terminated rows are acknowledged. Under the writer lock,
+an interrupted tail is repaired before appending; a failed append rolls back its
+own prefix. Rows name fixed operations, outcomes, counts, actor/session/task keys
+and sanitized activity descriptions, never command arguments, typed text, window
+titles, coordinates, command output or image payloads. These rows are not the
+held-input journal or pending-operation authority and must not be used to infer
+that an uncertain mutation is safe to repeat.
+
+After a confirmed helper response, a metadata write failure adds a warning while
+preserving the operation result; it does not make a successful mutation fail or
+clear an unknown one. Start rows and recording an unanswered request's failure
+are best-effort. Screenshot recording is also best-effort. Gathered viewer input
+keeps rows queued until append succeeds; a timer's failed append does not itself
+acknowledge those rows. These are distinct from durable recovery records: do not
+delete pending-operation evidence as an activity-log repair.
+
+## Held-input recovery journal
+
+The helper's input service owns the held-input journal beside its socket. This
+is recovery authority, not disposable activity metadata. Private replacement
+writes request mode `0600`: the service writes a `.pending` file through the
+kernel, then renames it over the active journal. It caches only the last
+successful replacement. A failed write does not update that cache or acknowledge
+a new recovery state; an uncommitted pending replacement is not replay authority.
+This is crash recovery, not a promise of power-loss durability.
+
+Loading reads at most 4096 bytes plus one overflow-detection byte. It checks the
+opened regular file's helper UID, refuses links and non-regular files without
+blocking on a FIFO, and validates the saved epoch and held-state fields. The
+record contains held buttons, key codes, modifiers and pointer facts, never typed
+text, passwords or screenshots. An unreadable or invalid journal is a recovery
+error, not proof that no input is held.
+
+Held input from an earlier security session is never replayed into a new login.
+Its journal is renamed to a distinct session/timestamp archive while preserving
+the file's owner, mode and contents. Archives have no automatic expiry; they
+preserve recovery evidence and do not authorize current-login replay. An
+acknowledged empty journal is different: it may remain active and need not be
+archived merely because the login changed. Do not remove active, pending or
+archived evidence to satisfy a diagnostic-log size target.
+
 ## Login timing diagnostics
 
 `atlas doctor --login-timing` reads the last two hours of Atlas login markers and

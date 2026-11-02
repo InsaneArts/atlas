@@ -598,6 +598,31 @@ mod tests {
     use std::{fs, io::Write};
 
     #[test]
+    fn created_and_rotated_activity_files_keep_the_writers_private_permissions() {
+        use std::os::unix::fs::MetadataExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let row = Row::parse(&agents(1)).unwrap();
+        append(directory.path(), &row).unwrap();
+        let mut large = row.clone();
+        large.actor = Some("a".repeat(ROTATE_AT as usize));
+        append(directory.path(), &large).unwrap();
+        assert!(fs::metadata(directory.path().join(FILE)).unwrap().len() > ROTATE_AT);
+        assert!(!directory.path().join(PREVIOUS).exists());
+
+        append(directory.path(), &row).unwrap();
+        for name in [FILE, PREVIOUS, LOCK] {
+            let metadata = fs::symlink_metadata(directory.path().join(name)).unwrap();
+            assert!(metadata.is_file(), "{name}");
+            assert_eq!(metadata.uid(), nix::unistd::getuid().as_raw(), "{name}");
+            assert_eq!(metadata.mode() & 0o777, 0o600, "{name}");
+        }
+        assert!(fs::metadata(directory.path().join(PREVIOUS)).unwrap().len() > ROTATE_AT);
+        // All three steps name the same command, so its newest row is shown.
+        assert_eq!(times(&recent(directory.path(), 3)), ["1"]);
+    }
+
+    #[test]
     fn a_failed_append_rolls_back_its_prefix_before_the_row_is_retried() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(FILE);
