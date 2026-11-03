@@ -58,11 +58,11 @@ Before testing your own build, read Test your own app; before copying files
 in, read Give the app what it needs.
 
 Open with `atlas open --app NAME [FILE|URL]` or `atlas open /path/App.app`,
-then `atlas wait --app NAME`. Act on a listed app control (not in a web
-page) by `atlas element press --ref LOOK.INDEX` (its `look` and `index`; or
-`set-value --value T`, `check`, `pick --option`, `expand`, their opposites):
-no pointer or focus. Else click it by `atlas click --app A --ref LOOK.INDEX`
-or `--name LABEL [--role ROLE]`, which lists `candidates` unless one matches.
+then `atlas wait --app NAME`. A listed app control (not a web page's) takes
+`atlas element press --ref LOOK.INDEX` (its `look` and `index`; or `check`,
+`expand`, their opposites, `set-value --value T`, `pick`): no pointer or focus.
+Else click it by `atlas click --app A --ref LOOK.INDEX` or
+`--name LABEL [--role ROLE]`, which lists `candidates` unless one matches.
 Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
 `atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
