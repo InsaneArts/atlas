@@ -5,20 +5,25 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::{Child, Command, Output, Stdio},
+    process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-/// The agent tools Atlas runs: their process groups, and whether Atlas is
-/// being stopped, after which none starts.
+/// The agent tools Atlas runs: their process groups, the leaders of those
+/// whose end could not be confirmed, and whether Atlas is being stopped,
+/// after which none starts.
 struct Tools {
     groups: Vec<i32>,
+    /// Kept, never reaped elsewhere, so their groups stay safe to signal:
+    /// a group stays listed while its leader is held here.
+    held: Vec<Box<dyn Leader>>,
     stopping: bool,
 }
 
 static RUNNING: Mutex<Tools> = Mutex::new(Tools {
     groups: Vec::new(),
+    held: Vec::new(),
     stopping: false,
 });
 
@@ -78,7 +83,7 @@ fn halt(tools: &Mutex<Tools>) -> Vec<i32> {
 
 /// Start `command` and list its process group in `tools`, under one lock:
 /// a stop then reaches every tool started before it, and none starts after.
-fn start(tools: &'static Mutex<Tools>, command: &mut Command) -> Result<(Child, Running)> {
+fn start(tools: &'static Mutex<Tools>, command: &mut Command) -> Result<Tool> {
     let mut list = locked(tools);
     if list.stopping {
         return Err(problem("Atlas is stopping"));
@@ -90,7 +95,116 @@ fn start(tools: &'static Mutex<Tools>, command: &mut Command) -> Result<(Child, 
         list.groups.push(group);
     }
 
-    Ok((child, Running { tools, group }))
+    Ok(Tool {
+        leader: child,
+        running: Running { tools, group },
+    })
+}
+
+/// What supervising a tool asks of the process that leads its group.
+trait Leader: Send {
+    /// Its output streams, each taken once.
+    fn pipes(&mut self) -> (Option<ChildStdout>, Option<ChildStderr>);
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>>;
+    fn wait(&mut self) -> std::io::Result<ExitStatus>;
+    /// Kill everything in its process group.
+    fn kill_group(&mut self) -> nix::Result<()>;
+}
+
+impl Leader for Child {
+    fn pipes(&mut self) -> (Option<ChildStdout>, Option<ChildStderr>) {
+        (self.stdout.take(), self.stderr.take())
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        Child::try_wait(self)
+    }
+
+    fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        Child::wait(self)
+    }
+
+    fn kill_group(&mut self) -> nix::Result<()> {
+        let group = i32::try_from(self.id()).map_err(|_| nix::errno::Errno::ESRCH)?;
+        nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(group),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+    }
+}
+
+/// A tool Atlas started: the process leading its group and the group's
+/// listing, owned together.
+struct Tool<L: Leader = Child> {
+    leader: L,
+    running: Running,
+}
+
+impl<L: Leader + 'static> Tool<L> {
+    /// The leader's exit status once it exits, or None at `deadline`; a wait
+    /// that is interrupted is asked again.
+    fn exited_by(&mut self, deadline: Instant) -> std::io::Result<Option<ExitStatus>> {
+        loop {
+            match self.leader.try_wait() {
+                Ok(Some(status)) => return Ok(Some(status)),
+                Ok(None) if Instant::now() >= deadline => return Ok(None),
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Kill the tool's group and reap its leader. The group is unlisted once
+    /// the leader is reaped, or once something else reaped it: its process ID
+    /// may then be another's, so it is never signalled again. When the signal
+    /// or the reap fails otherwise, the leader stays unreaped, so its group
+    /// stays listed for a stop to reach and the leader is held in the list.
+    fn stop(mut self) -> std::io::Result<()> {
+        match self.leader.kill_group() {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+            Err(errno) => {
+                self.hold();
+                return Err(errno.into());
+            }
+        }
+
+        loop {
+            match self.leader.wait() {
+                Ok(_) => return Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) if lost(&error) => return Err(error),
+                Err(error) => {
+                    self.hold();
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    /// Keep the leader in the list, its group listed with it.
+    fn hold(self) {
+        let Self {
+            leader,
+            mut running,
+        } = self;
+        locked(running.tools).held.push(Box::new(leader));
+        running.group = None;
+    }
+}
+
+/// `what` happened to a tool and then its end could not be confirmed, for
+/// `cause`: whatever it was doing may have happened.
+fn unknown_end(what: &str, cause: std::io::Error) -> atlas_core::error::Error {
+    problem(format!("{what}; whether it stopped is unknown"))
+        .with_source(cause)
+        .uncertain()
+}
+
+/// Whether a wait failed because the process is no child of Atlas's (any
+/// more): something else reaped it, so its identity is lost.
+fn lost(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(nix::errno::Errno::ECHILD as i32)
 }
 
 /// Run an agent's tool with no input and stop it after `limit`. Output is
@@ -127,9 +241,9 @@ pub(super) fn exec_in(
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    let (child, _running) = start(&RUNNING, &mut command)?;
+    let tool = start(&RUNNING, &mut command)?;
 
-    supervise(agent, child, limit)
+    supervise(agent, tool, limit)
 }
 
 /// A process group Atlas started, listed while it is waited for, so
@@ -290,24 +404,21 @@ fn shell_path() -> &'static [PathBuf] {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .process_group(0);
-        let Ok((mut child, _running)) = start(&RUNNING, &mut command) else {
+        let Ok(mut tool) = start(&RUNNING, &mut command) else {
             return Vec::new();
         };
 
-        let Some(stdout) = child.stdout.take() else {
-            return Vec::new();
-        };
-
-        let output = collect(Some(stdout));
-        let deadline = Instant::now() + Duration::from_secs(3);
-
-        while child.try_wait().ok().flatten().is_none() {
-            if Instant::now() >= deadline {
-                kill_group(&mut child);
-                break;
+        let output = collect(tool.leader.pipes().0);
+        match tool.exited_by(Instant::now() + Duration::from_secs(3)) {
+            Ok(Some(_)) => {}
+            // Something else reaped it: dropping the tool unlists it without
+            // a signal.
+            Err(error) if lost(&error) => {}
+            // The PATH is only a hint, so this asks for nothing more; a shell
+            // whose end cannot be confirmed stays listed and held.
+            Ok(None) | Err(_) => {
+                let _ = tool.stop();
             }
-
-            std::thread::sleep(Duration::from_millis(20));
         }
 
         // A background job the shell left holding the pipe open cannot keep
@@ -372,40 +483,44 @@ fn take((collected, ended): Collected) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-/// Stop `child` and everything in its process group, and reap it.
-fn kill_group(child: &mut std::process::Child) {
-    if let Ok(group) = i32::try_from(child.id()) {
-        let _ = nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(group),
-            nix::sys::signal::Signal::SIGKILL,
-        );
-    }
+/// Wait for `tool` within `limit`, collecting its output. A tool that does
+/// not answer in time, or that cannot be waited for, is stopped; one whose
+/// end cannot be confirmed is an uncertain failure that says so.
+fn supervise(
+    agent: Agent,
+    mut tool: Tool<impl Leader + 'static>,
+    limit: Duration,
+) -> Result<Output> {
+    let (stdout, stderr) = tool.leader.pipes();
+    let (stdout, stderr) = (collect(stdout), collect(stderr));
+    let untracked = format!("Atlas lost track of {}", agent.display_name());
 
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// Wait for `child` within `limit`, collecting its output.
-fn supervise(agent: Agent, mut child: std::process::Child, limit: Duration) -> Result<Output> {
-    let stdout = collect(child.stdout.take());
-    let stderr = collect(child.stderr.take());
-    let deadline = Instant::now() + limit;
-
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-
-        if Instant::now() >= deadline {
-            kill_group(&mut child);
-            return Err(problem(format!(
+    let status = match tool.exited_by(Instant::now() + limit) {
+        Ok(Some(status)) => status,
+        Ok(None) => {
+            let timeout = format!(
                 "{} did not answer within {} seconds",
                 agent.display_name(),
                 limit.as_secs()
-            )));
+            );
+            return Err(match tool.stop() {
+                Ok(()) => problem(timeout),
+                Err(cleanup) => unknown_end(&timeout, cleanup),
+            });
         }
-
-        std::thread::sleep(Duration::from_millis(20));
+        // Dropping the tool unlists it without a signal.
+        Err(error) if lost(&error) => return Err(unknown_end(&untracked, error)),
+        Err(error) => {
+            return Err(match tool.stop() {
+                Ok(()) => problem(format!("{untracked} and stopped it"))
+                    .with_source(error)
+                    .uncertain(),
+                Err(cleanup) => unknown_end(
+                    &untracked,
+                    std::io::Error::other(format!("{error}; stopping it: {cleanup}")),
+                ),
+            });
+        }
     };
 
     Ok(Output {
