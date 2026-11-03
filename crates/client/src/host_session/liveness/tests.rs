@@ -152,7 +152,7 @@ fn a_host_exit_is_seen_without_a_record_write() {
     });
     assert_eq!(ready, "ready\n");
     let pid = i32::try_from(child.0.id()).unwrap();
-    let instance = Instance::new(pid, atlas_core::host::ancestry::process(pid).unwrap().start);
+    let instance = atlas_core::host::ancestry::process(pid).unwrap().instance;
     let record = Record::new(
         &HostSession::new(Host::Codex, "root")
             .unwrap()

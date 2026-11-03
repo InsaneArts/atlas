@@ -83,8 +83,7 @@ fn a_suspended_waiter_is_passed_over_at_once_and_kept() {
     );
     child.expect("ready");
     let pid = i32::try_from(child.process.id()).unwrap();
-    let start = atlas_core::host::ancestry::process(pid).unwrap().start;
-    let suspended = Instance::new(pid, start);
+    let suspended = atlas_core::host::ancestry::process(pid).unwrap().instance;
     let path = noted(&folder, suspended, now_ms() - 1000);
     assert!(queued(&folder), "a running waiter is in line");
 

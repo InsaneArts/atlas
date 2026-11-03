@@ -34,7 +34,7 @@ fn recorded(client: &Client, session: &HostSession) {
 /// The process that started this one, as a live command other than this one.
 fn another_process() -> Instance {
     let parent = nix::unistd::getppid().as_raw();
-    Instance::new(parent, ancestry::process(parent).unwrap().start)
+    ancestry::process(parent).unwrap().instance
 }
 
 /// A holder note naming `session`, as another command `process` left it.

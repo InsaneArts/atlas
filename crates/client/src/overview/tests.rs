@@ -491,7 +491,7 @@ fn a_session_at_work_has_never_ended_whatever_its_record_says() {
     let host = atlas_core::host::ancestry::process(parent).unwrap();
     let resumed = HostSession::new(Host::Claude, "resumed")
         .unwrap()
-        .run_by(Some(Instance::new(parent, host.start)));
+        .run_by(Some(host.instance));
     let holding = client
         .controller
         .clone()

@@ -202,15 +202,7 @@ async fn a_locally_verified_host_never_waits_for_daemon_verification() {
 #[test]
 fn a_foreign_ancestor_does_not_hide_a_same_account_host_from_the_daemon() {
     let claims = claim();
-    let facts = |pid| {
-        let info = process(pid)?;
-        (info.uid == test_support::UID).then_some(Facts {
-            parent: info.ppid,
-            uid: info.uid,
-            command: info.name,
-            start: info.instance.start,
-        })
-    };
+    let facts = |pid| process(pid).filter(|info| info.uid == test_support::UID);
     let local = HostSession::resolve_for(
         |name| claims.iter().find_map(|claim| claim.env(name)),
         || ancestry::ancestors_from(80, ANCESTORS, facts),

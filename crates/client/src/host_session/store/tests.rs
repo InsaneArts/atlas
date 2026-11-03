@@ -642,7 +642,7 @@ fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
 /// A process that is this one's ancestor: its parent.
 fn parent() -> Instance {
     let pid = nix::unistd::getppid().as_raw();
-    Instance::new(pid, atlas_core::host::ancestry::process(pid).unwrap().start)
+    atlas_core::host::ancestry::process(pid).unwrap().instance
 }
 
 #[test]
@@ -1413,7 +1413,7 @@ fn entry_attachment_does_not_wait_for_a_held_marker_lock_or_lose_pending_attribu
     let directory = tempfile::tempdir().unwrap();
     let mut client = client(directory.path());
     let pid = nix::unistd::getppid().as_raw();
-    let process = Instance::new(pid, atlas_core::host::ancestry::process(pid).unwrap().start);
+    let process = atlas_core::host::ancestry::process(pid).unwrap().instance;
     let own = session("owner")
         .run_by(Some(process))
         .in_folder(Some("parent"));

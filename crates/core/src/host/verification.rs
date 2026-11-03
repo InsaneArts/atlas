@@ -1,5 +1,5 @@
 //! Host identity verified from the daemon socket's kernel-reported caller.
-use super::{ANCESTORS, Facts, Host, HostId, HostSession, Key, SOURCES, ancestry};
+use super::{ANCESTORS, Host, HostId, HostSession, Key, SOURCES, ancestry};
 use crate::process::{self, Instance};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -157,15 +157,7 @@ pub(crate) fn resolve_peer(
     if peer.instance != expected || peer.uid != uid || peer.zombie {
         return None;
     }
-    let facts = |pid| {
-        let info = describe(pid).ok()??;
-        (!info.zombie).then_some(Facts {
-            parent: info.ppid,
-            uid: info.uid,
-            command: info.name,
-            start: info.instance.start,
-        })
-    };
+    let facts = |pid| describe(pid).ok()?.filter(|info| !info.zombie);
     let session = HostSession::resolve_for(
         |name| claims.iter().find_map(|claim| claim.env(name)),
         || ancestry::ancestors_from(peer.ppid, ANCESTORS, facts),

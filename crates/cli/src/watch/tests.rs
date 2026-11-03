@@ -380,14 +380,11 @@ fn frames_go_only_to_a_private_folder() {
 #[tokio::test]
 async fn a_resumed_session_is_own_before_its_first_action() {
     use atlas_client::host_session::store;
-    use atlas_core::{
-        host::{Host, HostSession},
-        process::Instance,
-    };
+    use atlas_core::host::{Host, HostSession};
     let directory = tempfile::tempdir().unwrap();
     let client = atlas_client::test_support::client(directory.path());
     let pid = nix::unistd::getppid().as_raw();
-    let process = Instance::new(pid, atlas_core::host::ancestry::process(pid).unwrap().start);
+    let process = atlas_core::host::ancestry::process(pid).unwrap().instance;
     let own = HostSession::new(Host::Claude, "resumed")
         .unwrap()
         .run_by(Some(process));

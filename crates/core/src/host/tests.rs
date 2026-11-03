@@ -11,30 +11,30 @@ fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
     move |name| map.get(name).cloned()
 }
 
-fn ancestor(pid: i32, command: &str) -> Ancestor {
-    Ancestor {
-        pid,
-        uid: nix::unistd::geteuid().as_raw(),
-        parent: 1,
+fn ancestor(pid: i32, command: &str) -> Info {
+    let uid = nix::unistd::geteuid().as_raw();
+    Info {
         instance: Instance::new(pid, [1_761_655_000, 412_233]),
-        command: command.to_owned(),
+        ppid: 1,
+        pgid: pid,
+        uid,
+        ruid: uid,
+        svuid: uid,
+        zombie: false,
+        stopped: false,
+        name: command.to_owned(),
     }
 }
 
-fn resolved(pairs: &[(&str, &str)], ancestors: Vec<Ancestor>) -> Option<HostSession> {
+fn resolved(pairs: &[(&str, &str)], ancestors: Vec<Info>) -> Option<HostSession> {
     HostSession::resolve(
         env(pairs),
         || ancestors.clone(),
         |pid| {
             ancestors
                 .iter()
-                .find(|ancestor| ancestor.pid == pid)
-                .map(|ancestor| Facts {
-                    uid: nix::unistd::geteuid().as_raw(),
-                    parent: ancestor.parent,
-                    command: ancestor.command.clone(),
-                    start: ancestor.instance.start,
-                })
+                .find(|ancestor| ancestor.instance.pid == pid)
+                .cloned()
         },
     )
 }
@@ -315,12 +315,10 @@ fn a_node_host_hint_must_name_an_ancestor_of_this_account() {
         let session = HostSession::resolve(
             env(&[(source, "root"), (hint, "80")]),
             || vec![ancestor(80, "node")],
-            |_| {
-                Some(Facts {
-                    uid: nix::unistd::geteuid().as_raw(),
-                    parent: 1,
-                    command: "node".into(),
-                    start: [2, 0],
+            |pid| {
+                Some(Info {
+                    instance: Instance::new(pid, [2, 0]),
+                    ..ancestor(pid, "node")
                 })
             },
         )
@@ -362,7 +360,7 @@ fn independently_nested_codex_hosts_have_no_guessed_process_or_folder() {
 #[test]
 fn an_incomplete_codex_walk_cannot_choose_a_root() {
     let mut root = ancestor(80, "codex");
-    root.parent = 70;
+    root.ppid = 70;
     let session = resolved(&[("CODEX_SESSION_ID", "root")], vec![root]).unwrap();
     assert_eq!(session.process(), None);
 }

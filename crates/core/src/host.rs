@@ -7,10 +7,9 @@ pub mod verification;
 
 use crate::{
     name::{bounded, hex, lower_hex, name_type},
-    process::Instance,
+    process::{Info, Instance},
     record_folder::RecordName,
 };
-use ancestry::{Ancestor, Facts};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -90,16 +89,16 @@ impl Host {
     }
 
     /// Whether an ancestor matches a host-specific PID hint or command name.
-    fn runs_as(self, ancestor: &Ancestor, hint: Option<i32>, uid: u32) -> bool {
+    fn runs_as(self, ancestor: &Info, hint: Option<i32>, uid: u32) -> bool {
         if ancestor.uid != uid {
             return false;
         }
-        let command = ancestor.command.as_str();
+        let (pid, command) = (Some(ancestor.instance.pid), ancestor.name.as_str());
         match self {
-            Self::Claude => hint == Some(ancestor.pid),
+            Self::Claude => hint == pid,
             Self::Codex => command.starts_with("codex"),
-            Self::Opencode => hint == Some(ancestor.pid) || command == "opencode",
-            Self::Pi => hint == Some(ancestor.pid) || command == "pi",
+            Self::Opencode => hint == pid || command == "opencode",
+            Self::Pi => hint == pid || command == "pi",
             Self::Cursor => command.starts_with("Cursor") || command == "cursor-agent",
             Self::Named => false,
         }
@@ -293,16 +292,16 @@ impl HostSession {
     /// Resolve labels using only same-account ancestry and exact process starts.
     pub(crate) fn resolve(
         env: impl Fn(&str) -> Option<String>,
-        ancestors: impl FnOnce() -> Vec<Ancestor>,
-        process: impl Fn(i32) -> Option<Facts>,
+        ancestors: impl FnOnce() -> Vec<Info>,
+        process: impl Fn(i32) -> Option<Info>,
     ) -> Option<Self> {
         Self::resolve_for(env, ancestors, process, nix::unistd::geteuid().as_raw())
     }
 
     pub(crate) fn resolve_for(
         env: impl Fn(&str) -> Option<String>,
-        ancestors: impl FnOnce() -> Vec<Ancestor>,
-        process: impl Fn(i32) -> Option<Facts>,
+        ancestors: impl FnOnce() -> Vec<Info>,
+        process: impl Fn(i32) -> Option<Info>,
         uid: u32,
     ) -> Option<Self> {
         let candidates = Host::sessions(&env);
@@ -322,7 +321,7 @@ impl HostSession {
             .collect();
         let complete = walk
             .last()
-            .is_some_and(|ancestor| ancestor.pid == 1 || ancestor.parent == 1);
+            .is_some_and(|ancestor| ancestor.instance.pid == 1 || ancestor.ppid == 1);
         let single = matching.len() == 1;
         let (ambiguous, pinnable) = match host {
             Host::Codex => (!complete || !single, complete && single),
@@ -331,10 +330,10 @@ impl HostSession {
         };
         let selected = matching.first().filter(|_| pinnable);
         let instance = selected.and_then(|ancestor| {
-            let facts = process(ancestor.pid)?;
-            (facts.uid == uid
-                && facts.start == ancestor.instance.start
-                && facts.command == ancestor.command)
+            let now = process(ancestor.instance.pid)?;
+            (now.uid == uid
+                && now.instance.start == ancestor.instance.start
+                && now.name == ancestor.name)
                 .then_some(ancestor.instance)
         });
         Some(Self {
@@ -378,7 +377,7 @@ impl HostSession {
 /// may be nearer than any found, so then none is chosen: never a guess.
 fn nearest(
     candidates: Vec<(Host, HostId)>,
-    ancestors: &[Ancestor],
+    ancestors: &[Info],
     hint: &impl Fn(Host) -> Option<i32>,
     uid: u32,
 ) -> Option<(Host, HostId)> {
