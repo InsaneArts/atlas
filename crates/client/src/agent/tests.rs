@@ -6,10 +6,10 @@ use atlas_core::{
     error::{Code, Error, Holder, Result},
     screen::select::{ElementFilter, NameMatch},
     screen::{
-        elements::{Element, Stop},
+        elements::{Element, Look, Stop, click_point, element_check, menu_bar_window},
         windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, owning_window},
     },
-    session::Display,
+    session::{Display, FOCUS_APP, LOOKS},
 };
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, path::Path, time::Duration};
@@ -62,6 +62,10 @@ fn window_snapshot_identities_are_read_but_never_appear_in_the_public_window_row
 fn textedit_reads(request: &Value) -> Option<Value> {
     use crate::test_support::completed;
 
+    if request["op"] == "elements" {
+        assert_eq!(request["expect"], json!({"pid": 812, "start": [123, 456]}));
+        return Some(json!({"ok": true, "look": "kfpa", "elements": [], "truncated": false}));
+    }
     if request["op"] == "apps" {
         return Some(
             json!({"ok": true, "apps": [{"pid": 812, "name": "TextEdit"}],
@@ -130,6 +134,7 @@ async fn finding_an_app_verifies_the_helper_once() {
 
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[LOOKS]);
     for target in [Target::Name("TextEdit".into()), Target::Pid(812)] {
         let before = helper.proofs();
         let listed = helper
@@ -140,7 +145,61 @@ async fn finding_an_app_verifies_the_helper_once() {
             .await
             .unwrap();
         assert_eq!(listed["pid"], 812, "{target:?}");
+        assert_eq!(listed["look"], "kfpa", "{target:?}");
         assert_eq!(helper.proofs() - before, 1, "{target:?}");
+    }
+}
+
+/// A look is asked of the input service in the session just verified, for
+/// the very process found; one that cannot keep looks is asked nothing.
+#[tokio::test]
+async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
+    use crate::test_support::Helper;
+    use atlas_core::test_support::UID;
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[FOCUS_APP]);
+    let error = helper
+        .serve(
+            elements(&client, &Target::Pid(812), &ElementFilter::default(), 10, false),
+            |request| {
+                assert_ne!(request["op"], "elements", "no look is asked for");
+                textedit_reads(request)
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Startup);
+    assert!(error.error.contains("atlas start-input"), "{error}");
+
+    for (reply, code) in [
+        (json!({"ok": true, "elements": [], "truncated": false}), "elements"),
+        (json!({"ok": true, "look": "KFPA", "elements": [], "truncated": false}), "elements"),
+        (
+            json!({"ok": false, "code": "session-changed", "uncertain": true,
+                "error": "The helper changed since Atlas checked it; look again"}),
+            "session-changed",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let helper = helper.serving_input(&client, &[LOOKS]);
+        let error = helper
+            .serve(
+                elements(&client, &Target::Pid(812), &ElementFilter::default(), 10, false),
+                |request| {
+                    if request["op"] == "elements" {
+                        assert_eq!(request["epoch"]["processId"], 456);
+                        return Some(reply.clone());
+                    }
+                    textedit_reads(request)
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, code, "{reply}");
+        assert!(!error.uncertain, "a read changes nothing");
     }
 }
 
@@ -1302,6 +1361,7 @@ async fn a_named_click_keeps_an_unknown_mutation_pending_instead_of_scanning_or_
 /// A scan as the probe reports it, complete.
 fn scanned(elements: Vec<Element>) -> Scanned {
     Scanned {
+        look: None,
         elements,
         incomplete: false,
         reasons: Vec::new(),
@@ -1368,6 +1428,109 @@ fn the_default_listing_names_each_element_by_its_click_point_and_size() {
             ],
         })
     );
+}
+
+#[test]
+fn a_kept_look_names_each_listed_element_by_its_reference() {
+    let save = shown(3, "AXButton", Some("Save"), None);
+    let mut scan = scanned(vec![save.clone(), shown(12, "AXButton", Some("Open"), None)]);
+    scan.look = Look::parse("kfpa");
+
+    let compact = listing(812, &scan, &ElementFilter::default(), 50, false);
+    assert_eq!(compact["look"], "kfpa");
+    assert_eq!(compact["elements"][0]["ref"], "kfpa3");
+    assert_eq!(compact["elements"][0]["index"], 3, "the index stays");
+    assert_eq!(compact["elements"][1]["ref"], "kfpa12");
+
+    let full = listing(812, &scan, &ElementFilter::default(), 50, true);
+    assert_eq!(full["look"], "kfpa");
+    assert_eq!(full["elements"][0]["ref"], "kfpa3");
+    assert_eq!(full["elements"][0]["title"], "Save");
+
+    let one = listing(812, &scan, &named("Open"), 50, false);
+    assert_eq!(one["elements"].as_array().unwrap().len(), 1);
+    assert_eq!(one["elements"][0]["ref"], "kfpa12");
+
+    let unkept = listing(812, &scanned(vec![save]), &ElementFilter::default(), 50, false);
+    assert!(unkept.get("look").is_none());
+    assert!(unkept["elements"][0].get("ref").is_none());
+}
+
+/// A reference that is not one a listing gives is refused before control
+/// is taken or the helper is asked anything.
+#[tokio::test]
+async fn a_malformed_reference_is_refused_before_anything_is_asked() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    for reference in ["", "kfpa", "kfpa012", "KFPA1", "save"] {
+        let error = click_reference(&client, None, reference, Button::Left, 1, &[])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            json!(error),
+            json!({"ok": false, "code": "elements", "uncertain": false,
+                "error": "That is not a ref from atlas elements",
+                "next": "Run atlas elements again.", "performed": 0}),
+            "{reference:?}"
+        );
+    }
+    assert!(client.controller.pending().unwrap().is_empty());
+    assert!(client.controller.acquire_beside_commands().is_ok());
+}
+
+/// A referenced click is sent as one referenced action for the input
+/// service to find again, with the app's expectation only when one is named.
+#[tokio::test]
+async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
+    use crate::test_support::Helper;
+    use atlas_core::{
+        session::{FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW},
+        test_support::UID,
+    };
+
+    for target in [None, Some(Target::Pid(812))] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let helper = helper.serving_input(
+            &client,
+            &[LOOKS, FOCUS_APP, FOCUS_DOCK, FOCUS_WINDOW, FOCUS_FIELD],
+        );
+        let mut sent = Vec::new();
+        let reply = helper
+            .serve(
+                click_reference(&client, target.as_ref(), "kfpa12", Button::Left, 2, &[]),
+                |request| match request["op"].as_str() {
+                    Some("acquire" | "release") => Some(json!({"ok": true})),
+                    Some("input") => {
+                        sent.push(request.clone());
+                        let refused = json!({"ok": false, "code": "elements",
+                            "error": "That look is no longer kept", "uncertain": false,
+                            "next": "Run atlas elements again.", "performed": 0,
+                            "partial": false});
+                        Some(refused)
+                    }
+                    _ => textedit_reads(request),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply["code"], "elements");
+        assert_eq!(reply["next"], "Run atlas elements again.");
+        assert_eq!(reply["performed"], 0);
+        let [request] = sent.as_slice() else {
+            panic!("one input request: {sent:?}");
+        };
+        assert_eq!(
+            request["actions"],
+            json!([{"type": "reference", "ref": "kfpa12", "button": "left", "count": 2,
+                "modifiers": []}])
+        );
+        let expected = target
+            .as_ref()
+            .map_or(Value::Null, |_| json!({"pid": 812, "start": [123, 456]}));
+        assert_eq!(request.get("expect").cloned().unwrap_or(Value::Null), expected);
+        assert!(client.controller.pending().unwrap().is_empty());
+    }
 }
 
 #[test]
@@ -1564,7 +1727,7 @@ fn a_scan_says_why_it_stopped_early() {
         if !reasons.is_null() {
             reply["reasons"] = reasons;
         }
-        Scanned::from_probe(reply).unwrap()
+        Scanned::from_reply(reply).unwrap()
     };
 
     let every = probe(
@@ -1684,7 +1847,7 @@ fn an_app_that_withheld_its_windows_is_reported_never_listed_as_empty() {
         "reasons": ["withheld"],
         "errors": {},
     });
-    let scan = Scanned::from_probe(probe).unwrap();
+    let scan = Scanned::from_reply(probe).unwrap();
 
     let listed = listing(1, &scan, &ElementFilter::default(), 50, false);
     assert_eq!(listed["scanIncomplete"], true);
@@ -2877,7 +3040,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
     use crate::{
         client::Size,
         host_session::{Host, HostSession},
-        test_support::{Helper, completed},
+        test_support::Helper,
     };
     use atlas_core::{protocol::Crop, test_support::UID};
     use base64::{Engine, engine::general_purpose::STANDARD};
@@ -2891,6 +3054,11 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                 if named {
                     client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
                 }
+                let helper = if command == 1 {
+                    helper.serving_input(&client, &[LOOKS])
+                } else {
+                    helper
+                };
                 let reads = RefCell::new(Vec::new());
                 let reply = helper.serve(async {
                     match command {
@@ -2915,9 +3083,8 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                     if request["op"] == "apps" {
                         return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "Editor"}], "starts": {"812": [123,456]}}));
                     }
-                    if request["op"] == "run" {
-                        assert_eq!(request["argv"][1], "elements-info");
-                        return Some(completed(&json!({"ok": true, "elements": [], "truncated": false}).to_string()));
+                    if request["op"] == "elements" {
+                        return Some(json!({"ok": true, "look": "kfpa", "elements": [], "truncated": false}));
                     }
                     assert_eq!(request["op"], "windows");
                     let dock = request["dock"].as_bool().unwrap();
@@ -3146,7 +3313,7 @@ fn element_reply_cost_preserves_listing_and_refusal_words() {
     ))
     .unwrap();
     for fixture in fixtures {
-        let scanned = Scanned::from_probe(fixture["input"].clone()).unwrap();
+        let scanned = Scanned::from_reply(fixture["input"].clone()).unwrap();
         let listed = listing(
             812,
             &scanned,
@@ -3169,7 +3336,7 @@ fn element_reply_cost_preserves_listing_and_refusal_words() {
 
 #[tokio::test]
 async fn representative_element_reads_keep_their_helper_request_counts() {
-    use crate::test_support::{Helper, completed};
+    use crate::test_support::Helper;
     use atlas_core::test_support::UID;
 
     let fixtures: Vec<Value> = serde_json::from_str(include_str!(
@@ -3179,6 +3346,7 @@ async fn representative_element_reads_keep_their_helper_request_counts() {
     for fixture in fixtures {
         let dir = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(dir.path(), UID);
+        let helper = helper.serving_input(&client, &[LOOKS]);
         let mut operations = Vec::new();
         let listed = helper
             .serve(
@@ -3191,9 +3359,8 @@ async fn representative_element_reads_keep_their_helper_request_counts() {
                 ),
                 |request| {
                     operations.push(request["op"].as_str().unwrap().to_owned());
-                    if request["op"] == "run" {
-                        assert_eq!(request["argv"][1], "elements-info");
-                        Some(completed(&fixture["input"].to_string()))
+                    if request["op"] == "elements" {
+                        Some(fixture["input"].clone())
                     } else {
                         textedit_reads(request)
                     }

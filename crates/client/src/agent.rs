@@ -11,7 +11,7 @@ mod target;
 mod windows;
 
 pub use crate::app_selection::Closing;
-pub use elements::{click_element, elements, screenshot};
+pub use elements::{click_element, click_reference, elements, screenshot};
 pub use expect::{Expected, act};
 pub use input::{click, drag, keys, move_to, scroll, type_text};
 pub use launch::open;
