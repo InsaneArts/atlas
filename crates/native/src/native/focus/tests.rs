@@ -57,6 +57,8 @@ struct Seen {
     unread: Option<Unread>,
     slow: Duration,
     clock: Option<Instant>,
+    /// The Accessibility status behind an unreadable system focus.
+    status: Option<objc2_application_services::AXError>,
     focus_reads: usize,
     window_reads: usize,
     keyboard_reads: usize,
@@ -98,8 +100,11 @@ impl Look for Seen {
 
     fn focused(&mut self) -> Result<Option<i64>> {
         self.focus_reads += 1;
-        match &self.focused {
-            Some(Ok(pid)) => Ok(*pid),
+        match (&self.focused, self.status) {
+            (Some(Ok(pid)), _) => Ok(*pid),
+            (_, Some(status)) => {
+                Err(Error::new(Code::Native, "unreadable").with_source(ax::Status(status)))
+            }
             _ => Err(Error::new(Code::Native, "unreadable")),
         }
     }
@@ -567,6 +572,97 @@ fn a_focus_that_cannot_be_read_refuses() {
 
     let mut no_focus = Seen::default().showing(vec![menu_bar(), document]);
     assert_eq!(refusal(point_with(&mut no_focus, 200.0, 10.0)), unreadable);
+}
+
+/// Every cause behind `error`, as each says itself, innermost last.
+fn causes(error: &Error) -> String {
+    let mut said = Vec::new();
+    let mut cause = std::error::Error::source(error);
+    while let Some(current) = cause {
+        said.push(current.to_string());
+        cause = current.source();
+    }
+    said.join(" / ")
+}
+
+#[test]
+fn an_unreadable_focus_keeps_why_privately_without_any_title() {
+    let started = Instant::now();
+    let mut look = Seen::default().showing(vec![document()]);
+    look.status = Some(objc2_application_services::AXError::CannotComplete);
+    look.clock = Some(started);
+    let bound = Expect::from_instance(atlas_core::process::Instance::new(
+        APP as i32,
+        [1_700_000_000, 42],
+    ))
+    .unwrap();
+    let deadline = started + Duration::from_millis(500);
+
+    let error = require(&bound, Need::Keys, &display(), &mut look, deadline).unwrap_err();
+    let said = causes(&error);
+    assert!(said.contains("status -25204"), "{said}");
+    assert!(said.contains("0.0 ms in, 500.0 ms left"), "{said}");
+    assert!(
+        said.contains("process 812 started 1700000000.000042"),
+        "{said}"
+    );
+    assert!(!said.contains("Secret"), "{said}");
+    assert_eq!(
+        json!(error),
+        json!({
+            "ok": false,
+            "code": "focus-changed",
+            "error": error.error,
+            "uncertain": false,
+            "reason": "unreadable",
+        }),
+        "the reply says nothing more"
+    );
+}
+
+#[test]
+fn probes_reach_the_log_at_most_once_per_gap_and_never_past_their_limit() {
+    let started = Instant::now();
+    let mut notes = Notes::new();
+    assert_eq!(notes.admit(started), Some(0));
+    assert_eq!(notes.admit(started + PROBE_GAP / 2), None);
+    assert_eq!(notes.admit(started + PROBE_GAP / 2), None);
+    assert_eq!(notes.admit(started + PROBE_GAP), Some(2));
+
+    let mut at = started + PROBE_GAP;
+    for _ in 2..PROBES {
+        at += PROBE_GAP;
+        assert!(notes.admit(at).is_some());
+    }
+    assert_eq!(notes.admit(at + PROBE_GAP * 10), None, "the limit holds");
+}
+
+#[test]
+fn a_late_unreadable_focus_keeps_the_request_that_failed() {
+    let started = Instant::now();
+    let mut look = inside_with(typing(field("Email")), vec![document()]);
+    look.slow = Duration::from_millis(20);
+    look.unread = Some(Unread::Failed);
+    look.clock = Some(started);
+    let deadline = started + Duration::from_millis(5);
+    let error = require(
+        &in_field("Email"),
+        Need::Keys,
+        &display(),
+        &mut look,
+        deadline,
+    )
+    .unwrap_err();
+    assert_eq!(error.details["unread"], "slow");
+    let said = causes(&error);
+    assert!(
+        said.contains("no request said why, 20.0 ms in, 0.0 ms left, for process 812"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Where the app's focus is could not be read"),
+        "{said}"
+    );
 }
 
 /// A deadline well past any test's own reads.

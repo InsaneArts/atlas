@@ -76,7 +76,8 @@ impl Backend for Live {
         limit: usize,
         deadline: Instant,
     ) -> Result<Vec<Self::Element>> {
-        let name = CFString::from_static_str(name);
+        let attribute = name;
+        let name = CFString::from_static_str(attribute);
         let bound = || {
             Reader {
                 ask: Live,
@@ -88,7 +89,7 @@ impl Backend for Live {
         let count = match ffi::count(element, &name) {
             Ok(count) if count >= 0 && count as usize <= limit => count,
             Err(error) if absent(error) => return Ok(Vec::new()),
-            Err(error) => return Err(Unread::Malformed.reading(error)),
+            Err(error) => return Err(Unread::Malformed.asking(attribute, error)),
             _ => return Err(Unread::Malformed.error()),
         };
         bound()?;
@@ -96,11 +97,13 @@ impl Backend for Live {
             return Ok(Vec::new());
         }
         let values = ffi::copy_values(element, &name, count)
-            .map_err(|error| Unread::Failed.reading(error))?
+            .map_err(|error| Unread::Failed.asking(attribute, error))?
             .ok_or_else(|| Unread::Malformed.error())?;
         bound()?;
         if values.len() != count as usize
-            || ffi::count(element, &name).map_err(|error| Unread::Failed.reading(error))? != count
+            || ffi::count(element, &name)
+                .map_err(|error| Unread::Failed.asking(attribute, error))?
+                != count
         {
             return Err(Unread::Failed.error());
         }

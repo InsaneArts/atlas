@@ -4,11 +4,12 @@
 //! keyboard focus; pointer actions need the app's own window, or the named
 //! one, to be the top one at the point. Preparation requests focus first;
 //! the final verifier independently proves where input would land.
-use super::ax::{self, Focused, Judged, Keyboard, Unread, Within};
+use super::ax::{self, Asked, Focused, Judged, Keyboard, Status, Unread, Within};
 use crate::native::windows as native_windows;
 use atlas_core::{
     actions::Expect,
     error::{Code, Error, Result},
+    process::Start,
     screen::{
         elements::Element,
         select::{ElementFilter, shown_name},
@@ -18,7 +19,8 @@ use atlas_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    fmt::Display,
+    fmt::{self, Display},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -323,8 +325,23 @@ impl Look for Live {
     }
 }
 
-/// [`require`] against the live helper, taking until `deadline` at most.
+/// [`require`] against the live helper, taking until `deadline` at most,
+/// noting why when it could not tell.
 pub(super) fn check(
+    expect: &Expect,
+    need: Need,
+    display: &Bounds,
+    deadline: Instant,
+) -> Result<Option<&'static str>> {
+    let result = checked(expect, need, display, deadline);
+    if let Err(error) = &result {
+        note(error);
+    }
+    result
+}
+
+/// [`require`] against the live helper, taking until `deadline` at most.
+fn checked(
     expect: &Expect,
     need: Need,
     display: &Bounds,
@@ -346,19 +363,29 @@ pub(super) fn prepare(
     if need == Need::Nothing {
         return Ok(None);
     }
+    let started = Instant::now();
     ax::bring(expect, need, deadline, &guard, |number, until| {
         let selected = match number {
             Some(number) if expect.window() != Some(number) => expect.clone().in_window(number)?,
             _ => expect.clone(),
         };
-        check(&selected, need, display, until)
+        checked(&selected, need, display, until)
     })
     .map_err(|error| {
-        if error.code == Code::Native {
+        let error = if error.code == Code::Native {
             unread_by(error)
         } else {
             error
-        }
+        };
+        let now = Instant::now();
+        let error = probed(
+            error,
+            expect,
+            now.saturating_duration_since(started),
+            deadline.saturating_duration_since(now),
+        );
+        note(&error);
+        error
     })
 }
 
@@ -374,6 +401,7 @@ fn require(
     look: &mut impl Look,
     deadline: Instant,
 ) -> Result<Option<&'static str>> {
+    let started = look.now();
     let outcome = match need {
         Need::Nothing => return Ok(None),
         Need::Keys => active(expect, look).and_then(|()| inside(expect, look)),
@@ -388,11 +416,176 @@ fn require(
     let unread = outcome
         .as_ref()
         .is_err_and(|error| Reason::of(error) == Some(Reason::Unreadable));
-    if (outcome.is_ok() || unread) && look.now() >= deadline {
-        return Err(refused(Reason::Unreadable).with("unread", json!(Unread::Slow)));
+    let outcome = if (outcome.is_ok() || unread) && look.now() >= deadline {
+        let late = refused(Reason::Unreadable).with("unread", json!(Unread::Slow));
+        Err(match outcome {
+            Err(error) => late.with_source(error),
+            Ok(_) => late,
+        })
+    } else {
+        outcome
+    };
+
+    let now = look.now();
+    outcome.map_err(|error| {
+        probed(
+            error,
+            expect,
+            now.saturating_duration_since(started),
+            deadline.saturating_duration_since(now),
+        )
+    })
+}
+
+/// Why a check could not tell what is in front, kept with its refusal as a
+/// private cause and noted in the input service's log: the Accessibility
+/// request that failed and its status, as far as the failed read said; how
+/// long the check had run and had left; and the target's process. Never a
+/// title, a value or other text an app shows.
+#[derive(Debug)]
+struct Probe {
+    call: Option<&'static str>,
+    status: Option<i32>,
+    elapsed: Duration,
+    remaining: Duration,
+    pid: i64,
+    start: Option<Start>,
+    cause: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+
+impl Display for Probe {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Focus could not be read: ")?;
+        match (self.call, self.status) {
+            (Some(call), Some(status)) => write!(f, "{call} failed with status {status}")?,
+            (None, Some(status)) => write!(f, "a request failed with status {status}")?,
+            (_, None) => f.write_str("no request said why")?,
+        }
+        let millis = |duration: Duration| duration.as_secs_f64() * 1000.0;
+        write!(
+            f,
+            ", {:.1} ms in, {:.1} ms left, for process {}",
+            millis(self.elapsed),
+            millis(self.remaining),
+            self.pid
+        )?;
+        if let Some([seconds, micros]) = self.start {
+            write!(f, " started {seconds}.{micros:06}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Probe {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause.as_deref().map(|cause| cause as _)
+    }
+}
+
+/// `error` with its [`Probe`] once it says what is in front could not be
+/// told, `elapsed` into a check with `remaining` left; any other error, or
+/// one already probed, as it is.
+fn probed(mut error: Error, expect: &Expect, elapsed: Duration, remaining: Duration) -> Error {
+    if Reason::of(&error) != Some(Reason::Unreadable) || probe_of(&error).is_some() {
+        return error;
+    }
+    let (call, status) = request(&error);
+    let cause = error.source.take();
+    error.with_source(Probe {
+        call,
+        status,
+        elapsed,
+        remaining,
+        pid: expect.pid(),
+        start: expect.instance().map(|instance| instance.start),
+        cause,
+    })
+}
+
+fn probe_of(error: &Error) -> Option<&Probe> {
+    error.source.as_deref()?.downcast_ref::<Probe>()
+}
+
+/// The request that failed behind `error`, and its status, as far as its
+/// causes say.
+fn request(error: &Error) -> (Option<&'static str>, Option<i32>) {
+    let mut cause = std::error::Error::source(error);
+    while let Some(current) = cause {
+        if let Some(asked) = current.downcast_ref::<Asked>() {
+            return (Some(asked.call), Some(asked.status.0));
+        }
+        if let Some(Status(status)) = current.downcast_ref::<Status>() {
+            return (None, Some(status.0));
+        }
+        cause = current.source();
+    }
+    (None, None)
+}
+
+/// The shortest time between two probes noted in the log.
+const PROBE_GAP: Duration = Duration::from_secs(5);
+
+/// The most probes one input service notes, so an app stuck refusing for
+/// hours cannot fill the log.
+const PROBES: usize = 1000;
+
+/// Which probes the log has been given.
+struct Notes {
+    last: Option<Instant>,
+    skipped: usize,
+    written: usize,
+}
+
+impl Notes {
+    const fn new() -> Self {
+        Self {
+            last: None,
+            skipped: 0,
+            written: 0,
+        }
     }
 
-    outcome
+    /// Whether a probe at `now` is noted, and if so how many were left out
+    /// since the last one that was.
+    fn admit(&mut self, now: Instant) -> Option<usize> {
+        let due = self
+            .last
+            .is_none_or(|last| now.saturating_duration_since(last) >= PROBE_GAP);
+        if !due || self.written >= PROBES {
+            self.skipped += 1;
+            return None;
+        }
+        self.last = Some(now);
+        self.written += 1;
+        Some(std::mem::take(&mut self.skipped))
+    }
+}
+
+static NOTES: Mutex<Notes> = Mutex::new(Notes::new());
+
+/// Note `error`'s probe, when it has one, in the input service's log.
+fn note(error: &Error) {
+    // Tests never write to the service's log.
+    if cfg!(any(test, feature = "test-support")) {
+        return;
+    }
+    let Some(probe) = probe_of(error) else {
+        return;
+    };
+    // A writer that panicked holding the notes loses this evidence and
+    // nothing else.
+    let Ok(mut notes) = NOTES.lock() else {
+        return;
+    };
+    let Some(skipped) = notes.admit(Instant::now()) else {
+        return;
+    };
+    drop(notes);
+    // Best effort: a log that cannot be written loses this line, nothing else.
+    let _ = std::io::Write::write_fmt(
+        &mut std::io::stderr(),
+        format_args!("{probe} ({skipped} more since the last)\n"),
+    );
 }
 
 /// Prove the target app is active, independently of its window focus.

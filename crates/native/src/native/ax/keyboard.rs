@@ -90,13 +90,24 @@ pub(in crate::native) enum Unread {
 
 impl Unread {
     pub(super) fn reading(self, status: AXError) -> Error {
+        self.after(status).error().with_source(Status(status))
+    }
+
+    /// [`Unread::reading`], keeping which request `call` failed.
+    pub(in crate::native) fn asking(self, call: &'static str, status: AXError) -> Error {
+        self.after(status)
+            .error()
+            .with_source(Asked { call, status })
+    }
+
+    /// Why a request that ended with `status` could not tell: an app that
+    /// could not complete it is slow, whatever else was wrong.
+    fn after(self, status: AXError) -> Self {
         if status == AXError::CannotComplete {
             Self::Slow
         } else {
             self
         }
-        .error()
-        .with_source(Status(status))
     }
 
     /// Why `error` says it could not tell, when it says.
@@ -133,6 +144,26 @@ impl fmt::Display for Status {
 }
 
 impl std::error::Error for Status {}
+
+/// The Accessibility request that failed and its status, kept as an
+/// internal cause: the attribute or call it was, never what it held.
+#[derive(Debug)]
+pub(in crate::native) struct Asked {
+    pub(in crate::native) call: &'static str,
+    pub(in crate::native) status: AXError,
+}
+
+impl fmt::Display for Asked {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} failed with Accessibility error {}",
+            self.call, self.status.0
+        )
+    }
+}
+
+impl std::error::Error for Asked {}
 
 /// One attribute's answer, as the read tells answers apart.
 #[derive(Debug, Clone, PartialEq)]
@@ -249,7 +280,7 @@ impl<A: Ask> Reader<A> {
         attribute: &'static str,
     ) -> Result<Answer<A::Element>> {
         match self.asked(element, attribute)? {
-            Answer::Failed(status) => Err(Unread::Failed.reading(status)),
+            Answer::Failed(status) => Err(Unread::Failed.asking(attribute, status)),
             answer => Ok(answer),
         }
     }
@@ -275,7 +306,7 @@ impl<A: Ask> Reader<A> {
                 *failed = true;
                 Ok(None)
             }
-            Answer::Failed(status) => Err(Unread::Failed.reading(status)),
+            Answer::Failed(status) => Err(Unread::Failed.asking(attribute, status)),
             answer => text(answer),
         }
     }

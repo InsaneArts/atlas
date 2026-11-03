@@ -1,6 +1,6 @@
 //! Reads of what the whole login shows rather than one app's tree: the
 //! application with keyboard focus, and where the Dock takes clicks.
-use super::{Bounds, Status, batch::Source, ffi, scan::Scan};
+use super::{Asked, Bounds, batch::Source, ffi, scan::Scan};
 use crate::native::windows as native_windows;
 use atlas_core::{
     error::{Code, Error, Result},
@@ -10,13 +10,16 @@ use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{CFRetained, CFString};
 use std::time::{Duration, Instant};
 
+/// The system-wide attribute naming the application with keyboard focus.
+const FOCUSED_APPLICATION: &str = "AXFocusedApplication";
+
 /// The process of the application with keyboard focus in this login, as
 /// Accessibility reports it; None when no application has it. Waits at most
 /// `timeout`. This sets the calling process's messaging timeout, which the
 /// input service uses for nothing else.
 pub(in crate::native) fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     let unreadable = || Error::new(Code::Native, "The focused app could not be read");
-    let failed = |status| unreadable().with_source(Status(status));
+    let failed = |call, status| unreadable().with_source(Asked { call, status });
 
     let system = ffi::system_wide().ok_or_else(unreadable)?;
     // The system-wide element sets this process's global messaging timeout,
@@ -24,14 +27,14 @@ pub(in crate::native) fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     // unresponsive app for far longer.
     let bounded = ffi::set_timeout(&system, timeout);
     if bounded != AXError::Success {
-        return Err(failed(bounded));
+        return Err(failed("AXUIElementSetMessagingTimeout", bounded));
     }
 
-    let name = CFString::from_static_str("AXFocusedApplication");
+    let name = CFString::from_static_str(FOCUSED_APPLICATION);
     let focused = match ffi::copy(&system, &name) {
         Ok(focused) => focused.ok_or_else(unreadable)?,
         Err(AXError::NoValue) => return Ok(None),
-        Err(status) => return Err(failed(status)),
+        Err(status) => return Err(failed(FOCUSED_APPLICATION, status)),
     };
     let app = focused
         .downcast_ref::<AXUIElement>()
@@ -39,7 +42,7 @@ pub(in crate::native) fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     match ffi::owner(app) {
         Ok(pid) if pid > 0 => Ok(Some(pid.into())),
         Ok(_) => Err(unreadable()),
-        Err(status) => Err(failed(status)),
+        Err(status) => Err(failed("AXUIElementGetPid", status)),
     }
 }
 

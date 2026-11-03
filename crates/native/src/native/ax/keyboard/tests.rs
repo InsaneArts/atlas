@@ -225,6 +225,25 @@ fn a_failed_read_of_anything_judged_refuses_where_absence_would_not() {
     );
 }
 
+#[test]
+fn a_failed_read_keeps_which_attribute_failed_and_how_but_not_its_value() {
+    let mut failed = Fake::app();
+    failed.set(GROUP, "AXParent", Answer::Failed(AXError::CannotComplete));
+    let error = read_with(&mut failed, budget()).unwrap_err();
+    let asked = std::error::Error::source(&error)
+        .and_then(|cause| cause.downcast_ref::<Asked>())
+        .unwrap();
+    assert_eq!(
+        (asked.call, asked.status),
+        ("AXParent", AXError::CannotComplete)
+    );
+    assert_eq!(
+        asked.to_string(),
+        "AXParent failed with Accessibility error -25204"
+    );
+    assert_eq!(unread(Err(error)), "slow");
+}
+
 /// An AppKit text view answers its description with a plain failure
 /// every time: that is no name, not a refusal, since a name can only
 /// make a field match.
