@@ -338,6 +338,28 @@ fn each_command_that_acts_in_the_helper_says_what_it_does() {
     says(&["click", "10", "20", "--count", "2"], "double-clicked");
     says(&["click", "10", "20", "--button", "right"], "right-clicked");
     says(&["move", "1", "2"], "moved the pointer");
+    says(
+        &[
+            "element",
+            "press",
+            "--ref",
+            "8123abc12",
+            "--app",
+            "TextEdit",
+        ],
+        "pressed a control in TextEdit",
+    );
+    says(
+        &[
+            "element",
+            "set-value",
+            "--ref",
+            "8123abc12",
+            "--value",
+            "secret",
+        ],
+        "set a value",
+    );
     says(&["drag", "1", "2", "3", "4"], "dragged");
     says(&["scroll", "1", "2", "--dy", "3"], "scrolled");
     says(&["type", "secret"], "typed text");

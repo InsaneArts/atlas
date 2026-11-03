@@ -62,6 +62,14 @@ const GROUPS: &[(&str, &[Entry])] = &[
                     "atlas click 1200 880",
                 ],
             ),
+            (
+                "element",
+                &[
+                    "atlas element press --ref 8123abc12",
+                    "atlas element set-value --ref 8123abc4 --value \"hello\"",
+                    "atlas element pick --ref 8123abc7 --option 8123abc9",
+                ],
+            ),
             ("type", &["atlas type \"hello\""]),
             ("key", &["atlas key cmd+s", "atlas key escape return"]),
             ("move", &["atlas move 640 400"]),

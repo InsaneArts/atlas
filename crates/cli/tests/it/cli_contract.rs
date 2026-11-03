@@ -250,6 +250,34 @@ fn invalid_arguments_report_one_json_error_before_execution() {
     );
 }
 
+/// An action on an element needs its ref, an action Atlas knows, and the
+/// value or option its action takes: anything less is a usage error
+/// before anything is read.
+#[test]
+fn an_element_action_without_what_it_takes_is_a_usage_error() {
+    let fixture = Fixture::new();
+    for (args, named) in [
+        (vec!["element", "press"], "--ref"),
+        (vec!["element", "toggle", "--ref", "8123abc12"], "toggle"),
+        (
+            vec!["element", "set-value", "--ref", "8123abc12"],
+            "--value",
+        ),
+        (vec!["element", "pick", "--ref", "8123abc12"], "--option"),
+    ] {
+        let output = fixture.missing(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "usage", "{args:?}");
+        assert!(
+            error["error"].as_str().unwrap().contains(named),
+            "{args:?}: {}",
+            error["error"]
+        );
+    }
+}
+
 /// A reference names its element by itself: given with a point, a name or
 /// a role, the click is a usage error before anything is read.
 #[test]

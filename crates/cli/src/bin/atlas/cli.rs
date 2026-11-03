@@ -175,7 +175,10 @@ pub(super) enum Command {
     ///
     /// Each action is an object with a "type": move {x, y}; click {x, y,
     /// button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?};
-    /// scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32
+    /// scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}; and, as
+    /// atlas element does them, press, check, uncheck, expand, collapse and
+    /// scroll-into-view {ref}, set-value {ref, value} and pick {ref, option},
+    /// first in their batch. Up to 32
     /// actions that finish within two seconds; coordinates are display points,
     /// a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256
     /// characters, a wait at most 250 ms. With --app or --pid, each action is
@@ -205,8 +208,19 @@ pub(super) enum Command {
     /// items of a menu the app has open (menu: true, with a check mark as
     /// mark) and, while the app is in front, its menu bar titles. more says
     /// how many matching elements were left out. look names this listing:
-    /// atlas click --ref LOOK.INDEX clicks one of its elements.
+    /// atlas click --ref LOOK.INDEX clicks one of its elements, and atlas
+    /// element acts on one.
     Elements(Elements),
+    /// Act on an element from atlas elements through Accessibility.
+    ///
+    /// Does ACTION to the element --ref names, found again and proven the
+    /// same first. No pointer or key event is sent and nothing takes focus,
+    /// though the app may move focus itself. check, uncheck, expand and
+    /// collapse do nothing when it already is so. verification says whether
+    /// it reads as asked afterwards: matched, mismatch or not-checked (a press
+    /// is never checked). An action the element does not support, and a
+    /// password field's value, are refused. No app is launched.
+    Element(Element),
     /// Print the guide agents read to use Atlas (all of it by default).
     #[command(group(clap::ArgGroup::new("part").args(["skill", "commands", "errors"])))]
     AgentGuide(AgentGuide),
@@ -595,6 +609,93 @@ pub(super) struct Elements {
     /// Show every attribute the scan read, as it read it.
     #[arg(long)]
     pub(super) full: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Element {
+    /// What to do.
+    #[arg(value_enum)]
+    pub(super) action: ElementVerb,
+    /// The element's ref from atlas elements.
+    #[arg(long = "ref", value_name = "REF")]
+    pub(super) reference: String,
+    /// The value set-value sets: text, or a number for a slider.
+    #[arg(
+        long,
+        value_name = "TEXT",
+        allow_hyphen_values = true,
+        required_if_eq("action", "set-value")
+    )]
+    pub(super) value: Option<String>,
+    /// The option pick selects: its ref, from the same atlas elements.
+    #[arg(long, value_name = "REF", required_if_eq("action", "pick"))]
+    pub(super) option: Option<String>,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(super) enum ElementVerb {
+    /// Press a button, menu item or other control.
+    Press,
+    /// Set a field's or slider's value (--value).
+    SetValue,
+    /// Leave a checkbox or radio button checked.
+    Check,
+    /// Leave a checkbox unchecked.
+    Uncheck,
+    /// Select one option of a list, table, tab group or open menu (--option).
+    Pick,
+    /// Leave an outline row, disclosure or pop-up expanded.
+    Expand,
+    /// Leave it collapsed.
+    Collapse,
+    /// Scroll its view until it shows the element.
+    ScrollIntoView,
+}
+
+impl ElementVerb {
+    /// The verb as `atlas input` and the activity log name it, and what it
+    /// did, in words.
+    pub(super) fn words(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Press => ("press", "Pressed"),
+            Self::SetValue => ("set-value", "Set the value"),
+            Self::Check => ("check", "Checked"),
+            Self::Uncheck => ("uncheck", "Unchecked"),
+            Self::Pick => ("pick", "Picked the option"),
+            Self::Expand => ("expand", "Expanded"),
+            Self::Collapse => ("collapse", "Collapsed"),
+            Self::ScrollIntoView => ("scroll-into-view", "Scrolled it into view"),
+        }
+    }
+}
+
+impl Element {
+    /// The one action this asks for, as `atlas input` takes it.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a --value for anything but set-value and an --option for
+    /// anything but pick.
+    pub(super) fn as_input(&self) -> atlas_core::error::Result<serde_json::Value> {
+        let extra = match (self.action, &self.value, &self.option) {
+            (ElementVerb::SetValue, Some(value), None) => Some(("value", value)),
+            (ElementVerb::Pick, None, Some(option)) => Some(("option", option)),
+            (_, None, None) => None,
+            _ => {
+                return Err(atlas_core::error::Error::new(
+                    atlas_core::error::Code::Usage,
+                    "--value goes only with set-value, and --option only with pick",
+                ));
+            }
+        };
+        let mut action = serde_json::json!({"type": self.action.words().0, "ref": self.reference});
+        if let Some((name, given)) = extra {
+            action[name] = serde_json::json!(given);
+        }
+        Ok(action)
+    }
 }
 
 #[derive(clap::Args)]

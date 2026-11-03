@@ -275,6 +275,24 @@ fn a_failed_action_says_how_far_it_got() {
 }
 
 #[test]
+fn an_action_on_an_element_says_whether_it_reads_as_asked() {
+    let shown = |verification: &str| {
+        show(
+            View::Action("Checked".into()),
+            json!({"ok": true, "performed": 1, "mechanism": "accessibility",
+                   "verification": verification}),
+        )
+        .out
+    };
+    assert_eq!(shown("matched"), "✓ Checked; it reads as asked");
+    assert_eq!(
+        shown("mismatch"),
+        "✓ Checked, but it does not read as asked"
+    );
+    assert_eq!(shown("not-checked"), "✓ Checked");
+}
+
+#[test]
 fn agents_are_a_table_with_a_way_to_connect() {
     let shown = show(
         View::Agents,

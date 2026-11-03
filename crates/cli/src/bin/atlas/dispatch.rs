@@ -305,6 +305,10 @@ async fn carry_out(
         )),
         Command::Click(args) => click(&client()?, args).await,
         Command::Elements(args) => elements(&client()?, args).await,
+        Command::Element(args) => {
+            let action = args.as_input()?;
+            agent::element(&client()?, args.target.target().as_ref(), &action).await
+        }
         Command::Readiness { tools, apps } => {
             atlas_client::readiness::readiness(&client()?, &tools, &apps).await
         }
