@@ -1,9 +1,54 @@
 use super::*;
 use crate::cli::Cli;
 use clap::Parser;
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::UnixListener,
+};
 
 fn parse(args: &[&str]) -> std::result::Result<Cli, clap::Error> {
     Cli::try_parse_from(std::iter::once("atlas").chain(args.iter().copied()))
+}
+
+/// Accept one request on `listener`, check its operation and send `reply`.
+async fn answer(listener: &UnixListener, operation: &str, reply: Value) {
+    let (peer, _) = listener.accept().await.unwrap();
+    let mut peer = BufReader::new(peer);
+    let mut line = String::new();
+    peer.read_line(&mut line).await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&line).unwrap()["op"],
+        operation
+    );
+    peer.get_mut()
+        .write_all(format!("{reply}\n").as_bytes())
+        .await
+        .unwrap();
+}
+
+/// Answer the hello and the session proof a client checks before its first
+/// request, as a helper running as the configured account does.
+async fn handshake(listener: &UnixListener) {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
+        "parentPID": 123, "onConsole": false, "securitySessionID": 42,
+        "displayID": 7, "width": 100, "height": 100});
+    answer(
+        listener,
+        "hello",
+        json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
+            "session": {"managerName": "Aqua", "onConsole": false},
+            "display": {"width": 100, "height": 100, "scale": 1}}),
+    )
+    .await;
+    answer(
+        listener,
+        "run",
+        json!({"ok": true, "exitCode": 0, "timedOut": false,
+            "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -54,24 +99,11 @@ async fn a_sessions_first_read_is_seen_even_when_the_helper_is_unavailable() {
 #[tokio::test]
 async fn a_sessions_first_read_defers_another_sessions_service_change() {
     use atlas_core::host::Host;
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    use tokio::{
-        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-        net::UnixListener,
-    };
 
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-    let mut client = Client::new(Config {
-        helper_uid: 60001,
-        socket_path: dir.path().join("helper.sock"),
-        identity_probe: dir.path().join("probe"),
-        input_socket: dir.path().join("input.sock"),
-        output_dir: dir.path().join("out"),
-    })
-    .unwrap();
+    let mut client = atlas_client::test_support::client_in(dir.path());
     let host = HostSession::new(Host::Named, "worker").unwrap();
-    client.controller =
-        atlas_control::Controller::at(60001, &dir.path().join("state")).labelled(Some(&host));
+    client.controller = client.controller.labelled(Some(&host));
     client.host_session = Some(host.clone());
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["apps"]).unwrap().command.unwrap();
@@ -79,36 +111,8 @@ async fn a_sessions_first_read_defers_another_sessions_service_change() {
     assert!(policy.labelled(Actor::Agent));
     let listener = UnixListener::bind(&client.transport.path).unwrap();
     let helper = async {
-        let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
-            "parentPID": 123, "onConsole": false, "securitySessionID": 42,
-            "displayID": 7, "width": 100, "height": 100});
-        for (operation, reply) in [
-            (
-                "hello",
-                json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
-                    "session": {"managerName": "Aqua", "onConsole": false},
-                    "display": {"width": 100, "height": 100, "scale": 1}}),
-            ),
-            (
-                "run",
-                json!({"ok": true, "exitCode": 0, "timedOut": false,
-                    "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
-            ),
-            ("apps", json!({"ok": true, "apps": []})),
-        ] {
-            let (peer, _) = listener.accept().await.unwrap();
-            let mut peer = BufReader::new(peer);
-            let mut line = String::new();
-            peer.read_line(&mut line).await.unwrap();
-            assert_eq!(
-                serde_json::from_str::<Value>(&line).unwrap()["op"],
-                operation
-            );
-            peer.get_mut()
-                .write_all(format!("{reply}\n").as_bytes())
-                .await
-                .unwrap();
-        }
+        handshake(&listener).await;
+        answer(&listener, "apps", json!({"ok": true, "apps": []})).await;
     };
     let factory = || Ok(client.clone());
     let config = dir.path().join("settings.toml");
@@ -422,22 +426,8 @@ fn typed_text_names_the_field_it_was_sent_to_once_the_helper_checked_it() {
 
 #[tokio::test]
 async fn a_stop_cancels_an_environment_run_after_dispatch() {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    use tokio::{
-        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-        net::UnixListener,
-    };
-
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-    let mut client = Client::new(Config {
-        helper_uid: 60001,
-        socket_path: dir.path().join("helper.sock"),
-        identity_probe: dir.path().join("probe"),
-        input_socket: dir.path().join("input.sock"),
-        output_dir: dir.path().join("out"),
-    })
-    .unwrap();
-    client.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
+    let mut client = atlas_client::test_support::client_in(dir.path());
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["environment", "run", "--", "tool"])
         .unwrap()
@@ -454,35 +444,7 @@ async fn a_stop_cancels_an_environment_run_after_dispatch() {
     let listener = UnixListener::bind(&client.transport.path).unwrap();
     let ownership = client.controller.acquire(false).unwrap();
     let helper = async {
-        let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
-            "parentPID": 123, "onConsole": false, "securitySessionID": 42,
-            "displayID": 7, "width": 100, "height": 100});
-        for (operation, reply) in [
-            (
-                "hello",
-                json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
-                    "session": {"managerName": "Aqua", "onConsole": false},
-                    "display": {"width": 100, "height": 100, "scale": 1}}),
-            ),
-            (
-                "run",
-                json!({"ok": true, "exitCode": 0, "timedOut": false,
-                    "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
-            ),
-        ] {
-            let (peer, _) = listener.accept().await.unwrap();
-            let mut peer = BufReader::new(peer);
-            let mut line = String::new();
-            peer.read_line(&mut line).await.unwrap();
-            assert_eq!(
-                serde_json::from_str::<Value>(&line).unwrap()["op"],
-                operation
-            );
-            peer.get_mut()
-                .write_all(format!("{reply}\n").as_bytes())
-                .await
-                .unwrap();
-        }
+        handshake(&listener).await;
 
         let (peer, _) = listener.accept().await.unwrap();
         let mut peer = BufReader::new(peer);
@@ -516,57 +478,15 @@ async fn a_stop_cancels_an_environment_run_after_dispatch() {
 
 #[tokio::test]
 async fn atlas_run_lets_others_act_while_it_runs() {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    use tokio::{
-        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-        net::UnixListener,
-    };
-
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
-    let mut client = Client::new(Config {
-        helper_uid: 60001,
-        socket_path: dir.path().join("helper.sock"),
-        identity_probe: dir.path().join("probe"),
-        input_socket: dir.path().join("input.sock"),
-        output_dir: dir.path().join("out"),
-    })
-    .unwrap();
-    client.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
+    let mut client = atlas_client::test_support::client_in(dir.path());
     client.transport.peer_uid = nix::unistd::getuid().as_raw();
     let command = parse(&["run", "--", "tool"]).unwrap().command.unwrap();
     client.doing = Policy::of(&command).doing;
     let other = atlas_control::Controller::at(60001, &dir.path().join("state"));
     let listener = UnixListener::bind(&client.transport.path).unwrap();
     let helper = async {
-        let proof = json!({"ok": true, "uid": 60001, "hasGraphicAccess": true,
-            "parentPID": 123, "onConsole": false, "securitySessionID": 42,
-            "displayID": 7, "width": 100, "height": 100});
-        for (operation, reply) in [
-            (
-                "hello",
-                json!({"ok": true, "user": {"uid": 60001}, "daemon": {"pid": 123},
-                    "session": {"managerName": "Aqua", "onConsole": false},
-                    "display": {"width": 100, "height": 100, "scale": 1}}),
-            ),
-            (
-                "run",
-                json!({"ok": true, "exitCode": 0, "timedOut": false,
-                    "events": [{"event": "output", "data": STANDARD.encode(proof.to_string())}]}),
-            ),
-        ] {
-            let (peer, _) = listener.accept().await.unwrap();
-            let mut peer = BufReader::new(peer);
-            let mut line = String::new();
-            peer.read_line(&mut line).await.unwrap();
-            assert_eq!(
-                serde_json::from_str::<Value>(&line).unwrap()["op"],
-                operation
-            );
-            peer.get_mut()
-                .write_all(format!("{reply}\n").as_bytes())
-                .await
-                .unwrap();
-        }
+        handshake(&listener).await;
 
         let (peer, _) = listener.accept().await.unwrap();
         let mut peer = BufReader::new(peer);
