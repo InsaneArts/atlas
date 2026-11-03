@@ -13,11 +13,11 @@ use serde_json::json;
 
 #[test]
 fn a_reference_is_a_look_name_and_an_element_index_written_one_way() {
-    let reference = Reference::parse("kfpaq12").unwrap();
-    assert_eq!(reference.look, Look::parse("kfpaq").unwrap());
+    let reference = Reference::parse("8123c12").unwrap();
+    assert_eq!(reference.look, Look::parse("8123c").unwrap());
     assert_eq!(reference.index, 12);
-    assert_eq!(reference.to_string(), "kfpaq12");
-    for text in ["kfpaq", "kfpaq012", "kfpaq.e12", "KFPAQ12", "12", "kfp12"] {
+    assert_eq!(reference.to_string(), "8123c12");
+    for text in ["8123c", "8123c012", "8123c.e12", "8123C12", "12", "kfp12"] {
         assert!(Reference::parse(text).is_none(), "{text}");
     }
 }
@@ -31,10 +31,10 @@ fn a_referenced_click_is_validated_with_its_whole_batch_before_anything_is_sent(
     };
     let validate = |batch: serde_json::Value| Batch::decode(&batch)?.check(&display);
 
-    validate(json!([{"type": "reference", "ref": "kfpaq12"}, {"type": "key", "key": "return"}]))
+    validate(json!([{"type": "reference", "ref": "8123c12"}, {"type": "key", "key": "return"}]))
         .unwrap();
     let refused =
-        validate(json!([{"type": "reference", "ref": "kfpaq12", "count": 6}])).unwrap_err();
+        validate(json!([{"type": "reference", "ref": "8123c12", "count": 6}])).unwrap_err();
     assert_eq!(refused.code, "input");
     assert_eq!(
         refused.error,
