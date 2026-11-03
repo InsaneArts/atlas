@@ -126,68 +126,57 @@ fn a_focus_refusal_is_advised_by_what_was_sent_before_it() {
         advise(&mut value);
         value["next"].clone()
     };
+    let advised = |sent: bool, reason: &str| {
+        hints::focus_advice(&json!({
+            "code": "focus-changed",
+            "reason": reason,
+            "performed": u64::from(sent),
+        }))
+        .unwrap()
+    };
 
-    for (fields, sent, in_the_way) in [
+    for (fields, sent, reason) in [
         (
             json!({"reason": "app", "performed": 0, "partial": false}),
             false,
-            hints::InTheWay::App,
+            "app",
         ),
-        (json!({"reason": "point"}), false, hints::InTheWay::App),
+        (json!({"reason": "point"}), false, "app"),
         (
             json!({"reason": "unreadable", "performed": 0}),
             false,
-            hints::InTheWay::Unknown(hints::Unsure::Front),
+            "unreadable",
         ),
-        (
-            json!({"reason": "app", "performed": 2}),
-            true,
-            hints::InTheWay::App,
-        ),
+        (json!({"reason": "app", "performed": 2}), true, "app"),
         (
             json!({"reason": "app", "typed": 48, "partial": true}),
             true,
-            hints::InTheWay::App,
+            "app",
         ),
         (
             json!({"reason": "point", "typed": 0, "partial": true}),
             true,
-            hints::InTheWay::App,
+            "app",
         ),
         (
             json!({"reason": "unreadable", "performed": 1}),
             true,
-            hints::InTheWay::Unknown(hints::Unsure::Front),
+            "unreadable",
         ),
-        (
-            json!({"reason": "sheet", "performed": 0}),
-            false,
-            hints::InTheWay::Sheet,
-        ),
+        (json!({"reason": "sheet", "performed": 0}), false, "sheet"),
         (
             json!({"reason": "field", "typed": 16, "partial": true}),
             true,
-            hints::InTheWay::Field,
+            "field",
         ),
-        (
-            json!({"reason": "window", "performed": 0}),
-            false,
-            hints::InTheWay::Window,
-        ),
+        (json!({"reason": "window", "performed": 0}), false, "window"),
     ] {
-        assert_eq!(
-            refusal(fields.clone()),
-            hints::focus_changed(sent, in_the_way),
-            "{fields}"
-        );
+        assert_eq!(refusal(fields.clone()), advised(sent, reason), "{fields}");
     }
 
     let error = Error::new(Code::FocusChanged, "Calculator has keyboard focus")
         .with("reason", json!("unreadable"));
-    assert_eq!(
-        failure(&error, true)["next"],
-        hints::focus_changed(false, hints::InTheWay::Unknown(hints::Unsure::Front))
-    );
+    assert_eq!(failure(&error, true)["next"], advised(false, "unreadable"));
 }
 
 #[test]

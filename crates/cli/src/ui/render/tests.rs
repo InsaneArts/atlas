@@ -1031,7 +1031,8 @@ fn a_focus_refusal_card_advises_by_what_was_in_the_way_and_what_was_sent() {
             "partial": true, "error": "The field with keyboard focus is not the one named First"}),
     );
     let advice =
-        atlas_core::error::advice::focus_changed(true, atlas_core::error::advice::InTheWay::Field);
+        hints::focus_advice(&json!({"code": "focus-changed", "reason": "field", "performed": 1}))
+            .unwrap();
     assert!(left.err.contains(&advice), "{}", left.err);
     assert!(left.err.contains("send only the rest"), "{}", left.err);
 

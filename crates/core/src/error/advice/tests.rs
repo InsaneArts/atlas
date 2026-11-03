@@ -93,17 +93,30 @@ fn an_earlier_unknown_outcome_is_recovered_only_by_its_owner() {
     assert_eq!(step(Some(Code::Uncertain), None, true), UNCERTAIN);
 }
 
+/// The advice for a focus refusal with `reason` and `unread`, after
+/// something of the command was sent or before.
+fn focus_changed(sent: bool, reason: Option<&str>, unread: Option<&str>) -> String {
+    let result = serde_json::json!({
+        "ok": false,
+        "code": "focus-changed",
+        "reason": reason,
+        "unread": unread,
+        "performed": u64::from(sent),
+    });
+    focus_advice(&result).unwrap()
+}
+
 /// Opening an app again does not bring it forward in the helper, and
 /// takes focus from whoever moved it; a click where the app shows does.
 #[test]
 fn a_focus_refusal_never_sends_an_agent_to_open_the_app() {
     for sent in [false, true] {
-        for in_the_way in EVERY_WAY {
-            let said = focus_changed(sent, in_the_way);
+        for (reason, unread) in EVERY_WAY {
+            let said = focus_changed(sent, reason, unread);
             assert!(!said.contains("atlas open"), "{said}");
         }
-        for in_the_way in [InTheWay::App, InTheWay::Unknown(Unsure::Front)] {
-            let said = focus_changed(sent, in_the_way);
+        for reason in ["app", "unreadable"] {
+            let said = focus_changed(sent, Some(reason), None);
             assert!(
                 said.to_lowercase().contains("click where your app shows"),
                 "{said}"
@@ -112,28 +125,29 @@ fn a_focus_refusal_never_sends_an_agent_to_open_the_app() {
     }
     assert_eq!(
         next(Code::FocusChanged, None),
-        focus_changed(false, InTheWay::App)
+        focus_changed(false, Some("app"), None)
     );
     assert_eq!(
         step(Some(Code::FocusChanged), None, false),
-        focus_changed(false, InTheWay::App)
+        focus_changed(false, Some("app"), None)
     );
 }
 
-/// Every kind of thing a focus refusal can find in the way.
-const EVERY_WAY: [InTheWay; 12] = [
-    InTheWay::App,
-    InTheWay::Window,
-    InTheWay::Sheet,
-    InTheWay::Field,
-    InTheWay::Disabled,
-    InTheWay::Unknown(Unsure::Front),
-    InTheWay::Unknown(Unsure::Alike),
-    InTheWay::Unknown(Unsure::Unlisted),
-    InTheWay::Unknown(Unsure::Withheld),
-    InTheWay::Unknown(Unsure::Cut),
-    InTheWay::Unknown(Unsure::Deep),
-    InTheWay::Unknown(Unsure::Slow),
+/// Every kind of thing a focus refusal can find in the way, as its
+/// `reason` and `unread`.
+const EVERY_WAY: [(Option<&str>, Option<&str>); 12] = [
+    (Some("app"), None),
+    (Some("window"), None),
+    (Some("sheet"), None),
+    (Some("field"), None),
+    (Some("disabled"), None),
+    (Some("unreadable"), None),
+    (Some("unreadable"), Some("alike")),
+    (Some("unreadable"), Some("unlisted")),
+    (Some("unreadable"), Some("withheld")),
+    (Some("unreadable"), Some("cut")),
+    (Some("unreadable"), Some("deep")),
+    (Some("unreadable"), Some("slow")),
 ];
 
 /// A refusal for the window, a sheet or the field, or one Atlas could
@@ -164,9 +178,10 @@ fn a_focus_refusal_says_what_was_in_the_way() {
         (Some("unreadable"), Some("deep"), "deeper in your app"),
         (Some("unreadable"), Some("slow"), "The app was busy"),
         (Some("made-up"), None, "Another app"),
+        (Some("app"), Some("slow"), "Another app"),
         (None, None, "Another app"),
     ] {
-        let hint = focus_changed(false, InTheWay::of(reason, unread));
+        let hint = focus_changed(false, reason, unread);
         assert!(hint.contains(said), "{reason:?} {unread:?}: {hint}");
     }
 }
@@ -175,13 +190,13 @@ fn a_focus_refusal_says_what_was_in_the_way() {
 /// asks for the rest alone; one that sent nothing is run again whole.
 #[test]
 fn a_focus_refusal_says_earlier_actions_were_sent_only_when_they_were() {
-    for in_the_way in EVERY_WAY {
-        let sent = focus_changed(true, in_the_way);
+    for (reason, unread) in EVERY_WAY {
+        let sent = focus_changed(true, reason, unread);
         assert!(sent.contains("Earlier actions were sent"), "{sent}");
         assert!(sent.contains("send only the rest"), "{sent}");
         assert!(!sent.contains("run it again"), "{sent}");
 
-        let nothing = focus_changed(false, in_the_way);
+        let nothing = focus_changed(false, reason, unread);
         assert!(!nothing.contains("Earlier actions"), "{nothing}");
         assert!(nothing.contains("nothing"), "{nothing}");
         assert!(nothing.contains("again"), "{nothing}");
@@ -198,13 +213,13 @@ fn a_focus_refusal_says_earlier_actions_were_sent_only_when_they_were() {
 #[test]
 fn an_unreadable_front_asks_for_the_app_to_be_clicked_or_opened_first() {
     for sent in [false, true] {
-        let said = focus_changed(sent, InTheWay::Unknown(Unsure::Front));
+        let said = focus_changed(sent, Some("unreadable"), None);
         assert!(
             said.starts_with("Atlas couldn't tell what was in front"),
             "{said}"
         );
         assert!(said.contains("open the app if none of it shows"), "{said}");
-        let other = focus_changed(sent, InTheWay::App);
+        let other = focus_changed(sent, Some("app"), None);
         assert!(!other.contains("open the app"));
         assert!(other.starts_with("Another app was in front"), "{other}");
     }
@@ -225,11 +240,15 @@ fn a_focus_refusals_advice_reads_its_reason_and_what_was_sent() {
     };
     assert_eq!(
         advice(json!({"reason": "field", "typed": 16, "partial": true})),
-        Some(focus_changed(true, InTheWay::Field))
+        Some(focus_changed(true, Some("field"), None))
+    );
+    assert_eq!(
+        advice(json!({"reason": "field", "partial": true})),
+        Some(focus_changed(true, Some("field"), None))
     );
     assert_eq!(
         advice(json!({"reason": "unreadable", "unread": "alike", "performed": 0})),
-        Some(focus_changed(false, InTheWay::Unknown(Unsure::Alike)))
+        Some(focus_changed(false, Some("unreadable"), Some("alike")))
     );
     assert_eq!(advice(json!({"uncertain": true})), None);
     assert_eq!(focus_advice(&json!({"ok": false, "code": "busy"})), None);
