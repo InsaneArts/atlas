@@ -106,12 +106,13 @@ fn selected(
     Ok((helper, identity))
 }
 
-/// Ask for administrator rights once, saying `why`, and keep them fresh.
-fn administrator_rights(why: &str) -> Result<()> {
+/// Ask for administrator rights once, saying `why`, and keep them fresh
+/// while `rights` lasts.
+fn administrator_rights(rights: &mut setup::AdministratorRights, why: &str) -> Result<()> {
     heading("Administrator rights");
     say(why);
 
-    setup::request_administrator_rights()?;
+    rights.request()?;
     done("Administrator rights", "");
 
     Ok(())
@@ -327,7 +328,9 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
         &atlas_core::config::tilde(atlas_core::app_bundle::installed_app()?),
     );
     done_steps.push(json!({"step": "app", "command": linked}));
-    let (config, helper, expected) = helper_step(config_path)?;
+    // Kept fresh for this run only, however often it asks.
+    let mut rights = setup::AdministratorRights::default();
+    let (config, helper, expected) = helper_step(config_path, &mut rights)?;
     let name = helper.name.clone();
     // Whether an earlier run already finished setup (decides the first-run steps).
     let settled_before = setup::migrate::settled(helper.uid);
@@ -363,7 +366,15 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     done_steps.push(json!({"step": "config", "path": config_path, "helper": name}));
 
     if !daemon_answers(&client, config.helper_uid).await {
-        start_helper(&client, &config, &helper, &mut done_steps, &expected).await?;
+        start_helper(
+            &client,
+            &config,
+            &helper,
+            &mut done_steps,
+            &expected,
+            &mut rights,
+        )
+        .await?;
     }
 
     // The probe installed above is ready for the session checks below.
@@ -371,7 +382,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     let mut spinner = None;
     let refreshed = refresh_helper(&client, &helper, &expected, |notice| {
         match notice {
-            setup::Progress::Administrator(why) => administrator_rights(why)?,
+            setup::Progress::Administrator(why) => administrator_rights(&mut rights, why)?,
             setup::Progress::Waiting(message) => spinner = Some(Spinner::new(message)),
             setup::Progress::Done(label, detail) => done(label, detail),
         }
@@ -393,6 +404,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 /// Adapt the account choice and configuration operation to terminal progress.
 fn helper_step(
     config_path: &Path,
+    rights: &mut setup::AdministratorRights,
 ) -> Result<(Config, account::Account, helper_setup::identity::Identity)> {
     let (config, helper, identity) = configure_helper(config_path, choose_helper, say)?;
     if close_attended(helper.uid, Some(&identity), || {
@@ -405,7 +417,7 @@ fn helper_step(
                 "It's still open. Close it before you switch: run atlas init again.",
             ));
         }
-        setup::request_administrator_rights()
+        rights.request()
     })? {
         done("Closed", "the login the deleted account left open");
     }
@@ -457,9 +469,10 @@ async fn daemon_answers_within(client: &Client, uid: u32, pause: Duration) -> bo
 }
 
 /// Ask for administrator rights once in a run, to install the helper's job.
-fn job_rights(granted: &mut bool) -> Result<()> {
+fn job_rights(rights: &mut setup::AdministratorRights, granted: &mut bool) -> Result<()> {
     if !*granted {
         administrator_rights(
+            rights,
             "  macOS asks for your password once, to install the helper's background job.",
         )?;
         *granted = true;
@@ -477,14 +490,15 @@ async fn start_helper(
     helper: &account::Account,
     done_steps: &mut Vec<Value>,
     expected: &helper_setup::identity::Identity,
+    rights: &mut setup::AdministratorRights,
 ) -> Result<()> {
     // Set up before: the helper's job is installed and starts by itself
     // once the helper signs in (after a restart, say). No password then.
     let installed = setup::migrate::settled(helper.uid);
-    let mut rights = false;
+    let mut granted = false;
 
     if !installed {
-        job_rights(&mut rights)?;
+        job_rights(rights, &mut granted)?;
     }
 
     if atlas_core::session::logged_in(helper.uid) != Some(true) {
@@ -502,7 +516,7 @@ async fn start_helper(
     }
 
     if !started {
-        job_rights(&mut rights)?;
+        job_rights(rights, &mut granted)?;
         install_job(client, config, helper, expected).await?;
         done_steps.push(json!({"step": "daemon", "label": LABEL}));
     }

@@ -219,3 +219,120 @@ fn an_executor_failure_includes_its_final_error_output() {
     let mut endless = Forward::with(|_| Ok(None));
     assert_eq!(summary("", &mut endless, b"", Instant::now()), "");
 }
+
+/// Ask for `rights` with `consent`, renewing as worker `id` on each of
+/// `ticks` until the renewal is stopped.
+fn ticked(
+    rights: &mut AdministratorRights,
+    consent: std::io::Result<bool>,
+    id: usize,
+    ticks: std::sync::mpsc::Receiver<()>,
+    mut renew: impl FnMut(usize) + Send + 'static,
+) -> AtlasResult<()> {
+    use std::sync::mpsc::{RecvTimeoutError, TryRecvError};
+    rights.request_with(
+        || consent,
+        move || renew(id),
+        move |stop| loop {
+            if stop.try_recv() != Err(TryRecvError::Empty) {
+                return false;
+            }
+            match ticks.recv_timeout(Duration::from_millis(10)) {
+                Ok(()) => return true,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return false,
+            }
+        },
+    )
+}
+
+#[test]
+fn administrator_renewal_ends_with_its_attended_setup_scope() {
+    use std::sync::mpsc::{TryRecvError, channel};
+
+    // One renewal per tick, by the first worker however often consent is asked.
+    let (tick, ticks) = channel();
+    let (renewing, renewed) = channel();
+    let mut rights = AdministratorRights::default();
+    let again = renewing.clone();
+    ticked(&mut rights, Ok(true), 1, ticks, move |id| {
+        renewing.send(id).unwrap();
+    })
+    .unwrap();
+    let (_unused, never) = channel();
+    ticked(&mut rights, Ok(true), 2, never, move |id| {
+        again.send(id).unwrap();
+    })
+    .unwrap();
+    for _ in 0..3 {
+        tick.send(()).unwrap();
+        assert_eq!(renewed.recv().unwrap(), 1);
+    }
+    drop(rights);
+    assert!(tick.send(()).is_err(), "the renewal stopped with its setup");
+    assert_eq!(renewed.try_recv(), Err(TryRecvError::Disconnected));
+
+    // Ending the setup waits for a refresh already running.
+    let (tick, ticks) = channel();
+    let (entering, entered) = channel();
+    let (release, held) = channel::<()>();
+    let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let marked = std::sync::Arc::clone(&finished);
+    let mut rights = AdministratorRights::default();
+    ticked(&mut rights, Ok(true), 1, ticks, move |_| {
+        entering.send(()).unwrap();
+        held.recv().unwrap();
+        marked.store(true, std::sync::atomic::Ordering::SeqCst);
+    })
+    .unwrap();
+    tick.send(()).unwrap();
+    entered.recv().unwrap();
+    let (dropping, dropped) = channel();
+    let ending = std::thread::spawn(move || {
+        drop(rights);
+        dropping.send(()).unwrap();
+    });
+    assert!(
+        dropped.recv_timeout(Duration::from_millis(200)).is_err(),
+        "ending the setup waits for the refresh in flight"
+    );
+    release.send(()).unwrap();
+    dropped.recv().unwrap();
+    ending.join().unwrap();
+    assert!(finished.load(std::sync::atomic::Ordering::SeqCst));
+
+    // A refused or failed consent starts no renewal.
+    for consent in [Ok(false), Err(std::io::Error::other("no terminal"))] {
+        let (tick, ticks) = channel();
+        let mut rights = AdministratorRights::default();
+        assert!(ticked(&mut rights, consent, 1, ticks, |_| panic!("renewed")).is_err());
+        assert!(rights.renewal.is_none());
+        assert!(tick.send(()).is_err());
+    }
+
+    // A failed renewal, or a setup that unwinds, still ends it.
+    let (tick, ticks) = channel();
+    let mut rights = AdministratorRights::default();
+    ticked(&mut rights, Ok(true), 1, ticks, |_| {
+        panic!("the refresh failed")
+    })
+    .unwrap();
+    tick.send(()).unwrap();
+    drop(rights);
+    assert!(tick.send(()).is_err());
+    let (tick, ticks) = channel();
+    let (renewing, renewed) = channel();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut rights = AdministratorRights::default();
+        ticked(&mut rights, Ok(true), 1, ticks, move |id| {
+            renewing.send(id).unwrap();
+        })
+        .unwrap();
+        tick.send(()).unwrap();
+        renewed.recv().unwrap();
+        panic!("setup unwound");
+    }));
+    assert!(unwound.is_err());
+    assert!(tick.send(()).is_err());
+    assert_eq!(renewed.try_recv(), Err(TryRecvError::Disconnected));
+}

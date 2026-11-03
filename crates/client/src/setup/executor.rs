@@ -750,29 +750,90 @@ pub fn staging() -> String {
         )
 }
 
-/// Request normal sudo consent and refresh it while attended setup waits.
-/// Returns an init error when sudo refuses administrator rights.
-///
-/// # Errors
-///
-/// Returns missing-terminal, cancelled-authorization or administrator-rights failures.
-/// Authorization uses the operating system's normal consent flow.
-pub fn request_administrator_rights() -> AtlasResult<()> {
-    let status = Command::new("/usr/bin/sudo").arg("-v").status()?;
-    if !status.success() {
-        return Err(super::account::problem(
-            "Administrator rights were not granted",
-        ));
+/// How often attended setup refreshes administrator rights: sudo forgets
+/// them after five minutes while init waits for the person.
+const RENEW_EVERY: Duration = Duration::from_secs(60);
+
+/// How long one refresh may take.
+const RENEWAL: Duration = Duration::from_secs(10);
+
+/// Administrator rights for one attended setup: normal sudo consent, kept
+/// fresh while the setup waits. One renewal runs however often consent is
+/// asked for; dropping this stops and joins it, a refresh in flight
+/// included. The person's own sudo cache is left as it is.
+#[derive(Default)]
+pub struct AdministratorRights {
+    renewal: Option<Renewal>,
+}
+
+/// The renewal thread, and the sender whose drop stops it.
+struct Renewal {
+    stop: std::sync::mpsc::Sender<()>,
+    worker: std::thread::JoinHandle<()>,
+}
+
+impl AdministratorRights {
+    /// Request normal sudo consent, and keep it fresh until this ends.
+    ///
+    /// # Errors
+    ///
+    /// Returns missing-terminal, cancelled-authorization or administrator-rights failures.
+    /// Authorization uses the operating system's normal consent flow.
+    pub fn request(&mut self) -> AtlasResult<()> {
+        self.request_with(
+            || Ok(Command::new("/usr/bin/sudo").arg("-v").status()?.success()),
+            || {
+                // A refresh that fails leaves sudo to ask again when it is next needed.
+                let _ = atlas_core::bounded::output(
+                    Command::new("/usr/bin/sudo").args(["-n", "-v"]),
+                    RENEWAL,
+                );
+            },
+            |stop| {
+                matches!(
+                    stop.recv_timeout(RENEW_EVERY),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                )
+            },
+        )
     }
 
-    // sudo forgets the rights after five minutes while init waits for the person.
-    std::thread::spawn(|| {
-        loop {
-            std::thread::sleep(Duration::from_secs(60));
-            let _ = Command::new("/usr/bin/sudo").args(["-n", "-v"]).output();
+    /// Ask with `consent`; then, unless a renewal already runs, start one
+    /// that calls `renew` each time `wait` says to, until `wait` sees its
+    /// stop receiver end.
+    fn request_with(
+        &mut self,
+        consent: impl FnOnce() -> std::io::Result<bool>,
+        mut renew: impl FnMut() + Send + 'static,
+        mut wait: impl FnMut(&std::sync::mpsc::Receiver<()>) -> bool + Send + 'static,
+    ) -> AtlasResult<()> {
+        if !consent()? {
+            return Err(super::account::problem(
+                "Administrator rights were not granted",
+            ));
         }
-    });
-    Ok(())
+
+        if self.renewal.is_none() {
+            let (stop, stopped) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                while wait(&stopped) {
+                    renew();
+                }
+            });
+            self.renewal = Some(Renewal { stop, worker });
+        }
+        Ok(())
+    }
+}
+
+impl Drop for AdministratorRights {
+    fn drop(&mut self) {
+        if let Some(Renewal { stop, worker }) = self.renewal.take() {
+            drop(stop);
+            // A renewal that panicked has nothing left to stop.
+            let _ = worker.join();
+        }
+    }
 }
 
 /// Check cached rights without prompting after a long first-login wait.
