@@ -139,12 +139,27 @@ impl Found {
     pub(super) fn instance(&self) -> Instance {
         self.instance
     }
+
+    /// How many elements up the path to `inner` this element is, when the
+    /// look saw `inner` reached from it.
+    pub(super) fn above(&self, inner: &Found) -> Option<usize> {
+        let depth = inner
+            .chain
+            .len()
+            .checked_sub(self.chain.len())
+            .filter(|depth| *depth > 0)?;
+        let at = inner.chain.get(depth)?;
+        (inner.instance == self.instance && *at.object.0 == *self.chain.first()?.object.0)
+            .then_some(depth)
+    }
 }
 
 /// A referenced element met again where its look saw it: what it reports
-/// now and the object it is now, and what an action on it must reach.
+/// now and the object it is now, each element it was reached from as read
+/// again (nearest first), and what an action on it must reach.
 pub(super) struct Met {
     pub(super) element: Retraced,
+    pub(super) above: Vec<Retraced>,
     pub(super) expect: Expect,
 }
 
@@ -373,7 +388,9 @@ pub(super) fn kept(
 /// Refuses, with nothing sent, an element [`again`] refuses and one whose
 /// window cannot be told.
 pub(super) fn meet(found: &Found, time: Duration) -> Result<Met> {
-    let element = again(found, time)?;
+    let mut above = again(found, time)?;
+    let element = above.pop().ok_or_else(unavailable)?;
+    above.reverse();
     // Only a menu bar title is told by its point, and it always has a
     // frame: no point is one that lies on no menu bar.
     let point = element
@@ -391,19 +408,23 @@ pub(super) fn meet(found: &Found, time: Duration) -> Result<Met> {
         point,
     )
     .map_err(|error| error.with("next", json!(LOOK_AGAIN)))?;
-    Ok(Met { element, expect })
+    Ok(Met {
+        element,
+        above,
+        expect,
+    })
 }
 
-/// The element `found` names, read again: its app the same process, and its
-/// path from where a walk starts read again within `time`, each element on
-/// it proven the same as the look saw it.
+/// The path to the element `found` names, read again from where a walk
+/// starts down to it: its app the same process, and each element on it
+/// read within `time` and proven the same as the look saw it.
 ///
 /// # Errors
 ///
 /// Refuses, with nothing sent, an app that quit or was replaced, and an
 /// element no longer where the look saw it, read too slowly, changed or not
 /// proven the same.
-fn again(found: &Found, time: Duration) -> Result<Retraced> {
+fn again(found: &Found, time: Duration) -> Result<Vec<Retraced>> {
     let replaced = |cause: Error| stale("The app it is in quit or was replaced").with_source(cause);
     check_application(Some(found.instance)).map_err(replaced)?;
     let path: Vec<&AXUIElement> = found
@@ -421,7 +442,7 @@ fn again(found: &Found, time: Duration) -> Result<Retraced> {
             "The app answered too slowly to find the element again",
         ));
     }
-    let mut retraced = retraced
+    let retraced = retraced
         .filter(|retraced| retraced.len() == found.chain.len())
         .ok_or_else(|| stale("The element is no longer where that look saw it"))?;
     if !found
@@ -433,7 +454,7 @@ fn again(found: &Found, time: Duration) -> Result<Retraced> {
     {
         return Err(stale("The element changed since that look"));
     }
-    retraced.pop().ok_or_else(unavailable)
+    Ok(retraced)
 }
 
 /// Where the element `found` names is clicked now and what the click must
@@ -444,7 +465,7 @@ fn again(found: &Found, time: Duration) -> Result<Retraced> {
 /// Refuses, with nothing sent, an element [`again`] refuses, a disabled
 /// control, and an element off screen or whose window cannot be told.
 fn locate(found: &Found, epoch: &InputEpoch) -> Result<(f64, f64, Expect)> {
-    let met = again(found, RESOLVE)?;
+    let met = again(found, RESOLVE)?.pop().ok_or_else(unavailable)?;
     let element = &met.element;
     if element.enabled == Some(false) {
         return Err(Error::new(

@@ -41,6 +41,14 @@ fn a_value_is_set_as_the_number_or_text_the_element_holds() {
     let empty = value_for("", None).unwrap();
     assert_eq!(empty.downcast_ref::<CFString>().unwrap().to_string(), "");
 
+    let stepper = CFNumber::new_i64(3);
+    let whole = value_for("9007199254740993", holding(&stepper)).unwrap();
+    assert_eq!(
+        whole.downcast_ref::<CFNumber>().unwrap().as_i64(),
+        Some(9_007_199_254_740_993),
+        "a whole number is set exactly"
+    );
+
     let slider = CFNumber::new_f64(10.0);
     let number = value_for(" 42.5 ", holding(&slider)).unwrap();
     assert_eq!(

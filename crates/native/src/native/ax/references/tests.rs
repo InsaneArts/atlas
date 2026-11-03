@@ -281,6 +281,23 @@ fn an_element_to_act_on_is_kept_for_its_own_app_and_met_only_while_it_runs() {
     assert_eq!(error.error, "The app it is in quit or was replaced");
 }
 
+/// An option the look saw reached from its control lies that far below it,
+/// and nothing else lies below anything.
+#[test]
+fn an_element_lies_above_only_what_its_look_saw_reached_from_it() {
+    let looks = Looks::default();
+    let now = Instant::now();
+    let (look, _) = looks.keep(epoch(), chained(editor(), 1, 3), now).unwrap();
+    let (other, _) = looks.keep(epoch(), chained(editor(), 10, 3), now).unwrap();
+    let found = |look, index| looks.find(at(look, index), &epoch(), now).unwrap();
+
+    assert_eq!(found(look, 0).above(&found(look, 2)), Some(2));
+    assert_eq!(found(look, 1).above(&found(look, 2)), Some(1));
+    assert_eq!(found(look, 2).above(&found(look, 0)), None);
+    assert_eq!(found(look, 2).above(&found(look, 2)), None);
+    assert_eq!(found(other, 0).above(&found(look, 2)), None);
+}
+
 /// An app that shows no readable window proves no path into it, so no
 /// element of it is found again.
 #[test]

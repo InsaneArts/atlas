@@ -1,19 +1,20 @@
 //! Actions done to a referenced element through Accessibility alone. The
 //! element is met again along its own path and proven the one its look
-//! saw, its window admitted as input would be, and what it supports read
-//! first; it is met and proven again just before the one request that acts,
-//! its state read then, and what it reads as afterwards read back. Nothing
-//! is posted, and nothing is asked to move or take focus. An element already
-//! as asked is left as it is, and one whose state cannot be read is never
-//! toggled blind.
+//! saw, and what it supports read first; it is met and proven again just
+//! before the one request that acts, and only then judged: enabled, its
+//! app's own, its window admitted as input would be, and its state read.
+//! What it reads as afterwards is read back. Nothing is posted, and nothing
+//! is asked to move or take focus. An element already as asked is left as
+//! it is, and one whose state cannot be read is never toggled blind.
 use super::{
     Status, absent,
     bring::{admitted, check_application},
     ffi,
-    references::{Found, Looks, Met, kept, meet},
+    references::{Found, Looks, kept, meet},
+    tree::Retraced,
 };
 use atlas_core::{
-    actions::{ACT, ElementAction, RESOLVE, Verification},
+    actions::{ACT, ElementAction, Expect, RESOLVE, Verification},
     error::{Code, Error, Result, advice::DISABLED_CONTROL},
     process::Instance,
     screen::elements::{Reference, stale},
@@ -38,6 +39,9 @@ const OPTION_DEPTH: usize = 4;
 /// The most action names an element may list.
 const ACTIONS: usize = 64;
 
+/// Roles whose value is text, so setting it needs nothing of the old one.
+const TEXT_ROLES: [&str; 4] = ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"];
+
 /// What an agent does about an element that does not take an action.
 const INSTEAD: &str = "Click it with atlas click --ref instead, or run atlas elements again.";
 
@@ -49,6 +53,14 @@ pub(in crate::native) struct Acted {
     pub(in crate::native) verification: Verification,
     pub(in crate::native) instance: Instance,
     pub(in crate::native) changed: bool,
+}
+
+/// The element an action names, met again; for a pick, the option of it;
+/// and what acting there must reach.
+struct Met {
+    control: Retraced,
+    option: Option<Retraced>,
+    expect: Expect,
 }
 
 /// The one request that acts on an element.
@@ -79,11 +91,11 @@ enum Wanted {
 /// # Errors
 ///
 /// Refuses, with nothing done, a reference [`kept`] or [`meet`] refuses, an
-/// element in another window, an option outside its control, a window a
-/// sheet or modal blocks, a disabled control, a password field's value, an
-/// action the element does not support, a state it cannot read when acting
-/// would toggle it, and an app too slow to leave time for the action. An
-/// action the app did not acknowledge is uncertain.
+/// element in another window or of another process, an option outside its
+/// control, a window a sheet or modal blocks, a disabled control, a
+/// password field's value, an action the element does not support, a state
+/// it cannot read when acting would toggle it, and an app too slow to leave
+/// time for the action. An action the app did not acknowledge is uncertain.
 pub(in crate::native) fn act_on(
     looks: &Looks,
     reference: Reference,
@@ -101,35 +113,37 @@ pub(in crate::native) fn act_on(
         _ => None,
     };
 
-    let (met, picked) = meet_all(&control, option.as_ref(), deadline)?;
-    if window.is_some_and(|window| met.expect.window() != Some(window)) {
+    let first = meet_all(&control, option.as_ref(), deadline)?;
+    if window.is_some_and(|window| first.expect.window() != Some(window)) {
         return Err(stale("That element is not in the window named"));
     }
-    if let Some(picked) = &picked
-        && !within(&picked.element.object, &met.element.object, deadline)?
-    {
-        return Err(Error::new(
-            Code::Input,
-            "That option is not one of that control's; nothing was sent",
-        ));
-    }
-    admitted(&met.expect, deadline)?;
-    let (effect, wanted) = plan(action, &met, picked.as_ref(), deadline)?;
+    let (effect, wanted) = plan(action, &first, deadline)?;
 
-    // Met and proven again just before the request that acts.
+    // Met and proven again just before the request that acts, and judged
+    // as it is then.
     guard()?;
-    let (again, picked) = meet_all(&control, option.as_ref(), deadline)?;
-    if again.expect != met.expect {
+    let met = meet_all(&control, option.as_ref(), deadline)?;
+    if met.expect != first.expect {
         return Err(stale("The element moved to another window"));
     }
-    let object: &AXUIElement = &picked.as_ref().unwrap_or(&again).element.object;
+    let off = |element: &Retraced| element.element.enabled == Some(false);
+    if (*action != ElementAction::ScrollIntoView && off(&met.control))
+        || met.option.as_ref().is_some_and(off)
+    {
+        return Err(disabled());
+    }
+    let object: &AXUIElement = &met.option.as_ref().unwrap_or(&met.control).object;
     let instance = control.instance();
+    if ffi::owner(object).ok() != Some(instance.pid) {
+        return Err(stale("The element belongs to another process than its app"));
+    }
+    admitted(&met.expect, deadline)?;
     if let Wanted::State {
         attribute,
         on,
         blind,
     } = &wanted
-        && !needed(state(object, *attribute, deadline)?, *on, *blind)?
+        && !needed(state(object, attribute, deadline)?, *on, *blind)?
     {
         return Ok(Acted {
             verification: Verification::Matched,
@@ -149,9 +163,9 @@ pub(in crate::native) fn act_on(
     // changes how long the app is waited for; its answer is judged alike.
     let _ = ffi::set_timeout(object, remaining);
     let status = match &effect {
-        Effect::Perform(name) => ffi::act(object, &CFString::from_static_str(*name)),
+        Effect::Perform(name) => ffi::act(object, &CFString::from_static_str(name)),
         Effect::Set(attribute, value) => {
-            ffi::set(object, &CFString::from_static_str(*attribute), value)
+            ffi::set(object, &CFString::from_static_str(attribute), value)
         }
     };
     acknowledged(status)?;
@@ -163,35 +177,54 @@ pub(in crate::native) fn act_on(
 }
 
 /// The control `control` names met again, and the option `option` names
-/// when there is one, each within what is left before `deadline`.
-fn meet_all(
-    control: &Found,
-    option: Option<&Found>,
-    deadline: Instant,
-) -> Result<(Met, Option<Met>)> {
-    let met = meet(control, left(deadline)?.min(RESOLVE))?;
-    let picked = match option {
-        Some(option) => Some(meet(option, left(deadline)?.min(RESOLVE))?),
-        None => None,
+/// when there is one, each within what is left before `deadline`. An
+/// option the look saw reached from its control is proven with it by the
+/// one walk of its own path; another must lie within it as its parents say.
+fn meet_all(control: &Found, option: Option<&Found>, deadline: Instant) -> Result<Met> {
+    let time = || Ok::<_, Error>(left(deadline)?.min(RESOLVE));
+    let Some(option) = option else {
+        let met = meet(control, time()?)?;
+        return Ok(Met {
+            control: met.element,
+            option: None,
+            expect: met.expect,
+        });
     };
-    Ok((met, picked))
+
+    let picked = meet(option, time()?)?;
+    let (found, expect) = match control.above(option) {
+        Some(depth) => {
+            let found = depth
+                .checked_sub(1)
+                .and_then(|nearer| picked.above.into_iter().nth(nearer))
+                .ok_or_else(|| stale("The option is no longer where that look saw it"))?;
+            (found, picked.expect)
+        }
+        None => {
+            let met = meet(control, time()?)?;
+            if !within(&picked.element.object, &met.element.object, deadline)? {
+                return Err(Error::new(
+                    Code::Input,
+                    "That option is not one of that control's; nothing was sent",
+                ));
+            }
+            (met.element, met.expect)
+        }
+    };
+    Ok(Met {
+        control: found,
+        option: Some(picked.element),
+        expect,
+    })
 }
 
-/// The request that carries out `action` on the element `met` (or for a
-/// pick, on the option `picked` of it) and what it should read as once
-/// done, from what it says it supports.
-fn plan(
-    action: &ElementAction,
-    met: &Met,
-    picked: Option<&Met>,
-    deadline: Instant,
-) -> Result<(Effect, Wanted)> {
-    let element = &met.element.element;
-    let object: &AXUIElement = &met.element.object;
+/// The request that carries out `action` on the element `met` names (or
+/// for a pick, on its option) and what it should read as once done, from
+/// what it says it supports.
+fn plan(action: &ElementAction, met: &Met, deadline: Instant) -> Result<(Effect, Wanted)> {
+    let element = &met.control.element;
+    let object: &AXUIElement = &met.control.object;
     let role = element.role.as_deref();
-    if *action != ElementAction::ScrollIntoView && element.enabled == Some(false) {
-        return Err(disabled());
-    }
     let press = |object: &AXUIElement, what: &str| {
         if supports(object, "AXPress", deadline)? {
             Ok(Effect::Perform("AXPress"))
@@ -218,7 +251,13 @@ fn plan(
             if !settable(object, "AXValue", deadline)? {
                 return Err(unsupported("given a value"));
             }
-            let value = value_for(text, read(object, "AXValue", deadline)?.as_deref())?;
+            // Only a value that may be a number is read first, so a long
+            // text is never copied just to be replaced.
+            let now = match role {
+                Some(role) if TEXT_ROLES.contains(&role) => None,
+                _ => read(object, "AXValue", deadline)?,
+            };
+            let value = value_for(text, now.as_deref())?;
             (Effect::Set("AXValue", value.clone()), Wanted::Value(value))
         }
         ElementAction::Check(on) => {
@@ -272,22 +311,27 @@ fn plan(
             )
         }
         ElementAction::Pick(_) => {
-            let picked = picked.ok_or_else(|| stale("That option is no longer kept"))?;
-            if picked.element.element.enabled == Some(false) {
-                return Err(disabled());
-            }
-            let object: &AXUIElement = &picked.element.object;
-            // Selecting an option twice selects it still, so an option
-            // whose selection cannot be read is picked all the same.
+            let option = met
+                .option
+                .as_ref()
+                .ok_or_else(|| stale("That option is no longer kept"))?;
+            let object: &AXUIElement = &option.object;
+            // An option is selected as such; pressed only when a press
+            // selects it once and for good, as a radio button's, a tab's
+            // or a menu item's does. Selecting one twice selects it still,
+            // so an option whose selection cannot be read is picked anyway.
+            let radio = option.element.role.as_deref() == Some("AXRadioButton");
             let effect = if settable(object, "AXSelected", deadline)? {
                 Effect::Set("AXSelected", flag(true))
-            } else {
+            } else if radio || option.element.role.as_deref() == Some("AXMenuItem") {
                 press(object, "picked")?
+            } else {
+                return Err(unsupported("picked"));
             };
             (
                 effect,
                 Wanted::State {
-                    attribute: "AXSelected",
+                    attribute: if radio { "AXValue" } else { "AXSelected" },
                     on: true,
                     blind: false,
                 },
@@ -303,21 +347,29 @@ fn secure(role: Option<&str>, subrole: Option<&str>) -> bool {
 }
 
 /// The value `text` sets on an element whose value reads as `now`: a number
-/// for one that holds a number, text for one that holds text or nothing.
+/// for one that holds a number (a whole one kept exact), text for one that
+/// holds text or was not read.
 fn value_for(text: &str, now: Option<&CFType>) -> Result<CFRetained<CFType>> {
     match now {
-        Some(now) if now.downcast_ref::<CFNumber>().is_some() => text
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .filter(|number| number.is_finite())
-            .map(|number| CFNumber::new_f64(number).into())
-            .ok_or_else(|| {
-                Error::new(
-                    Code::Input,
-                    "The element holds a number: give a number; nothing was sent",
-                )
-            }),
+        Some(now) if now.downcast_ref::<CFNumber>().is_some() => {
+            let text = text.trim();
+            text.parse::<i64>()
+                .ok()
+                .map(CFNumber::new_i64)
+                .or_else(|| {
+                    text.parse::<f64>()
+                        .ok()
+                        .filter(|number| number.is_finite())
+                        .map(CFNumber::new_f64)
+                })
+                .map(Into::into)
+                .ok_or_else(|| {
+                    Error::new(
+                        Code::Input,
+                        "The element holds a number: give a number; nothing was sent",
+                    )
+                })
+        }
         Some(now) if now.downcast_ref::<CFString>().is_none() => {
             Err(unsupported("given a value as text or a number"))
         }
@@ -369,7 +421,7 @@ fn acknowledged(status: AXError) -> Result<()> {
 fn read_back(object: &AXUIElement, wanted: &Wanted, deadline: Instant) -> Verification {
     let reads = match wanted {
         Wanted::Unknown => None,
-        Wanted::State { attribute, on, .. } => state(object, *attribute, deadline)
+        Wanted::State { attribute, on, .. } => state(object, attribute, deadline)
             .ok()
             .flatten()
             .map(|now| now == *on),
