@@ -3078,3 +3078,84 @@ fn a_press_on_a_widget_refuses_with_what_the_final_check_finds_there() {
         "app"
     );
 }
+
+/// One preparation of a title-bar move onto the empty desktop, its press
+/// point turned to the window's content at a barrier after preparation
+/// proved the move and before the final check. With `reuse`, the final
+/// check takes the proof preparation read instead of reading its own. The
+/// outcome, the events a batch would post after it, and how many checks ran.
+fn move_with_its_source_changed(reuse: bool) -> (Result<Option<&'static str>>, usize, usize) {
+    let need = Need::Drag {
+        from: (200.0, 35.0),
+        to: (900.0, 700.0),
+        button: atlas_core::actions::Button::Left,
+    };
+    let expect = Expect::new(812).unwrap();
+    let mut fake = Fake::new();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let listed = fake.windows.clone();
+    // Whose title bar the press point is on, as Accessibility finds it now.
+    let source = Cell::new(Some(42));
+    let earlier = Cell::new(None);
+    let checks = Cell::new(0);
+    let mut verify = |number, until| {
+        checks.set(checks.get() + 1);
+        let title = match earlier.get() {
+            Some(proof) if reuse => proof,
+            _ => source.get(),
+        };
+        earlier.set(Some(earlier.get().unwrap_or(title)));
+        crate::native::focus::tests::verify_move(
+            &expect,
+            need,
+            number,
+            title,
+            listed.clone(),
+            until,
+        )
+    };
+    let target = prepare(
+        &mut fake,
+        &expect,
+        need,
+        deadline,
+        &|| Ok(()),
+        &mut |number| verify(number, deadline).is_ok(),
+    )
+    .unwrap();
+    assert_eq!(checks.get(), 1, "preparation proved the move");
+    assert!(
+        target.reader.ask.writes.is_empty(),
+        "the window was already in front"
+    );
+
+    source.set(None);
+    let outcome = settle(target, &expect, deadline, &|| Ok(()), &mut verify);
+    // The batch posts the drag's events only once its final check admits it.
+    let posted = if outcome.is_ok() { 3 } else { 0 };
+    (outcome, posted, checks.get())
+}
+
+#[test]
+fn a_move_proven_in_preparation_is_proven_again_before_any_input() {
+    let (outcome, posted, checks) = move_with_its_source_changed(false);
+    let error = outcome.unwrap_err();
+    assert_eq!(error.code, Code::FocusChanged);
+    assert_eq!(error.details["reason"], "point");
+    assert!(
+        error
+            .error
+            .starts_with("Only a window dragged by its title bar"),
+        "{}",
+        error.error
+    );
+    assert_eq!(posted, 0, "nothing is sent");
+    assert_eq!(checks, 2, "the final check read its own proof");
+
+    let (reused, posted, _) = move_with_its_source_changed(true);
+    assert!(
+        reused.is_ok(),
+        "a check reusing the earlier proof lets it through"
+    );
+    assert_eq!(posted, 3, "and the drag would be sent outside the app");
+}

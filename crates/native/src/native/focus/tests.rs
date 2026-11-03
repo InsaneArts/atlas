@@ -189,6 +189,26 @@ pub(in crate::native) fn verify_input(
     require(&selected, need, &display(), &mut look, deadline)
 }
 
+/// A final check of `need` while the app is active and Accessibility finds
+/// the title bar of window `title` at the press point, as this check alone
+/// reads it.
+pub(in crate::native) fn verify_move(
+    expect: &Expect,
+    need: Need,
+    number: Option<i64>,
+    title: Option<i64>,
+    listed: Vec<Window>,
+    deadline: Instant,
+) -> Result<Option<&'static str>> {
+    let mut look = Seen::focused(Some(expect.pid())).showing(listed);
+    look.title = Some(Ok(title));
+    let selected = match number {
+        Some(number) => expect.clone().in_window(number)?,
+        None => expect.clone(),
+    };
+    require(&selected, need, &display(), &mut look, deadline)
+}
+
 /// The refusal's code, reason and what it found, as an agent reads them.
 fn refusal(outcome: Result<Option<&str>>) -> serde_json::Value {
     let error = outcome.unwrap_err();
