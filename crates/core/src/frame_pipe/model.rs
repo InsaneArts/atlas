@@ -599,7 +599,10 @@ pub fn rectangles(
         pixels += rectangle.bytes();
         found.push(rectangle);
     }
-    if records.len() as u64 + pixels != payload {
+    // Records and pixels together stay smaller than the full picture.
+    if records.len() as u64 + pixels != payload
+        || payload >= u64::from(width) * u64::from(height) * 3
+    {
         return Err(Refusal::Invalid);
     }
     Ok(found)

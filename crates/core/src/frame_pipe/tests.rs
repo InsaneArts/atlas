@@ -1,7 +1,7 @@
 //! The shared golden vectors, read from the Swift package's fixtures so both
 //! sides decode the same bytes.
 use super::{
-    model::{Attached, CreditOnly, FrameMetadata, decode, rectangles},
+    model::{Attached, CreditOnly, FrameMetadata, Rectangle, decode, rectangles},
     wire::{Decoder, Item, Kind, Lane, Refusal},
 };
 use serde_json::Value;
@@ -68,8 +68,32 @@ fn typed(packet: &Packet) -> Value {
     value.unwrap()
 }
 
+/// `base` with each rectangle's pixels from `pixels` written in, row by row.
+fn apply(base: &[u8], rectangles: &[Rectangle], pixels: &[u8], width: u32) -> Vec<u8> {
+    let mut picture = base.to_vec();
+    let mut at = 0;
+    for rectangle in rectangles {
+        let row = rectangle.width as usize * 3;
+        for line in 0..rectangle.height {
+            let start = ((rectangle.y + line) * width + rectangle.x) as usize * 3;
+            picture[start..start + row].copy_from_slice(&pixels[at..at + row]);
+            at += row;
+        }
+    }
+    picture
+}
+
 #[test]
 fn every_golden_vector_decodes_as_its_manifest_says_at_every_split() {
+    let full = unhex(
+        &serde_json::from_slice::<Vec<Value>>(
+            &std::fs::read(fixtures().join("manifest.json")).unwrap(),
+        )
+        .unwrap()[0]["packets"][0]["payload"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    );
     let manifest: Vec<Value> =
         serde_json::from_slice(&std::fs::read(fixtures().join("manifest.json")).unwrap()).unwrap();
     assert_eq!(manifest.len(), 10);
@@ -131,6 +155,18 @@ fn every_golden_vector_decodes_as_its_manifest_says_at_every_split() {
                                 .map(|r| serde_json::json!([r.x, r.y, r.width, r.height]))
                                 .collect();
                             assert_eq!(&Value::from(corners), &expected["rectangles"], "{name}");
+                            if let Some(applied) = expected["applied"].as_str() {
+                                assert_eq!(
+                                    apply(
+                                        &full,
+                                        &found,
+                                        &packet.payload[records..],
+                                        frame.width.get()
+                                    ),
+                                    unhex(applied),
+                                    "{name}"
+                                );
+                            }
                         }
                     }
                 }
@@ -175,22 +211,29 @@ fn delta_rectangles_must_be_inside_ordered_apart_and_exactly_paid_for() {
             .flat_map(|n| n.to_be_bytes())
             .collect::<Vec<u8>>()
     };
+    // A 4×4 picture is 48 bytes: two one-pixel rectangles take 38.
     let two = [record(0, 0, 1, 1), record(1, 0, 1, 1)].concat();
-    assert_eq!(rectangles(&two, 2, 2, 32 + 6).unwrap().len(), 2);
+    assert_eq!(rectangles(&two, 4, 4, 32 + 6).unwrap().len(), 2);
     for (records, payload) in [
         (two.clone(), 32 + 5),
         ([record(1, 0, 1, 1), record(0, 0, 1, 1)].concat(), 38),
         ([record(0, 0, 2, 1), record(1, 0, 1, 1)].concat(), 32 + 9),
-        (record(1, 1, 2, 1), 16 + 6),
+        (record(3, 1, 2, 1), 16 + 6),
         (record(0, 0, 0, 1), 16),
         (record(u32::MAX, 0, 2, 1), 16 + 6),
+        (record(0, 0, 4, 3), 16 + 36),
         (Vec::new(), 0),
         (two[..17].to_vec(), 17 + 6),
+        (record(0, 0, 1, 1).repeat(257), 257 * 19),
     ] {
         assert_eq!(
-            rectangles(&records, 2, 2, payload),
+            rectangles(&records, 4, 4, payload),
             Err(Refusal::Invalid),
             "{payload}"
         );
     }
+    assert_eq!(
+        rectangles(&record(0, 0, 1, 1), 4097, 1, 19),
+        Err(Refusal::Invalid)
+    );
 }

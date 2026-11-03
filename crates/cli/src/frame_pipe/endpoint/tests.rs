@@ -93,12 +93,14 @@ async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_ne
 
     // A crash leaves a socket behind with nothing listening: it is cleared.
     drop(UnixListener::bind(&control).unwrap());
+    fs::set_permissions(&control, fs::Permissions::from_mode(0o600)).unwrap();
     assert!(control.exists());
     let (listeners, endpoint) = bind_in(base.path(), me(), 7004).await.unwrap();
 
     // A socket bound in its place later is another's, and stays.
     fs::remove_file(&frame).unwrap();
     let successor = UnixListener::bind(&frame).unwrap();
+    fs::set_permissions(&frame, fs::Permissions::from_mode(0o600)).unwrap();
     drop((listeners, endpoint));
     assert!(
         frame.exists(),

@@ -230,10 +230,9 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
         // Owned for cleanup from the moment it exists.
         let inode = match fs::symlink_metadata(&socket) {
             Ok(metadata) => metadata.ino(),
-            Err(error) => {
-                let _ = fs::remove_file(&socket);
-                return Err(context("Inspect", &socket)(error));
-            }
+            // Not known to be this socket, so not removed: the next start
+            // finds it and clears it only if no one answers there.
+            Err(error) => return Err(context("Inspect", &socket)(error)),
         };
         endpoint.bound.push((socket.clone(), inode));
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
