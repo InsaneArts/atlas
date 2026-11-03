@@ -107,7 +107,7 @@ The input journal records held keys and mouse buttons separately. A replacement 
 
 ## Native and embedded views
 
-The local viewer service supplies pictures, status, activity, apps, screenshots and control to AtlasApp. Frames have identities and freshness limits; user input is checked against the frame and control lease it came from. Status polling is not proof that a fresh picture has arrived.
+The local viewer service supplies pictures, status, activity, apps, screenshots and control to AtlasApp. Beside it, the menu bar runs the [frame pipe](frame-pipe.md): one demand-driven source of raw pictures that AtlasApp and the terminal viewer share over private Unix sockets, falling back to the viewer's PNG pictures when it is unavailable. Frames have identities and freshness limits; user input is checked against the frame and control lease it came from. Status polling is not proof that a fresh picture has arrived.
 
 The MCP server offers status and `show_screen` to agent hosts. A host that supports embedded UI can render the bundled view in `crates/cli/src/mcp/screen.js`. The view's own polling and controls are separate from model-facing tools. Host capability and tool visibility checks preserve that distinction, including the rule that only the person resumes stopped agents.
 

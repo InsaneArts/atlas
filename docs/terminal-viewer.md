@@ -1,6 +1,8 @@
 # Atlas inside a terminal pane
 
-The terminal viewer draws the hidden helper's screen as pixels inside a normal terminal pane. It uses the Kitty graphics protocol and a terminal-owned viewer with Atlas's existing capture and input rules. Keep the helper signed in off console; the menu bar need not be running.
+The terminal viewer draws the hidden helper's screen as pixels inside a normal terminal pane. It uses the Kitty graphics protocol and Atlas's existing capture and input rules. Keep the helper signed in off console; the menu bar need not be running.
+
+When the menu bar runs for the same helper, the terminal shares its [frame pipe](frame-pipe.md): the same pictures Atlas.app shows, with no second capture, and Take Control through the menu bar's viewer. Otherwise, or with `--max-dimension` or `--capture-backend sck`, it runs a private viewer of its own.
 
 Terminal mode uses `~/.config/atlas.toml` by default, including when the binary runs from a development checkout. This selects the configured helper rather than a checkout's development configuration. An explicit `--config FILE` or `ATLAS_CONFIG` still selects another configuration. The terminal binds a private loopback endpoint on a free port and does not overwrite the menu bar's record.
 
