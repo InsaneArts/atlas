@@ -2382,57 +2382,64 @@ fn a_numbered_sheet_reachable_only_through_children_resolves_before_keyboard_pre
 }
 
 #[test]
-fn a_child_only_sheet_button_requires_its_exact_sheet_expectation() {
-    for (separate, requested) in [(true, 43), (true, 42), (false, 42)] {
-        let mut fake = Fake::new();
-        child_only_sheet(&mut fake);
-        if !separate {
-            fake.windows.remove(0);
-        }
-        let expect = Expect::new(812).unwrap().in_window(requested).unwrap();
-        let deadline = fake.now.get() + Duration::from_millis(450);
-        // A separately listed sheet can receive a point outside its document.
-        let point = if separate {
-            (480.0, 150.0)
-        } else {
-            (100.0, 150.0)
-        };
-        let result = prepare(
-            &mut fake,
-            &expect,
-            Need::Point(point.0, point.1),
-            deadline,
-            &|| Ok(()),
-            &mut |_| false,
-        );
-        if requested == 42 {
-            reason(result.map(|_| ()), "sheet");
-            assert!(fake.writes.is_empty());
-            continue;
-        }
-        let target = result.unwrap();
-        assert_eq!(target.window, Some(3));
-        let listed = target.reader.ask.windows.clone();
-        let mut verified = 0;
-        settle(target, &expect, deadline, &|| Ok(()), |selected, _| {
-            assert_eq!(selected, Some(if separate { 43 } else { 42 }));
-            let screen = windows::Screen::new(
-                Bounds::display(1000.0, 800.0),
-                windows::Dock::Icons(Vec::new()),
+fn a_sheet_button_requires_its_exact_sheet_expectation_however_the_sheet_is_found() {
+    for (sheet, child_only) in [
+        (listed_sheet as fn(&mut Fake), false),
+        (child_only_sheet, true),
+    ] {
+        for (separate, requested) in [(true, 43), (true, 42), (false, 42)] {
+            let mut fake = Fake::new();
+            sheet(&mut fake);
+            if !separate {
+                fake.windows.remove(0);
+            }
+            let expect = Expect::new(812).unwrap().in_window(requested).unwrap();
+            let deadline = fake.now.get() + Duration::from_millis(450);
+            // A separately listed sheet can receive a point outside its document.
+            let point = if separate && child_only {
+                (480.0, 150.0)
+            } else {
+                (100.0, 150.0)
+            };
+            let result = prepare(
+                &mut fake,
+                &expect,
+                Need::Point(point.0, point.1),
+                deadline,
+                &|| Ok(()),
+                &mut |_| false,
             );
-            assert!(windows::unobstructed(
-                &listed,
-                selected.unwrap(),
-                point.0,
-                point.1,
-                &screen
-            ));
-            verified += 1;
-            Ok(None)
-        })
-        .unwrap();
-        assert_eq!(verified, 2);
-        assert!(!fake.writes.contains(&(WINDOW, Write::Raise)));
+            if requested == 42 {
+                reason(result.map(|_| ()), "sheet");
+                assert!(fake.writes.is_empty());
+                continue;
+            }
+            let target = result.unwrap();
+            assert_eq!(target.window, Some(3));
+            let number = Some(if separate { 43 } else { 42 });
+            assert_eq!(target.number, number);
+            let listed = target.reader.ask.windows.clone();
+            let mut verified = 0;
+            settle(target, &expect, deadline, &|| Ok(()), |selected, _| {
+                assert_eq!(selected, number);
+                let screen = windows::Screen::new(
+                    Bounds::display(1000.0, 800.0),
+                    windows::Dock::Icons(Vec::new()),
+                );
+                assert!(windows::unobstructed(
+                    &listed,
+                    selected.unwrap(),
+                    point.0,
+                    point.1,
+                    &screen
+                ));
+                verified += 1;
+                Ok(None)
+            })
+            .unwrap();
+            assert_eq!(verified, 2);
+            assert!(!fake.writes.contains(&(WINDOW, Write::Raise)));
+        }
     }
 }
 
@@ -2516,42 +2523,6 @@ fn a_sheet_omitted_from_ax_windows_can_be_targeted_by_its_own_number() {
         .unwrap();
     assert!(fake.writes.contains(&(3, Write::Raise)));
     assert!(!fake.writes.contains(&(WINDOW, Write::Raise)));
-}
-
-#[test]
-fn a_sheet_button_click_requires_the_sheet_number_and_refuses_a_parent_expectation() {
-    for (separate, requested) in [(true, 43), (true, 42), (false, 42)] {
-        let mut fake = Fake::new();
-        listed_sheet(&mut fake);
-        if !separate {
-            fake.windows.remove(0);
-        }
-        let expect = Expect::new(812).unwrap().in_window(requested).unwrap();
-        let deadline = fake.now.get() + Duration::from_millis(450);
-        let result = prepare(
-            &mut fake,
-            &expect,
-            Need::Point(100.0, 150.0),
-            deadline,
-            &|| Ok(()),
-            &mut |_| false,
-        );
-        if requested == 42 {
-            reason(result.map(|_| ()), "sheet");
-            assert!(fake.writes.is_empty());
-            continue;
-        }
-        let target = result.unwrap();
-        assert_eq!(target.window, Some(3));
-        let number = Some(if separate { 43 } else { 42 });
-        assert_eq!(target.number, number);
-        settle(target, &expect, deadline, &|| Ok(()), |selected, _| {
-            assert_eq!(selected, number);
-            Ok(None)
-        })
-        .unwrap();
-        assert!(!fake.writes.contains(&(WINDOW, Write::Raise)));
-    }
 }
 
 #[test]
