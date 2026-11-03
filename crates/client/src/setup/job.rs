@@ -121,22 +121,54 @@ pub fn install_job(
     Err(error)
 }
 
-/// Prepare and install under one claim, including rollback dispatches.
+/// [`as_helper`], owning what it needs to run on a worker of its own.
+fn helper_runner(
+    executable: &'static Path,
+    helper: &Account,
+    expected: &Identity,
+) -> impl Fn(&Request) -> Result<Value> + Send + 'static {
+    let (helper, expected) = (helper.clone(), expected.clone());
+    move |request| as_helper(executable, &helper, request, &expected)
+}
+
+/// Run `transaction` on a blocking worker of its own, which a caller that
+/// stops waiting leaves running to its end. A worker that ends without an
+/// answer leaves what it did unknown.
+async fn on_worker<T: Send + 'static>(
+    transaction: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(transaction)
+        .await
+        .map_err(|cause| {
+            problem("Setting up the helper stopped before it finished")
+                .with_source(cause)
+                .uncertain()
+        })?
+}
+
+/// Prepare and install under one claim, including rollback dispatches, on
+/// a worker that holds exclusion until all of it is done.
 async fn prepare_and_install(
     client: &Client,
     controller_name: &str,
     agent: Agent,
     logs: &Path,
-    run: impl Fn(&Request) -> Result<Value>,
+    run: impl Fn(&Request) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
-    let _ownership = client.service_change(true).await?;
-    setup_transaction_held(&client.controller, || {
-        run(&Request::Prepare {
-            uid: agent.uid,
-            controller: controller_name.to_owned(),
-        })?;
-        install_job(run, agent, logs)
+    let ownership = client.service_change(true).await?;
+    let controller = client.controller.clone();
+    let (controller_name, logs) = (controller_name.to_owned(), logs.to_path_buf());
+    on_worker(move || {
+        let _ownership = ownership;
+        setup_transaction_held(&controller, || {
+            run(&Request::Prepare {
+                uid: agent.uid,
+                controller: controller_name,
+            })?;
+            install_job(run, agent, &logs)
+        })
     })
+    .await
 }
 
 /// Restart the helper daemon (launchd starts a fresh process) and wait for
@@ -208,22 +240,30 @@ async fn new_daemon_answers(client: &Client, before: &Value) -> bool {
 /// version's, from outside the daemon it runs (through sudo, as installing
 /// it does): the earlier definition is kept as a backup, and comes back if
 /// the new one cannot go in. Pending until a new daemon answers, like a
-/// restart.
+/// restart. The replacement runs on a worker that holds exclusion and the
+/// claim until it is done, and exclusion is held on until the new daemon is
+/// checked; a caller that stops waiting leaves it pending.
 async fn replace_job(
     client: &Client,
     helper: &Account,
     agent: Agent,
     layout: &Layout,
-    run: impl Fn(&Request) -> Result<Value>,
+    run: impl Fn(&Request) -> Result<Value> + Send + 'static,
 ) -> Result<()> {
-    let _exclusion = client.service_change(true).await?;
+    let exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
-    let pending = client.controller.quarantine()?;
-
-    {
-        let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
-        install_job(run, agent, &layout.logs()).map_err(Error::uncertain)?;
-    }
+    let controller = client.controller.clone();
+    let logs = layout.logs();
+    let (_exclusion, pending) = on_worker(move || {
+        let pending = controller.quarantine()?;
+        {
+            // Executor claims bind to the thread that dispatches them.
+            let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+            install_job(run, agent, &logs).map_err(Error::uncertain)?;
+        }
+        Ok((exclusion, pending))
+    })
+    .await?;
 
     if !new_daemon_answers(client, &before).await {
         return Err(problem(format!(
@@ -268,9 +308,13 @@ pub async fn refresh_helper(
         progress(setup::Progress::Waiting(
             "Replacing the helper's background job…",
         ))?;
-        replace_job(client, helper, agent, &layout, |request| {
-            as_helper(executable, helper, request, expected)
-        })
+        replace_job(
+            client,
+            helper,
+            agent,
+            &layout,
+            helper_runner(executable, helper, expected),
+        )
         .await?;
         progress(setup::Progress::Done(
             "Helper job",
@@ -309,9 +353,13 @@ pub async fn prepare_helper(
     let executable = Path::new(app_bundle::EXECUTABLE);
     let controller = this_account()?;
     let (agent, layout) = helper_agent(helper, executable)?;
-    prepare_and_install(client, &controller.name, agent, &layout.logs(), |request| {
-        as_helper(executable, helper, request, expected)
-    })
+    prepare_and_install(
+        client,
+        &controller.name,
+        agent,
+        &layout.logs(),
+        helper_runner(executable, helper, expected),
+    )
     .await?;
     Ok(layout.logs().join(format!("{LABEL}.log")))
 }

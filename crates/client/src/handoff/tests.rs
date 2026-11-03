@@ -1,5 +1,8 @@
 use super::*;
-use crate::client::AppList;
+use crate::{
+    client::AppList,
+    test_support::{Requester, WATCHDOG},
+};
 
 #[test]
 fn only_a_real_private_folder_of_this_account_counts() {
@@ -890,65 +893,6 @@ fn a_copy_quit_target_is_only_one_this_session_may_take() {
     assert_eq!(copy_node(&root, &token, &other), None);
 }
 
-/// How long a test waits for what should happen at once before it takes
-/// the runtime for stalled.
-const WATCHDOG: Duration = Duration::from_secs(5);
-
-/// An operation a request started on a runtime of its own thread, beside
-/// a heartbeat that answers whenever that runtime is free, until the
-/// operation ends or the request is dropped.
-struct Request<T> {
-    ping: tokio::sync::mpsc::UnboundedSender<std::sync::mpsc::Sender<()>>,
-    stop: Option<tokio::sync::oneshot::Sender<()>>,
-    ended: std::sync::mpsc::Receiver<Option<T>>,
-}
-
-impl<T: Send + 'static> Request<T> {
-    fn start<F: Future<Output = T>>(operation: impl FnOnce() -> F + Send + 'static) -> Self {
-        let (ping, mut pings) = tokio::sync::mpsc::unbounded_channel();
-        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-        let (end, ended) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime.block_on(async move {
-                tokio::spawn(async move {
-                    while let Some(answer) = pings.recv().await {
-                        let _ = std::sync::mpsc::Sender::send(&answer, ());
-                    }
-                });
-                let outcome = tokio::select! {
-                    outcome = operation() => Some(outcome),
-                    _ = stopped => None,
-                };
-                let _ = end.send(outcome);
-            });
-        });
-        Self {
-            ping,
-            stop: Some(stop),
-            ended,
-        }
-    }
-
-    /// Whether the runtime answered the heartbeat in time.
-    fn responsive(&self) -> bool {
-        let (answer, answered) = std::sync::mpsc::channel();
-        self.ping.send(answer).is_ok() && answered.recv_timeout(WATCHDOG).is_ok()
-    }
-
-    /// Drop the request's future, as a requester that went away does.
-    fn abandon(mut self) {
-        let _ = self.stop.take().unwrap().send(());
-        assert!(
-            matches!(self.ended.recv_timeout(WATCHDOG), Ok(None)),
-            "the request was not dropped"
-        );
-    }
-}
-
 /// Two files under `dir` for the helper, which it cannot read.
 fn unreadable_pair(dir: &Path) -> Vec<Target> {
     ["a.txt", "b.txt"]
@@ -990,7 +934,7 @@ fn a_blocked_handoff_copy_leaves_the_runtime_responsive_and_retains_controller_e
         copy(path, root, token)
     };
     let prepared = root.clone();
-    let request = Request::start(move || async move {
+    let request = Requester::start(move || async move {
         handing
             .on_worker(&ownership, move || Ok(prepared), copying)
             .await
@@ -1040,7 +984,7 @@ fn a_failed_handoff_cleans_earlier_copies_before_releasing_ownership() {
         Err(problem("Could not copy"))
     };
     let prepared = root.clone();
-    let request = Request::start(move || async move {
+    let request = Requester::start(move || async move {
         handing
             .on_worker(&ownership, move || Ok(prepared), copying)
             .await
