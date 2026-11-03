@@ -88,7 +88,6 @@ pub(crate) async fn start(client: Arc<Client>, longest: u32, witness: Witness) -
         listeners,
         controller,
         gate,
-        service,
         source,
         witness,
         async {

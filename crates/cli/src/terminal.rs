@@ -107,11 +107,23 @@ pub async fn monitor(
     }
     let display = client.identity().await?.epoch.display;
     let points = (display.width, display.height);
+    // With the menu bar running for this helper, the terminal shares its
+    // frame service and its control routes, so no second capture runs.
+    if backend == CaptureBackend::CoreGraphics
+        && max_dimension.is_none()
+        && let Some((url, descriptor)) = shared(&client).await
+    {
+        let frames = Frames::Shared {
+            descriptor,
+            client: None,
+        };
+        return connected(url, frames, read_only, max_dimension, points).await;
+    }
     let dimension = quality::current(max_dimension, points);
     let service = viewer::TerminalService::start(client, settings, dimension, backend).await?;
     let result = connected(
         service.url.clone(),
-        service.frames(),
+        Frames::Private(service.frames()),
         read_only,
         max_dimension,
         points,
@@ -121,9 +133,94 @@ pub async fn monitor(
     result.and(cleanup)
 }
 
+/// The running menu bar's address and its frame service's description,
+/// when the menu bar serves `client`'s helper and runs one.
+async fn shared(client: &Client) -> Option<(String, Value)> {
+    let record = client.output_dir().ok()?.join(viewer::MENUBAR_RECORD);
+    let helper = client.transport.peer_uid;
+    tokio::task::spawn_blocking(move || {
+        let found = viewer::read_record(&record)?;
+        let port = viewer::recorded_port(&found)?;
+        let running = viewer::running(&record, port)?;
+        let url = viewer::address(&running)?.to_owned();
+        let body = viewer::fetch(&url, "pipe.json", Duration::from_secs(2), 16 * 1024).ok()?;
+        let descriptor: Value = serde_json::from_slice(&body).ok()?;
+        (descriptor["helperUID"].as_u64() == Some(u64::from(helper))).then_some((url, descriptor))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Where the terminal's pictures come from: its own private viewer, or the
+/// menu bar's frame service, shared with every other viewer.
+enum Frames {
+    Private(viewer::TerminalFrames),
+    Shared {
+        descriptor: Value,
+        /// The observer, once paired; a failed one is paired again.
+        client: Option<crate::frame_pipe::client::PipeClient>,
+    },
+}
+
+impl Frames {
+    fn set_dimension(&mut self, dimension: u32) {
+        if let Self::Private(frames) = self {
+            frames.set_dimension(dimension);
+        }
+    }
+
+    /// The shortest gap between reads: the shared service paces itself.
+    fn interval(&self) -> Duration {
+        match self {
+            Self::Private(frames) => frames.interval(),
+            Self::Shared { .. } => Duration::ZERO,
+        }
+    }
+
+    async fn next(&mut self) -> Result<SharedFrame> {
+        match self {
+            Self::Private(frames) => frames.next().await,
+            Self::Shared { descriptor, client } => {
+                let result = shared_next(descriptor, client).await;
+                if result.is_err() {
+                    *client = None;
+                }
+                result
+            }
+        }
+    }
+}
+
+/// The shared service's next picture, committed, pairing first when needed.
+async fn shared_next(
+    descriptor: &Value,
+    client: &mut Option<crate::frame_pipe::client::PipeClient>,
+) -> Result<SharedFrame> {
+    let observer = match client {
+        Some(observer) => observer,
+        None => client
+            .insert(crate::frame_pipe::client::PipeClient::open(descriptor, SHARED_LONGEST).await?),
+    };
+    let picture = observer.next().await?;
+    observer.commit(&picture.metadata).await?;
+    let metadata = picture.metadata;
+    Ok(SharedFrame {
+        png: Vec::new(),
+        rgb: Some(Arc::new(picture.rgb)),
+        pixels: (metadata.width.get(), metadata.height.get()),
+        metrics: None,
+        key: metadata.frame_key.as_str().to_owned(),
+        display: (metadata.display_width.get(), metadata.display_height.get()),
+    })
+}
+
+/// The detail the terminal asks the shared service for.
+const SHARED_LONGEST: u32 = 1600;
+
 async fn connected(
     url: String,
-    mut source: viewer::TerminalFrames,
+    mut source: Frames,
     read_only: bool,
     max_dimension: Option<u32>,
     mut display: (f64, f64),

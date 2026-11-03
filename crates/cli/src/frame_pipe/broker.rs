@@ -14,8 +14,8 @@ use atlas_core::frame_pipe::{
     budget::{self, OBSERVERS_MAX},
     diagnostics::{Reason, Stage},
     model::{
-        Attach, CreditOnly, Disposition, ErrorMetadata, Failure, FrameMetadata, Hello, Hex32,
-        Hex64, Metadata, Pair, Positive, Profile, Ref, Side, Welcome, WireCode, decode, encode,
+        Attach, CreditOnly, Disposition, ErrorMetadata, Failure, FrameMetadata, Hello, Hex64,
+        Metadata, Pair, Positive, Profile, Ref, Side, Welcome, WireCode, decode, encode,
         flow::{
             Barrier, Close, Closed, ControlOwner, Credit, Dropped, Phase, Resynced, Settle, State,
             Subscribe, SubscribeReason, Subscribed,
@@ -86,7 +86,6 @@ struct Observer {
 /// The broker's state.
 struct Broker {
     controller: u32,
-    service: Hex32,
     gate: Gate,
     source: source::Handle,
     latest: Answer,
@@ -96,6 +95,8 @@ struct Broker {
     profile: Option<Profile>,
     /// The session the current profile's pictures show.
     epoch: Option<Epoch>,
+    /// Whether the source's last answer was a failure.
+    failing: bool,
     witness: Witness,
     connections: HashMap<Id, Connection>,
     observers: HashMap<Id, Observer>,
@@ -110,7 +111,6 @@ pub(crate) async fn run(
     listeners: Listeners,
     controller: u32,
     gate: Gate,
-    service: Hex32,
     source: source::Handle,
     witness: Witness,
     shutdown: impl Future<Output = ()>,
@@ -120,13 +120,13 @@ pub(crate) async fn run(
     let latest = answers.borrow_and_update().clone();
     let mut broker = Broker {
         controller,
-        service,
         gate,
         source,
         latest,
         wanted: 0,
         profile: None,
         epoch: None,
+        failing: false,
         witness,
         connections: HashMap::new(),
         observers: HashMap::new(),
@@ -509,6 +509,7 @@ impl Broker {
     /// The source answered: subscriptions waiting on it are answered, and
     /// credits are served.
     fn answered(&mut self, now: Instant) {
+        self.report_source();
         let found = match &self.latest.latest {
             Latest::Picture(picture) => self
                 .profile_of(picture)
@@ -573,6 +574,49 @@ impl Broker {
             display_scale,
             backend: picture.backend,
         })
+    }
+
+    /// Tell every subscribed observer when the source starts failing, and
+    /// why, or works again: a hint for drawing, never authority.
+    fn report_source(&mut self) {
+        let failure = match &self.latest.latest {
+            Latest::Failed(reason) => Some(*reason),
+            Latest::Picture(_) => None,
+            Latest::Nothing | Latest::Idle => return,
+        };
+        let failing = failure.is_some();
+        if failing == self.failing {
+            return;
+        }
+        self.failing = failing;
+        let Some(profile) = self.profile else {
+            return;
+        };
+        let state = State {
+            phase: if failing {
+                Phase::Unavailable
+            } else {
+                Phase::Live
+            },
+            stream_generation: profile.stream_generation.get(),
+            geometry_generation: profile.geometry_generation.get(),
+            input_ready: !failing,
+            control_owner: ControlOwner::None,
+            profile: None,
+            failure: failure.map(self::failure),
+            managed_bytes: None,
+        };
+        let subscribed: Vec<Id> = self
+            .observers
+            .iter()
+            .filter(|(_, observer)| observer.subscribed)
+            .map(|(control, _)| *control)
+            .collect();
+        for control in subscribed {
+            if let Err(reason) = self.send(control, Kind::State, 0, &state) {
+                self.fail(control, 0, reason);
+            }
+        }
     }
 
     /// Tell every subscribed observer the profile changed, retiring credits

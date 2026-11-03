@@ -53,7 +53,7 @@ async fn one_service_binds_private_sockets_and_a_second_is_refused() {
     let (_listeners, endpoint) = bind_in(base.path(), me(), 7001).await.unwrap();
     let folder = endpoint.folder.clone();
     assert_eq!(fs::metadata(&folder).unwrap().mode() & 0o777, 0o700);
-    for name in ["c.sock", "f.sock", "m.sock"] {
+    for name in ["c.sock", "f.sock"] {
         let metadata = fs::symlink_metadata(folder.join(name)).unwrap();
         assert!(metadata.file_type().is_socket());
         assert_eq!(metadata.mode() & 0o777, 0o600);

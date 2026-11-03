@@ -1,5 +1,5 @@
 //! The broker's private endpoint for one controller and helper: a folder
-//! only the controller can reach, its lifetime lock, its three sockets and
+//! only the controller can reach, its lifetime lock, its two sockets and
 //! its record. A reachable or unverifiable socket is never taken over, an
 //! unsafe folder is refused rather than repaired, and only the sockets this
 //! instance bound are ever removed.
@@ -46,7 +46,6 @@ fn folder(base: &Path, controller: u32, key: &[u8; 32]) -> PathBuf {
 pub(crate) struct Listeners {
     pub(crate) control: UnixListener,
     pub(crate) frame: UnixListener,
-    pub(crate) management: UnixListener,
 }
 
 /// A file system object's device and inode.
@@ -241,7 +240,7 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
         _lock: lock,
     };
     let mut listeners = Vec::new();
-    for name in ["c.sock", "f.sock", "m.sock"] {
+    for name in ["c.sock", "f.sock"] {
         let socket = endpoint.folder.join(name);
         if socket.as_os_str().len() > SOCKET_PATH_MAX {
             return Err(Error::new(
@@ -273,22 +272,13 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
         listeners.push(listener);
     }
     let mut listeners = listeners.into_iter();
-    let (Some(control), Some(frame), Some(management)) =
-        (listeners.next(), listeners.next(), listeners.next())
-    else {
+    let (Some(control), Some(frame)) = (listeners.next(), listeners.next()) else {
         return Err(Error::new(
             Code::State,
             "The frame service bound too few sockets",
         ));
     };
-    Ok((
-        Listeners {
-            control,
-            frame,
-            management,
-        },
-        endpoint,
-    ))
+    Ok((Listeners { control, frame }, endpoint))
 }
 
 #[cfg(test)]

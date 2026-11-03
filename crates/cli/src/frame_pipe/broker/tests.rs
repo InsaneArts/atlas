@@ -2,7 +2,7 @@ use super::{source::Acquire, *};
 use atlas_core::frame_pipe::{
     budget::{BROKER_PIXELS, Budget},
     model::{
-        Attached, ClientKind, Demand, Longest, Measure, Right, Role, Source, UpdateKind,
+        Attached, ClientKind, Demand, Hex32, Longest, Measure, Right, Role, Source, UpdateKind,
         flow::{Subscribe, SubscribeReason},
     },
     pixels::FramePixels,
@@ -99,7 +99,6 @@ impl Running {
         let listeners = Listeners {
             control: UnixListener::bind(path("c.sock")).unwrap(),
             frame: UnixListener::bind(path("f.sock")).unwrap(),
-            management: UnixListener::bind(path("m.sock")).unwrap(),
         };
         let (service, bootstrap) = (Hex32::random(), Hex64::random());
         let gate = Gate::new(
@@ -119,17 +118,9 @@ impl Running {
                 .unwrap()
                 .push((key.to_owned(), epoch.security_session_id));
         });
-        let task = tokio::spawn(run(
-            listeners,
-            uid,
-            gate,
-            service.clone(),
-            handle,
-            witness,
-            async {
-                let _ = stopped.await;
-            },
-        ));
+        let task = tokio::spawn(run(listeners, uid, gate, handle, witness, async {
+            let _ = stopped.await;
+        }));
         Self {
             control: path("c.sock"),
             frame: path("f.sock"),
@@ -549,5 +540,30 @@ async fn a_new_session_retires_old_credits_and_asks_for_a_new_subscription() {
     client.credit(&second, 3, Barrier::Reconfigure).await;
     let (metadata, _, _) = client.picture().await;
     assert_eq!(metadata.stream_generation, profile.stream_generation);
+    broker.shut().await;
+}
+
+#[tokio::test]
+async fn subscribed_observers_hear_once_when_the_source_fails_and_when_it_works_again() {
+    let broker = Running::start(Scripted::default()).await;
+    let mut client = Client_::pair(&broker).await;
+    let subscribed = client.subscribe().await;
+    *broker.source.fail.lock().unwrap() = Some(Reason::SourceStale);
+    client.credit(&subscribed, 1, Barrier::Resume).await;
+    let (state, _): (State, _) = client.control.expect(Kind::State).await;
+    assert_eq!(state.phase, Phase::Unavailable);
+    assert_eq!(
+        state.failure.map(|failure| failure.reason),
+        Some(Reason::SourceStale)
+    );
+    let (expired, _): (CreditOnly, _) = client.control.expect(Kind::CreditExpired).await;
+    assert_eq!(expired.credit_id.get(), 1);
+
+    *broker.source.fail.lock().unwrap() = None;
+    client.credit(&subscribed, 2, Barrier::Ordinary).await;
+    let (state, _): (State, _) = client.control.expect(Kind::State).await;
+    assert_eq!(state.phase, Phase::Live);
+    let (metadata, _, _) = client.picture().await;
+    assert_eq!(metadata.credit_id.get(), 2);
     broker.shut().await;
 }

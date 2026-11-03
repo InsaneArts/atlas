@@ -71,6 +71,7 @@ pub(crate) struct Subscription {
 
 impl Subscription {
     /// The picture the client committed last, which input may name.
+    #[cfg(test)]
     pub(crate) fn base(&self) -> Option<&Ref> {
         self.base.as_ref()
     }
