@@ -12,7 +12,7 @@ fn temporary_client(config: Config) -> Result<Client> {
 
 #[tokio::test]
 async fn a_waiter_arriving_during_download_refuses_the_swap_under_ownership() {
-    use atlas_core::{host::Host, process::Instance};
+    use atlas_core::host::Host;
 
     let directory = tempfile::tempdir().unwrap();
     let settings = directory.path().join("config.toml");
@@ -34,34 +34,8 @@ async fn a_waiter_arriving_during_download_refuses_the_swap_under_ownership() {
     .await
     .unwrap();
 
-    let holder = std::fs::read_dir(directory.path().join("state"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| path.to_string_lossy().ends_with(".holder.json"))
-        .unwrap();
-    let waiting = holder.with_file_name(
-        holder
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .replace(".holder.json", ".waiting"),
-    );
-    std::fs::create_dir(&waiting).unwrap();
     let worker = HostSession::new(Host::Named, "worker").unwrap();
-    let note = atlas_control::Note {
-        session: Some(worker.key().clone()),
-        host: Some(Host::Named),
-        folder: None,
-        named: Some(worker.id().clone()),
-        process: Instance::current().unwrap(),
-        since: u64::try_from(atlas_core::time::timestamp() / 1_000_000).unwrap(),
-    };
-    std::fs::write(
-        waiting.join("0000000000000001.json"),
-        serde_json::to_vec(&note).unwrap(),
-    )
-    .unwrap();
+    atlas_client::test_support::waiting_note(&directory.path().join("state"), Some(&worker));
 
     let error = tokio::time::timeout(
         std::time::Duration::from_secs(1),
