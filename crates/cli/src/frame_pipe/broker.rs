@@ -732,7 +732,11 @@ impl Broker {
         });
         if !queued {
             self.fail(control, 0, Reason::SlowWriter);
+            return;
         }
+        // The next picture is read while this one travels, so the observer's
+        // next credit finds it fresh; the source's cadence bounds the rate.
+        self.source.want();
     }
 
     /// Expire unserved credits, end deliveries left unsettled and lanes
