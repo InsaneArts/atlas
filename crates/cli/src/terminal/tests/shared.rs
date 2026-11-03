@@ -15,6 +15,7 @@ async fn the_terminal_shares_the_running_menu_bar_frame_service() {
         client: None,
         failed: false,
         found: Discovery::of(&client),
+        address: Arc::new(std::sync::Mutex::new(url.clone())),
     };
     let began = std::time::Instant::now();
     let mut last = None;
@@ -32,6 +33,56 @@ async fn the_terminal_shares_the_running_menu_bar_frame_service() {
         let lease = viewer::post_local(&url, "control/acquire", &json!({"frame": key}))?;
         let lease = lease["lease"].as_str().unwrap_or_default().to_owned();
         viewer::post_local(&url, "control/release", &json!({"lease": lease}))
+    })
+    .await
+    .unwrap();
+    assert!(granted.is_ok(), "{granted:?}");
+}
+
+/// Against the menu bar running on this Mac, which it restarts: the shared
+/// terminal finds the new service and the new address by itself.
+#[tokio::test]
+#[ignore = "restarts the installed menu bar on this Mac"]
+async fn a_shared_terminal_follows_a_restarted_menu_bar() {
+    let config =
+        atlas_core::config::Config::load(&atlas_core::config::installed_path().unwrap()).unwrap();
+    let client = Client::new(config).unwrap();
+    let (url, descriptor) = shared(&client).await.expect("a running frame service");
+    let address = Arc::new(std::sync::Mutex::new(url.clone()));
+    let mut frames = Frames::Shared {
+        descriptor,
+        client: None,
+        failed: false,
+        found: Discovery::of(&client),
+        address: address.clone(),
+    };
+    frames.next().await.unwrap();
+    std::process::Command::new("pkill")
+        .args(["-TERM", "-f", "atlas menubar --serve"])
+        .status()
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    std::process::Command::new("/Applications/Atlas.app/Contents/MacOS/atlas")
+        .arg("menubar")
+        .status()
+        .unwrap();
+    let began = std::time::Instant::now();
+    let frame = loop {
+        match frames.next().await {
+            Ok(frame) => break frame,
+            Err(_) if began.elapsed() < Duration::from_secs(20) => {
+                tokio::time::sleep(frames.interval()).await;
+            }
+            Err(error) => panic!("no picture after the restart: {error:?}"),
+        }
+    };
+    let renewed = address.lock().unwrap().clone();
+    assert_ne!(renewed, url, "a new menu bar has a new address");
+    let key = frame.key;
+    let granted = tokio::task::spawn_blocking(move || {
+        let lease = viewer::post_local(&renewed, "control/acquire", &json!({"frame": key}))?;
+        let lease = lease["lease"].as_str().unwrap_or_default().to_owned();
+        viewer::post_local(&renewed, "control/release", &json!({"lease": lease}))
     })
     .await
     .unwrap();

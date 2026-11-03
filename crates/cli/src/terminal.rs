@@ -113,18 +113,20 @@ pub async fn monitor(
         && max_dimension.is_none()
         && let Some((url, descriptor)) = shared(&client).await
     {
+        let address = Arc::new(std::sync::Mutex::new(url));
         let frames = Frames::Shared {
             descriptor,
             client: None,
             failed: false,
             found: Discovery::of(&client),
+            address: address.clone(),
         };
-        return connected(url, frames, read_only, max_dimension, points).await;
+        return connected(address, frames, read_only, max_dimension, points).await;
     }
     let dimension = quality::current(max_dimension, points);
     let service = viewer::TerminalService::start(client, settings, dimension, backend).await?;
     let result = connected(
-        service.url.clone(),
+        Arc::new(std::sync::Mutex::new(service.url.clone())),
         Frames::Private(service.frames()),
         read_only,
         max_dimension,
@@ -189,6 +191,9 @@ enum Frames {
         /// looks the service up again, as a restarted menu bar has new ones.
         failed: bool,
         found: Discovery,
+        /// The menu bar viewer's address control goes to, renewed with the
+        /// service when a restarted menu bar is found again.
+        address: Address,
     },
 }
 
@@ -216,9 +221,13 @@ impl Frames {
                 client,
                 failed,
                 found,
+                address,
             } => {
-                if *failed && let Some((_, fresh)) = discover(found.clone()).await {
+                if *failed && let Some((url, fresh)) = discover(found.clone()).await {
                     *descriptor = fresh;
+                    *address
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = url;
                 }
                 let result = shared_next(descriptor, client).await;
                 *failed = result.is_err();
@@ -264,8 +273,12 @@ const SHARED_LONGEST: u32 = 1600;
 /// The pause before trying the shared service again after a failed read.
 const SHARED_RETRY: Duration = Duration::from_millis(250);
 
+/// Where control requests go: the viewer's address, which a shared terminal
+/// renews when the menu bar restarts.
+type Address = Arc<std::sync::Mutex<String>>;
+
 async fn connected(
-    url: String,
+    url: Address,
     mut source: Frames,
     read_only: bool,
     max_dimension: Option<u32>,
@@ -292,7 +305,7 @@ async fn connected(
         screen::run(receiver, commands, terminal_stop, read_only, screen_budget)
     });
     let (frames, mut captured) = mpsc::channel(1);
-    let mut session = Session::new(url.clone(), read_only);
+    let mut session = Session::at(url, read_only);
     let refresh = session.refresh.clone();
     let frame_stop = stop.clone();
     let view_state = states.subscribe();
@@ -481,7 +494,7 @@ fn change(states: &watch::Sender<State>, update: impl FnOnce(&mut State)) {
 }
 
 struct Session {
-    url: String,
+    url: Address,
     lease: Option<String>,
     pending: bool,
     paused: bool,
@@ -502,7 +515,12 @@ struct Session {
 }
 
 impl Session {
+    #[cfg(test)]
     fn new(url: String, read_only: bool) -> Self {
+        Self::at(Arc::new(std::sync::Mutex::new(url)), read_only)
+    }
+
+    fn at(url: Address, read_only: bool) -> Self {
         Self {
             url,
             lease: None,
@@ -526,7 +544,11 @@ impl Session {
     }
 
     fn request(&mut self, operation: Operation, route: &'static str, body: Value) {
-        let url = self.url.clone();
+        let url = self
+            .url
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         self.operations.spawn_blocking(move || {
             let result = viewer::post_local(&url, route, &body).map_err(|error| {
                 // A lost HTTP reply does not prove a mutation was refused.
