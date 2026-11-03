@@ -165,7 +165,7 @@ impl Policy {
             Command::Restart => Self::helper(Inspect, View::Restart, None, Kind::Other),
             Command::StartInput => Self::helper(Inspect, View::StartInput, None, Kind::Other),
             Command::Readiness { .. } => Self::helper(Inspect, View::Readiness, None, Kind::Other),
-            Command::Setup(setup) if setup.apply || setup.rollback => Self {
+            Command::Setup(setup) if setup.apply => Self {
                 work: ServiceChange,
                 ..Self::passive(Agent, Ordinary, View::Generic)
             },

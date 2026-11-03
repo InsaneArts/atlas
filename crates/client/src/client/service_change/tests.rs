@@ -1188,13 +1188,6 @@ async fn input_replacement_and_setup_repairs_refuse_recent_work_before_dispatch(
                 .map(|error| error.code),
             Some(Code::Busy)
         );
-        assert_eq!(
-            crate::setup::migrate::rollback(&config, &client, &ownership)
-                .await
-                .unwrap_err()
-                .code,
-            Code::Busy
-        );
     };
     tokio::time::timeout(Duration::from_secs(1), checked)
         .await

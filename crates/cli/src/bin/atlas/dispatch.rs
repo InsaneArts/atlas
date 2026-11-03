@@ -358,24 +358,20 @@ fn setup_helper(args: &cli::SetupHelper) -> Result<Value> {
     atlas_daemon::helper_setup::run_guarded(serde_json::from_str(&args.request)?, &guard)
 }
 
-/// `atlas setup`: a preview, or a migration applied or rolled back.
+/// `atlas setup`: a preview, or the recorded setup applied.
 async fn setup(
     config: &Path,
     client: &impl Fn() -> Result<Client>,
     args: cli::Setup,
 ) -> Result<Value> {
-    if !args.apply && !args.rollback {
+    if !args.apply {
         return atlas_client::setup::preview(config, args.helper.as_deref()).await;
     }
 
     let client = client()?;
-    // The migration settles only mutations its own log records, and refuses others.
+    // Setup settles only mutations its own log records, and refuses others.
     let ownership = client.service_change(true).await?;
-    if args.apply {
-        atlas_client::setup::migrate::apply(config, &client, &ownership).await
-    } else {
-        atlas_client::setup::migrate::rollback(config, &client, &ownership).await
-    }
+    atlas_client::setup::migrate::apply(config, &client, &ownership).await
 }
 
 fn activity(client: &Client, host: Option<&HostSession>, args: &cli::Activity) -> Result<Value> {

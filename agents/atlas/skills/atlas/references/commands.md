@@ -1783,9 +1783,9 @@ Global options:
 ## atlas setup
 
 ```text
-Inspect or repair the helper's setup (advanced).
+Inspect the helper's setup, or finish it (advanced).
 
-Without flags, report the helper account, configuration, endpoints and services without changing anything. --apply runs Atlas's own signed helper daemon as a managed LaunchAgent on a private socket directory beside the existing capture job, moves input and the configuration over once it is verified, then retires the old job, recording every step so an interruption resumes. --rollback restores the previous job and configuration.
+Without flags, report the helper account, configuration, endpoints and services without changing anything. --apply finishes or re-checks the first setup atlas init started: Atlas's own signed helper daemon runs as a managed LaunchAgent on a private socket directory, and every step is recorded so an interruption resumes.
 
 Usage: atlas setup [OPTIONS]
 
@@ -1794,10 +1794,7 @@ Options:
           Helper account short name. Defaults to the configured helper
 
       --apply
-          Migrate (or resume migrating) to the managed private layout
-
-      --rollback
-          Undo an applied or interrupted migration
+          Finish or re-check the first setup in the managed private layout
 
   -h, --help
           Print help (see a summary with '-h')

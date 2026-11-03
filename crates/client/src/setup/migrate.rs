@@ -52,9 +52,8 @@ struct Plan {
     config_path: PathBuf,
     old_config: String,
     new_config: String,
-    /// A first setup (by `atlas init`), with nothing to roll back to. False
-    /// only in a migration an earlier version of Atlas recorded, which is
-    /// refused.
+    /// A first setup (by `atlas init`). False only in a migration an earlier
+    /// version of Atlas recorded, which is refused.
     fresh: bool,
 }
 
@@ -650,14 +649,16 @@ fn unknown_version(path: &Path) -> Error {
 fn earlier_migration(path: &Path) -> Error {
     problem(format!(
         "The setup record comes from an earlier version of Atlas, which this one cannot \
-         continue or roll back; run atlas uninstall, then atlas init ({})",
+         continue; run atlas uninstall, then atlas init ({})",
         path.display()
     ))
 }
 
+/// The refusal of a rollback left unfinished; only an earlier version of
+/// Atlas rolled setups back.
 fn rollback_unfinished(path: &Path) -> Error {
     problem(format!(
-        "A rollback is unfinished; run setup --rollback to complete it ({})",
+        "A rollback is unfinished; run atlas uninstall, then atlas init ({})",
         path.display()
     ))
 }
@@ -892,30 +893,6 @@ pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Resu
             inspect(&migration.client, &request, migration.account()?).await
         })
         .await
-}
-
-/// Refuse to roll back the recorded setup: a first setup has nothing earlier
-/// to roll back to, and a migration an earlier version of Atlas recorded is
-/// left as it is, with its pending actions.
-///
-/// # Errors
-///
-/// Returns a refusal while the service is in use, the failure to read the
-/// record, or the refusal of the recorded setup.
-pub async fn rollback(
-    config_path: &Path,
-    client: &Client,
-    _ownership: &Ownership,
-) -> Result<Value> {
-    client.require_service_idle().await?;
-    let (path, log) = recorded_log(config_path)?;
-    let log = log.ok_or_else(|| problem("No setup migration is recorded"))?;
-
-    Err(if log.plan.fresh {
-        problem("This was a first setup: there is nothing earlier to roll back to")
-    } else {
-        earlier_migration(&path)
-    })
 }
 
 #[cfg(test)]

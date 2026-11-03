@@ -88,12 +88,12 @@ Start with `atlas doctor --json` and read `nextSteps`. A logged-out helper needs
 When Atlas specifically asks for recovery, `atlas restart` confirms a new hidden helper before clearing an unknown action outcome. Take a screenshot first if the helper can answer, and inspect the result again afterward. Recovery is not a reason to replay the uncertain action. `atlas start-input` starts or resets the input service when that is the reported missing step.
 
 The same active-work check protects `restart`, replacement of a stale input
-service by `start-input`, and service replacement during `init` and setup
-apply or rollback. The app's recovery paths use it too. When you intend to
+service by `start-input`, and service replacement during `init` and
+`setup --apply`. The app's recovery paths use it too. When you intend to
 interrupt active sessions or background jobs, run the needed CLI command with
 `--allow-disrupt`, for example `atlas restart --allow-disrupt`.
 
-For an interrupted setup or a managed-layout repair, `atlas setup` inspects the current state. `atlas setup --apply` applies or resumes the migration; `atlas setup --rollback` restores the previous job and configuration when such a migration has something to restore. Use these advanced operations for the setup issue Atlas reports. Guided first-time setup remains `atlas init` or the app's setup window.
+For an interrupted setup or a managed-layout repair, `atlas setup` inspects the current state. `atlas setup --apply` finishes or re-checks the first setup `atlas init` started. Use these advanced operations for the setup issue Atlas reports. Guided first-time setup remains `atlas init` or the app's setup window.
 
 ## Activity metadata
 
