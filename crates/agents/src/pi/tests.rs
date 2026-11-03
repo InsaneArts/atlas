@@ -49,19 +49,30 @@ fn pi_reads_object_packages_and_preserves_their_exact_removal_source() {
 }
 
 #[test]
-fn pi_distinguishes_old_atlas_bundles_from_unrelated_packages() {
-    let value = json!({"packages": ["/missing/Atlas.app/Contents/Resources/agents/atlas", "/someone/atlas"]});
+fn pi_distinguishes_atlas_bundles_from_unrelated_packages() {
+    let temp = tempfile::tempdir().unwrap();
+    let agents = temp.path().join("Atlas.app/Contents/Resources/agents");
+    fs::create_dir_all(agents.join("atlas/.claude-plugin")).unwrap();
+    fs::write(
+        agents.join("atlas/.claude-plugin/plugin.json"),
+        json!({"name": "atlas", "homepage": super::super::HOMEPAGE}).to_string(),
+    )
+    .unwrap();
+    let bundled = agents.join("atlas");
+    let value = json!({"packages": [
+        bundled,
+        "/missing/Atlas.app/Contents/Resources/agents/atlas",
+        "/someone/atlas",
+    ]});
     let entries = packages_in(&value.to_string(), Path::new("/config")).unwrap();
     assert!(owned(&entries[0]));
-    assert!(!owned(&entries[1]));
+    assert!(!owned(&entries[1]), "a removed app's has no manifest");
+    assert!(!owned(&entries[2]));
     assert_eq!(
         source_of(&entries),
-        Source::Elsewhere("/someone/atlas".into())
+        Source::Elsewhere("/missing/Atlas.app/Contents/Resources/agents/atlas".into())
     );
-    assert_eq!(
-        source_of(&entries[..1]),
-        Source::Folder("/missing/Atlas.app/Contents/Resources/agents".into())
-    );
+    assert_eq!(source_of(&entries[..1]), Source::Folder(agents));
 }
 
 #[test]

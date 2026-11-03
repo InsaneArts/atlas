@@ -122,10 +122,25 @@ fn only_atlas_own_folders_count_as_its_marketplace() {
     .unwrap();
     assert!(!atlas_folder(&someone));
     assert!(!atlas_folder(&dir.path().join("missing")));
+    assert!(
+        !atlas_folder(Path::new(
+            "/Volumes/Old/Atlas.app/Contents/Resources/agents"
+        )),
+        "a removed app's has no manifest to read"
+    );
 
-    assert!(atlas_folder(Path::new(
-        "/Volumes/Old/Atlas.app/Contents/Resources/agents"
-    )));
+    // Another Atlas.app's, by its plugin's manifest; an app without one
+    // is not Atlas's.
+    let other = dir.path().join("Other.app/Contents/Resources/agents");
+    let manifest = other.join("atlas/.codex-plugin");
+    fs::create_dir_all(&manifest).unwrap();
+    assert!(!atlas_folder(&other));
+    fs::write(
+        manifest.join("plugin.json"),
+        format!(r#"{{"name":"atlas","homepage":"{HOMEPAGE}"}}"#),
+    )
+    .unwrap();
+    assert!(atlas_folder(&other));
 }
 
 #[test]
@@ -167,7 +182,14 @@ fn connecting_replaces_only_a_marketplace_of_atlas_own() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("Atlas.app/Contents/Resources/agents");
     fs::create_dir_all(&path).unwrap();
-    let old = Source::Folder("/Volumes/Old/Atlas.app/Contents/Resources/agents".into());
+    let older = dir.path().join("Old/Atlas.app/Contents/Resources/agents");
+    fs::create_dir_all(older.join("atlas/.claude-plugin")).unwrap();
+    fs::write(
+        older.join("atlas/.claude-plugin/plugin.json"),
+        format!(r#"{{"name":"atlas","homepage":"{HOMEPAGE}"}}"#),
+    )
+    .unwrap();
+    let old = Source::Folder(older);
     let remove = argv(&["plugin", "marketplace", "remove", "atlas"]);
 
     for agent in [Agent::Claude, Agent::Codex] {
@@ -179,7 +201,6 @@ fn connecting_replaces_only_a_marketplace_of_atlas_own() {
             );
         }
 
-        // There, so not judged by the agent's own copy of the plugin.
         fs::create_dir_all(dir.path().join("someone")).unwrap();
         let someone = Source::Folder(dir.path().join("someone"));
         let error = agent.connecting(&path, Some(&someone)).unwrap_err();
@@ -272,43 +293,6 @@ fn codex_settings_say_where_its_atlas_marketplace_comes_from() {
         codex_recorded(dir.path()),
         Some(Source::Folder("/a/agents".into()))
     );
-}
-
-/// A marketplace folder since removed is Atlas's when it was inside an
-/// app, or when the agent's own copy of the plugin is Atlas's.
-#[test]
-fn a_removed_folder_is_atlas_own_by_its_shape_or_the_agents_copy() {
-    let dir = tempfile::tempdir().unwrap();
-    let gone = dir.path().join("Atlas 2.app/Contents/Resources/agents");
-    assert!(atlas_folder(&gone), "any app's, once removed");
-    assert!(!atlas_folder(&dir.path().join("checkout/agents")));
-
-    // An app that is there counts only when it is Atlas.
-    let other = dir.path().join("Other.app");
-    fs::create_dir_all(other.join("Contents/Resources/agents")).unwrap();
-    fs::write(
-        other.join("Contents/Info.plist"),
-        "<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>com.example.other</string>\n</dict>",
-    )
-    .unwrap();
-    assert!(!atlas_folder(&other.join("Contents/Resources/agents")));
-    fs::write(
-        other.join("Contents/Info.plist"),
-        "<dict>\n\t<key>CFBundleIdentifier</key>\n\t<string>com.insanearts.atlas</string>\n</dict>",
-    )
-    .unwrap();
-    assert!(atlas_folder(&other.join("Contents/Resources/agents")));
-
-    // The copy an agent keeps when installing the plugin.
-    let copy = dir.path().join("cache/1.0/.codex-plugin");
-    fs::create_dir_all(&copy).unwrap();
-    assert!(!atlas_plugin(&dir.path().join("cache/1.0")));
-    fs::write(
-        copy.join("plugin.json"),
-        format!(r#"{{"name":"atlas","homepage":"{HOMEPAGE}"}}"#),
-    )
-    .unwrap();
-    assert!(atlas_plugin(&dir.path().join("cache/1.0")));
 }
 
 /// The plugin's manifests describe this version, and its skill and

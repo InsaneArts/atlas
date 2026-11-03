@@ -52,7 +52,7 @@ fn problem(message: impl Into<String>) -> Error {
 /// Catalog membership and settings discovery are one declaration; each
 /// agent's name and display name are its [`Host`]'s.
 macro_rules! agents {
-    ($($agent:ident => ($home:expr, $restart:expr)),+ $(,)?) => {
+    ($($agent:ident => $restart:expr),+ $(,)?) => {
         /// The agents Atlas can connect, and their command-line tools.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Agent { $($agent),+ }
@@ -65,7 +65,6 @@ macro_rules! agents {
                 match self { $(Self::$agent => Metadata {
                     name: Host::$agent.as_str(),
                     display: Host::$agent.label(),
-                    home: $home,
                     restart: $restart,
                 }),+ }
             }
@@ -74,11 +73,11 @@ macro_rules! agents {
 }
 
 agents! {
-    Claude => (|| configured_home("CLAUDE_CONFIG_DIR", ".claude"), None),
-    Codex => (|| configured_home("CODEX_HOME", ".codex"), None),
-    Opencode => (opencode::home, Some("Restart opencode for this change to take effect.")),
-    Pi => (pi::home, None),
-    Cursor => (|| cursor::home().ok(), Some("Reload the Cursor window or start a new Cursor Agent session for this change to take effect.")),
+    Claude => None,
+    Codex => None,
+    Opencode => Some("Restart opencode for this change to take effect."),
+    Pi => None,
+    Cursor => Some("Reload the Cursor window or start a new Cursor Agent session for this change to take effect."),
 }
 
 impl Agent {
@@ -125,7 +124,7 @@ impl Agent {
 
         match source {
             Some(Source::Folder(folder)) if same_place(folder, marketplace) => {}
-            Some(Source::Folder(folder)) if self.ours(folder) => match self {
+            Some(Source::Folder(folder)) if atlas_folder(folder) => match self {
                 Agent::Codex => steps.push(argv(&["plugin", "marketplace", "remove", NAME])),
                 Agent::Claude | Agent::Pi | Agent::Opencode | Agent::Cursor => {}
             },
@@ -160,37 +159,6 @@ impl Agent {
             "{}'s marketplaces could not be read",
             self.display_name()
         ))
-    }
-
-    /// Whether `folder`, where its marketplace named atlas comes from, is
-    /// Atlas's own: a folder of Atlas's, or one since removed whose plugin
-    /// this agent keeps a copy of that is Atlas's.
-    fn ours(self, folder: &Path) -> bool {
-        atlas_folder(folder) || (matches!(folder.try_exists(), Ok(false)) && self.keeps_atlas())
-    }
-
-    /// Whether this agent's copy of the plugin named atlas (agents copy a
-    /// plugin when installing it) is Atlas's.
-    fn keeps_atlas(self) -> bool {
-        match self {
-            Self::Pi | Self::Opencode | Self::Cursor => return false,
-            Self::Claude | Self::Codex => {}
-        }
-        let Some(home) = self.home() else {
-            return false;
-        };
-
-        fs::read_dir(home.join("plugins/cache").join(NAME).join(NAME))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .any(|version| atlas_plugin(&version.path()))
-    }
-
-    /// The folder this agent keeps its settings in, as its tool finds it
-    /// with Atlas's environment.
-    fn home(self) -> Option<PathBuf> {
-        (self.metadata().home)()
     }
 
     /// The argv that disconnect it.
@@ -313,7 +281,7 @@ impl Agent {
         let recorded = match self {
             Self::Opencode => return opencode::source().map(Some),
             Self::Pi => return pi::source().map(Some),
-            Self::Codex => self.home().and_then(|home| codex_recorded(&home)),
+            Self::Codex => codex_home().and_then(|home| codex_recorded(&home)),
             Self::Claude | Self::Cursor => None,
         };
 
@@ -368,15 +336,16 @@ impl Agent {
 pub struct Metadata {
     name: &'static str,
     display: &'static str,
-    home: fn() -> Option<PathBuf>,
     pub restart: Option<&'static str>,
 }
 
-fn configured_home(variable: &str, folder: &str) -> Option<PathBuf> {
-    std::env::var_os(variable)
+/// The folder Codex keeps its settings in, as its tool finds it with
+/// Atlas's environment.
+fn codex_home() -> Option<PathBuf> {
+    std::env::var_os("CODEX_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(folder)))
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
 }
 
 /// Where an agent's marketplace named atlas comes from.
@@ -408,26 +377,11 @@ fn this_atlas(folder: &Path) -> bool {
     }
 }
 
-/// Whether `folder` is a marketplace of Atlas's own: this Atlas's, one
-/// inside an app that is Atlas (or inside any app, once removed), or one
-/// whose plugin manifest gives Atlas's homepage, such as a checkout's.
+/// Whether `folder` is a marketplace of Atlas's own: this Atlas's, or one
+/// whose plugin manifest gives Atlas's homepage, such as another Atlas.app's
+/// or a checkout's.
 fn atlas_folder(folder: &Path) -> bool {
-    if marketplace().is_ok_and(|ours| same_place(folder, &ours)) {
-        return true;
-    }
-
-    let app = folder
-        .ancestors()
-        .nth(3)
-        .filter(|app| app.extension().is_some_and(|extension| extension == "app"))
-        .filter(|_| folder.ends_with("Contents/Resources/agents"));
-    if let Some(app) = app
-        && (matches!(folder.try_exists(), Ok(false)) || atlas_bundle(app))
-    {
-        return true;
-    }
-
-    atlas_plugin(&folder.join(NAME))
+    marketplace().is_ok_and(|ours| same_place(folder, &ours)) || atlas_plugin(&folder.join(NAME))
 }
 
 /// Whether `plugin` is Atlas's plugin: a manifest of it gives Atlas's homepage.
@@ -437,19 +391,6 @@ fn atlas_plugin(plugin: &Path) -> bool {
         .filter_map(|manifest| fs::read(plugin.join(manifest)).ok())
         .filter_map(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .any(|manifest| manifest["name"] == NAME && manifest["homepage"] == HOMEPAGE)
-}
-
-/// Whether the app bundle at `app` is Atlas, by its bundle identifier.
-fn atlas_bundle(app: &Path) -> bool {
-    let Ok(info) = fs::read_to_string(app.join("Contents/Info.plist")) else {
-        return false;
-    };
-
-    info.split("<key>CFBundleIdentifier</key>")
-        .nth(1)
-        .and_then(|rest| rest.trim_start().strip_prefix("<string>"))
-        .and_then(|rest| rest.split("</string>").next())
-        == Some(atlas_core::app_bundle::IDENTIFIER)
 }
 
 /// Where Codex's marketplace named atlas comes from, as the settings in
@@ -825,7 +766,7 @@ enum Removal {
 /// plugin must be gone.
 fn disconnect_agent(agent: Agent, source: Result<Option<Source>>) -> Result<Removal> {
     match source? {
-        Some(Source::Folder(folder)) if agent.ours(&folder) => {}
+        Some(Source::Folder(folder)) if atlas_folder(&folder) => {}
         Some(Source::Folder(folder)) => return Ok(Removal::Kept(folder.display().to_string())),
         Some(Source::Elsewhere(place)) => return Ok(Removal::Kept(place)),
         Some(Source::Absent) => return Ok(Removal::Nothing),
