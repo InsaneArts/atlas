@@ -218,8 +218,9 @@ pub(super) enum Command {
     /// though the app may move focus itself. check, uncheck, expand and
     /// collapse send nothing (performed: 0) when it already is so. verification says whether
     /// it reads as asked afterwards: matched, mismatch or not-checked (a press
-    /// is never checked). An action the element does not support, and a
-    /// password field's value, are refused. No app is launched.
+    /// is never checked). An element of a web page, an action the element
+    /// does not support, and a password field's value are refused: click and
+    /// type in a web page. No app is launched.
     Element(Element),
     /// Print the guide agents read to use Atlas (all of it by default).
     #[command(group(clap::ArgGroup::new("part").args(["skill", "commands", "errors"])))]

@@ -579,7 +579,7 @@ Examples:
 ```text
 Act on an element from atlas elements through Accessibility.
 
-Does ACTION to the element --ref names, found again and proven the same first. No pointer or key event is sent and nothing takes focus, though the app may move focus itself. check, uncheck, expand and collapse send nothing (performed: 0) when it already is so. verification says whether it reads as asked afterwards: matched, mismatch or not-checked (a press is never checked). An action the element does not support, and a password field's value, are refused. No app is launched.
+Does ACTION to the element --ref names, found again and proven the same first. No pointer or key event is sent and nothing takes focus, though the app may move focus itself. check, uncheck, expand and collapse send nothing (performed: 0) when it already is so. verification says whether it reads as asked afterwards: matched, mismatch or not-checked (a press is never checked). An element of a web page, an action the element does not support, and a password field's value are refused: click and type in a web page. No app is launched.
 
 Usage: atlas element [OPTIONS] --ref <LOOK.INDEX> <ACTION>
 

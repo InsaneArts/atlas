@@ -47,7 +47,7 @@ What `windows` lists was open before you: leave it. Touch only windows you
 opened, and never run `atlas close --all`: it quits every app. Do not start
 with a screenshot.
 
-Where your host shows Atlas's view (the Claude and Codex apps, Cursor), call
+Where your host shows Atlas's view (Claude and Codex apps, Cursor), call
 `show_screen` once before visible work, unasked; elsewhere `atlas monitor`
 opens it. When the person asks to watch or take control, open it and leave
 the helper alone. Never call Stop, Resume, Take Control or Give Back.
@@ -58,11 +58,11 @@ Before testing your own build, read Test your own app; before copying files
 in, read Give the app what it needs.
 
 Open with `atlas open --app NAME [FILE|URL]` or `atlas open /path/App.app`,
-then `atlas wait --app NAME`. Act on a listed element (its `look` and
-`index`) by `atlas element press --ref LOOK.INDEX` (or `set-value --value T`,
-`check`, `pick --option`, `expand`, their opposites): no pointer or focus.
-Else click it by `atlas click --app A --ref LOOK.INDEX` or
-`--name LABEL [--role ROLE]`, which lists `candidates` unless one matches.
+then `atlas wait --app NAME`. Act on a listed app control (not in a web
+page) by `atlas element press --ref LOOK.INDEX` (its `look` and `index`; or
+`set-value --value T`, `check`, `pick --option`, `expand`, their opposites):
+no pointer or focus. Else click it by `atlas click --app A --ref LOOK.INDEX`
+or `--name LABEL [--role ROLE]`, which lists `candidates` unless one matches.
 Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
 `atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
@@ -71,8 +71,8 @@ Untargeted points use the top window from your last look.
 `--app` bypasses this memory; in a shared app, add `--window N`:
 `atlas click --app A --window N X Y`.
 
-`atlas run -- PROGRAM ARGS` runs a command as the helper; its result is
-`exitCode`. Use `--timeout` up to 600, not `&`, and never send keys or clicks
+`atlas run -- PROGRAM ARGS` runs a command as the helper (result:
+`exitCode`). Use `--timeout` up to 600, not `&`, and never send keys or clicks
 from it (`osascript`, `cliclick`). For a server that must keep running,
 use `atlas job start -- PROGRAM ARGS`.
 
@@ -123,7 +123,7 @@ Never reopen a screenshot you read or one marked `unchanged: true`.
 - `session-changed`, `stale-frame` or `lease-lost`: the helper changed.
   Look again before acting.
 - `cancelled`: the person stopped your input (`partial: true`: some landed).
-  Look, then ask before trying again.
+  Look, then ask before retrying.
 - Anything else: read `error` and `next`, then the error reference.
 
 ## Clean up
