@@ -4,6 +4,7 @@
 //! a vanished request or reply cannot acknowledge an unknown outcome.
 use super::{
     accessibility_trusted,
+    ax::Looks,
     events::Engine,
     lease::{Gate, Grant, Who, busy},
     session_info,
@@ -43,22 +44,25 @@ use request::Request;
 const MAX_REQUEST: usize = 64 * 1024;
 
 /// What this service can do beyond plain input, as its hello lists it:
-/// authenticated shutdown, the person's Stop, and checking an agent's
-/// target app, with the Dock covering where it takes clicks, and the window
-/// and field it names.
-const CAPABILITIES: [&str; 6] = [
+/// authenticated shutdown, the person's Stop, checking an agent's target
+/// app, with the Dock covering where it takes clicks, and the window and
+/// field it names, and reading an app's elements as looks a click can name.
+const CAPABILITIES: [&str; 7] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,
     atlas_core::session::FOCUS_DOCK,
     atlas_core::session::FOCUS_WINDOW,
     atlas_core::session::FOCUS_FIELD,
+    atlas_core::session::LOOKS,
 ];
 
 struct Service {
     engine: Arc<Mutex<Engine>>,
     operations: Operations,
     gate: Arc<Gate>,
+    /// Shared with the engine, which finds referenced elements in them.
+    looks: Arc<Looks>,
     /// Shared with recovery's engine work, which rebinds both together.
     epoch: Arc<RwLock<InputEpoch>>,
     /// SHA-256 of the executable this process started from. Hashed once at
@@ -116,6 +120,12 @@ impl Service {
 
     fn check(&self) -> Result<()> {
         self.operations.check()?;
+        self.check_session()
+    }
+
+    /// Whether this service's hidden session, display and Accessibility
+    /// permission are still the ones it enforces.
+    fn check_session(&self) -> Result<()> {
         if InputEpoch::from_proof(&session_info()?, std::process::id())? != self.epoch()?
             || !accessibility_trusted()
         {
@@ -134,7 +144,9 @@ impl Service {
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         // Stop, release, recovery and shutdown keep working after session or
-        // permission loss, so only control and its uses need both intact.
+        // permission loss, so only control and its uses need both intact. A
+        // look checks its epoch before its session, as input does, and goes
+        // on during a Stop or the person's control: it sends nothing.
         match &request {
             Request::Renew { .. }
             | Request::Unknown { .. }
@@ -144,7 +156,8 @@ impl Service {
             | Request::Shutdown { .. }
             | Request::Hold { .. }
             | Request::Release { .. }
-            | Request::Reset { .. } => {}
+            | Request::Reset { .. }
+            | Request::Elements { .. } => {}
         }
 
         match request {
@@ -163,7 +176,44 @@ impl Service {
                 expect,
                 app,
             } => self.input(owner, epoch, actions, expect, app, phase).await,
+            Request::Elements { epoch, expect } => self.look(epoch, expect).await,
         }
+    }
+
+    /// One look at the elements of the app `expect` names, kept so that a
+    /// reference names one of its objects alone. It grants nothing: a click
+    /// finds its element again under its own control and checks.
+    async fn look(
+        &self,
+        expected: Result<InputEpoch>,
+        expect: Result<Option<Expect>>,
+    ) -> Result<Value> {
+        let epoch = self.check_epoch(expected?)?;
+        self.check_session()?;
+        let expect =
+            expect?.ok_or_else(|| Error::new(Code::Input, "A look names the app it reads"))?;
+        let read = tokio::task::spawn_blocking(move || super::ax::read(&expect))
+            .await
+            .map_err(|cause| {
+                Error::new(Code::Elements, "The accessibility read did not finish")
+                    .with_source(cause)
+            })??;
+
+        // A session or display that changed while the app was read keeps
+        // nothing of it.
+        self.check_epoch(epoch.clone())?;
+        self.check_session()?;
+        let (look, snapshot) = self
+            .looks
+            .keep(epoch, read, std::time::Instant::now())?;
+        Ok(json!({
+            "ok": true,
+            "look": look.to_string(),
+            "elements": snapshot.elements,
+            "truncated": snapshot.incomplete,
+            "reasons": snapshot.stops,
+            "errors": snapshot.errors,
+        }))
     }
 
     async fn hello(&self) -> Result<Value> {
@@ -358,7 +408,7 @@ impl Service {
         )?;
         let count = actions.len();
         let expect = expect?;
-        agent_target(&self.gate, expect.as_ref())?;
+        agent_target(&self.gate, expect.as_ref(), &actions)?;
         phase.send_replace(ConnectionPhase::Mutation("input"));
         let mut cancellation = Cancellation {
             gate: self.gate.clone(),
@@ -493,8 +543,14 @@ fn hold(
     Ok(json!({ "ok": true, "held": on, "kept": kept.is_ok() }))
 }
 
-fn agent_target(gate: &Gate, expect: Option<&Expect>) -> Result<()> {
-    if expect.is_some() && gate.holder()? == Some(Holder::Person) {
+/// Refuse the person's input that names an agent's target: an expectation,
+/// or a referenced element, which brings its own.
+fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Result<()> {
+    let named = expect.is_some()
+        || actions
+            .iter()
+            .any(|action| matches!(action, Action::Reference { .. }));
+    if named && gate.holder()? == Some(Holder::Person) {
         return Err(Error::new(
             Code::Input,
             "The person's input cannot name an agent target",
@@ -557,6 +613,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         build: build.flatten(),
         executable,
         stopping: tokio::sync::Notify::new(),
+        looks: engine.looks.clone(),
         epoch: Arc::new(RwLock::new(engine.epoch.clone())),
         engine: Arc::new(Mutex::new(engine)),
         operations: Operations::default(),
@@ -731,7 +788,7 @@ async fn handle(
     };
 
     let (initial, owner, shutdown) = match &request {
-        Request::Hello => (ConnectionPhase::Read, None, false),
+        Request::Hello | Request::Elements { .. } => (ConnectionPhase::Read, None, false),
         Request::Shutdown { .. } => (ConnectionPhase::Refusal, None, true),
         Request::Input { owner, .. } => (ConnectionPhase::Refusal, Some(owner.clone()), false),
         Request::Hold { .. }

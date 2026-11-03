@@ -16,7 +16,7 @@ const FOCUSED_APPLICATION: &str = "AXFocusedApplication";
 /// The process of the application with keyboard focus in this login, as
 /// Accessibility reports it; None when no application has it. Waits at most
 /// `timeout`. This sets the calling process's messaging timeout, which the
-/// input service uses for nothing else.
+/// input service's element reads also set before their own reads.
 pub(in crate::native) fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     let unreadable = || Error::new(Code::Native, "The focused app could not be read");
     let failed = |call, status| unreadable().with_source(Asked { call, status });

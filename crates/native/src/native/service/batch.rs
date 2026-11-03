@@ -1,10 +1,17 @@
-//! Ordered batch execution, focus budget and failure settlement.
+//! Ordered batch execution, referenced elements found again, focus budget
+//! and failure settlement.
 use super::{Engine, Gate, worker_failed};
-use crate::native::focus::{self, Need};
+use crate::native::{
+    ax::{self, Resolved},
+    focus::{self, Need},
+};
 use atlas_core::{
     actions::{Action, Expect},
     error::{Code, Error, Result},
-    screen::geometry::Bounds,
+    screen::{
+        elements::{Reference, stale},
+        geometry::Bounds,
+    },
 };
 use serde_json::{Value, json};
 use std::{
@@ -29,6 +36,9 @@ pub(super) trait Perform {
         budget: Duration,
         prepare: bool,
     ) -> Result<Option<&'static str>>;
+    /// Find the element `reference` names again, before anything is checked
+    /// or posted: where to click it now and what that click must reach.
+    async fn resolve(&mut self, reference: Reference) -> Result<Resolved>;
     /// Carry out one action through posted events or a Dock AXPress.
     async fn perform(&mut self, action: Action) -> Result<()>;
     /// Events posted or AX presses acknowledged so far.
@@ -73,6 +83,37 @@ impl Perform for Engine {
             },
         )
         .await
+    }
+
+    /// The app is read again on a blocking thread under the same guards as
+    /// a check; the engine stays locked meanwhile. A batch named for an app
+    /// finds references only in it, and one that was not keeps the found
+    /// app as its target through its last post.
+    async fn resolve(&mut self, reference: Reference) -> Result<Resolved> {
+        self.check()?;
+        let looks = self.looks.clone();
+        let epoch = self.epoch.clone();
+        let named = self.target;
+        let guard = self.preparation_guard();
+        let resolved = checked_preparation(
+            move || {
+                guard()?;
+                ax::resolve(&looks, reference, &epoch, named)
+            },
+            || {
+                self.check().and_then(|()| {
+                    drop(self.grant.as_ref().ok_or_else(worker_failed)?.authorize()?);
+                    Ok(())
+                })
+            },
+        )
+        .await?;
+        let found = resolved
+            .expect
+            .instance()
+            .ok_or_else(|| stale("That look names no process"))?;
+        self.target = Some(found);
+        Ok(resolved)
     }
 
     async fn perform(&mut self, action: Action) -> Result<()> {
@@ -120,10 +161,11 @@ pub(super) async fn checked_preparation<T: Send + 'static>(
 /// Carry out `actions` in order on `engine`, which the caller holds
 /// locked, each checked against `expect` just before it starts: a key
 /// after the batch's first against the app alone, since an earlier key
-/// (tab, return, cmd+w) may move the window or field on purpose. On the
-/// first failure, revoke `gate`, release what is held and return the
-/// [`Failure`]. Once all are done, the role of the field `expect` names, when
-/// every check of it found the same.
+/// (tab, return, cmd+w) may move the window or field on purpose, and a
+/// referenced click against what its element, found again first, must
+/// reach. On the first failure, revoke `gate`, release what is held and
+/// return the [`Failure`]. Once all are done, the role of the field
+/// `expect` names, when every check of it found the same.
 pub(super) async fn run(
     engine: &mut impl Perform,
     gate: &Gate,
@@ -145,30 +187,21 @@ pub(super) async fn run(
             | Action::Drag { .. }
             | Action::Scroll { .. }
             | Action::Type { .. }
-            | Action::Wait { .. } => false,
+            | Action::Wait { .. }
+            | Action::Reference { .. } => false,
         };
         let continuation = key && pressed;
         let expected = if continuation { later.as_ref() } else { expect };
         pressed |= key;
-        let checked = match expected {
-            Some(expected) => {
-                let prepare = !continuation && !engine.held_input();
-                require_within(engine, expected, action.target(), &mut budget, prepare).await
-            }
-            None => Ok(None),
-        };
-        let step = match checked {
-            Ok(role) => {
-                roles.extend(role);
-                engine.perform(action).await
-            }
-            Err(error) => Err(error),
-        };
+        let prepare = !continuation && !engine.held_input();
 
-        if let Err(error) = step {
-            // Only a poisoned gate fails this, and that refuses every later grant.
-            let _ = gate.revoke();
-            return Err(Box::new(failed(engine, error, performed, before)));
+        match step(engine, action, expected, prepare, &mut budget).await {
+            Ok(role) => roles.extend(role),
+            Err(error) => {
+                // Only a poisoned gate fails this, and that refuses every later grant.
+                let _ = gate.revoke();
+                return Err(Box::new(failed(engine, error, performed, before)));
+            }
         }
     }
 
@@ -177,6 +210,47 @@ pub(super) async fn run(
         (Some(role), None) => Some(role),
         _ => None,
     })
+}
+
+/// One action of a batch, checked against `expected` (when it names an app)
+/// and carried out: a referenced click is found again first and is then
+/// checked against what its own element must reach. Once done, the role of
+/// the field the check named, when it named one.
+async fn step(
+    engine: &mut impl Perform,
+    action: Action,
+    expected: Option<&Expect>,
+    prepare: bool,
+    budget: &mut Duration,
+) -> Result<Option<&'static str>> {
+    let (action, found) = match action {
+        Action::Reference {
+            reference,
+            button,
+            count,
+            modifiers,
+        } => {
+            let Resolved { x, y, expect } = engine.resolve(reference).await?;
+            let click = Action::Click {
+                x,
+                y,
+                button,
+                count,
+                modifiers,
+            };
+            (click, Some(expect))
+        }
+        action => (action, None),
+    };
+
+    let role = match found.as_ref().or(expected) {
+        Some(expected) => {
+            require_within(engine, expected, action.target(), budget, prepare).await?
+        }
+        None => None,
+    };
+    engine.perform(action).await?;
+    Ok(role)
 }
 
 /// [`Perform::require`], spending what it takes of `budget`: the time one

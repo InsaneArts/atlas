@@ -1,6 +1,7 @@
 //! The depth-first read of one app's elements: where it starts (the app's
 //! windows, its menu bar titles and the menus it has open), the walk down
-//! from there, and what each element met on the way reports.
+//! from there, what each element met on the way reports, and the object
+//! each one is with the element it was reached from.
 use super::{
     absent,
     batch::{Batch, Source},
@@ -28,12 +29,14 @@ use std::{
 const MENU_BAR_ITEMS: usize = 64;
 
 /// An element waiting to be read: how deep it sits, the frame of the
-/// window or open menu it belongs to, and whether it is in an open menu.
+/// window or open menu it belongs to, whether it is in an open menu, and
+/// the index of the element it was reached from.
 struct Visit {
     element: CFRetained<AXUIElement>,
     depth: usize,
     window: Option<Bounds>,
     menu: bool,
+    parent: Option<usize>,
 }
 
 impl Visit {
@@ -44,8 +47,23 @@ impl Visit {
             depth: 0,
             window: frame,
             menu,
+            parent: None,
         }
     }
+}
+
+/// The object an element of a snapshot is, and the index of the element it
+/// was reached from (none where the walk started).
+pub(super) struct Traced {
+    pub(super) object: CFRetained<AXUIElement>,
+    pub(super) parent: Option<usize>,
+}
+
+/// One traversal's snapshot and, beside each of its elements by index, the
+/// object it is.
+pub(super) struct Observed {
+    pub(super) snapshot: Snapshot,
+    pub(super) objects: Vec<Traced>,
 }
 
 /// Depth-first elements of `pid`'s windows, its menu bar titles when it is
@@ -57,6 +75,17 @@ impl Visit {
 /// Rejects an invalid process and returns accessibility-observation failures. Incomplete
 /// scans retain their truncation reasons instead of claiming complete coverage.
 pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
+    observe(pid, limits, None).map(|observed| observed.snapshot)
+}
+
+/// [`elements`] with the object each element is, ending the walk once it
+/// meets `until`: what was read on the way there is all that tells that
+/// element and the elements it was reached from.
+pub(super) fn observe(
+    pid: i32,
+    limits: Limits,
+    until: Option<&AXUIElement>,
+) -> Result<Observed> {
     // The system-wide element sets this process's global messaging timeout,
     // which covers every read below.
     if let Some(system) = ffi::system_wide() {
@@ -109,13 +138,14 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     };
     menu_bar(&mut scan, &app, &mut roots);
     open_menus(&mut scan, &app, pid, &mut roots, &mut unvisited, &listed);
-    let found = walk(
+    let (found, objects) = walk(
         &mut scan,
         roots,
         limits,
         &mut unvisited,
         &listed,
         i64::from(pid),
+        until,
     );
 
     if !unvisited.is_empty() {
@@ -125,11 +155,14 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
     // A request that started before the deadline may have ended after it.
     scan.open();
 
-    Ok(Snapshot {
-        elements: found,
-        incomplete: scan.incomplete,
-        stops: scan.stops,
-        errors: scan.errors,
+    Ok(Observed {
+        snapshot: Snapshot {
+            elements: found,
+            incomplete: scan.incomplete,
+            stops: scan.stops,
+            errors: scan.errors,
+        },
+        objects,
     })
 }
 
@@ -208,7 +241,8 @@ fn open_menus(
     }
 }
 
-/// Every element under `roots`, depth first, within `limits`. Each element
+/// Every element of app `pid` under `roots`, depth first, within `limits`,
+/// and the object each is, up to `until` once it is met. Each element
 /// reached is struck from `unvisited`.
 fn walk(
     scan: &mut Scan,
@@ -217,13 +251,15 @@ fn walk(
     unvisited: &mut Vec<CFRetained<AXUIElement>>,
     listed: &[windows::Window],
     pid: i64,
-) -> Vec<Element> {
+    until: Option<&AXUIElement>,
+) -> (Vec<Element>, Vec<Traced>) {
     let open_menus: Vec<Bounds> = roots
         .iter()
         .filter(|root| root.menu)
         .filter_map(|root| root.window.clone())
         .collect();
     let mut found = Vec::new();
+    let mut objects = Vec::new();
     let mut stack: Vec<Visit> = roots.into_iter().rev().collect();
     // Each element is read once: an app can list an element under itself
     // (TextEdit lists its own application element as a child), and without
@@ -263,7 +299,15 @@ fn walk(
         };
         let window = element.window.clone();
         let bar_title = element.role.as_deref() == Some("AXMenuBarItem");
+        let index = found.len();
         found.push(element);
+        objects.push(Traced {
+            object: visit.element.clone(),
+            parent: visit.parent,
+        });
+        if until.is_some_and(|until| *until == *visit.element) {
+            break;
+        }
 
         // The menu under a menu bar title is closed, or read as a window of
         // its own above: nothing in it is on screen here.
@@ -291,11 +335,12 @@ fn walk(
                 depth: visit.depth + 1,
                 window: window.clone(),
                 menu: visit.menu,
+                parent: Some(index),
             });
         }
     }
 
-    found
+    (found, objects)
 }
 
 /// What the element in `visit` reports, the `index`th found, its

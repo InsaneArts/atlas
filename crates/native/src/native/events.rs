@@ -1,5 +1,6 @@
 //! CoreGraphics input belongs to one private event source in the helper session.
 use super::{
+    ax::Looks,
     journal::{self, Held, Journal},
     lease::Grant,
 };
@@ -19,6 +20,7 @@ use objc2_core_graphics::{
 };
 use std::{
     path::PathBuf,
+    sync::Arc,
     time::{Duration, Instant},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -122,6 +124,8 @@ pub(super) struct Engine {
     pub(super) grant: Option<Grant>,
     /// The process resolved for this request, retained through the last post.
     pub(super) target: Option<atlas_core::process::Instance>,
+    /// The looks the service keeps, where a referenced click finds its element.
+    pub(super) looks: Arc<Looks>,
     journal: Option<Journal>,
     journal_dirty: bool,
     /// Events posted or AX presses acknowledged so far: distinguishes input
@@ -165,6 +169,7 @@ impl Engine {
             epoch,
             grant: None,
             target: None,
+            looks: Arc::default(),
             journal: None,
             journal_dirty: false,
             posted: 0,
@@ -738,6 +743,14 @@ impl Engine {
                 self.key(code, flags, None)?;
             }
             Action::Wait { ms } => self.delay(Duration::from_millis(ms.into())).await?,
+            // A batch finds a referenced element again and clicks it as a
+            // click; one that reaches here was never found, so nothing posts.
+            Action::Reference { .. } => {
+                return Err(Error::new(
+                    Code::Input,
+                    "A referenced element must be found again before it is clicked",
+                ));
+            }
         }
 
         Ok(())
