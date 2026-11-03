@@ -1350,7 +1350,12 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
     let operations = super::Operations::default();
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+    // The current controller's lease outlasts any delay in running the test,
+    // so only a refusal could end it.
+    let lasting = Duration::from_secs(60 * 60);
+    let grant = gate
+        .acquire_lasting(&owner, super::Who::Agent, lasting)
+        .unwrap();
     for operation in ["release", "renew", "input"] {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         client
@@ -1359,9 +1364,10 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
             )
             .await
             .unwrap();
-        drop(client);
         let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
         let refused = gate.clone();
+        let (decided, deciding) = tokio::sync::oneshot::channel();
+        let (left, leaving) = tokio::sync::oneshot::channel::<()>();
         let mut tasks = super::JoinSet::new();
         let task = tasks.spawn(async move {
             let _phase = phase;
@@ -1374,6 +1380,9 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
             };
             assert_eq!(refusal.code, Code::LeaseLost);
             assert!(!refusal.uncertain);
+            // The refusal is answered only once its client has gone.
+            decided.send(()).unwrap();
+            leaving.await.unwrap();
             super::reply(&mut server, Err(refusal)).await
         });
         operations
@@ -1381,13 +1390,16 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
             .lock()
             .unwrap()
             .insert(task.id(), (observed, false));
+        deciding.await.expect("the request was read and refused");
+        drop(client);
+        left.send(()).unwrap();
         let outcome = tasks.join_next_with_id().await.unwrap();
         assert!(matches!(outcome, Ok((_, Err(_)))));
         super::connection_outcome(outcome, &operations, false).unwrap();
         operations.check().unwrap();
         assert!(gate.active().unwrap());
         drop(grant.authorize().unwrap());
-        gate.renew(&owner).unwrap();
+        gate.renew_lasting(&owner, lasting).unwrap();
     }
     operations.drain().await.unwrap();
 }
