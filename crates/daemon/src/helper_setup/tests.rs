@@ -115,12 +115,6 @@ fn every_worker_request_without_an_identity_refuses_before_dispatch() {
             uid,
             labels: vec![LABEL.into()],
         },
-        Request::CheckRetire {
-            uid,
-            label: "old".into(),
-            sha256: "a".repeat(64),
-            missing_ok: false,
-        },
     ] {
         for logged_out in [false, true] {
             let guard = Guard {
@@ -507,7 +501,7 @@ fn sandbox() -> (tempfile::TempDir, Layout, String) {
 }
 
 #[test]
-fn retirement_preflight_and_retire_share_the_same_definition_and_backup_rules() {
+fn retirement_checks_the_definition_and_backup_before_changing_anything() {
     let dir = tempfile::tempdir().unwrap();
     let layout = Layout::new(60001, dir.path().into());
     let label = "old.helper";

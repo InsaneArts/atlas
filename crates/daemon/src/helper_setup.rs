@@ -81,15 +81,8 @@ pub enum Request {
     Install { agent: Agent },
     /// Unload a label whose plist has the expected hash and back the plist up.
     /// `missing_ok` accepts a label with no job, plist or backup at all; only
-    /// cleanup of an artifact this migration may never have created sets it.
+    /// cleanup of an artifact setup may never have created sets it.
     Retire {
-        uid: u32,
-        label: String,
-        sha256: String,
-        missing_ok: bool,
-    },
-    /// Validate retirement's prerequisites without changing anything.
-    CheckRetire {
         uid: u32,
         label: String,
         sha256: String,
@@ -117,7 +110,6 @@ impl Request {
             Self::Inspect { uid, .. }
             | Self::Prepare { uid, .. }
             | Self::Retire { uid, .. }
-            | Self::CheckRetire { uid, .. }
             | Self::Restore { uid, .. }
             | Self::FirstLogin { uid, .. }
             | Self::ForgetOpener { uid }
@@ -133,7 +125,6 @@ impl Request {
             Self::Prepare { .. }
             | Self::Install { .. }
             | Self::Retire { .. }
-            | Self::CheckRetire { .. }
             | Self::Restore { .. }
             | Self::FirstLogin { .. }
             | Self::ForgetOpener { .. }
@@ -149,7 +140,6 @@ impl Request {
             | Self::Prepare { .. }
             | Self::Install { .. }
             | Self::Retire { .. }
-            | Self::CheckRetire { .. }
             | Self::Restore { .. }
             | Self::ForgetOpener { .. }
             | Self::Kickstart { .. } => true,
@@ -497,12 +487,6 @@ fn execute(request: Request, layout: &Layout) -> Result<Value> {
             missing_ok,
             ..
         } => retire(layout, &label, &sha256, missing_ok),
-        Request::CheckRetire {
-            label,
-            sha256,
-            missing_ok,
-            ..
-        } => check_retire(layout, &label, &sha256, missing_ok),
         Request::Restore { label, sha256, .. } => restore(layout, &label, &sha256),
         Request::FirstLogin { opener, .. } => first_login::first_login(layout, opener),
         Request::ForgetOpener { .. } => first_login::forget_opener(layout),
@@ -525,7 +509,7 @@ fn kickstart(layout: &Layout, uid: u32) -> Result<Value> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum File {
+pub(crate) enum File {
     Absent,
     Regular(String),
     /// A symlink, directory or anything else; never followed or replaced.
@@ -737,7 +721,9 @@ fn bootout(layout: &Layout, label: &str) -> Result<()> {
     })
 }
 
-pub(crate) fn retirement_with(
+/// Whether `label`'s definition, its backup and the job read by `read_job`
+/// let retirement go ahead, with the definition and job it found.
+fn retirement_with(
     layout: &Layout,
     label: &str,
     sha256: &str,
@@ -774,11 +760,6 @@ pub(crate) fn retirement_with(
         )));
     }
     Ok((plist, job))
-}
-
-fn check_retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {
-    retirement_with(layout, label, sha256, missing_ok, || job(layout, label))?;
-    Ok(json!({"ok": true}))
 }
 
 fn retire(layout: &Layout, label: &str, sha256: &str, missing_ok: bool) -> Result<Value> {

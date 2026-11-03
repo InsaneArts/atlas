@@ -5,12 +5,9 @@
     clippy::missing_panics_doc,
     reason = "test fixtures: failing is how they report a broken test"
 )]
-use crate::{
-    daemon::{
-        read::{self, Places},
-        serve::{Daemon, handle},
-    },
-    helper_setup::{File, Job, Layout},
+use crate::daemon::{
+    read::{self, Places},
+    serve::{Daemon, handle},
 };
 use atlas_core::{
     error::Result,
@@ -47,22 +44,6 @@ pub fn read_at(
         temporary: None,
     };
     read::read_at(request, &places, uid, &|| Ok(()), events, now)
-}
-
-/// The helper's check of a job's retirement, reading the job from `read_job`.
-pub fn retirement_with(
-    layout: &Layout,
-    label: &str,
-    sha256: &str,
-    missing_ok: bool,
-    read_job: impl FnOnce() -> Result<Job>,
-) -> Result<(File, Job)> {
-    crate::helper_setup::retirement_with(layout, label, sha256, missing_ok, read_job)
-}
-
-/// The digest the helper's setup keeps of `text`.
-pub fn text_sha256(text: &str) -> String {
-    crate::helper_setup::text_sha256(text)
 }
 
 /// The made-up helper session: off the console, on display 7.
