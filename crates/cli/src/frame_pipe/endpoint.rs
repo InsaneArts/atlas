@@ -23,8 +23,9 @@ use tokio::net::{UnixListener, UnixStream};
 const BASE: &str = "/private/tmp";
 /// The longest socket path a Unix address holds, in bytes.
 const SOCKET_PATH_MAX: usize = 103;
-/// How long a socket left behind is given to answer before it counts as stale.
-const STALE: Duration = Duration::from_millis(250);
+/// How long a socket left behind is given to answer: a dead one refuses at
+/// once, and one that neither answers nor refuses in time counts as alive.
+const STALE: Duration = Duration::from_secs(1);
 
 /// The broker's identity for a controller and helper, whatever paths or
 /// sessions serve them.

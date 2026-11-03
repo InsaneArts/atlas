@@ -1,6 +1,11 @@
 use super::*;
 use std::{os::unix::fs::symlink, process::Command};
 
+/// Held by tests that spawn processes and by tests that need a closed socket
+/// to stay closed: a child forked meanwhile holds every open socket until it
+/// executes, so a listener closed here could still answer from it.
+static FORKS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Give `path` an ACL entry that grants nothing its owner lacks.
 fn add_acl(path: &Path) {
     let user = nix::unistd::User::from_uid(nix::unistd::getuid())
@@ -101,6 +106,7 @@ async fn an_unsafe_folder_is_refused_and_left_as_it_is() {
 
 #[tokio::test]
 async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_never_removed() {
+    let _forks = FORKS.lock().await;
     let base = base();
     let (listeners, endpoint) = bind_in(base.path(), me(), 7004).await.unwrap();
     let control = endpoint.socket("c.sock");
@@ -108,7 +114,7 @@ async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_ne
     drop((listeners, endpoint));
 
     // A crash leaves a socket behind with nothing listening: it is cleared.
-    drop(UnixListener::bind(&control).unwrap());
+    drop(std::os::unix::net::UnixListener::bind(&control).unwrap());
     fs::set_permissions(&control, fs::Permissions::from_mode(0o600)).unwrap();
     assert!(control.exists());
     let (listeners, endpoint) = bind_in(base.path(), me(), 7004).await.unwrap();
@@ -170,6 +176,7 @@ async fn a_folder_another_owner_claimed_or_a_loose_lock_file_is_refused() {
 
 #[tokio::test]
 async fn a_lock_or_left_socket_with_an_acl_is_refused_and_kept() {
+    let _forks = FORKS.lock().await;
     let base = base();
     let (listeners, endpoint) = bind_in(base.path(), me(), 7006).await.unwrap();
     let (lock, control) = (
@@ -178,7 +185,7 @@ async fn a_lock_or_left_socket_with_an_acl_is_refused_and_kept() {
     );
     drop((listeners, endpoint));
 
-    drop(UnixListener::bind(&control).unwrap());
+    drop(std::os::unix::net::UnixListener::bind(&control).unwrap());
     fs::set_permissions(&control, fs::Permissions::from_mode(0o600)).unwrap();
     add_acl(&control);
     assert_eq!(
