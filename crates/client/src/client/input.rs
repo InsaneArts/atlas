@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 const GRANT_OUTLIVES: Duration =
     atlas_core::session::GRANT_TTL.saturating_add(Duration::from_secs(1));
 
-/// The longest a look may take: the scan's own four seconds, a slow last
-/// Accessibility answer, and the reply.
-const LOOK_TIMEOUT: Duration = Duration::from_secs(8);
+/// The longest a look may take, as long as the probe was given: the scan's
+/// own four seconds, each request within them, and the reply.
+const LOOK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Refuse unless the input service that answered `verified` reads and
 /// keeps looks; nothing is asked of one that does not.
@@ -114,7 +114,13 @@ impl Client {
         transport.timeout = LOOK_TIMEOUT;
         let reply = transport.call(&request).await.map_err(Error::certain)?;
         if reply["ok"] != true {
-            return Err(native_refusal(&reply).certain());
+            // As the probe's failures read: a refusal of the session keeps
+            // its code, and the read's own failure is the elements'.
+            let code = match Code::of_reply(&reply, Code::Elements) {
+                code @ (Code::SessionChanged | Code::Identity | Code::Busy) => code,
+                _ => Code::Elements,
+            };
+            return Err(Error::refused(code, &reply, "The accessibility probe failed").certain());
         }
         Ok(reply)
     }
