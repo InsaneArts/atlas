@@ -116,19 +116,13 @@ async fn preview(
     }
 
     let observed = observe(hands, &steps).await?;
-    let descriptions: Vec<_> = steps
+    let (shown, untraced): (Vec<Value>, Vec<Vec<String>>) = steps
         .iter()
         .map(|entry| observed.step(hands, scope, entry))
-        .collect();
+        .unzip();
     let running = running_named(hands, loaded, observed.apps.as_ref()).await;
     let mut left = reply::left(loaded, receipt.as_ref(), running.as_ref());
-    let mut shown = Vec::new();
-    for observation in descriptions {
-        if let Observation::Quit(targets) = &observation.fact {
-            reply::add_untraced(&mut left, &targets.untraced);
-        }
-        shown.push(observation.describe(hands.copies()));
-    }
+    reply::add_untraced(&mut left, untraced.iter().flatten());
     Ok(json!({
         "ok": true,
         "preview": true,
@@ -146,23 +140,6 @@ struct Preview {
     plans: Vec<(Token, PlanState)>,
     installs: Vec<crate::environment::InstallState>,
     jobs: Vec<(atlas_core::protocol::JobId, Value)>,
-}
-
-struct Observed<'a> {
-    entry: &'a Entry,
-    copied_app: Option<String>,
-    fact: Observation<'a>,
-}
-
-enum Observation<'a> {
-    None,
-    Quit(targets::Targets),
-    Install(Option<&'a crate::environment::InstallState>),
-    Plan(Option<&'a PlanState>),
-    CopyPresent,
-    CopyAbsent,
-    Outputs(Vec<crate::collect::Intact>),
-    Job(Option<&'a Value>),
 }
 
 async fn observe(hands: &impl Hands, steps: &[Entry]) -> Result<Preview> {
@@ -215,97 +192,69 @@ async fn observe(hands: &impl Hands, steps: &[Entry]) -> Result<Preview> {
 }
 
 impl Preview {
-    fn step<'a>(&'a self, hands: &impl Hands, scope: &Scope, entry: &'a Entry) -> Observed<'a> {
-        let copied_app = entry.step.copied_app(hands.copies());
-        let fact = if entry.state.finished() {
-            Observation::None
-        } else {
-            match &entry.step {
-                Step::Quit { bundles } => {
-                    let empty = AppList::empty();
-                    Observation::Quit(targets(
-                        hands.copies(),
-                        &scope.session,
-                        bundles,
-                        &self.installs,
-                        self.apps.as_ref().unwrap_or(&empty),
-                    ))
-                }
-                Step::RemoveInstall { install, .. } => {
-                    Observation::Install(install_in(&self.installs, install))
-                }
-                Step::UndoPlan { plan } => Observation::Plan(
-                    self.plans
-                        .iter()
-                        .find(|(id, _)| id == plan)
-                        .map(|(_, state)| state),
-                ),
-                Step::RemoveCopy { copy } => {
-                    if handoff::copy_exists(hands.copies(), copy) {
-                        Observation::CopyPresent
-                    } else {
-                        Observation::CopyAbsent
-                    }
-                }
-                Step::CheckOutputs { outputs } => Observation::Outputs(
-                    outputs.iter().map(|output| hands.intact(output)).collect(),
-                ),
-                Step::StopJob { job, .. } => Observation::Job(
-                    self.jobs
-                        .iter()
-                        .find(|(known, _)| known == job)
-                        .map(|(_, state)| state),
-                ),
-                Step::FindJobs => Observation::None,
-            }
-        };
-        Observed {
-            entry,
-            copied_app,
-            fact,
+    /// `entry` as the preview shows it, with what is observed of it now
+    /// when it has yet to finish, and the apps its quit found running from
+    /// a copy macOS moved them to that cannot be traced to it.
+    fn step(&self, hands: &impl Hands, scope: &Scope, entry: &Entry) -> (Value, Vec<String>) {
+        let copies = hands.copies();
+        let mut value = described(copies, entry, entry.step.copied_app(copies));
+        if entry.state != StepState::Pending {
+            said_state(&mut value, entry);
         }
-    }
-}
-
-impl Observed<'_> {
-    fn describe(self, copies: &Path) -> Value {
-        let mut value = described(copies, self.entry, self.copied_app);
-        if self.entry.state != StepState::Pending {
-            said_state(&mut value, self.entry);
+        if entry.state.finished() {
+            return (value, Vec::new());
         }
-        match self.fact {
-            Observation::None
-            | Observation::Job(None)
-            | Observation::Plan(None)
-            | Observation::Install(None) => {}
-            Observation::Quit(found) => {
+        match &entry.step {
+            Step::Quit { bundles } => {
+                let empty = AppList::empty();
+                let found = targets(
+                    copies,
+                    &scope.session,
+                    bundles,
+                    &self.installs,
+                    self.apps.as_ref().unwrap_or(&empty),
+                );
                 value["apps"] = found
                     .processes
                     .iter()
                     .map(|process| json!({"app": process.name, "pid": process.pid}))
-                    .collect()
+                    .collect();
+                return (value, found.untraced);
             }
-            Observation::Install(Some(found)) => {
-                let placed = found.placed.as_ref();
-                value["installPhase"] = json!(found.phase);
-                value["present"] = json!(found.verified());
-                value["unchanged"] = json!(placed.and_then(|placed| placed.unchanged));
-                if let Some(placed) = placed {
-                    value["path"] = json!(placed.path);
+            Step::RemoveInstall { install, .. } => {
+                if let Some(found) = install_in(&self.installs, install) {
+                    let placed = found.placed.as_ref();
+                    value["installPhase"] = json!(found.phase);
+                    value["present"] = json!(found.verified());
+                    value["unchanged"] = json!(placed.and_then(|placed| placed.unchanged));
+                    if let Some(placed) = placed {
+                        value["path"] = json!(placed.path);
+                    }
                 }
             }
-            Observation::Plan(Some(PlanState { phase, targets })) => {
-                value["planState"] = json!(phase);
-                value["targets"] = json!(targets);
+            Step::UndoPlan { plan } => {
+                if let Some((_, PlanState { phase, targets })) =
+                    self.plans.iter().find(|(id, _)| id == plan)
+                {
+                    value["planState"] = json!(phase);
+                    value["targets"] = json!(targets);
+                }
             }
-            Observation::CopyPresent => value["present"] = json!(true),
-            Observation::CopyAbsent => value["present"] = json!(false),
-            Observation::Outputs(found) => {
-                value["intact"] = json!(found.iter().all(crate::collect::Intact::whole))
+            Step::RemoveCopy { copy } => {
+                value["present"] = json!(handoff::copy_exists(copies, copy));
             }
-            Observation::Job(Some(state)) => value["jobState"] = state.clone(),
+            Step::CheckOutputs { outputs } => {
+                let found: Vec<_> = outputs.iter().map(|output| hands.intact(output)).collect();
+                value["intact"] = json!(found.iter().all(crate::collect::Intact::whole));
+            }
+            Step::StopJob { job, .. } => {
+                if let Some((_, state)) = self.jobs.iter().find(|(known, _)| known == job) {
+                    value["jobState"] = state.clone();
+                }
+            }
+            Step::FindJobs => {}
         }
-        value
+        (value, Vec::new())
     }
 }
 

@@ -685,15 +685,11 @@ async fn describing_a_preview_uses_the_copy_observed_before_description() {
     let mut steps = Vec::new();
     plan::merge(&mut steps, &loaded.undoable());
     let observed = observe(&fake, &steps).await.unwrap();
-    let descriptions: Vec<_> = steps
+    let shown: Vec<_> = steps
         .iter()
-        .map(|entry| observed.step(&fake, &scope, entry))
+        .map(|entry| observed.step(&fake, &scope, entry).0)
         .collect();
     fs::remove_dir_all(place.folder(&copy)).unwrap();
-    let shown: Vec<_> = descriptions
-        .into_iter()
-        .map(|step| step.describe(&place.root))
-        .collect();
     let removed = shown
         .iter()
         .find(|step| step["do"] == "remove-copy")
