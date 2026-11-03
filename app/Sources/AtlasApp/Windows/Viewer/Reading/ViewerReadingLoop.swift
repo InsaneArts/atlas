@@ -54,6 +54,8 @@ final class ViewerReadingLoop {
   @ObservationIgnored private(set) var ticking: Task<Void, Never>?
   /// Waits ``Motion/Duration/appearDelay`` for a picture before the waiting stage rings its mark.
   @ObservationIgnored private var waiting: Task<Void, Never>?
+  /// Streams pictures from the frame service while watching, when the app can reach one.
+  @ObservationIgnored private let pump: ViewerFramePump?
 
   /// Creates a loop that has read nothing yet, at the person's saved rate.
   ///
@@ -67,6 +69,9 @@ final class ViewerReadingLoop {
     uptime = dependencies.uptime
     clock = dependencies.clock
     pictures = dependencies.pictures
+    pump = dependencies.framePipe.map {
+      ViewerFramePump(service: dependencies.service, connector: $0, clock: dependencies.clock)
+    }
     rate = ViewerPictureRate(rawValue: preferences.loadRate()) ?? .live
   }
 
@@ -91,6 +96,18 @@ final class ViewerReadingLoop {
     }
     tick(on)
     if on && viewer?.session.paused != true { awaitPicture() } else { stopAwaiting() }
+    if on {
+      pump?.start(
+        paused: { [weak self] in self?.viewer?.session.paused ?? true },
+        pause: { [weak self] in self?.rate == .live ? .zero : .seconds(self?.rate.seconds ?? 0) },
+        show: { [weak self] frame, decoded in
+          guard let self else { return }
+          show(frame, decoded: decoded, ready: reading.status.ready)
+        }
+      )
+    } else {
+      pump?.stop()
+    }
   }
 
   /// Read again now, or right after the reading under way.
@@ -137,7 +154,9 @@ final class ViewerReadingLoop {
     let readingNumber = statusReading
     let current = { [unowned self] in watching && number == generation && readingNumber == statusReading }
     let paused = viewer?.session.paused == true
-    let needsEarlyFrame = !paused && reading.frame == nil
+    // While the frame service streams pictures, a reading reads the status alone.
+    let streaming = pump?.streaming == true
+    let needsEarlyFrame = !paused && reading.frame == nil && !streaming
     // With no picture yet, the first one is asked for alongside the
     // status, so the window shows the helper at once.
     async let early = needsEarlyFrame ? (try? await service.frame()) : nil
@@ -150,6 +169,7 @@ final class ViewerReadingLoop {
         return
       }
       if let reason = reply.unobservable?.word { throw ServiceError(reason) }
+      if streaming { return }
       let next: Frame
       if let early = await early {
         next = early

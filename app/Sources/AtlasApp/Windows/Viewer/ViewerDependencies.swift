@@ -39,4 +39,6 @@ struct ViewerDependencies {
   var icons = AppIcons.none
   /// Reads all covering windows through the guarded helper command; nil disables window crops.
   var appWindows: @MainActor () async -> HelperOccluderList? = { nil }
+  /// Opens lanes to the frame service; nil reads every picture over the viewer's address.
+  var framePipe: (any FramePipeConnector)?
 }
