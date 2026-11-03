@@ -455,28 +455,6 @@ fn the_elements_table_shows_each_click_point() {
 }
 
 #[test]
-fn the_elements_table_names_each_element_by_its_ref_when_the_look_is_kept() {
-    let kept = show(
-        View::Elements,
-        json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
-               "scanIncomplete": false, "windows": [], "look": "8123abc",
-               "elements": [{"index": 3, "ref": "8123abc3", "role": "AXCheckBox", "name": "Bold",
-                             "at": [400, 62], "size": [24, 22]}]}),
-    );
-    assert!(kept.out.contains("REF"), "{}", kept.out);
-    assert!(kept.out.contains("8123abc3"), "{}", kept.out);
-
-    let unkept = show(
-        View::Elements,
-        json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
-               "scanIncomplete": false, "windows": [],
-               "elements": [{"index": 3, "role": "AXCheckBox", "name": "Bold",
-                             "at": [400, 62], "size": [24, 22]}]}),
-    );
-    assert!(!unkept.out.contains("REF"), "{}", unkept.out);
-}
-
-#[test]
 fn a_scan_that_stopped_early_says_why() {
     let shown = show(
         View::Elements,

@@ -39,7 +39,7 @@ fn every_look_is_its_service_and_count_and_reads_back_as_the_same_look() {
 
 #[test]
 fn a_reference_is_its_look_and_index_written_exactly_one_way() {
-    let reference = Reference::parse("8123abc12").unwrap();
+    let reference = Reference::parse("8123abc.12").unwrap();
     assert_eq!(
         reference.look,
         Look {
@@ -49,41 +49,45 @@ fn a_reference_is_its_look_and_index_written_exactly_one_way() {
         }
     );
     assert_eq!(reference.index, 12);
-    assert_eq!(reference.to_string(), "8123abc12");
-    assert_eq!(Reference::parse("8123abc0").unwrap().index, 0);
+    assert_eq!(reference.to_string(), "8123abc.12");
+    assert_eq!(Reference::parse("8123abc.0").unwrap().index, 0);
     assert_eq!(
         serde_json::to_value(reference).unwrap(),
-        serde_json::json!("8123abc12")
+        serde_json::json!("8123abc.12")
     );
     assert_eq!(
-        serde_json::from_value::<Reference>(serde_json::json!("8123abc12")).unwrap(),
+        serde_json::from_value::<Reference>(serde_json::json!("8123abc.12")).unwrap(),
         reference
     );
 }
 
 #[test]
-fn anything_but_a_listed_reference_is_no_reference() {
+fn anything_but_a_listed_look_and_index_is_no_reference() {
     for text in [
         "",
         "8123abc",
-        "8123c12",
-        "8123ab12",
-        "abc12",
-        "0abc12",
-        "08123abc12",
-        "8123ABC12",
-        "8123abc012",
-        "8123abc+1",
-        "+8123abc1",
-        "8123abc1.5",
-        "8123abc 1",
-        " 8123abc1",
+        "8123abc.",
+        ".12",
+        "8123abc12",
+        "8123c.12",
+        "8123ab.12",
+        "abc.12",
+        "0abc.12",
+        "08123abc.12",
+        "8123ABC.12",
+        "8123abc.012",
+        "8123abc.+1",
+        "+8123abc.1",
+        "8123abc.1.5",
+        "8123abc. 1",
+        " 8123abc.1",
         "8123abc.e4",
-        "8123abc1a2",
-        "é123",
-        "8123abc99999999999999999999999",
-        "99999999999abc1",
-        "8123abzzzzzzzzzzzzzzzzzzzzzzzzzzzz1",
+        "8123abc.1a2",
+        "8123abc..1",
+        "é.123",
+        "8123abc.99999999999999999999999",
+        "99999999999abc.1",
+        "8123abzzzzzzzzzzzzzzzzzzzzzzzzzzzz.1",
     ] {
         assert_eq!(Reference::parse(text), None, "{text:?}");
     }

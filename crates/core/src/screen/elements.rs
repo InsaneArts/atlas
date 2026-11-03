@@ -239,8 +239,8 @@ fn decimal<T: std::str::FromStr>(digits: &str) -> Option<T> {
     written.then(|| digits.parse().ok()).flatten()
 }
 
-/// One element of one look, as `atlas elements` names it: the look's name
-/// followed by the element's index in it, such as `8123qfc12`.
+/// One element of one look: the `look` an `atlas elements` listing names,
+/// a dot, and the element's `index` in it, such as `8123qfc.12`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reference {
     pub look: Look,
@@ -250,9 +250,7 @@ pub struct Reference {
 impl Reference {
     /// The reference `text` is, if it is one exactly as a listing gives it.
     pub fn parse(text: &str) -> Option<Self> {
-        let letters = text.find(|c: char| !c.is_ascii_digit())?;
-        let index = letters + text[letters..].find(|c: char| c.is_ascii_digit())?;
-        let (look, index) = text.split_at(index);
+        let (look, index) = text.split_once('.')?;
         Some(Self {
             look: Look::parse(look)?,
             index: decimal(index)?,
@@ -262,7 +260,7 @@ impl Reference {
 
 impl fmt::Display for Reference {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.look, self.index)
+        write!(f, "{}.{}", self.look, self.index)
     }
 }
 

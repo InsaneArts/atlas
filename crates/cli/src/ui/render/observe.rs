@@ -447,10 +447,7 @@ pub(super) fn elements(value: &Value) -> String {
                 };
 
                 vec![
-                    element["ref"].as_str().map_or_else(
-                        || element["index"].to_string(),
-                        |reference| text::printable(reference).into_owned(),
-                    ),
+                    element["index"].to_string(),
                     text::clip(&text::printable(element["role"].as_str().unwrap_or("")), 24),
                     text::clip(&text::printable(name), 32),
                     text::clip(
@@ -462,16 +459,8 @@ pub(super) fn elements(value: &Value) -> String {
             })
             .collect();
 
-        let first = if elements.iter().any(|element| element["ref"].is_string()) {
-            "REF"
-        } else {
-            "#"
-        };
         lines.push(String::new());
-        lines.push(table::render(
-            &[first, "ROLE", "NAME", "VALUE", "AT"],
-            &rows,
-        ));
+        lines.push(table::render(&["#", "ROLE", "NAME", "VALUE", "AT"], &rows));
     }
 
     let more = value["more"]
