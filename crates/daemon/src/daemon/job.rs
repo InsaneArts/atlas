@@ -74,6 +74,10 @@ struct State {
     /// The leaders this daemon started, held unreaped until their group is
     /// empty so the group's ID stays theirs.
     children: HashMap<JobId, Child>,
+    /// Launchers kept before they made a session of their own, which could
+    /// not be seen to exit. Their group was never theirs, so they are never
+    /// signalled: supervision only collects each one's exit, then ends it.
+    presession: HashMap<JobId, Child>,
     /// How many jobs may still run, as the records said last.
     running: usize,
     /// How many records could not be read, so their jobs may still run.
@@ -192,6 +196,7 @@ impl Jobs {
             state: Mutex::new(State {
                 store: Store::open(daemon)?,
                 children: HashMap::new(),
+                presession: HashMap::new(),
                 running: 0,
                 unresolved: 0,
                 complete: false,

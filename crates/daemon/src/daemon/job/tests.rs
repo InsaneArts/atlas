@@ -1660,7 +1660,7 @@ async fn a_launcher_whose_wait_fails_remains_owned_and_unconfirmed() {
         let mut state = jobs.state().unwrap();
         assert!(matches!(state.store.read(&id), Some(Found::Record(_))));
         state
-            .children
+            .presession
             .remove(&id)
             .expect("the launcher stays owned")
     };
@@ -1691,7 +1691,7 @@ async fn a_launcher_is_retained_when_cleanup_times_out_after_its_record_write_fa
             panic!("the launcher's record was lost");
         };
         let child = state
-            .children
+            .presession
             .remove(&id)
             .expect("the launcher stays owned");
         assert_eq!(kept.pid, child.id().map(|pid| i32::try_from(pid).unwrap()));
@@ -1704,6 +1704,56 @@ async fn a_launcher_is_retained_when_cleanup_times_out_after_its_record_write_fa
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn a_launcher_kept_before_its_own_session_is_reaped_once_it_exits_and_never_signalled() {
+    for unrecorded in [false, true] {
+        let (folder, jobs, table, start) = launching(ENDS_BEFORE_SETSID);
+        let prepared = jobs.prepare(&start).unwrap();
+        let id = prepared.record.id.clone();
+        if unrecorded {
+            let path = folder.path().join(format!("jobs/{id}.json"));
+            std::fs::create_dir(path.with_extension("json.partial")).unwrap();
+        }
+        *jobs.wait_fault.lock().unwrap() = Some(launch::WaitFault::Fails);
+        let reply = jobs.launch(prepared, &start).await;
+        jobs.state().unwrap().launching.remove(&id);
+        assert_eq!(reply["uncertain"], true, "{reply}");
+        let pid = i32::try_from(reply["job"]["pid"].as_i64().unwrap()).unwrap();
+        let started: Start = serde_json::from_value(reply["job"]["start"].clone()).unwrap();
+
+        // Ended, or killed by its cleanup, it is left unreaped; wait until
+        // the kernel shows it so. Outer watchdog only.
+        let until = Instant::now() + Duration::from_secs(10);
+        while !atlas_core::process::info(pid)
+            .unwrap()
+            .is_some_and(|info| info.zombie)
+        {
+            assert!(Instant::now() < until, "the launcher never exited");
+            std::thread::yield_now();
+        }
+        // As the kernel sees it: it never left the daemon's process group.
+        let mut exited = process(pid, started, 9999, 1);
+        exited.zombie = true;
+        table.processes.lock().unwrap().push(exited);
+
+        jobs.watch_once(None).unwrap();
+        jobs.stop_all(StopReason::Person);
+        jobs.watch_once(None).unwrap();
+        let job = jobs.show(Some(&id))["job"].clone();
+        assert_eq!(job["state"], "ended", "unrecorded {unrecorded}: {job}");
+        assert_eq!(jobs.census().unwrap().running, 1, "only the fixture's job");
+        assert!(
+            atlas_core::process::info(pid)
+                .unwrap()
+                .is_none_or(|info| info.instance.start != started),
+            "the launcher was reaped"
+        );
+        // Only the fixture's own job is stopped; nothing reaches the launcher
+        // or the group it was started in.
+        assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
+    }
 }
 
 #[tokio::test]

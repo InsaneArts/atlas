@@ -283,12 +283,29 @@ impl Jobs {
         };
         let jobs = self.clone();
         self.launch_reply(
-            tokio::task::spawn_blocking(move || match jobs.holding(&observed.id, child) {
-                Ok(mut state) => keep_running(&mut state, *observed, &said),
-                Err(error) => unconfirmed(&observed, &error.error),
-            })
-            .await,
+            tokio::task::spawn_blocking(move || jobs.keep_presession(*observed, child, &said))
+                .await,
         )
+    }
+
+    /// Keep a launcher that never made a session of its own and could not be
+    /// seen to exit, and reply that its outcome is not known. Its record
+    /// stays launched, and it is held apart from the jobs' leaders: its
+    /// process group is still the one it was started in, so nothing is ever
+    /// sent to it, and supervision ends it once waiting collects its exit.
+    fn keep_presession(&self, record: Record, child: Child, said: &str) -> Value {
+        match self.state() {
+            Ok(mut state) => {
+                state.presession.insert(record.id.clone(), child);
+                state.store.put(&record);
+                state.running += 1;
+                unconfirmed(&record, said)
+            }
+            Err(error) => {
+                self.retain_unobserved_child(record.id.clone(), child);
+                unconfirmed(&record, &error.error)
+            }
+        }
     }
 
     /// End a launch that failed with `said`, and reply. `setsid` says
@@ -313,11 +330,8 @@ impl Jobs {
             }
             let jobs = self.clone();
             return self.launch_reply(
-                tokio::task::spawn_blocking(move || match jobs.holding(&record.id, child) {
-                    Ok(mut state) => keep_running(&mut state, record, &said),
-                    Err(error) => unconfirmed(&record, &error.error),
-                })
-                .await,
+                tokio::task::spawn_blocking(move || jobs.keep_presession(record, child, &said))
+                    .await,
             );
         }
         // After it, its group may hold the program's processes too: it

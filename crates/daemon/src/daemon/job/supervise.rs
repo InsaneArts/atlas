@@ -15,13 +15,14 @@ use crate::daemon::run;
 use atlas_core::{
     error::Result,
     process::Info,
-    protocol::{How, JOB_GRACE, JobState, Left},
+    protocol::{How, JOB_GRACE, JobId, JobState, Left},
     time::now_ms,
 };
 use nix::sys::signal::Signal;
 use std::{
     os::unix::process::ExitStatusExt,
     path::PathBuf,
+    process::ExitStatus,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -51,12 +52,16 @@ impl Jobs {
     pub fn watch_once(&self, forced: Option<How>) -> Result<()> {
         let mut state = self.state()?;
         let now = now_ms();
+        self.reap_presession(&mut state, now);
         let records = state.inventory().found;
         let processes = self.processes();
         for read in records {
             let Found::Record(mut record) = read else {
                 continue;
             };
+            if state.presession.contains_key(&record.id) {
+                continue;
+            }
             if state.left_launched(&record) {
                 self.found_again(&mut state, &mut record, processes.as_deref());
             }
@@ -75,6 +80,40 @@ impl Jobs {
             state.pruned = Some(Instant::now());
         }
         Ok(())
+    }
+
+    /// Collect the exit of each launcher kept before it made a session of
+    /// its own, and end its record once its exit is collected. Its group is
+    /// never looked at and nothing is sent to it: the group was never its own.
+    fn reap_presession(&self, state: &mut State, now: u64) {
+        let exited: Vec<(JobId, ExitStatus)> = state
+            .presession
+            .iter_mut()
+            .filter_map(|(id, child)| match child.try_wait() {
+                Ok(Some(status)) => Some((id.clone(), status)),
+                // Not collected yet, or waiting failed: tried again next time.
+                Ok(None) | Err(_) => None,
+            })
+            .collect();
+        for (id, status) in exited {
+            state.presession.remove(&id);
+            let Some(Found::Record(mut record)) = state.store.read(&id) else {
+                continue;
+            };
+            if record.state == JobState::Ended {
+                continue;
+            }
+            record.state = JobState::Ended;
+            record.ended = Some(Ended {
+                how: How::Exited,
+                at: now,
+                signal: None,
+                exit_code: status.code(),
+                exit_signal: status.signal().map(run::signal_name),
+                left: Vec::new(),
+            });
+            state.store.put(&record);
+        }
     }
 
     /// How long until the next look: sooner while a job is stopping.
