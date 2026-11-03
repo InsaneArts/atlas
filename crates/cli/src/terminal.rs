@@ -116,6 +116,8 @@ pub async fn monitor(
         let frames = Frames::Shared {
             descriptor,
             client: None,
+            failed: false,
+            found: Discovery::of(&client),
         };
         return connected(url, frames, read_only, max_dimension, points).await;
     }
@@ -133,11 +135,34 @@ pub async fn monitor(
     result.and(cleanup)
 }
 
+/// Where the running menu bar's record is, and the helper it must serve.
+#[derive(Clone)]
+struct Discovery {
+    record: Option<std::path::PathBuf>,
+    helper: u32,
+}
+
+impl Discovery {
+    fn of(client: &Client) -> Self {
+        Self {
+            record: client
+                .output_dir()
+                .ok()
+                .map(|output| output.join(viewer::MENUBAR_RECORD)),
+            helper: client.transport.peer_uid,
+        }
+    }
+}
+
 /// The running menu bar's address and its frame service's description,
 /// when the menu bar serves `client`'s helper and runs one.
 async fn shared(client: &Client) -> Option<(String, Value)> {
-    let record = client.output_dir().ok()?.join(viewer::MENUBAR_RECORD);
-    let helper = client.transport.peer_uid;
+    discover(Discovery::of(client)).await
+}
+
+async fn discover(found: Discovery) -> Option<(String, Value)> {
+    let record = found.record?;
+    let helper = found.helper;
     tokio::task::spawn_blocking(move || {
         let found = viewer::read_record(&record)?;
         let port = viewer::recorded_port(&found)?;
@@ -160,6 +185,10 @@ enum Frames {
         descriptor: Value,
         /// The observer, once paired; a failed one is paired again.
         client: Option<crate::frame_pipe::client::PipeClient>,
+        /// Whether the last read failed, so the next waits a moment and
+        /// looks the service up again, as a restarted menu bar has new ones.
+        failed: bool,
+        found: Discovery,
     },
 }
 
@@ -174,6 +203,7 @@ impl Frames {
     fn interval(&self) -> Duration {
         match self {
             Self::Private(frames) => frames.interval(),
+            Self::Shared { failed: true, .. } => SHARED_RETRY,
             Self::Shared { .. } => Duration::ZERO,
         }
     }
@@ -181,9 +211,18 @@ impl Frames {
     async fn next(&mut self) -> Result<SharedFrame> {
         match self {
             Self::Private(frames) => frames.next().await,
-            Self::Shared { descriptor, client } => {
+            Self::Shared {
+                descriptor,
+                client,
+                failed,
+                found,
+            } => {
+                if *failed && let Some((_, fresh)) = discover(found.clone()).await {
+                    *descriptor = fresh;
+                }
                 let result = shared_next(descriptor, client).await;
-                if result.is_err() {
+                *failed = result.is_err();
+                if *failed {
                     *client = None;
                 }
                 result
@@ -217,6 +256,8 @@ async fn shared_next(
 
 /// The detail the terminal asks the shared service for.
 const SHARED_LONGEST: u32 = 1600;
+/// The pause before trying the shared service again after a failed read.
+const SHARED_RETRY: Duration = Duration::from_millis(250);
 
 async fn connected(
     url: String,

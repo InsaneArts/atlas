@@ -28,6 +28,8 @@ pub(super) struct Scripted {
     pub(super) fail: Arc<Mutex<Option<Reason>>>,
     /// The helper session the pictures show.
     pub(super) session: Arc<AtomicU64>,
+    /// How old, in milliseconds, each picture already is when made.
+    pub(super) aged: Arc<AtomicU64>,
 }
 
 fn epoch(session: u64) -> Epoch {
@@ -62,7 +64,7 @@ impl Acquire for Scripted {
         Ok(Picture {
             pixels,
             sequence: Positive::new(sequence).unwrap(),
-            at: Instant::now(),
+            at: Instant::now() - Duration::from_millis(self.aged.load(Ordering::SeqCst)),
             display: [measure(4.0), measure(2.0), measure(1.0)],
             backend: Source::Cg,
             epoch: epoch(self.session.load(Ordering::SeqCst)),
@@ -565,5 +567,81 @@ async fn subscribed_observers_hear_once_when_the_source_fails_and_when_it_works_
     assert_eq!(state.phase, Phase::Live);
     let (metadata, _, _) = client.picture().await;
     assert_eq!(metadata.credit_id.get(), 2);
+    broker.shut().await;
+}
+
+#[tokio::test]
+async fn a_subscription_whose_first_picture_fails_is_refused() {
+    let source = Scripted::default();
+    *source.fail.lock().unwrap() = Some(Reason::BackendInUse);
+    let broker = Running::start(source).await;
+    let mut client = Client_::pair(&broker).await;
+    let request = client.request();
+    let subscribe = Subscribe {
+        reason: SubscribeReason::First,
+        demand: Demand {
+            desired_longest: Longest::new(1600).unwrap(),
+            backend: Source::Cg,
+            hard_ceiling: None,
+        },
+        view_generation: Positive::new(1).unwrap(),
+    };
+    client
+        .control
+        .send(Kind::Subscribe, request, &subscribe)
+        .await;
+    let (error, got): (ErrorMetadata, _) = client.control.expect(Kind::Error).await;
+    assert_eq!(error.failure.reason, Reason::BackendInUse);
+    assert_eq!(got.head.request, request);
+    broker.shut().await;
+}
+
+#[tokio::test]
+async fn a_credit_after_a_profile_change_is_retired_and_the_pair_lives_on() {
+    let broker = Running::start(Scripted::default()).await;
+    let mut client = Client_::pair(&broker).await;
+    let first = client.subscribe().await;
+    client.credit(&first, 1, Barrier::Subscribe).await;
+    let (_, _, reference) = client.picture().await;
+    client.settle(1, reference).await;
+    // Another observer's demand finds the new session first.
+    broker.source.session.store(9, Ordering::SeqCst);
+    let mut other = Client_::pair(&broker).await;
+    other.subscribe().await;
+    let (state, _): (State, _) = client.control.expect(Kind::State).await;
+    assert_eq!(state.phase, Phase::ProfileChanged);
+    let credit = Credit {
+        credit_id: Positive::new(2).unwrap(),
+        view_generation: Positive::new(1).unwrap(),
+        stream_generation: first.profile.stream_generation,
+        geometry_generation: first.profile.geometry_generation,
+        barrier: Barrier::Ordinary,
+        barrier_generation: None,
+        input_revision: None,
+    };
+    let request = client.request();
+    client.control.send(Kind::Credit, request, &credit).await;
+    let (error, _): (ErrorMetadata, _) = client.control.expect(Kind::Error).await;
+    assert_eq!(error.disposition, Disposition::CreditRetired);
+    let second = client.subscribe_for(SubscribeReason::Reconfigure).await;
+    client.credit(&second, 3, Barrier::Reconfigure).await;
+    client.picture().await;
+    broker.shut().await;
+}
+
+#[tokio::test]
+async fn a_picture_committed_after_its_freshness_names_no_input() {
+    let broker = Running::start(Scripted::default()).await;
+    let mut client = Client_::pair(&broker).await;
+    let subscribed = client.subscribe().await;
+    broker.source.aged.store(480, Ordering::SeqCst);
+    client.credit(&subscribed, 1, Barrier::Resume).await;
+    let (_, _, reference) = client.picture().await;
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    client.settle(1, reference).await;
+    assert!(
+        broker.witnessed.lock().unwrap().is_empty(),
+        "acknowledged, but too old to name input"
+    );
     broker.shut().await;
 }

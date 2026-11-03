@@ -13,6 +13,8 @@ async fn the_terminal_shares_the_running_menu_bar_frame_service() {
     let mut frames = Frames::Shared {
         descriptor,
         client: None,
+        failed: false,
+        found: Discovery::of(&client),
     };
     let began = std::time::Instant::now();
     let mut last = None;

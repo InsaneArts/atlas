@@ -10,14 +10,18 @@ use atlas_core::{
             Attach, Attached, ClientKind, CreditOnly, Demand, ErrorMetadata, FrameMetadata, Hello,
             Hex32, Hex64, Longest, Metadata, Pair, Positive, Ref, Right, Role, Source, UpdateKind,
             Welcome, decode, encode,
-            flow::{Barrier, Credit, Settle, State, Subscribe, SubscribeReason, Subscribed},
+            flow::{Barrier, Credit, Phase, Settle, State, Subscribe, SubscribeReason, Subscribed},
         },
         wire::{CHUNK, Decoder, Head, Item, Kind, Lane, encode as packet},
     },
 };
 use serde::Serialize;
 use serde_json::Value;
-use std::path::Path;
+use std::{path::Path, time::Duration};
+
+/// How long one picture may take, credit to pixels, before the observer
+/// gives up: the source failing, or the service gone quiet.
+const PICTURE_DEADLINE: Duration = Duration::from_secs(3);
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
@@ -229,7 +233,7 @@ impl PipeClient {
         self.control
             .send(Kind::Subscribe, self.request, &subscribe)
             .await?;
-        let subscribed: Subscribed = expect(&mut self.control, Kind::Subscribed).await?;
+        let subscribed: Subscribed = self.reply(Kind::Subscribed).await?;
         let profile = subscribed.profile;
         self.generations = Some((
             profile.stream_generation,
@@ -247,7 +251,21 @@ impl PipeClient {
     ///
     /// Returns any refusal or packet out of order; the observer then ends.
     pub(crate) async fn next(&mut self) -> Result<Picture> {
+        tokio::time::timeout(PICTURE_DEADLINE, self.picture())
+            .await
+            .map_err(|_| {
+                Error::new(
+                    Code::StaleFrame,
+                    "The frame service sent no picture in time",
+                )
+            })?
+    }
+
+    async fn picture(&mut self) -> Result<Picture> {
         loop {
+            if self.generations.is_none() {
+                self.subscribe(SubscribeReason::Reconfigure).await?;
+            }
             let (stream, geometry, barrier) = self.generations.ok_or_else(protocol)?;
             self.credit += 1;
             self.request += 1;
@@ -277,12 +295,7 @@ impl PipeClient {
                         let _: CreditOnly = read(&received.metadata)?;
                     }
                     (Lane::Control, Kind::CreditExpired) => break,
-                    (Lane::Control, Kind::State) => {
-                        let state: State = read(&received.metadata)?;
-                        if state.profile.is_some() {
-                            self.generations = None;
-                        }
-                    }
+                    (Lane::Control, Kind::State) => self.state(&received.metadata)?,
                     (Lane::Control, Kind::Error) => {
                         let error: ErrorMetadata = read(&received.metadata)?;
                         if self.generations.is_none()
@@ -341,10 +354,47 @@ impl PipeClient {
         ] {
             self.request += 1;
             self.control.send(kind, self.request, &settle).await?;
-            let echo: Settle = expect(&mut self.control, answer).await?;
+            let echo: Settle = self.reply(answer).await?;
             if echo != settle {
                 return Err(protocol());
             }
+        }
+        Ok(())
+    }
+}
+
+impl PipeClient {
+    /// The next reply on the control lane, which must be a `kind`. An
+    /// acceptance or a state change that crosses it on the other lane's
+    /// schedule is handled on the way.
+    async fn reply<T: Metadata>(&mut self, kind: Kind) -> Result<T> {
+        loop {
+            let received = self.control.receive().await?;
+            match received.head.kind {
+                found if found == kind => return read(&received.metadata),
+                Kind::CreditAccepted => {}
+                Kind::State => self.state(&received.metadata)?,
+                Kind::Error => {
+                    let error: ErrorMetadata = read(&received.metadata)?;
+                    return Err(refusal(error.failure.reason));
+                }
+                _ => return Err(protocol()),
+            }
+        }
+    }
+
+    /// Note a state change: a changed profile is subscribed to again before
+    /// the next credit, and a failing source ends the observer.
+    fn state(&mut self, metadata: &[u8]) -> Result<()> {
+        let state: State = read(metadata)?;
+        if state.phase == Phase::Unavailable {
+            return Err(Error::new(
+                Code::StaleFrame,
+                "The helper's pictures are unavailable",
+            ));
+        }
+        if state.profile.is_some() {
+            self.generations = None;
         }
         Ok(())
     }

@@ -441,6 +441,11 @@ impl Broker {
             .get_mut(&connection)
             .ok_or(Reason::InvalidSchema)?;
         if !observer.subscribed {
+            // Its profile changed since: the credit is retired, and the
+            // observer subscribes again.
+            if observer.paired.is_some() && observer.subscribing.is_none() {
+                return self.retire(connection, request, credit.credit_id, Reason::WrongGeometry);
+            }
             return Err(Reason::InvalidSchema);
         }
         observer.subscription.credit(credit.credit_id, now)?;
@@ -499,7 +504,11 @@ impl Broker {
             .acknowledge(request, credit, ack, now)?;
         if answer != Kind::DecodedAck {
             let sent = observer.sent.take();
-            if let (Some(key), Some(picture), subscription::Step::Done) = (committed, sent, step) {
+            // Only a picture still fresh when committed may name input; an
+            // older one is acknowledged, and input aimed at it is refused.
+            if let (Some(key), Some(picture), subscription::Step::Done) = (committed, sent, step)
+                && now.saturating_duration_since(picture.at) < FRESHNESS
+            {
                 (self.witness)(key.as_str(), &picture.epoch, picture.at);
             }
         }
@@ -528,8 +537,14 @@ impl Broker {
         }
         let controls: Vec<Id> = self.observers.keys().copied().collect();
         for control in controls {
+            // A refusal answers the Subscribe it refuses.
+            let request = self
+                .observers
+                .get(&control)
+                .and_then(|observer| observer.subscribing)
+                .map_or(0, |(request, _)| request);
             if let Err(reason) = self.answer_subscribe(control) {
-                self.fail(control, 0, reason);
+                self.fail(control, request, reason);
                 continue;
             }
             self.serve(control, now);
@@ -660,6 +675,17 @@ impl Broker {
     /// Answer a Subscribe once the source has a profile, if the broker can
     /// hold every subscribed observer's pictures.
     fn answer_subscribe(&mut self, control: Id) -> Result<(), Reason> {
+        // A source that failed the subscription's own acquisition refuses
+        // it, so the observer tries again later rather than waiting forever.
+        if let Latest::Failed(reason) = self.latest.latest
+            && self
+                .observers
+                .get(&control)
+                .and_then(|observer| observer.subscribing)
+                .is_some_and(|(_, demand)| self.latest.demand >= demand)
+        {
+            return Err(reason);
+        }
         let Some(profile) = self.profile else {
             return Ok(());
         };

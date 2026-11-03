@@ -27,6 +27,10 @@ pub(super) const FRAME_WIDTH: u32 = 1600;
 const KEPT_FRAMES: usize = 24;
 /// How many live frames, which keep no pixels here, may be named at once.
 const KEPT_LIVE: usize = 256;
+/// How many committed pictures may be named at once: every observer the
+/// frame service admits, each at its full rate, for the eight seconds a
+/// frame may be named.
+const KEPT_COMMITTED: usize = 4 * KEPT_LIVE;
 
 /// The recent frames, each under the key control requests name it by.
 #[derive(Default)]
@@ -203,9 +207,14 @@ impl Viewer {
                 at,
             }),
         ));
-        while committed.len() > KEPT_LIVE {
+        while committed.len() > KEPT_COMMITTED {
             committed.pop_front();
         }
+    }
+
+    /// Forget every committed picture, as when the frame service changes.
+    pub(crate) fn forget_committed(&self) {
+        unpoisoned(&self.committed).clear();
     }
 
     /// The recent frame kept under `key`, kept, live or committed.

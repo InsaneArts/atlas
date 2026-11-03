@@ -19,6 +19,9 @@ use tokio::{
 
 /// The most packets queued for one lane's writer.
 pub(super) const QUEUE: usize = 16;
+/// How long one packet, a whole picture included, may take to write; a peer
+/// that stops reading loses its lane rather than holding a writer.
+const WRITE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A connection, by the order it was accepted.
 pub(super) type Id = u64;
@@ -126,48 +129,56 @@ async fn write_lane(
     events: mpsc::Sender<Event>,
 ) {
     while let Some(item) = outgoing.recv().await {
-        let written = match item {
-            Outgoing::Packet {
-                kind,
-                request,
-                metadata,
-            } => match encode(kind, request, &metadata, 0) {
-                Ok(bytes) => write.write_all(&bytes).await,
-                Err(_) => break,
-            },
-            Outgoing::Frame {
-                request,
-                credit,
-                metadata,
-                picture,
-            } => {
-                let pixels = picture.pixels.as_slice();
-                let Ok(head) = encode(Kind::FullFrame, request, &metadata, pixels.len() as u64)
-                else {
-                    break;
-                };
-                let mut written = write.write_all(&head).await;
-                for piece in pixels.chunks(CHUNK) {
-                    if written.is_err() {
-                        break;
-                    }
-                    written = write.write_all(piece).await;
-                }
-                if written.is_ok() {
-                    let delivered = Event::Delivered {
-                        connection,
-                        credit,
-                        at: Instant::now(),
-                    };
-                    let _ = events.send(delivered).await;
-                }
-                written
-            }
-        };
-        if written.is_err() {
+        let writing = write_item(&mut write, connection, item, &events);
+        if !matches!(
+            tokio::time::timeout(WRITE_DEADLINE, writing).await,
+            Ok(Ok(()))
+        ) {
             break;
         }
     }
     let _ = write.shutdown().await;
     let _ = events.send(Event::Ended { connection }).await;
+}
+
+/// Write one queued packet whole; a picture's pixels go in bounded pieces
+/// straight from the shared picture, and its last byte is reported.
+async fn write_item(
+    write: &mut OwnedWriteHalf,
+    connection: Id,
+    item: Outgoing,
+    events: &mpsc::Sender<Event>,
+) -> std::io::Result<()> {
+    match item {
+        Outgoing::Packet {
+            kind,
+            request,
+            metadata,
+        } => {
+            let bytes = encode(kind, request, &metadata, 0)
+                .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
+            write.write_all(&bytes).await
+        }
+        Outgoing::Frame {
+            request,
+            credit,
+            metadata,
+            picture,
+        } => {
+            let pixels = picture.pixels.as_slice();
+            let head = encode(Kind::FullFrame, request, &metadata, pixels.len() as u64)
+                .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
+            write.write_all(&head).await?;
+            for piece in pixels.chunks(CHUNK) {
+                write.write_all(piece).await?;
+            }
+            let delivered = Event::Delivered {
+                connection,
+                credit,
+                at: Instant::now(),
+            };
+            let _ = events.send(delivered).await;
+            Ok(())
+        }
+    }
 }
