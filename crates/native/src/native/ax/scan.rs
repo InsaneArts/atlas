@@ -312,14 +312,20 @@ impl Scan {
         let value = self.attribute(Source::Element(element), "AXValue")?;
         if let Some(text) = value.downcast_ref::<CFString>() {
             let text = bounded_string(text);
-            self.bounded(text, "AXValue")
-        } else if let Some(number) = value.downcast_ref::<CFNumber>() {
+            return self.bounded(text, "AXValue");
+        }
+        let rendered = if let Some(number) = value.downcast_ref::<CFNumber>() {
             number.as_f64().map(|number| number.to_string())
         } else {
             value
                 .downcast_ref::<CFBoolean>()
                 .map(|flag| flag.as_bool().to_string())
+        };
+        // A value there but not rendered is not an absent one.
+        if rendered.is_none() {
+            self.doubt("AXValue");
         }
+        rendered
     }
 
     /// The start of a text `characters` units long, cut at the limit; an

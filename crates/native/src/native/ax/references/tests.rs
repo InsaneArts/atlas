@@ -143,9 +143,10 @@ fn every_look_is_named_by_this_service_and_a_count_it_never_gives_twice() {
     assert_eq!(names[0].sequence, 0);
     assert_eq!(names[1999].sequence, 1999);
 
+    let first = names[0];
     looks.shelf.lock().unwrap().next = Some(Look {
-        service: std::process::id(),
         sequence: u64::MAX,
+        ..first
     });
     looks.keep(epoch(), sized(editor(), 1), now).unwrap();
     let error = looks.keep(epoch(), sized(editor(), 1), now).err().unwrap();
@@ -153,21 +154,30 @@ fn every_look_is_named_by_this_service_and_a_count_it_never_gives_twice() {
     assert!(error.error.contains("atlas start-input"), "{}", error.error);
 }
 
+/// A name from another service process, or from an earlier one given the
+/// same process ID, names nothing here, though this one holds that count.
 #[test]
 fn a_look_from_another_service_is_refused_even_where_this_one_has_its_count() {
     let looks = Looks::default();
     let now = Instant::now();
     let (look, _) = looks.keep(epoch(), chained(editor(), 1, 1), now).unwrap();
-    let earlier = Look {
-        service: look.service.wrapping_add(1).max(1),
-        ..look
-    };
-    let error = looks.find(at(earlier, 0), &epoch(), now).err().unwrap();
-    assert_stale(&error);
-    assert_eq!(
-        error.error,
-        "That look was taken by an earlier input service"
-    );
+    for earlier in [
+        Look {
+            service: look.service.wrapping_add(1).max(1),
+            ..look
+        },
+        Look {
+            incarnation: (look.incarnation + 1) % INCARNATIONS,
+            ..look
+        },
+    ] {
+        let error = looks.find(at(earlier, 0), &epoch(), now).err().unwrap();
+        assert_stale(&error);
+        assert_eq!(
+            error.error,
+            "That look was taken by an earlier input service"
+        );
+    }
 }
 
 #[test]

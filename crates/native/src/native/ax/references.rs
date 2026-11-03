@@ -19,8 +19,8 @@ use atlas_core::{
     process::Instance,
     screen::{
         elements::{
-            Element, LOOK_AGAIN, Limits, Look, Reference, Snapshot, click_point, drawn,
-            element_check, stale,
+            Element, INCARNATIONS, LOOK_AGAIN, Limits, Look, Reference, Snapshot, click_point,
+            drawn, element_check, stale,
         },
         geometry::Bounds,
     },
@@ -95,14 +95,21 @@ pub(in crate::native) struct Looks {
 }
 
 impl Default for Looks {
-    /// The looks of this service process, whose ID begins each name, so no
-    /// name another service gave can name one of them.
+    /// The looks of this service process, whose ID and start time begin
+    /// each name, so a name another service gave, even one the same ID was
+    /// given before, names none of them.
     fn default() -> Self {
+        let incarnation = Instance::current().map_or(0, |me| {
+            let [seconds, micros] = me.start;
+            let started = seconds.wrapping_mul(1_000_000).wrapping_add(micros);
+            u16::try_from(started % u64::from(INCARNATIONS)).unwrap_or_default()
+        });
         Self {
             shelf: Mutex::new(Shelf {
                 looks: VecDeque::new(),
                 next: Some(Look {
                     service: std::process::id(),
+                    incarnation,
                     sequence: 0,
                 }),
             }),
@@ -199,10 +206,10 @@ impl Looks {
     /// when that look is still kept and was taken in `epoch`.
     fn find(&self, reference: Reference, epoch: &InputEpoch, now: Instant) -> Result<Found> {
         let mut shelf = self.shelf.lock().map_err(|_| unavailable())?;
-        if shelf
-            .next
-            .is_some_and(|next| next.service != reference.look.service)
-        {
+        let named = reference.look;
+        if shelf.next.is_some_and(|next| {
+            (next.service, next.incarnation) != (named.service, named.incarnation)
+        }) {
             return Err(stale("That look was taken by an earlier input service"));
         }
         shelf.expire(now);

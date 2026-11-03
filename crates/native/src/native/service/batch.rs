@@ -240,9 +240,10 @@ pub(super) async fn run(
 
 /// One action of a batch, checked against `expected` (when it names an app)
 /// and carried out. A referenced click is found again first, checked
-/// against what its own element must reach, and confirmed to be that very
-/// element once more just before it is posted. Once done, the role of the
-/// field the check named, when it named one.
+/// against what its own element must reach, then confirmed to be that very
+/// element once more and its point checked again, reading only, just before
+/// it is posted. Once done, the role of the field the check named, when it
+/// named one.
 async fn step(
     engine: &mut impl Perform,
     action: Action,
@@ -285,6 +286,8 @@ async fn step(
     };
     let role = require_within(engine, &resolved.expect, click.target(), budget, prepare).await?;
     engine.confirm(&resolved).await?;
+    // Whatever came in front meanwhile is seen by a check that only reads.
+    require_within(engine, &resolved.expect, click.target(), budget, false).await?;
     engine.perform(click).await?;
     Ok(role)
 }

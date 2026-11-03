@@ -2264,7 +2264,7 @@ async fn input_without_an_expectation_is_never_checked() {
 }
 
 fn referenced() -> Action {
-    serde_json::from_value(json!({"type": "reference", "ref": "8123c12"})).unwrap()
+    serde_json::from_value(json!({"type": "reference", "ref": "8123abc12"})).unwrap()
 }
 
 #[tokio::test]
@@ -2316,14 +2316,28 @@ async fn a_found_reference_is_checked_against_its_own_window_and_clicked_where_i
                 "resolve 0",
                 "check 0",
                 "confirm 0",
-                "post 0",
                 "check 1",
+                "post 0",
+                "check 2",
                 "post 1",
             ]
         } else {
-            vec!["resolve 0", "check 0", "confirm 0", "post 0", "post 1"]
+            vec![
+                "resolve 0",
+                "check 0",
+                "confirm 0",
+                "check 1",
+                "post 0",
+                "post 1",
+            ]
         };
         assert_eq!(stand.log, checked);
+        assert_eq!(
+            stand.preparations[..2],
+            [true, false],
+            "prepared once, then only read again"
+        );
+        assert_eq!(stand.asked[..2], [found.clone(), found.clone()]);
     }
 }
 
