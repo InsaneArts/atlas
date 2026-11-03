@@ -154,13 +154,20 @@ pub fn why(stops: impl IntoIterator<Item = Stop>) -> Option<String> {
     }
 }
 
-/// One look the input service keeps: the service process that took it, and
-/// which of that process's looks it is, counted from 0 and never reused.
-/// Written as the process ID followed by the count in letters (`a` to `z`,
-/// then `aa`), such as `8123c`.
+/// How many incarnations two letters tell apart.
+pub const INCARNATIONS: u16 = 26 * 26;
+
+/// One look the input service keeps: the service process that took it, by
+/// its ID and an incarnation that tells it from another process the ID was
+/// given before, and which of that process's looks it is, counted from 0
+/// and never reused. Written as the process ID, two letters for the
+/// incarnation, then the count in letters (`a` to `z`, then `aa`), such as
+/// `8123qfc`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Look {
     pub service: u32,
+    /// Below [`INCARNATIONS`].
+    pub incarnation: u16,
     pub sequence: u64,
 }
 
@@ -168,18 +175,25 @@ impl Look {
     /// The look `word` names, if it is written exactly as a listing writes it.
     pub fn parse(word: &str) -> Option<Self> {
         let (service, letters) = word.split_at(word.find(|c: char| !c.is_ascii_digit())?);
-        let sequence = (!letters.is_empty() && letters.bytes().all(|b| b.is_ascii_lowercase()))
+        if !letters.bytes().all(|byte| byte.is_ascii_lowercase()) {
+            return None;
+        }
+        let (incarnation, count) = letters.split_at_checked(2)?;
+        let sequence = (!count.is_empty())
             .then(|| {
-                letters.bytes().try_fold(0u64, |number, byte| {
+                count.bytes().try_fold(0u128, |number, byte| {
                     number
                         .checked_mul(26)?
-                        .checked_add(u64::from(byte - b'a') + 1)
+                        .checked_add(u128::from(byte - b'a') + 1)
                 })
             })
             .flatten()?;
         Some(Self {
             service: decimal(service).filter(|service| *service > 0)?,
-            sequence: sequence - 1,
+            incarnation: incarnation
+                .bytes()
+                .fold(0, |number, byte| number * 26 + u16::from(byte - b'a')),
+            sequence: u64::try_from(sequence - 1).ok()?,
         })
     }
 
@@ -201,7 +215,14 @@ impl fmt::Display for Look {
             letters.push(char::from(b'a' + (number % 26) as u8));
             number /= 26;
         }
-        write!(f, "{}", self.service)?;
+        let incarnation = self.incarnation % INCARNATIONS;
+        write!(
+            f,
+            "{}{}{}",
+            self.service,
+            char::from(b'a' + (incarnation / 26) as u8),
+            char::from(b'a' + (incarnation % 26) as u8),
+        )?;
         letters
             .iter()
             .rev()
@@ -219,7 +240,7 @@ fn decimal<T: std::str::FromStr>(digits: &str) -> Option<T> {
 }
 
 /// One element of one look, as `atlas elements` names it: the look's name
-/// followed by the element's index in it, such as `8123c12`.
+/// followed by the element's index in it, such as `8123qfc12`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reference {
     pub look: Look,

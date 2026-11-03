@@ -2,16 +2,19 @@ use super::*;
 
 #[test]
 fn every_look_is_its_service_and_count_and_reads_back_as_the_same_look() {
-    for (sequence, written) in [
-        (0, "8123a"),
-        (25, "8123z"),
-        (26, "8123aa"),
-        (701, "8123zz"),
-        (702, "8123aaa"),
-        (u64::MAX, "8123gkgwbylwrxtlpp"),
+    for (incarnation, sequence, written) in [
+        (1, 0, "8123aba"),
+        (1, 25, "8123abz"),
+        (1, 26, "8123abaa"),
+        (1, 701, "8123abzz"),
+        (1, 702, "8123abaaa"),
+        (0, 2, "8123aac"),
+        (INCARNATIONS - 1, 2, "8123zzc"),
+        (1, u64::MAX, "8123abgkgwbylwrxtlpp"),
     ] {
         let look = Look {
             service: 8123,
+            incarnation,
             sequence,
         };
         assert_eq!(look.to_string(), written);
@@ -19,31 +22,41 @@ fn every_look_is_its_service_and_count_and_reads_back_as_the_same_look() {
     }
     let last = Look {
         service: 8123,
+        incarnation: 1,
         sequence: u64::MAX,
     };
     assert_eq!(last.after(), None, "the count never comes around again");
-    assert_eq!(Look::parse("8123a").unwrap().after(), Look::parse("8123b"));
+    assert_eq!(
+        Look::parse("8123aba").unwrap().after(),
+        Look::parse("8123abb")
+    );
+    assert_ne!(
+        Look::parse("8123abc"),
+        Look::parse("8123acc"),
+        "another incarnation of the same process ID"
+    );
 }
 
 #[test]
 fn a_reference_is_its_look_and_index_written_exactly_one_way() {
-    let reference = Reference::parse("8123c12").unwrap();
+    let reference = Reference::parse("8123abc12").unwrap();
     assert_eq!(
         reference.look,
         Look {
             service: 8123,
+            incarnation: 1,
             sequence: 2
         }
     );
     assert_eq!(reference.index, 12);
-    assert_eq!(reference.to_string(), "8123c12");
-    assert_eq!(Reference::parse("8123c0").unwrap().index, 0);
+    assert_eq!(reference.to_string(), "8123abc12");
+    assert_eq!(Reference::parse("8123abc0").unwrap().index, 0);
     assert_eq!(
         serde_json::to_value(reference).unwrap(),
-        serde_json::json!("8123c12")
+        serde_json::json!("8123abc12")
     );
     assert_eq!(
-        serde_json::from_value::<Reference>(serde_json::json!("8123c12")).unwrap(),
+        serde_json::from_value::<Reference>(serde_json::json!("8123abc12")).unwrap(),
         reference
     );
 }
@@ -52,28 +65,30 @@ fn a_reference_is_its_look_and_index_written_exactly_one_way() {
 fn anything_but_a_listed_reference_is_no_reference() {
     for text in [
         "",
-        "8123c",
-        "c12",
-        "0c12",
-        "08123c12",
-        "8123C12",
-        "8123c012",
-        "8123c+1",
-        "+8123c1",
-        "8123c1.5",
-        "8123c 1",
-        " 8123c1",
-        "8123c.e4",
-        "8123c1a2",
+        "8123abc",
+        "8123c12",
+        "8123ab12",
+        "abc12",
+        "0abc12",
+        "08123abc12",
+        "8123ABC12",
+        "8123abc012",
+        "8123abc+1",
+        "+8123abc1",
+        "8123abc1.5",
+        "8123abc 1",
+        " 8123abc1",
+        "8123abc.e4",
+        "8123abc1a2",
         "é123",
-        "8123c99999999999999999999999",
-        "99999999999c1",
-        "8123zzzzzzzzzzzzzzzzzzzz1",
+        "8123abc99999999999999999999999",
+        "99999999999abc1",
+        "8123abzzzzzzzzzzzzzzzzzzzzzzzzzzzz1",
     ] {
         assert_eq!(Reference::parse(text), None, "{text:?}");
     }
     for value in [
-        serde_json::json!("8123c"),
+        serde_json::json!("8123abc"),
         serde_json::json!(12),
         serde_json::json!(null),
     ] {
