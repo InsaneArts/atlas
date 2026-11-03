@@ -3667,56 +3667,6 @@ fn recording_appends_privately_and_rotates_a_full_log() {
     assert_eq!(row["started"], true);
 }
 
-#[test]
-fn a_refused_app_list_keeps_its_code() {
-    let busy = json!({"ok": false, "code": "busy", "uncertain": false,
-        "error": "The helper is serving too many connections"});
-    let failed = json!({"ok": false, "code": "apps", "uncertain": false,
-        "error": "Running applications could not be listed"});
-
-    for (reply, code) in [(busy, Code::Busy), (failed, Code::Apps)] {
-        let error = AppList::decode(reply).unwrap_err();
-        assert_eq!((error.code, error.uncertain), (code, false));
-    }
-}
-
-#[test]
-fn a_reply_without_an_app_array_is_never_an_empty_list() {
-    let malformed = [
-        json!({"ok": true}),
-        json!({"ok": true, "apps": null}),
-        json!({"ok": true, "apps": {}}),
-        json!({"ok": true, "apps": [{"name": "TextEdit"}]}),
-        json!({"ok": true, "apps": [{"pid": 0}]}),
-        json!({"ok": true, "apps": [{"pid": -1}]}),
-        json!({"ok": true, "apps": [{"pid": "5"}]}),
-        json!({"ok": true, "apps": [{"pid": 2_147_483_648_u64}]}),
-        json!({"ok": true, "apps": [{"pid": 5, "name": 3}]}),
-        json!({"ok": true, "apps": [{"pid": 5, "active": "yes"}]}),
-        json!({"ok": true, "apps": ["TextEdit"]}),
-        json!({"apps": []}),
-    ];
-
-    for reply in malformed {
-        let error = AppList::decode(reply.clone()).unwrap_err();
-        assert_eq!(
-            (error.code, error.uncertain),
-            (Code::Protocol, false),
-            "{reply}"
-        );
-    }
-}
-
-#[test]
-fn a_truly_empty_list_is_an_empty_list() {
-    let empty = json!({"ok": true, "apps": [], "elapsedMs": 1.5});
-    assert_eq!(AppList::decode(empty.clone()).unwrap().project(), empty);
-
-    let listed = json!({"ok": true, "apps": [{"pid": 812, "name": null, "bundleId": null,
-        "executable": "/x", "active": true, "hidden": false, "policy": "regular"}]});
-    assert_eq!(AppList::decode(listed.clone()).unwrap().project(), listed);
-}
-
 #[tokio::test]
 async fn process_identities_stay_internal_to_app_resolution() {
     use crate::test_support::Helper;

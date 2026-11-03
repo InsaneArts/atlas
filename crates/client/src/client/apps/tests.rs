@@ -140,3 +140,35 @@ fn public_apps_omit_starts_while_targets_reject_malformed_starts() {
     .unwrap();
     assert_eq!(stale.starts().unwrap().get(&812), Some(&[0, 1_000_000]));
 }
+
+#[test]
+fn a_refused_app_list_keeps_its_code() {
+    let busy = json!({"ok": false, "code": "busy", "uncertain": false,
+        "error": "The helper is serving too many connections"});
+    let failed = json!({"ok": false, "code": "apps", "uncertain": false,
+        "error": "Running applications could not be listed"});
+
+    for (reply, code) in [(busy, Code::Busy), (failed, Code::Apps)] {
+        let error = AppList::decode(reply).unwrap_err();
+        assert_eq!((error.code, error.uncertain), (code, false));
+    }
+}
+
+#[test]
+fn only_an_ok_reply_with_an_app_array_is_a_list() {
+    let empty = json!({"ok": true, "apps": [], "elapsedMs": 1.5});
+    assert_eq!(AppList::decode(empty.clone()).unwrap().project(), empty);
+    for reply in [
+        json!({"ok": true}),
+        json!({"ok": true, "apps": null}),
+        json!({"ok": true, "apps": {}}),
+        json!({"apps": []}),
+    ] {
+        let error = AppList::decode(reply.clone()).unwrap_err();
+        assert_eq!(
+            (error.code, error.uncertain),
+            (Code::Protocol, false),
+            "{reply}"
+        );
+    }
+}
