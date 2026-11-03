@@ -632,11 +632,10 @@ fn unknown_process_samples_leave_current_and_history_states_unended() {
             now: record.last_seen,
         }
         .history_with(&processes, |_| false);
-        assert_eq!(
-            (shown.state, history[0].state),
-            (SessionState::Idle, SessionState::Idle)
-        );
-        assert_eq!((lifetime.ended, history[0].ended_at), (None, None));
+        assert_eq!(shown.state, SessionState::Idle);
+        assert_eq!(history[0]["state"], json!(SessionState::Idle));
+        assert_eq!(lifetime.ended, None);
+        assert_eq!(history[0]["endedAt"], Value::Null);
         assert!(!shown.live && !shown.relevant() && !lifetime.active);
     }
 }
@@ -679,9 +678,11 @@ fn only_a_known_end_projects_to_ended_history() {
             now,
         }
         .history_with(&processes, |_| false);
-        assert_eq!((shown.state, history[0].state), (expected, expected));
+        assert_eq!(shown.state, expected);
+        assert_eq!(history[0]["state"], json!(expected));
         let ended = (expected == SessionState::Ended).then_some(record.last_seen);
-        assert_eq!((lifetime.ended, history[0].ended_at), (ended, ended));
+        assert_eq!(lifetime.ended, ended);
+        assert_eq!(history[0]["endedAt"], json!(ended));
         assert!(!shown.live && !lifetime.active);
     }
 }

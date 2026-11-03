@@ -2028,21 +2028,22 @@ fn a_quiet_session_has_no_known_end_and_is_listed_for_seven_days() {
 
     let states: Vec<_> = history
         .iter()
-        .map(|past| json!(past.state).as_str().unwrap().to_owned())
+        .map(|past| past["state"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(states, ["idle", "idle"], "a week and more is gone");
-    assert_eq!(history[1].ended_at, None, "it only went quiet");
-    let plans: Vec<_> = history[0]
-        .plans
+    assert_eq!(history[1]["endedAt"], Value::Null, "it only went quiet");
+    let plans: Vec<_> = history[0]["plans"]
+        .as_array()
+        .unwrap()
         .iter()
-        .map(|plan| (json!(plan.phase), plan.can_roll_back))
+        .map(|plan| (plan["phase"].clone(), plan["canRollBack"].clone()))
         .collect();
     assert_eq!(
         plans,
         [
-            (json!("applying"), true),
-            (json!("applied"), true),
-            (json!("rollingBack"), false),
+            (json!("applying"), json!(true)),
+            (json!("applied"), json!(true)),
+            (json!("rollingBack"), json!(false)),
         ]
     );
 }

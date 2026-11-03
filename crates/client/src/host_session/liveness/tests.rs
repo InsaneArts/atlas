@@ -313,13 +313,8 @@ fn a_liveness_sample_never_infers_death_after_expiry() {
         now: 100,
     }
     .history_with(&frozen, |_| false);
-    assert_eq!(
-        (shown.state, history[0].state),
-        (
-            crate::session_view::SessionState::Idle,
-            crate::session_view::SessionState::Idle
-        )
-    );
+    assert_eq!(shown.state, crate::session_view::SessionState::Idle);
+    assert_eq!(history[0]["state"], "idle");
     assert!(!shown.live && !shown.relevant());
-    assert_eq!(history[0].ended_at, None);
+    assert_eq!(history[0]["endedAt"], serde_json::Value::Null);
 }

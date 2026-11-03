@@ -9,13 +9,13 @@ use crate::{
     environment::Phase,
     helper_info::Capture,
     host_session::{
-        Host, Key,
+        Key,
         liveness::{Lifetime, Snapshot},
         names::{name_of, names},
         record::Record,
         store::IDLE_FOR,
     },
-    task::record::{CleanupState, Record as TaskRecord},
+    task::record::Record as TaskRecord,
 };
 use atlas_control::{Cause, Note};
 use atlas_core::error::Code;
@@ -325,62 +325,6 @@ impl Scene<'_> {
     }
 }
 
-/// One session as the viewer's history lists it, live or ended: who it
-/// is, when it worked and what it made. No host id, path, plan id or copy
-/// token is in it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Past {
-    pub key: Key,
-    pub host: Host,
-    pub host_label: &'static str,
-    pub name: String,
-    pub folder: Option<String>,
-    pub started_at: u64,
-    pub last_seen_at: u64,
-    /// When it ended, as its record or its host's process says; none for
-    /// one that only went quiet.
-    pub ended_at: Option<u64>,
-    /// Ended only when an end is known, otherwise Idle: current status
-    /// separately describes work and recovery attention.
-    pub state: SessionState,
-    /// How many actions it did.
-    pub actions: u64,
-    pub apps: Vec<PastApp>,
-    pub copies: Vec<PastCopy>,
-    pub plans: Vec<PastPlan>,
-    /// The apps its tasks installed into the helper that may still be
-    /// there, by name.
-    pub installs: Vec<String>,
-    /// How far its newest unfinished cleanup got; none when every cleanup
-    /// of its work finished, or none ran.
-    pub cleanup: Option<CleanupState>,
-    /// Its newest screenshots still kept, by file name.
-    pub screenshots: Vec<Capture>,
-}
-
-/// An app a session opened, and whether from a copy Atlas made for it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct PastApp {
-    pub name: String,
-    pub copied: bool,
-}
-
-/// A copy Atlas made for a session that is still there, by its app.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct PastCopy {
-    pub app: Option<String>,
-}
-
-/// An environment plan a session applied, as far as it got.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PastPlan {
-    pub phase: Phase,
-    pub made_at: u64,
-    pub can_roll_back: bool,
-}
-
 /// What the viewer's history is read from.
 pub struct HistorySource<'a> {
     /// Every record kept, newest last seen first.
@@ -403,7 +347,7 @@ impl HistorySource<'_> {
     /// The sessions last seen within the days records are kept for, newest
     /// first, at most [`HISTORY`].
     #[cfg(any(test, feature = "test-support"))]
-    pub fn history(&self) -> Vec<Past> {
+    pub fn history(&self) -> Vec<Value> {
         let processes = Snapshot::sample(
             self.records.iter().filter_map(|record| record.host_process),
             |instance| instance.state(),
@@ -411,7 +355,17 @@ impl HistorySource<'_> {
         self.history_with(&processes, |_| false)
     }
 
-    pub fn history_with(&self, processes: &Snapshot, work: impl Fn(&Key) -> bool) -> Vec<Past> {
+    /// Each session as the viewer's history lists it, live or ended: who it
+    /// is, when it worked and what it made. No host id, path, plan id or
+    /// copy token is in it.
+    ///
+    /// `endedAt` is when it ended, as its record or its host's process
+    /// says, and null for one that only went quiet. `state` is Ended only
+    /// when an end is known, otherwise Idle: current status separately
+    /// describes work and recovery attention. `installs` names the apps its
+    /// tasks installed into the helper that may still be there; `cleanup`
+    /// says how far its newest unfinished cleanup got.
+    pub fn history_with(&self, processes: &Snapshot, work: impl Fn(&Key) -> bool) -> Vec<Value> {
         let kept = atlas_core::time::ms(IDLE_FOR);
 
         let named = names(self.records);
@@ -421,82 +375,77 @@ impl HistorySource<'_> {
             .filter(|record| self.now.saturating_sub(record.last_seen) <= kept)
             .take(HISTORY)
             .map(|record| {
-                let lifetime = processes.lifetime(record, self.now, work(&record.key));
-                let ended_at = lifetime.ended;
-                let copies: Vec<PastCopy> = self
-                    .copies
-                    .get(&record.key)
-                    .into_iter()
-                    .flatten()
-                    .map(|app| PastCopy { app: app.clone() })
+                let ended_at = processes
+                    .lifetime(record, self.now, work(&record.key))
+                    .ended;
+                let copies = self.copies.get(&record.key).map_or(&[][..], Vec::as_slice);
+                let plans: Vec<Value> = record
+                    .plans
+                    .iter()
+                    .map(|plan| {
+                        let can_roll_back = match plan.phase {
+                            Phase::Applied | Phase::Applying => true,
+                            Phase::RollingBack | Phase::RolledBack => false,
+                        };
+                        json!({"phase": plan.phase, "madeAt": plan.at, "canRollBack": can_roll_back})
+                    })
                     .collect();
-                Past {
-                    key: record.key.clone(),
-                    host: record.host,
-                    host_label: record.host.label(),
-                    name: name_of(&named, &record.key, Some(record.host)),
-                    folder: record.folder.clone(),
-                    started_at: record.started,
-                    last_seen_at: record.last_seen,
-                    ended_at,
-                    state: if ended_at.is_some() {
-                        SessionState::Ended
-                    } else {
-                        SessionState::Idle
-                    },
-                    actions: record.counts.values().sum(),
-                    apps: self.apps(record, &copies),
-                    copies,
-                    plans: record
-                        .plans
-                        .iter()
-                        .map(|plan| PastPlan {
-                            phase: plan.phase,
-                            made_at: plan.at,
-                            can_roll_back: can_roll_back(plan.phase),
-                        })
-                        .collect(),
-                    installs: crate::task::record::installs_of(self.tasks, &record.key),
-                    cleanup: crate::task::record::unfinished_cleanup_of(self.tasks, &record.key),
-                    screenshots: record
-                        .screenshots
-                        .iter()
-                        .filter(|capture| self.captures.contains(capture.as_str()))
-                        .take(HISTORY_SHOTS)
-                        .cloned()
-                        .collect(),
-                }
+                let screenshots: Vec<&Capture> = record
+                    .screenshots
+                    .iter()
+                    .filter(|capture| self.captures.contains(capture.as_str()))
+                    .take(HISTORY_SHOTS)
+                    .collect();
+                let state = if ended_at.is_some() {
+                    SessionState::Ended
+                } else {
+                    SessionState::Idle
+                };
+                json!({
+                    "key": record.key,
+                    "host": record.host,
+                    "hostLabel": record.host.label(),
+                    "name": name_of(&named, &record.key, Some(record.host)),
+                    "folder": record.folder,
+                    "startedAt": record.started,
+                    "lastSeenAt": record.last_seen,
+                    "endedAt": ended_at,
+                    "state": state,
+                    "actions": record.counts.values().sum::<u64>(),
+                    "apps": self.apps(record, copies),
+                    "copies": copies.iter().map(|app| json!({"app": app})).collect::<Vec<_>>(),
+                    "plans": plans,
+                    "installs": crate::task::record::installs_of(self.tasks, &record.key),
+                    "cleanup": crate::task::record::unfinished_cleanup_of(self.tasks, &record.key),
+                    "screenshots": screenshots,
+                })
             })
             .collect()
     }
 
     /// The apps `record`'s session opened, as its rows still say, newest
-    /// first and each once.
-    fn apps(&self, record: &Record, copies: &[PastCopy]) -> Vec<PastApp> {
-        let mut apps: Vec<PastApp> = Vec::new();
-        let opened = self
+    /// first and each once, and whether each came from a copy Atlas made
+    /// for it.
+    fn apps(&self, record: &Record, copies: &[Option<String>]) -> Vec<Value> {
+        let mut opened: Vec<&str> = Vec::new();
+        let names = self
             .rows
             .iter()
             .filter(|row| row.session.as_deref() == Some(record.key.as_str()))
             .filter(|row| row.verb.as_deref() == Some("open") && row.worked())
             .filter_map(|row| row.app.as_deref());
-        for name in opened {
-            if apps.iter().all(|app| app.name != name) {
-                apps.push(PastApp {
-                    name: name.to_owned(),
-                    copied: copies.iter().any(|copy| copy.app.as_deref() == Some(name)),
-                });
+        for name in names {
+            if !opened.contains(&name) {
+                opened.push(name);
             }
         }
-        apps
-    }
-}
-
-/// Whether a plan as far as `phase` can still be rolled back.
-fn can_roll_back(phase: Phase) -> bool {
-    match phase {
-        Phase::Applied | Phase::Applying => true,
-        Phase::RollingBack | Phase::RolledBack => false,
+        opened
+            .into_iter()
+            .map(|name| {
+                let copied = copies.iter().any(|copy| copy.as_deref() == Some(name));
+                json!({"name": name, "copied": copied})
+            })
+            .collect()
     }
 }
 

@@ -1276,10 +1276,7 @@ fn surviving_work(explicit: bool) {
         now: atlas_core::time::now_ms(),
     }
     .history_with(&reading.processes, |key| reading.work(key, facts));
-    assert_eq!(
-        serde_json::to_value(&history[0]).unwrap()["endedAt"],
-        entry["ended"]
-    );
+    assert_eq!(history[0]["endedAt"], entry["ended"]);
     drop(claim);
     let reading = read();
     let entries = reading.entries(facts);
@@ -1409,7 +1406,7 @@ fn marker_contention_preserves_a_gone_hosts_verified_running_work() {
         now: u64::try_from(now / 1_000_000).unwrap(),
     }
     .history_with(&reading.processes, |key| reading.work(key, facts));
-    assert_eq!(history[0].ended_at, None);
+    assert_eq!(history[0]["endedAt"], Value::Null);
     drop(claim);
     assert!(read().entries(facts).is_empty());
     drop(lock);
