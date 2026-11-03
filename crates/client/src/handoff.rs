@@ -4,7 +4,7 @@
 //! grant to the helper, and nothing there is ever replaced: a new copy gets
 //! a new folder, so a running app's files never change under it.
 use crate::{
-    client::Client,
+    client::{Client, RUN_TIMEOUT, Run},
     host_session::{HostSession, Key},
     task::{Claims, Owned, State},
 };
@@ -156,8 +156,9 @@ fn quiet(tool: &str, args: &[&str], path: &Path, limit: Duration) -> Result<()> 
 
 /// Which of `paths` the helper itself can open: readable, a folder it can
 /// enter, and for an app, its executable too. The helper answers, so its
-/// groups and access lists count, not just permission bits.
-async fn readable(client: &Client, ownership: &Ownership, paths: &[PathBuf]) -> Result<Vec<bool>> {
+/// groups and access lists count, not just permission bits. It runs with a
+/// run's usual limit under the ownership the caller holds.
+async fn readable(client: &Client, _ownership: &Ownership, paths: &[PathBuf]) -> Result<Vec<bool>> {
     if paths.is_empty() {
         return Ok(Vec::new());
     }
@@ -184,7 +185,7 @@ done"#;
     argv.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));
 
     // Only reads: a failed check leaves nothing pending.
-    let reply = client.inspect_owned(ownership, argv).await?;
+    let reply = client.run(argv, Run::inspect().within(RUN_TIMEOUT)).await?;
     let output = run_output(&reply, 65536).unwrap_or_default();
     let answers: Vec<bool> = String::from_utf8_lossy(&output)
         .lines()

@@ -2,7 +2,7 @@
 //! against the session it came from, a crop checked against the one asked
 //! for, and the saved capture that says where its pixels lie on the
 //! display. Captures are kept for a week.
-use super::{Client, Verified, record::recorded_code};
+use super::{Client, record::recorded_code};
 use crate::last_capture;
 use atlas_core::{
     error::{Code, Error, Result},
@@ -288,21 +288,9 @@ impl Client {
         self.capture_expecting(None, size, crop, new_file).await
     }
 
-    /// [`Client::capture`] only while the helper is still the one `verified`
-    /// names, as for a crop of a process found in it.
-    pub(crate) async fn capture_in(
-        &self,
-        verified: &Verified,
-        size: Size,
-        crop: Option<&Crop>,
-        new_file: bool,
-    ) -> Result<Value> {
-        self.capture_expecting(Some(&verified.session().epoch), size, crop, new_file)
-            .await
-    }
-
-    /// [`Client::capture`], refused unless the helper is in `expected`.
-    async fn capture_expecting(
+    /// [`Client::capture`], refused unless the helper is in `expected`, as
+    /// for a crop of a process found in the helper a verification named.
+    pub(crate) async fn capture_expecting(
         &self,
         expected: Option<&Epoch>,
         size: Size,

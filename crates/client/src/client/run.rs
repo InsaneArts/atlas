@@ -234,18 +234,6 @@ impl Client {
         Ok(Finished::decode(&reply, limit))
     }
 
-    /// Run a fixed, read-only inspection command with a run's usual limit,
-    /// under controller ownership the caller already holds. Only for
-    /// commands that cannot change the helper: nothing is left pending when
-    /// it fails.
-    pub(crate) async fn inspect_owned(
-        &self,
-        _ownership: &Ownership,
-        argv: Vec<String>,
-    ) -> Result<Value> {
-        self.run(argv, Run::inspect().within(RUN_TIMEOUT)).await
-    }
-
     /// Send the run `mutation` to the verified helper, recording nothing.
     /// The reply comes after the command ends, as for any other run.
     async fn run_unrecorded(&self, mutation: &Mutation<'_>) -> Result<Value> {

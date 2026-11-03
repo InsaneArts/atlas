@@ -205,7 +205,12 @@ pub async fn screenshot(
     let captured = match &verified {
         Some(verified) => {
             client
-                .capture_in(verified, size, crop.as_ref(), new_file)
+                .capture_expecting(
+                    Some(&verified.session().epoch),
+                    size,
+                    crop.as_ref(),
+                    new_file,
+                )
                 .await
         }
         None => client.capture(size, crop.as_ref(), new_file).await,
