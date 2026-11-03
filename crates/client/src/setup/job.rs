@@ -1,6 +1,6 @@
 //! The helper's background job as its controller installs, replaces and
 //! restarts it, each action run by a worker inside the helper login.
-use super::{account::problem, executor::setup_transaction_held, reported_pid};
+use super::{account::problem, reported_pid};
 use crate::{client::Client, setup};
 use atlas_core::{
     account::{Account, account_with_uid},
@@ -147,7 +147,9 @@ async fn on_worker<T: Send + 'static>(
 }
 
 /// Prepare and install under one claim, including rollback dispatches, on
-/// a worker that holds exclusion until all of it is done.
+/// a worker that holds exclusion until all of it is done. The claim is
+/// settled, still under exclusion, only once its success is heard here: a
+/// caller that stops waiting leaves it pending.
 async fn prepare_and_install(
     client: &Client,
     controller_name: &str,
@@ -158,17 +160,24 @@ async fn prepare_and_install(
     let ownership = client.service_change(true).await?;
     let controller = client.controller.clone();
     let (controller_name, logs) = (controller_name.to_owned(), logs.to_path_buf());
-    on_worker(move || {
-        let _ownership = ownership;
-        setup_transaction_held(&controller, || {
+    let (_ownership, pending, installed) = on_worker(move || {
+        let pending = controller.quarantine()?;
+        let installed = {
+            // Executor claims bind to the thread that dispatches them.
+            let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
             run(&Request::Prepare {
                 uid: agent.uid,
                 controller: controller_name,
-            })?;
-            install_job(run, agent, &logs)
-        })
+            })
+            .and_then(|_| install_job(run, agent, &logs))
+        };
+        Ok((ownership, pending, installed))
     })
-    .await
+    .await?;
+
+    let installed = installed?;
+    client.controller.clear_if(&pending)?;
+    Ok(installed)
 }
 
 /// Restart the helper daemon (launchd starts a fresh process) and wait for
