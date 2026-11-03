@@ -75,8 +75,9 @@ final class ViewerFramePump {
             }
             let picture = try await opened.next(longest: Self.longest)
             guard let decoded = await Self.decode(picture) else { throw ServiceError.unknownScreenSize }
-            // Committed before it is shown: input aimed at a picture on screen always finds it.
-            try await opened.commit(picture)
+            // Committed before it is shown: input aimed at a picture on screen always finds it. One set aside as
+            // too old is skipped for the next.
+            guard try await opened.commit(picture) else { continue }
             guard !Task.isCancelled, current() else { break }
             streaming(true)
             show(

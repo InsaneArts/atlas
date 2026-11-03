@@ -149,8 +149,10 @@ fn keep_pipe(
             }
             if let Some((_, old)) = running.take() {
                 unpoisoned(&viewer.pipe).take();
-                viewer.forget_committed();
+                // Stopped first, so no late commit of the old helper's
+                // pictures is kept after they are forgotten.
                 old.stop().await;
+                viewer.forget_committed();
             }
             running = start_pipe(&viewer, client.clone())
                 .await

@@ -241,8 +241,13 @@ async fn shared_next(
         None => client
             .insert(crate::frame_pipe::client::PipeClient::open(descriptor, SHARED_LONGEST).await?),
     };
-    let picture = observer.next().await?;
-    observer.commit(&picture.metadata).await?;
+    // A picture set aside as too old by its commit is skipped for the next.
+    let picture = loop {
+        let picture = observer.next().await?;
+        if observer.commit(&picture.metadata).await? {
+            break picture;
+        }
+    };
     let metadata = picture.metadata;
     Ok(SharedFrame {
         png: Vec::new(),

@@ -14,8 +14,8 @@ use atlas_core::frame_pipe::{
     budget::{self, OBSERVERS_MAX},
     diagnostics::{Reason, Stage},
     model::{
-        Attach, CreditOnly, Disposition, ErrorMetadata, Failure, FrameMetadata, Hello, Hex64,
-        Metadata, Pair, Positive, Profile, Ref, Side, Welcome, WireCode, decode, encode,
+        Attach, CreditOnly, Disposition, DropReason, ErrorMetadata, Failure, FrameMetadata, Hello,
+        Hex64, Metadata, Pair, Positive, Profile, Ref, Side, Welcome, WireCode, decode, encode,
         flow::{
             Barrier, Close, Closed, ControlOwner, Credit, Dropped, Phase, Resynced, Settle, State,
             Subscribe, SubscribeReason, Subscribed,
@@ -456,10 +456,16 @@ impl Broker {
             observer.subscription.retire(credit.credit_id);
             return self.retire(connection, request, credit.credit_id, Reason::WrongGeometry);
         }
-        let demand = (credit.barrier != Barrier::Ordinary).then(|| {
-            self.wanted = self.source.want();
-            self.wanted
-        });
+        // A barrier credit waits for a picture begun after the barrier it
+        // names, kept across its retries; one naming none begins it now.
+        let demand =
+            (credit.barrier != Barrier::Ordinary).then(|| match credit.barrier_generation {
+                Some(barrier) => barrier.get(),
+                None => {
+                    self.wanted = self.source.want();
+                    self.wanted
+                }
+            });
         observer.waiting = Some(Waiting {
             credit,
             request,
@@ -495,6 +501,24 @@ impl Broker {
             .observers
             .get_mut(&connection)
             .ok_or(Reason::InvalidSchema)?;
+        // Only a picture still fresh when committed may name input: an older
+        // one is set aside as stale, and its commit answered by retiring the
+        // credit, so the observer shows the next picture instead.
+        let stale = matches!(ack, Ack::Commit(_))
+            && observer
+                .sent
+                .as_ref()
+                .is_some_and(|picture| now.saturating_duration_since(picture.at) >= FRESHNESS);
+        if stale {
+            observer.subscription.acknowledge(
+                request,
+                credit,
+                Ack::Drop(DropReason::Stale, None),
+                now,
+            )?;
+            observer.sent = None;
+            return self.retire(connection, request, credit, Reason::SourceStale);
+        }
         let committed = match &ack {
             Ack::Commit(reference) => Some(reference.frame_key.clone()),
             _ => None,
@@ -504,11 +528,7 @@ impl Broker {
             .acknowledge(request, credit, ack, now)?;
         if answer != Kind::DecodedAck {
             let sent = observer.sent.take();
-            // Only a picture still fresh when committed may name input; an
-            // older one is acknowledged, and input aimed at it is refused.
-            if let (Some(key), Some(picture), subscription::Step::Done) = (committed, sent, step)
-                && now.saturating_duration_since(picture.at) < FRESHNESS
-            {
+            if let (Some(key), Some(picture), subscription::Step::Done) = (committed, sent, step) {
                 (self.witness)(key.as_str(), &picture.epoch, picture.at);
             }
         }

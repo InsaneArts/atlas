@@ -18,8 +18,6 @@ public actor FrameStreamClient {
   private var observerID = ""
   /// The accepted profile's generations, and the barrier its subscription installed.
   private var generations: (stream: UInt64, geometry: UInt64, barrier: UInt64)?
-  /// Whether the next credit must wait for a picture taken after the last subscription.
-  private var fresh = true
 
   /// Creates an observer over two connected lanes; it reads them from now on.
   ///
@@ -137,7 +135,6 @@ public actor FrameStreamClient {
       let barrier = subscribed["barrierGeneration"] as? UInt64
     else { throw FramePipeError.invalid }
     generations = (stream, geometry, barrier)
-    fresh = true
   }
 
   /// The next picture: one credit, then the picture it earns. A credit that expires unserved is given again; a
@@ -153,9 +150,9 @@ public actor FrameStreamClient {
       credit += 1
       var asked: [String: Any] = [
         "creditID": credit, "viewGeneration": 1, "streamGeneration": generations.stream,
-        "geometryGeneration": generations.geometry, "barrier": fresh ? "subscribe" : "ordinary",
+        // Subscribed answers only once a picture begun after subscribing exists: every credit takes the latest.
+        "geometryGeneration": generations.geometry, "barrier": "ordinary",
       ]
-      if fresh { asked["barrierGeneration"] = generations.barrier }
       try await send(.credit, on: control, asked)
       var iterator = incoming.makeAsyncIterator()
       reading: while true {
@@ -188,7 +185,6 @@ public actor FrameStreamClient {
             default: throw FramePipeError.truncated
             }
           }
-          fresh = false
           return try Self.picture(picture, rgb: rgb)
         default: throw FramePipeError.invalid
         }
@@ -198,16 +194,33 @@ public actor FrameStreamClient {
 
   /// Commits `picture`: decoded, then selected, so input may name it.
   ///
-  /// - Parameter picture: The picture shown.
-  /// - Throws: ``FramePipeError`` or a lane failure when the service does not acknowledge both exactly.
-  public func commit(_ picture: FramePipePicture) async throws {
+  /// - Parameter picture: The picture to show.
+  /// - Returns: Whether it is committed; false when the service set it aside as too old by then, so it is not shown.
+  /// - Throws: ``FramePipeError`` or a lane failure when the service does not acknowledge it exactly.
+  public func commit(_ picture: FramePipePicture) async throws -> Bool {
     let reference = try JSONSerialization.jsonObject(with: picture.reference)
     let settle: [String: Any] = ["creditID": picture.credit, "ref": reference]
     try await send(.decoded, on: control, settle)
+    let decoded = try await expect(.decodedAck, keys: ["creditID", "ref"])
+    guard decoded["creditID"] as? UInt64 == picture.credit else { throw FramePipeError.invalid }
     try await send(.commit, on: control, settle)
-    for kind in [FramePacketKind.decodedAck, .commitAck] {
-      let echo = try await expect(kind, keys: ["creditID", "ref"])
-      guard echo["creditID"] as? UInt64 == picture.credit else { throw FramePipeError.invalid }
+    var iterator = incoming.makeAsyncIterator()
+    while true {
+      guard case .packet(.control, let header, let metadata) = try await iterator.next() else {
+        throw FramePipeError.invalid
+      }
+      switch header.kind {
+      case .commitAck:
+        let echo = try Self.object(metadata, keys: ["creditID", "ref"])
+        guard echo["creditID"] as? UInt64 == picture.credit else { throw FramePipeError.invalid }
+        return true
+      case .error:
+        let error = try Self.object(metadata, keys: nil)
+        guard error["disposition"] as? String == "credit-retired", error["creditID"] as? UInt64 == picture.credit
+        else { throw Self.refusal(metadata) }
+        return false
+      default: try crossing(header, metadata)
+      }
     }
   }
 

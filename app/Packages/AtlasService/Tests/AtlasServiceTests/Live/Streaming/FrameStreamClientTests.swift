@@ -25,7 +25,7 @@ struct FrameStreamClientTests {
       #expect((picture.width, picture.height) == (4, 2))
       #expect(picture.display == ViewerStatus.Size(width: 4, height: 2))
       #expect(picture.revision == "pipe:1:1")
-      try await client.commit(picture)
+      #expect(try await client.commit(picture))
     }
     let kinds = await broker.kinds
     #expect(kinds.prefix(4) == [.hello, .attach, .pairConfirm, .subscribe])
@@ -76,7 +76,7 @@ struct FrameStreamClientTests {
     for _ in 0..<3 {
       let picture = try await client.next(longest: 1_600)
       #expect(picture.rgb.count == 24)
-      try await client.commit(picture)
+      #expect(try await client.commit(picture))
     }
     await client.close()
   }
@@ -85,6 +85,16 @@ struct FrameStreamClientTests {
   func unavailable() async throws {
     let (client, _) = try await Self.opened([.unavailable])
     await #expect(throws: ServiceError.self) { try await client.next(longest: 1_600) }
+    await client.close()
+  }
+
+  @Test("a picture whose commit comes too late is reported, and the next one counts")
+  func staleCommit() async throws {
+    let (client, _) = try await Self.opened([.staleCommit, .picture])
+    let late = try await client.next(longest: 1_600)
+    #expect(try await client.commit(late) == false)
+    let next = try await client.next(longest: 1_600)
+    #expect(try await client.commit(next))
     await client.close()
   }
 }

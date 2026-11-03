@@ -28,7 +28,7 @@ struct NativeFramePipeLiveTests {
       let decoded = try #require(await ViewerFramePump.decode(picture))
       #expect(decoded.picture.image.width == picture.width)
       ages.append(picture.ageAtHeader)
-      try await client.commit(picture)
+      #expect(try await client.commit(picture))
       last = picture
     }
     // A committed picture is one control may be taken on, through the viewer's own guarded route.

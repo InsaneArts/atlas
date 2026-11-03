@@ -142,7 +142,6 @@ pub(crate) struct PipeClient {
     /// The accepted profile's stream and geometry generations and its
     /// subscription's barrier.
     generations: Option<(Positive, Positive, Positive)>,
-    fresh: bool,
     longest: u32,
 }
 
@@ -155,6 +154,12 @@ impl PipeClient {
     /// Returns an unreadable descriptor, a lane served by another process,
     /// or any refusal or step out of order.
     pub(crate) async fn open(descriptor: &Value, longest: u32) -> Result<Self> {
+        tokio::time::timeout(PICTURE_DEADLINE, Self::pair(descriptor, longest))
+            .await
+            .map_err(|_| Error::new(Code::StaleFrame, "The frame service did not pair in time"))?
+    }
+
+    async fn pair(descriptor: &Value, longest: u32) -> Result<Self> {
         let text = |key: &str| descriptor[key].as_str().ok_or_else(unreadable);
         let broker = descriptor["brokerPID"]
             .as_u64()
@@ -212,7 +217,6 @@ impl PipeClient {
             request: 2,
             credit: 0,
             generations: None,
-            fresh: true,
             longest: longest.clamp(320, 4096),
         };
         client.subscribe(SubscribeReason::First).await?;
@@ -240,7 +244,6 @@ impl PipeClient {
             profile.geometry_generation,
             subscribed.barrier_generation,
         ));
-        self.fresh = true;
         Ok(())
     }
 
@@ -266,7 +269,7 @@ impl PipeClient {
             if self.generations.is_none() {
                 self.subscribe(SubscribeReason::Reconfigure).await?;
             }
-            let (stream, geometry, barrier) = self.generations.ok_or_else(protocol)?;
+            let (stream, geometry, _) = self.generations.ok_or_else(protocol)?;
             self.credit += 1;
             self.request += 1;
             let credit = Credit {
@@ -274,12 +277,10 @@ impl PipeClient {
                 view_generation: Positive::new(1).ok_or_else(protocol)?,
                 stream_generation: stream,
                 geometry_generation: geometry,
-                barrier: if self.fresh {
-                    Barrier::Subscribe
-                } else {
-                    Barrier::Ordinary
-                },
-                barrier_generation: self.fresh.then_some(barrier),
+                // Subscribed answers only once a picture begun after the
+                // subscription exists, so every credit takes the latest.
+                barrier: Barrier::Ordinary,
+                barrier_generation: None,
                 input_revision: None,
             };
             self.control
@@ -318,7 +319,6 @@ impl PipeClient {
                         {
                             return Err(protocol());
                         }
-                        self.fresh = false;
                         return Ok(Picture { metadata, rgb });
                     }
                     _ => return Err(protocol()),
@@ -328,12 +328,20 @@ impl PipeClient {
     }
 
     /// Commit `metadata`'s picture: decoded and selected, so input may name
-    /// it.
+    /// it. False when the service set it aside as too old by then: the
+    /// picture is not shown, and the next one is asked for.
     ///
     /// # Errors
     ///
-    /// Returns a refusal or an acknowledgement that does not echo it.
-    pub(crate) async fn commit(&mut self, metadata: &FrameMetadata) -> Result<()> {
+    /// Returns a refusal, an acknowledgement that does not echo it, or no
+    /// answer in time.
+    pub(crate) async fn commit(&mut self, metadata: &FrameMetadata) -> Result<bool> {
+        tokio::time::timeout(PICTURE_DEADLINE, self.settle(metadata))
+            .await
+            .map_err(|_| Error::new(Code::StaleFrame, "The frame service did not answer in time"))?
+    }
+
+    async fn settle(&mut self, metadata: &FrameMetadata) -> Result<bool> {
         let settle = Settle {
             credit_id: metadata.credit_id,
             reference: Ref {
@@ -348,18 +356,44 @@ impl PipeClient {
                 view_generation: metadata.view_generation,
             },
         };
-        for (kind, answer) in [
-            (Kind::Decoded, Kind::DecodedAck),
-            (Kind::Commit, Kind::CommitAck),
-        ] {
-            self.request += 1;
-            self.control.send(kind, self.request, &settle).await?;
-            let echo: Settle = self.reply(answer).await?;
-            if echo != settle {
-                return Err(protocol());
+        self.request += 1;
+        self.control
+            .send(Kind::Decoded, self.request, &settle)
+            .await?;
+        let echo: Settle = self.reply(Kind::DecodedAck).await?;
+        if echo != settle {
+            return Err(protocol());
+        }
+        self.request += 1;
+        self.control
+            .send(Kind::Commit, self.request, &settle)
+            .await?;
+        loop {
+            let received = self.control.receive().await?;
+            match received.head.kind {
+                Kind::CommitAck => {
+                    let echo: Settle = read(&received.metadata)?;
+                    return if echo == settle {
+                        Ok(true)
+                    } else {
+                        Err(protocol())
+                    };
+                }
+                Kind::Error => {
+                    let error: ErrorMetadata = read(&received.metadata)?;
+                    if error.disposition
+                        == atlas_core::frame_pipe::model::Disposition::CreditRetired
+                        && error.credit_id == Some(settle.credit_id)
+                    {
+                        return Ok(false);
+                    }
+                    return Err(refusal(error.failure.reason));
+                }
+                Kind::CreditAccepted => {}
+                Kind::State => self.state(&received.metadata)?,
+                _ => return Err(protocol()),
             }
         }
-        Ok(())
     }
 }
 

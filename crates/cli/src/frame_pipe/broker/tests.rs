@@ -420,7 +420,9 @@ async fn an_unserved_credit_expires_and_the_observer_may_credit_again() {
     let mut client = Client_::pair(&broker).await;
     let subscribed = client.subscribe().await;
     broker.source.hang.store(true, Ordering::SeqCst);
-    let request = client.credit(&subscribed, 1, Barrier::Resume).await;
+    // The subscription's own picture is too old to serve by now.
+    tokio::time::sleep(FRESHNESS).await;
+    let request = client.credit(&subscribed, 1, Barrier::Ordinary).await;
     let (expired, got): (CreditOnly, _) = client.control.expect(Kind::CreditExpired).await;
     assert_eq!((expired.credit_id.get(), got.head.request), (1, request));
     client.credit(&subscribed, 2, Barrier::Ordinary).await;
@@ -551,7 +553,8 @@ async fn subscribed_observers_hear_once_when_the_source_fails_and_when_it_works_
     let mut client = Client_::pair(&broker).await;
     let subscribed = client.subscribe().await;
     *broker.source.fail.lock().unwrap() = Some(Reason::SourceStale);
-    client.credit(&subscribed, 1, Barrier::Resume).await;
+    tokio::time::sleep(FRESHNESS).await;
+    client.credit(&subscribed, 1, Barrier::Ordinary).await;
     let (state, _): (State, _) = client.control.expect(Kind::State).await;
     assert_eq!(state.phase, Phase::Unavailable);
     assert_eq!(
@@ -633,15 +636,32 @@ async fn a_credit_after_a_profile_change_is_retired_and_the_pair_lives_on() {
 async fn a_picture_committed_after_its_freshness_names_no_input() {
     let broker = Running::start(Scripted::default()).await;
     let mut client = Client_::pair(&broker).await;
-    let subscribed = client.subscribe().await;
     broker.source.aged.store(480, Ordering::SeqCst);
-    client.credit(&subscribed, 1, Barrier::Resume).await;
+    let subscribed = client.subscribe().await;
+    client.credit(&subscribed, 1, Barrier::Subscribe).await;
     let (_, _, reference) = client.picture().await;
     tokio::time::sleep(Duration::from_millis(40)).await;
-    client.settle(1, reference).await;
-    assert!(
-        broker.witnessed.lock().unwrap().is_empty(),
-        "acknowledged, but too old to name input"
+    let settle = Settle {
+        credit_id: Positive::new(1).unwrap(),
+        reference,
+    };
+    let request = client.request();
+    client.control.send(Kind::Decoded, request, &settle).await;
+    client.control.expect::<Settle>(Kind::DecodedAck).await;
+    let request = client.request();
+    client.control.send(Kind::Commit, request, &settle).await;
+    let (error, got): (ErrorMetadata, _) = client.control.expect(Kind::Error).await;
+    assert_eq!(error.disposition, Disposition::CreditRetired);
+    assert_eq!(got.head.request, request);
+    assert!(broker.witnessed.lock().unwrap().is_empty());
+    broker.source.aged.store(0, Ordering::SeqCst);
+    client.credit(&subscribed, 2, Barrier::Ordinary).await;
+    let (_, _, reference) = client.picture().await;
+    client.settle(2, reference).await;
+    assert_eq!(
+        broker.witnessed.lock().unwrap().len(),
+        1,
+        "the next one counts"
     );
     broker.shut().await;
 }

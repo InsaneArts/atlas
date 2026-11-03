@@ -23,6 +23,8 @@ actor ScriptedFramePipeBroker {
     case interleaved
     /// The source stops working.
     case unavailable
+    /// A picture whose commit comes too late: the credit is retired instead.
+    case staleCommit
   }
 
   static let service = String(repeating: "a", count: 32)
@@ -36,6 +38,8 @@ actor ScriptedFramePipeBroker {
   /// Every packet received, by kind.
   private(set) var kinds: [FramePacketKind] = []
   private var stream: UInt64 = 1
+  /// Whether the next commit is answered by retiring its credit.
+  private var retireCommit = false
   private var sequence: UInt64 = 0
 
   init(script: [Answer]) {
@@ -92,6 +96,13 @@ actor ScriptedFramePipeBroker {
       reply(.subscribed, request, ["profile": profile, "barrierGeneration": 1])
     case .credit: await credit(asked, request)
     case .decoded: reply(.decodedAck, request, asked)
+    case .commit where retireCommit:
+      retireCommit = false
+      reply(
+        .error,
+        request,
+        ["failure": failure("source-stale"), "disposition": "credit-retired", "creditID": asked["creditID"] ?? 0]
+      )
     case .commit: reply(.commitAck, request, asked)
     default: break
     }
@@ -132,6 +143,10 @@ actor ScriptedFramePipeBroker {
           "controlOwner": "none", "failure": failure("source-stale"),
         ]
       )
+    case .staleCommit:
+      retireCommit = true
+      sequence += 1
+      picture(credit: credit, request: request)
     case .picture, .wrongCredit:
       sequence += 1
       picture(credit: answer == .picture ? credit : credit + 7, request: request)
