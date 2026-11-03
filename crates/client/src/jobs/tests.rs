@@ -532,6 +532,7 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
         refused: 0,
         unknown: 0,
         unresolved: 0,
+        unread: 0,
         error: None,
     }
     .say(&mut reply);
@@ -548,6 +549,7 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
         refused: 0,
         unknown: 0,
         unresolved: 0,
+        unread: 0,
         error: Some("Connection refused".into()),
     }
     .say(&mut reply);
@@ -762,6 +764,7 @@ fn a_log_out_or_uninstall_counts_what_it_stopped_and_says_what_it_could_not() {
         refused: 1,
         unknown: 1,
         unresolved: 0,
+        unread: 0,
         error: None,
     }
     .say(&mut reply);
@@ -826,6 +829,82 @@ async fn a_malformed_stop_acknowledgement_never_becomes_an_empty_successful_resu
         stopping_every_job_with(json!({"ok": true, "op": "job", "action": "stop-all"})).await;
     assert!(everyone.error.is_none());
     assert!(everyone.warnings().is_empty());
+}
+
+fn unreadable_row(id: &str) -> Shown {
+    shown(&json!({"id": id, "state": "unknown",
+        "error": "Atlas cannot tell whether this job's process is running"}))
+}
+
+fn ended_row(id: &str) -> Shown {
+    let mut ended = job_view(id, "ended");
+    ended["how"] = json!("stopped");
+    shown(&ended)
+}
+
+/// What [`outstanding`] comes to for one job told to stop, with the stop
+/// naming `named` unreadable, and every look listing `listed(n)` at its
+/// `n`th look; and how many looks there were.
+async fn outstanding_after(
+    named: &[JobId],
+    listed: impl Fn(usize) -> Vec<Shown>,
+) -> (Outstanding, usize) {
+    let looks = std::cell::Cell::new(0);
+    let left = outstanding(1, named, || {
+        looks.set(looks.get() + 1);
+        let jobs = listed(looks.get());
+        async move { Ok(jobs) }
+    })
+    .await;
+    (left, looks.get())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_job_told_to_stop_whose_record_can_no_longer_be_read_is_never_counted_stopped() {
+    let started = tokio::time::Instant::now();
+    let (left, looks) = outstanding_after(&[], |_| vec![unreadable_row(ID)]).await;
+    assert_eq!(left, Outstanding { left: 0, unread: 1 });
+    assert!(
+        started.elapsed() >= JOB_GRACE + BEYOND_GRACE,
+        "it is looked at until the wait runs out, {looks} looks"
+    );
+    let everyone = Everyone {
+        asked: 1,
+        left: left.left,
+        unread: left.unread,
+        ..Everyone::default()
+    };
+    let mut reply = json!({"ok": true, "loggedOut": true});
+    everyone.say(&mut reply);
+    assert_eq!(reply["jobsStopped"], 0, "{reply}");
+    assert_eq!(
+        reply["warnings"],
+        json!(["Atlas could not read the record of 1 background job; it may still be running"])
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_job_whose_record_is_read_again_and_has_ended_counts_as_stopped() {
+    let (left, looks) = outstanding_after(&[], |look| {
+        vec![if look < 3 {
+            unreadable_row(ID)
+        } else {
+            ended_row(ID)
+        }]
+    })
+    .await;
+    assert_eq!(left, Outstanding { left: 0, unread: 0 });
+    assert_eq!(looks, 3);
+
+    // A record the stop already named unreadable is said by the stop's own
+    // count, and does not keep the wait going.
+    let other = JobId::parse("000000000000").unwrap();
+    let (left, looks) = outstanding_after(std::slice::from_ref(&other), |_| {
+        vec![ended_row(ID), unreadable_row(other.as_str())]
+    })
+    .await;
+    assert_eq!(left, Outstanding { left: 0, unread: 0 });
+    assert_eq!(looks, 1);
 }
 
 #[tokio::test]
