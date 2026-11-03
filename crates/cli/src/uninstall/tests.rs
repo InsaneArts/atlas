@@ -264,45 +264,45 @@ async fn an_unrecorded_helper_never_uses_its_daemons_word_to_adopt_an_account() 
     assert!(hint.contains("System Settings > Users & Groups"));
 }
 
-#[test]
-fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed() {
+/// What a teardown would remove: Atlas.app and its data, in `dir`, with
+/// settings that load (and keep the menu bar's records in `runs`) or don't.
+fn removable(dir: &Path, loaded: bool) -> Found {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
-    let output = dir.path().join("runs");
+    let output = dir.join("runs");
+    fs::create_dir(&output).unwrap();
+    fs::set_permissions(&output, fs::Permissions::from_mode(0o700)).unwrap();
     let client = Client::new(Config {
         helper_uid: 7001,
-        socket_path: dir.path().join("no-daemon.sock"),
-        input_socket: dir.path().join("no-input.sock"),
-        identity_probe: dir.path().join("atlas"),
-        output_dir: output.clone(),
+        socket_path: dir.join("no-daemon.sock"),
+        input_socket: dir.join("no-input.sock"),
+        identity_probe: dir.join("atlas"),
+        output_dir: output,
     })
     .unwrap();
     let found = Found {
-        app: dir.path().join("Atlas.app"),
-        executable: dir.path().join("atlas"),
-        client: Some(client),
-        unloaded: None,
+        app: dir.join("Atlas.app"),
+        executable: dir.join("atlas"),
+        client: loaded.then_some(client),
+        unloaded: (!loaded).then(|| "The settings do not load".to_owned()),
         helper: None,
         known: None,
-        data: dir.path().join("data"),
+        data: dir.join("data"),
         leftovers: vec![],
     };
     for kept in [&found.app, &found.data] {
         fs::create_dir(kept).unwrap();
     }
-    let settings = dir.path().join("settings");
-    fs::write(&settings, "").unwrap();
-    let said = std::cell::RefCell::new(Vec::new());
-    let progress = |progress: Progress<'_>| {
-        let (Progress::Say(what) | Progress::Done(what, _) | Progress::Skipped(what, _)) = progress;
-        said.borrow_mut().push(what.to_owned());
-    };
-    // The menu bar's record can't be read, so whether it runs is unknown.
-    fs::create_dir(&output).unwrap();
-    fs::set_permissions(&output, fs::Permissions::from_mode(0o700)).unwrap();
-    fs::write(output.join("menubar.json"), "{").unwrap();
+    fs::write(dir.join("settings"), "").unwrap();
+    found
+}
+
+/// Carry out the rest of a teardown of `found`, with what reaches beyond
+/// `dir` stood in for: its outcome, the effects it reached, and what it
+/// said it removed.
+fn rest_of(dir: &Path, found: &Found) -> (Result<()>, Vec<&'static str>, Vec<Value>) {
+    let settings = dir.join("settings");
     let mut live = Live {
-        found: &found,
+        found,
         config_path: &settings,
         keep_config: false,
         yes: true,
@@ -311,21 +311,29 @@ fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed
         hint: None,
         deleted: false,
         exclusion: None,
-        progress: &progress,
+        progress: &silent,
         ask: &agree,
     };
-    let forgot = std::cell::Cell::new(false);
-    let disconnected = std::cell::Cell::new(false);
-    let error = live
-        .rest_using(
-            |_| forgot.set(true),
-            crate::menubar::stop,
-            |_| {
-                disconnected.set(true);
-                Err(problem("removal went on"))
-            },
-        )
-        .unwrap_err();
+    let (outcome, reached) = stand_in::standing_in(|| live.rest());
+    (outcome, reached, live.removed)
+}
+
+const EVERY_EFFECT: [&str; 5] = ["opener", "login", "agents", "trash", "settings"];
+
+#[test]
+fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), true);
+    let (outcome, reached, _) = rest_of(dir.path(), &found);
+    assert!(outcome.is_ok());
+    assert_eq!(reached, EVERY_EFFECT, "with no menu bar, everything goes");
+
+    // The menu bar's record can't be read, so whether it runs is unknown.
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), true);
+    fs::write(dir.path().join("runs/menubar.json"), "{").unwrap();
+    let (outcome, reached, removed) = rest_of(dir.path(), &found);
+    let error = outcome.unwrap_err();
     assert!(
         error.error.ends_with(
             "can't be read, so Atlas.app and its settings were kept. Quit the menu bar, then \
@@ -334,11 +342,9 @@ fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed
         "{}",
         error.error
     );
-    assert!(forgot.get());
-    assert!(!disconnected.get(), "nothing is removed after the menu bar");
-    assert!(said.borrow().is_empty(), "nothing says it stopped");
-    assert!(live.removed.is_empty());
-    assert!(found.app.exists() && found.data.exists() && settings.exists());
+    assert_eq!(reached, ["opener"], "nothing is removed after the menu bar");
+    assert!(removed.is_empty());
+    assert!(found.app.exists() && found.data.exists() && dir.path().join("settings").exists());
 }
 
 #[test]
