@@ -1,5 +1,5 @@
 use super::*;
-use atlas_core::{buffer::Buffer, protocol::ConnectionPhase};
+use atlas_core::{buffer::Buffer, frame_pipe::diagnostics::Lifecycle, protocol::ConnectionPhase};
 use atlas_native::native::capture::Shot;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::{
@@ -88,19 +88,39 @@ fn pin() -> SessionPin {
 }
 
 fn connection(daemon: Arc<Daemon>, side: u32) -> (UnixStream, JoinHandle<Result<()>>) {
+    connection_from(daemon, side, CaptureBackend::CoreGraphics)
+}
+
+fn connection_from(
+    daemon: Arc<Daemon>,
+    side: u32,
+    backend: CaptureBackend,
+) -> (UnixStream, JoinHandle<Result<()>>) {
     let (client, server) = UnixStream::pair().unwrap();
     let (reader, writer) = server.into_split();
     (
         client,
-        tokio::spawn(serve(
-            daemon,
-            reader,
-            writer,
-            side,
-            pin(),
-            CaptureBackend::CoreGraphics,
-        )),
+        tokio::spawn(serve(daemon, reader, writer, side, pin(), backend)),
     )
+}
+
+/// A daemon whose native source stops as `stop` says.
+fn stopping(stop: fn() -> Result<()>) -> Arc<Daemon> {
+    let mut daemon = Arc::try_unwrap(daemon(raw)).ok().unwrap();
+    daemon.source = Source::new(stop);
+    Arc::new(daemon)
+}
+
+fn never_stops() -> Result<()> {
+    Err(Error::new(
+        Code::Capture,
+        "Native stream stop is still pending",
+    ))
+}
+
+async fn ask_stop(client: &mut UnixStream, id: u64) {
+    client.write_all(&[0]).await.unwrap();
+    client.write_all(&id.to_be_bytes()).await.unwrap();
 }
 
 async fn header(client: &mut UnixStream) -> Value {
@@ -111,11 +131,12 @@ async fn header(client: &mut UnixStream) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-async fn accepted(client: &mut UnixStream) {
-    assert_eq!(
-        header(client).await,
-        json!({"ok":true,"stream":"rgb-stream-v1"})
-    );
+async fn accepted(client: &mut UnixStream) -> u64 {
+    let header = header(client).await;
+    assert_eq!(header["ok"], true);
+    assert_eq!(header["stream"], "rgb-stream-v1");
+    assert_eq!(header["daemonPID"], std::process::id());
+    header["producerGeneration"].as_u64().unwrap()
 }
 
 #[tokio::test]
@@ -212,10 +233,10 @@ async fn a_departed_reader_cannot_leave_an_orphan_capture_or_release_its_slot_ea
             .await
             .is_err()
     );
-    assert_eq!(daemon.stream_slot.available_permits(), 0);
+    assert_eq!(daemon.source.lifecycle(), Lifecycle::Active);
     BLOCKED.store(false, Ordering::SeqCst);
     task.await.unwrap().unwrap();
-    assert_eq!(daemon.stream_slot.available_permits(), 1);
+    assert_eq!(daemon.source.lifecycle(), Lifecycle::Stopped);
 }
 
 #[tokio::test]
@@ -284,4 +305,104 @@ async fn readiness_follows_the_acceptance_handshake_after_the_initial_request_li
     assert_eq!(rgb, [11, 22, 33, 44, 55, 66]);
     drop(client);
     task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_stop_request_answers_only_once_the_source_is_drained() {
+    let _serial = SERIAL.lock().await;
+    reset();
+    let daemon = daemon(raw);
+    let (mut client, task) = connection(daemon.clone(), 640);
+    let generation = accepted(&mut client).await;
+    client.write_all(&[1]).await.unwrap();
+    assert_eq!(header(&mut client).await["sequence"], 1);
+    client.read_exact(&mut [0; 6]).await.unwrap();
+    ask_stop(&mut client, 41).await;
+    assert_eq!(
+        header(&mut client).await,
+        json!({"ok": true, "daemonPID": std::process::id(), "producerGeneration": generation,
+            "stopRequestID": 41, "drained": true})
+    );
+    task.await.unwrap().unwrap();
+    assert_eq!(daemon.source.lifecycle(), Lifecycle::Stopped);
+    let query = "0123456789abcdef0123456789abcdef";
+    let status = drain_status(
+        &daemon.source,
+        std::process::id(),
+        generation,
+        query,
+        Some(41),
+    );
+    assert_eq!(status["state"], "stopped");
+    assert_eq!(status["drained"], true);
+    assert_eq!(status["stopRequestID"], 41);
+    assert_eq!(status["queryID"], query);
+    let other = drain_status(
+        &daemon.source,
+        std::process::id(),
+        generation,
+        query,
+        Some(7),
+    );
+    assert!(
+        other.get("stopRequestID").is_none(),
+        "an unknown stop ID is never echoed"
+    );
+    let elsewhere = drain_status(
+        &daemon.source,
+        std::process::id() + 1,
+        generation,
+        query,
+        None,
+    );
+    assert_eq!(
+        (elsewhere["state"].clone(), elsewhere["drained"].clone()),
+        (json!("unknown"), json!(false))
+    );
+}
+
+#[tokio::test]
+async fn an_unconfirmed_native_stop_keeps_every_capture_out_until_it_is_confirmed() {
+    let _serial = SERIAL.lock().await;
+    reset();
+    let daemon = stopping(never_stops);
+    let (mut client, task) = connection_from(daemon.clone(), 640, CaptureBackend::ScreenCaptureKit);
+    let generation = accepted(&mut client).await;
+    ask_stop(&mut client, 5).await;
+    assert_eq!(header(&mut client).await["code"], "capture");
+    task.await.unwrap().unwrap();
+    assert_eq!(daemon.source.lifecycle(), Lifecycle::Quarantined);
+    let status = drain_status(
+        &daemon.source,
+        std::process::id(),
+        generation,
+        "0123456789abcdef0123456789abcdef",
+        Some(5),
+    );
+    assert_eq!(
+        (status["state"].clone(), status["drained"].clone()),
+        (json!("quarantined"), json!(false))
+    );
+
+    let (mut next, next_task) = connection(daemon.clone(), 640);
+    assert_eq!(
+        header(&mut next).await["code"],
+        "busy",
+        "a CoreGraphics stream cannot bypass it"
+    );
+    next_task.await.unwrap().unwrap();
+    assert_eq!(CAPTURES.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_truncated_stop_request_still_gives_the_source_back() {
+    let _serial = SERIAL.lock().await;
+    reset();
+    let daemon = daemon(raw);
+    let (mut client, task) = connection(daemon.clone(), 640);
+    accepted(&mut client).await;
+    client.write_all(&[0, 1, 2]).await.unwrap();
+    drop(client);
+    task.await.unwrap().unwrap();
+    assert_eq!(daemon.source.lifecycle(), Lifecycle::Stopped);
 }

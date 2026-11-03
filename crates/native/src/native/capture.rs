@@ -22,6 +22,7 @@ use objc2_image_io::{
 };
 
 mod raw;
+pub mod source;
 mod stream;
 
 pub use raw::RawShot;

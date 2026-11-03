@@ -124,6 +124,9 @@ pub const RGB_STREAM: &str = "rgb-stream-v1";
 pub const RGB_STREAM_HIGH_RES: &str = "rgb-stream-4096";
 /// The experimental ScreenCaptureKit source for raw frames.
 pub const SCK_EXPERIMENTAL: &str = "capture-sck-experimental";
+/// A raw frame stream stops only when asked, answers once its source is
+/// stopped and drained, and is asked about later by generation.
+pub const RGB_STREAM_STOP: &str = "rgb-stream-stop-v1";
 /// Fresh independent session proofs from a persistent child, without a
 /// process per request.
 pub const SESSION_PROOF: &str = "session-proof-v1";
@@ -144,6 +147,14 @@ impl CaptureBackend {
             Self::ScreenCaptureKit => "sck",
         }
     }
+}
+
+/// Whether `id` is exactly 32 lowercase hex digits.
+pub fn hex32(id: &str) -> bool {
+    id.len() == 32
+        && id
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Whether `challenge` may name one independent session proof: 1 to 128
@@ -216,6 +227,29 @@ requests! { request =>
         crate::host::verification::claims(&request["claims"])
             .map(Request::HostSession)
             .ok_or_else(|| bad("invalid host session claims")),
+    /// Whether a live capture generation is known to be stopped and drained.
+    "stream-drain-status" StreamDrainStatus {
+        daemon_pid: u32,
+        producer_generation: u64,
+        query_id: String,
+        stop_request: Option<u64>,
+    } = Ok(Request::StreamDrainStatus {
+        daemon_pid: whole(&request["daemonPID"], 1..=u64::from(u32::MAX), "\"daemonPID\" must be a process ID")?
+            as u32,
+        producer_generation: whole(
+            &request["producerGeneration"],
+            1..=u64::MAX,
+            "\"producerGeneration\" must be a generation",
+        )?,
+        query_id: request["queryID"]
+            .as_str()
+            .filter(|id| hex32(id))
+            .ok_or_else(|| bad("\"queryID\" must be 32 lowercase hex digits"))?
+            .to_owned(),
+        stop_request: optional(&request["stopRequestID"], |value| {
+            whole(value, 0..=u64::MAX, "\"stopRequestID\" must be a whole number")
+        })?,
+    }),
     /// Raw frames on this connection, each after a readiness byte.
     "stream" Stream { max_dimension: u32, pin: SessionPin, backend: CaptureBackend } =
         Ok(Request::Stream {
@@ -308,6 +342,7 @@ impl Request {
             Self::SessionProof { .. } => (Hidden, None, Read("session-proof")),
             Self::HostSession(_) => (Any, None, Read("host-session")),
             Self::Stream { pin, .. } => (Hidden, Some(*pin), Read("stream")),
+            Self::StreamDrainStatus { .. } => (Any, None, Read("stream-drain-status")),
             Self::Apps { pin } => (Any, *pin, Read("apps")),
             Self::Windows { pin, .. } => (Hidden, *pin, Read("windows")),
             Self::Screenshot { .. } => (Hidden, None, Read("screenshot")),

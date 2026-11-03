@@ -585,3 +585,30 @@ fn a_stream_requires_a_bounded_size_and_explicit_session_pin() {
             backend: CaptureBackend::CoreGraphics,
         });
 }
+
+#[test]
+fn a_drain_query_names_one_generation_with_a_fresh_query_id() {
+    let query = "0123456789abcdef0123456789abcdef";
+    assert_eq!(
+        parse(
+            json!({"op": "stream-drain-status", "daemonPID": 77, "producerGeneration": 3,
+                "queryID": query, "stopRequestID": 9})
+            .to_string()
+            .as_bytes()
+        ),
+        Ok(Request::StreamDrainStatus {
+            daemon_pid: 77,
+            producer_generation: 3,
+            query_id: query.into(),
+            stop_request: Some(9),
+        })
+    );
+    for bad in [
+        json!({"op": "stream-drain-status", "daemonPID": 77, "producerGeneration": 3, "queryID": "ABCDEF0123456789abcdef0123456789"}),
+        json!({"op": "stream-drain-status", "daemonPID": 77, "producerGeneration": 0, "queryID": query}),
+        json!({"op": "stream-drain-status", "daemonPID": 0, "producerGeneration": 3, "queryID": query}),
+        json!({"op": "stream-drain-status", "producerGeneration": 3, "queryID": query}),
+    ] {
+        assert!(parse(bad.to_string().as_bytes()).is_err(), "{bad}");
+    }
+}

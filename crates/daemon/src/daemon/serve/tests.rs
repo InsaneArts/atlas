@@ -1387,6 +1387,7 @@ async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_inc
             "rgb-stream-4096",
             "session-proof-v1",
             "capture-sck-experimental",
+            "rgb-stream-stop-v1",
             "jobs"
         ])
     );
@@ -1449,6 +1450,7 @@ fn a_blocked_hello_lookup_leaves_other_daemon_requests_responsive() {
             "rgb-stream-4096",
             "session-proof-v1",
             "capture-sck-experimental",
+            "rgb-stream-stop-v1",
             "jobs"
         ])
     );
@@ -1470,6 +1472,7 @@ async fn the_daemon_offers_jobs_and_reads() {
             "rgb-stream-4096",
             "session-proof-v1",
             "capture-sck-experimental",
+            "rgb-stream-stop-v1",
         ]),
         "no jobs without their folder"
     );
@@ -1487,6 +1490,7 @@ async fn the_daemon_offers_jobs_and_reads() {
             "rgb-stream-4096",
             "session-proof-v1",
             "capture-sck-experimental",
+            "rgb-stream-stop-v1",
             "jobs"
         ])
     );

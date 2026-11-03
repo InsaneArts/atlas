@@ -179,8 +179,8 @@ pub struct Daemon {
     /// Foreground commands outlive a cancelled socket handler until their
     /// process group and observed event writer have finished.
     runs: Mutex<JoinSet<Result<()>>>,
-    /// The one live frame stream; held through its native source's drain.
-    stream_slot: Semaphore,
+    /// The one live capture source; held through its native source's drain.
+    source: capture::source::Source,
     /// The persistent child that answers session-proof requests.
     proof_worker: Mutex<Option<proof::Worker>>,
 }
@@ -209,7 +209,7 @@ impl Daemon {
             stopping: watch::Sender::new(false),
             jobs: None,
             runs: Mutex::new(JoinSet::new()),
-            stream_slot: Semaphore::new(1),
+            source: capture::source::Source::new(capture::stop_display_stream),
             proof_worker: Mutex::new(None),
         }
     }
@@ -678,6 +678,18 @@ pub(crate) async fn handle(
         Request::SessionProof { challenge } => proof::query(&daemon.proof_worker, &challenge)
             .await
             .unwrap_or_else(refused),
+        Request::StreamDrainStatus {
+            daemon_pid,
+            producer_generation,
+            query_id,
+            stop_request,
+        } => stream::drain_status(
+            &daemon.source,
+            daemon_pid,
+            producer_generation,
+            &query_id,
+            stop_request,
+        ),
         Request::HostSession(claims) => tokio::task::spawn_blocking(move || {
             atlas_core::host::verification::verify(&claims, caller, peer.uid())
         })
@@ -708,7 +720,16 @@ pub(crate) async fn handle(
             max_dimension,
             per_point,
             crop,
-        } => screenshot(&daemon.screen, max_dimension, per_point, crop).await,
+        } => {
+            // A live source whose stop is unconfirmed is asked again first,
+            // which blocks; until it confirms, nothing else captures.
+            let confirming = daemon.clone();
+            match tokio::task::spawn_blocking(move || confirming.source.one_shot()).await {
+                Ok(Ok(())) => screenshot(&daemon.screen, max_dimension, per_point, crop).await,
+                Ok(Err(error)) => refused(error),
+                Err(_) => failure(Code::Capture, "The capture failed"),
+            }
+        }
         Request::Run { argv, timeout, .. } => {
             return serve_run(daemon, argv, timeout, policy, (reader, writer), phase).await;
         }

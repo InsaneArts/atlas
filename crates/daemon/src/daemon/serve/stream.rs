@@ -7,7 +7,10 @@ use atlas_core::{
     protocol::{CaptureBackend, SessionPin, refused},
     session::InputEpoch,
 };
-use atlas_native::native::capture::{self, RawShot};
+use atlas_native::native::capture::{
+    self, RawShot,
+    source::{Drain, Owner, Source},
+};
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 use tokio::{
@@ -25,16 +28,79 @@ const CADENCE: Duration = Duration::from_nanos(1_000_000_000 / 30);
 const NATIVE_CADENCE: Duration = Duration::from_nanos(1_000_000_000 / 60);
 const MAX_HEADER: usize = 4096;
 
-/// Stops the native source when the connection that owns it ends. A stop
-/// that is not confirmed leaves the source quarantined in its worker.
-struct StreamStop(CaptureBackend);
+/// The connection's ownership of the live source. Dropping it gives the
+/// source back: at once for CoreGraphics, and on a blocking thread for a
+/// native source, whose admission stays held until its stop is confirmed
+/// and which stays quarantined when it is not.
+struct Producer {
+    daemon: Arc<Daemon>,
+    owner: Option<Owner>,
+}
 
-impl Drop for StreamStop {
+impl Producer {
+    fn generation(&self) -> u64 {
+        self.owner.as_ref().map_or(0, Owner::generation)
+    }
+
+    /// Give the source back now, as `stop_request` asked: Ok only once its
+    /// native source is stopped and drained.
+    async fn stop(mut self, stop_request: u64) -> Result<()> {
+        let Some(owner) = self.owner.take() else {
+            return Ok(());
+        };
+        let daemon = self.daemon.clone();
+        tokio::task::spawn_blocking(move || daemon.source.stop(owner, Some(stop_request)))
+            .await
+            .map_err(|_| {
+                Error::new(Code::Capture, "The live capture stop did not finish").uncertain()
+            })?
+    }
+}
+
+impl Drop for Producer {
     fn drop(&mut self) {
-        if self.0 == CaptureBackend::ScreenCaptureKit {
-            let _ = capture::stop_display_stream();
+        let Some(owner) = self.owner.take() else {
+            return;
+        };
+        let native = owner.backend() == CaptureBackend::ScreenCaptureKit;
+        let daemon = self.daemon.clone();
+        // A failed stop is kept as the source's quarantine, not lost here.
+        let stop = move || {
+            let _ = daemon.source.stop(owner, None);
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) if native => drop(runtime.spawn_blocking(stop)),
+            _ => stop(),
         }
     }
+}
+
+/// What the source knows of `generation` of daemon `daemon_pid`, for a
+/// controller settling a stream whose stop it never heard confirmed. A stop
+/// request is echoed only when this source recorded that very request.
+pub(super) fn drain_status(
+    source: &Source,
+    daemon_pid: u32,
+    generation: u64,
+    query_id: &str,
+    stop_request: Option<u64>,
+) -> Value {
+    let drain = if daemon_pid == std::process::id() {
+        source.drain(generation)
+    } else {
+        Drain::Unknown
+    };
+    let (state, drained, recorded) = match drain {
+        Drain::Drained { stop_request } => (json!("stopped"), true, stop_request),
+        Drain::Held(lifecycle) => (json!(lifecycle), false, None),
+        Drain::Unknown => (json!("unknown"), false, None),
+    };
+    let mut reply = json!({"ok": true, "daemonPID": daemon_pid, "producerGeneration": generation,
+        "queryID": query_id, "state": state, "drained": drained});
+    if let Some(recorded) = recorded.filter(|recorded| Some(*recorded) == stop_request) {
+        reply["stopRequestID"] = json!(recorded);
+    }
+    reply
 }
 
 fn stopped() -> Error {
@@ -124,16 +190,22 @@ pub(super) async fn serve(
     pin: SessionPin,
     backend: CaptureBackend,
 ) -> Result<()> {
-    let Ok(_slot) = daemon.stream_slot.try_acquire() else {
-        return write_header(
-            &mut writer,
-            &refused(Error::new(Code::Busy, "A live capture is already open")),
-        )
-        .await;
+    // Admission may first confirm an earlier native stop, which blocks.
+    let admitting = daemon.clone();
+    let owner = match tokio::task::spawn_blocking(move || admitting.source.admit(backend)).await {
+        Ok(Ok(owner)) => owner,
+        Ok(Err(error)) => return write_header(&mut writer, &refused(error)).await,
+        Err(_) => {
+            let error = Error::new(Code::Capture, "The live capture could not start");
+            return write_header(&mut writer, &refused(error)).await;
+        }
     };
-    // Drop order keeps the producer slot excluded through native cancellation
-    // and callback drain, including client departure and capture errors.
-    let _stream_stop = StreamStop(backend);
+    // Ownership lasts through native cancellation and callback drain,
+    // including client departure and capture errors.
+    let producer = Producer {
+        daemon: daemon.clone(),
+        owner: Some(owner),
+    };
     let initial = daemon.screen.epoch();
     let expected = match initial {
         Ok(epoch)
@@ -157,7 +229,12 @@ pub(super) async fn serve(
     // The controller waits for this before READY. Its request line and
     // readiness byte therefore cannot be coalesced and consumed together
     // by the protocol's single-line reader.
-    write_header(&mut writer, &json!({"ok":true,"stream":"rgb-stream-v1"})).await?;
+    write_header(
+        &mut writer,
+        &json!({"ok": true, "stream": "rgb-stream-v1", "daemonPID": std::process::id(),
+            "producerGeneration": producer.generation()}),
+    )
+    .await?;
     let mut sequence = 0_u64;
     let mut next = tokio::time::Instant::now();
     loop {
@@ -168,12 +245,33 @@ pub(super) async fn serve(
                 if !matches!(read, Ok(Ok(_))) { return Ok(()); }
             }
         }
-        if ready != [1] {
-            return write_header(
-                &mut writer,
-                &refused(Error::new(Code::BadRequest, "A live frame requires READY")),
-            )
-            .await;
+        match ready {
+            [1] => {}
+            // A stop request: its 64-bit ID follows, and the reply comes
+            // only once the source is stopped and drained.
+            [0] => {
+                let mut id = [0_u8; 8];
+                let read = tokio::time::timeout(WRITE, reader.read_exact(&mut id)).await;
+                if !matches!(read, Ok(Ok(_))) {
+                    return Ok(());
+                }
+                let stop_request = u64::from_be_bytes(id);
+                let generation = producer.generation();
+                let reply = match producer.stop(stop_request).await {
+                    Ok(()) => json!({"ok": true, "daemonPID": std::process::id(),
+                        "producerGeneration": generation, "stopRequestID": stop_request,
+                        "drained": true}),
+                    Err(error) => refused(error),
+                };
+                return write_header(&mut writer, &reply).await;
+            }
+            _ => {
+                return write_header(
+                    &mut writer,
+                    &refused(Error::new(Code::BadRequest, "A live frame requires READY")),
+                )
+                .await;
+            }
         }
         tokio::select! {
             () = daemon.stopped() => return Ok(()),
