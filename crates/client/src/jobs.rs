@@ -669,10 +669,21 @@ impl Everyone {
 /// control the caller holds.
 pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
     let request = json!({"op": "job", "action": "stop-all", "reason": reason});
-    let reply = match client.transport.call(&request).await {
+    stopped_every(client, client.transport.call(&request)).await
+}
+
+/// [`stop_every`] once `asked` brings the helper's reply to its request.
+async fn stopped_every(
+    client: &Client,
+    asked: impl std::future::Future<Output = Result<Value>>,
+) -> Everyone {
+    let reply = match asked.await {
         Ok(reply) if reply["ok"] == true => reply,
-        // A helper with no daemon running keeps none.
-        Err(error) if error.code == Code::Io && !client.transport.path.exists() => {
+        // A helper with no daemon running keeps none. A removed socket does
+        // not acknowledge a request already sent.
+        Err(error)
+            if error.code == Code::Io && !error.uncertain && !client.transport.path.exists() =>
+        {
             return Everyone::default();
         }
         Ok(reply) => return Everyone::failed(refused(&reply).error),

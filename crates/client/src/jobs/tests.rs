@@ -854,6 +854,41 @@ async fn unreadable_job_records_remain_visible_during_logout_cleanup() {
 }
 
 #[tokio::test]
+async fn removing_the_socket_after_a_stop_was_sent_does_not_acknowledge_its_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_in(dir.path());
+    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+    std::fs::write(&client.transport.path, "endpoint").unwrap();
+    let (sent, request) = tokio::sync::oneshot::channel::<()>();
+    let socket = client.transport.path.clone();
+    // The request has gone out; then the daemon's socket is removed and the
+    // read of its reply fails.
+    let asked = async move {
+        request.await.unwrap();
+        std::fs::remove_file(&socket).unwrap();
+        Err(Error::new(Code::Io, "Connection reset by peer").uncertain())
+    };
+    sent.send(()).unwrap();
+    let everyone = stopped_every(&client, asked).await;
+    assert!(!client.transport.path.exists());
+    assert_eq!(
+        everyone.error.as_deref(),
+        Some("Connection reset by peer"),
+        "an unanswered stop is never taken to have found no jobs"
+    );
+    assert_eq!(everyone.warnings().len(), 1);
+
+    // Only a connection refused before anything was sent shows there is no
+    // daemon, and so no job.
+    let none = stopped_every(&client, async {
+        Err(Error::new(Code::Io, "Could not connect to socket"))
+    })
+    .await;
+    assert!(none.error.is_none());
+    assert!(none.warnings().is_empty());
+}
+
+#[tokio::test]
 async fn an_incomplete_stop_of_every_job_is_said_at_logout() {
     use atlas_core::record_folder::LISTED;
     use atlas_daemon::daemon::job::Jobs;
