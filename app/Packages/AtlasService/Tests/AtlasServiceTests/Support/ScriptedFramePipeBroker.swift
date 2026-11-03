@@ -17,6 +17,12 @@ actor ScriptedFramePipeBroker {
     case wrongCredit
     /// A fatal error.
     case refuse
+    /// The picture first, its acceptance only after it.
+    case lateAcceptance
+    /// A state change between the picture's pieces.
+    case interleaved
+    /// The source stops working.
+    case unavailable
   }
 
   static let service = String(repeating: "a", count: 32)
@@ -56,7 +62,7 @@ actor ScriptedFramePipeBroker {
     )
   }
 
-  func received(_ data: Data, on lane: FramePipeLane) {
+  func received(_ data: Data, on lane: FramePipeLane) async {
     var codec = FramePacketCodec(lane: lane)
     var input = data
     guard case .packet(let header, let metadata)? = try? codec.next(&input),
@@ -84,7 +90,7 @@ actor ScriptedFramePipeBroker {
     case .pairConfirm: reply(.pairReady, request, asked)
     case .subscribe:
       reply(.subscribed, request, ["profile": profile, "barrierGeneration": 1])
-    case .credit: credit(asked, request)
+    case .credit: await credit(asked, request)
     case .decoded: reply(.decodedAck, request, asked)
     case .commit: reply(.commitAck, request, asked)
     default: break
@@ -98,11 +104,34 @@ actor ScriptedFramePipeBroker {
     ]
   }
 
-  private func credit(_ asked: [String: Any], _ request: UInt64) {
+  private func credit(_ asked: [String: Any], _ request: UInt64) async {
     let credit = asked["creditID"] as? UInt64 ?? 0
-    reply(.creditAccepted, request, ["creditID": credit])
     let answer = script.isEmpty ? .picture : script.removeFirst()
     switch answer {
+    case .lateAcceptance:
+      sequence += 1
+      picture(credit: credit, request: request)
+      try? await Task.sleep(for: .milliseconds(20))
+      reply(.creditAccepted, request, ["creditID": credit])
+      return
+    case .interleaved:
+      reply(.creditAccepted, request, ["creditID": credit])
+      sequence += 1
+      picture(credit: credit, request: request, split: true)
+      return
+    default: reply(.creditAccepted, request, ["creditID": credit])
+    }
+    switch answer {
+    case .lateAcceptance, .interleaved: return
+    case .unavailable:
+      reply(
+        .state,
+        0,
+        [
+          "phase": "unavailable", "streamGeneration": stream, "geometryGeneration": stream, "inputReady": false,
+          "controlOwner": "none", "failure": failure("source-stale"),
+        ]
+      )
     case .picture, .wrongCredit:
       sequence += 1
       picture(credit: answer == .picture ? credit : credit + 7, request: request)
@@ -131,7 +160,7 @@ actor ScriptedFramePipeBroker {
     ["code": "protocol", "stage": "protocol", "uncertain": false, "dispatched": false, "reason": reason]
   }
 
-  private func picture(credit: UInt64, request: UInt64) {
+  private func picture(credit: UInt64, request: UInt64, split: Bool = false) {
     let metadata: [String: Any] = [
       "serviceInstance": Self.service, "observerID": Self.observer, "observerGeneration": 1,
       "streamGeneration": stream, "geometryGeneration": stream, "creditID": credit, "sourceSequence": sequence,
@@ -143,7 +172,23 @@ actor ScriptedFramePipeBroker {
     guard let body = try? JSONSerialization.data(withJSONObject: metadata),
       let head = try? FramePacketCodec.encode(kind: .fullFrame, request: request, metadata: body, payloadLength: 24)
     else { return }
-    frame?.sink.yield(head + pixels)
+    guard split else {
+      frame?.sink.yield(head + pixels)
+      return
+    }
+    frame?.sink.yield(head + pixels.prefix(10))
+    reply(
+      .state,
+      0,
+      [
+        "phase": "live", "streamGeneration": stream, "geometryGeneration": stream, "inputReady": true,
+        "controlOwner": "none",
+      ]
+    )
+    Task { [frame] in
+      try? await Task.sleep(for: .milliseconds(20))
+      frame?.sink.yield(pixels.dropFirst(10))
+    }
   }
 
   private func reply(

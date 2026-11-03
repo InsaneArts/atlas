@@ -4,12 +4,6 @@ import Foundation
 /// which only its commit makes the picture input may name. Every reply is checked against exactly what was asked;
 /// anything else ends the observer.
 public actor FrameStreamClient {
-  /// The keys a ref has, in the order the service writes them.
-  private static let referenceKeys = [
-    "serviceInstance", "observerID", "observerGeneration", "streamGeneration", "geometryGeneration",
-    "sourceSequence", "imageSequence", "frameKey", "viewGeneration",
-  ]
-
   private let descriptor: FramePipeDescriptor
   private let control: any FramePipeTransport
   private let frame: any FramePipeTransport
@@ -154,6 +148,7 @@ public actor FrameStreamClient {
   /// - Throws: ``FramePipeError`` or a lane failure, which end the observer.
   public func next(longest: Int) async throws -> FramePipePicture {
     while true {
+      if generations == nil { try await subscribe(reason: "reconfigure", longest: longest) }
       guard let generations else { throw FramePipeError.invalid }
       credit += 1
       var asked: [String: Any] = [
@@ -171,10 +166,7 @@ public actor FrameStreamClient {
           switch header.kind {
           case .creditAccepted: continue
           case .creditExpired: break reading
-          case .state:
-            let state = try Self.object(metadata, keys: nil)
-            guard state["phase"] as? String == "profile-changed" else { continue }
-            self.generations = nil
+          case .state: try note(metadata)
           case .error:
             if self.generations == nil, Self.retired(metadata) {
               try await subscribe(reason: "reconfigure", longest: longest)
@@ -188,9 +180,13 @@ public actor FrameStreamClient {
           try picture.check(kind: .fullFrame, payloadLength: header.payloadLength)
           guard picture.creditID == credit, picture.observerID == observerID else { throw FramePipeError.invalid }
           var rgb = Data(capacity: Int(header.payloadLength))
+          // The lanes are independent: control packets may arrive between the picture's pieces.
           while rgb.count < Int(header.payloadLength) {
-            guard case .payload(let piece) = try await iterator.next() else { throw FramePipeError.truncated }
-            rgb.append(piece)
+            switch try await iterator.next() {
+            case .payload(let piece): rgb.append(piece)
+            case .packet(.control, let header, let metadata): try crossing(header, metadata)
+            default: throw FramePipeError.truncated
+            }
           }
           fresh = false
           return try Self.picture(picture, rgb: rgb)
@@ -270,12 +266,36 @@ public actor FrameStreamClient {
     lane: FramePipeLane = .control
   ) async throws -> [String: Any] {
     var iterator = incoming.makeAsyncIterator()
-    guard case .packet(let arrived, let header, let metadata) = try await iterator.next() else {
-      throw FramePipeError.truncated
+    while true {
+      guard case .packet(let arrived, let header, let metadata) = try await iterator.next() else {
+        throw FramePipeError.truncated
+      }
+      if arrived == lane, header.kind == kind { return try Self.object(metadata, keys: keys) }
+      guard arrived == .control else { throw FramePipeError.invalid }
+      try crossing(header, metadata)
     }
-    if header.kind == .error { throw Self.refusal(metadata) }
-    guard arrived == lane, header.kind == kind else { throw FramePipeError.invalid }
-    return try Self.object(metadata, keys: keys)
+  }
+
+  /// Handles a control packet that crossed a reply or a picture: an acceptance needs nothing, a state change is
+  /// noted, and anything else ends the observer.
+  private func crossing(_ header: FramePipeHeader, _ metadata: Data) throws {
+    switch header.kind {
+    case .creditAccepted: return
+    case .state: try note(metadata)
+    case .error: throw Self.refusal(metadata)
+    default: throw FramePipeError.invalid
+    }
+  }
+
+  /// Notes a state change: a changed profile is subscribed to again before the next credit, and a source that
+  /// stopped working ends the observer, so the window reads pictures another way meanwhile.
+  private func note(_ metadata: Data) throws {
+    let state = try Self.object(metadata, keys: nil)
+    switch state["phase"] as? String {
+    case "profile-changed": generations = nil
+    case "unavailable": throw ServiceError("The helper's pictures are unavailable")
+    default: return
+    }
   }
 
   /// `metadata` as an object, once it passes the lexical check and, when `keys` is given, has exactly those keys.

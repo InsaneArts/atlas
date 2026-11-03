@@ -21,6 +21,8 @@ final class ViewerFramePump {
   private let clock: any Clock<Duration>
   /// The pump, while the window watches.
   private var pumping: Task<Void, Never>?
+  /// Numbers each start, so a pump that was stopped never changes what a later one set.
+  private var generation = 0
   /// Whether pictures arrive from the frame service now.
   private(set) var streaming = false
 
@@ -49,7 +51,12 @@ final class ViewerFramePump {
     show: @escaping @MainActor (Frame, DesktopPicture.Decoded) -> Void
   ) {
     stop()
-    pumping = Task { [weak self, service, connector, clock] in
+    let number = generation
+    let current = { [weak self] in self?.generation == number }
+    let streaming = { [weak self] (on: Bool) in
+      if self?.generation == number { self?.streaming = on }
+    }
+    pumping = Task { [service, connector, clock] in
       while !Task.isCancelled {
         var client: FrameStreamClient?
         do {
@@ -68,21 +75,22 @@ final class ViewerFramePump {
             }
             let picture = try await opened.next(longest: Self.longest)
             guard let decoded = await Self.decode(picture) else { throw ServiceError.unknownScreenSize }
-            guard !Task.isCancelled else { break }
-            self?.streaming = true
+            // Committed before it is shown: input aimed at a picture on screen always finds it.
+            try await opened.commit(picture)
+            guard !Task.isCancelled, current() else { break }
+            streaming(true)
             show(
               Frame(png: Data(), id: picture.frameKey, revision: picture.revision, display: picture.display),
               decoded
             )
-            try await opened.commit(picture)
             let rest = pause()
             if rest > .zero { try await clock.sleep(for: rest) }
           }
         } catch {
-          self?.streaming = false
+          streaming(false)
         }
         await client?.close()
-        self?.streaming = false
+        streaming(false)
         try? await clock.sleep(for: Self.retryEvery)
       }
     }
@@ -90,6 +98,7 @@ final class ViewerFramePump {
 
   /// Stops pumping; the window reads pictures over the viewer's address again.
   func stop() {
+    generation += 1
     pumping?.cancel()
     pumping = nil
     streaming = false

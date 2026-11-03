@@ -69,4 +69,22 @@ struct FrameStreamClientTests {
     #expect(await broker.kinds.filter { $0 == .credit }.count <= 1)
     await client.close()
   }
+
+  @Test("an acceptance after its picture, or a state between the picture's pieces, is handled on the way")
+  func crossingLanes() async throws {
+    let (client, _) = try await Self.opened([.lateAcceptance, .interleaved, .picture])
+    for _ in 0..<3 {
+      let picture = try await client.next(longest: 1_600)
+      #expect(picture.rgb.count == 24)
+      try await client.commit(picture)
+    }
+    await client.close()
+  }
+
+  @Test("a source that stops working ends the observer")
+  func unavailable() async throws {
+    let (client, _) = try await Self.opened([.unavailable])
+    await #expect(throws: ServiceError.self) { try await client.next(longest: 1_600) }
+    await client.close()
+  }
 }

@@ -99,7 +99,11 @@ final class ViewerReadingLoop {
     if on {
       pump?.start(
         paused: { [weak self] in self?.viewer?.session.paused ?? true },
-        pause: { [weak self] in self?.rate == .live ? .zero : .seconds(self?.rate.seconds ?? 0) },
+        pause: { [weak self] in
+          // Live, or controlling, streams at the service's pace; a slower rate waits between pictures.
+          guard let self, rate != .live, viewer?.holdingControl != true else { return .zero }
+          return .seconds(rate.seconds)
+        },
         show: { [weak self] frame, decoded in
           guard let self else { return }
           show(frame, decoded: decoded, ready: reading.status.ready)
@@ -176,10 +180,11 @@ final class ViewerReadingLoop {
       } else {
         next = try await service.frame()
       }
-      guard current() else { return }
+      guard current(), pump?.streaming != true else { return }
       // Decoded once: the view draws its pixels, and input is mapped through its size.
       let decoded = await decode(next)
-      guard current() else { return }
+      // The frame service may have taken over meanwhile: its pictures win.
+      guard current(), pump?.streaming != true else { return }
       guard let decoded else { throw ServiceError.unknownScreenSize }
       show(next, decoded: decoded, ready: reply.ready)
     } catch is StatusRefused {
@@ -270,8 +275,10 @@ final class ViewerReadingLoop {
   ///   - decoded: Its picture and size, decoded once.
   ///   - ready: Whether the status read with it says the helper takes input.
   func show(_ frame: Frame, decoded: DesktopPicture.Decoded, ready: Bool) {
+    // A change between the viewer's pictures and the frame service's is a change of transport, not of helper:
+    // their revisions are compared only with their own kind.
     if let viewer, viewer.holdingControl || viewer.control.acquiring, let shown = reading.frame,
-      shown.revision != frame.revision
+      shown.revision.hasPrefix("pipe:") == frame.revision.hasPrefix("pipe:"), shown.revision != frame.revision
     {
       viewer.control.releaseControl(ViewerWords.helperChanged)
     }
