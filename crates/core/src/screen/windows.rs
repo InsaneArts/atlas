@@ -15,6 +15,13 @@ pub const MENU_BAR_LAYER: i64 = 24;
 /// never an app's own windows.
 pub const DOCK_LAYER: i64 = 20;
 
+/// The layer Notification Center's desktop widgets sit on: above the
+/// desktop's icons, below every app's windows.
+pub const WIDGET_LAYER: i64 = -2_147_483_601;
+
+/// The name the window list gives Notification Center's windows.
+const NOTIFICATION_CENTER: &str = "Notification Center";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Window {
@@ -25,6 +32,37 @@ pub struct Window {
     pub layer: i64,
     pub alpha: f64,
     pub bounds: Bounds,
+    /// The system process the helper proved draws this window; none for
+    /// an app's window, or one whose process was not proven.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<System>,
+}
+
+/// A system process proven to draw a window: one of the helper login's own
+/// processes, running the system's program for it. A window's owner name
+/// alone never makes one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum System {
+    /// Notification Center, which draws banners, alerts and desktop widgets.
+    NotificationCenter,
+}
+
+/// What a window Notification Center draws, or is named as drawing, is to
+/// a pointer event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    /// A desktop widget, which takes clicks wherever it is.
+    Widget,
+    /// A window across the whole display, above the ordinary layer, that
+    /// lets pointer events through to what is under it.
+    Overlay,
+    /// Anything else it shows, a banner, an alert or its panel, which
+    /// takes clicks where it is.
+    Notification,
+    /// Named as Notification Center's, but its process was not proven to
+    /// be: what it shows there is not known.
+    Unproven,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,13 +130,27 @@ impl Window {
         self.layer == MENU_BAR_LAYER && self.owner.as_deref() == Some("Window Server")
     }
 
-    /// Whether this is one of the Dock's or Notification Center's windows
-    /// spanning the whole `display`, which pass pointer events through to
-    /// what is under them, except where the Dock shows its tiles (see
-    /// [`Screen`]).
+    /// Whether this is one of the Dock's windows spanning the whole
+    /// `display`, or Notification Center's [`Surface::Overlay`], which pass
+    /// pointer events through to what is under them, except where the Dock
+    /// shows its tiles (see [`Screen`]).
     pub fn passes_through(&self, display: &Bounds) -> bool {
         self.bounds.covers(display)
-            && matches!(self.owner.as_deref(), Some("Dock" | "Notification Center"))
+            && (self.is_dock() || self.surface(display) == Some(Surface::Overlay))
+    }
+
+    /// What this window is to a pointer event as Notification Center's,
+    /// on `display`; none when it is not, by proof or by name.
+    pub fn surface(&self, display: &Bounds) -> Option<Surface> {
+        match self.system {
+            Some(System::NotificationCenter) if self.layer > 0 && self.bounds.covers(display) => {
+                Some(Surface::Overlay)
+            }
+            Some(System::NotificationCenter) if self.layer == WIDGET_LAYER => Some(Surface::Widget),
+            Some(System::NotificationCenter) => Some(Surface::Notification),
+            None if self.owner.as_deref() == Some(NOTIFICATION_CENTER) => Some(Surface::Unproven),
+            None => None,
+        }
     }
 
     /// Whether this is a window of the Dock's.
@@ -253,6 +305,19 @@ impl Screen {
         &self.dock
     }
 
+    /// What `window` is as Notification Center's on this display.
+    pub fn surface(&self, window: &Window) -> Option<Surface> {
+        window.surface(&self.display)
+    }
+
+    /// Whether what `window` shows to pointer events is not known: the
+    /// Dock where it could not be read, or a window named as Notification
+    /// Center's whose process was not proven.
+    pub fn unread(&self, window: &Window) -> bool {
+        (window.is_dock() && self.dock == Dock::Unread)
+            || self.surface(window) == Some(Surface::Unproven)
+    }
+
     /// Whether `window` lets a pointer event at the point through to what
     /// is under it: a full-display click-through overlay, but not where the
     /// Dock takes clicks.
@@ -290,10 +355,10 @@ pub fn from_reply(value: &serde_json::Value) -> Option<Shown> {
 
 /// Whether the point lies inside window `target` with nothing in front of it
 /// covering that point. `windows` is front to back. Only the Dock's and
-/// Notification Center's higher-layer windows spanning the whole display
-/// are click-through overlays, the Dock's only away from where it takes
-/// clicks; every other window in front, the menu bar and any unidentified
-/// overlay included, occludes.
+/// Notification Center's proven higher-layer windows spanning the whole
+/// display are click-through overlays, the Dock's only away from where it
+/// takes clicks; every other window in front, the menu bar, a widget or
+/// banner and any unidentified overlay included, occludes.
 pub fn unobstructed(windows: &[Window], target: i64, x: f64, y: f64, screen: &Screen) -> bool {
     let Some(index) = windows.iter().position(|window| window.number == target) else {
         return false;
@@ -323,6 +388,38 @@ pub fn reaches(windows: &[Window], pid: i64, x: f64, y: f64, screen: &Screen) ->
     windows
         .iter()
         .any(|window| window.pid == pid && unobstructed(windows, window.number, x, y, screen))
+}
+
+/// What a pointer event at a point meets once past every window that lets
+/// it through.
+#[derive(Debug, PartialEq)]
+pub enum Ground<'a> {
+    /// The empty desktop: inside the display, with no listed window there.
+    Clear,
+    /// Outside the display.
+    Outside,
+    /// This window, a widget among them, covers the point.
+    Covered(&'a Window),
+    /// What this window shows at the point is not known (see
+    /// [`Screen::unread`]).
+    Unread(&'a Window),
+}
+
+/// What is at the point, front to back through `windows`: the frontmost
+/// window there, however faint, that does not let the point through, or the
+/// empty desktop when there is none.
+pub fn ground_at<'a>(windows: &'a [Window], x: f64, y: f64, screen: &Screen) -> Ground<'a> {
+    if !screen.display.contains(x, y) {
+        return Ground::Outside;
+    }
+    match windows
+        .iter()
+        .find(|window| window.bounds.contains(x, y) && !screen.passes(window, x, y))
+    {
+        None => Ground::Clear,
+        Some(window) if screen.unread(window) => Ground::Unread(window),
+        Some(window) => Ground::Covered(window),
+    }
 }
 
 /// A whole point inside `target` that is [`unobstructed`], preferring points

@@ -13,7 +13,7 @@ use atlas_core::{
     screen::{
         elements::Element,
         select::{ElementFilter, shown_name},
-        windows::{self, Bounds, Dock, Listed, Screen, Window},
+        windows::{self, Bounds, Dock, Listed, Screen, Surface, Window},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -792,8 +792,10 @@ fn covered(listed: &[Window], pid: i64, number: i64) -> bool {
 /// layer, is uncovered at the point, the Dock covering what is under it
 /// where it takes clicks. The active app owns the menu bar. With a window named,
 /// only where that window is uncovered, judged where it presses: a drop
-/// lands in the app's window if not the same one. Where the Dock could not
-/// be read and is on top, what is in front is unreadable.
+/// lands in the app's window if not the same one. A desktop widget covers
+/// what is behind it. Where the Dock could not be read, or a window named as
+/// Notification Center's was not proven to be, and is on top, what is in
+/// front is unreadable.
 fn point(
     expect: &Expect,
     (x, y): (f64, f64),
@@ -817,13 +819,16 @@ fn point(
         let fact = format!("No window of the app is at {at}");
         return Err(refused_because(Reason::Point, fact));
     };
-    readable_dock(top, &screen)?;
+    readable(top, &screen)?;
 
     let found = Found {
         window: None,
         ..Found::at(top)
     };
-    let fact = format!("{} window is at {at}, not the app's", found.whose());
+    let fact = match screen.surface(top) {
+        Some(Surface::Widget) => format!("A desktop widget is at {at}, not the app's window"),
+        _ => format!("{} window is at {at}, not the app's", found.whose()),
+    };
     Err(refused_with(Reason::Point, fact, found))
 }
 
@@ -851,7 +856,7 @@ fn at_window(
         let fact = format!("Window {wanted} is not at that point");
         return Err(refused_because(Reason::Window, fact));
     };
-    readable_dock(top, screen)?;
+    readable(top, screen)?;
 
     let found = Found::at(top);
     let (reason, whose) = if top.pid == pid {
@@ -866,14 +871,19 @@ fn at_window(
     Err(refused_with(reason, fact, found))
 }
 
-/// Refuse when the Dock is `top` and where it takes clicks could not be read.
-fn readable_dock(top: &Window, screen: &Screen) -> Result<()> {
-    if top.is_dock() && *screen.dock() == Dock::Unread {
-        let fact = "Atlas could not read where the Dock takes clicks";
-        return Err(refused_because(Reason::Unreadable, fact));
+/// Refuse when what `top` shows at the point is not known: the Dock where
+/// it takes clicks could not be read, or a window named as Notification
+/// Center's whose process was not proven to be it.
+fn readable(top: &Window, screen: &Screen) -> Result<()> {
+    if !screen.unread(top) {
+        return Ok(());
     }
-
-    Ok(())
+    let fact = if top.is_dock() {
+        "Atlas could not read where the Dock takes clicks"
+    } else {
+        "Atlas could not prove that Notification Center shows the window there"
+    };
+    Err(refused_because(Reason::Unreadable, fact))
 }
 
 fn unreadable_from(error: Error) -> Error {

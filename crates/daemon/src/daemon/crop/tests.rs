@@ -59,6 +59,7 @@ fn window(pid: i64, layer: i64, x: f64, y: f64, width: f64, height: f64) -> Wind
         title: None,
         layer,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x,
             y,
@@ -189,6 +190,7 @@ fn windows_of_others_in_front_are_reported_as_overlapping() {
     dock.owner = Some("Dock".into());
     let mut center = window(4, 23, 0.0, 0.0, 1000.0, 800.0);
     center.owner = Some("Notification Center".into());
+    center.system = Some(atlas_core::screen::windows::System::NotificationCenter);
     let mut alert = window(5, 8, 250.0, 250.0, 200.0, 120.0);
     alert.owner = Some("System Events".into());
     let mut gone = window(9, 0, 120.0, 120.0, 50.0, 50.0);
@@ -197,7 +199,7 @@ fn windows_of_others_in_front_are_reported_as_overlapping() {
     let mut indicator = window(2, 2147483630, 990.0, 1.0, 28.0, 22.0);
     indicator.owner = Some("Window Server".into());
 
-    let windows = [
+    let mut windows = [
         indicator,
         menu_bar(),
         dock,
@@ -209,14 +211,23 @@ fn windows_of_others_in_front_are_reported_as_overlapping() {
         window(7, 0, 950.0, 30.0, 50.0, 50.0),
         window(8, 0, 150.0, 150.0, 100.0, 100.0),
     ];
-    let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
-    let owners: Vec<_> = crop
-        .overlapping
-        .iter()
-        .map(|window| window.owner.as_deref().unwrap())
-        .collect();
+    let owners = |windows: &[Window]| -> Vec<String> {
+        app(windows, 7, &DISPLAY, &NO_DOCK)
+            .unwrap()
+            .overlapping
+            .iter()
+            .map(|window| window.owner.clone().unwrap())
+            .collect()
+    };
 
-    assert_eq!(owners, ["System Events"]);
+    assert_eq!(owners(&windows), ["System Events"]);
+
+    windows[3].system = None;
+    assert_eq!(
+        owners(&windows),
+        ["Notification Center", "System Events"],
+        "a window only named as Notification Center's is in front like any other"
+    );
 }
 
 #[test]

@@ -39,7 +39,7 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 `focus-changed` means an action given `--app`, `--pid`, `--window` or `--field` was not sent, because something else had focus or was at its point. `reason` says what:
 
 - `app`: another app had keyboard focus.
-- `point`: another app's window, the desktop, the Dock or an overlay was at the action's point.
+- `point`: another app's window, the desktop, a desktop widget, the Dock or an overlay was at the action's point.
 - `window`: another window of the app had focus, was in front of the named one or was at the point.
 - `sheet`: a sheet or dialog over the named window had focus.
 - `field`: another field or none had focus. Browsers and custom views often do not say which field has focus, so `--field` is refused there every time: use `--window` instead.

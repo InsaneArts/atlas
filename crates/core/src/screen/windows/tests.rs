@@ -64,6 +64,7 @@ fn placed(number: i64, layer: i64, title: Option<&str>, alpha: f64) -> Window {
         title: title.map(str::to_owned),
         layer,
         alpha,
+        system: None,
         bounds: Bounds {
             x: 10.0,
             y: 20.0,
@@ -132,6 +133,7 @@ fn window(number: i64, x: f64, y: f64, width: f64, height: f64) -> Window {
         title: None,
         layer: 0,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x,
             y,
@@ -351,6 +353,8 @@ fn the_top_window_at_a_point_agrees_with_the_unobstructed_check() {
     };
     let mut hidden = layered(8, 0, "Ghost", (0.0, 0.0, 1000.0, 800.0));
     hidden.alpha = 0.0;
+    let mut overlay = layered(9, 20, "Notification Center", (0.0, 0.0, 1000.0, 800.0));
+    overlay.system = Some(System::NotificationCenter);
     let fixtures = [
         vec![
             layered(1, MENU_LAYER, "TextEdit", (100.0, 24.0, 200.0, 300.0)),
@@ -363,7 +367,7 @@ fn the_top_window_at_a_point_agrees_with_the_unobstructed_check() {
         ],
         vec![
             hidden,
-            layered(9, 20, "Notification Center", (0.0, 0.0, 1000.0, 800.0)),
+            overlay,
             layered(10, 20, "Other", (0.0, 0.0, 500.0, 800.0)),
             layered(11, 0, "TextEdit", (100.0, 100.0, 800.0, 600.0)),
         ],
@@ -430,4 +434,116 @@ fn the_top_window_at_a_point_agrees_with_the_unobstructed_check() {
         assert!(!reaches(first, pid, 300.0, 775.0, &docked()), "{pid}");
     }
     assert!(reaches(first, 7, 100.0, 775.0, &docked()));
+}
+
+#[test]
+fn a_window_only_named_as_notification_centers_covers_what_is_under_it() {
+    let mut claimed = window(1, 0.0, 0.0, 1000.0, 800.0);
+    claimed.layer = 20;
+    claimed.owner = Some("Notification Center".into());
+    let app = window(2, 100.0, 100.0, 400.0, 300.0);
+    let listed = [claimed, app];
+
+    assert!(!unobstructed(&listed, 2, 200.0, 200.0, &undocked()));
+    assert_eq!(
+        top_at(&listed, 200.0, 200.0, &undocked()).map(|window| window.number),
+        Some(1)
+    );
+    assert_eq!(
+        ground_at(&listed, 700.0, 600.0, &undocked()),
+        Ground::Unread(&listed[0]),
+        "what it shows is not known"
+    );
+}
+
+/// A window of Notification Center's, as the helper proved it, at `layer`.
+fn notification_center(number: i64, layer: i64, bounds: (f64, f64, f64, f64)) -> Window {
+    let mut window = window(number, bounds.0, bounds.1, bounds.2, bounds.3);
+    window.pid = 31082;
+    window.owner = Some("Notification Center".into());
+    window.layer = layer;
+    window.system = Some(System::NotificationCenter);
+    window
+}
+
+#[test]
+fn banner_and_widget_regions_block_points_while_proven_empty_regions_pass_through() {
+    let banner = notification_center(1, 23, (640.0, 40.0, 350.0, 80.0));
+    let overlay = notification_center(2, 20, (0.0, 0.0, 1000.0, 800.0));
+    let app = window(3, 300.0, 300.0, 400.0, 300.0);
+    let month = notification_center(4, WIDGET_LAYER, (8.0, 38.0, 180.0, 180.0));
+    let featured = notification_center(5, WIDGET_LAYER, (8.0, 218.0, 360.0, 180.0));
+    let listed = [banner, overlay, app, month, featured];
+    let screen = undocked();
+    let number = |ground: Ground<'_>| match ground {
+        Ground::Covered(window) => Some(window.number),
+        Ground::Clear => None,
+        other => panic!("{other:?}"),
+    };
+
+    assert_eq!(listed[0].surface(&display()), Some(Surface::Notification));
+    assert_eq!(listed[1].surface(&display()), Some(Surface::Overlay));
+    assert_eq!(listed[2].surface(&display()), None);
+    assert_eq!(listed[3].surface(&display()), Some(Surface::Widget));
+
+    for (x, y, what, expected) in [
+        (700.0, 60.0, "a banner", Some(1)),
+        (400.0, 400.0, "an app's window under the overlay", Some(3)),
+        (70.0, 70.0, "a widget", Some(4)),
+        (300.0, 300.0, "the app's window over a widget", Some(3)),
+        (100.0, 300.0, "a widget below another", Some(5)),
+        (800.0, 700.0, "the empty desktop under the overlay", None),
+        (190.0, 100.0, "beside a widget", None),
+    ] {
+        assert_eq!(
+            number(ground_at(&listed, x, y, &screen)),
+            expected,
+            "{what}"
+        );
+        assert_eq!(
+            top_at(&listed, x, y, &screen).map(|window| window.number),
+            expected,
+            "{what}"
+        );
+    }
+    assert!(unobstructed(&listed, 3, 400.0, 400.0, &screen));
+    assert_eq!(ground_at(&listed, 1000.0, 400.0, &screen), Ground::Outside);
+    assert_eq!(ground_at(&listed, -1.0, 400.0, &screen), Ground::Outside);
+
+    let mut faint = window(6, 750.0, 650.0, 100.0, 100.0);
+    faint.alpha = 0.0;
+    let with_faint = [faint];
+    assert_eq!(
+        number(ground_at(&with_faint, 800.0, 700.0, &screen)),
+        Some(6),
+        "a window that shows nothing is still not the desktop"
+    );
+
+    let mut dock = window(7, 0.0, 0.0, 1000.0, 800.0);
+    dock.layer = 20;
+    dock.owner = Some("Dock".into());
+    let docks = [dock];
+    assert_eq!(number(ground_at(&docks, 300.0, 770.0, &docked())), Some(7));
+    assert_eq!(ground_at(&docks, 300.0, 600.0, &docked()), Ground::Clear);
+    assert_eq!(
+        ground_at(&docks, 300.0, 600.0, &Screen::new(display(), Dock::Unread)),
+        Ground::Unread(&docks[0])
+    );
+}
+
+#[test]
+fn a_window_says_which_system_drew_it_only_when_one_did() {
+    let mut proven = window(1, 0.0, 0.0, 10.0, 10.0);
+    proven.system = Some(System::NotificationCenter);
+    let ordinary = window(2, 0.0, 0.0, 10.0, 10.0);
+
+    assert_eq!(serde_json::json!(proven)["system"], "notificationCenter");
+    assert!(serde_json::json!(ordinary).get("system").is_none());
+    let mut wire = serde_json::json!(proven);
+    wire.as_object_mut().unwrap().remove("system");
+    assert_eq!(
+        serde_json::from_value::<Window>(wire).unwrap().system,
+        None,
+        "a list from before the field says no system drew it"
+    );
 }

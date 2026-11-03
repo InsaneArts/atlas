@@ -464,6 +464,7 @@ fn window(pid: i64, owner: &str, layer: i64, bounds: [f64; 4]) -> Window {
         title: Some(format!("{owner} window")),
         layer,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x: bounds[0],
             y: bounds[1],

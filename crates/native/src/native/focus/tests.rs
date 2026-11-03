@@ -26,6 +26,7 @@ fn window(pid: i64, owner: &str, layer: i64, bounds: (f64, f64, f64, f64)) -> Wi
         title: Some("Secret plans.txt".to_owned()),
         layer,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x: bounds.0,
             y: bounds.1,
@@ -377,17 +378,78 @@ fn the_menu_bar_counts_as_the_apps_only_while_it_has_keyboard_focus() {
 #[test]
 fn click_through_overlays_do_not_hide_the_window_under_them() {
     let document = window(APP, "TextEdit", 0, (100.0, 100.0, 400.0, 300.0));
-    for owner in ["Dock", "Notification Center"] {
-        let overlay = window(2, owner, 20, (0.0, 0.0, 1000.0, 800.0));
+    for (owner, system) in [
+        ("Dock", None),
+        (
+            "Notification Center",
+            Some(windows::System::NotificationCenter),
+        ),
+    ] {
+        let mut overlay = window(2, owner, 20, (0.0, 0.0, 1000.0, 800.0));
+        overlay.system = system;
         let mut look = Seen::focused(Some(APP)).showing(vec![overlay, document.clone()]);
         assert!(point_with(&mut look, 200.0, 200.0).is_ok(), "{owner}");
     }
 
     let other = window(2, "Shade", 20, (0.0, 0.0, 1000.0, 800.0));
-    let mut look = Seen::focused(Some(APP)).showing(vec![other, document]);
+    let mut look = Seen::focused(Some(APP)).showing(vec![other, document.clone()]);
     assert_eq!(
         refusal(point_with(&mut look, 200.0, 200.0))["found"]["app"],
         "Shade"
+    );
+
+    let claimed = window(2, "Notification Center", 20, (0.0, 0.0, 1000.0, 800.0));
+    let mut look = Seen::focused(Some(APP)).showing(vec![claimed, document]);
+    let error = point_with(&mut look, 200.0, 200.0).unwrap_err();
+    assert_eq!(
+        error.error,
+        "Atlas could not prove that Notification Center shows the window there, so click \
+         where the app shows and try again; this action and the rest were not sent",
+        "a name alone proves no overlay"
+    );
+    assert_eq!(error.details["reason"], "unreadable");
+}
+
+/// A desktop widget, as the helper proves Notification Center draws one.
+fn widget(bounds: (f64, f64, f64, f64)) -> Window {
+    let mut widget = window(3, "Notification Center", windows::WIDGET_LAYER, bounds);
+    widget.title = Some("Month".to_owned());
+    widget.system = Some(windows::System::NotificationCenter);
+    widget
+}
+
+#[test]
+fn a_desktop_widget_is_named_as_what_covers_the_point() {
+    let document = window(APP, "TextEdit", 0, (100.0, 100.0, 400.0, 300.0));
+    let listed = vec![document, widget((8.0, 38.0, 180.0, 180.0))];
+    let look = || Seen::focused(Some(APP)).showing(listed.clone());
+
+    assert!(
+        point_with(&mut look(), 150.0, 150.0).is_ok(),
+        "the app's window over it"
+    );
+    let error = point_with(&mut look(), 50.0, 50.0).unwrap_err();
+    assert_eq!(
+        error.error,
+        "A desktop widget is at that point, not the app's window, so bring it there or pick \
+         another point; this action and the rest were not sent"
+    );
+    assert_eq!(
+        refusal(Err(error)),
+        json!({"reason": "point", "found": {"app": "Notification Center", "pid": 3}}),
+        "never the widget's name"
+    );
+    let drag = Need::Drag {
+        from: (150.0, 150.0),
+        to: (50.0, 50.0),
+    };
+    let error = require(&expect(), drag, &display(), &mut look(), later()).unwrap_err();
+    assert!(
+        error
+            .error
+            .starts_with("A desktop widget is at the drop point, not the app's window, so"),
+        "{}",
+        error.error
     );
 }
 
@@ -731,6 +793,7 @@ fn numbered(number: i64, pid: i64, title: Option<&str>, bounds: (f64, f64, f64, 
         title: title.map(str::to_owned),
         layer: 0,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x: bounds.0,
             y: bounds.1,

@@ -49,6 +49,7 @@ impl Fake {
                 title: Some("private-title-sentinel".into()),
                 layer: 0,
                 alpha: 1.0,
+                system: None,
                 bounds: Bounds {
                     x: 10.0,
                     y: 30.0,
