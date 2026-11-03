@@ -342,3 +342,62 @@ fn a_refused_action_names_its_problem() {
         "Action 1 was refused and nothing was sent: text is 1 to 256 characters"
     );
 }
+
+/// A referenced click is checked as a click before its element is found
+/// again, and finding one takes so much of the budget that a batch holds
+/// at most one.
+#[test]
+fn a_referenced_click_is_checked_as_a_click_and_one_fits_a_batch() {
+    let display = Display {
+        width: 100.0,
+        height: 100.0,
+        scale: 1.0,
+    };
+    let check =
+        |batch: &serde_json::Value| Batch::decode(batch).and_then(|batch| batch.check(&display));
+
+    let one = serde_json::json!([{"type": "reference", "ref": "kfpa12", "count": 2}]);
+    check(&one).unwrap();
+    let decoded = Batch::decode(&one).unwrap();
+    assert!(matches!(
+        decoded.actions(),
+        [Action::Reference { reference, button: Button::Left, count: 2, modifiers }]
+            if reference.to_string() == "kfpa12" && modifiers.is_empty()
+    ));
+    assert_eq!(decoded.actions()[0].target(), Target::Nothing);
+    assert!(!Kind::Reference.personal());
+    assert!(RESOLVE_MS + 5 * CLICK_MS <= BATCH_MS);
+
+    for (action, problem) in [
+        (
+            serde_json::json!({"type": "reference", "ref": "kfpa12", "count": 0}),
+            "a click is 1 to 5 clicks",
+        ),
+        (
+            serde_json::json!({"type": "reference", "ref": "kfpa12", "modifiers": ["hyper"]}),
+            "a modifier is one of cmd, ctrl, alt, shift and fn",
+        ),
+    ] {
+        assert_eq!(
+            check(&serde_json::json!([action])).unwrap_err().error,
+            format!("Action 1 was refused and nothing was sent: {problem}")
+        );
+    }
+
+    let two = serde_json::json!([
+        {"type": "reference", "ref": "kfpa12"},
+        {"type": "reference", "ref": "kfpa13"},
+    ]);
+    assert_eq!(
+        check(&two).unwrap_err().error,
+        "The batch would take longer than two seconds; send it in parts"
+    );
+
+    for malformed in [
+        serde_json::json!([{"type": "reference", "ref": "kfpa012"}]),
+        serde_json::json!([{"type": "reference"}]),
+        serde_json::json!([{"type": "reference", "ref": "kfpa1", "x": 1}]),
+    ] {
+        assert_eq!(check(&malformed).unwrap_err().code, Code::InvalidJson);
+    }
+}

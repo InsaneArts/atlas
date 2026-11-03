@@ -4,6 +4,7 @@
 //! finishes within two seconds.
 use crate::{
     error::{Code, Error, Result},
+    screen::elements::Reference,
     session::Display,
 };
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,17 @@ actions! {
     Wait {
         ms: u32,
     } => false,
+    // A click on the element a reference names, found again first.
+    Reference {
+        #[serde(rename = "ref")]
+        reference: Reference,
+        #[serde(default)]
+        button: Button,
+        #[serde(default = "one")]
+        count: u8,
+        #[serde(default)]
+        modifiers: Vec<String>,
+    } => false,
 }
 
 /// The destination an action must reach before it can send input.
@@ -125,7 +137,10 @@ impl Action {
                 to: (*to_x, *to_y),
                 button: *button,
             },
-            Self::Wait { .. } => Target::Nothing,
+            // A reference names no point until the input service finds its
+            // element again; it is then checked as the click it becomes, and
+            // one never found again is never posted.
+            Self::Wait { .. } | Self::Reference { .. } => Target::Nothing,
         }
     }
 }
@@ -137,7 +152,7 @@ impl Kind {
         let (x, y) = match self {
             Self::Click | Self::Scroll | Self::Move => ("x", "y"),
             Self::Drag => ("fromX", "fromY"),
-            Self::Pointer | Self::Type | Self::Key | Self::Wait => return None,
+            Self::Pointer | Self::Type | Self::Key | Self::Wait | Self::Reference => return None,
         };
         Some((wire[x].as_f64()?, wire[y].as_f64()?))
     }
@@ -572,6 +587,9 @@ pub const TEXT_MAX: usize = 256;
 pub const TYPE_GAP: Duration = Duration::from_millis(2);
 /// The pause between moving the pointer to a point and scrolling there.
 pub const SCROLL_SETTLE: Duration = Duration::from_millis(50);
+/// The longest the input service reads an app to find a referenced
+/// element again.
+pub const RESOLVE: Duration = Duration::from_millis(RESOLVE_MS as u64);
 
 /// The batch budget and each action's share of it, in milliseconds. Each
 /// share covers the engine's pauses for that action plus posting time.
@@ -590,6 +608,8 @@ const TYPE_MS: u32 = 7;
 // The longest text one action types fits one batch.
 const _: () = assert!(TYPE_MS * TEXT_MAX as u32 <= BATCH_MS);
 const KEY_MS: u32 = 10;
+/// [`RESOLVE`], so a batch finds at most one referenced element.
+const RESOLVE_MS: u32 = 1000;
 
 /// # Errors
 ///
@@ -647,14 +667,15 @@ impl Action {
                 && y < display.height
         };
 
-        // A pointer press and a click are checked alike.
+        // A pointer press, a click and a referenced click are checked alike.
+        let clicks = |count: u8, modifiers: &[String]| {
+            unless((1..=5).contains(&count), "a click is 1 to 5 clicks").or(unless(
+                modifiers_valid(modifiers),
+                "a modifier is one of cmd, ctrl, alt, shift and fn",
+            ))
+        };
         let press = |x: f64, y: f64, count: u8, modifiers: &[String]| {
-            unless(point(x, y), OFF_DISPLAY)
-                .or(unless((1..=5).contains(&count), "a click is 1 to 5 clicks"))
-                .or(unless(
-                    modifiers_valid(modifiers),
-                    "a modifier is one of cmd, ctrl, alt, shift and fn",
-                ))
+            unless(point(x, y), OFF_DISPLAY).or(clicks(count, modifiers))
         };
 
         match self {
@@ -713,6 +734,13 @@ impl Action {
                 KEY_MS,
             ),
             Self::Wait { ms } => (unless(*ms <= 250, "a wait is at most 250 ms"), *ms),
+            // Its point is checked once its element is found again.
+            Self::Reference {
+                count, modifiers, ..
+            } => (
+                clicks(*count, modifiers),
+                RESOLVE_MS + u32::from(*count) * CLICK_MS,
+            ),
         }
     }
 }

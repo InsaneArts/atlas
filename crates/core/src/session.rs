@@ -397,6 +397,10 @@ pub const FOCUS_WINDOW: &str = "focus-window";
 /// The input-service capability that checks the field an agent names.
 pub const FOCUS_FIELD: &str = "focus-field";
 
+/// The input-service capability that reads an app's elements and keeps
+/// each look, so a click can name one element of it by reference.
+pub const LOOKS: &str = "looks";
+
 /// Whether an input service's hello lists `name` among its capabilities.
 pub fn has_capability(native: &Value, name: &str) -> bool {
     capability_names(native)
