@@ -497,7 +497,8 @@ impl Engine {
 
                 if self.held.is_some() && !self.drag_started && point != self.position {
                     // AppKit establishes native window tracking at the first
-                    // dragged location that has moved. Bound that initial
+                    // dragged location that has moved, and what is dragged
+                    // then follows the pointer from there. Bound that initial
                     // step to one point so a sparse viewer stream does not
                     // lose its first jump. A stationary click never enters
                     // this path.
@@ -629,31 +630,34 @@ impl Engine {
         self.pointer(phase, point, button, &[], 1).await
     }
 
-    /// One drag owns its anchor, paced travel and release. A native window
-    /// move is anchored at the first dragged event, not at the press, so that
-    /// event stays on `from` without moving; the pointer then travels from
-    /// `from` to `to` and releases there.
+    /// One drag owns its anchor, paced travel, release and final resting point.
     async fn drag(&mut self, from: Point, to: Point, button: Button) -> Result<()> {
         self.step(PointerPhase::Down, from, button).await?;
 
         self.delay(DRAG_HOLD).await?;
-        self.step(PointerPhase::Move, from, button).await?;
-        // The drag has its anchor: no one-point first step follows.
-        self.drag_started = true;
+        // What is dragged follows the pointer from the first moved
+        // step (see the move phase), so the pointer travels that
+        // step past the target, releases there, and then rests on
+        // the target: the window or item moves exactly as asked.
+        let first = first_step(from, to);
+        let anchor = shifted(from, first);
+        let end = self.on_display(shifted(to, first));
+
+        self.step(PointerPhase::Move, anchor, button).await?;
         self.delay(DRAG_START).await?;
 
         for step in 1..=DRAG_STEPS {
-            // Measured back from `to`, so the last step lands on it exactly.
-            let rest = f64::from(DRAG_STEPS - step) / f64::from(DRAG_STEPS);
+            let t = f64::from(step) / f64::from(DRAG_STEPS);
             let point = Point {
-                x: to.x - (to.x - from.x) * rest,
-                y: to.y - (to.y - from.y) * rest,
+                x: anchor.x + (end.x - anchor.x) * t,
+                y: anchor.y + (end.y - anchor.y) * t,
             };
             self.step(PointerPhase::Move, point, button).await?;
             self.delay(DRAG_STEP).await?;
         }
 
-        self.step(PointerPhase::Up, to, button).await
+        self.step(PointerPhase::Up, end, button).await?;
+        self.step(PointerPhase::Move, to, button).await
     }
 
     pub(super) async fn perform(&mut self, action: Action) -> Result<()> {

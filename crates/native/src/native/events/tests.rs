@@ -104,11 +104,13 @@ fn posts(seen: &[tap::Seen]) -> Vec<tap::Posted> {
         .collect()
 }
 
-/// A drag presses at its source, starts dragging there without moving,
-/// travels no further than its destination and releases there, recording
-/// what is held before every event.
+/// AppKit anchors a native window move at the first dragged event that
+/// moves, one first step from the press. So a drag presses at its source,
+/// steps once towards its target, travels to one first step past the target
+/// (kept on the display), releases there and then rests on the target,
+/// recording what is held before every event.
 #[tokio::test(start_paused = true)]
-async fn a_complete_drag_releases_at_its_requested_destination() {
+async fn a_drag_releases_one_first_step_past_its_target_and_then_rests_on_it() {
     let (moved, down, dragged, up) = (
         CGEventType::MouseMoved.0,
         CGEventType::LeftMouseDown.0,
@@ -125,11 +127,24 @@ async fn a_complete_drag_releases_at_its_requested_destination() {
         ("far display edge", (700.0, 500.0), (799.0, 599.0)),
         ("near display edge", (50.0, 50.0), (0.0, 0.0)),
     ];
+    let display = epoch();
 
     for (case, from, to) in cases {
+        let step = |from: f64, to: f64| (to - from).clamp(-DRAG_ANCHOR, DRAG_ANCHOR);
+        let first = (step(from.0, to.0), step(from.1, to.1));
+        let anchor = (from.0 + first.0, from.1 + first.1);
+        let end = (
+            (to.0 + first.0).clamp(0.0, display.width - 1.0),
+            (to.1 + first.1).clamp(0.0, display.height - 1.0),
+        );
+
         let directory = tempfile::tempdir().unwrap();
         let (tap, seen) = tap::Tap::new();
-        let mut engine = Engine::tapped(epoch(), Some(directory.path().join("held.json")), tap);
+        let mut engine = Engine::tapped(
+            display.clone(),
+            Some(directory.path().join("held.json")),
+            tap,
+        );
         engine
             .perform(Action::Drag {
                 from_x: from.0,
@@ -144,57 +159,46 @@ async fn a_complete_drag_releases_at_its_requested_destination() {
         let seen = seen.lock().unwrap().clone();
         let posts = posts(&seen);
         let at = |posted: &tap::Posted| (posted.x, posted.y);
-        let first = posts.first().unwrap();
+        let kinds: Vec<u32> = posts.iter().map(|posted| posted.kind).collect();
+        let mut expected = vec![moved, down];
+        expected.extend(std::iter::repeat_n(dragged, 1 + DRAG_STEPS as usize));
+        expected.extend([up, moved]);
+        assert_eq!(kinds, expected, "{case}: event kinds");
+
+        assert_eq!(at(&posts[0]), from, "{case}: moves to the source");
+        assert_eq!(at(&posts[1]), from, "{case}: presses there");
         assert_eq!(
-            (first.kind, at(first)),
-            (moved, from),
-            "{case}: moves to the source"
+            (at(&posts[2]), (posts[2].dx, posts[2].dy)),
+            (anchor, (first.0 as i64, first.1 as i64)),
+            "{case}: the first drag moves one first step"
         );
+        let release = posts.len() - 2;
         assert_eq!(
-            (posts[1].kind, at(&posts[1])),
-            (down, from),
-            "{case}: presses there"
+            at(&posts[release - 1]),
+            end,
+            "{case}: drags past the target"
         );
-        assert_eq!(
-            (posts[2].kind, at(&posts[2]), posts[2].dx, posts[2].dy),
-            (dragged, from, 0, 0),
-            "{case}: the first drag stays on the source"
-        );
-        assert_eq!(posts.len(), 4 + DRAG_STEPS as usize, "{case}: event count");
-        let release = posts.iter().position(|posted| posted.kind == up).unwrap();
         assert_eq!(
             at(&posts[release]),
+            end,
+            "{case}: releases one first step past the target"
+        );
+        assert_eq!(
+            at(&posts[release + 1]),
             to,
-            "{case}: releases at the destination"
-        );
-        assert_eq!(
-            release,
-            posts.len() - 1,
-            "{case}: nothing moves after the release"
-        );
-        let before = &posts[posts.len() - 2];
-        assert_eq!(
-            (before.kind, at(before)),
-            (dragged, to),
-            "{case}: drags to it"
+            "{case}: then rests on the target"
         );
 
-        let gesture = &posts[1..];
-        let low = (from.0.min(to.0), from.1.min(to.1));
-        let high = (from.0.max(to.0), from.1.max(to.1));
+        let gesture = &posts[1..=release];
+        let low = (from.0.min(end.0), from.1.min(end.1));
+        let high = (from.0.max(end.0), from.1.max(end.1));
         for posted in gesture {
             assert!(
                 (low.0..=high.0).contains(&posted.x) && (low.1..=high.1).contains(&posted.y),
-                "{case}: {posted:?} overshoots"
+                "{case}: {posted:?} leaves the drag's path"
             );
             assert_eq!(posted.number, gesture[0].number, "{case}: one gesture");
         }
-        assert!(
-            gesture[1..gesture.len() - 1]
-                .iter()
-                .all(|posted| posted.kind == dragged),
-            "{case}: only drags between press and release"
-        );
         for pair in posts.windows(2) {
             assert_eq!(
                 (pair[1].dx, pair[1].dy),
@@ -205,17 +209,27 @@ async fn a_complete_drag_releases_at_its_requested_destination() {
                 "{case}: each delta is the move since the last event"
             );
         }
-        let travelled = gesture[2..]
+        let anchored = posts[3..=release]
             .iter()
             .fold((0, 0), |(x, y), posted| (x + posted.dx, y + posted.dy));
         assert_eq!(
-            travelled,
+            anchored,
             (
-                (to.0.round() - from.0.round()) as i64,
-                (to.1.round() - from.1.round()) as i64,
+                (end.0.round() - anchor.0.round()) as i64,
+                (end.1.round() - anchor.1.round()) as i64,
             ),
-            "{case}: travels exactly the requested distance after the first drag"
+            "{case}: travels from the anchor to the release"
         );
+        if end == (to.0 + first.0, to.1 + first.1) {
+            assert_eq!(
+                anchored,
+                (
+                    (to.0.round() - from.0.round()) as i64,
+                    (to.1.round() - from.1.round()) as i64,
+                ),
+                "{case}: what the anchor drags moves exactly as asked"
+            );
+        }
 
         for (index, event) in seen.iter().enumerate() {
             if matches!(event, tap::Seen::Post(_)) {
