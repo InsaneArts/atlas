@@ -102,12 +102,11 @@ async fn update_using(
         finish.arg("--allow-disrupt");
     }
     let output = finish.arg("--config").arg(config).output()?;
-    let finished = child_reply(&output)
-        .unwrap_or_else(|_| json!({"ok": false, "error": "The new version did not report"}));
-    report["ok"] = finished["ok"].clone();
+    let (moved, finished) = helper_moved(&output);
+    report["ok"] = json!(moved);
     report["helper"] = finished;
 
-    if report["ok"] == true {
+    if moved {
         // A running menu bar moves onto the new version too. It stops before
         // the previous app, the bundle it still runs from, is removed.
         let output = Config::load(config)
@@ -206,30 +205,65 @@ async fn update_finish_using(
         steps.push(&["setup", "--apply"]);
     }
 
-    let mut done = Vec::new();
-
-    for step in steps {
+    let done = match run_steps(&steps, |step| {
         let mut command = std::process::Command::new(&executable);
         command.args(step);
         if allow_disrupt {
             command.arg("--allow-disrupt");
         }
-        let output = command.arg("--json").arg("--config").arg(config).output()?;
-        let reply = child_reply(&output).unwrap_or(Value::Null);
-        if !output.status.success() || reply["ok"] == false {
-            return Ok(json!({
+        command.arg("--json").arg("--config").arg(config).output()
+    })? {
+        Ok(done) => done,
+        Err(failed) => return Ok(failed),
+    };
+
+    let agents = atlas_agents::refresh();
+    Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
+}
+
+/// Run `steps` in order through `run`, stopping at the first that fails:
+/// the steps completed, or the failed-step report.
+fn run_steps(
+    steps: &[&[&str]],
+    mut run: impl FnMut(&[&str]) -> std::io::Result<std::process::Output>,
+) -> Result<std::result::Result<Vec<String>, Value>> {
+    let mut done = Vec::new();
+
+    for step in steps {
+        if let Err(failure) = acknowledged(&run(step)?, "The step") {
+            return Ok(Err(json!({
                 "ok": false,
                 "failedStep": step.join(" "),
-                "failure": reply,
+                "failure": failure,
                 "completedSteps": done,
-            }));
+            })));
         }
 
         done.push(step.join(" "));
     }
 
-    let agents = atlas_agents::refresh();
-    Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
+    Ok(Ok(done))
+}
+
+/// Whether `update-finish` moved the helper, and its report.
+fn helper_moved(output: &std::process::Output) -> (bool, Value) {
+    match acknowledged(output, "The new version") {
+        Ok(finished) => (true, finished),
+        Err(failure) => (false, failure),
+    }
+}
+
+/// The reply of an Atlas command run here, `who`, when it acknowledged
+/// success: it exited successfully and answered an object whose `ok` is
+/// true. Otherwise its failure: its own reply when that says `ok` is false,
+/// or else one saying it did not report or confirm.
+fn acknowledged(output: &std::process::Output, who: &str) -> std::result::Result<Value, Value> {
+    match child_reply(output) {
+        Ok(reply) if reply["ok"] == false => Err(reply),
+        Ok(reply) if output.status.success() && reply["ok"] == true => Ok(reply),
+        Ok(_) => Err(json!({"ok": false, "error": format!("{who} did not confirm it finished")})),
+        Err(_) => Err(json!({"ok": false, "error": format!("{who} did not report")})),
+    }
 }
 
 /// What an Atlas command run here answered: replies go to stdout, errors
