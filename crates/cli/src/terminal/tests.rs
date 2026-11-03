@@ -4,6 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 mod focus;
 mod frame_health;
 mod scroll;
+mod shared;
 mod view;
 
 #[tokio::test]
