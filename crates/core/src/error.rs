@@ -225,7 +225,7 @@ codes! {
     Config => ("config", LOCAL),
     ConfigInvalid => ("config-invalid", LOCAL),
     Daemon => ("daemon", LOCAL),
-    Elements => ("elements", LOCAL),
+    Elements => ("elements", NATIVE),
     Environment => ("environment", LOCAL),
     FocusChanged => ("focus-changed", NATIVE),
     Identity => ("identity", NATIVE),

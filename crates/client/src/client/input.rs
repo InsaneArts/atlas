@@ -114,12 +114,7 @@ impl Client {
         transport.timeout = LOOK_TIMEOUT;
         let reply = transport.call(&request).await.map_err(Error::certain)?;
         if reply["ok"] != true {
-            return Err(Error::refused(
-                Code::of_reply(&reply, Code::Elements),
-                &reply,
-                "The input service could not read the app",
-            )
-            .certain());
+            return Err(native_refusal(&reply).certain());
         }
         Ok(reply)
     }

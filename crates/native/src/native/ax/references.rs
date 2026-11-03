@@ -45,7 +45,7 @@ const STRIDE: u64 = 104_729;
 
 /// One element of a look: the object it is, the index of the element it
 /// was reached from, and what it reported.
-pub(in crate::native) struct Seen {
+struct Seen {
     object: Kept,
     parent: Option<usize>,
     element: Element,

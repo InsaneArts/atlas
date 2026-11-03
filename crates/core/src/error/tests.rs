@@ -139,6 +139,7 @@ fn an_input_service_refusal_keeps_only_the_codes_callers_act_on() {
         [
             "busy",
             "cancelled",
+            "elements",
             "focus-changed",
             "identity",
             "lease-lost",
