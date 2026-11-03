@@ -3,7 +3,7 @@
 //! The ring keeps the newest records and the first failure of the latest
 //! outage, so a later retry cannot hide what started it.
 use crate::error::Code;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::VecDeque, time::Duration};
 
 /// How many records the ring keeps.
@@ -53,7 +53,7 @@ pub enum Outcome {
 }
 
 /// Where in an acquisition, delivery or cleanup something ended.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Stage {
     #[default]
@@ -86,7 +86,7 @@ pub enum Stage {
 }
 
 /// Why something ended, in words that name a cause, never a native string.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Reason {
     #[default]
