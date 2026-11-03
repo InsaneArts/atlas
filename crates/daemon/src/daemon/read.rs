@@ -131,98 +131,73 @@ pub(crate) fn read_at(
     events: &mut dyn FnMut(Value) -> bool,
     now: SystemTime,
 ) -> Value {
-    match served(request, places, uid, guard, events, now) {
-        Ok(reply) => reply,
-        Err(Stop::Refused(reason)) => refusal(reason),
-        Err(Stop::Guard(refusal)) => refusal,
-    }
-}
-
-/// Why a read stopped: a reason of its own, or the guard's refusal.
-enum Stop {
-    Refused(ReadRefusal),
-    Guard(Value),
-}
-
-impl From<ReadRefusal> for Stop {
-    fn from(reason: ReadRefusal) -> Self {
-        Self::Refused(reason)
-    }
-}
-
-impl From<Value> for Stop {
-    fn from(refusal: Value) -> Self {
-        Self::Guard(refusal)
-    }
-}
-
-fn served(
-    request: &ReadRequest,
-    places: &Places,
-    uid: u32,
-    guard: &dyn Fn() -> Result<(), Value>,
-    events: &mut dyn FnMut(Value) -> bool,
-    now: SystemTime,
-) -> Result<Value, Stop> {
-    let path = locate(&request.path, places)?;
-    guard()?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK)
-        .open(&path)
-        .map_err(|error| opened(&error))?;
-    let mut real = PathBuf::new();
-    nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_GETPATH(&mut real))
-        .map_err(|_| ReadRefusal::Unreadable)?;
-    if let Some(inside) = within(&real, &places.home) {
-        refuse_inside(inside, &places.home)?;
-    }
-    let metadata = file.metadata().map_err(|_| ReadRefusal::Unreadable)?;
-    let identity = readable(
-        &metadata,
-        &real,
-        places,
-        uid,
-        request.expect.as_ref(),
-        request.max_size,
-        now,
-    )?;
-
-    let mut reply = json!({
-        "ok": true,
-        "op": "read",
-        "file": {
-            "path": real,
-            "inHome": within(&real, &places.home),
-            "dev": identity.dev,
-            "ino": identity.ino,
-            "size": identity.size,
-            "mtime": identity.mtime,
-            "ctime": identity.ctime,
-        },
-        "offset": request.offset,
-    });
-
-    if request.digest {
+    let mut served = || -> Result<Value, Value> {
+        let path = locate(&request.path, places).map_err(refusal)?;
         guard()?;
-        reply["sha256"] = json!(digest(&file, identity.size, guard)?);
-        reply["length"] = json!(0);
-    } else {
-        let length = request
-            .length
-            .min(READ_RANGE_MAX)
-            .min(identity.size.saturating_sub(request.offset));
-        send(&file, request.offset, length, guard, events)?;
-        reply["length"] = json!(length);
-    }
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW_ANY | libc::O_NONBLOCK)
+            .open(&path)
+            .map_err(|error| refusal(opened(&error)))?;
+        let mut real = PathBuf::new();
+        nix::fcntl::fcntl(&file, nix::fcntl::FcntlArg::F_GETPATH(&mut real))
+            .map_err(|_| refusal(ReadRefusal::Unreadable))?;
+        if let Some(inside) = within(&real, &places.home) {
+            refuse_inside(inside, &places.home).map_err(refusal)?;
+        }
+        let metadata = file
+            .metadata()
+            .map_err(|_| refusal(ReadRefusal::Unreadable))?;
+        let identity = readable(
+            &metadata,
+            &real,
+            places,
+            uid,
+            request.expect.as_ref(),
+            request.max_size,
+            now,
+        )
+        .map_err(refusal)?;
 
-    // Unchanged to the nanosecond while it was read, or it was being written.
-    let after = file.metadata().map_err(|_| ReadRefusal::Unreadable)?;
-    if identity_of(&after) != identity {
-        return Err(ReadRefusal::Changing.into());
-    }
-    guard()?;
-    Ok(reply)
+        let mut reply = json!({
+            "ok": true,
+            "op": "read",
+            "file": {
+                "path": real,
+                "inHome": within(&real, &places.home),
+                "dev": identity.dev,
+                "ino": identity.ino,
+                "size": identity.size,
+                "mtime": identity.mtime,
+                "ctime": identity.ctime,
+            },
+            "offset": request.offset,
+        });
+
+        if request.digest {
+            guard()?;
+            reply["sha256"] = json!(digest(&file, identity.size, guard)?);
+            reply["length"] = json!(0);
+        } else {
+            let length = request
+                .length
+                .min(READ_RANGE_MAX)
+                .min(identity.size.saturating_sub(request.offset));
+            send(&file, request.offset, length, guard, events)?;
+            reply["length"] = json!(length);
+        }
+
+        // Unchanged to the nanosecond while it was read, or it was being written.
+        let after = file
+            .metadata()
+            .map_err(|_| refusal(ReadRefusal::Unreadable))?;
+        if identity_of(&after) != identity {
+            return Err(refusal(ReadRefusal::Changing));
+        }
+        guard()?;
+        Ok(reply)
+    };
+    served().unwrap_or_else(|refusal| refusal)
 }
 
 /// Where `path` points inside the helper, or why it may not be read: the
@@ -414,7 +389,7 @@ fn send(
     length: u64,
     guard: &dyn Fn() -> Result<(), Value>,
     events: &mut dyn FnMut(Value) -> bool,
-) -> Result<(), Stop> {
+) -> Result<(), Value> {
     let mut buffer = vec![0_u8; CHUNK];
     let mut sent = 0;
     while sent < length {
@@ -424,15 +399,15 @@ fn send(
         while filled < want {
             let count = file
                 .read_at(&mut buffer[filled..want], offset + sent + filled as u64)
-                .map_err(|_| ReadRefusal::Unreadable)?;
+                .map_err(|_| refusal(ReadRefusal::Unreadable))?;
             if count == 0 {
                 // Shorter than it said it was: written meanwhile.
-                return Err(ReadRefusal::Changing.into());
+                return Err(refusal(ReadRefusal::Changing));
             }
             filled += count;
         }
         if !events(json!({"event": "data", "data": STANDARD.encode(&buffer[..filled])})) {
-            return Err(ReadRefusal::Gone.into());
+            return Err(refusal(ReadRefusal::Gone));
         }
         sent += filled as u64;
     }
@@ -442,7 +417,7 @@ fn send(
 /// SHA-256 of the first `size` bytes of `file`, which must be all of it,
 /// asking `guard` before each mebibyte, so a helper that came on screen is
 /// not read on to the end.
-fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Result<String, Stop> {
+fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Result<String, Value> {
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     let mut read = 0;
@@ -450,9 +425,9 @@ fn digest(file: &File, size: u64, guard: &dyn Fn() -> Result<(), Value>) -> Resu
         guard()?;
         let count = file
             .read_at(&mut buffer, read)
-            .map_err(|_| ReadRefusal::Unreadable)?;
+            .map_err(|_| refusal(ReadRefusal::Unreadable))?;
         if count == 0 {
-            return Err(ReadRefusal::Changing.into());
+            return Err(refusal(ReadRefusal::Changing));
         }
         let count = usize::try_from(size - read).map_or(count, |left| count.min(left));
         hasher.update(&buffer[..count]);
