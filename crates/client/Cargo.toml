@@ -9,7 +9,7 @@ repository.workspace = true
 
 [features]
 # Helpers and hooks for the tests of crates above; never in a shipped build.
-test-support = ["atlas-control/test-support", "atlas-core/test-support", "dep:tempfile", "nix/event", "nix/socket"]
+test-support = ["atlas-control/test-support", "atlas-core/test-support", "nix/event", "nix/socket"]
 
 [dependencies]
 atlas-control.workspace = true
@@ -23,7 +23,7 @@ nix = { workspace = true, features = ["dir", "fs", "process", "signal", "user"] 
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
-tempfile = { workspace = true, optional = true }
+tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 unicode-segmentation.workspace = true
 
@@ -33,7 +33,6 @@ atlas-core = { workspace = true, features = ["test-support"] }
 atlas-daemon = { workspace = true, features = ["test-support"] }
 atlas-native = { workspace = true, features = ["test-support"] }
 nix = { workspace = true, features = ["event", "socket"] }
-tempfile.workspace = true
 tokio = { workspace = true, features = ["process", "rt-multi-thread", "test-util"] }
 
 [lints]
