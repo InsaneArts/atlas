@@ -272,20 +272,23 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     // Asked on an earlier visit, or before a restart, and everything is on
     // now: say so (and pick up the grant).
     if accessibility() && recording().await {
-        if asked(false) {
-            arrival_notice(controller, Arrival::SetUp);
+        let arrival = if blocking(|| asked(false)).await.unwrap_or(false) {
+            Some(Arrival::SetUp)
         } else if just_logged_in().await {
-            arrival_notice(controller, Arrival::Running);
-        }
-
-        if !capture::permitted() {
-            restart();
-        }
-
+            Some(Arrival::Running)
+        } else {
+            None
+        };
+        let notice = move || {
+            if let Some(arrival) = arrival {
+                arrival_notice(controller, arrival);
+            }
+        };
+        announce(notice, capture::permitted, restart).await;
         return;
     }
 
-    asked(true);
+    blocking(|| asked(true)).await;
 
     if !accessibility_granted(shown).await {
         return;
@@ -296,12 +299,35 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
     }
 
     if shown() {
-        asked(false);
-        arrival_notice(controller, Arrival::SetUp);
-        if !capture::permitted() {
-            restart();
-        }
+        let notice = move || {
+            asked(false);
+            arrival_notice(controller, Arrival::SetUp);
+        };
+        announce(notice, capture::permitted, restart).await;
     }
+}
+
+/// Tell the person with `notice`, then restart this process when it may not
+/// record yet (`permitted`). The notice looks up the account, starts the
+/// notice app and notes the login it was shown in, so the restarted daemon
+/// never shows it again. The notice runs off the runtime and is waited
+/// for; a watcher stopped meanwhile leaves it to finish on its own.
+async fn announce(
+    notice: impl FnOnce() + Send + 'static,
+    permitted: impl FnOnce() -> bool,
+    restart: &impl Fn(),
+) {
+    blocking(notice).await;
+    if !permitted() {
+        restart();
+    }
+}
+
+/// Run `work` on a blocking thread, as what reads and writes notes, looks
+/// up accounts or waits for a process must: none may hold a runtime thread.
+/// None when it panicked.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    tokio::task::spawn_blocking(work).await.ok()
 }
 
 /// Ask for Accessibility as long as the person stays, however long they
@@ -317,7 +343,7 @@ async fn accessibility_granted(shown: &impl Fn() -> bool) -> bool {
     while !accessibility() {
         match asking.pass(guided().await, 15) {
             Nudge::Request => request_accessibility(),
-            Nudge::OpenSettings => open_settings("Privacy_Accessibility"),
+            Nudge::OpenSettings => _ = blocking(|| open_settings("Privacy_Accessibility")).await,
             Nudge::Wait => {}
         }
 
@@ -344,7 +370,7 @@ async fn recording_granted(shown: &impl Fn() -> bool) -> bool {
         let nudge = asking.pass(guided().await, 1);
         match nudge {
             Nudge::Request => _ = capture::request(),
-            Nudge::OpenSettings => open_settings("Privacy_ScreenCapture"),
+            Nudge::OpenSettings => _ = blocking(|| open_settings("Privacy_ScreenCapture")).await,
             Nudge::Wait => {}
         }
 

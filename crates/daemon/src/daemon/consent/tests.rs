@@ -126,6 +126,100 @@ fn the_set_up_notice_names_the_account_to_switch_back_to() {
     );
 }
 
+/// What a held arrival did, in order.
+type Said = std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>;
+
+/// A notice that says it began, waits until `released` lets it go, as an
+/// account lookup or the notice app's launch may, and is noted in `said`.
+fn held_notice(
+    said: &Said,
+    began: tokio::sync::oneshot::Sender<()>,
+    released: std::sync::mpsc::Receiver<()>,
+) -> impl FnOnce() + Send + 'static {
+    let said = said.clone();
+    move || {
+        let _ = began.send(());
+        released.recv().unwrap();
+        said.lock().unwrap().push("notice");
+    }
+}
+
+/// Run `watcher` on a runtime of one thread, in a thread of its own, so the
+/// test can let a held notice go even when that runtime stalls.
+fn on_one_thread(
+    watcher: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(watcher);
+    })
+}
+
+#[test]
+fn a_blocked_arrival_notice_leaves_the_watcher_responsive_and_restarts_after_it() {
+    let said = Said::default();
+    let (release, released) = std::sync::mpsc::channel();
+    let (answered, responsive) = std::sync::mpsc::channel();
+    let (began, beginning) = tokio::sync::oneshot::channel();
+    let notice = held_notice(&said, began, released);
+    let restarted = said.clone();
+    let watcher = on_one_thread(async move {
+        let arrival = tokio::spawn(async move {
+            let restart = move || restarted.lock().unwrap().push("restart");
+            announce(notice, || false, &restart).await;
+        });
+        beginning.await.unwrap();
+        let _ = answered.send(());
+        arrival.await.unwrap();
+    });
+    let responsive = responsive.recv_timeout(Duration::from_secs(10));
+    release.send(()).unwrap();
+    watcher.join().unwrap();
+    responsive.expect("the runtime stalled while the notice was prepared");
+    assert_eq!(*said.lock().unwrap(), ["notice", "restart"]);
+}
+
+#[test]
+fn stopping_the_watcher_never_waits_for_a_notice_and_shows_it_once() {
+    let said = Said::default();
+    let (release, released) = std::sync::mpsc::channel();
+    let (answered, responsive) = std::sync::mpsc::channel();
+    let (began, beginning) = tokio::sync::oneshot::channel();
+    let notice = held_notice(&said, began, released);
+    let (shown, showing) = tokio::sync::oneshot::channel();
+    let notice = move || {
+        notice();
+        let _ = shown.send(());
+    };
+    let restarted = said.clone();
+    let watcher = on_one_thread(async move {
+        let arrival = tokio::spawn(async move {
+            let restart = move || restarted.lock().unwrap().push("restart");
+            announce(notice, || false, &restart).await;
+        });
+        beginning.await.unwrap();
+        arrival.abort();
+        let stopped = arrival.await.is_err_and(|error| error.is_cancelled());
+        let _ = answered.send(stopped);
+        showing.await.unwrap();
+    });
+    let stopped = responsive.recv_timeout(Duration::from_secs(10));
+    release.send(()).unwrap();
+    watcher.join().unwrap();
+    assert!(
+        stopped.expect("stopping waited for the notice"),
+        "the watcher was stopped"
+    );
+    assert_eq!(
+        *said.lock().unwrap(),
+        ["notice"],
+        "shown once, never restarted"
+    );
+}
+
 #[test]
 fn a_notice_is_remembered_for_its_login_only() {
     let home = tempfile::tempdir().unwrap();
