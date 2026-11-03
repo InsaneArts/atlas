@@ -60,4 +60,13 @@ struct FrameStreamClientTests {
     await #expect(throws: ServiceError.self) { try await refused.next(longest: 1_600) }
     await refused.close()
   }
+
+  @Test("a lane that ends while a picture is awaited ends the observer, with no credit given again")
+  func endedLane() async throws {
+    let (client, broker) = try await Self.opened([.expire])
+    await broker.control?.close()
+    await #expect(throws: (any Error).self) { try await client.next(longest: 1_600) }
+    #expect(await broker.kinds.filter { $0 == .credit }.count <= 1)
+    await client.close()
+  }
 }

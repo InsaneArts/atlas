@@ -163,7 +163,9 @@ public actor FrameStreamClient {
       if fresh { asked["barrierGeneration"] = generations.barrier }
       try await send(.credit, on: control, asked)
       var iterator = incoming.makeAsyncIterator()
-      reading: while let item = try await iterator.next() {
+      reading: while true {
+        // An ended stream, or a cancelled wait, ends the observer: never another credit.
+        guard let item = try await iterator.next() else { throw FramePipeError.truncated }
         switch item {
         case .packet(.control, let header, let metadata):
           switch header.kind {
