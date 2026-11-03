@@ -8,7 +8,7 @@
 use crate::{
     client::Client,
     environment,
-    handoff::{self, Running, Target},
+    handoff::{self, Target},
     task::{Claims, Owned, State, store::Store as Tasks},
 };
 use atlas_core::{
@@ -54,7 +54,8 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     // Copying, installing and removing the copy happen under one ownership,
     // so no other open, close or cleanup interleaves.
     let ownership = client.controller.acquire(false)?;
-    let running = Running::listed(&client.running_apps().await?);
+    let listed = client.running_apps().await?;
+    let running = listed.rows();
 
     let id = Token::new();
     let install = Owned::Install {
@@ -64,7 +65,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     claims.claim(&install, State::Intent)?;
 
     let handed =
-        match handoff::hand_over(client, &ownership, vec![Target::Path(bundle)], &running).await {
+        match handoff::hand_over(client, &ownership, vec![Target::Path(bundle)], running).await {
             Ok(handed) => handed,
             Err(error) => {
                 let _ = claims.settle_all(&[(install, State::Gone)]);
@@ -86,7 +87,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     if let Some(token) = transport {
         let session = task.session().clone();
         let gone = matches!(
-            handoff::remove_copy(Path::new(handoff::ROOT), &token, &session, &running),
+            handoff::remove_copy(Path::new(handoff::ROOT), &token, &session, running),
             handoff::CopyRemoval::Removed | handoff::CopyRemoval::AlreadyGone
         );
         if gone {

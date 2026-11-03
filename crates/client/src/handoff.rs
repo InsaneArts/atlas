@@ -4,7 +4,7 @@
 //! grant to the helper, and nothing there is ever replaced: a new copy gets
 //! a new folder, so a running app's files never change under it.
 use crate::{
-    client::{Client, RUN_TIMEOUT, Run},
+    client::{AppRow, Client, RUN_TIMEOUT, Run},
     host_session::{HostSession, Key},
     task::{Claims, Owned, State},
 };
@@ -218,26 +218,6 @@ pub(crate) fn resolve(target: &str) -> Target {
     }
 }
 
-/// A running app, as the helper lists it.
-pub(crate) struct Running {
-    pub(crate) name: String,
-    pub(crate) executable: String,
-}
-
-impl Running {
-    /// The running apps of `apps`, an app list the helper gave; a name or
-    /// executable it does not know is empty.
-    pub(crate) fn listed(apps: &crate::client::AppList) -> Vec<Self> {
-        apps.rows()
-            .iter()
-            .map(|app| Self {
-                name: app.name().unwrap_or("").to_owned(),
-                executable: app.executable().unwrap_or("").to_owned(),
-            })
-            .collect()
-    }
-}
-
 /// Which app the copies are opened with, by the names it may run as.
 const OPENED_WITH: &str = ".opened-with";
 
@@ -271,7 +251,7 @@ pub(crate) async fn hand_over(
     client: &Client,
     ownership: &Ownership,
     targets: Vec<Target>,
-    running: &[Running],
+    running: &[AppRow],
 ) -> Result<Handed> {
     // The app the targets open with: its copies go when it is closed.
     let opened_with: Vec<String> = match targets.first() {
@@ -326,7 +306,7 @@ enum Placed {
 /// can read each path outside ROOT): each one as it is given, or the copy
 /// it needs. A folder the helper cannot read, or a file whose earlier copy
 /// still runs in the helper, refuses them all before anything is copied.
-fn placement(targets: Vec<Target>, answers: Vec<bool>, running: &[Running]) -> Result<Vec<Placed>> {
+fn placement(targets: Vec<Target>, answers: Vec<bool>, running: &[AppRow]) -> Result<Vec<Placed>> {
     let root_path = PathBuf::from(ROOT);
     let mut answers = answers.into_iter();
     let mut placed = Vec::new();
@@ -354,13 +334,16 @@ fn placement(targets: Vec<Target>, answers: Vec<bool>, running: &[Running]) -> R
                 // A new copy is a new app to macOS: a second one would run
                 // beside the first instead of bringing it forward.
                 if let Some(earlier) = running.iter().find(|app| {
-                    app.executable.starts_with(ROOT) && names(&path).contains(&app.name)
+                    app.executable().unwrap_or("").starts_with(ROOT)
+                        && names(&path)
+                            .iter()
+                            .any(|name| name == app.name().unwrap_or(""))
                 }) {
                     return Err(Error::new(
                         Code::Input,
                         format!(
                             "An earlier copy of {0} is still running in the helper. Close it first: atlas close --app '{0}'",
-                            earlier.name
+                            earlier.name().unwrap_or("")
                         ),
                     ));
                 }
@@ -611,11 +594,13 @@ fn folder_names(folder: &Path) -> Vec<String> {
 /// Whether a copy folder may be in use: an app of one of its names is among
 /// `running` (the helper's apps, from a list it gave), or one runs from an
 /// executable inside it, whatever it is called. Such a folder is never
-/// removed.
-fn in_use(folder: &Path, running: &[Running]) -> bool {
+/// removed. A name or executable the list does not know is empty.
+fn in_use(folder: &Path, running: &[AppRow]) -> bool {
     let names = folder_names(folder);
     running.iter().any(|app| {
-        runs_from(&app.executable, folder) || names.iter().any(|name| same_text(&app.name, name))
+        let name = app.name().unwrap_or("");
+        runs_from(app.executable().unwrap_or(""), folder)
+            || names.iter().any(|own| same_text(name, own))
     })
 }
 
@@ -728,7 +713,7 @@ impl Removed {
 pub(crate) fn remove_copies_in(
     root: &Path,
     app: &str,
-    running: &[Running],
+    running: &[AppRow],
     session: Option<&Key>,
 ) -> Removed {
     let mut removed = Removed::default();
@@ -876,13 +861,13 @@ pub(crate) fn remove_copy(
     root: &Path,
     token: &Token,
     session: &Key,
-    running: &[Running],
+    running: &[AppRow],
 ) -> CopyRemoval {
     take_copy(root, token.as_str(), Some(session), running)
 }
 
 /// [`remove_copy`], for a command of host `session` or none.
-fn take_copy(root: &Path, name: &str, session: Option<&Key>, running: &[Running]) -> CopyRemoval {
+fn take_copy(root: &Path, name: &str, session: Option<&Key>, running: &[AppRow]) -> CopyRemoval {
     if root_if_owned_in(root).is_none() {
         return CopyRemoval::Unreadable;
     }
@@ -935,7 +920,7 @@ pub fn copy_folder(root: &Path, token: &Token) -> PathBuf {
 /// not in use by an app in `running` (the helper's apps), so a copy nobody
 /// closed does not stay forever. The tokens of the folders removed come
 /// back, so their claims can be settled.
-pub(crate) fn prune_in(root: &Path, running: &[Running]) -> Vec<Token> {
+pub(crate) fn prune_in(root: &Path, running: &[AppRow]) -> Vec<Token> {
     let mut removed = Vec::new();
     for folder in folders(root) {
         let old = fs::symlink_metadata(&folder)

@@ -14,7 +14,7 @@ use crate::{
     client::AppList,
     collect::{Intact, Kept},
     environment::{InstallState, KeptReason, Outcome as Removed, PlanState, RemovalReply, Undone},
-    handoff::{self, CopyRemoval, Running},
+    handoff::{self, CopyRemoval},
     host_session::Key,
 };
 use atlas_core::{
@@ -663,9 +663,9 @@ async fn remove_install(hands: &impl Hands, install: &Token) -> Result<Outcome> 
 }
 
 async fn remove_copy(hands: &impl Hands, copy: &Token, session: &Key) -> Result<Outcome> {
-    let running = Running::listed(&hands.apps().await?);
+    let running = hands.apps().await?;
     Ok(
-        match handoff::remove_copy(hands.copies(), copy, session, &running) {
+        match handoff::remove_copy(hands.copies(), copy, session, running.rows()) {
             CopyRemoval::AlreadyGone => Outcome::gone(),
             CopyRemoval::Removed => Outcome::done(),
             CopyRemoval::AnotherSession => Outcome::kept(Reason::AnotherSession),

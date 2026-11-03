@@ -1,4 +1,5 @@
 use super::*;
+use crate::client::AppList;
 
 #[test]
 fn only_a_real_private_folder_of_this_account_counts() {
@@ -166,20 +167,20 @@ fn copies_in_use_are_kept() {
 
     assert_eq!(copies_of(&root, "TEXTEDIT"), std::slice::from_ref(&opened));
     assert!(copies_of(&root, "Preview").is_empty());
-    assert!(in_use(&app, &apps(&["RUNNER"])));
+    assert!(in_use(&app, apps(&["RUNNER"]).rows()));
     assert!(
-        in_use(&opened, &apps(&["TextEdit"])),
+        in_use(&opened, apps(&["TextEdit"]).rows()),
         "opened with a running app"
     );
-    assert!(!in_use(&other, &apps(&["TextEdit", "Runner"])));
+    assert!(!in_use(&other, apps(&["TextEdit", "Runner"]).rows()));
 
     // `close --app runner` while Runner still runs keeps its copy.
     assert_eq!(
-        remove_copies_in(&root, "runner", &apps(&["Finder", "Runner"]), None),
+        remove_copies_in(&root, "runner", apps(&["Finder", "Runner"]).rows(), None),
         Removed::default()
     );
     assert!(app.exists());
-    let removed = remove_copies_in(&root, "runner", &apps(&["Finder"]), None);
+    let removed = remove_copies_in(&root, "runner", apps(&["Finder"]).rows(), None);
     assert_eq!(removed.folders, [app.to_string_lossy().into_owned()]);
     assert!(!app.exists());
 
@@ -187,7 +188,7 @@ fn copies_in_use_are_kept() {
     age(&opened, 8);
     age(&other, 8);
     let new = copy_folder(&root, "d", "new.txt");
-    prune_in(&root, &apps(&["textedit"]));
+    prune_in(&root, apps(&["textedit"]).rows());
     assert!(opened.exists(), "in use");
     assert!(!other.exists(), "old and unused");
     assert!(new.exists(), "recent");
@@ -200,14 +201,16 @@ fn key(id: &str) -> Key {
 }
 
 /// Apps of these names running from somewhere outside any copy.
-fn apps(names: &[&str]) -> Vec<Running> {
-    names
+fn apps(names: &[&str]) -> AppList {
+    let apps: Vec<_> = names
         .iter()
-        .map(|name| Running {
-            name: (*name).to_owned(),
-            executable: format!("/Applications/{name}.app/Contents/MacOS/{name}"),
+        .zip(1..)
+        .map(|(name, pid)| {
+            serde_json::json!({"pid": pid, "name": name,
+                "executable": format!("/Applications/{name}.app/Contents/MacOS/{name}")})
         })
-        .collect()
+        .collect();
+    AppList::decode(serde_json::json!({"ok": true, "apps": apps})).unwrap()
 }
 
 /// A copy root under `dir` holding one copy opened with TextEdit.
@@ -260,22 +263,19 @@ fn a_copy_an_app_runs_from_is_in_use_even_without_its_name() {
     fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
     let app = copy_folder(&root, "app", "Long Runner.app");
     let beside = copy_folder(&root, "app-beside", "note.txt");
-    let running = [Running {
-        name: String::new(),
-        executable: app
-            .join("Long Runner.app/Contents/MacOS/runner")
-            .to_string_lossy()
-            .into_owned(),
-    }];
+    let listed = AppList::decode(serde_json::json!({"ok": true, "apps": [{"pid": 1,
+        "executable": app.join("Long Runner.app/Contents/MacOS/runner")}]}))
+    .unwrap();
+    let running = listed.rows();
 
-    assert!(in_use(&app, &running));
-    assert!(!in_use(&beside, &running), "a folder whose name it begins");
+    assert!(in_use(&app, running));
+    assert!(!in_use(&beside, running), "a folder whose name it begins");
     assert_eq!(
-        remove_copies_in(&root, "runner", &running, None),
+        remove_copies_in(&root, "runner", running, None),
         Removed::default()
     );
     age(&app, 8);
-    prune_in(&root, &running);
+    prune_in(&root, running);
     assert!(app.exists());
 }
 
@@ -338,7 +338,12 @@ fn close_keeps_another_sessions_copies_and_counts_them() {
 
     let dir = tempfile::tempdir().unwrap();
     let (root, [own, other, nobody, busy]) = made(dir.path());
-    let removed = remove_copies_in(&root, "TextEdit", &apps(&["Busy"]), Some(&key("left")));
+    let removed = remove_copies_in(
+        &root,
+        "TextEdit",
+        apps(&["Busy"]).rows(),
+        Some(&key("left")),
+    );
     assert_eq!(removed.kept_others, 1);
     let mut folders = removed.folders.clone();
     folders.sort();
@@ -349,7 +354,7 @@ fn close_keeps_another_sessions_copies_and_counts_them() {
 
     let dir = tempfile::tempdir().unwrap();
     let (root, [.., busy]) = made(dir.path());
-    let removed = remove_copies_in(&root, "TextEdit", &apps(&["Busy"]), None);
+    let removed = remove_copies_in(&root, "TextEdit", apps(&["Busy"]).rows(), None);
     assert_eq!(
         (removed.folders.len(), removed.kept_others),
         (3, 0),

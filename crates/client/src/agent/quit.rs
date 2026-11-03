@@ -281,11 +281,10 @@ fn remove_copies(
     // A copy is never removed while an app of its names runs: an app that
     // came back, or another one, may be running from it. An agent's close
     // keeps the copies another agent session made.
-    let running = handoff::Running::listed(after);
     let session = client.host_session.as_ref().map(|session| session.key());
     let mut removed = handoff::Removed::default();
     for name in names {
-        let gone = handoff::remove_copies_in(copies, name, &running, session);
+        let gone = handoff::remove_copies_in(copies, name, after.rows(), session);
         removed.folders.extend(gone.folders);
         removed.kept_others += gone.kept_others;
         removed.failed.extend(gone.failed);

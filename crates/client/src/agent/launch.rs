@@ -53,10 +53,11 @@ pub(super) async fn open_in(
     // with `run` go on beside it.
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
-    let running = handoff::Running::listed(&client.apps_in(&verified).await?);
-    task::settle_copies_gone(client, handoff::prune_in(copies, &running));
+    let listed = client.apps_in(&verified).await?;
+    let running = listed.rows();
+    task::settle_copies_gone(client, handoff::prune_in(copies, running));
 
-    let handed = handoff::hand_over(client, &ownership, wanted(app, targets), &running).await?;
+    let handed = handoff::hand_over(client, &ownership, wanted(app, targets), running).await?;
     let copied = handed.copied;
     let mut given = handed.paths.into_iter();
 
