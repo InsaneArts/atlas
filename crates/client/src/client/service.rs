@@ -4,7 +4,7 @@
 use super::Client;
 use atlas_core::{
     error::{Code, Error, Result},
-    session::{Observation, PermissionObservation, SHUTDOWN, input_current, require_hidden},
+    session::{Observation, SHUTDOWN, input_current, require_hidden},
     transport::run_output,
 };
 use serde_json::{Value, json};
@@ -48,9 +48,7 @@ fn launched_pid(reply: &Value) -> Result<u32> {
 /// Refuse input work while the helper's Atlas lacks Accessibility; an
 /// unknown answer is not a refusal.
 pub(super) fn require_accessibility(observation: &Observation) -> Result<()> {
-    if observation.accessibility == PermissionObservation::Denied
-        || observation.native.accessibility == PermissionObservation::Denied
-    {
+    if observation.accessibility == Some(false) || observation.native.accessibility == Some(false) {
         return Err(Error::new(
             Code::Permission,
             "The helper does not allow Atlas Accessibility yet, which input needs. In the \

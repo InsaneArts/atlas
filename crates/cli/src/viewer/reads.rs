@@ -351,7 +351,7 @@ impl Viewer {
         let starts = settled
             && native.control_active != Some(true)
             && native.held_input != Some(true)
-            && session.accessibility == atlas_core::session::PermissionObservation::Allowed;
+            && session.accessibility == Some(true);
         let hidden = starts
             .then(|| session.require_hidden(client.config.helper_uid).ok())
             .flatten()

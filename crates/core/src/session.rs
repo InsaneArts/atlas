@@ -26,29 +26,6 @@ use epoch::ProofObservation;
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Permission not asked about, not answered, refused, or granted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PermissionObservation {
-    Unqueried,
-    Unavailable,
-    Denied,
-    Allowed,
-}
-
-impl PermissionObservation {
-    fn decode(value: &Value, queried: bool) -> Self {
-        if !queried {
-            Self::Unqueried
-        } else {
-            match value.as_bool() {
-                Some(true) => Self::Allowed,
-                Some(false) => Self::Denied,
-                None => Self::Unavailable,
-            }
-        }
-    }
-}
-
 /// A pin may be incomplete; readiness never fills in its missing fields.
 #[derive(Clone, Debug)]
 struct PinObservation {
@@ -88,7 +65,8 @@ pub struct NativeObservation {
     protocol_version: Option<u64>,
     pub pid: Option<u32>,
     pub ready: Option<bool>,
-    pub accessibility: PermissionObservation,
+    /// Whether Accessibility is allowed; None when not asked or not answered.
+    pub accessibility: Option<bool>,
     epoch: Option<InputEpoch>,
     pinned: PinObservation,
     pub control_active: Option<bool>,
@@ -111,7 +89,7 @@ impl NativeObservation {
             protocol_version: value["protocolVersion"].as_u64(),
             pid,
             ready: value["ready"].as_bool(),
-            accessibility: PermissionObservation::decode(&value["accessibility"], !value.is_null()),
+            accessibility: value["accessibility"].as_bool(),
             epoch: ProofObservation::decode(&value["session"])
                 .input_epoch(pid.unwrap_or(0))
                 .ok(),
@@ -126,9 +104,7 @@ impl NativeObservation {
     }
 
     fn healthy(&self) -> bool {
-        self.ok
-            && self.protocol_version == Some(1)
-            && self.accessibility == PermissionObservation::Allowed
+        self.ok && self.protocol_version == Some(1) && self.accessibility == Some(true)
     }
 
     pub fn has_capability(&self, name: &str) -> bool {
@@ -166,8 +142,10 @@ pub struct Observation {
     pub capture_pid: Option<u32>,
     display: Option<Display>,
     proof: ProofObservation,
-    capture: PermissionObservation,
-    pub accessibility: PermissionObservation,
+    /// Whether Screen Recording is allowed; None when the read failed or did not say.
+    capture: Option<bool>,
+    /// Whether Accessibility is allowed; None when the read did not say.
+    pub accessibility: Option<bool>,
     daemon_capabilities: Vec<String>,
     pub native: NativeObservation,
     pub installed_build: Option<String>,
@@ -190,11 +168,10 @@ impl Observation {
                 .filter(|pid| *pid > 0),
             display: Display::deserialize(&value["display"]).ok(),
             proof: ProofObservation::decode(&value["sessionProof"]),
-            capture: PermissionObservation::decode(&value["permissions"]["screenCapture"], ok),
-            accessibility: PermissionObservation::decode(
-                &value["permissions"]["accessibility"],
-                true,
-            ),
+            capture: value["permissions"]["screenCapture"]
+                .as_bool()
+                .filter(|_| ok),
+            accessibility: value["permissions"]["accessibility"].as_bool(),
             daemon_capabilities: capability_names(&value["daemon"]),
             native: NativeObservation::decode(&value["inputService"]),
             installed_build: value["installedBuild"].as_str().map(str::to_owned),
@@ -308,7 +285,7 @@ impl Observation {
 
         Ok(Session {
             epoch,
-            capture: self.capture == PermissionObservation::Allowed,
+            capture: self.capture == Some(true),
             input: self.native.healthy() && self.native.ready == Some(true) && native_matches,
         })
     }

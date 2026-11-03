@@ -3,9 +3,8 @@ use super::logins::{
     running_for, stale_in,
 };
 use super::{
-    Absence, Blocker, FOCUS_APP, Kind, LOGGED_OUT, Observation, PermissionObservation, Record,
-    Window, classify, diagnosis, has_capability, input_build_current, require_hidden, silent,
-    validate_target_uid,
+    Absence, Blocker, FOCUS_APP, Kind, LOGGED_OUT, Observation, Record, Window, classify,
+    diagnosis, has_capability, input_build_current, require_hidden, silent, validate_target_uid,
 };
 use crate::error::Code;
 use serde_json::json;
@@ -40,10 +39,10 @@ fn an_unqueried_permission_remains_distinct_from_denial() {
     let denied = json!({"ok": true, "inputService": {"ok": true, "accessibility": false}});
     let allowed = json!({"ok": true, "inputService": {"ok": true, "accessibility": true}});
     for (value, expected, projection) in [
-        (unknown, PermissionObservation::Unqueried, json!(null)),
-        (unavailable, PermissionObservation::Unavailable, json!(null)),
-        (denied, PermissionObservation::Denied, json!(false)),
-        (allowed, PermissionObservation::Allowed, json!(true)),
+        (unknown, None, json!(null)),
+        (unavailable, None, json!(null)),
+        (denied, Some(false), json!(false)),
+        (allowed, Some(true), json!(true)),
     ] {
         let observation = Observation::decode(&value);
         assert_eq!(observation.native.accessibility, expected);
@@ -58,15 +57,19 @@ fn an_unqueried_permission_remains_distinct_from_denial() {
     }
 
     for (value, expected) in [
-        (json!({}), PermissionObservation::Unqueried),
-        (json!({"ok": true}), PermissionObservation::Unavailable),
+        (json!({}), None),
+        (json!({"ok": true}), None),
+        (
+            json!({"ok": false, "permissions": {"screenCapture": true}}),
+            None,
+        ),
         (
             json!({"ok": true, "permissions": {"screenCapture": false}}),
-            PermissionObservation::Denied,
+            Some(false),
         ),
         (
             json!({"ok": true, "permissions": {"screenCapture": true}}),
-            PermissionObservation::Allowed,
+            Some(true),
         ),
     ] {
         assert_eq!(Observation::decode(&value).capture, expected);

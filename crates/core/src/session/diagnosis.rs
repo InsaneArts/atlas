@@ -1,5 +1,5 @@
 //! Doctor checks and their public guidance, derived from one observation.
-use super::{Observation, PermissionObservation, Session, connection_refusal};
+use super::{Observation, Session, connection_refusal};
 use crate::error::{Code, Error, Result};
 use serde_json::{Value, json};
 
@@ -179,7 +179,7 @@ impl Observation {
             },
             Check {
                 name: "Screen Recording allowed",
-                ok: reachable.then_some(self.capture == PermissionObservation::Allowed),
+                ok: reachable.then_some(self.capture == Some(true)),
                 next_step: if reachable {
                     "In the helper's System Settings › Privacy & Security › Screen & System Audio \
                      Recording, turn Atlas on."
@@ -189,11 +189,8 @@ impl Observation {
             },
             Check {
                 name: "Accessibility allowed",
-                ok: native_reachable
-                    .then_some(self.native.accessibility == PermissionObservation::Allowed),
-                next_step: if native_reachable
-                    || self.accessibility == PermissionObservation::Denied
-                {
+                ok: native_reachable.then_some(self.native.accessibility == Some(true)),
+                next_step: if native_reachable || self.accessibility == Some(false) {
                     "In the helper's System Settings › Privacy & Security › Accessibility, turn \
                      Atlas on (atlas init walks you through it)."
                 } else if queried {
@@ -206,7 +203,7 @@ impl Observation {
                 name: "Input service ready",
                 ok: queried
                     .then_some(session.is_some_and(|s| s.input || self.native.repinnable(s))),
-                next_step: if queried && self.accessibility == PermissionObservation::Denied {
+                next_step: if queried && self.accessibility == Some(false) {
                     "Turn on Accessibility for Atlas in the helper first; atlas init walks you through it."
                 } else if queried {
                     START_INPUT
