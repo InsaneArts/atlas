@@ -2770,15 +2770,10 @@ fn replacing_the_process_during_final_verification_invalidates_the_result() {
     });
     reason(result.map(|_| ()), "app");
     assert!(fake.writes.is_empty());
-}
-
-/// A guard that refuses once `current` is no longer `target`, as
-/// [`check_application`] does with the kernel's answer.
-fn same_application(target: Instance, current: Option<Instance>) -> Result<()> {
-    if current != Some(target) {
-        return Err(refused(Reason::App));
+    for current in [None, Some(Instance::new(813, target.start))] {
+        reason(same_application(target, current), "app");
     }
-    Ok(())
+    same_application(target, Some(target)).unwrap();
 }
 
 #[test]
@@ -2793,20 +2788,6 @@ fn the_native_target_retains_and_rechecks_the_kernel_start_time() {
     check_application(None).unwrap();
     let stale = Instance::new(pid, [target.start[0], (target.start[1] + 1) % 1_000_000]);
     reason(check_application(Some(stale)), "app");
-}
-
-#[test]
-fn a_process_that_ended_is_no_longer_the_target() {
-    let mut child = std::process::Command::new("/bin/cat")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let pid = i64::from(child.id());
-    let target = application(pid).unwrap();
-    check_application(Some(target)).unwrap();
-    child.kill().unwrap();
-    child.wait().unwrap();
-    reason(check_application(Some(target)), "app");
 }
 
 #[test]

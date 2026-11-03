@@ -197,17 +197,16 @@ pub(in crate::native) fn application(pid: i64) -> Result<Instance> {
     .ok_or_else(|| refused(Reason::App))
 }
 
-/// Refuse when `target` is no longer the process its PID names now; a
-/// process that cannot be read is refused, keeping why.
 pub(in crate::native) fn check_application(target: Option<Instance>) -> Result<()> {
-    let Some(target) = target else {
-        return Ok(());
-    };
-    match application(target.pid.into()) {
-        Ok(current) if current == target => Ok(()),
-        Ok(_) => Err(refused(Reason::App)),
-        Err(cause) => Err(refused(Reason::App).with_source(cause)),
+    if let Some(target) = target {
+        match application(target.pid.into()) {
+            Ok(current) => same_application(target, Some(current))?,
+            Err(cause) => {
+                same_application(target, None).map_err(|refusal| refusal.with_source(cause))?;
+            }
+        }
     }
+    Ok(())
 }
 
 pub(in crate::native) fn target_application(expect: &Expect) -> Result<Instance> {
@@ -217,6 +216,13 @@ pub(in crate::native) fn target_application(expect: &Expect) -> Result<Instance>
     };
     check_application(Some(target))?;
     Ok(target)
+}
+
+fn same_application(target: Instance, current: Option<Instance>) -> Result<()> {
+    if current != Some(target) {
+        return Err(refused(Reason::App));
+    }
+    Ok(())
 }
 
 /// The frame a window must have to be told from the window list.

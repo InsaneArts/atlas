@@ -53,12 +53,18 @@ pub fn running() -> Vec<Running> {
 /// does and has one. Called on worker threads, so it drains its own
 /// autorelease pool.
 pub fn bundle_id(pid: i64) -> Option<String> {
-    let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)?;
-    objc2::rc::autoreleasepool(|_| {
-        NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?
-            .bundleIdentifier()
-            .map(|id| id.to_string())
+    bundle_id_with(pid, |pid| {
+        objc2::rc::autoreleasepool(|_| {
+            NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?
+                .bundleIdentifier()
+                .map(|id| id.to_string())
+        })
     })
+}
+
+fn bundle_id_with(pid: i64, lookup: impl FnOnce(libc::pid_t) -> Option<String>) -> Option<String> {
+    let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    lookup(pid)
 }
 
 /// When `app` was launched, in milliseconds since 1970; none for an app

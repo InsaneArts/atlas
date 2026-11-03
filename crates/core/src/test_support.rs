@@ -10,7 +10,24 @@ pub mod host;
 
 pub use child::{TestChild, message, permitted};
 
-use std::{path::PathBuf, process::Command};
+use crate::error::Result;
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+/// Atlas.app's executable, its reachability read from `reachable`.
+pub fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
+    crate::app_bundle::app_executable_using(reachable)
+}
+
+/// `executable` as the installed app, its signature read from `developer_id`.
+pub fn signed_executable_using(
+    executable: PathBuf,
+    developer_id: impl FnOnce(&Path) -> bool,
+) -> Result<PathBuf> {
+    crate::app_bundle::signed_executable_using(executable, developer_id)
+}
 
 /// The helper account test clients are configured for.
 pub const UID: u32 = 7001;

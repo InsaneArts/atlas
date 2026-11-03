@@ -113,22 +113,38 @@ fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_ch
     };
     let running = std::env::current_exe().unwrap();
     assert!(running.starts_with(directory.join("atlas-approved.test")));
-    // The opener names the installed app, the only executable Allow's
-    // identity check verifies, never the staged copy that wrote it.
-    let installed = Path::new(atlas_core::app_bundle::EXECUTABLE);
+    let installed = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
+    // Stand in only for disk reachability and codesign. Resolve paths,
+    // write the real plist and apply Allow's actual identity checks.
+    let program = atlas_core::test_support::app_executable_using(|path| {
+        assert_eq!(path, installed);
+        true
+    })
+    .unwrap();
+    let program = atlas_core::test_support::signed_executable_using(program, |path| {
+        assert_eq!(path, installed);
+        true
+    })
+    .unwrap();
     let (_home, layout) = layout();
-    let readied = ready(&layout, false, Some(installed), MACOS).unwrap();
+    let readied = ready(&layout, false, Some(&program), MACOS).unwrap();
     let opener = lint(&fs::read_to_string(readied.opener.unwrap()).unwrap());
     let opened = PathBuf::from(opener["ProgramArguments"][0].as_str().unwrap());
     assert_eq!(opened, installed);
-    assert_ne!(opened, running);
 
-    let (allowed, approvals) =
-        atlas_native::approval::without_authorization(atlas_core::app_bundle::signed_executable);
-    if let Ok(allowed) = allowed {
-        assert_eq!(allowed, opened);
-    }
+    let (allowed, approvals) = atlas_native::approval::without_authorization(|| {
+        atlas_core::test_support::signed_executable_using(opened, |path| path == installed)
+    });
+    assert_eq!(allowed.unwrap(), installed);
     assert_eq!(approvals, 0);
+    assert!(
+        atlas_core::test_support::signed_executable_using(program, |_| false).is_err(),
+        "the installed app must still pass signature verification"
+    );
+    assert!(
+        atlas_core::test_support::signed_executable_using(running, |_| true).is_err(),
+        "a staged copy is never accepted as the installed identity"
+    );
 }
 
 #[test]
