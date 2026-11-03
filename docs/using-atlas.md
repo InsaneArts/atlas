@@ -36,6 +36,16 @@ atlas screenshot
 
 The named click refuses missing or ambiguous targets. Each listing also names its `look`, such as `8123abc`. `atlas click --app Example --ref 8123abc.12` clicks the element with `index` 12 in that listing: that very element where it is now, with the same checks as a named click. Atlas never matches a reference again by its name or position: when the listing has expired, the app or Atlas's input service restarted, or the element was replaced, changed or moved, the click is refused with `performed: 0` and tells you to run `atlas elements` again. Inspect the second screenshot to check the result. A successful input response confirms delivery, not that the app did what you intended. Check the resulting screen, accessibility elements or saved file after each meaningful step.
 
+A ref can also be acted on through Accessibility, with no pointer, keys or focus:
+
+```sh
+atlas element press --ref 8123abc12
+atlas element set-value --ref 8123abc4 --value "Quarterly report"
+atlas element check --ref 8123abc7
+```
+
+The actions are `press`, `set-value --value TEXT`, `check`, `uncheck`, `pick --option REF` (an option listed under that control), `expand`, `collapse` and `scroll-into-view`, and `atlas input` takes them as actions of those types. The element is found again and proven the same as a referenced click finds it, its window must not be blocked by a sheet or modal dialog, and it is proven once more just before the one request that acts. `check`, `uncheck`, `expand` and `collapse` ask for a state: an element already in it is left alone, and one whose state cannot be read is refused rather than toggled. The reply is `{"ok":true,"performed":1,"mechanism":"accessibility","verification":"matched"}`, where `verification` is `matched` or `mismatch` when the element's state or value was read back, and `not-checked` otherwise, as after a press. It never repeats the value you set. An element that does not support the action is refused with nothing sent; Atlas never falls back to a click. A password field's value is never set. Apps can respond to Accessibility differently than to a real click or typing, and the app may still move focus itself. An action the app did not acknowledge in time is uncertain: do not repeat it, recover as for any uncertain input.
+
 If a control has no usable accessibility element, take a fresh screenshot and use `atlas click X Y` with the observed position. Coordinates are display points measured from the top-left corner. Convert screenshot pixel coordinates with the result's `origin` and `pointsPerPixel`: point = origin + pixel × pointsPerPixel. `atlas screenshot --app NAME` or `--region X,Y,W,H` takes a smaller picture of one app's windows or one part of the display. Do not reuse coordinates after the window or display changes.
 
 When you finish, close this app:
