@@ -256,10 +256,10 @@ fn invalid_arguments_report_one_json_error_before_execution() {
 fn a_click_by_reference_takes_no_point_name_or_role() {
     let fixture = Fixture::new();
     for args in [
-        vec!["click", "--ref", "8123abc12", "10", "20"],
-        vec!["click", "--ref", "8123abc12", "--name", "Save"],
-        vec!["click", "--ref", "8123abc12", "--role", "AXButton"],
-        vec!["click", "--ref", "8123abc12", "--window", "4", "10", "20"],
+        vec!["click", "--ref", "8123abc.12", "10", "20"],
+        vec!["click", "--ref", "8123abc.12", "--name", "Save"],
+        vec!["click", "--ref", "8123abc.12", "--role", "AXButton"],
+        vec!["click", "--ref", "8123abc.12", "--window", "4", "10", "20"],
     ] {
         let output = fixture.missing(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");

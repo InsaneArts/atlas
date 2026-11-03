@@ -2264,7 +2264,7 @@ async fn input_without_an_expectation_is_never_checked() {
 }
 
 fn referenced() -> Action {
-    serde_json::from_value(json!({"type": "reference", "ref": "8123abc12"})).unwrap()
+    serde_json::from_value(json!({"type": "reference", "ref": "8123abc.12"})).unwrap()
 }
 
 #[tokio::test]

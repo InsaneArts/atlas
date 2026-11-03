@@ -455,6 +455,16 @@ fn the_elements_table_shows_each_click_point() {
 }
 
 #[test]
+fn a_kept_look_is_named_beside_how_many_elements_it_holds() {
+    let kept = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 5, "matching": 0, "more": 0,
+               "scanIncomplete": false, "elements": [], "look": "8123abc"}),
+    );
+    assert_eq!(kept.out, "Process 9 · 0 of 5 elements match · look 8123abc");
+}
+
+#[test]
 fn a_scan_that_stopped_early_says_why() {
     let shown = show(
         View::Elements,
