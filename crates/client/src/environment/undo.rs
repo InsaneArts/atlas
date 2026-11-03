@@ -56,6 +56,12 @@ pub(crate) struct PlanState {
 /// the frozen plans beside the shared command for those it never did,
 /// asked in as many reads as the helper's limit needs. Reads only: it
 /// takes no control and records nothing.
+///
+/// # Errors
+///
+/// Fails when the helper's list cannot be read, or when it holds a record
+/// that the helper or this build cannot read: that record may be any of
+/// `ids`, so none of them is taken for gone or never started.
 pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<PlanState>> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -66,6 +72,12 @@ pub(crate) async fn plan_states(client: &Client, ids: &[Token]) -> Result<Vec<Pl
     for batch in ids.chunks(list::ASKED) {
         let asked: Vec<String> = batch.iter().map(|id| id.as_str().to_owned()).collect();
         let there: Transactions = list::ask(client, &helper, true, asked).await?;
+        if !there.all_read() {
+            return Err(problem(
+                "Atlas could not read every record of the helper's copies, so it cannot tell \
+                 what undoing one would remove",
+            ));
+        }
         transactions.extend(there.known().cloned());
     }
 
