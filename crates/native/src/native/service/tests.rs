@@ -12,13 +12,6 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
 
-/// Parse a whole batch and validate every action, as execution would.
-fn parse(wire: &Value, display: &Display) -> Result<Vec<Action>> {
-    let actions: Vec<Action> = Vec::deserialize(wire)?;
-    atlas_core::actions::check(&actions, display)?;
-    Ok(actions)
-}
-
 /// [`super::run`], a failure as the reply it sends.
 async fn run(
     engine: &mut impl Perform,
@@ -59,322 +52,270 @@ fn input_body(fields: &str) -> String {
     )
 }
 
+const DISPLAY: Display = Display {
+    width: 800.0,
+    height: 600.0,
+    scale: 1.0,
+};
+
 #[test]
-fn input_decoding_keeps_optional_compatibility_and_legacy_refusal_words() {
-    let display = atlas_core::session::Display {
-        width: 800.0,
-        height: 600.0,
-        scale: 1.0,
-    };
-    for options in [
-        "",
-        r#", "app":false"#,
-        r#", "app":true"#,
-        r#", "expect":null"#,
-        r#", "expect":{"pid":812,"window":42,"field":"Search"}"#,
+fn input_requests_take_each_member_from_its_last_value() {
+    let key = format!(
+        "{:?}",
+        Vec::<Action>::deserialize(json!([{"type":"key","key":"a"}])).unwrap()
+    );
+    for (options, expect, app) in [
+        ("", Value::Null, false),
+        (r#","app":false"#, Value::Null, false),
+        (r#","app":true"#, Value::Null, true),
+        (r#","app":null,"app":true"#, Value::Null, true),
+        (r#","app":true,"app":null"#, Value::Null, false),
+        (r#","app":"true""#, Value::Null, false),
+        (r#","app":0"#, Value::Null, false),
+        (r#","app":[]"#, Value::Null, false),
+        (r#","app":{}"#, Value::Null, false),
+        (r#","expect":null"#, Value::Null, false),
+        (
+            r#","expect":{"pid":812,"window":42,"field":"Search"}"#,
+            json!({"pid":812,"window":42,"field":"Search"}),
+            false,
+        ),
+        (
+            r#","expect":{"pid":null,"pid":812}"#,
+            json!({"pid":812}),
+            false,
+        ),
+        (
+            r#","expect":false,"expect":{"pid":812}"#,
+            json!({"pid":812}),
+            false,
+        ),
     ] {
         let body = input_body(&format!(
-            r#""actions":[{{"type":"move","x":10,"y":20}}]{options},"other":1,"other":2,"person":null,"person":false"#
+            r#""actions":null,"actions":[{{"type":"key","key":null,"key":"a"}}]{options},"other":1,"other":2,"person":null,"person":false"#
         ));
         let Request::Input {
             owner,
             epoch,
             actions,
-            expect,
-            app,
+            expect: actual_expect,
+            app: actual_app,
         } = Request::decode(body.as_bytes()).unwrap()
         else {
             panic!("expected typed input");
         };
         assert_eq!(owner, "a".repeat(48));
-        assert_eq!(epoch.unwrap().width, display.width);
-        assert_eq!(actions.unwrap().len(), 1);
-        assert_eq!(app, options.contains("true"));
-        assert_eq!(expect.unwrap().is_some(), options.contains("812"));
+        assert_eq!(epoch.unwrap().width, DISPLAY.width);
+        assert_eq!(format!("{:?}", actions.unwrap()), key, "{body}");
+        assert_eq!(json!(actual_expect.unwrap()), expect, "{body}");
+        assert_eq!(actual_app, app, "{body}");
     }
-    for actions in [
-        "null",
-        "false",
-        "1",
-        r#""actions""#,
-        "{}",
-        "[]",
-        r#"[{"type":"move","x":1}]"#,
-        r#"[{"type":"move","x":null,"y":20}]"#,
-        r#"[{"type":"click","x":null,"y":20,"count":null}]"#,
-        r#"[{"type":"click","count":null,"y":20,"x":null}]"#,
-        r#"[{"type":"click","x":10,"y":20,"count":0}]"#,
-        r#"[{"type":"key","key":"unknown"}]"#,
-        r#"[{"type":"wait","ms":251}]"#,
-        r#"[{"type":"move","x":800,"y":20}]"#,
-        r#"[{"type":"unknown"}]"#,
-    ] {
-        let body = input_body(&format!(r#""actions":{actions}"#));
-        let wire: Value = serde_json::from_str(&body).unwrap();
-        let old = parse(&wire["actions"], &display).unwrap_err();
-        let Request::Input { actions, .. } = Request::decode(body.as_bytes()).unwrap() else {
-            panic!("expected typed input");
-        };
-        let error = match actions {
-            Ok(actions) => atlas_core::actions::check(&actions, &display).unwrap_err(),
-            Err(error) => Error::new(error.code, &error.error),
-        };
-        assert_eq!(json!(error), json!(old), "{body}");
-    }
-    for expect in [
-        "false",
-        "0",
-        r#""expect""#,
-        "[]",
-        "{}",
-        r#"{"pid":null}"#,
-        r#"{"pid":812,"window":0}"#,
-        r#"{"pid":812,"field":""}"#,
-        r#"{"pid":812,"other":true}"#,
-        r#"{"pid":812,"start":false}"#,
-    ] {
-        let body = input_body(&format!(
-            r#""actions":[{{"type":"key","key":"a"}}],"expect":{expect}"#
-        ));
-        let wire: Value = serde_json::from_str(&body).unwrap();
-        let old = Expect::from_request(&wire["expect"]).unwrap_err();
-        let Request::Input { expect, .. } = Request::decode(body.as_bytes()).unwrap() else {
-            panic!("expected typed input");
-        };
-        let error = expect.unwrap_err();
-        assert_eq!(json!(error), json!(old), "{body}");
-    }
+    let body = r#"{"op":"input","epoch":{"uid":501,"securitySessionId":1,"displayId":2,"width":null,"width":800,"height":600,"processId":1},"actions":[]}"#;
+    let Request::Input { epoch, .. } = Request::decode(body.as_bytes()).unwrap() else {
+        panic!("expected typed input");
+    };
+    assert_eq!(epoch.unwrap().width, DISPLAY.width);
+    let body = input_body(r#""actions":[{"type":"key","key":"a"}],"op":null"#);
+    assert_eq!(
+        json!(Request::decode(body.as_bytes()).unwrap_err()),
+        json!({"code":"input","error":"Native operation requires a string op","ok":false,"uncertain":false})
+    );
 }
 
-#[tokio::test]
-async fn input_fields_preserve_legacy_acceptance_and_reject_the_complete_invalid_batch()
--> std::result::Result<(), Box<dyn std::error::Error>> {
-    let display = atlas_core::session::Display {
-        width: 800.0,
-        height: 600.0,
-        scale: 1.0,
-    };
-    let mut cases = Vec::new();
-    let alternatives = [
-        json!({"type":"pointer","phase":"down","x":10,"y":20}),
-        json!({"type":"move","x":10,"y":20}),
-        json!({"type":"click","x":10,"y":20}),
-        json!({"type":"drag","fromX":10,"fromY":20,"toX":30,"toY":40}),
-        json!({"type":"scroll","x":10,"y":20}),
-        json!({"type":"type","text":"a"}),
-        json!({"type":"key","key":"a"}),
-        json!({"type":"wait","ms":0}),
-    ];
-    for action in alternatives {
-        let fields = action.as_object().ok_or("expected as_object")?;
-        for (name, value) in fields {
-            let mut missing = fields.clone();
-            missing.remove(name);
-            cases.push(input_body(&format!(
-                r#""actions":[{{"type":"key","key":"a"}},{missing}]"#,
-                missing = json!(missing)
-            )));
-            for wrong in [Value::Null, json!(false), json!({}), json!([])] {
-                let mut malformed = fields.clone();
-                malformed.insert(name.clone(), wrong);
-                cases.push(input_body(&format!(
-                    r#""actions":[{{"type":"key","key":"a"}},{malformed}]"#,
-                    malformed = json!(malformed)
-                )));
-            }
-            let rest = json!(missing).to_string();
-            for (first, second) in [
-                (value.to_string(), value.to_string()),
-                ("null".into(), value.to_string()),
-                (value.to_string(), "null".into()),
-            ] {
-                cases.push(input_body(&format!(r#""actions":[{{"type":"key","key":"a"}},{{"{name}":{first},"{name}":{second},{rest}}}]"#, rest=rest.trim_start_matches('{').trim_end_matches('}'))));
-            }
-        }
-        for (name, value) in [
-            ("button", json!("left")),
-            ("count", json!(1)),
-            ("modifiers", json!([])),
-            ("dx", json!(0)),
-            ("dy", json!(1)),
-        ] {
-            let applies = match fields["type"].as_str().ok_or("expected as_str")? {
-                "pointer" | "click" => ["button", "count", "modifiers"].contains(&name),
-                "drag" => name == "button",
-                "scroll" => ["dx", "dy"].contains(&name),
-                _ => false,
-            };
-            if applies {
-                for wrong in [
-                    Value::Null,
-                    json!(false),
-                    json!({}),
-                    json!([]),
-                    json!("invalid"),
-                ] {
-                    if wrong == value {
-                        continue;
-                    }
-                    let mut malformed = fields.clone();
-                    malformed.insert(name.into(), wrong);
-                    cases.push(input_body(&format!(
-                        r#""actions":[{{"type":"key","key":"a"}},{malformed}]"#,
-                        malformed = json!(malformed)
-                    )));
-                }
-                cases.push(input_body(&format!(r#""actions":[{{"type":"key","key":"a"}},{{{rest},"{name}":{value},"{name}":{value}}}]"#, rest=action.to_string().trim_start_matches('{').trim_end_matches('}'))));
-            }
-        }
-    }
-    for actions in [
-        "null".to_owned(),
-        "[]".into(),
-        serde_json::to_string(&vec![json!({"type":"key","key":"a"}); 33])?,
-        serde_json::to_string(&vec![json!({"type":"wait","ms":250}); 9])?,
-    ] {
-        cases.push(input_body(&format!(r#""actions":{actions}"#)));
-    }
-    for action in [
-        json!({"type":"pointer","phase":"down","x":800,"y":20}),
-        json!({"type":"click","x":10,"y":20,"count":0}),
-        json!({"type":"click","x":10,"y":20,"count":6}),
-        json!({"type":"click","x":10,"y":20,"modifiers":["invalid"]}),
-        json!({"type":"drag","fromX":10,"fromY":20,"toX":800,"toY":40}),
-        json!({"type":"scroll","x":10,"y":20,"dx":101}),
-        json!({"type":"scroll","x":10,"y":20,"dy":-101}),
-        json!({"type":"type","text":""}),
-        json!({"type":"type","text":"x".repeat(257)}),
-        json!({"type":"key","key":"invalid"}),
-        json!({"type":"wait","ms":251}),
-    ] {
-        cases.push(input_body(&format!(
+#[test]
+fn input_refusals_stay_on_their_own_field_and_refuse_the_whole_batch() {
+    let batch = |action: &str| {
+        input_body(&format!(
             r#""actions":[{{"type":"key","key":"a"}},{action}]"#
-        )));
+        ))
+    };
+    let expect = |expect: &str| {
+        input_body(&format!(
+            r#""actions":[{{"type":"key","key":"a"}}],"expect":{expect}"#
+        ))
+    };
+    let epoch = |epoch: &str| {
+        format!(r#"{{"op":"input","epoch":{epoch},"actions":[{{"type":"key","key":"a"}}]}}"#)
+    };
+    let refused = "Action 2 was refused and nothing was sent:";
+    let refusals = [
+        (
+            input_body(r#""actions":null"#),
+            "actions",
+            "invalid-json",
+            "invalid type: null, expected a sequence".to_owned(),
+        ),
+        (
+            input_body(r#""actions":[{"type":"key","key":"a"}],"actions":null"#),
+            "actions",
+            "invalid-json",
+            "invalid type: null, expected a sequence".into(),
+        ),
+        (
+            input_body(r#""actions":[]"#),
+            "actions",
+            "input",
+            "Send between 1 and 32 actions".into(),
+        ),
+        (
+            input_body(&format!(
+                r#""actions":{}"#,
+                json!(vec![json!({"type":"key","key":"a"}); 33])
+            )),
+            "actions",
+            "input",
+            "Send between 1 and 32 actions".into(),
+        ),
+        (
+            input_body(&format!(
+                r#""actions":{}"#,
+                json!(vec![json!({"type":"wait","ms":250}); 9])
+            )),
+            "actions",
+            "input",
+            "The batch would take longer than two seconds; send it in parts".into(),
+        ),
+        (
+            batch(r#"{"type":"key","key":"a","key":null}"#),
+            "actions",
+            "invalid-json",
+            "invalid type: null, expected a string".into(),
+        ),
+        (
+            batch(r#"{"type":"move","x":10}"#),
+            "actions",
+            "invalid-json",
+            "missing field `y`".into(),
+        ),
+        (
+            batch(r#"{"type":"move","x":false,"y":20}"#),
+            "actions",
+            "invalid-json",
+            "invalid type: boolean `false`, expected f64".into(),
+        ),
+        (
+            batch(r#"{"type":"click","x":null,"y":20,"count":null}"#),
+            "actions",
+            "invalid-json",
+            "invalid type: null, expected u8".into(),
+        ),
+        (
+            batch(r#"{"type":"click","count":null,"y":20,"x":null}"#),
+            "actions",
+            "invalid-json",
+            "invalid type: null, expected u8".into(),
+        ),
+        (
+            batch(r#"{"type":"unknown"}"#),
+            "actions",
+            "invalid-json",
+            "unknown variant `unknown`, expected one of `pointer`, `move`, `click`, `drag`, `scroll`, `type`, `key`, `wait`".into(),
+        ),
+        (
+            batch(r#"{"type":"click","x":10,"y":20,"button":"invalid"}"#),
+            "actions",
+            "invalid-json",
+            "unknown variant `invalid`, expected one of `left`, `middle`, `right`".into(),
+        ),
+        (
+            batch(r#"{"type":"click","x":10,"y":20,"count":0}"#),
+            "actions",
+            "input",
+            format!("{refused} a click is 1 to 5 clicks"),
+        ),
+        (
+            batch(r#"{"type":"move","x":800,"y":20}"#),
+            "actions",
+            "input",
+            format!("{refused} its point is off the display"),
+        ),
+        (
+            batch(r#"{"type":"wait","ms":251}"#),
+            "actions",
+            "input",
+            format!("{refused} a wait is at most 250 ms"),
+        ),
+        (
+            batch(r#"{"type":"scroll","x":10,"y":20,"dx":101}"#),
+            "actions",
+            "input",
+            format!("{refused} a scroll is at most 100 lines each way"),
+        ),
+        (
+            expect("false"),
+            "expect",
+            "input",
+            r#""expect" must name a process ID"#.into(),
+        ),
+        (
+            expect(r#"{"pid":812,"pid":null}"#),
+            "expect",
+            "input",
+            r#""expect" must name a process ID"#.into(),
+        ),
+        (
+            expect(r#"{"pid":812,"window":0}"#),
+            "expect",
+            "input",
+            r#""window" must be a window number"#.into(),
+        ),
+        (
+            epoch("null"),
+            "epoch",
+            "invalid-json",
+            "invalid type: null, expected struct InputEpoch".into(),
+        ),
+        (
+            epoch(r#"{"uid":501,"securitySessionId":1,"displayId":2,"width":800,"height":600}"#),
+            "epoch",
+            "invalid-json",
+            "missing field `processId`".into(),
+        ),
+        (
+            epoch(
+                r#"{"uid":false,"securitySessionId":1,"displayId":2,"width":800,"height":600,"processId":1}"#,
+            ),
+            "epoch",
+            "invalid-json",
+            "invalid type: boolean `false`, expected u32".into(),
+        ),
+        (
+            epoch(
+                r#"{"uid":501,"securitySessionId":1,"displayId":2,"width":800,"width":null,"height":600,"processId":1}"#,
+            ),
+            "epoch",
+            "invalid-json",
+            "invalid type: null, expected f64".into(),
+        ),
+    ];
+    for (body, field, code, word) in refusals {
+        let Request::Input {
+            epoch,
+            actions,
+            expect,
+            ..
+        } = Request::decode(body.as_bytes()).unwrap()
+        else {
+            panic!("expected typed input for {body}");
+        };
+        let actions = actions.and_then(|actions| atlas_core::actions::check(&actions, &DISPLAY));
+        let refusals: Vec<_> = [
+            ("epoch", epoch.err()),
+            ("actions", actions.err()),
+            ("expect", expect.err()),
+        ]
+        .into_iter()
+        .filter_map(|(name, error)| Some((name, json!(error?))))
+        .collect();
+        assert_eq!(
+            refusals,
+            [(
+                field,
+                json!({"code":code,"error":word,"ok":false,"uncertain":false})
+            )],
+            "{body}"
+        );
     }
-    let base: Value = serde_json::from_str(&input_body(r#""actions":[{"type":"key","key":"a"}]"#))?;
-    for (field, value) in base["epoch"].as_object().ok_or("expected as_object")? {
-        let mut members = base["epoch"]
-            .as_object()
-            .ok_or("expected as_object")?
-            .clone();
-        members.remove(field);
-        let rest = json!(members).to_string();
-        let rest = rest.trim_start_matches('{').trim_end_matches('}');
-        let mut missing = base.clone();
-        missing["epoch"]
-            .as_object_mut()
-            .ok_or("expected as_object_mut")?
-            .remove(field);
-        cases.push(missing.to_string());
-        for wrong in [
-            Value::Null,
-            json!(false),
-            json!("invalid"),
-            json!([]),
-            json!({}),
-        ] {
-            let mut malformed = base.clone();
-            malformed["epoch"][field] = wrong;
-            cases.push(malformed.to_string());
-        }
-        for (first, second) in [
-            (value.to_string(), value.to_string()),
-            ("null".into(), value.to_string()),
-            (value.to_string(), "null".into()),
-        ] {
-            cases.push(format!(r#"{{"op":"input","actions":[{{"type":"key","key":"a"}}],"epoch":{{{rest},"{field}":{first},"{field}":{second}}}}}"#));
-        }
-    }
-    for field in ["op", "owner", "epoch", "actions", "expect", "app"] {
-        let base: Value = serde_json::from_str(&input_body(
-            r#""actions":[{"type":"key","key":"a"}],"expect":{"pid":812},"app":false"#,
-        ))?;
-        let value = &base[field];
-        for (first, second) in [
-            (value.to_string(), value.to_string()),
-            ("null".into(), value.to_string()),
-            (value.to_string(), "null".into()),
-        ] {
-            let mut members = base.as_object().ok_or("expected as_object")?.clone();
-            members.remove(field);
-            let rest = json!(members).to_string();
-            cases.push(format!(
-                r#"{{{rest},"{field}":{first},"{field}":{second}}}"#,
-                rest = rest.trim_start_matches('{').trim_end_matches('}')
-            ));
-        }
-    }
-    for field in ["pid", "start", "window", "field"] {
-        let values = json!({"pid":812,"start":[1,0],"window":42,"field":"Search"});
-        let value = &values[field];
-        let mut rest = values.as_object().ok_or("expected as_object")?.clone();
-        rest.remove(field);
-        let rest = json!(rest).to_string();
-        cases.push(input_body(&format!(r#""actions":[{{"type":"key","key":"a"}}],"expect":{{{rest},"{field}":{value},"{field}":{value}}}"#, rest=rest.trim_start_matches('{').trim_end_matches('}'))));
-    }
-    for app in ["null", "0", r#""false""#, "[]", "{}"] {
-        cases.push(input_body(&format!(
-            r#""actions":[{{"type":"key","key":"a"}}],"app":{app}"#
-        )));
-    }
-    for body in cases {
-        let wire: Value = serde_json::from_str(&body)?;
-        let legacy = (|| -> Result<Vec<Action>> {
-            if wire["op"].as_str() != Some("input") {
-                return Err(Error::new(
-                    Code::Input,
-                    "Native operation requires a string op",
-                ));
-            }
-            atlas_core::session::InputEpoch::deserialize(&wire["epoch"])?;
-            let actions = parse(&wire["actions"], &display)?;
-            Expect::from_request(&wire["expect"])?;
-            Ok(actions)
-        })();
-        let result = (|| -> Result<Vec<Action>> {
-            let Request::Input {
-                epoch,
-                actions,
-                expect,
-                app,
-                ..
-            } = Request::decode(body.as_bytes())?
-            else {
-                return Err(Error::new(
-                    Code::Input,
-                    "Native operation requires a string op",
-                ));
-            };
-            epoch?;
-            let actions = actions?;
-            atlas_core::actions::check(&actions, &display)?;
-            expect?;
-            assert_eq!(app, wire["app"] == true, "{body}");
-            Ok(actions)
-        })();
-        match legacy {
-            Ok(expected) => {
-                let actual = result?;
-                assert_eq!(format!("{actual:?}"), format!("{expected:?}"), "{body}");
-            }
-            Err(expected) => {
-                let stand = Stand::locked(&[]);
-                let mut engine = stand.lock().await;
-                let actual = match result {
-                    Err(error) => error,
-                    Ok(actions) => {
-                        let outcome = run(&mut *engine, &Gate::default(), actions, None).await;
-                        panic!("invalid input reached execution for {body}: {outcome:?}");
-                    }
-                };
-                assert_eq!(json!(actual), json!(expected), "{body}");
-                assert_eq!(engine.posted, 0, "{body}");
-                assert!(engine.log.is_empty(), "{body}");
-                assert_eq!(engine.releases, 0, "{body}");
-            }
-        }
-    }
-    Ok(())
 }
 
 #[tokio::test]
