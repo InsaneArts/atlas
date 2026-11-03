@@ -250,11 +250,20 @@ async fn shared_next(
         None => client
             .insert(crate::frame_pipe::client::PipeClient::open(descriptor, SHARED_LONGEST).await?),
     };
-    // A picture set aside as too old by its commit is skipped for the next.
+    // A picture set aside as too old by its commit is skipped for the next,
+    // a few times; more in a row is a picture gap.
+    let mut skipped = 0;
     let picture = loop {
         let picture = observer.next().await?;
         if observer.commit(&picture.metadata).await? {
             break picture;
+        }
+        skipped += 1;
+        if skipped == STALE_IN_A_ROW {
+            return Err(Error::new(
+                Code::StaleFrame,
+                "The frame service's pictures arrive too late to use",
+            ));
         }
     };
     let metadata = picture.metadata;
@@ -270,6 +279,9 @@ async fn shared_next(
 
 /// The detail the terminal asks the shared service for.
 const SHARED_LONGEST: u32 = 1600;
+/// How many pictures in a row may arrive too late to commit before the
+/// shared service counts as failing.
+const STALE_IN_A_ROW: u32 = 5;
 /// The pause before trying the shared service again after a failed read.
 const SHARED_RETRY: Duration = Duration::from_millis(250);
 

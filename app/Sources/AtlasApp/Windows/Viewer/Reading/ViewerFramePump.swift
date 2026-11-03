@@ -10,6 +10,8 @@ import Foundation
 final class ViewerFramePump {
   /// The detail pictures are read at, on their longest side, in pixels.
   static let longest = 1_600
+  /// How many pictures in a row may arrive too late to commit before the frame service counts as failing.
+  static let lateInARow = 5
   /// The pause before trying again after the frame service failed or was not offered.
   static let retryEvery: Duration = .seconds(2)
 
@@ -68,6 +70,7 @@ final class ViewerFramePump {
           let opened = FrameStreamClient(descriptor: descriptor, control: lanes.control, frame: lanes.frame)
           client = opened
           try await opened.open(longest: Self.longest)
+          var late = 0
           while !Task.isCancelled {
             if paused() {
               try await clock.sleep(for: .milliseconds(250))
@@ -77,7 +80,13 @@ final class ViewerFramePump {
             guard let decoded = await Self.decode(picture) else { throw ServiceError.unknownScreenSize }
             // Committed before it is shown: input aimed at a picture on screen always finds it. One set aside as
             // too old is skipped for the next.
-            guard try await opened.commit(picture) else { continue }
+            guard try await opened.commit(picture) else {
+              // A few in a row is jitter; more ends the observer, and the viewer's own pictures take over.
+              late += 1
+              if late == Self.lateInARow { throw ServiceError("The helper's pictures arrive too late to use") }
+              continue
+            }
+            late = 0
             guard !Task.isCancelled, current() else { break }
             streaming(true)
             show(
