@@ -61,10 +61,17 @@ async fn off_runtime<T: Send + 'static>(
     })?
 }
 
-/// POST `body` to `route` of the menu bar's viewer at `url`.
+/// POST `body` to `route` of the menu bar's viewer at `url`. An answer that
+/// never came (`menubar`) may still have changed control, so it is
+/// uncertain; the viewer's own refusals keep what they say.
 async fn post(url: &str, route: &'static str, body: Value) -> Result<Value> {
     let url = url.to_owned();
-    off_runtime(move || crate::viewer::post_local(&url, route, &body)).await
+    off_runtime(move || crate::viewer::post_local(&url, route, &body))
+        .await
+        .map_err(|error| match error.code {
+            Code::Menubar => error.uncertain(),
+            _ => error,
+        })
 }
 
 /// Ask the viewer to end `held`. A release names its own lease, so it never
@@ -152,9 +159,9 @@ impl Server {
                 release(&old).await;
             }
             let reply = post(&url, "control/acquire", json!({"frame": frame.key})).await?;
-            let lease = reply["lease"]
-                .as_str()
-                .ok_or_else(|| Error::new(Code::Menubar, "The menu bar gave no control"))?;
+            let lease = reply["lease"].as_str().ok_or_else(|| {
+                Error::new(Code::Menubar, "The menu bar gave no control").uncertain()
+            })?;
             let taken = Held {
                 url,
                 lease: lease.to_owned(),

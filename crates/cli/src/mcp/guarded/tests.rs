@@ -247,6 +247,249 @@ async fn response_delivery_and_teardown_preserve_other_views() {
     );
 }
 
+/// How the fixture viewer answers an acquire.
+#[derive(Clone, Copy, PartialEq)]
+enum Acquire {
+    Granted,
+    WithoutLease,
+    Unreadable,
+}
+
+/// A menu bar viewer recorded for `root`, whose status read fails while
+/// `status_fails` is set and whose control requests are recorded.
+struct Viewer {
+    status_fails: Arc<AtomicBool>,
+    acquire: Arc<Mutex<Acquire>>,
+    acquired: Arc<Mutex<Vec<String>>>,
+    released: Arc<Mutex<Vec<String>>>,
+    serving: tokio::task::JoinHandle<()>,
+}
+
+impl Viewer {
+    async fn serve(root: &mut Server) -> Self {
+        use axum::{
+            Json, Router,
+            http::StatusCode,
+            routing::{get, post},
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        root.port = listener.local_addr().unwrap().port();
+        let output = root.client.output_dir().unwrap().to_path_buf();
+        std::fs::create_dir_all(&output).unwrap();
+        let url = format!("http://127.0.0.1:{}/viewer/", root.port);
+        std::fs::write(
+            output.join(crate::viewer::MENUBAR_RECORD),
+            json!({"url": url, "pid": std::process::id()}).to_string(),
+        )
+        .unwrap();
+
+        let status_fails = Arc::new(AtomicBool::new(true));
+        let acquire = Arc::new(Mutex::new(Acquire::Granted));
+        let acquired = Arc::new(Mutex::new(Vec::new()));
+        let released = Arc::new(Mutex::new(Vec::new()));
+        let png = atlas_native::native::capture::sample_png(64, 36);
+        let app = Router::new()
+            .route(
+                "/viewer/",
+                get(|| async { Json(json!({"service": "atlas-viewer", "pid": std::process::id()})) }),
+            )
+            .route(
+                "/viewer/status.json",
+                get({
+                    let status_fails = status_fails.clone();
+                    move || async move {
+                        if status_fails.load(Ordering::SeqCst) {
+                            (StatusCode::SERVICE_UNAVAILABLE, Json(json!({})))
+                        } else {
+                            (
+                                StatusCode::OK,
+                                Json(json!({"overview": {"state": "idle", "label": "Idle", "headline": "Waiting"}})),
+                            )
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/viewer/frame.png",
+                get(move || {
+                    let png = png.clone();
+                    async move {
+                        (
+                            [
+                                ("x-frame-id", "shown"),
+                                ("x-display-width", "64"),
+                                ("x-display-height", "36"),
+                            ],
+                            png,
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/viewer/control/acquire",
+                post({
+                    let (acquire, acquired) = (acquire.clone(), acquired.clone());
+                    move || async move {
+                        let mode = *acquire.lock().unwrap();
+                        let mut acquired = acquired.lock().unwrap();
+                        let lease = format!("lease-{}", acquired.len());
+                        acquired.push(lease.clone());
+                        match mode {
+                            Acquire::Granted => json!({"ok": true, "lease": lease}).to_string(),
+                            Acquire::WithoutLease => json!({"ok": true}).to_string(),
+                            Acquire::Unreadable => "not json".to_owned(),
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/viewer/control/release",
+                post({
+                    let released = released.clone();
+                    move |Json(body): Json<Value>| async move {
+                        released
+                            .lock()
+                            .unwrap()
+                            .push(body["lease"].as_str().unwrap().to_owned());
+                        Json(json!({"ok": true}))
+                    }
+                }),
+            );
+        Self {
+            status_fails,
+            acquire,
+            acquired,
+            released,
+            serving: tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }),
+        }
+    }
+}
+
+impl Drop for Viewer {
+    fn drop(&mut self) {
+        self.serving.abort();
+    }
+}
+
+/// Call `tool` in the view whose authority is `token`, with its reply
+/// written, and return its result.
+async fn delivered(registry: &Registry, root: &Server, tool: &str, token: &str) -> Value {
+    let mut reply = registry
+        .call(
+            root,
+            &json!(1),
+            &json!({"name": tool, "arguments": {ARGUMENT: token}}),
+        )
+        .await;
+    reply.delivered();
+    reply.value["result"].clone()
+}
+
+/// Open a view and return its authority.
+async fn opened(registry: &Registry, root: &Server) -> String {
+    let mut reply = registry
+        .call(
+            root,
+            &json!(1),
+            &json!({"name":"show_screen","arguments":{OPEN:true}}),
+        )
+        .await;
+    reply.delivered();
+    reply.value["result"]["_meta"][META]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn a_failed_status_read_after_an_acknowledged_release_does_not_consume_a_view_slot() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut root = root(dir.path());
+    let viewer = Viewer::serve(&mut root).await;
+    let registry = root.app_views.get().unwrap();
+
+    for lifecycle in 0..=LIMIT {
+        let token = opened(registry, &root).await;
+        viewer.status_fails.store(false, Ordering::SeqCst);
+        let taken = delivered(registry, &root, "take_control", &token).await;
+        assert!(taken["isError"].is_null(), "{taken}");
+
+        viewer.status_fails.store(true, Ordering::SeqCst);
+        let given = delivered(registry, &root, "give_back", &token).await;
+        assert_eq!(given["isError"], true);
+        assert_eq!(given["structuredContent"]["error"]["code"], "menubar");
+        assert_eq!(given["structuredContent"]["error"]["uncertain"], false);
+        let lease = format!("lease-{lifecycle}");
+        assert_eq!(viewer.released.lock().unwrap().last(), Some(&lease));
+
+        delivered(registry, &root, "view_close", &token).await;
+        registry.sweep(false).await;
+        assert!(
+            registry.is_empty(),
+            "lifecycle {lifecycle}: a closed view with no lease frees its slot"
+        );
+    }
+    assert_eq!(viewer.released.lock().unwrap().len(), LIMIT + 1);
+}
+
+#[tokio::test]
+async fn a_failed_status_read_after_an_acknowledged_acquire_still_releases_its_known_lease() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut root = root(dir.path());
+    let viewer = Viewer::serve(&mut root).await;
+    let registry = root.app_views.get().unwrap();
+    let token = opened(registry, &root).await;
+    let other = opened(registry, &root).await;
+
+    let taken = delivered(registry, &root, "take_control", &token).await;
+    assert_eq!(taken["isError"], true);
+    assert_eq!(taken["structuredContent"]["error"]["code"], "menubar");
+    assert_eq!(*viewer.acquired.lock().unwrap(), ["lease-0"]);
+
+    delivered(registry, &root, "view_close", &token).await;
+    registry.sweep(false).await;
+    assert_eq!(*viewer.released.lock().unwrap(), ["lease-0"]);
+    assert_eq!(registry.locked().len(), 1, "only the closed view ends");
+    assert!(
+        registry
+            .reserve(&root, Some(&json!(other)), false, false)
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn an_acquire_whose_acknowledgement_is_unknown_keeps_its_view() {
+    for mode in [Acquire::WithoutLease, Acquire::Unreadable] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut root = root(dir.path());
+        let viewer = Viewer::serve(&mut root).await;
+        *viewer.acquire.lock().unwrap() = mode;
+        let registry = root.app_views.get().unwrap();
+        let token = opened(registry, &root).await;
+
+        let taken = delivered(registry, &root, "take_control", &token).await;
+        assert_eq!(taken["isError"], true);
+        assert_eq!(taken["structuredContent"]["error"]["uncertain"], true);
+        assert_eq!(viewer.acquired.lock().unwrap().len(), 1);
+
+        delivered(registry, &root, "view_close", &token).await;
+        registry.sweep(true).await;
+        assert_eq!(registry.locked().len(), 1, "an unknown acquire is retained");
+        assert!(registry.locked()[0].usage.uncertain.load(Ordering::SeqCst));
+
+        // A later acknowledged release never clears that unknown acquire.
+        let child = registry.locked()[0].child.clone();
+        *child.held.lock().await = Some(Held {
+            url: format!("http://127.0.0.1:{}/viewer/", root.port),
+            lease: "known".into(),
+            kept: Instant::now(),
+        });
+        registry.sweep(true).await;
+        assert_eq!(*viewer.released.lock().unwrap(), ["known"]);
+        assert_eq!(registry.locked().len(), 1);
+    }
+}
+
 #[tokio::test]
 async fn refused_cleanup_keeps_its_lease_and_retries_without_touching_another_view() {
     use axum::{Router, routing::post};
