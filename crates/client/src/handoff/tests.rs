@@ -470,10 +470,16 @@ fn every_copy_is_claimed_in_one_write_before_any_is_made() {
     let placed = to_copy(&[&sources[0], &sources[1]]);
 
     let mut seen = Vec::new();
-    let handed = handed_in(&root, placed, &owner, |path, root, token| {
-        seen.push(states(&output, &task));
-        copy(path, root, token)
-    })
+    let handed = handed_in(
+        &root,
+        placed,
+        &owner,
+        |path, root, token| {
+            seen.push(states(&output, &task));
+            copy(path, root, token)
+        },
+        |folder| fs::symlink_metadata(folder),
+    )
     .unwrap();
 
     assert_eq!(seen, [[State::Intent, State::Intent]; 2]);
@@ -496,7 +502,10 @@ fn a_failed_copy_takes_the_ones_before_it_and_each_is_settled_once_gone() {
     let missing = dir.path().join("missing.txt");
     let placed = to_copy(&[&made, &missing, &made]);
 
-    let error = handed_in(&root, placed, &owner, copy).unwrap_err();
+    let error = handed_in(&root, placed, &owner, copy, |folder| {
+        fs::symlink_metadata(folder)
+    })
+    .unwrap_err();
 
     assert!(error.error.contains("Could not copy"), "{error}");
     assert!(error.details.get("leftover").is_none());
@@ -521,16 +530,109 @@ fn a_failed_copy_whose_folder_stays_is_left_claimed_and_reported() {
     fs::write(&source, "hello").unwrap();
 
     // The copy fails after making its folder, and cannot remove it.
-    let error = handed_in(&root, to_copy(&[&source]), &owner, |_, root, token| {
-        fs::create_dir(root.join(token.as_str())).unwrap();
-        Err(problem("Could not copy"))
-    })
+    let error = handed_in(
+        &root,
+        to_copy(&[&source]),
+        &owner,
+        |_, root, token| {
+            fs::create_dir(root.join(token.as_str())).unwrap();
+            Err(problem("Could not copy"))
+        },
+        |folder| fs::symlink_metadata(folder),
+    )
     .unwrap_err();
 
     let leftover = error.details["leftover"].as_array().unwrap();
     assert_eq!(leftover.len(), 1);
     assert!(Path::new(leftover[0].as_str().unwrap()).exists());
     assert_eq!(states(&output, &task), [State::Intent]);
+}
+
+/// Look at a path as `fs::symlink_metadata` does, except that a copy
+/// folder under `root` is looked at with `fault` once it exists.
+fn faulty(
+    root: &Path,
+    fault: std::io::ErrorKind,
+) -> impl Fn(&Path) -> std::io::Result<fs::Metadata> + '_ {
+    move |path| {
+        let metadata = fs::symlink_metadata(path)?;
+        if path.parent() == Some(root) {
+            return Err(std::io::Error::from(fault));
+        }
+        Ok(metadata)
+    }
+}
+
+#[test]
+fn an_unreadable_copy_folder_keeps_its_task_claim() {
+    use std::io::ErrorKind;
+    for fault in [ErrorKind::PermissionDenied, ErrorKind::Other] {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, output, claims, task) = claiming(dir.path());
+        let owner = Owner {
+            session: None,
+            claims: &claims,
+            opened_with: &[],
+        };
+        let source = dir.path().join("note.txt");
+        fs::write(&source, "hello").unwrap();
+
+        let error = handed_in(
+            &root,
+            to_copy(&[&source]),
+            &owner,
+            copy,
+            faulty(&root, fault),
+        )
+        .unwrap_err();
+        let leftover = error.details["leftover"].as_array().unwrap();
+        assert_eq!(leftover.len(), 1, "{fault:?}");
+        assert!(Path::new(leftover[0].as_str().unwrap()).exists());
+        assert!(
+            error.error.contains(leftover[0].as_str().unwrap()),
+            "{error}"
+        );
+        assert_eq!(states(&output, &task), [State::Intent], "{fault:?}");
+
+        let error = handed_in(
+            &root,
+            to_copy(&[&source]),
+            &owner,
+            |_, root, token| {
+                fs::create_dir(root.join(token.as_str())).unwrap();
+                Err(problem("Could not copy"))
+            },
+            faulty(&root, fault),
+        )
+        .unwrap_err();
+        assert!(error.error.starts_with("Could not copy"), "{error}");
+        let leftover = error.details["leftover"].as_array().unwrap();
+        assert_eq!(leftover.len(), 1, "{fault:?}");
+        assert!(Path::new(leftover[0].as_str().unwrap()).exists());
+        assert_eq!(
+            states(&output, &task),
+            [State::Intent, State::Intent],
+            "{fault:?}"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let (root, output, claims, task) = claiming(dir.path());
+    let owner = Owner {
+        session: None,
+        claims: &claims,
+        opened_with: &[],
+    };
+    let error = handed_in(
+        &root,
+        to_copy(&[&dir.path().join("note.txt")]),
+        &owner,
+        |_, _, _| Err(problem("Could not copy")),
+        faulty(&root, ErrorKind::PermissionDenied),
+    )
+    .unwrap_err();
+    assert!(error.details.get("leftover").is_none(), "{error}");
+    assert_eq!(states(&output, &task), [State::Gone], "a folder never made");
 }
 
 #[test]
@@ -545,7 +647,10 @@ fn the_record_keeps_no_file_names_or_paths() {
     let source = dir.path().join("Secret plan.rtf");
     fs::write(&source, "hello").unwrap();
 
-    let handed = handed_in(&root, to_copy(&[&source]), &owner, copy).unwrap();
+    let handed = handed_in(&root, to_copy(&[&source]), &owner, copy, |folder| {
+        fs::symlink_metadata(folder)
+    })
+    .unwrap();
 
     assert!(handed.paths[0].ends_with("Secret plan.rtf"));
     let record = fs::read_to_string(output.join(format!("tasks/{}.json", task.key()))).unwrap();
@@ -569,7 +674,10 @@ fn a_copy_is_said_by_where_it_came_from_and_went_and_knows_its_folder() {
     let source = dir.path().join("plan.rtf");
     fs::write(&source, "hello").unwrap();
 
-    let handed = handed_in(&root, to_copy(&[&source]), &owner, copy).unwrap();
+    let handed = handed_in(&root, to_copy(&[&source]), &owner, copy, |folder| {
+        fs::symlink_metadata(folder)
+    })
+    .unwrap();
 
     let copied = &handed.copied[0];
     assert_eq!(copied.token, token_of_copy(&handed.paths[0]));

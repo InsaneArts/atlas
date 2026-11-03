@@ -290,7 +290,9 @@ pub(crate) async fn hand_over(
         claims: &claims,
         opened_with: &opened_with,
     };
-    handed_in(&root, placed, &owner, copy)
+    handed_in(&root, placed, &owner, copy, |folder| {
+        fs::symlink_metadata(folder)
+    })
 }
 
 /// What one target becomes for the helper.
@@ -373,14 +375,17 @@ struct Owner<'a> {
 /// with `copy`. Every copy's token is claimed for the command's task in one
 /// write before any folder is made, so a crash on the way leaves each one
 /// findable, and all are settled in one more once it is known how each
-/// went: `made` when it is there, `gone` only once its folder is seen to be
+/// went: `made` when it is there, `gone` only once `look` finds its folder
 /// absent. When a copy fails, those already made go; one whose folder
-/// stays anyway is left claimed and named in the error as `leftover`.
+/// stays anyway is left claimed and named in the error as `leftover`. A
+/// folder `look` cannot tell about is left claimed and named so too, and
+/// fails a hand-over that would otherwise have opened it.
 fn handed_in(
     root: &Path,
     placed: Vec<Placed>,
     owner: &Owner,
     mut copy: impl FnMut(&Path, &Path, &Token) -> Result<PathBuf>,
+    look: impl Fn(&Path) -> std::io::Result<fs::Metadata>,
 ) -> Result<Handed> {
     let tokens: Vec<Token> = placed
         .iter()
@@ -427,19 +432,26 @@ fn handed_in(
     for token in tokens {
         let folder = root.join(token.as_str());
         let owned = Owned::Copy { id: token };
-        match (fs::symlink_metadata(&folder).is_ok(), result.is_err()) {
-            (false, _) => settled.push((owned, State::Gone)),
-            (true, false) => settled.push((owned, State::Made)),
-            (true, true) => leftover.push(folder.to_string_lossy().into_owned()),
+        match look(&folder) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                settled.push((owned, State::Gone));
+            }
+            Ok(_) if result.is_ok() => settled.push((owned, State::Made)),
+            Ok(_) | Err(_) => leftover.push(folder.to_string_lossy().into_owned()),
         }
     }
     let _ = owner.claims.settle_all(&settled);
 
     match result {
-        Ok(()) => Ok(Handed {
+        Ok(()) if leftover.is_empty() => Ok(Handed {
             paths,
             copied: made,
         }),
+        Ok(()) => Err(problem(format!(
+            "Atlas could not check what it copied at {}; it stays claimed for this task.",
+            leftover.join(", ")
+        ))
+        .with("leftover", serde_json::json!(leftover))),
         Err(error) if leftover.is_empty() => Err(error),
         Err(mut error) => {
             error.error.push_str(&format!(
