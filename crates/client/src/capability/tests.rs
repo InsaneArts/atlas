@@ -1,7 +1,8 @@
 use super::{sample_report as report, *};
 
 fn assess(record: Option<&Record>, current: Option<&Generation>, at: u64) -> Value {
-    assessment(record, current, at).1
+    let evidence = record.cloned().map_or(Evidence::Missing, Evidence::Present);
+    assessment(&evidence, current, at).1
 }
 
 fn generation() -> Generation {
@@ -164,7 +165,7 @@ fn missing_proof_never_upgrades_capability() {
         assert!(diagnosis.observation.require_hidden(502).is_err());
         assert!(!diagnosis.value["capabilities"]["input"].as_bool().unwrap());
     }
-    let (state, report) = assessment(None, None, 100);
+    let (state, report) = assessment(&Evidence::Missing, None, 100);
     assert_eq!(state, NativeState::Unknown);
     assert_eq!(
         report,
@@ -205,4 +206,72 @@ fn a_legacy_null_report_keeps_its_existing_summary_fields() {
         summary(json!(null)),
         json!({"display": null, "helper": {"name": null, "uid": null}})
     );
+}
+
+/// Doctor's view of the record file at `path`, in the generation and at the
+/// time `record` describes.
+fn assess_file(path: Result<PathBuf>) -> (NativeState, Value) {
+    assessment(&read_record(path), Some(&generation()), 160)
+}
+
+#[test]
+fn unreadable_native_evidence_is_distinguished_from_a_missing_check() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("native-502.json");
+    let (state, report) = assess_file(Ok(missing.clone()));
+    assert_eq!(state, NativeState::Unknown);
+    assert_eq!(
+        report["reason"],
+        "Native Save/Open has no recorded check. Panels can be inert without authenticated Screen Sharing; use atlas run or atlas open instead."
+    );
+
+    let present = dir.path().join("present.json");
+    fs::write(
+        &present,
+        serde_json::to_vec(&record(true, true, 100)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(assess_file(Ok(present.clone())).0, NativeState::Passed);
+
+    let unread =
+        "Native Save/Open's recorded check could not be read; use atlas run or atlas open instead.";
+    let malformed = "Native Save/Open's recorded check is malformed and was ignored; use atlas run or atlas open instead.";
+
+    let mut cases = vec![
+        ("location", Err(problem("no home")), unread),
+        ("directory", Ok(dir.path().to_path_buf()), unread),
+    ];
+
+    let locked = dir.path().join("locked.json");
+    fs::copy(&present, &locked).unwrap();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&locked).is_err() {
+        cases.push(("permission", Ok(locked), unread));
+    }
+
+    let garbled = dir.path().join("garbled.json");
+    fs::write(&garbled, b"{\"observedAt\": ").unwrap();
+    cases.push(("garbled", Ok(garbled), malformed));
+    let unknown = dir.path().join("unknown.json");
+    fs::write(&unknown, br#"{"observedAt": 100, "passed": true}"#).unwrap();
+    cases.push(("wrong shape", Ok(unknown), malformed));
+
+    for (name, path, reason) in cases {
+        let (state, report) = assess_file(path);
+        assert_eq!(state, NativeState::Unknown, "{name}");
+        assert_eq!(
+            report,
+            json!({"state": "unknown", "reason": reason}),
+            "{name}"
+        );
+        assert!(
+            !report.to_string().contains(&*dir.path().to_string_lossy()),
+            "{name}: no path is published"
+        );
+
+        let doctor = with_capabilities(json!({"ready": true, "warnings": []}), state, report);
+        assert_eq!(doctor["ready"], true, "{name}: readiness is unchanged");
+        assert_eq!(doctor["capabilities"]["nativeDialogs"]["state"], "unknown");
+    }
 }
