@@ -64,7 +64,13 @@ fn an_unconfirmed_native_stop_quarantines_every_backend_until_it_is_confirmed() 
     ] {
         assert_eq!(source.admit(backend).unwrap_err().code, Code::Busy);
     }
-    assert_eq!(source.one_shot().unwrap_err().code, Code::Busy);
+    assert_eq!(
+        source
+            .one_shot(|| panic!("no capture while quarantined"))
+            .unwrap_err()
+            .code,
+        Code::Busy
+    );
     assert_eq!(ASKED.load(Ordering::SeqCst), 4, "each admission asks again");
 
     CONFIRMS.store(true, Ordering::SeqCst);
@@ -76,7 +82,7 @@ fn an_unconfirmed_native_stop_quarantines_every_backend_until_it_is_confirmed() 
         "a later confirmation never claims the earlier request's stop"
     );
     source.stop(next, None).unwrap();
-    assert!(source.one_shot().is_ok());
+    assert_eq!(source.one_shot(|| 7).unwrap(), 7);
 }
 
 #[test]
@@ -84,7 +90,7 @@ fn a_core_graphics_owner_never_asks_the_native_stream_to_stop() {
     let source = Source::new(|| panic!("no native source to stop"));
     let owner = source.admit(CaptureBackend::CoreGraphics).unwrap();
     source.stop(owner, None).unwrap();
-    assert!(source.one_shot().is_ok());
+    assert!(source.one_shot(|| ()).is_ok());
 }
 
 #[test]
@@ -96,4 +102,31 @@ fn only_the_newest_sixteen_drained_generations_are_remembered() {
     }
     assert_eq!(source.drain(1), Drain::Unknown, "pruned");
     assert_eq!(source.drain(2), Drain::Drained { stop_request: None });
+}
+
+#[test]
+fn no_state_change_can_begin_while_a_one_shot_capture_runs() {
+    use std::sync::{Arc, mpsc};
+    let source = Arc::new(Source::new(stopped));
+    let owner = source.admit(CaptureBackend::ScreenCaptureKit).unwrap();
+    let (started, capturing) = mpsc::channel();
+    let (finish, finished) = mpsc::channel::<()>();
+    let shooting = source.clone();
+    let shot = std::thread::spawn(move || {
+        shooting
+            .one_shot(|| {
+                started.send(()).unwrap();
+                finished.recv().unwrap();
+            })
+            .unwrap()
+    });
+    capturing.recv().unwrap();
+    assert!(
+        source.state.try_lock().is_err(),
+        "a stop, admission or quarantine waits for the capture that passed the check"
+    );
+    finish.send(()).unwrap();
+    shot.join().unwrap();
+    source.stop(owner, None).unwrap();
+    assert_eq!(source.lifecycle(), Lifecycle::Stopped);
 }

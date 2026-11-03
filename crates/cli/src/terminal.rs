@@ -304,13 +304,8 @@ fn received(
                 if first_in_outage {
                     // Retain the first cause through reconnect attempts and
                     // recovery, rather than replacing it with a later busy.
-                    let reason: String = error
-                        .error
-                        .chars()
-                        .filter(|c| !c.is_control())
-                        .take(160)
-                        .collect();
-                    // Stage and reason are fixed words from the live reader.
+                    // Only fixed words are kept: the code, and the stage and
+                    // reason the live reader names, never a reply's text.
                     let word = |key: &str| {
                         error
                             .details
@@ -327,7 +322,7 @@ fn received(
                         .zip(word("reason"))
                         .map(|(stage, why)| format!(" at {stage} ({why})"))
                         .unwrap_or_default();
-                    state.last_frame_error = Some(format!("{}{stage}: {reason}", error.code));
+                    state.last_frame_error = Some(format!("{}{stage}", error.code));
                 }
             });
             session.release(states);

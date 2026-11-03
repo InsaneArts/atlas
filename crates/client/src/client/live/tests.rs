@@ -344,12 +344,26 @@ async fn a_partially_received_pixel_body_never_leaves_a_retryable_stream() {
     }, |_| panic!("partial-frame tests never request captures or mutations")).await;
 }
 
-/// A stream on `socket` whose helper confirms stops for generation 3.
+/// A stream on `socket` whose helper, this process standing in for its
+/// daemon, confirms stops for generation 3.
 fn confirming(socket: UnixStream, epoch: &Epoch) -> LiveStream {
     LiveStream {
-        producer: Some((epoch.capture_pid, 3)),
+        producer: Some(Served {
+            daemon: std::process::id(),
+            generation: 3,
+            instance: None,
+        }),
         ..opened(socket, epoch)
     }
+}
+
+fn hex32(id: &Value) -> bool {
+    id.as_str().is_some_and(|id| {
+        id.len() == 32
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
 }
 
 #[tokio::test]
@@ -357,13 +371,13 @@ async fn a_stop_is_confirmed_by_the_drained_reply_to_its_own_request() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
     let (socket, mut producer) = UnixStream::pair().unwrap();
-    let stream = confirming(socket, &epoch());
+    let mut stream = confirming(socket, &epoch());
     let helper = async {
         let mut stop = [0; 9];
         producer.read_exact(&mut stop).await.unwrap();
         assert_eq!(stop[0], 0, "a stop request, never READY");
         let id = u64::from_be_bytes(stop[1..].try_into().unwrap());
-        let reply = serde_json::to_vec(&json!({"ok": true, "daemonPID": 77,
+        let reply = serde_json::to_vec(&json!({"ok": true, "daemonPID": std::process::id(),
             "producerGeneration": 3, "stopRequestID": id, "drained": true}))
         .unwrap();
         producer.write_u32(reply.len() as u32).await.unwrap();
@@ -373,38 +387,114 @@ async fn a_stop_is_confirmed_by_the_drained_reply_to_its_own_request() {
     stopped.unwrap();
 }
 
-#[tokio::test]
-async fn an_unanswered_stop_is_settled_only_by_a_fresh_drain_query() {
-    for (state, drained) in [("stopped", true), ("quarantined", false)] {
-        let directory = tempfile::tempdir().unwrap();
-        let (client, helper) =
-            crate::test_support::Helper::client(directory.path(), atlas_core::test_support::UID);
-        let (socket, producer) = UnixStream::pair().unwrap();
-        // The helper closes without answering the stop.
-        drop(producer);
-        let stream = confirming(socket, &epoch());
-        let mut queries = Vec::new();
-        let stopped = helper
-            .serve(stream.stop(&client), |request| {
-                assert_eq!(request["op"], "stream-drain-status");
-                assert_eq!(request["producerGeneration"], 3);
-                assert!(
-                    request.get("stopRequestID").is_none(),
-                    "no stop is claimed that the helper never answered"
-                );
-                queries.push(request["queryID"].clone());
-                Some(json!({"ok": true, "daemonPID": 77, "producerGeneration": 3,
-                    "queryID": request["queryID"], "state": state, "drained": drained}))
-            })
-            .await;
-        assert_eq!(stopped.is_ok(), drained, "{state}");
-        assert_eq!(
-            queries.len(),
-            1,
-            "a quarantined source is not asked again here"
-        );
-        assert!(atlas_core::protocol::hex32(queries[0].as_str().unwrap()));
+/// Stop `stream`, its stop going unanswered, while a stand-in daemon answers
+/// each drain query with the next of `states`; the queries it saw.
+async fn unanswered_stop(states: &[(&str, bool)], daemon: u32) -> (Result<()>, Vec<Value>) {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) =
+        crate::test_support::Helper::client(directory.path(), atlas_core::test_support::UID);
+    let (socket, mut producer) = UnixStream::pair().unwrap();
+    let mut stream = confirming(socket, &epoch());
+    if let Some(served) = &mut stream.producer {
+        served.daemon = daemon;
     }
+    let mut queries = Vec::new();
+    let mut answers = states.iter();
+    let stopping = async {
+        // The stop arrives in full, and its answer never comes.
+        let consume = async {
+            let mut stop = [0; 9];
+            producer.read_exact(&mut stop).await.unwrap();
+            drop(producer);
+        };
+        let (stopped, ()) = tokio::join!(stream.stop(&client), consume);
+        stopped
+    };
+    let stopped = helper
+        .serve(stopping, |request| {
+            assert_eq!(request["op"], "stream-drain-status");
+            assert_eq!(request["producerGeneration"], 3);
+            assert!(
+                request.get("stopRequestID").is_none(),
+                "no stop is claimed that the helper never answered"
+            );
+            queries.push(request["queryID"].clone());
+            let (state, drained) = answers.next().copied().unwrap_or(("stopping", false));
+            Some(
+                json!({"ok": true, "daemonPID": daemon, "producerGeneration": 3,
+                "queryID": request["queryID"], "state": state, "drained": drained}),
+            )
+        })
+        .await;
+    (stopped, queries)
+}
+
+#[tokio::test]
+async fn a_lost_stop_answer_is_settled_only_by_fresh_queries_until_drained() {
+    let (stopped, queries) = unanswered_stop(
+        &[("active", false), ("stopping", false), ("stopped", true)],
+        std::process::id(),
+    )
+    .await;
+    stopped.unwrap();
+    assert_eq!(queries.len(), 3);
+    assert!(queries.iter().all(hex32));
+    assert_ne!(queries[0], queries[1], "every query is fresh");
+}
+
+#[tokio::test]
+async fn no_drain_claim_short_of_stopped_and_drained_settles_a_stop() {
+    for states in [
+        &[("quarantined", false)][..],
+        &[("unknown", false)],
+        &[("stopping", true)],
+    ] {
+        let (stopped, queries) = unanswered_stop(states, std::process::id()).await;
+        assert!(stopped.is_err(), "{states:?}");
+        if states[0].0 != "stopping" {
+            assert_eq!(queries.len(), 1, "{states:?} is not asked again");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_stop_still_settling_at_its_deadline_is_unconfirmed() {
+    let started = std::time::Instant::now();
+    let (stopped, queries) = unanswered_stop(&[], std::process::id()).await;
+    assert!(stopped.is_err());
+    assert!(
+        queries.len() > 1,
+        "it kept asking while the source was stopping"
+    );
+    assert!(
+        started.elapsed() < DEADLINE + Duration::from_secs(1),
+        "one deadline bounds it"
+    );
+}
+
+#[tokio::test]
+async fn only_the_daemon_that_ran_the_stream_can_confirm_its_drain() {
+    let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+    // This process answers, but the stream was another daemon's.
+    let listener = tokio::net::UnixListener::bind(&client.transport.path).unwrap();
+    let (socket, producer) = UnixStream::pair().unwrap();
+    drop(producer);
+    let mut stream = confirming(socket, &epoch());
+    if let Some(served) = &mut stream.producer {
+        served.daemon = std::process::id() + 1;
+    }
+    let asked = async {
+        let (mut peer, _) = listener.accept().await.unwrap();
+        let mut sent = Vec::new();
+        peer.read_to_end(&mut sent).await.unwrap();
+        sent
+    };
+    let (stopped, sent) = tokio::join!(stream.stop(&client), asked);
+    assert!(stopped.is_err());
+    assert!(sent.is_empty(), "another process is never asked");
 }
 
 #[tokio::test]
@@ -412,7 +502,9 @@ async fn an_older_helper_has_only_the_closed_connection_to_go_by() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
     let (socket, mut producer) = UnixStream::pair().unwrap();
-    opened(socket, &epoch()).stop(&client).await.unwrap();
+    let mut stream = opened(socket, &epoch());
+    stream.stop(&client).await.unwrap();
+    drop(stream);
     assert_eq!(
         producer.read(&mut [0]).await.unwrap(),
         0,

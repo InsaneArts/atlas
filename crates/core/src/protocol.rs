@@ -150,7 +150,7 @@ impl CaptureBackend {
 }
 
 /// Whether `id` is exactly 32 lowercase hex digits.
-pub fn hex32(id: &str) -> bool {
+fn hex32(id: &str) -> bool {
     id.len() == 32
         && id
             .bytes()

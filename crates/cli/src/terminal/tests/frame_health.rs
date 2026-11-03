@@ -131,7 +131,9 @@ async fn recovery_keeps_the_first_interruption_reason_until_another_outage_start
         &mut session,
         &states,
         &mut good,
-        Err(Error::new(Code::Cancelled, "source stopped")),
+        Err(Error::new(Code::Cancelled, "/private/path in a reply")
+            .with("stage", json!("after-proof"))
+            .with("reason", json!("cancelled"))),
     );
     received(
         &mut session,
@@ -142,17 +144,18 @@ async fn recovery_keeps_the_first_interruption_reason_until_another_outage_start
     received(&mut session, &states, &mut good, Ok(picture("recovered")));
     assert_eq!(
         states.borrow().last_frame_error.as_deref(),
-        Some("cancelled: source stopped")
+        Some("cancelled at after-proof (cancelled)"),
+        "only fixed words, never a reply's text"
     );
     assert!(states.borrow().message.starts_with("Watching"));
     received(
         &mut session,
         &states,
         &mut good,
-        Err(Error::new(Code::Transport, "reader closed")),
+        Err(Error::new(Code::Transport, "reader closed").with("stage", json!("Not A Word"))),
     );
     assert_eq!(
         states.borrow().last_frame_error.as_deref(),
-        Some("transport: reader closed")
+        Some("transport")
     );
 }

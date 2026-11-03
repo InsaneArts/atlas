@@ -93,16 +93,25 @@ fn a_page_stays_within_its_byte_bound() {
         for timing in [Timing::BeforeProof, Timing::Total] {
             record.time(timing, Duration::MAX);
         }
-        record.allocated_bytes = u64::MAX;
+        for field in [
+            &mut record.source_generation,
+            &mut record.age_at_decision_ns,
+            &mut record.credit_wait_ns,
+            &mut record.broker_age_ns,
+            &mut record.client_bound_ns,
+            &mut record.source_sequence,
+            &mut record.input_revision,
+            &mut record.last_good_gap_ns,
+            &mut record.allocated_bytes,
+            &mut record.reserved_bytes,
+        ] {
+            *field = u64::MAX;
+        }
         ring.push(record);
     }
     let page = ring.page(0, PAGE);
-    let bytes: usize = page
-        .records
-        .iter()
-        .map(|record| serde_json::to_vec(record).unwrap().len() + 1)
-        .sum();
-    assert!(bytes <= PAGE_BYTES);
+    assert!(page.records.len() < PAGE, "the byte bound shortened it");
+    assert!(serde_json::to_vec(&page).unwrap().len() <= PAGE_BYTES);
     assert_eq!(page.next_cursor, page.records.len() as u64);
 }
 
@@ -117,4 +126,38 @@ fn errors_name_their_reason_by_code_alone() {
     assert_eq!(Backend::named("anything"), Backend::None);
     let words: Value = serde_json::to_value([Outcome::CleanupPending]).unwrap();
     assert_eq!(words, json!(["cleanup-pending"]));
+}
+
+#[test]
+fn a_record_has_exactly_the_specified_keys() {
+    let value = serde_json::to_value(Record::new(1)).unwrap();
+    let mut keys: Vec<_> = value.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    let mut expected = vec![
+        "version",
+        "acquisitionID",
+        "sourceGeneration",
+        "requestedBackend",
+        "actualBackend",
+        "timingMask",
+        "timingsNs",
+        "ageAtDecisionNs",
+        "creditWaitNs",
+        "brokerAgeNs",
+        "clientBoundNs",
+        "sourceSequence",
+        "inputRevision",
+        "outcome",
+        "stage",
+        "reason",
+        "pipeSynchronized",
+        "pipeReused",
+        "lastGoodGapNs",
+        "releaseReason",
+        "allocatedBytes",
+        "reservedBytes",
+        "lifecycle",
+    ];
+    expected.sort();
+    assert_eq!(keys, expected);
 }

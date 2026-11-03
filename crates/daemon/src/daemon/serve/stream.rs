@@ -190,21 +190,25 @@ pub(super) async fn serve(
     pin: SessionPin,
     backend: CaptureBackend,
 ) -> Result<()> {
-    // Admission may first confirm an earlier native stop, which blocks.
+    // Admission may first confirm an earlier native stop, which blocks. The
+    // guard is made there, so an abandoned admission still gives the source
+    // back.
     let admitting = daemon.clone();
-    let owner = match tokio::task::spawn_blocking(move || admitting.source.admit(backend)).await {
-        Ok(Ok(owner)) => owner,
+    let admitted = tokio::task::spawn_blocking(move || {
+        admitting.source.admit(backend).map(|owner| Producer {
+            daemon: admitting.clone(),
+            owner: Some(owner),
+        })
+    });
+    // Each capture worker holds a share too: the source is given back only
+    // once no capture of this connection can still be running.
+    let producer = match admitted.await {
+        Ok(Ok(producer)) => Arc::new(producer),
         Ok(Err(error)) => return write_header(&mut writer, &refused(error)).await,
         Err(_) => {
             let error = Error::new(Code::Capture, "The live capture could not start");
             return write_header(&mut writer, &refused(error)).await;
         }
-    };
-    // Ownership lasts through native cancellation and callback drain,
-    // including client departure and capture errors.
-    let producer = Producer {
-        daemon: daemon.clone(),
-        owner: Some(owner),
     };
     let initial = daemon.screen.epoch();
     let expected = match initial {
@@ -257,7 +261,16 @@ pub(super) async fn serve(
                 }
                 let stop_request = u64::from_be_bytes(id);
                 let generation = producer.generation();
-                let reply = match producer.stop(stop_request).await {
+                // No capture is in flight between frames, so this is the
+                // connection's only share.
+                let stopped = match Arc::try_unwrap(producer) {
+                    Ok(producer) => producer.stop(stop_request).await,
+                    Err(_) => Err(Error::new(
+                        Code::Capture,
+                        "The live capture is still in use",
+                    )),
+                };
+                let reply = match stopped {
                     Ok(()) => json!({"ok": true, "daemonPID": std::process::id(),
                         "producerGeneration": generation, "stopRequestID": stop_request,
                         "drained": true}),
@@ -280,12 +293,14 @@ pub(super) async fn serve(
         let capture_started = tokio::time::Instant::now();
         let worker_daemon = daemon.clone();
         let worker_expected = expected.clone();
+        let held = producer.clone();
         let mut worker = tokio::task::spawn_blocking(move || {
+            let _held = held;
             capture(&worker_daemon, &worker_expected, side, backend)
         });
         // A blocking framework capture cannot be interrupted safely. On
         // departure or shutdown its result is discarded, and its task is
-        // joined while still holding the stream slot: no orphan producer.
+        // joined while still holding the source: no orphan producer.
         let mut extra = [0_u8; 1];
         let captured = tokio::select! {
             () = daemon.stopped() => { let _ = worker.await; return Ok(()); }

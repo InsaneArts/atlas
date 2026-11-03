@@ -166,10 +166,12 @@ impl TerminalFrames {
 
     async fn read(&mut self, client: &Client) -> Result<SharedFrame> {
         if !self.connected {
-            // A source left unconfirmed stays quarantined in the helper and
-            // refuses the next stream, which reports it; nothing is lost here.
-            if let Some(retired) = self.retired.take() {
-                let _ = retired.stop(client).await;
+            // The next stream opens only once the last one's source is
+            // confirmed stopped; until then each read asks again and reports
+            // the unconfirmed stop.
+            if let Some(retired) = self.retired.as_mut() {
+                retired.stop(client).await?;
+                self.retired = None;
             }
             let until = tokio::time::Instant::now() + RECONNECT;
             self.stream = loop {

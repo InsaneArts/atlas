@@ -986,7 +986,7 @@ async fn anonymous_captures_skip_routing_but_app_crops_still_read_the_dock() {
         DOCKS.store(0, Ordering::SeqCst);
         let reply = tokio::time::timeout(
             Duration::from_secs(5),
-            screenshot(&daemon.screen, None, false, crop),
+            screenshot(&daemon.screen, daemon.source.clone(), None, false, crop),
         )
         .await
         .unwrap();
@@ -1613,4 +1613,31 @@ async fn parts_waiting_to_be_delivered_are_dropped_once_the_session_changes() {
         "only the part before the change: {lines}"
     );
     assert_eq!(cut.unwrap()["code"], "session-changed");
+}
+
+#[tokio::test]
+async fn no_screenshot_is_taken_while_a_live_source_is_quarantined() {
+    use atlas_native::native::capture::source::Source;
+    let mut daemon = Daemon::new(
+        "Aqua".into(),
+        |_, _, _| -> Result<capture::Shot> { panic!("no capture while quarantined") },
+        || false,
+        session,
+    );
+    daemon.screen.windows = fake_windows;
+    daemon.screen.dock = |_| Dock::Icons(Vec::new());
+    daemon.source = Arc::new(Source::new(|| {
+        Err(Error::new(
+            Code::Capture,
+            "Native stream stop is still pending",
+        ))
+    }));
+    let owner = daemon
+        .source
+        .admit(atlas_core::protocol::CaptureBackend::ScreenCaptureKit)
+        .unwrap();
+    assert!(daemon.source.stop(owner, None).is_err());
+    let reply = &exchange(Arc::new(daemon), r#"{"op":"screenshot"}"#).await[0];
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["code"], "busy");
 }

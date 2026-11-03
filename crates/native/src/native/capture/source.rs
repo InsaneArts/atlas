@@ -101,6 +101,7 @@ impl Source {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn lifecycle(&self) -> Lifecycle {
         self.state().lifecycle
     }
@@ -127,14 +128,24 @@ impl Source {
         })
     }
 
-    /// Before a capture outside the live source: a quarantined source is
-    /// asked to stop again first, which blocks.
+    /// Run `capture`, a capture outside the live source, unless an earlier
+    /// native source's stop is unconfirmed; such a source is asked to stop
+    /// again first. The source cannot change state while `capture` runs, so
+    /// no quarantine begins between the check and the capture. This blocks.
     ///
     /// # Errors
     ///
     /// Returns busy while an earlier live source's stop is unconfirmed.
-    pub fn one_shot(&self) -> Result<()> {
-        self.confirm()
+    pub fn one_shot<T>(&self, capture: impl FnOnce() -> T) -> Result<T> {
+        self.confirm()?;
+        let state = self.state();
+        if matches!(
+            state.lifecycle,
+            Lifecycle::Quarantined | Lifecycle::Stopping
+        ) {
+            return Err(quarantined());
+        }
+        Ok(capture())
     }
 
     /// Give the source back. A native source is stopped and drained first;

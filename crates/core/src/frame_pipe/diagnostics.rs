@@ -180,6 +180,7 @@ pub enum Timing {
 #[serde(rename_all = "camelCase")]
 pub struct Record {
     version: u8,
+    #[serde(rename = "acquisitionID")]
     pub acquisition_id: u64,
     pub source_generation: u64,
     pub requested_backend: Backend,
@@ -235,7 +236,7 @@ impl Record {
         self.reason = reason;
     }
 
-    pub fn failed(&self) -> bool {
+    fn failed(&self) -> bool {
         self.outcome != Outcome::Accepted
     }
 }
@@ -288,11 +289,17 @@ impl Ring {
     }
 
     /// Up to `count` (at most [`PAGE`]) records from `cursor` on, fewer
-    /// when their JSON would pass [`PAGE_BYTES`]. Records the ring dropped
-    /// are skipped.
+    /// when the page's whole JSON would pass [`PAGE_BYTES`]. Records the
+    /// ring dropped are skipped.
     pub fn page(&self, cursor: u64, count: usize) -> Page {
         let mut records = Vec::new();
-        let mut bytes = 0;
+        // The page around its records, with the widest cursors it can have.
+        let mut bytes = serde_json::to_vec(&Page {
+            cursor: u64::MAX,
+            next_cursor: u64::MAX,
+            records: Vec::new(),
+        })
+        .map_or(PAGE_BYTES, |json| json.len());
         let mut next_cursor = cursor.max(self.records.front().map_or(self.next, |(id, _)| *id));
         for (id, record) in self.records.iter().filter(|(id, _)| *id >= cursor) {
             let size = serde_json::to_vec(record).map_or(usize::MAX, |json| json.len() + 1);

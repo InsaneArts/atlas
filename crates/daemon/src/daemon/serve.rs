@@ -180,7 +180,7 @@ pub struct Daemon {
     /// process group and observed event writer have finished.
     runs: Mutex<JoinSet<Result<()>>>,
     /// The one live capture source; held through its native source's drain.
-    source: capture::source::Source,
+    source: Arc<capture::source::Source>,
     /// The persistent child that answers session-proof requests.
     proof_worker: Mutex<Option<proof::Worker>>,
 }
@@ -209,7 +209,7 @@ impl Daemon {
             stopping: watch::Sender::new(false),
             jobs: None,
             runs: Mutex::new(JoinSet::new()),
-            source: capture::source::Source::new(capture::stop_display_stream),
+            source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
         }
     }
@@ -721,14 +721,14 @@ pub(crate) async fn handle(
             per_point,
             crop,
         } => {
-            // A live source whose stop is unconfirmed is asked again first,
-            // which blocks; until it confirms, nothing else captures.
-            let confirming = daemon.clone();
-            match tokio::task::spawn_blocking(move || confirming.source.one_shot()).await {
-                Ok(Ok(())) => screenshot(&daemon.screen, max_dimension, per_point, crop).await,
-                Ok(Err(error)) => refused(error),
-                Err(_) => failure(Code::Capture, "The capture failed"),
-            }
+            screenshot(
+                &daemon.screen,
+                daemon.source.clone(),
+                max_dimension,
+                per_point,
+                crop,
+            )
+            .await
         }
         Request::Run { argv, timeout, .. } => {
             return serve_run(daemon, argv, timeout, policy, (reader, writer), phase).await;
