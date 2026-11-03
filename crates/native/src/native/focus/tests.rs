@@ -476,7 +476,11 @@ fn a_drag_is_refused_when_it_would_drop_on_the_dock() {
         json!({"reason": "point", "found": {"app": "Dock", "pid": 2}})
     );
     let error = docked_need(APP, &icons(), drag((400.0, 770.0))).unwrap_err();
-    assert!(error.error.contains("at that point"), "{}", error.error);
+    assert!(
+        error
+            .error
+            .starts_with("Dock's window is at the drop point, not the app's, so")
+    );
 
     assert_eq!(
         refusal(docked_need(APP, &icons(), drag((900.0, 300.0))))["found"]["app"],
@@ -945,7 +949,11 @@ fn pointer_preparation_refuses_a_point_covered_by_a_same_app_floating_panel() {
         assert_eq!(error.code, Code::FocusChanged);
         assert_eq!(error.details["reason"], "window");
         assert_eq!(error.details["found"]["window"], 4130);
-        assert!(error.error.contains("The named window"));
+        assert!(
+            error
+                .error
+                .starts_with("The app's window 4130 is at that point, not window 4120, so")
+        );
     }
 }
 

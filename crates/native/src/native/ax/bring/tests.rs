@@ -1072,7 +1072,11 @@ fn a_window_refusal_survives_a_later_production_verification_that_exceeds_its_de
     assert_eq!(reads, 2);
     assert!(fake.now.get() > deadline);
     assert_eq!(error.details["reason"], "window");
-    assert!(error.error.contains("The named window"));
+    assert!(
+        error
+            .error
+            .starts_with("Window 43 has keyboard focus, not window 42, so")
+    );
     assert!(!error.details.contains_key("unread"));
     assert!(!error.uncertain);
 }

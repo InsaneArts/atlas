@@ -17,7 +17,10 @@ use atlas_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::time::{Duration, Instant};
+use std::{
+    fmt::Display,
+    time::{Duration, Instant},
+};
 
 /// The longest one destination check may take before input is posted.
 pub(super) const CHECK_BUDGET: Duration = Duration::from_millis(500);
@@ -79,6 +82,15 @@ enum Spot {
     Drop,
 }
 
+impl Spot {
+    fn words(self) -> &'static str {
+        match self {
+            Self::At => "that point",
+            Self::Drop => "the drop point",
+        }
+    }
+}
+
 /// Why an action was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -102,26 +114,29 @@ pub(super) enum Reason {
 }
 
 impl Reason {
-    /// What is wrong and what to do about it.
-    fn said(self) -> &'static str {
+    /// What is wrong, when nothing more particular is known.
+    fn fact(self) -> &'static str {
         match self {
-            Self::App => "The target app is not in front or has quit, so bring it to the front",
-            Self::Point => {
-                "The app's window is not on top at that point, so bring it there or pick another \
-                 point"
-            }
-            Self::Window => {
-                "The named window is not in front, so bring it to the front or look again"
-            }
-            Self::Sheet => "A sheet or dialog is over the target window, so answer it first",
-            Self::Field => {
-                "The named field does not have keyboard focus or cannot be told apart, so click \
-                 it or give its exact name"
-            }
-            Self::Disabled => "That field is disabled, so enable it or name another field",
-            Self::Unreadable => {
-                "Atlas could not tell what is in front, so click where the app shows and try again"
-            }
+            Self::App => "The target app is not in front or has quit",
+            Self::Point => "The app's window is not on top at that point",
+            Self::Window => "The named window is not in front",
+            Self::Sheet => "A sheet or dialog is over the target window",
+            Self::Field => "The named field does not have keyboard focus or cannot be told apart",
+            Self::Disabled => "That field is disabled",
+            Self::Unreadable => "Atlas could not tell what is in front",
+        }
+    }
+
+    /// What to do about it.
+    fn remedy(self) -> &'static str {
+        match self {
+            Self::App => "bring it to the front",
+            Self::Point => "bring it there or pick another point",
+            Self::Window => "bring it to the front or look again",
+            Self::Sheet => "answer it first",
+            Self::Field => "click it or give its exact name",
+            Self::Disabled => "enable it or name another field",
+            Self::Unreadable => "click where the app shows and try again",
         }
     }
 
@@ -202,6 +217,14 @@ impl Found {
             pid: window.pid,
             window: Some(window.number),
             field: None,
+        }
+    }
+
+    /// Whose the found app is, as a refusal names it.
+    fn whose(&self) -> String {
+        match &self.app {
+            Some(name) => format!("{name}'s"),
+            None => "Another app's".to_owned(),
         }
     }
 }
@@ -379,14 +402,18 @@ fn active(expect: &Expect, look: &mut impl Look) -> Result<()> {
         return Ok(());
     }
     let Some(pid) = focused else {
-        return Err(refused(Reason::App));
+        return Err(refused_because(Reason::App, "No app has keyboard focus"));
     };
     if pid == expect.pid() {
         return Ok(());
     }
 
     let found = Found::named(pid, look.windows().unwrap_or_default());
-    Err(refused_with(Reason::App, found))
+    let fact = match &found.app {
+        Some(name) => format!("{name} has keyboard focus, not the app this was for"),
+        None => "Another app has keyboard focus".to_owned(),
+    };
+    Err(refused_with(Reason::App, fact, found))
 }
 
 /// With the app in focus, the window and the field it names, judged from
@@ -434,7 +461,13 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>>
         .focused
         .as_ref()
         .map(|focused| Field::of(&focused.element));
-    Err(refused_with(reason, found))
+    let fact = match (reason, found.window, expect.window()) {
+        (Reason::Window, Some(number), Some(wanted)) if number != wanted => {
+            format!("Window {number} has keyboard focus, not window {wanted}")
+        }
+        _ => reason.fact().to_owned(),
+    };
+    Err(refused_with(reason, fact, found))
 }
 
 /// The role of the field with keyboard focus, as [`FIELDS`] spells it,
@@ -586,8 +619,10 @@ fn point(
         return Ok(());
     }
 
+    let at = spot.words();
     let Some(top) = top else {
-        return Err(refused(Reason::Point));
+        let fact = format!("No window of the app is at {at}");
+        return Err(refused_because(Reason::Point, fact));
     };
     readable_dock(top, &screen)?;
 
@@ -595,7 +630,8 @@ fn point(
         window: None,
         ..Found::at(top)
     };
-    Err(refused_with(Reason::Point, found))
+    let fact = format!("{} window is at {at}, not the app's", found.whose());
+    Err(refused_with(Reason::Point, fact, found))
 }
 
 /// A pointer action at a point goes ahead only where window `wanted`, one
@@ -611,29 +647,37 @@ fn at_window(
         .iter()
         .any(|window| window.number == wanted && window.pid == pid)
     {
-        return Err(refused(Reason::Window));
+        let fact = format!("Window {wanted} of the app is not on screen");
+        return Err(refused_because(Reason::Window, fact));
     }
     if windows::unobstructed(listed, wanted, x, y, screen) {
         return Ok(());
     }
 
     let Some(top) = windows::top_at(listed, x, y, screen) else {
-        return Err(refused(Reason::Window));
+        let fact = format!("Window {wanted} is not at that point");
+        return Err(refused_because(Reason::Window, fact));
     };
     readable_dock(top, screen)?;
 
-    let reason = if top.pid == pid {
-        Reason::Window
+    let found = Found::at(top);
+    let (reason, whose) = if top.pid == pid {
+        (Reason::Window, "The app's".to_owned())
     } else {
-        Reason::Point
+        (Reason::Point, found.whose())
     };
-    Err(refused_with(reason, Found::at(top)))
+    let fact = format!(
+        "{whose} window {} is at that point, not window {wanted}",
+        top.number
+    );
+    Err(refused_with(reason, fact, found))
 }
 
 /// Refuse when the Dock is `top` and where it takes clicks could not be read.
 fn readable_dock(top: &Window, screen: &Screen) -> Result<()> {
     if top.is_dock() && *screen.dock() == Dock::Unread {
-        return Err(refused(Reason::Unreadable));
+        let fact = "Atlas could not read where the Dock takes clicks";
+        return Err(refused_because(Reason::Unreadable, fact));
     }
 
     Ok(())
@@ -652,13 +696,18 @@ fn unread_by(error: Error) -> Error {
 
 /// A `focus-changed` refusal for `reason`.
 pub(super) fn refused(reason: Reason) -> Error {
-    Error::new(Code::FocusChanged, format!("{}; {NOT_SENT}", reason.said()))
-        .with("reason", json!(reason))
+    refused_because(reason, reason.fact())
 }
 
-/// [`refused`], naming what was `found` there.
-fn refused_with(reason: Reason, found: Found) -> Error {
-    refused(reason).with("found", json!(found))
+/// [`refused`], saying what is wrong as `fact`.
+fn refused_because(reason: Reason, fact: impl Display) -> Error {
+    let message = format!("{fact}, so {}; {NOT_SENT}", reason.remedy());
+    Error::new(Code::FocusChanged, message).with("reason", json!(reason))
+}
+
+/// [`refused_because`], naming what was `found` there.
+fn refused_with(reason: Reason, fact: impl Display, found: Found) -> Error {
+    refused_because(reason, fact).with("found", json!(found))
 }
 
 #[cfg(test)]
