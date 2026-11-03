@@ -472,6 +472,90 @@ pub fn stop(output: &Path) -> Result<Option<u16>> {
     )
 }
 
+/// [`stop`] the menu bar whose records `output` holds. When where they are
+/// can't be told (`output` says why), a menu bar is known not to run only
+/// when no other process of this account runs Atlas.
+///
+/// # Errors
+///
+/// Returns what [`stop`] returns, or a menu bar error when `output` failed
+/// and this account's processes can't be listed or another runs Atlas.
+pub fn stop_located(output: Result<PathBuf>) -> Result<Option<u16>> {
+    match output {
+        Ok(output) => stop(&output),
+        Err(unlocated) => {
+            let exe = std::env::current_exe()?;
+            let name = exe.file_name().unwrap_or_default();
+            let me = i32::try_from(std::process::id()).unwrap_or(-1);
+            elsewhere(unlocated, listed(), me, name)
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The processes [`listed`] gives on this thread, when a test says.
+    pub(crate) static LISTED: std::cell::RefCell<Option<Vec<atlas_core::process::Info>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// This account's processes.
+fn listed() -> Result<Vec<atlas_core::process::Info>> {
+    #[cfg(test)]
+    if let Some(listed) = LISTED.with(|listed| listed.borrow().clone()) {
+        return Ok(listed);
+    }
+    atlas_core::process::of_user(nix::unistd::getuid().as_raw())
+}
+
+/// With the menu bar's records not found (`unlocated` says why), whether
+/// one may run: any of `processes` named `name`, as the kernel keeps it,
+/// other than `me` and its ancestors and processes that have exited.
+fn elsewhere(
+    unlocated: Error,
+    processes: Result<Vec<atlas_core::process::Info>>,
+    me: i32,
+    name: &std::ffi::OsStr,
+) -> Result<Option<u16>> {
+    use std::os::unix::ffi::OsStrExt;
+    let processes = processes.map_err(|error| {
+        Error::new(
+            Code::Menubar,
+            "Atlas could not tell whether the menu bar runs",
+        )
+        .with_source(error)
+    })?;
+
+    let mut mine = vec![me];
+    let mut at = me;
+    while let Some(parent) = processes
+        .iter()
+        .find(|process| process.instance.pid == at)
+        .map(|process| process.ppid)
+        .filter(|parent| *parent > 1 && !mine.contains(parent))
+    {
+        mine.push(parent);
+        at = parent;
+    }
+
+    // The kernel keeps at most 16 bytes of a command's name.
+    let name = name.as_bytes();
+    let kept = name.get(..16).unwrap_or(name);
+    match processes.iter().find(|process| {
+        !process.zombie && !mine.contains(&process.instance.pid) && process.name.as_bytes() == kept
+    }) {
+        None => Ok(None),
+        Some(process) => Err(Error::new(
+            Code::Menubar,
+            format!(
+                "Atlas can't find the menu bar's record while Atlas runs as process {}",
+                process.instance.pid
+            ),
+        )
+        .with_source(unlocated)),
+    }
+}
+
 /// The port and process of the menu bar `record` names, when it runs and
 /// its viewer answers as it; None when it is known not to run. It reads the
 /// record with `read`, the process with `info`, asks the viewer at the

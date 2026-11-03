@@ -645,26 +645,29 @@ impl Live<'_> {
     /// here is not the person's choice: unless they had turned it off
     /// themselves, the record of a choice goes, so setting Atlas up again
     /// turns it on again (settings kept with --keep-config keep that record
-    /// otherwise). A menu bar not seen to stop changes nothing, and is an
-    /// error.
+    /// otherwise). A menu bar not seen to stop or known not to run changes
+    /// nothing, and is an error.
     fn stop_menubar(&self) -> Result<()> {
-        let output = self
-            .found
-            .client
-            .as_ref()
-            .and_then(|client| client.output_dir().ok().map(Path::to_path_buf));
-        let stopped = match output {
-            Some(output) => crate::menubar::stop(&output).map_err(|error| {
+        let output = match &self.found.client {
+            Some(client) => client.output_dir().map(Path::to_path_buf),
+            None => Err(Error::new(
+                Code::Config,
+                self.found
+                    .unloaded
+                    .clone()
+                    .unwrap_or_else(|| "Atlas has no settings".to_owned()),
+            )),
+        };
+        let stopped = crate::menubar::stop_located(output)
+            .map_err(|error| {
                 problem(format!(
                     "{}, so Atlas.app and its settings were kept. Quit the menu bar, then run \
                      atlas uninstall again.",
                     error.error
                 ))
                 .with_source(error)
-            })?,
-            None => None,
-        }
-        .is_some();
+            })?
+            .is_some();
         #[cfg(test)]
         if stand_in::reached("login") {
             return Ok(());

@@ -109,13 +109,9 @@ async fn update_using(
     if moved {
         // A running menu bar moves onto the new version too. It stops before
         // the previous app, the bundle it still runs from, is removed.
-        let output = Config::load(config)
-            .ok()
-            .and_then(|loaded| Client::new(loaded).ok())
-            .and_then(|client| client.output_dir().ok().map(std::path::Path::to_path_buf));
         let port = retire_previous(
             &mut report,
-            || output.map_or(Ok(None), |output| atlas_cli::menubar::stop(&output)),
+            || stop_menubar(config),
             atlas_client::update::finished,
         )?;
 
@@ -141,6 +137,16 @@ async fn update_using(
     }
 
     Ok(report)
+}
+
+/// Stop the menu bar of the settings at `config`. Settings that don't say
+/// where its records are leave it known not to run only when no other
+/// Atlas process runs.
+fn stop_menubar(config: &std::path::Path) -> Result<Option<u16>> {
+    let output = Config::load(config)
+        .and_then(Client::new)
+        .and_then(|client| client.output_dir().map(std::path::Path::to_path_buf));
+    atlas_cli::menubar::stop_located(output)
 }
 
 /// Stop a running menu bar with `stop`, then drop the previous app with

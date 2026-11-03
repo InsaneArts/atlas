@@ -348,6 +348,54 @@ fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed
 }
 
 #[test]
+fn uninstall_with_unloadable_settings_keeps_the_app_while_a_menu_bar_may_run() {
+    use atlas_core::process::{Info, Instance};
+    let exe = std::env::current_exe().unwrap();
+    let name = exe.file_name().unwrap().to_str().unwrap();
+    let process = |pid: i32, ppid: i32| Info {
+        instance: Instance::new(pid, [1, 0]),
+        ppid,
+        pgid: pid,
+        uid: 501,
+        ruid: 501,
+        svuid: 501,
+        zombie: false,
+        stopped: false,
+        name: name.get(..16).unwrap_or(name).to_owned(),
+    };
+    let me = i32::try_from(std::process::id()).unwrap();
+    let listing = |listed: Vec<Info>| {
+        crate::menubar::LISTED.with(|listing| *listing.borrow_mut() = Some(listed));
+    };
+
+    // Only this very process runs Atlas: no menu bar can run.
+    listing(vec![process(me, 1)]);
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), false);
+    let (outcome, reached, _) = rest_of(dir.path(), &found);
+    assert!(outcome.is_ok());
+    assert_eq!(reached, EVERY_EFFECT);
+
+    // Another Atlas process may be the menu bar, its records unknown.
+    listing(vec![process(me, 1), process(me + 100_000, 1)]);
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), false);
+    let (outcome, reached, removed) = rest_of(dir.path(), &found);
+    crate::menubar::LISTED.with(|listing| listing.borrow_mut().take());
+    let error = outcome.unwrap_err();
+    assert!(
+        error
+            .error
+            .starts_with("Atlas can't find the menu bar's record while Atlas runs as process"),
+        "{}",
+        error.error
+    );
+    assert_eq!(reached, ["opener"], "nothing is removed after the menu bar");
+    assert!(removed.is_empty());
+    assert!(found.app.exists() && found.data.exists() && dir.path().join("settings").exists());
+}
+
+#[test]
 fn a_linked_cache_is_refused_without_unlinking_control_state() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("state");

@@ -289,3 +289,47 @@ fn an_update_retains_the_previous_app_while_menu_bar_shutdown_is_unconfirmed() {
         assert_eq!(report["previous"], json!({"removed": true}));
     }
 }
+
+#[test]
+fn an_update_does_not_take_unloadable_settings_for_no_menu_bar() {
+    use atlas_core::test_support::{TestChild, message, permitted};
+    if std::env::var_os("ATLAS_ANOTHER_ATLAS").is_some() {
+        message("running");
+        permitted("done");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let broken = dir.path().join("broken.toml");
+    std::fs::write(&broken, "helper_uid = [").unwrap();
+
+    // Another process of this executable may be the menu bar.
+    let mut other = TestChild::spawn(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "update::tests::an_update_does_not_take_unloadable_settings_for_no_menu_bar",
+                "--nocapture",
+            ])
+            .env("ATLAS_ANOTHER_ATLAS", "1"),
+    );
+    other.expect("running");
+    let running = stop_menubar(&broken);
+    other.permit("done");
+    assert!(other.wait().success());
+    let error = running.expect_err("where the menu bar keeps its records is unknown");
+    assert_eq!(error.code, Code::Menubar);
+    assert_eq!(
+        error.error,
+        format!(
+            "Atlas can't find the menu bar's record while Atlas runs as process {}",
+            other.process.id()
+        )
+    );
+
+    assert_eq!(
+        stop_menubar(&broken).unwrap(),
+        None,
+        "no other Atlas process runs"
+    );
+}

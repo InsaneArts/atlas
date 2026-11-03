@@ -1007,6 +1007,61 @@ fn a_suspended_menu_bar_that_does_not_answer_is_not_reported_absent() {
 }
 
 #[test]
+fn a_menu_bar_whose_records_are_unknown_runs_while_any_other_atlas_does() {
+    use atlas_core::process::{Info, Instance};
+    let process = |pid: i32, ppid: i32, name: &str, zombie: bool| Info {
+        instance: Instance::new(pid, [1, 0]),
+        ppid,
+        pgid: pid,
+        uid: 501,
+        ruid: 501,
+        svuid: 501,
+        zombie,
+        stopped: false,
+        name: name.to_owned(),
+    };
+    let unlocated = || Error::new(Code::Config, "The settings do not load");
+    let atlas = std::ffi::OsStr::new("atlas");
+    let find = |listed: Vec<Info>| elsewhere(unlocated(), Ok(listed), 30, atlas);
+
+    // This process, the Atlas that started it, exited ones and other programs.
+    let quiet = vec![
+        process(10, 1, "atlas", false),
+        process(20, 10, "zsh", false),
+        process(30, 20, "atlas", false),
+        process(40, 1, "atlas", true),
+        process(50, 1, "AtlasApp", false),
+    ];
+    assert_eq!(find(quiet.clone()).unwrap(), None);
+
+    let mut busy = quiet;
+    busy.push(process(60, 1, "atlas", false));
+    let error = find(busy).unwrap_err();
+    assert_eq!(error.code, Code::Menubar);
+    assert_eq!(
+        error.error,
+        "Atlas can't find the menu bar's record while Atlas runs as process 60"
+    );
+
+    // The kernel keeps only the first 16 bytes of a longer name.
+    let long = std::ffi::OsStr::new("atlas-0123456789abcdef");
+    let listed = vec![process(60, 1, "atlas-0123456789", false)];
+    assert!(elsewhere(unlocated(), Ok(listed), 30, long).is_err());
+
+    let unlisted = elsewhere(
+        unlocated(),
+        Err(Error::new(Code::State, "no listing")),
+        30,
+        atlas,
+    )
+    .unwrap_err();
+    assert_eq!(
+        unlisted.error,
+        "Atlas could not tell whether the menu bar runs"
+    );
+}
+
+#[test]
 fn only_a_menu_bar_known_not_to_run_is_reported_absent() {
     use atlas_core::process::{Info, Instance};
     use std::io::ErrorKind;
