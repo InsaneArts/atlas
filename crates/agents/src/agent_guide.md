@@ -54,9 +54,9 @@ in, read Give the app what it needs.
 
 Open with `atlas open --app NAME [FILE|URL]` or `atlas open /path/App.app`,
 then `atlas wait --app NAME`. Click a listed
-element by `atlas click --app A --ref REF`, else by
-`--name LABEL [--role ROLE]`, which lists `candidates` unless one matches.
-Otherwise use
+element by `atlas click --app A --ref LOOK.INDEX` (its `look` and
+`index`), else by `--name LABEL`, which lists `candidates` unless one
+matches. Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
 `atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
 `drag`): nothing is sent while another app would get it.
@@ -86,7 +86,7 @@ After each action:
 2. Read apps and web pages by name first: `atlas elements --app A --name X`
    for text, a control, its value and state; `atlas wait --app A` (or `--title T`,
    `--gone`) for a window.
-3. To check what's visible (drawing, layout), take a crop:
+3. To check what's visible, take a crop:
    `atlas screenshot --app A` or `--region X,Y,W,H`. Take a full
    `atlas screenshot` only when a crop's `overlapping` names a window in front.
 
