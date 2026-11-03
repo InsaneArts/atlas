@@ -231,6 +231,12 @@ async fn step(
             modifiers,
         } => {
             let Resolved { x, y, expect } = engine.resolve(reference).await?;
+            // A batch that names a window clicks a reference only in it.
+            if let Some(window) = expected.and_then(Expect::window)
+                && expect.window() != Some(window)
+            {
+                return Err(stale("That element is not in the window named"));
+            }
             let click = Action::Click {
                 x,
                 y,

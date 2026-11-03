@@ -344,10 +344,9 @@ fn a_refused_action_names_its_problem() {
 }
 
 /// A referenced click is checked as a click before its element is found
-/// again, and finding one takes so much of the budget that a batch holds
-/// at most one.
+/// again, comes first in its batch, and is charged the time finding it takes.
 #[test]
-fn a_referenced_click_is_checked_as_a_click_and_one_fits_a_batch() {
+fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
     let display = Display {
         width: 100.0,
         height: 100.0,
@@ -356,13 +355,13 @@ fn a_referenced_click_is_checked_as_a_click_and_one_fits_a_batch() {
     let check =
         |batch: &serde_json::Value| Batch::decode(batch).and_then(|batch| batch.check(&display));
 
-    let one = serde_json::json!([{"type": "reference", "ref": "kfpa12", "count": 2}]);
+    let one = serde_json::json!([{"type": "reference", "ref": "kfpaq12", "count": 2}]);
     check(&one).unwrap();
     let decoded = Batch::decode(&one).unwrap();
     assert!(matches!(
         decoded.actions(),
         [Action::Reference { reference, button: Button::Left, count: 2, modifiers }]
-            if reference.to_string() == "kfpa12" && modifiers.is_empty()
+            if reference.to_string() == "kfpaq12" && modifiers.is_empty()
     ));
     assert_eq!(decoded.actions()[0].target(), Target::Nothing);
     assert!(!Kind::Reference.personal());
@@ -370,11 +369,11 @@ fn a_referenced_click_is_checked_as_a_click_and_one_fits_a_batch() {
 
     for (action, problem) in [
         (
-            serde_json::json!({"type": "reference", "ref": "kfpa12", "count": 0}),
+            serde_json::json!({"type": "reference", "ref": "kfpaq12", "count": 0}),
             "a click is 1 to 5 clicks",
         ),
         (
-            serde_json::json!({"type": "reference", "ref": "kfpa12", "modifiers": ["hyper"]}),
+            serde_json::json!({"type": "reference", "ref": "kfpaq12", "modifiers": ["hyper"]}),
             "a modifier is one of cmd, ctrl, alt, shift and fn",
         ),
     ] {
@@ -384,19 +383,37 @@ fn a_referenced_click_is_checked_as_a_click_and_one_fits_a_batch() {
         );
     }
 
-    let two = serde_json::json!([
-        {"type": "reference", "ref": "kfpa12"},
-        {"type": "reference", "ref": "kfpa13"},
+    for later in [
+        serde_json::json!([
+            {"type": "reference", "ref": "kfpaq12"},
+            {"type": "reference", "ref": "kfpaq13"},
+        ]),
+        serde_json::json!([
+            {"type": "key", "key": "return"},
+            {"type": "reference", "ref": "kfpaq12"},
+        ]),
+    ] {
+        assert_eq!(
+            check(&later).unwrap_err().error,
+            "Action 2 was refused and nothing was sent: a referenced click comes first in its batch"
+        );
+    }
+    let slow = serde_json::json!([
+        {"type": "reference", "ref": "kfpaq12"},
+        {"type": "wait", "ms": 250},
+        {"type": "wait", "ms": 250},
+        {"type": "wait", "ms": 250},
+        {"type": "wait", "ms": 250},
     ]);
     assert_eq!(
-        check(&two).unwrap_err().error,
+        check(&slow).unwrap_err().error,
         "The batch would take longer than two seconds; send it in parts"
     );
 
     for malformed in [
-        serde_json::json!([{"type": "reference", "ref": "kfpa012"}]),
+        serde_json::json!([{"type": "reference", "ref": "kfpaq012"}]),
         serde_json::json!([{"type": "reference"}]),
-        serde_json::json!([{"type": "reference", "ref": "kfpa1", "x": 1}]),
+        serde_json::json!([{"type": "reference", "ref": "kfpaq1", "x": 1}]),
     ] {
         assert_eq!(check(&malformed).unwrap_err().code, Code::InvalidJson);
     }

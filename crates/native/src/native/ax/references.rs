@@ -7,7 +7,7 @@
 use super::{
     bring::{check_application, target_application},
     ffi::Kept,
-    tree::{Observed, Traced, observe},
+    tree::{Observed, observe},
 };
 use crate::native;
 use atlas_core::{
@@ -111,12 +111,11 @@ pub(in crate::native) struct Read {
 }
 
 /// What a kept look holds of one referenced element: the process it is in,
-/// what it reported, and its object followed by the object of each element
-/// it was reached from, nearest first.
+/// and the element's object and what it reported, followed by those of each
+/// element it was reached from, nearest first.
 struct Found {
     instance: Instance,
-    element: Element,
-    chain: Vec<Kept>,
+    chain: Vec<(Kept, Element)>,
 }
 
 /// Where a referenced element is clicked now, and what the click must reach.
@@ -182,19 +181,19 @@ impl Looks {
             .seen
             .get(at)
             .ok_or_else(|| stale("That look has no element of that number"))?;
-        let mut chain = vec![Kept(seen.object.0.clone())];
+        let kept = |seen: &Seen| (Kept(seen.object.0.clone()), seen.element.clone());
+        let mut chain = vec![kept(seen)];
         // Each element was reached from one found before it, so every step
         // goes to a smaller index and the walk up ends.
         let mut parent = seen.parent;
         while let Some(above) = parent.filter(|above| *above < at) {
             let seen = look.seen.get(above).ok_or_else(unavailable)?;
-            chain.push(Kept(seen.object.0.clone()));
+            chain.push(kept(seen));
             (at, parent) = (above, seen.parent);
         }
 
         Ok(Found {
             instance: look.instance,
-            element: seen.element.clone(),
             chain,
         })
     }
@@ -261,34 +260,34 @@ pub(in crate::native) fn resolve(
     let replaced = |cause: Error| stale("The app it is in quit or was replaced").with_source(cause);
     check_application(Some(found.instance)).map_err(replaced)?;
 
-    let Some((object, above)) = found.chain.split_first() else {
-        return Err(unavailable());
-    };
+    let (object, _) = found.chain.first().ok_or_else(unavailable)?;
     let limits = Limits {
         time: RESOLVE,
         ..Limits::default()
     };
-    let Observed { snapshot, objects } = observe(found.instance.pid, limits, Some(&*object.0))?;
-    check_application(Some(found.instance)).map_err(replaced)?;
-
-    let Some(index) = objects
-        .iter()
-        .position(|traced| *traced.object == *object.0)
-    else {
-        return Err(stale(if snapshot.incomplete {
-            "The element was not found again in time"
+    let started = Instant::now();
+    let observed = observe(found.instance.pid, limits, Some(&*object.0)).map_err(|error| {
+        if error.code == Code::Elements {
+            error.with("next", json!(LOOK_AGAIN))
         } else {
-            "The element is no longer there"
-        }));
-    };
-    if !reached(&objects, index, above) {
-        return Err(stale("The element is no longer where that look saw it"));
+            error
+        }
+    })?;
+    check_application(Some(found.instance)).map_err(replaced)?;
+    // A read whose last answers came late may describe an app that has
+    // moved on, and would hold the click past its share of the batch.
+    if started.elapsed() > 2 * RESOLVE {
+        return Err(stale(
+            "The app answered too slowly to find the element again",
+        ));
     }
 
-    let element = snapshot.elements.get(index).ok_or_else(unavailable)?;
-    if !same(&found.element, element) {
-        return Err(stale("The element changed since that look"));
-    }
+    let index = met_again(&found.chain, &observed)?;
+    let element = observed
+        .snapshot
+        .elements
+        .get(index)
+        .ok_or_else(unavailable)?;
     if element.enabled == Some(false) {
         return Err(Error::new(
             Code::Input,
@@ -318,39 +317,61 @@ pub(in crate::native) fn resolve(
     Ok(Resolved { x, y, expect })
 }
 
-/// Whether the element at `index` of `objects` was reached through exactly
-/// the objects `above` names, nearest first, from where the walk started.
-fn reached(objects: &[Traced], index: usize, above: &[Kept]) -> bool {
-    let mut parent = objects.get(index).and_then(|traced| traced.parent);
-    for kept in above {
-        match parent.and_then(|at| objects.get(at)) {
-            Some(traced) if *traced.object == *kept.0 => parent = traced.parent,
-            _ => return false,
+/// Where the element `chain` names (with each element it was reached from,
+/// nearest first) is met again in `observed`: the very same object, reached
+/// through the very same objects from where the walk started, each of them
+/// still the same element.
+fn met_again(chain: &[(Kept, Element)], observed: &Observed) -> Result<usize> {
+    let Observed { snapshot, objects } = observed;
+    let (object, _) = chain.first().ok_or_else(unavailable)?;
+    let index = objects
+        .iter()
+        .position(|traced| *traced.object == *object.0)
+        .ok_or_else(|| {
+            stale(if snapshot.incomplete {
+                "The element was not found again in time"
+            } else {
+                "The element is no longer there"
+            })
+        })?;
+
+    let moved = || stale("The element is no longer where that look saw it");
+    let mut at = Some(index);
+    for (kept, then) in chain {
+        let traced = at
+            .and_then(|at| objects.get(at))
+            .filter(|traced| *traced.object == *kept.0)
+            .ok_or_else(moved)?;
+        let now = at
+            .and_then(|at| snapshot.elements.get(at))
+            .ok_or_else(unavailable)?;
+        if !same(then, now) {
+            return Err(stale("The element changed since that look"));
         }
+        at = traced.parent;
     }
-    parent.is_none()
+    match at {
+        Some(_) => Err(moved()),
+        None => Ok(index),
+    }
 }
 
 /// Whether `now` is the element a look saw as `then`: the same role,
-/// subrole, title, description, identifier and menu, each read whole, or
-/// cut as it was then. Its value and frame may change: typing and
-/// scrolling change them.
+/// subrole, title, description, identifier and menu, and for a static text
+/// the same value, each read whole. Any other value may change, as typing
+/// changes it, and so may the frame.
 fn same(then: &Element, now: &Element) -> bool {
-    let named = |names: &[String]| -> Vec<String> {
-        names
-            .iter()
-            .filter(|name| *name != "AXValue")
-            .cloned()
-            .collect()
-    };
+    let text = then.role.as_deref() == Some("AXStaticText");
+    let identifying = |name: &String| text || name != "AXValue";
     then.role == now.role
         && then.subrole == now.subrole
         && then.title == now.title
         && then.description == now.description
         && then.identifier == now.identifier
         && then.menu == now.menu
-        && named(&now.unreadable).is_empty()
-        && named(&then.truncated) == named(&now.truncated)
+        && (!text || then.value == now.value)
+        && !now.unreadable.iter().any(identifying)
+        && !then.truncated.iter().chain(&now.truncated).any(identifying)
 }
 
 #[cfg(test)]

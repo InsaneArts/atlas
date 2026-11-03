@@ -41,11 +41,12 @@ fn service(marker: &std::path::Path) -> super::Service {
         height: 1.0,
         process_id: std::process::id(),
     };
+    let engine = super::Engine::idle(epoch.clone());
     super::Service {
-        engine: Arc::new(Mutex::new(super::Engine::idle(epoch.clone()))),
+        looks: engine.looks.clone(),
+        engine: Arc::new(Mutex::new(engine)),
         operations: super::Operations::default(),
         gate: Arc::new(Gate::default()),
-        looks: Arc::default(),
         epoch: Arc::new(super::RwLock::new(epoch)),
         build: None,
         executable: None,
@@ -2250,7 +2251,7 @@ async fn input_without_an_expectation_is_never_checked() {
 }
 
 fn referenced() -> Action {
-    serde_json::from_value(json!({"type": "reference", "ref": "kfpa12"})).unwrap()
+    serde_json::from_value(json!({"type": "reference", "ref": "kfpaq12"})).unwrap()
 }
 
 #[tokio::test]
@@ -2308,6 +2309,31 @@ async fn a_found_reference_is_checked_against_its_own_window_and_clicked_where_i
         };
         assert_eq!(stand.log, checked);
     }
+}
+
+/// A batch that names a window clicks a referenced element only in it,
+/// refusing one found in another before any check or post.
+#[tokio::test]
+async fn a_reference_found_outside_the_window_named_is_refused() {
+    let stand = Stand::locked(&[Step::Post]);
+    stand.lock().await.found = Some(Resolved {
+        x: 30.0,
+        y: 40.0,
+        expect: Expect::new(812).unwrap().in_window(43).unwrap(),
+    });
+    let named = Expect::new(812).unwrap().in_window(42).unwrap();
+    let gate = Arc::new(Gate::default());
+    let outcome = {
+        let mut engine = stand.lock().await;
+        run(&mut *engine, &gate, vec![referenced()], Some(&named)).await
+    };
+    let reply = outcome.unwrap_err();
+    assert_eq!(reply["code"], "elements");
+    assert_eq!(reply["performed"], 0);
+    assert_eq!(reply["uncertain"], false);
+    let stand = stand.lock().await;
+    assert_eq!(stand.log, ["resolve 0"]);
+    assert_eq!(stand.posted, 0);
 }
 
 #[test]
@@ -3446,6 +3472,7 @@ fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc
     let epoch = display_epoch();
     let engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
     Arc::new(super::Service {
+        looks: engine.looks.clone(),
         engine: Arc::new(Mutex::new(engine)),
         operations: super::Operations::default(),
         gate,

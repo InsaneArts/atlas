@@ -155,12 +155,12 @@ pub fn why(stops: impl IntoIterator<Item = Stop>) -> Option<String> {
 }
 
 /// How many letters name a look.
-const LOOK_LETTERS: usize = 4;
+const LOOK_LETTERS: usize = 5;
 
 /// How many looks there are names for.
 pub const LOOK_NAMES: u64 = 26u64.pow(LOOK_LETTERS as u32);
 
-/// The name of one look the input service keeps: four lowercase letters.
+/// The name of one look the input service keeps: five lowercase letters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Look(u32);
 
@@ -198,7 +198,7 @@ impl fmt::Display for Look {
 }
 
 /// One element of one look, as `atlas elements` names it: the look's name
-/// followed by the element's index in it, such as `kfpa12`.
+/// followed by the element's index in it, such as `kfpaq12`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reference {
     pub look: Look,
@@ -273,7 +273,7 @@ pub fn click_point(role: Option<&str>, frame: &Bounds) -> (f64, f64) {
 
 /// The menu bar where it shows the point, which is the Window Server's
 /// window rather than the app's.
-pub fn menu_bar_window(windows: &[Window], x: f64, y: f64) -> Option<i64> {
+fn menu_bar_window(windows: &[Window], x: f64, y: f64) -> Option<i64> {
     windows
         .iter()
         .find(|window| window.is_menu_bar() && window.alpha > 0.0 && window.bounds.contains(x, y))

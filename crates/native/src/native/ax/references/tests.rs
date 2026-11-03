@@ -1,4 +1,4 @@
-use super::super::ffi;
+use super::super::{ffi, tree::Traced};
 use super::*;
 use objc2_application_services::AXUIElement;
 use objc2_core_foundation::CFRetained;
@@ -102,14 +102,14 @@ fn two_callers_looks_each_keep_what_they_saw_and_one_never_retargets_the_other()
         let found = looks.find(at(look, 2), &epoch(), now).unwrap();
         assert_eq!(found.instance, editor());
         assert_eq!(
-            found.element.title.as_deref(),
+            found.chain[0].1.title.as_deref(),
             Some(&*format!("Button {base}.2"))
         );
         let objects: Vec<bool> = found
             .chain
             .iter()
             .zip([base + 2, base + 1, base])
-            .map(|(kept, number)| *kept.0 == *object(number))
+            .map(|((kept, _), number)| *kept.0 == *object(number))
             .collect();
         assert_eq!(
             objects,
@@ -207,30 +207,109 @@ fn a_replaced_or_unnamed_process_is_refused_before_its_app_is_read_again() {
     );
 }
 
+/// A read again: each element by its object's number, the index it was
+/// reached from and its title.
+fn observed(entries: &[(i32, Option<usize>, &str)], incomplete: bool) -> Observed {
+    Observed {
+        snapshot: Snapshot {
+            elements: entries
+                .iter()
+                .enumerate()
+                .map(|(index, (_, _, title))| button(index, title))
+                .collect(),
+            incomplete,
+            ..empty()
+        },
+        objects: entries
+            .iter()
+            .map(|(number, parent, _)| Traced {
+                object: object(*number),
+                parent: *parent,
+            })
+            .collect(),
+    }
+}
+
+/// Button 3, reached from 2, reached from 1 where the walk started.
+fn third() -> Vec<(Kept, Element)> {
+    [3, 2, 1]
+        .map(|number| (Kept(object(number)), button(0, &format!("Button {number}"))))
+        .into()
+}
+
 #[test]
-fn an_element_is_reached_only_through_the_same_objects_from_the_same_start() {
-    let traced = |number: i32, parent: Option<usize>| Traced {
-        object: object(number),
-        parent,
-    };
-    let kept = |number: i32| Kept(object(number));
-    let objects = [traced(1, None), traced(2, Some(0)), traced(3, Some(1))];
-    assert!(reached(&objects, 2, &[kept(2), kept(1)]));
-    assert!(reached(&objects, 0, &[]));
-    assert!(
-        !reached(&objects, 2, &[kept(2)]),
-        "a walk that started higher"
+fn an_element_is_met_again_by_its_object_wherever_its_siblings_moved() {
+    let reordered = observed(
+        &[
+            (1, None, "Button 1"),
+            (9, Some(0), "Button 9"),
+            (2, Some(0), "Button 2"),
+            (3, Some(2), "Button 3"),
+        ],
+        false,
     );
-    assert!(!reached(&objects, 2, &[kept(2), kept(1), kept(5)]));
-    assert!(
-        !reached(&objects, 2, &[kept(4), kept(1)]),
-        "a replaced parent"
-    );
-    let moved = [traced(1, None), traced(2, Some(0)), traced(3, Some(0))];
-    assert!(
-        !reached(&moved, 2, &[kept(2), kept(1)]),
-        "moved to another parent"
-    );
+    assert_eq!(met_again(&third(), &reordered).unwrap(), 3);
+}
+
+#[test]
+fn an_element_replaced_moved_or_changed_is_never_met_again() {
+    for (entries, incomplete, why) in [
+        (
+            vec![
+                (1, None, "Button 1"),
+                (2, Some(0), "Button 2"),
+                (4, Some(1), "Button 3"),
+            ],
+            false,
+            "The element is no longer there",
+        ),
+        (
+            vec![(1, None, "Button 1"), (2, Some(0), "Button 2")],
+            true,
+            "The element was not found again in time",
+        ),
+        (
+            vec![
+                (1, None, "Button 1"),
+                (2, Some(0), "Button 2"),
+                (3, Some(0), "Button 3"),
+            ],
+            false,
+            "The element is no longer where that look saw it",
+        ),
+        (
+            vec![
+                (10, None, "Window"),
+                (1, Some(0), "Button 1"),
+                (2, Some(1), "Button 2"),
+                (3, Some(2), "Button 3"),
+            ],
+            false,
+            "The element is no longer where that look saw it",
+        ),
+        (
+            vec![
+                (1, None, "Button 1"),
+                (2, Some(0), "Other row"),
+                (3, Some(1), "Button 3"),
+            ],
+            false,
+            "The element changed since that look",
+        ),
+        (
+            vec![
+                (1, None, "Button 1"),
+                (2, Some(0), "Button 2"),
+                (3, Some(1), "Renamed"),
+            ],
+            false,
+            "The element changed since that look",
+        ),
+    ] {
+        let error = met_again(&third(), &observed(&entries, incomplete)).unwrap_err();
+        assert_stale(&error);
+        assert_eq!(error.error, why, "{entries:?}");
+    }
 }
 
 #[test]
@@ -255,5 +334,18 @@ fn an_element_is_the_same_only_while_what_identifies_it_holds() {
     other.identifier = Some("other".into());
     for changed in [renamed, unread, cut, menu, other] {
         assert!(!same(&then, &changed), "{changed:?}");
+    }
+
+    // A static text says what it is by its value.
+    let mut label = then.clone();
+    label.role = Some("AXStaticText".into());
+    label.value = Some("Invoice 12".into());
+    let mut relabelled = label.clone();
+    relabelled.value = Some("Invoice 13".into());
+    let mut cut = label.clone();
+    cut.truncated = vec!["AXValue".into()];
+    assert!(same(&label, &label));
+    for changed in [relabelled, cut] {
+        assert!(!same(&label, &changed), "{changed:?}");
     }
 }

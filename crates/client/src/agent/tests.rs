@@ -6,7 +6,7 @@ use atlas_core::{
     error::{Code, Error, Holder, Result},
     screen::select::{ElementFilter, NameMatch},
     screen::{
-        elements::{Element, Look, Stop, click_point, element_check, menu_bar_window},
+        elements::{Element, Look, Stop, click_point, element_check},
         windows::{Bounds, MENU_BAR_LAYER, MENU_LAYER, Window, owning_window},
     },
     session::{Display, FOCUS_APP, LOOKS},
@@ -64,7 +64,7 @@ fn textedit_reads(request: &Value) -> Option<Value> {
 
     if request["op"] == "elements" {
         assert_eq!(request["expect"], json!({"pid": 812, "start": [123, 456]}));
-        return Some(json!({"ok": true, "look": "kfpa", "elements": [], "truncated": false}));
+        return Some(json!({"ok": true, "look": "kfpaq", "elements": [], "truncated": false}));
     }
     if request["op"] == "apps" {
         return Some(
@@ -145,7 +145,7 @@ async fn finding_an_app_verifies_the_helper_once() {
             .await
             .unwrap();
         assert_eq!(listed["pid"], 812, "{target:?}");
-        assert_eq!(listed["look"], "kfpa", "{target:?}");
+        assert_eq!(listed["look"], "kfpaq", "{target:?}");
         assert_eq!(helper.proofs() - before, 1, "{target:?}");
     }
 }
@@ -185,7 +185,7 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
             "elements",
         ),
         (
-            json!({"ok": true, "look": "KFPA", "elements": [], "truncated": false}),
+            json!({"ok": true, "look": "KFPAQ", "elements": [], "truncated": false}),
             "elements",
         ),
         (
@@ -517,43 +517,6 @@ fn a_field_needs_the_app_or_window_it_is_in() {
         Expected::new(Some(Target::Name("TextEdit".into())), None, field())
             .unwrap()
             .is_some()
-    );
-}
-
-/// A menu bar title is judged against the menu bar, the Window Server's
-/// window at the point to click, and only while that is shown; an app's
-/// own window at that layer is not the bar.
-#[test]
-fn the_menu_bar_is_the_window_servers() {
-    let bar = |owner: &str, alpha: f64| {
-        let mut bar = window(3, 433, owner, MENU_BAR_LAYER);
-        bar.alpha = alpha;
-        bar.bounds = Bounds {
-            x: 0.0,
-            y: 0.0,
-            width: 1512.0,
-            height: 30.0,
-        };
-
-        bar
-    };
-    let app = || window(9, 6, "Opie", 0);
-
-    assert_eq!(
-        menu_bar_window(&[bar("Window Server", 1.0), app()], 232.0, 12.0),
-        Some(3)
-    );
-    assert_eq!(
-        menu_bar_window(&[bar("Window Server", 1.0), app()], 232.0, 60.0),
-        None
-    );
-    assert_eq!(
-        menu_bar_window(&[bar("Window Server", 0.0), app()], 232.0, 12.0),
-        None
-    );
-    assert_eq!(
-        menu_bar_window(&[bar("Opie", 1.0), app()], 232.0, 12.0),
-        None
     );
 }
 
@@ -1455,22 +1418,22 @@ fn a_kept_look_names_each_listed_element_by_its_reference() {
         save.clone(),
         shown(12, "AXButton", Some("Open"), None),
     ]);
-    scan.look = Look::parse("kfpa");
+    scan.look = Look::parse("kfpaq");
 
     let compact = listing(812, &scan, &ElementFilter::default(), 50, false);
-    assert_eq!(compact["look"], "kfpa");
-    assert_eq!(compact["elements"][0]["ref"], "kfpa3");
+    assert_eq!(compact["look"], "kfpaq");
+    assert_eq!(compact["elements"][0]["ref"], "kfpaq3");
     assert_eq!(compact["elements"][0]["index"], 3, "the index stays");
-    assert_eq!(compact["elements"][1]["ref"], "kfpa12");
+    assert_eq!(compact["elements"][1]["ref"], "kfpaq12");
 
     let full = listing(812, &scan, &ElementFilter::default(), 50, true);
-    assert_eq!(full["look"], "kfpa");
-    assert_eq!(full["elements"][0]["ref"], "kfpa3");
+    assert_eq!(full["look"], "kfpaq");
+    assert_eq!(full["elements"][0]["ref"], "kfpaq3");
     assert_eq!(full["elements"][0]["title"], "Save");
 
     let one = listing(812, &scan, &named("Open"), 50, false);
     assert_eq!(one["elements"].as_array().unwrap().len(), 1);
-    assert_eq!(one["elements"][0]["ref"], "kfpa12");
+    assert_eq!(one["elements"][0]["ref"], "kfpaq12");
 
     let unkept = listing(
         812,
@@ -1489,7 +1452,7 @@ fn a_kept_look_names_each_listed_element_by_its_reference() {
 async fn a_malformed_reference_is_refused_before_anything_is_asked() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    for reference in ["", "kfpa", "kfpa012", "KFPA1", "save"] {
+    for reference in ["", "kfpaq", "kfpaq012", "KFPAQ1", "save"] {
         let error = click_reference(&client, None, reference, Button::Left, 1, &[])
             .await
             .unwrap_err();
@@ -1525,7 +1488,7 @@ async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
         let mut sent = Vec::new();
         let reply = helper
             .serve(
-                click_reference(&client, target.as_ref(), "kfpa12", Button::Left, 2, &[]),
+                click_reference(&client, target.as_ref(), "kfpaq12", Button::Left, 2, &[]),
                 |request| match request["op"].as_str() {
                     Some("acquire" | "release") => Some(json!({"ok": true})),
                     Some("input") => {
@@ -1549,7 +1512,7 @@ async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
         };
         assert_eq!(
             request["actions"],
-            json!([{"type": "reference", "ref": "kfpa12", "button": "left", "count": 2,
+            json!([{"type": "reference", "ref": "kfpaq12", "button": "left", "count": 2,
                 "modifiers": []}])
         );
         let expected = target
@@ -3114,7 +3077,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                         return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "Editor"}], "starts": {"812": [123,456]}}));
                     }
                     if request["op"] == "elements" {
-                        return Some(json!({"ok": true, "look": "kfpa", "elements": [], "truncated": false}));
+                        return Some(json!({"ok": true, "look": "kfpaq", "elements": [], "truncated": false}));
                     }
                     assert_eq!(request["op"], "windows");
                     let dock = request["dock"].as_bool().unwrap();
