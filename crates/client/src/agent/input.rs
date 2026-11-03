@@ -151,22 +151,36 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
     Ok(type_recorded(client, &batches, interrupt, send).await)
 }
 
-/// The terminal command row must describe all batches, including confirmed
-/// text before a later refusal. The reader replaces the individual batch rows
-/// with this one. Only action counts and the reply's safe projection are kept.
+/// Send each of `batches` as `type` actions through `send`, stopping at
+/// the first that is not confirmed, or before the next once `interrupt`
+/// was asked to stop: the report says how much was confirmed typed. Of a
+/// batch that stopped it, only the parts the helper says it performed
+/// count, and `partial` says whether some of the text was sent.
+///
+/// With a command under way, its terminal row describes all batches,
+/// including confirmed text before a later refusal. The reader replaces
+/// the individual batch rows with this one. Only action counts and the
+/// reply's safe projection are kept.
 pub(super) async fn type_recorded(
     client: &Client,
     batches: &[String],
     interrupt: &Interrupt,
     mut send: impl AsyncFnMut(&Value) -> Result<Value>,
 ) -> Value {
-    if client.doing.is_none() {
-        return type_each(batches, interrupt, send).await;
-    }
     let started = Instant::now();
     let mut identity = json!({});
-    let mut report = type_each(batches, interrupt, async |actions: &Value| {
-        let outcome = send(actions).await;
+    let (mut typed, mut confirmed) = (0, 0);
+    let mut stopped = None;
+    for batch in batches {
+        let parts = type_parts(batch);
+        let actions: Vec<Value> = parts
+            .iter()
+            .map(|part| json!({ "type": "type", "text": part }))
+            .collect();
+        let outcome = match interrupt.check() {
+            Ok(()) => send(&Value::Array(actions)).await,
+            Err(stop) => Err(stop),
+        };
         if let Ok(reply) = &outcome {
             if !reply["app"].is_null() {
                 identity["app"] = reply["app"].clone();
@@ -176,9 +190,42 @@ pub(super) async fn type_recorded(
                 identity["field"] = reply["field"].clone();
             }
         }
-        outcome
-    })
-    .await;
+
+        let (error, performed, partial) = match outcome {
+            Ok(reply) if reply["ok"] == true => {
+                confirmed += 1;
+                typed += batch.chars().count();
+                continue;
+            }
+            Ok(reply) => (
+                unconfirmed(&reply),
+                reply["performed"]
+                    .as_u64()
+                    .and_then(|performed| usize::try_from(performed).ok())
+                    .unwrap_or(0),
+                reply["partial"] == true,
+            ),
+            Err(error) => (error, 0, false),
+        };
+        let typed = typed
+            + parts
+                .iter()
+                .take(performed)
+                .map(|part| part.chars().count())
+                .sum::<usize>();
+        let mut report = json!(error);
+        report["typed"] = json!(typed);
+        report["batches"] = json!(batches.len());
+        report["confirmedBatches"] = json!(confirmed);
+        report["partial"] = json!(typed > 0 || partial);
+        stopped = Some(report);
+        break;
+    }
+    let mut report =
+        stopped.unwrap_or_else(|| json!({ "ok": true, "typed": typed, "batches": batches.len() }));
+    if client.doing.is_none() {
+        return report;
+    }
 
     let mut reply = report.clone();
     if report["uncertain"] == true {
@@ -210,118 +257,25 @@ pub(super) async fn type_recorded(
     report
 }
 
-/// Send each of `batches` as `type` actions through `send`, stopping at
-/// the first that is not confirmed, or before the next once `interrupt`
-/// was asked to stop: the report says how much was confirmed typed.
-pub(super) async fn type_each(
-    batches: &[String],
-    interrupt: &Interrupt,
-    mut send: impl AsyncFnMut(&Value) -> Result<Value>,
-) -> Value {
-    let (mut typed, mut confirmed) = (0, 0);
-
-    for batch in batches {
-        let parts = type_parts(batch);
-        let actions: Vec<Value> = parts
-            .iter()
-            .map(|part| json!({ "type": "type", "text": part }))
-            .collect();
-        let outcome = match interrupt.check() {
-            Ok(()) => send(&Value::Array(actions)).await,
-            Err(stop) => Err(stop),
-        };
-
-        let failure = match outcome {
-            Ok(reply) if reply["ok"] == true => {
-                confirmed += 1;
-                typed += batch.chars().count();
-                continue;
-            }
-            Ok(reply) => Unconfirmed::from_reply(&reply),
-            Err(error) => Unconfirmed::from(error),
-        };
-
-        return stopped_typing(typed, batches.len(), confirmed, &parts, failure);
+/// The failure a helper replied with to a batch it did not confirm. Agents
+/// act on the code (busy, lease-lost, session-changed, focus-changed), on
+/// who holds control when busy and on what was found instead of the app,
+/// so those are kept; nothing else of the reply is.
+fn unconfirmed(reply: &Value) -> Error {
+    let mut error = Error::refused(
+        Code::of_reply(reply, Code::Input),
+        reply,
+        "The helper did not confirm the text",
+    );
+    if let Some(holder) = reply["holder"].as_str().and_then(Holder::parse) {
+        error = error.held_by(holder);
     }
-
-    json!({ "ok": true, "typed": typed, "batches": batches.len() })
-}
-
-/// A batch the helper did not confirm: why, how many of its actions were
-/// performed, and whether the failing one had sent some of its events.
-pub(super) struct Unconfirmed {
-    error: Error,
-    performed: usize,
-    partial: bool,
-}
-
-impl Unconfirmed {
-    /// A failure the helper replied with. Agents act on the code (busy,
-    /// lease-lost, session-changed, focus-changed), on who holds control
-    /// when busy and on what was found instead of the app, so those are
-    /// kept; nothing else of the reply is.
-    pub(super) fn from_reply(reply: &Value) -> Self {
-        let mut error = Error::refused(
-            Code::of_reply(reply, Code::Input),
-            reply,
-            "The helper did not confirm the text",
-        );
-        if let Some(holder) = reply["holder"].as_str().and_then(Holder::parse) {
-            error = error.held_by(holder);
-        }
-        for kept in ["reason", "unread", "found"] {
-            if !reply[kept].is_null() {
-                error = error.with(kept, reply[kept].clone());
-            }
-        }
-
-        Self {
-            error,
-            performed: reply["performed"]
-                .as_u64()
-                .and_then(|performed| usize::try_from(performed).ok())
-                .unwrap_or(0),
-            partial: reply["partial"] == true,
+    for kept in ["reason", "unread", "found"] {
+        if !reply[kept].is_null() {
+            error = error.with(kept, reply[kept].clone());
         }
     }
-}
-
-impl From<Error> for Unconfirmed {
-    /// A failure before or around the batch: none of it is known performed.
-    fn from(error: Error) -> Self {
-        Self {
-            error,
-            performed: 0,
-            partial: false,
-        }
-    }
-}
-
-/// The report of a `type` that stopped at a batch: everything confirmed
-/// before it, `typed` characters in `confirmed` of `batches`, plus the
-/// `parts` of that batch the helper says it performed. `partial` says some
-/// of the text was sent.
-pub(super) fn stopped_typing(
-    typed: usize,
-    batches: usize,
-    confirmed: usize,
-    parts: &[String],
-    failure: Unconfirmed,
-) -> Value {
-    let typed = typed
-        + parts
-            .iter()
-            .take(failure.performed)
-            .map(|part| part.chars().count())
-            .sum::<usize>();
-
-    let mut report = json!(failure.error);
-    report["typed"] = json!(typed);
-    report["batches"] = json!(batches);
-    report["confirmedBatches"] = json!(confirmed);
-    report["partial"] = json!(typed > 0 || failure.partial);
-
-    report
+    error
 }
 
 /// Keys pressed in order, as one batch; an unknown key is named.

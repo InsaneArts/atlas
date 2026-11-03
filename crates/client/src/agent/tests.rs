@@ -575,17 +575,35 @@ fn text_is_typed_in_parts_of_at_most_sixteen_characters() {
     }
 }
 
-#[test]
-fn a_stopped_type_counts_the_parts_the_helper_performed() {
-    let parts = type_parts(&"z".repeat(64));
+/// The report of typing `batches` batches of 64 characters with no command
+/// under way, the first `confirmed` of which the helper confirms before
+/// the next ends with `failure`.
+async fn stopped_at(batches: usize, confirmed: usize, failure: Result<Value>) -> Value {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let interrupt = Interrupt::new_for_test(Duration::from_secs(10));
+    let batches = type_batches(&"z".repeat(64 * batches)).unwrap();
+    let mut failure = Some(failure);
+    let mut sent = 0;
+    type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
+        sent += 1;
+        if sent > confirmed {
+            return failure.take().unwrap();
+        }
+        Ok(json!({"ok": true, "performed": actions.as_array().unwrap().len()}))
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_stopped_type_counts_the_parts_the_helper_performed() {
     let refused = json!({"ok": false, "code": "focus-changed", "reason": "app",
         "found": {"app": "Calculator", "pid": 900}, "error": "Calculator has keyboard focus",
         "holder": "person", "unread": "slow",
         "performed": 2, "partial": false, "uncertain": false, "cleanupError": "kept out",
         "secret": "unrelated-refusal-secret-4b72", "id": "job", "task": "task", "state": "running"});
-    let reply = |value: &Value| Unconfirmed::from_reply(value);
 
-    let report = stopped_typing(64, 3, 1, &parts, reply(&refused));
+    let report = stopped_at(3, 1, Ok(refused.clone())).await;
     assert_eq!(report["typed"], 64 + 32);
     assert_eq!(report["batches"], 3);
     assert_eq!(report["confirmedBatches"], 1);
@@ -607,26 +625,20 @@ fn a_stopped_type_counts_the_parts_the_helper_performed() {
         "only what agents act on"
     );
 
-    let first = stopped_typing(
-        0,
-        1,
-        0,
-        &parts,
-        reply(&json!({"performed": 0, "code": "focus-changed"})),
-    );
+    let first = stopped_at(1, 0, Ok(json!({"performed": 0, "code": "focus-changed"}))).await;
     assert_eq!(
         (first["typed"].clone(), first["partial"].clone()),
         (json!(0), json!(false))
     );
-    let broke = reply(&json!({"performed": 0, "partial": true, "uncertain": true}));
-    assert_eq!(stopped_typing(0, 1, 0, &parts, broke)["partial"], true);
+    let broke = json!({"performed": 0, "partial": true, "uncertain": true});
+    assert_eq!(stopped_at(1, 0, Ok(broke)).await["partial"], true);
 
     let left = json!({"ok": false, "code": "focus-changed", "reason": "field",
         "found": {"app": "TextEdit", "pid": 812, "window": 4120,
             "field": {"role": "AXTextField", "name": "Second"}},
         "error": "The field with keyboard focus is not the one named First",
         "performed": 0, "partial": false, "uncertain": false});
-    let report = stopped_typing(128, 4, 2, &parts, reply(&left));
+    let report = stopped_at(4, 2, Ok(left.clone())).await;
     assert_eq!(
         (
             report["typed"].clone(),
@@ -641,21 +653,18 @@ fn a_stopped_type_counts_the_parts_the_helper_performed() {
     assert_eq!(report["found"], left["found"]);
 
     let lost = Error::new(Code::Transport, "Native reply timed out").uncertain();
-    let report = stopped_typing(64, 2, 1, &parts, lost.into());
+    let report = stopped_at(2, 1, Err(lost)).await;
     assert_eq!(report["typed"], 64, "no part of a failed batch counts");
     assert_eq!(report["code"], "transport");
     assert_eq!(report["uncertain"], true);
     assert!(report.get("reason").is_none() && report.get("found").is_none());
 
     let busy = Error::new(Code::Busy, "held").held_by(Holder::Agent);
-    assert_eq!(
-        stopped_typing(0, 1, 0, &parts, busy.into())["holder"],
-        "agent"
-    );
-    let busy = reply(&json!({"code": "busy", "holder": "person"}));
-    assert_eq!(stopped_typing(0, 1, 0, &parts, busy)["holder"], "person");
+    assert_eq!(stopped_at(1, 0, Err(busy)).await["holder"], "agent");
+    let busy = json!({"code": "busy", "holder": "person"});
+    assert_eq!(stopped_at(1, 0, Ok(busy)).await["holder"], "person");
 
-    let unknown = stopped_typing(0, 1, 0, &parts, reply(&json!({"code": "made-up"})));
+    let unknown = stopped_at(1, 0, Ok(json!({"code": "made-up"}))).await;
     assert_eq!(unknown["code"], "input");
     assert_eq!(unknown["error"], "The helper did not confirm the text");
 }
@@ -802,12 +811,14 @@ async fn typing_records_a_stop_between_batches_after_confirmed_text() {
 async fn typing_stops_between_parts_and_says_how_much_was_typed() {
     use nix::sys::signal::Signal;
 
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
     let interrupt = Interrupt::new_for_test(Duration::from_secs(10));
     let batches = type_batches(&"x".repeat(200)).unwrap();
     assert_eq!(batches.len(), 4);
     let mut sent = 0;
 
-    let report = type_each(&batches, &interrupt, async |actions: &Value| {
+    let report = type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
         sent += 1;
         interrupt.ask_for_test(Signal::SIGTERM);
         Ok(json!({"ok": true, "performed": actions.as_array().unwrap().len()}))
@@ -823,7 +834,7 @@ async fn typing_stops_between_parts_and_says_how_much_was_typed() {
 
     let interrupt = Interrupt::new_for_test(Duration::from_secs(10));
     let mut first = true;
-    let report = type_each(&batches, &interrupt, async |actions: &Value| {
+    let report = type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
         if std::mem::take(&mut first) {
             Ok(json!({"ok": true, "performed": actions.as_array().unwrap().len()}))
         } else {
