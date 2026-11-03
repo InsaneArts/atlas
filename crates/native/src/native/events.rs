@@ -24,6 +24,8 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 
 mod dock;
+#[cfg(test)]
+pub(super) mod tap;
 
 /// The only place events go: the helper login's own session event tap, never
 /// the global HID tap.
@@ -92,15 +94,15 @@ struct Source(
 
 impl Source {
     #[cfg(not(test))]
-    fn get(&self) -> &CGEventSource {
-        &self.0
+    fn get(&self) -> Option<&CGEventSource> {
+        Some(&self.0)
     }
 
+    /// A test engine has none: its events are created without one and
+    /// reach only its tap.
     #[cfg(test)]
-    fn get(&self) -> &CGEventSource {
-        self.0
-            .as_ref()
-            .expect("An idle test engine cannot post events")
+    fn get(&self) -> Option<&CGEventSource> {
+        self.0.as_deref()
     }
 }
 
@@ -138,12 +140,24 @@ pub(super) struct Engine {
     /// When macOS last confirmed that this process may post events; none
     /// until it has, or after it said no.
     post_access: Option<Instant>,
+    #[cfg(test)]
+    tap: Option<tap::Tap>,
 }
 
 impl Engine {
     #[cfg(test)]
     pub(super) fn idle(epoch: InputEpoch) -> Self {
         Self::with_source(epoch, Source(None))
+    }
+
+    /// A test engine whose checks pass, which finds no Dock and whose events
+    /// reach only `tap`, journaling to `journal` when given one.
+    #[cfg(test)]
+    pub(super) fn tapped(epoch: InputEpoch, journal: Option<PathBuf>, tap: tap::Tap) -> Self {
+        let mut engine = Self::with_source(epoch, Source(None));
+        engine.journal = journal.map(Journal::new);
+        engine.tap = Some(tap);
+        engine
     }
 
     fn with_source(epoch: InputEpoch, source: Source) -> Self {
@@ -165,6 +179,8 @@ impl Engine {
             drag_started: false,
             flags: 0,
             post_access: None,
+            #[cfg(test)]
+            tap: None,
         }
     }
 
@@ -231,6 +247,12 @@ impl Engine {
     }
 
     pub(super) fn check(&mut self) -> Result<()> {
+        #[cfg(test)]
+        if let Some(tap) = &self.tap {
+            tap.check();
+            return Ok(());
+        }
+
         Self::check_epoch(&self.epoch)?;
 
         // Without it macOS drops posted events silently: refuse instead.
@@ -306,6 +328,10 @@ impl Engine {
                 mouse_number: self.mouse_number,
                 flags,
             })?;
+            #[cfg(test)]
+            if let (Some(tap), Some(held)) = (&self.tap, journal.saved()) {
+                tap.written(held);
+            }
         }
 
         Ok(())
@@ -332,13 +358,27 @@ impl Engine {
         // Exactly the modifiers asked for: an arrow key's own numeric pad and
         // function flags would leave macOS reading function as held.
         CGEvent::set_flags(Some(&event), CGEventFlags(flags));
-        CGEvent::post(TAP, Some(&event));
+        self.emit(&event);
         self.dock_pressed = false;
 
         self.posted += 1;
         self.flags = flags;
 
         Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn emit(&self, event: &CGEvent) {
+        CGEvent::post(TAP, Some(event));
+    }
+
+    /// Only a tapped test engine has anywhere to send events.
+    #[cfg(test)]
+    fn emit(&self, event: &CGEvent) {
+        self.tap
+            .as_ref()
+            .expect("An idle test engine cannot post events")
+            .post(event);
     }
 
     fn mouse(
@@ -350,7 +390,7 @@ impl Engine {
         flags: u64,
     ) -> Result<()> {
         let event = created(CGEvent::new_mouse_event(
-            Some(self.source.get()),
+            self.source.get(),
             kind,
             point,
             Mouse::from(button).number,
@@ -446,8 +486,7 @@ impl Engine {
 
                 if self.held.is_some() && !self.drag_started && point != self.position {
                     // AppKit establishes native window tracking at the first
-                    // dragged location that has moved, and what is dragged
-                    // then follows the pointer from there. Bound that initial
+                    // dragged location that has moved. Bound that initial
                     // step to one point so a sparse viewer stream does not
                     // lose its first jump. A stationary click never enters
                     // this path.
@@ -513,11 +552,7 @@ impl Engine {
 
     #[allow(unsafe_code, reason = "FFI: key text is passed as a UTF-16 pointer")]
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
-        let event = created(CGEvent::new_keyboard_event(
-            Some(self.source.get()),
-            code,
-            down,
-        ))?;
+        let event = created(CGEvent::new_keyboard_event(self.source.get(), code, down))?;
 
         if let Some(text) = text {
             // SAFETY: the pointer and length describe the live UTF-16 slice.
@@ -583,34 +618,30 @@ impl Engine {
         self.pointer(phase, point, button, &[], 1).await
     }
 
-    /// One drag owns its anchor, paced travel, release and final resting point.
+    /// One drag owns its anchor, paced travel and release. What is dragged
+    /// moves with the pointer from the press, so the pointer travels from
+    /// `from` to `to` and releases there.
     async fn drag(&mut self, from: Point, to: Point, button: Button) -> Result<()> {
         self.step(PointerPhase::Down, from, button).await?;
 
         self.delay(DRAG_HOLD).await?;
-        // What is dragged follows the pointer from the first moved
-        // step (see the move phase), so the pointer travels that
-        // step past the target, releases there, and then rests on
-        // the target: the window or item moves exactly as asked.
-        let first = first_step(from, to);
-        let anchor = shifted(from, first);
-        let end = self.on_display(shifted(to, first));
+        let anchor = shifted(from, first_step(from, to));
 
         self.step(PointerPhase::Move, anchor, button).await?;
         self.delay(DRAG_START).await?;
 
         for step in 1..=DRAG_STEPS {
-            let t = f64::from(step) / f64::from(DRAG_STEPS);
+            // Measured back from `to`, so the last step lands on it exactly.
+            let rest = f64::from(DRAG_STEPS - step) / f64::from(DRAG_STEPS);
             let point = Point {
-                x: anchor.x + (end.x - anchor.x) * t,
-                y: anchor.y + (end.y - anchor.y) * t,
+                x: to.x - (to.x - anchor.x) * rest,
+                y: to.y - (to.y - anchor.y) * rest,
             };
             self.step(PointerPhase::Move, point, button).await?;
             self.delay(DRAG_STEP).await?;
         }
 
-        self.step(PointerPhase::Up, end, button).await?;
-        self.step(PointerPhase::Move, to, button).await
+        self.step(PointerPhase::Up, to, button).await
     }
 
     pub(super) async fn perform(&mut self, action: Action) -> Result<()> {
@@ -669,7 +700,7 @@ impl Engine {
                 // A wheel's positive turn scrolls up and left; the command's
                 // positive lines scroll down and right, as documented.
                 let event = created(CGEvent::new_scroll_wheel_event2(
-                    Some(self.source.get()),
+                    self.source.get(),
                     CGScrollEventUnit::Line,
                     2,
                     -dy,

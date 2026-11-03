@@ -49,6 +49,11 @@ impl Journal {
 
         Ok(())
     }
+
+    #[cfg(test)]
+    pub(super) fn saved(&self) -> Option<&Held> {
+        self.saved.as_ref()
+    }
 }
 
 /// The input a crashed service left held in this login, if any. A journal
