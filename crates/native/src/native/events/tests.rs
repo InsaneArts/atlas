@@ -104,8 +104,9 @@ fn posts(seen: &[tap::Seen]) -> Vec<tap::Posted> {
         .collect()
 }
 
-/// A drag presses at its source, travels no further than its destination,
-/// and releases there, recording what is held before every event.
+/// A drag presses at its source, starts dragging there without moving,
+/// travels no further than its destination and releases there, recording
+/// what is held before every event.
 #[tokio::test(start_paused = true)]
 async fn a_complete_drag_releases_at_its_requested_destination() {
     let (moved, down, dragged, up) = (
@@ -154,6 +155,12 @@ async fn a_complete_drag_releases_at_its_requested_destination() {
             (down, from),
             "{case}: presses there"
         );
+        assert_eq!(
+            (posts[2].kind, at(&posts[2]), posts[2].dx, posts[2].dy),
+            (dragged, from, 0, 0),
+            "{case}: the first drag stays on the source"
+        );
+        assert_eq!(posts.len(), 4 + DRAG_STEPS as usize, "{case}: event count");
         let release = posts.iter().position(|posted| posted.kind == up).unwrap();
         assert_eq!(
             at(&posts[release]),
@@ -198,7 +205,7 @@ async fn a_complete_drag_releases_at_its_requested_destination() {
                 "{case}: each delta is the move since the last event"
             );
         }
-        let travelled = gesture[1..]
+        let travelled = gesture[2..]
             .iter()
             .fold((0, 0), |(x, y), posted| (x + posted.dx, y + posted.dy));
         assert_eq!(
@@ -207,7 +214,7 @@ async fn a_complete_drag_releases_at_its_requested_destination() {
                 (to.0.round() - from.0.round()) as i64,
                 (to.1.round() - from.1.round()) as i64,
             ),
-            "{case}: travels exactly the requested distance"
+            "{case}: travels exactly the requested distance after the first drag"
         );
 
         for (index, event) in seen.iter().enumerate() {

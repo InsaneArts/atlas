@@ -629,24 +629,25 @@ impl Engine {
         self.pointer(phase, point, button, &[], 1).await
     }
 
-    /// One drag owns its anchor, paced travel and release. What is dragged
-    /// moves with the pointer from the press, so the pointer travels from
+    /// One drag owns its anchor, paced travel and release. A native window
+    /// move is anchored at the first dragged event, not at the press, so that
+    /// event stays on `from` without moving; the pointer then travels from
     /// `from` to `to` and releases there.
     async fn drag(&mut self, from: Point, to: Point, button: Button) -> Result<()> {
         self.step(PointerPhase::Down, from, button).await?;
 
         self.delay(DRAG_HOLD).await?;
-        let anchor = shifted(from, first_step(from, to));
-
-        self.step(PointerPhase::Move, anchor, button).await?;
+        self.step(PointerPhase::Move, from, button).await?;
+        // The drag has its anchor: no one-point first step follows.
+        self.drag_started = true;
         self.delay(DRAG_START).await?;
 
         for step in 1..=DRAG_STEPS {
             // Measured back from `to`, so the last step lands on it exactly.
             let rest = f64::from(DRAG_STEPS - step) / f64::from(DRAG_STEPS);
             let point = Point {
-                x: to.x - (to.x - anchor.x) * rest,
-                y: to.y - (to.y - anchor.y) * rest,
+                x: to.x - (to.x - from.x) * rest,
+                y: to.y - (to.y - from.y) * rest,
             };
             self.step(PointerPhase::Move, point, button).await?;
             self.delay(DRAG_STEP).await?;
