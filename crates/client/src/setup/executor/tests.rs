@@ -176,12 +176,15 @@ fn an_executor_failure_includes_its_final_error_output() {
         ),
     ];
     for (case, mut rest) in endings {
-        // The diagnostic is held until the report already waits for it.
+        // The diagnostic is held until the report waits at its receive.
         let (release, held) = std::sync::mpsc::channel();
-        let (reporting, reported) = std::sync::mpsc::channel::<()>();
+        let (waiting, waits) = std::sync::mpsc::channel();
         let releaser = std::thread::spawn(move || {
-            reported.recv().unwrap();
-            release.send(()).unwrap();
+            let waited = waits.recv().is_ok();
+            if waited {
+                release.send(()).unwrap();
+            }
+            waited
         });
         rest.push_front(Ok(SAID));
         let mut released = false;
@@ -194,14 +197,16 @@ fn an_executor_failure_includes_its_final_error_output() {
             }
             step(&mut rest, chunk)
         });
-        reporting.send(()).unwrap();
+        complaints.waiting = Some(waiting);
         let said = summary(
             "",
             &mut complaints,
             b"se cret",
             Instant::now() + Duration::from_secs(10),
         );
-        releaser.join().unwrap();
+        // A report that never waited drops the only way to release it.
+        drop(complaints);
+        assert!(releaser.join().unwrap(), "the report waits: {case}");
         assert_eq!(said, "sudo: a  diagnostic", "{case}");
     }
 

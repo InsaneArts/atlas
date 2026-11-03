@@ -483,6 +483,9 @@ pub struct Forward {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     reader: Option<std::thread::JoinHandle<()>>,
     ended: Option<Option<std::io::ErrorKind>>,
+    /// Told each time a caller is about to wait for the stream.
+    #[cfg(test)]
+    waiting: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Forward {
@@ -521,6 +524,8 @@ impl Forward {
             stop,
             reader: Some(reader),
             ended: None,
+            #[cfg(test)]
+            waiting: None,
         }
     }
 
@@ -530,6 +535,13 @@ impl Forward {
         use std::sync::mpsc::RecvTimeoutError;
         if let Some(ended) = self.ended {
             return ended.map_or(Said::Ended, |kind| Said::Failed(kind.into()));
+        }
+        #[cfg(test)]
+        if !wait.is_zero()
+            && let Some(waiting) = &self.waiting
+        {
+            // A test that stopped listening no longer orders anything.
+            let _ = waiting.send(());
         }
         let said = match self.receiver.recv_timeout(wait) {
             Ok(said) => said,
