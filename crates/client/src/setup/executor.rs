@@ -111,19 +111,35 @@ pub fn finish_executor(
 /// never writes the secret back; only what sysadminctl wrote before the
 /// first step's line could hold it, and it is cut out there.
 pub(crate) fn converse_until(
-    mut stream: UnixStream,
+    stream: UnixStream,
     secret: Option<&[u8]>,
     deadline: Instant,
 ) -> (bool, Result<String, Refusal>) {
-    let (secret, answers) = secret.map_or((&[][..], 0), |secret| (secret, MAX_ANSWERS));
     let channel = match stream.try_clone() {
         Ok(channel) => channel,
         Err(error) => return (false, Err(Refusal::Failed(error.to_string()))),
     };
-    let receiver = forward(channel);
+    converse(stream, forward(channel), secret, deadline)
+}
+
+fn converse(
+    mut input: impl Write,
+    mut output: Forward,
+    secret: Option<&[u8]>,
+    deadline: Instant,
+) -> (bool, Result<String, Refusal>) {
+    let (secret, answers) = secret.map_or((&[][..], 0), |secret| (secret, MAX_ANSWERS));
     let mut seen = Vec::new();
-    let answered = answer(&mut stream, &receiver, secret, answers, deadline, &mut seen);
-    drop(stream);
+    let answered = answer(
+        &mut input,
+        &mut output,
+        secret,
+        answers,
+        deadline,
+        &mut seen,
+    );
+    drop(input);
+    drop(output);
 
     let marked = seen
         .windows(MARK.len())
@@ -138,6 +154,10 @@ pub(crate) fn converse_until(
     let finished = answered.is_ok();
     let said = match answered {
         Ok(()) => Ok(text),
+        // What the step said may be cut short, whatever it said so far.
+        Err(Unanswered::Unread(_)) => Err(Refusal::Failed(
+            "Atlas could not read the approved step's reply; the step may still finish".into(),
+        )),
         // A step that stopped early (refusing the account, say) closed its
         // channel before the password went in: its own line says why.
         Err(_) if text.contains(MARK) => Ok(text),
@@ -289,24 +309,33 @@ pub fn answer_prompts(
         .take()
         .ok_or_else(|| problem("No error pipe"))?;
 
-    let receiver = forward(output);
+    let mut receiver = forward(output);
     // Drained as it comes, so a chatty program never blocks on it.
-    let complaints = forward(errors);
+    let mut complaints = forward(errors);
+    let deadline = Instant::now() + patience;
     let mut seen = Vec::new();
     let answered = answer(
         &mut input,
-        &receiver,
+        &mut receiver,
         secret,
         MAX_ANSWERS,
-        Instant::now() + patience,
+        deadline,
         &mut seen,
     );
-    if let Err(error) = answered {
+    if let Err(unanswered) = answered {
         let _ = child.kill();
         let _ = child.wait();
         wait_until_ended(executor);
         seen.fill(0);
-        return Err(error);
+        return Err(match unanswered {
+            Unanswered::Unread(error) => {
+                problem("Atlas could not read what the program said; it may have acted")
+                    .uncertain()
+                    .with_source(error)
+            }
+            Unanswered::Closed(error) => error.into(),
+            Unanswered::Late => problem("The step took too long and was stopped"),
+        });
     }
 
     drop(input);
@@ -322,14 +351,39 @@ pub fn answer_prompts(
         return Ok(text);
     }
 
-    let complained: Vec<u8> = complaints.try_iter().flatten().collect();
-    let complained = String::from_utf8_lossy(&without(&complained, secret)).into_owned();
-    let summary = last_words(&text)
-        .or_else(|| last_words(&complained))
-        .unwrap_or_default()
-        .to_owned();
+    Err(problem(summary(&text, &mut complaints, secret, deadline)))
+}
 
-    Err(problem(summary))
+/// A failed program's last words: those of its output, or else of its error
+/// output, read to its end or until `deadline`, with `secret` cut out.
+fn summary(text: &str, complaints: &mut Forward, secret: &[u8], deadline: Instant) -> String {
+    if let Some(said) = last_words(text) {
+        return said.to_owned();
+    }
+    let mut complained = Vec::new();
+    loop {
+        let wait = deadline.saturating_duration_since(Instant::now()).min(LOOK);
+        match complaints.next(wait) {
+            Said::Bytes(bytes) => complained.extend(bytes),
+            Said::Nothing if Instant::now() < deadline => {}
+            Said::Nothing | Said::Ended | Said::Failed(_) => break,
+        }
+    }
+    let kept = without(&complained, secret);
+    complained.fill(0);
+    let complained = String::from_utf8_lossy(&kept).into_owned();
+    last_words(&complained).unwrap_or_default().to_owned()
+}
+
+/// Why a conversation with a program ended before its output did.
+#[derive(Debug)]
+enum Unanswered {
+    /// Its output could not be read, so what it said may be incomplete.
+    Unread(std::io::Error),
+    /// Its input closed before an answer went in.
+    Closed(std::io::Error),
+    /// The deadline passed.
+    Late,
 }
 
 /// Read what a program writes until it stops (its output closes) or
@@ -338,19 +392,20 @@ pub fn answer_prompts(
 /// `answers` times.
 fn answer(
     input: &mut impl Write,
-    receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
+    output: &mut Forward,
     secret: &[u8],
     answers: usize,
     deadline: Instant,
     seen: &mut Vec<u8>,
-) -> AtlasResult<()> {
+) -> Result<(), Unanswered> {
     let mut answered = 0;
 
     loop {
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(bytes) => seen.extend(bytes),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+        match output.next(LOOK) {
+            Said::Bytes(bytes) => seen.extend(bytes),
+            Said::Nothing => {}
+            Said::Ended => return Ok(()),
+            Said::Failed(error) => return Err(Unanswered::Unread(error)),
         }
 
         // A question ends without a newline: "User password:".
@@ -365,12 +420,13 @@ fn answer(
             input
                 .write_all(secret)
                 .and_then(|()| input.write_all(b"\n"))
-                .and_then(|()| input.flush())?;
+                .and_then(|()| input.flush())
+                .map_err(Unanswered::Closed)?;
             answered += 1;
         }
 
         if Instant::now() >= deadline {
-            return Err(problem("The step took too long and was stopped"));
+            return Err(Unanswered::Late);
         }
     }
 }
@@ -402,20 +458,123 @@ pub fn without(bytes: &[u8], secret: &[u8]) -> Vec<u8> {
     kept
 }
 
-/// Read `stream` on a thread of its own, passing each chunk on as it
-/// arrives; the channel closes when the stream ends.
-pub fn forward(mut stream: impl Read + Send + 'static) -> std::sync::mpsc::Receiver<Vec<u8>> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut chunk = [0u8; 4096];
-        while let Ok(read @ 1..) = stream.read(&mut chunk) {
-            if sender.send(chunk[..read].to_vec()).is_err() {
-                break;
-            }
-        }
-    });
+/// How long one wait for output lasts before its reader or caller looks
+/// again.
+const LOOK: Duration = Duration::from_millis(100);
 
-    receiver
+/// What a forwarded stream said next.
+#[derive(Debug)]
+pub enum Said {
+    /// More of its bytes.
+    Bytes(Vec<u8>),
+    /// Nothing within the wait.
+    Nothing,
+    /// It closed: everything it wrote has been passed on.
+    Ended,
+    /// Reading it failed, so what it wrote may be incomplete.
+    Failed(std::io::Error),
+}
+
+/// A stream read on a thread of its own, which passes each chunk on as it
+/// arrives and then says how the stream ended. Dropping it stops and joins
+/// the reader, which never blocks longer than one wait.
+pub struct Forward {
+    receiver: std::sync::mpsc::Receiver<Said>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    reader: Option<std::thread::JoinHandle<()>>,
+    ended: Option<Option<std::io::ErrorKind>>,
+}
+
+impl Forward {
+    /// Read with `read`, which waits at most [`LOOK`] and returns `None`
+    /// when nothing arrived; zero bytes is the stream's end.
+    fn with(
+        mut read: impl FnMut(&mut [u8]) -> std::io::Result<Option<usize>> + Send + 'static,
+    ) -> Self {
+        use std::sync::{Arc, atomic::AtomicBool, atomic::Ordering};
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let reader = std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            let end = loop {
+                if stopped.load(Ordering::Relaxed) {
+                    return;
+                }
+                match read(&mut chunk) {
+                    Ok(None) => {}
+                    Ok(Some(0)) => break Said::Ended,
+                    Ok(Some(read)) => {
+                        if sender.send(Said::Bytes(chunk[..read].to_vec())).is_err() {
+                            return;
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => break Said::Failed(error),
+                }
+            };
+            // A caller that went away no longer waits for the end.
+            let _ = sender.send(end);
+        });
+        Self {
+            receiver,
+            stop,
+            reader: Some(reader),
+            ended: None,
+        }
+    }
+
+    /// What the stream said next, waiting at most `wait`. Once it ended,
+    /// every later call says how again.
+    pub fn next(&mut self, wait: Duration) -> Said {
+        use std::sync::mpsc::RecvTimeoutError;
+        if let Some(ended) = self.ended {
+            return ended.map_or(Said::Ended, |kind| Said::Failed(kind.into()));
+        }
+        let said = match self.receiver.recv_timeout(wait) {
+            Ok(said) => said,
+            Err(RecvTimeoutError::Timeout) => Said::Nothing,
+            Err(RecvTimeoutError::Disconnected) => {
+                Said::Failed(std::io::Error::other("the output reader stopped"))
+            }
+        };
+        match &said {
+            Said::Ended => self.ended = Some(None),
+            Said::Failed(error) => self.ended = Some(Some(error.kind())),
+            Said::Bytes(_) | Said::Nothing => {}
+        }
+        said
+    }
+}
+
+impl Drop for Forward {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(reader) = self.reader.take() {
+            // A panicked reader already reads as a failed stream.
+            let _ = reader.join();
+        }
+    }
+}
+
+/// Read `stream` on a thread of its own: see [`Forward`]. Interrupted reads
+/// are retried; any other read failure is reported, never taken for its end.
+pub fn forward(mut stream: impl Read + std::os::fd::AsFd + Send + 'static) -> Forward {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    let wait = PollTimeout::try_from(LOOK).unwrap_or(PollTimeout::MAX);
+    Forward::with(move |chunk| {
+        let mut ready = [PollFd::new(stream.as_fd(), PollFlags::POLLIN)];
+        match poll(&mut ready, wait) {
+            Ok(0) | Err(nix::errno::Errno::EINTR) => return Ok(None),
+            Ok(_) => {}
+            Err(errno) => return Err(errno.into()),
+        }
+        match stream.read(chunk) {
+            Ok(read) => Ok(Some(read)),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error),
+        }
+    })
 }
 
 /// Like `attended`, but timestamped log lines on standard error (as
@@ -437,7 +596,7 @@ pub fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResul
         .stderr
         .take()
         .ok_or_else(|| super::account::problem("The command has no error output"))?;
-    let receiver = forward(stream);
+    let mut receiver = forward(stream);
 
     let log_line = |bytes: &[u8]| {
         // "2026-10-11 14:28:19.767 sysadminctl[…]": a date, then a time.
@@ -452,9 +611,9 @@ pub fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResul
     let mut pending = Vec::new();
     let mut terminal = std::io::stderr();
 
-    loop {
-        match receiver.recv_timeout(Duration::from_millis(250)) {
-            Ok(bytes) => {
+    let unread = loop {
+        match receiver.next(Duration::from_millis(250)) {
+            Said::Bytes(bytes) => {
                 pending.extend(bytes);
 
                 while let Some(end) = pending.iter().position(|&byte| byte == b'\n') {
@@ -467,16 +626,18 @@ pub fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResul
                 }
             }
             // A question waits for an answer without ending its line.
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Said::Nothing => {
                 if !pending.is_empty() && !log_line(&pending) {
                     let _ = terminal.write_all(&pending);
                     let _ = terminal.flush();
                     pending.clear();
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Said::Ended => break None,
+            Said::Failed(error) => break Some(error),
         }
-    }
+    };
+    drop(receiver);
 
     let status = child.wait()?;
     let output = output
@@ -484,7 +645,14 @@ pub fn quietly_attended(mut child: std::process::Child, why: &str) -> AtlasResul
         .transpose()?
         .unwrap_or_default();
     if status.success() {
-        return Ok(());
+        // What the command said may have been cut short, a question included.
+        return unread.map_or(Ok(()), |error| {
+            Err(
+                super::account::problem("Atlas could not read what the command said")
+                    .uncertain()
+                    .with_source(error),
+            )
+        });
     }
 
     let _ = terminal.write_all(&dropped);

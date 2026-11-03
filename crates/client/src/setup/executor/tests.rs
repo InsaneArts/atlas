@@ -2,7 +2,7 @@ use super::*;
 #[test]
 fn quiet_commands_hide_log_lines_and_keep_their_outcome() {
     use atlas_core::test_support::{TestChild, message, rerun};
-    use std::{process::Stdio, sync::mpsc::RecvTimeoutError};
+    use std::process::Stdio;
 
     const NAME: &str =
         "setup::executor::tests::quiet_commands_hide_log_lines_and_keep_their_outcome";
@@ -40,11 +40,14 @@ fn quiet_commands_hide_log_lines_and_keep_their_outcome() {
                 .arg("--nocapture")
                 .env("ATLAS_QUIET_COMMAND_FIXTURE", status),
         );
-        let receiver = forward(child.process.stderr.take().unwrap());
+        let mut receiver = forward(child.process.stderr.take().unwrap());
         child.expect("quiet command started");
         let mut seen = Vec::new();
         while seen.len() < PROMPT.len() {
-            seen.extend(receiver.recv_timeout(Duration::from_secs(10)).unwrap());
+            match receiver.next(Duration::from_secs(10)) {
+                Said::Bytes(bytes) => seen.extend(bytes),
+                said => panic!("the partial prompt never arrived: {said:?}"),
+            }
         }
         assert_eq!(
             seen,
@@ -55,12 +58,10 @@ fn quiet_commands_hide_log_lines_and_keep_their_outcome() {
         child.expect("quiet command ended");
         assert!(child.wait().success());
         loop {
-            match receiver.recv_timeout(Duration::from_secs(10)) {
-                Ok(bytes) => seen.extend(bytes),
-                Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => {
-                    panic!("the owned stderr reader did not finish")
-                }
+            match receiver.next(Duration::from_secs(10)) {
+                Said::Bytes(bytes) => seen.extend(bytes),
+                Said::Ended => break,
+                said => panic!("the owned stderr reader did not finish: {said:?}"),
             }
         }
         let expected = if status == "0" {
@@ -70,4 +71,151 @@ fn quiet_commands_hide_log_lines_and_keep_their_outcome() {
         };
         assert_eq!(seen, expected.as_bytes(), "status {status}");
     }
+}
+
+type Steps = std::collections::VecDeque<std::io::Result<&'static [u8]>>;
+
+/// Say the next of `steps`, or end once there are none.
+fn step(steps: &mut Steps, chunk: &mut [u8]) -> std::io::Result<Option<usize>> {
+    match steps.pop_front() {
+        Some(Ok(bytes)) => {
+            chunk[..bytes.len()].copy_from_slice(bytes);
+            Ok(Some(bytes.len()))
+        }
+        Some(Err(error)) => Err(error),
+        None => Ok(Some(0)),
+    }
+}
+
+/// A stream that says each of `steps` in turn, then ends.
+fn scripted(steps: Vec<std::io::Result<&'static [u8]>>) -> Forward {
+    let mut steps = Steps::from(steps);
+    Forward::with(move |chunk| step(&mut steps, chunk))
+}
+
+/// Input whose reader has gone, as a step that stopped early leaves it.
+struct Gone;
+
+impl Write for Gone {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::ErrorKind::BrokenPipe.into())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::BrokenPipe.into())
+    }
+}
+
+#[test]
+fn a_read_failure_after_an_executor_marker_is_not_a_completed_reply() {
+    const REFUSED: &[u8] = b"@atlas error refused\n";
+    let lost = || Err(std::io::Error::other("the channel failed"));
+    let interrupted = || Err(std::io::ErrorKind::Interrupted.into());
+    let deadline = || Instant::now() + Duration::from_secs(10);
+
+    let mut seen = Vec::new();
+    let answered = answer(
+        &mut Vec::new(),
+        &mut scripted(vec![Ok(REFUSED), lost()]),
+        b"",
+        0,
+        deadline(),
+        &mut seen,
+    );
+    assert_eq!(seen, REFUSED);
+    assert!(
+        matches!(answered, Err(Unanswered::Unread(_))),
+        "a read failure is not the end of output: {answered:?}"
+    );
+
+    let (finished, said) = converse(
+        Vec::new(),
+        scripted(vec![Ok(REFUSED), lost()]),
+        Some(b"secret"),
+        deadline(),
+    );
+    assert!(!finished);
+    assert!(said.is_err(), "a marker never masks a read failure");
+
+    let (finished, said) = converse(
+        Vec::new(),
+        scripted(vec![interrupted(), Ok(REFUSED), interrupted()]),
+        Some(b"secret"),
+        deadline(),
+    );
+    assert!(finished, "interrupted reads are retried");
+    assert_eq!(said.unwrap().as_bytes(), REFUSED);
+
+    // A step that refused before its password went in closed its channel;
+    // its own line still says why.
+    let (finished, said) = converse(
+        Gone,
+        scripted(vec![Ok(b"@atlas error refused\nUser password:")]),
+        Some(b"secret"),
+        deadline(),
+    );
+    assert!(!finished);
+    assert_eq!(said.unwrap(), "@atlas error refused\nUser password:");
+}
+
+#[test]
+fn an_executor_failure_includes_its_final_error_output() {
+    const SAID: &[u8] = b"sudo: a se cret diagnostic\n";
+    let endings: [(&str, Steps); 3] = [
+        ("a clean end", Steps::new()),
+        (
+            "interrupted reads",
+            Steps::from([
+                Err(std::io::ErrorKind::Interrupted.into()),
+                Err(std::io::ErrorKind::Interrupted.into()),
+            ]),
+        ),
+        (
+            "a failed read",
+            Steps::from([Err(std::io::Error::other("the pipe failed"))]),
+        ),
+    ];
+    for (case, mut rest) in endings {
+        // The diagnostic is held until the report already waits for it.
+        let (release, held) = std::sync::mpsc::channel();
+        let (reporting, reported) = std::sync::mpsc::channel::<()>();
+        let releaser = std::thread::spawn(move || {
+            reported.recv().unwrap();
+            release.send(()).unwrap();
+        });
+        rest.push_front(Ok(SAID));
+        let mut released = false;
+        let mut complaints = Forward::with(move |chunk| {
+            if !released {
+                if held.recv_timeout(LOOK).is_err() {
+                    return Ok(None);
+                }
+                released = true;
+            }
+            step(&mut rest, chunk)
+        });
+        reporting.send(()).unwrap();
+        let said = summary(
+            "",
+            &mut complaints,
+            b"se cret",
+            Instant::now() + Duration::from_secs(10),
+        );
+        releaser.join().unwrap();
+        assert_eq!(said, "sudo: a  diagnostic", "{case}");
+    }
+
+    // A program's own last words need no error output.
+    let mut silent = Forward::with(|_| Ok(None));
+    let said = summary(
+        "sysadminctl: refused\n",
+        &mut silent,
+        b"",
+        Instant::now() + Duration::from_secs(10),
+    );
+    assert_eq!(said, "sysadminctl: refused");
+
+    // Error output that never ends is read only until the deadline.
+    let mut endless = Forward::with(|_| Ok(None));
+    assert_eq!(summary("", &mut endless, b"", Instant::now()), "");
 }
