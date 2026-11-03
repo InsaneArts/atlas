@@ -25,7 +25,7 @@ use std::{
     fs::OpenOptions,
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     sync::Arc,
     time::Duration,
 };
@@ -51,6 +51,22 @@ pub(super) struct Prepared {
     home: Option<PathBuf>,
     lifetime: u64,
     log: PathBuf,
+}
+
+/// Why a launcher could not be recorded, with its record when its identity
+/// was read and only writing it failed.
+struct Unrecorded {
+    error: Error,
+    observed: Option<Box<Record>>,
+}
+
+impl From<Error> for Unrecorded {
+    fn from(error: Error) -> Self {
+        Self {
+            error,
+            observed: None,
+        }
+    }
 }
 
 /// Why a launch failed, and whether the launcher had made its own session
@@ -150,11 +166,15 @@ impl Jobs {
 
         let record = match self.record_launched(&record, &child).await {
             Ok(record) => record,
-            Err(error) if error.code == Code::SpawnFailed => {
-                end_launcher(&mut child).await;
-                return self.forgotten(&record, error.error).await;
+            Err(Unrecorded { error, observed }) if error.code == Code::SpawnFailed => {
+                if self.end_launcher(&mut child).await {
+                    return self.forgotten(&record, error.error).await;
+                }
+                return self
+                    .keep_unrecorded(record, observed, child, error.error)
+                    .await;
             }
-            Err(error) => {
+            Err(Unrecorded { error, .. }) => {
                 self.retain_unobserved_child(record.id.clone(), child);
                 return unconfirmed(&record, &error.error);
             }
@@ -202,8 +222,13 @@ impl Jobs {
     }
 
     /// `record` as launched by `child`, its process's identity read and
-    /// written, or an error when it could not be read or recorded.
-    async fn record_launched(self: &Arc<Self>, record: &Record, child: &Child) -> Result<Record> {
+    /// written, or why it could not be read or recorded, with the record
+    /// once its identity was read.
+    async fn record_launched(
+        self: &Arc<Self>,
+        record: &Record,
+        child: &Child,
+    ) -> std::result::Result<Record, Unrecorded> {
         // Read while it is this daemon's unreaped child, so it is exact. The
         // launcher waits on its standard input until its record says so: a
         // daemon that ends before then leaves nothing running.
@@ -226,17 +251,44 @@ impl Jobs {
             launched_record.pgid = Some(pid);
             launched_record.state = JobState::Launched;
             launched_record.identity().ok_or_else(refused)?;
-            state
-                .store
-                .write(&launched_record)
-                .map_err(|error| refused().with_source(error))?;
-            Ok(launched_record)
+            match state.store.write(&launched_record) {
+                Ok(()) => Ok(launched_record),
+                Err(error) => Err(Unrecorded {
+                    error: refused().with_source(error),
+                    observed: Some(Box::new(launched_record)),
+                }),
+            }
         })
         .await
         .map_err(|error| {
             self.fail_supervision();
             Self::unavailable().with_source(error)
         })?
+    }
+
+    /// Keep a launcher that could not be recorded and may not have been
+    /// reaped, and reply that its outcome is not known: by the record its
+    /// observed identity gives, held in memory when it cannot be written,
+    /// or as a child whose identity was never observed.
+    async fn keep_unrecorded(
+        self: &Arc<Self>,
+        record: Record,
+        observed: Option<Box<Record>>,
+        child: Child,
+        said: String,
+    ) -> Value {
+        let Some(observed) = observed else {
+            self.retain_unobserved_child(record.id.clone(), child);
+            return unconfirmed(&record, &said);
+        };
+        let jobs = self.clone();
+        self.launch_reply(
+            tokio::task::spawn_blocking(move || match jobs.holding(&observed.id, child) {
+                Ok(mut state) => keep_running(&mut state, *observed, &said),
+                Err(error) => unconfirmed(&observed, &error.error),
+            })
+            .await,
+        )
     }
 
     /// End a launch that failed with `said`, and reply. `setsid` says
@@ -256,7 +308,7 @@ impl Jobs {
             // Before its session of its own the launcher is this
             // daemon's child alone, still waiting or exiting: ending it
             // by its own PID is certain, and nothing else ran.
-            if end_launcher(&mut child).await {
+            if self.end_launcher(&mut child).await {
                 return self.forgotten(&record, said).await;
             }
             let jobs = self.clone();
@@ -412,11 +464,43 @@ impl Jobs {
     }
 }
 
-/// Kill a launcher that is this daemon's child alone: whether waiting for it
-/// came to an end in time.
-async fn end_launcher(child: &mut Child) -> bool {
-    let _ = child.start_kill();
-    tokio::time::timeout(REAP, child.wait()).await.is_ok()
+/// How waiting for a launcher goes wrong in a test.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(super) enum WaitFault {
+    /// Waiting returns an error.
+    Fails,
+    /// Waiting never comes to an end.
+    Hangs,
+}
+
+impl Jobs {
+    /// Kill a launcher that is this daemon's child alone: whether waiting for
+    /// it returned its exit status in time. A wait that fails or runs out
+    /// proves nothing about the launcher, which then stays this daemon's.
+    async fn end_launcher(&self, child: &mut Child) -> bool {
+        let _ = child.start_kill();
+        matches!(
+            tokio::time::timeout(REAP, self.wait_launcher(child)).await,
+            Ok(Ok(_))
+        )
+    }
+
+    async fn wait_launcher(&self, child: &mut Child) -> std::io::Result<ExitStatus> {
+        #[cfg(test)]
+        {
+            let fault = *self
+                .wait_fault
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match fault {
+                Some(WaitFault::Fails) => return Err(std::io::Error::other("wait failed")),
+                Some(WaitFault::Hangs) => return std::future::pending().await,
+                None => {}
+            }
+        }
+        child.wait().await
+    }
 }
 
 /// Refuse a start past the limit on jobs running, in the helper or for `task`.

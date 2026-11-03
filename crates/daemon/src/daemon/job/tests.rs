@@ -1437,6 +1437,103 @@ async fn an_unwritable_launch_record_does_not_disable_supervision() {
     assert!(table.signals().is_empty());
 }
 
+/// Jobs whose launcher is `script`, with a start of `/usr/bin/true` for it.
+fn launching(script: &str) -> (tempfile::TempDir, Arc<Jobs>, Arc<Table>, JobStart) {
+    use std::os::unix::fs::PermissionsExt;
+    let table = Table::with(vec![leader()]);
+    let (folder, mut jobs) = jobs_with(&record(), &table);
+    let launcher = folder.path().join("launcher");
+    std::fs::write(&launcher, script).unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    jobs.launcher = launcher;
+    let start = JobStart {
+        argv: vec!["/usr/bin/true".into()],
+        lifetime: Duration::from_secs(60),
+        name: None,
+        task: None,
+        session: None,
+    };
+    (folder, Arc::new(jobs), table, start)
+}
+
+/// A launcher that reads its go and ends before it makes a session of its own.
+const ENDS_BEFORE_SETSID: &str = "#!/bin/sh\nread -r -t 20 go\n";
+
+#[tokio::test]
+async fn a_launcher_whose_wait_fails_remains_owned_and_unconfirmed() {
+    let (folder, jobs, table, start) = launching(ENDS_BEFORE_SETSID);
+    let prepared = jobs.prepare(&start).unwrap();
+    let id = prepared.record.id.clone();
+    let log = folder.path().join(format!("jobs/{id}.log"));
+    *jobs.wait_fault.lock().unwrap() = Some(launch::WaitFault::Fails);
+    let reply = jobs.launch(prepared, &start).await;
+    assert_eq!(reply["uncertain"], true, "{reply}");
+    assert_eq!(reply["reason"], "unconfirmed", "{reply}");
+    assert_eq!(reply["job"]["id"], id.as_str());
+    let mut child = {
+        let mut state = jobs.state().unwrap();
+        assert!(matches!(state.store.read(&id), Some(Found::Record(_))));
+        state
+            .children
+            .remove(&id)
+            .expect("the launcher stays owned")
+    };
+    assert!(log.exists());
+    assert!(table.signals().is_empty());
+    child.wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_launcher_is_retained_when_cleanup_times_out_after_its_record_write_fails() {
+    let (folder, jobs, table, start) = launching(ENDS_BEFORE_SETSID);
+    let prepared = jobs.prepare(&start).unwrap();
+    let id = prepared.record.id.clone();
+    let path = folder.path().join(format!("jobs/{id}.json"));
+    let log = folder.path().join(format!("jobs/{id}.log"));
+    std::fs::create_dir(path.with_extension("json.partial")).unwrap();
+    *jobs.wait_fault.lock().unwrap() = Some(launch::WaitFault::Hangs);
+    // Waiting never ends, so only the reap limit ends it; paused time lets
+    // that limit pass once nothing else is left to do.
+    tokio::time::pause();
+    let reply = jobs.launch(prepared, &start).await;
+    tokio::time::resume();
+    assert_eq!(reply["uncertain"], true, "{reply}");
+    assert_eq!(reply["reason"], "unconfirmed", "{reply}");
+    let mut child = {
+        let mut state = jobs.state().unwrap();
+        let Some(Found::Record(kept)) = state.store.read(&id) else {
+            panic!("the launcher's record was lost");
+        };
+        let child = state
+            .children
+            .remove(&id)
+            .expect("the launcher stays owned");
+        assert_eq!(kept.pid, child.id().map(|pid| i32::try_from(pid).unwrap()));
+        child
+    };
+    assert_eq!(reply["job"]["pid"], json!(child.id()));
+    assert!(log.exists());
+    assert!(table.signals().is_empty());
+    tokio::time::timeout(Duration::from_secs(10), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_launcher_is_forgotten_only_after_waiting_returns_its_exit_status() {
+    let (folder, jobs, table, start) = launching(ENDS_BEFORE_SETSID);
+    let prepared = jobs.prepare(&start).unwrap();
+    let id = prepared.record.id.clone();
+    let reply = jobs.launch(prepared, &start).await;
+    assert_eq!(reply["code"], "spawn-failed", "{reply}");
+    assert_eq!(reply["uncertain"], false, "{reply}");
+    assert!(!folder.path().join(format!("jobs/{id}.json")).exists());
+    assert!(!folder.path().join(format!("jobs/{id}.log")).exists());
+    assert!(jobs.state().unwrap().children.is_empty());
+    assert!(table.signals().is_empty());
+}
+
 #[tokio::test]
 async fn a_panicked_launch_confirmation_retains_the_launched_child() {
     use std::os::unix::fs::PermissionsExt;

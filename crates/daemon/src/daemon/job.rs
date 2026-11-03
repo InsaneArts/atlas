@@ -102,6 +102,8 @@ pub struct Jobs {
     /// Independent of poison; only a fresh supervisor can trust ownership again.
     unavailable: AtomicBool,
     state: Mutex<State>,
+    #[cfg(test)]
+    wait_fault: Mutex<Option<launch::WaitFault>>,
 }
 
 impl Jobs {
@@ -166,6 +168,8 @@ impl Jobs {
                 launching: HashSet::new(),
                 stopped_all: None,
             }),
+            #[cfg(test)]
+            wait_fault: Mutex::new(None),
         };
         jobs.adopt()?;
         Ok(jobs)
