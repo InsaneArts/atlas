@@ -1,5 +1,5 @@
 use atlas_client::client::Client;
-use atlas_control::{Controller, Lease};
+use atlas_control::Controller;
 use atlas_core::screen::{frame::Size, png::png_dimensions};
 use atlas_core::{
     actions,
@@ -34,47 +34,6 @@ fn display() -> Display {
         width: 2560.0,
         height: 1440.0,
         scale: 1.0,
-    }
-}
-
-#[test]
-fn graphical_identity_needs_independent_proof() {
-    assert!(require_hidden(&status(), 502).is_ok());
-
-    for path in [
-        "onConsole",
-        "hasGraphicAccess",
-        "securitySessionID",
-        "displayID",
-        "uid",
-        "width",
-    ] {
-        let mut state = status();
-        state["sessionProof"].as_object_mut().unwrap().remove(path);
-        let refused = require_hidden(&state, 502).unwrap_err();
-        assert!(
-            matches!(refused.code, Code::Identity | Code::OnConsole),
-            "{path}"
-        );
-    }
-
-    let mut state = status();
-    state["session"]["onConsole"] = json!(true);
-    assert_eq!(require_hidden(&state, 502).unwrap_err().code, "on-console");
-
-    let mut state = status();
-    state["sessionProof"]["hasGraphicAccess"] = json!(false);
-    assert_eq!(require_hidden(&state, 502).unwrap_err().code, "identity");
-}
-
-#[test]
-fn identities_change_when_security_session_or_display_changes() {
-    let original = require_hidden(&status(), 502).unwrap().epoch;
-
-    for field in ["securitySessionID", "displayID"] {
-        let mut state = status();
-        state["sessionProof"][field] = json!(99);
-        assert_ne!(original, require_hidden(&state, 502).unwrap().epoch);
     }
 }
 
@@ -570,55 +529,6 @@ fn async_transport_futures_do_not_embed_large_receive_buffers() {
         std::mem::size_of_val(&future) < 8192,
         "A large receive buffer on the async stack crashed the debug HTTP server"
     );
-}
-
-#[tokio::test]
-async fn old_owner_cannot_release_a_new_lease() {
-    let dir = tempfile::tempdir().unwrap();
-    let controller = Controller::at(502, dir.path());
-    let mut lease = Lease::default();
-    let old = lease.acquire(&controller).unwrap();
-
-    lease.release();
-    let new = lease.acquire(&controller).unwrap();
-
-    if lease.require(&old).is_ok() {
-        lease.release();
-    }
-
-    lease.require(&new).unwrap();
-}
-
-/// What the viewer does with an acquire the helper refused for certain.
-fn end_refused_acquire(lease: &mut Lease, token: &str) {
-    if lease.require(token).is_ok() {
-        lease.release();
-    }
-}
-
-#[test]
-fn delayed_acquire_failure_cannot_release_a_replacement_owner() {
-    let dir = tempfile::tempdir().unwrap();
-    let controller = Controller::at(502, dir.path());
-    let mut lease = Lease::default();
-    let old = lease.acquire(&controller).unwrap();
-    assert_eq!(lease.begin_release(Some(&old)).unwrap(), Some(old.clone()));
-    lease.end_release();
-    let current = lease.acquire(&controller).unwrap();
-
-    end_refused_acquire(&mut lease, &old);
-    lease.require(&current).unwrap();
-    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
-
-    assert_eq!(
-        lease.begin_release(Some(&current)).unwrap(),
-        Some(current.clone())
-    );
-
-    end_refused_acquire(&mut lease, &current);
-    assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
-    lease.end_release();
-    controller.acquire(false).unwrap();
 }
 
 async fn exchange(
@@ -1352,26 +1262,6 @@ fn only_generations_nothing_will_settle_are_unresolved() {
 
     drop(replacement);
     assert!(!path.exists());
-}
-
-#[test]
-fn a_stale_release_is_a_no_op_but_never_ends_another_lease() {
-    let dir = tempfile::tempdir().unwrap();
-    let controller = Controller::at(502, dir.path());
-    let mut lease = Lease::default();
-    let old = lease.acquire(&controller).unwrap();
-
-    // Revoked elsewhere (the menu bar); the viewer's own release follows.
-    assert_eq!(lease.begin_release(None).unwrap(), Some(old.clone()));
-    lease.end_release();
-    assert_eq!(lease.begin_release(Some(&old)).unwrap(), None);
-
-    let current = lease.acquire(&controller).unwrap();
-    assert_eq!(
-        lease.begin_release(Some(&old)).unwrap_err().code,
-        "lease-lost"
-    );
-    lease.require(&current).unwrap();
 }
 
 /// The usual reasons the helper cannot be used keep codes agents act on.

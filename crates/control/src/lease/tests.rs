@@ -255,6 +255,7 @@ fn a_refused_acquire_never_ends_a_later_owner_or_unfinished_work() {
     assert!(lease.cleaning && lease.descriptor.is_some());
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
     lease.end_release_at(now);
+    assert!(controller.acquire(false).is_ok());
     let owner = lease.acquire_at(&controller, now, || now).unwrap();
     lease.inflight = true;
     end_refused_acquire(&mut lease, &owner, now);
@@ -313,7 +314,11 @@ fn a_stale_release_never_ends_a_different_owner() {
     let now = Instant::now();
     let mut lease = Lease::default();
     let old = lease.acquire_at(&controller, now, || now).unwrap();
-    lease.begin_release_at(None, now).unwrap();
+    // Revoked elsewhere; the owner's own release follows.
+    assert_eq!(
+        lease.begin_release_at(None, now).unwrap(),
+        Some(old.clone())
+    );
     lease.end_release_at(now);
     assert_eq!(lease.begin_release_at(Some(&old), now).unwrap(), None);
     let owner = lease.acquire_at(&controller, now, || now).unwrap();
