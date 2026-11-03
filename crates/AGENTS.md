@@ -4,14 +4,14 @@ Read the repository's `AGENTS.md` first. Paths here are relative to `crates/`.
 Each folder is one layer and one package, and each package depends only on the
 layers above it in this list:
 
-| Folder    | Package         | What it holds                                                      |
-| --------- | --------------- | ------------------------------------------------------------------ |
-| `core`    | `atlas-core`    | names, errors, time, wire types, observations, install location    |
-| `native`  | `atlas-native`  | macOS calls and input execution                                    |
-| `daemon`  | `atlas-daemon`  | the helper daemon, and the helper's layout and launchd actions     |
-| `control` | `atlas-control` | exclusion, cancellation, pending mutations and viewer leases       |
-| `client`  | `atlas-client`  | the controller side: verified requests and the work built on them  |
-| `agents`  | `atlas-agents`  | connecting coding agents: plugins, project sections and the guide  |
+| Folder    | Package         | What it holds                                                       |
+| --------- | --------------- | ------------------------------------------------------------------- |
+| `core`    | `atlas-core`    | names, errors, time, wire types, observations, install location     |
+| `native`  | `atlas-native`  | macOS calls and input execution                                     |
+| `daemon`  | `atlas-daemon`  | the helper daemon, and the helper's layout and launchd actions      |
+| `control` | `atlas-control` | exclusion, cancellation, pending mutations and viewer leases        |
+| `client`  | `atlas-client`  | the controller side: verified requests and the work built on them   |
+| `agents`  | `atlas-agents`  | connecting coding agents: plugins, project sections and the guide   |
 | `cli`     | `atlas-cli`     | the `atlas` binary, viewers, MCP server, menu bar, onboarding, `ui` |
 
 Command grammar and attended interaction stay in `cli/src/bin/atlas`, release
