@@ -159,7 +159,7 @@ impl Jobs {
                 return unconfirmed(&record, &error.error);
             }
         };
-        let Some(leader) = record.identity().map(|identity| identity.leader()) else {
+        let Some(leader) = record.identity() else {
             return failure(Code::SpawnFailed, "The job's process could not be observed");
         };
 

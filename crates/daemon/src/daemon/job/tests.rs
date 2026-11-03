@@ -1,6 +1,6 @@
 use super::{
     observe::{left, observe},
-    record::{Ended, JobIdentity, Record, VERSION},
+    record::{Ended, Record, VERSION},
     reply::unconfirmed,
     verdict::{Observation, verdict},
     *,
@@ -238,7 +238,7 @@ fn processes_that_could_not_be_read_end_nothing() {
 
 #[test]
 fn a_job_identity_is_bounded_and_led_by_its_own_group() {
-    assert!(JobIdentity::new(BOOT, 4312, START, 4312).is_some());
+    assert_eq!(record().identity(), Some(Instance::new(4312, START)));
     for (pid, start, pgid) in [
         (4312, START, 4313),
         (0, START, 0),
@@ -248,12 +248,13 @@ fn a_job_identity_is_bounded_and_led_by_its_own_group() {
         (4312, [0, 1], 4312),
         (4312, [1, 1_000_000], 4312),
     ] {
-        assert!(
-            JobIdentity::new(BOOT, pid, start, pgid).is_none(),
-            "{pid} {pgid}"
-        );
+        let mut unsound = record();
+        (unsound.pid, unsound.start, unsound.pgid) = (Some(pid), Some(start), Some(pgid));
+        assert!(unsound.identity().is_none(), "{pid} {pgid}");
     }
-    assert!(JobIdentity::new("", 4312, START, 4312).is_none());
+    let mut unnamed = record();
+    unnamed.boot = String::new();
+    assert!(unnamed.identity().is_none());
 
     let mut corrupt = record();
     corrupt.pgid = Some(4400);

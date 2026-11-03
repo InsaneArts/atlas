@@ -337,8 +337,8 @@ impl Jobs {
             state.children.remove(&record.id);
         }
         let mut left_over = remaining;
-        if let (Some(processes), Some(identity)) = (processes, record.identity()) {
-            for escaped in left(&record.seen, processes, identity.pgid(), self.uid) {
+        if let (Some(processes), Some(job)) = (processes, record.identity()) {
+            for escaped in left(&record.seen, processes, job.pid, self.uid) {
                 if !left_over.iter().any(|known| known.pid == escaped.pid) {
                     left_over.push(escaped);
                 }
@@ -395,8 +395,7 @@ impl Jobs {
     /// Note `record`'s descendants among `processes`, to report later which
     /// left its group.
     fn note_seen(&self, record: &mut Record, processes: Option<&[Info]>) {
-        let leader = record.identity().map(|identity| identity.leader());
-        let (Some(processes), Some(leader)) = (processes, leader) else {
+        let (Some(processes), Some(leader)) = (processes, record.identity()) else {
             return;
         };
         observe(&mut record.seen, &leader, processes, |pid| {

@@ -26,9 +26,9 @@ impl Jobs {
     /// signal, and a group listed while the leader was replaced shows the
     /// change as a disagreement.
     pub(super) fn observe(&self, state: &State, record: &Record) -> Option<Observation> {
-        let identity = record.identity()?;
-        let members = self.kernel.group(identity.pgid()).ok()?;
-        let leader = self.kernel.process(identity.leader().pid).ok()?;
+        let job = record.identity()?;
+        let members = self.kernel.group(job.pid).ok()?;
+        let leader = self.kernel.process(job.pid).ok()?;
         Some(Observation {
             leader,
             members,

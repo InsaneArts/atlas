@@ -1,7 +1,7 @@
 //! Whether a job's group may be signalled now: decided from its identity,
 //! the person's side's copy of it, and one fresh look at its leader and its
 //! group. Pure, so every rule is tested on its own.
-use super::record::{JobIdentity, Record};
+use super::record::Record;
 use atlas_core::{
     process::Info,
     protocol::{Expected, JobRefusal},
@@ -123,11 +123,12 @@ pub(super) fn verdict(
     if record.uid != uid {
         return Verdict::OtherAccount;
     }
-    let Some(identity) = record.identity() else {
+    let Some(job) = record.identity() else {
         return Verdict::Identity;
     };
+    let pgid = job.pid;
     if let Some(expect) = expect
-        && JobIdentity::expected(expect).as_ref() != Some(&identity)
+        && record.expected().as_ref() != Some(expect)
     {
         return Verdict::Identity;
     }
@@ -137,13 +138,13 @@ pub(super) fn verdict(
     let Some(seen) = seen else {
         return Verdict::Unknown;
     };
-    if !consistent(seen.leader.as_ref(), &seen.members, identity.leader().pid) {
+    if !consistent(seen.leader.as_ref(), &seen.members, job.pid) {
         return Verdict::Unknown;
     }
 
     let leader = match &seen.leader {
-        Some(leader) if leader.instance.start != identity.leader().start => return Verdict::Reused,
-        Some(leader) if leader.pgid != identity.pgid() => return Verdict::Identity,
+        Some(leader) if leader.instance.start != job.start => return Verdict::Reused,
+        Some(leader) if leader.pgid != pgid => return Verdict::Identity,
         // A leader this daemon has not reaped counts as live: its unreaped
         // PID, and so its group's ID, cannot go to another process. Any
         // other zombie leader counts as gone.
@@ -154,16 +155,14 @@ pub(super) fn verdict(
     let live: Vec<&Info> = seen
         .members
         .iter()
-        .filter(|member| member.pgid == identity.pgid() && !member.zombie)
+        .filter(|member| member.pgid == pgid && !member.zombie)
         .collect();
     if live.iter().any(|member| !member.owned_by(uid)) {
         return Verdict::OtherAccount;
     }
     match (leader, live.is_empty()) {
         (_, true) => Verdict::Ended,
-        (Some(_), false) => Verdict::Signal {
-            pgid: identity.pgid(),
-        },
+        (Some(_), false) => Verdict::Signal { pgid },
         (None, false) => Verdict::LeaderGone {
             remaining: live.into_iter().cloned().collect(),
         },

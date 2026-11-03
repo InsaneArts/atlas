@@ -18,49 +18,6 @@ const PID_MAX: i32 = 99_999;
 /// The longest boot session identity accepted.
 const BOOT_MAX: usize = 64;
 
-/// What a job is: the boot it started in, its leader's PID and exact start
-/// time, and its process group, which is the leader's PID. Only
-/// [`JobIdentity::new`] makes one, so every identity in hand is in bounds
-/// and names a group led by its own leader.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct JobIdentity<'a> {
-    boot: &'a str,
-    leader: Instance,
-}
-
-impl<'a> JobIdentity<'a> {
-    /// The identity these say, when the boot is named, the PID is a user
-    /// process's, the start time is a real one, and the group is the
-    /// leader's own.
-    pub(super) fn new(boot: &'a str, pid: i32, start: Start, pgid: i32) -> Option<Self> {
-        let sound = !boot.is_empty()
-            && boot.len() <= BOOT_MAX
-            && (2..=PID_MAX).contains(&pid)
-            && pgid == pid
-            && start[0] > 0
-            && start[1] < 1_000_000;
-        sound.then(|| Self {
-            boot,
-            leader: Instance::new(pid, start),
-        })
-    }
-
-    /// The identity the person's side sent, when it is a sound one.
-    pub(super) fn expected(expected: &'a Expected) -> Option<Self> {
-        Self::new(&expected.boot, expected.pid, expected.start, expected.pgid)
-    }
-
-    /// The job's process group: always its leader's PID.
-    pub(super) fn pgid(&self) -> i32 {
-        self.leader.pid
-    }
-
-    /// The leader as a process instance.
-    pub(super) fn leader(&self) -> Instance {
-        self.leader
-    }
-}
-
 /// A stop under way.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -171,9 +128,19 @@ pub(super) struct Record {
 }
 
 impl Record {
-    /// Its identity, when it has a process and the identity is sound.
-    pub(super) fn identity(&self) -> Option<JobIdentity<'_>> {
-        JobIdentity::new(&self.boot, self.pid?, self.start?, self.pgid?)
+    /// Its leader, when it has a process and its identity is sound: the boot
+    /// is named, the PID is a user process's, the start time is a real one,
+    /// and the group is the leader's own, so the leader's PID is also the
+    /// job's process group.
+    pub(super) fn identity(&self) -> Option<Instance> {
+        let (pid, start, pgid) = (self.pid?, self.start?, self.pgid?);
+        let sound = !self.boot.is_empty()
+            && self.boot.len() <= BOOT_MAX
+            && (2..=PID_MAX).contains(&pid)
+            && pgid == pid
+            && start[0] > 0
+            && start[1] < 1_000_000;
+        sound.then(|| Instance::new(pid, start))
     }
 
     /// Whether this record may be acted on: it is of this build's format,
@@ -188,7 +155,7 @@ impl Record {
 
     /// What the job is, when it has a process.
     pub(super) fn expected(&self) -> Option<Expected> {
-        let leader = self.identity()?.leader;
+        let leader = self.identity()?;
         Some(Expected {
             boot: self.boot.clone(),
             pid: leader.pid,
