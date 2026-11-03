@@ -76,6 +76,9 @@ public enum ActivityAction: Equatable, Sendable {
     "type": .typing, "key": .keys, "scroll": .scroll, "screenshot": .screenshot, "open": .window,
     "open-link": .window, "close": .window, "install": .window, "cleanup": .window, "run": .command,
     "job-start": .command, "job-stop": .command, "collect": .command,
+    // Actions on an element stand in for the pointer, typing or scrolling they replace.
+    "press": .pointer, "check": .pointer, "uncheck": .pointer, "pick": .pointer, "expand": .pointer,
+    "collapse": .pointer, "set-value": .typing, "scroll-into-view": .scroll,
   ]
 
   /// The verbs the service's words lead with (`crates/client/src/doing.rs`), done, failed and under way, by their kind.
