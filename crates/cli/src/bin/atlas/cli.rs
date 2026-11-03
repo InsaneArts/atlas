@@ -216,7 +216,7 @@ pub(super) enum Command {
     /// Does ACTION to the element --ref names, found again and proven the
     /// same first. No pointer or key event is sent and nothing takes focus,
     /// though the app may move focus itself. check, uncheck, expand and
-    /// collapse do nothing when it already is so. verification says whether
+    /// collapse send nothing (performed: 0) when it already is so. verification says whether
     /// it reads as asked afterwards: matched, mismatch or not-checked (a press
     /// is never checked). An action the element does not support, and a
     /// password field's value, are refused. No app is launched.
