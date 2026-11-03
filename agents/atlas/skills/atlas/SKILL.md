@@ -60,8 +60,8 @@ in, read Give the app what it needs.
 Open with `atlas open --app NAME [FILE|URL]` or `atlas open /path/App.app`,
 then `atlas wait --app NAME`. Click a listed
 element by `atlas click --app A --ref LOOK.INDEX` (its `look` and
-`index`), else by `--name LABEL`, which lists `candidates` unless one
-matches. Otherwise use
+`index`), else by `--name LABEL [--role ROLE]`, which lists `candidates`
+unless one matches. Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
 `atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
 `drag`): nothing is sent while another app would get it.
