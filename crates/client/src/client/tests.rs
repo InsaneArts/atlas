@@ -816,23 +816,6 @@ async fn a_stop_while_acquisition_is_unanswered_waits_for_it_then_posts_nothing(
 }
 
 #[tokio::test]
-async fn a_stop_while_input_is_under_way_lets_the_batch_finish_and_settles_it() {
-    let (_dir, mut client, listener, session) = native_client();
-    let interrupt = stoppable(&mut client);
-    let mut caller = Box::pin(standalone_input(&client, &session));
-    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-    answer(&mut acquire, json!({"ok": true})).await;
-    let mut input = dispatched(&mut caller, &listener, "input").await;
-    interrupt.ask_for_test(Signal::SIGTERM);
-    answer(&mut input, json!({"ok": true, "performed": 2})).await;
-
-    let mut release = dispatched(&mut caller, &listener, "release").await;
-    answer(&mut release, json!({"ok": true})).await;
-    assert_eq!(caller.await.unwrap()["ok"], true);
-    assert!(client.controller.pending().unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() {
     if !atlas_core::test_support::isolated(
         "client::tests::a_signalled_input_settles_only_after_its_batch_and_release_are_known",
@@ -867,6 +850,7 @@ async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() 
                     .as_ref()
                     .is_some_and(|reply| reply["ok"] == true);
                 let known_release = release_reply.is_some();
+                let mut asked = tokio::time::Instant::now();
                 if !known_batch || known_release {
                     interrupt.ask_for_test(signal);
                 }
@@ -881,6 +865,7 @@ async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() 
                         );
                     }
                     if known_batch && !known_release {
+                        asked = tokio::time::Instant::now();
                         interrupt.ask_for_test(signal);
                     }
                     if let Some(reply) = release_reply {
@@ -889,9 +874,9 @@ async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() 
                         assert!(tokio::time::timeout(SOON, caller.as_mut()).await.is_err());
                         assert_eq!(other.controller.pending().unwrap(), generation);
                     }
-                    caller.await
+                    tokio::time::timeout(GRACE * 4, caller).await.unwrap()
                 } else {
-                    let outcome = caller.await;
+                    let outcome = tokio::time::timeout(GRACE * 4, caller).await.unwrap();
                     let mut line = String::new();
                     assert_eq!(input.read_line(&mut line).await.unwrap(), 0);
                     let (release, _) = listener.accept().await.unwrap();
@@ -909,6 +894,7 @@ async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() 
                     assert!(other.controller.acquire(false).is_ok());
                 } else {
                     if !known_release {
+                        assert!(asked.elapsed() >= GRACE, "cut at the end of the grace");
                         let error = outcome.unwrap_err();
                         assert_eq!(error.code, Code::Interrupted);
                         assert!(error.uncertain);
@@ -943,46 +929,6 @@ async fn a_signalled_input_settles_only_after_its_batch_and_release_are_known() 
 }
 
 #[tokio::test]
-async fn input_still_unanswered_after_the_grace_stays_pending_for_every_agent() {
-    // Recovery takes the controller lock, which a spawn on another test
-    // thread can hold in its child until exec.
-    if !atlas_core::test_support::isolated(
-        "client::tests::input_still_unanswered_after_the_grace_stays_pending_for_every_agent",
-    ) {
-        return;
-    }
-    let (dir, mut client, listener, session) = native_client();
-    let interrupt = stoppable(&mut client);
-    let mut caller = Box::pin(standalone_input(&client, &session));
-    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-    answer(&mut acquire, json!({"ok": true})).await;
-    let mut input = dispatched(&mut caller, &listener, "input").await;
-    interrupt.ask_for_test(Signal::SIGTERM);
-
-    // Past the grace, its release is still sent whole, but not waited
-    // for.
-    let error = tokio::time::timeout(GRACE * 4, caller)
-        .await
-        .unwrap()
-        .unwrap_err();
-    assert_eq!(error.code, "interrupted");
-    assert!(error.uncertain);
-    let mut line = String::new();
-    assert_eq!(
-        input.read_line(&mut line).await.unwrap(),
-        0,
-        "the input service sees the batch cut off"
-    );
-    let (release, _) = listener.accept().await.unwrap();
-    BufReader::new(release).read_line(&mut line).await.unwrap();
-    assert_eq!(
-        serde_json::from_str::<Value>(&line).unwrap()["op"],
-        "release"
-    );
-    recovery_settles_the_abandoned_claim(&another(&client, dir.path()));
-}
-
-#[tokio::test]
 async fn a_stop_while_release_is_unanswered_waits_for_it() {
     let (_dir, mut client, listener, session) = native_client();
     let interrupt = stoppable(&mut client);
@@ -999,35 +945,6 @@ async fn a_stop_while_release_is_unanswered_waits_for_it() {
     answer(&mut release, json!({"ok": true})).await;
     assert_eq!(caller.await.unwrap()["ok"], true);
     assert!(client.controller.pending().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn a_release_still_unanswered_after_the_grace_stays_pending() {
-    if !atlas_core::test_support::isolated(
-        "client::tests::a_release_still_unanswered_after_the_grace_stays_pending",
-    ) {
-        return;
-    }
-    let (dir, mut client, listener, session) = native_client();
-    let interrupt = stoppable(&mut client);
-    let mut caller = Box::pin(standalone_input(&client, &session));
-    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-    answer(&mut acquire, json!({"ok": true})).await;
-    let mut input = dispatched(&mut caller, &listener, "input").await;
-    answer(&mut input, json!({"ok": true, "performed": 2})).await;
-    let _release = dispatched(&mut caller, &listener, "release").await;
-    tokio::time::pause();
-    interrupt.ask_for_test(Signal::SIGTERM);
-    let asked = tokio::time::Instant::now();
-
-    let error = tokio::time::timeout(GRACE * 4, caller)
-        .await
-        .unwrap()
-        .unwrap_err();
-    assert!(asked.elapsed() >= GRACE, "cut at the end of the grace");
-    assert_eq!(error.code, "interrupted");
-    assert!(error.uncertain);
-    recovery_settles_the_abandoned_claim(&another(&client, dir.path()));
 }
 
 #[tokio::test]
