@@ -1535,7 +1535,7 @@ async fn an_element_action_is_sent_whole_and_answered_briefly() {
     let mut sent = Vec::new();
     let reply = helper
         .serve(
-            element(&client, None, &action),
+            super::element(&client, None, &action),
             |request| match request["op"].as_str() {
                 Some("acquire" | "release") => Some(json!({"ok": true})),
                 Some("input") => {
@@ -1564,7 +1564,7 @@ async fn an_element_action_is_sent_whole_and_answered_briefly() {
     let (client, helper) = Helper::client(directory.path(), UID);
     let helper = helper.serving_input(&client, &[LOOKS]);
     let error = helper
-        .serve(element(&client, None, &action), |request| {
+        .serve(super::element(&client, None, &action), |request| {
             assert_ne!(request["op"], "input", "nothing is sent");
             match request["op"].as_str() {
                 Some("acquire" | "release") => Some(json!({"ok": true})),
@@ -1584,7 +1584,7 @@ async fn a_malformed_option_or_a_physical_action_is_refused_before_anything_is_a
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
     let action = json!({"type": "pick", "ref": "8123abc12", "option": "Large"});
-    let error = element(&client, None, &action).await.unwrap_err();
+    let error = super::element(&client, None, &action).await.unwrap_err();
     assert_eq!(error.code, Code::Elements);
     assert_eq!(error.details["performed"], 0);
 
@@ -1592,7 +1592,7 @@ async fn a_malformed_option_or_a_physical_action_is_refused_before_anything_is_a
         json!({"type": "key", "key": "cmd+q"}),
         json!({"type": "reference", "ref": "8123abc12"}),
     ] {
-        let error = element(&client, None, &physical).await.unwrap_err();
+        let error = super::element(&client, None, &physical).await.unwrap_err();
         assert_eq!(error.code, Code::Input, "{physical}");
     }
     assert!(client.controller.pending().unwrap().is_empty());
