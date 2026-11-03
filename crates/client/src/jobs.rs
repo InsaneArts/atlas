@@ -585,6 +585,8 @@ pub struct Everyone {
     pub(crate) refused: u64,
     /// How many the helper could not observe, so it signalled nothing.
     pub(crate) unknown: u64,
+    /// How many records the helper could not read, whose jobs may still run.
+    pub(crate) unresolved: u64,
     /// Why the helper could not be told, when it could not.
     pub(crate) error: Option<String>,
 }
@@ -631,7 +633,23 @@ impl Everyone {
                 them(self.unknown)
             )
         });
-        warning.into_iter().chain(refused).chain(unknown).collect()
+        let unresolved = (self.unresolved > 0).then(|| {
+            let (records, they) = if self.unresolved == 1 {
+                ("record", "it")
+            } else {
+                ("records", "they")
+            };
+            format!(
+                "Atlas could not read the {records} of {}; {they} may still be running",
+                jobs(self.unresolved)
+            )
+        });
+        warning
+            .into_iter()
+            .chain(refused)
+            .chain(unknown)
+            .chain(unresolved)
+            .collect()
     }
 
     /// Add what this came to to `reply`: `jobsStopped` and its warnings.
@@ -660,13 +678,16 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
         Ok(reply) => return Everyone::failed(refused(&reply).error),
         Err(error) => return Everyone::failed(error.error),
     };
+    // Only the reply to a stop of every job, with no doubt about it, says
+    // what was stopped.
     let all = match JobReply::deserialize(&reply) {
-        Ok(JobReply::StopAll(all)) => all,
-        _ => Default::default(),
+        Ok(JobReply::StopAll(all)) if reply["uncertain"] != true => all,
+        _ => return Everyone::failed("the helper did not confirm what it stopped".into()),
     };
     let asked = all.stopping;
     let refused = all.refused.len() as u64;
     let unknown = all.unknown.len() as u64;
+    let unresolved = all.unresolved.len() as u64;
     let mut left = asked;
     let started = Instant::now();
     while left > 0 && started.elapsed() < JOB_GRACE + BEYOND_GRACE {
@@ -686,6 +707,7 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
         left,
         refused,
         unknown,
+        unresolved,
         error: None,
     }
 }
