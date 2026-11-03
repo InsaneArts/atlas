@@ -310,31 +310,19 @@ impl Scan {
         maximum: usize,
     ) -> Vec<CFRetained<AXUIElement>> {
         let count = self.count(element, attribute);
-        let name = CFString::from_static_str(attribute);
-        self.listed(attribute, count, maximum, |wanted| {
-            ffi::copy_values(element, &name, wanted)
-        })
-    }
-
-    /// The elements of an array attribute that holds `count` values, at most
-    /// `maximum` of them, copied by `copy` once it is told how many to ask for.
-    pub(super) fn listed(
-        &mut self,
-        attribute: &'static str,
-        count: CFIndex,
-        maximum: usize,
-        copy: impl FnOnce(CFIndex) -> Result<Option<CFRetained<CFArray<CFType>>>, AXError>,
-    ) -> Vec<CFRetained<AXUIElement>> {
         if count <= 0 {
             return Vec::new();
         }
 
+        let name = CFString::from_static_str(attribute);
         let wanted = count.min(CFIndex::try_from(maximum).unwrap_or(CFIndex::MAX));
         if wanted < count {
             self.stop(Stop::Count);
         }
 
-        let values = match copy(wanted).and_then(|values| values.ok_or(AXError::Success)) {
+        let values = match ffi::copy_values(element, &name, wanted)
+            .and_then(|values| values.ok_or(AXError::Success))
+        {
             Ok(values) => values,
             Err(status) => {
                 self.failed(status, attribute);
@@ -343,16 +331,8 @@ impl Scan {
             }
         };
 
-        // Each value is checked to be an AXUIElement before use. A reply with
-        // another number of values, or a value that is no element, leaves
-        // children unread; those that were read are kept.
-        let asked = usize::try_from(wanted).unwrap_or(maximum);
-        let children: Vec<_> = values
-            .iter()
-            .take(asked)
-            .filter_map(|value| value.downcast::<AXUIElement>().ok())
-            .collect();
-        if values.len() != asked || children.len() != asked {
+        let (children, whole) = elements(&values, usize::try_from(wanted).unwrap_or(maximum));
+        if !whole {
             self.failed(AXError::Failure, attribute);
             self.stop(Stop::Unread);
         }
@@ -410,3 +390,21 @@ impl Scan {
         }
     }
 }
+
+/// The elements of `values`, an array attribute's reply asked for `asked`
+/// of them, each checked to be an AXUIElement before use, at most `asked`;
+/// and whether the reply was whole: exactly `asked` values, every one an
+/// element. What was read is kept either way.
+fn elements(values: &CFArray<CFType>, asked: usize) -> (Vec<CFRetained<AXUIElement>>, bool) {
+    let children: Vec<_> = values
+        .iter()
+        .take(asked)
+        .filter_map(|value| value.downcast::<AXUIElement>().ok())
+        .collect();
+    let whole = values.len() == asked && children.len() == asked;
+
+    (children, whole)
+}
+
+#[cfg(test)]
+mod tests;
