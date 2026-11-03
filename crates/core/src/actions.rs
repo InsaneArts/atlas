@@ -162,9 +162,22 @@ impl<'a> Batch<'a> {
         &self.actions
     }
 
+    /// Validates the whole batch on `display` without sending any of it.
+    ///
     /// # Errors
     ///
-    /// Returns the refusal of the batch on `display`.
+    /// Rejects unsupported keys or modifiers, off-display points, and
+    /// batches that exceed the action or duration limits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use atlas_core::{actions::Batch, session::Display};
+    /// let display = Display { width: 800.0, height: 600.0, scale: 1.0 };
+    /// let batch = serde_json::json!([{"type":"move","x":10,"y":20}]);
+    /// Batch::decode(&batch)?.check(&display)?;
+    /// # Ok::<(), atlas_core::error::Error>(())
+    /// ```
     pub fn check(&self, display: &Display) -> Result<()> {
         check(&self.actions, display)
     }
@@ -573,25 +586,6 @@ const TYPE_MS: u32 = 7;
 // The longest text one action types fits one batch.
 const _: () = assert!(TYPE_MS * TEXT_MAX as u32 <= BATCH_MS);
 const KEY_MS: u32 = 10;
-
-/// Validate a whole input batch without sending any of it.
-///
-/// # Errors
-///
-/// Rejects malformed actions, unsupported keys or modifiers, off-display points, and
-/// batches that exceed the action or duration limits. Validation sends no input.
-///
-/// # Examples
-///
-/// ```
-/// use atlas_core::{actions, session::Display};
-/// let display = Display { width: 800.0, height: 600.0, scale: 1.0 };
-/// actions::validate(&serde_json::json!([{"type":"move","x":10,"y":20}]), &display)?;
-/// # Ok::<(), atlas_core::error::Error>(())
-/// ```
-pub fn validate(value: &Value, display: &Display) -> Result<()> {
-    Batch::decode(value)?.check(display)
-}
 
 /// # Errors
 ///

@@ -5,7 +5,7 @@ pub mod diagnosis;
 mod epoch;
 mod logins;
 
-pub use diagnosis::{Absence, diagnose, silent};
+pub use diagnosis::{Absence, silent};
 pub use diagnosis::{Diagnosis, Guidance, LOGGED_OUT, require_report};
 #[cfg(any(test, feature = "test-support"))]
 pub use diagnosis::{START_INPUT, diagnosis};

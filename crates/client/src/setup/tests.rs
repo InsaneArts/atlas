@@ -315,7 +315,7 @@ async fn observing_a_blocked_transport_preserves_its_code_and_advice() {
     tokio::join!(observe(&client, uid, &mut report), serving);
 
     let steps = next_steps(&report);
-    let doctor = atlas_core::session::diagnose(status, uid);
+    let doctor = atlas_core::session::diagnosis(status, uid).value;
     assert_eq!(steps, vec![doctor["nextSteps"][0].as_str().unwrap()]);
     assert!(!steps.join(" ").contains("Log in"));
     assert_eq!(report["session"]["code"], "blocked");

@@ -449,7 +449,10 @@ fn an_oversized_wait_is_refused_without_overflowing() {
     ]);
 
     assert_eq!(
-        validate(&batch, &display).unwrap_err().error,
+        Batch::decode(&batch)
+            .and_then(|batch| batch.check(&display))
+            .unwrap_err()
+            .error,
         "Action 2 was refused and nothing was sent: a wait is at most 250 ms"
     );
 }
@@ -464,7 +467,8 @@ fn a_refused_action_names_its_problem() {
     };
 
     let said = |action: serde_json::Value| {
-        validate(&serde_json::json!([action]), &display)
+        Batch::decode(&serde_json::json!([action]))
+            .and_then(|batch| batch.check(&display))
             .unwrap_err()
             .error
     };

@@ -146,9 +146,10 @@ async fn standalone_input(client: &Client, session: &Session) -> Result<Value> {
         {"type": "pointer", "phase": "down", "x": 1, "y": 1},
         {"type": "pointer", "phase": "move", "x": 2, "y": 2},
     ]);
-    actions::validate(&actions, &session.epoch.display)?;
+    let batch = actions::Batch::decode(&actions)?;
+    batch.check(&session.epoch.display)?;
     client
-        .input_in_session(actions::Batch::decode(&actions)?, None, None, None, session)
+        .input_in_session(batch, None, None, None, session)
         .await
 }
 

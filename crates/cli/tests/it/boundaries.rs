@@ -5,7 +5,7 @@ use atlas_core::{
     actions,
     config::Config,
     error::Code,
-    session::{Display, InputEpoch, Observation, diagnose, input_current, require_hidden},
+    session::{Display, InputEpoch, Observation, diagnosis, input_current, require_hidden},
     transport::Transport,
 };
 use serde_json::{Value, json};
@@ -22,6 +22,11 @@ fn status() -> Value {
         "permissions": {"screenCapture": true, "accessibility": true},
         "sessionProof": {"ok": true,"uid":502,"hasGraphicAccess":true,"parentPID":123,"onConsole":false,
         "securitySessionID":100384,"displayID":28,"width":2560,"height":1440}})
+}
+
+/// Validates a whole input batch on `display` without sending any of it.
+fn validate(batch: &Value, display: &Display) -> atlas_core::error::Result<()> {
+    actions::Batch::decode(batch)?.check(display)
 }
 
 fn display() -> Display {
@@ -300,7 +305,7 @@ fn unsafe_actions_and_whole_batches_are_rejected() {
     ] {
         // A malformed action fails to parse; a well-formed one out of
         // bounds is refused as input.
-        let refused = actions::validate(&json!([action]), &display()).unwrap_err();
+        let refused = validate(&json!([action]), &display()).unwrap_err();
         assert!(
             matches!(refused.code, Code::Input | Code::InvalidJson),
             "{action}: {}",
@@ -309,13 +314,13 @@ fn unsafe_actions_and_whole_batches_are_rejected() {
     }
 
     assert_eq!(
-        actions::validate(&json!(vec![json!({"type":"wait","ms":250}); 9]), &display())
+        validate(&json!(vec![json!({"type":"wait","ms":250}); 9]), &display())
             .unwrap_err()
             .code,
         "input"
     );
     assert_eq!(
-        actions::validate(
+        validate(
             &json!([{ "type":"key", "key":"return" }, { "type":"run" }]),
             &display()
         )
@@ -338,7 +343,7 @@ fn the_whole_batch_is_deserialized_before_semantics_count_or_budget_are_checked(
         json!(too_many),
         json!(too_slow),
     ] {
-        let error = actions::validate(&batch, &display()).unwrap_err();
+        let error = validate(&batch, &display()).unwrap_err();
         assert_eq!(error.code, "invalid-json");
         assert_eq!(error.error, "missing field `x`");
     }
@@ -355,7 +360,7 @@ fn an_invalid_tail_names_the_action_and_keeps_field_error_precedence() {
             {"type":"click","x":1,"y":1},
             {"type":"click","x":x,"y":1,"count":count,"modifiers":["hyper"]},
         ]);
-        let error = actions::validate(&batch, &display()).unwrap_err();
+        let error = validate(&batch, &display()).unwrap_err();
         assert_eq!(error.code, "input");
         assert_eq!(
             error.error,
@@ -367,7 +372,7 @@ fn an_invalid_tail_names_the_action_and_keeps_field_error_precedence() {
 #[test]
 fn action_count_and_total_budget_keep_their_exact_boundaries() {
     for count in [0, 33] {
-        let error = actions::validate(
+        let error = validate(
             &json!(vec![json!({"type":"move","x":1,"y":1}); count]),
             &display(),
         )
@@ -375,16 +380,16 @@ fn action_count_and_total_budget_keep_their_exact_boundaries() {
         assert_eq!(error.code, "input");
         assert_eq!(error.error, "Send between 1 and 32 actions");
     }
-    actions::validate(
+    validate(
         &json!(vec![json!({"type":"move","x":1,"y":1}); 32]),
         &display(),
     )
     .unwrap();
 
     let mut batch = vec![json!({"type":"wait","ms":250}); 8];
-    actions::validate(&json!(batch), &display()).unwrap();
+    validate(&json!(batch), &display()).unwrap();
     batch.push(json!({"type":"key","key":"return"}));
-    let error = actions::validate(&json!(batch), &display()).unwrap_err();
+    let error = validate(&json!(batch), &display()).unwrap_err();
     assert_eq!(error.code, "input");
     assert_eq!(
         error.error,
@@ -399,7 +404,7 @@ fn unicode_and_supported_shortcuts_validate() {
     }
 
     assert!(
-        actions::validate(
+        validate(
             &json!([{ "type":"type", "text":"ქართული 日本語 🧑🏽‍💻 e\u{301}" }]),
             &display()
         )
@@ -1017,10 +1022,11 @@ fn check(report: &Value, name: &str) -> Value {
 
 #[test]
 fn doctor_reports_unobservable_facts_as_unknown_not_missing() {
-    let report = diagnose(
+    let report = diagnosis(
         json!({"ok": false, "code": "transport", "error": "Connection refused"}),
         502,
-    );
+    )
+    .value;
     assert_eq!(report["ready"], false);
     assert_eq!(check(&report, "Helper running"), false);
 
@@ -1038,7 +1044,7 @@ fn doctor_reports_unobservable_facts_as_unknown_not_missing() {
 
 #[test]
 fn doctor_ready_never_implies_native_dialogs() {
-    let report = diagnose(ready_status(), 502);
+    let report = diagnosis(ready_status(), 502).value;
     assert_eq!(report["ready"], true, "{report}");
     assert_eq!(report["capabilities"]["input"], true);
     assert_eq!(report["capabilities"]["nativeDialogs"]["state"], "unknown");
@@ -1048,19 +1054,19 @@ fn doctor_ready_never_implies_native_dialogs() {
 fn doctor_reads_input_permission_from_the_input_service() {
     let mut state = ready_status();
     state["inputService"]["accessibility"] = json!(false);
-    let report = diagnose(state, 502);
+    let report = diagnosis(state, 502).value;
     assert_eq!(check(&report, "Accessibility allowed"), false);
     assert_eq!(report["ready"], false);
 
     let mut state = ready_status();
     state["permissions"]["accessibility"] = json!(false);
-    assert_eq!(diagnose(state, 502)["ready"], true);
+    assert_eq!(diagnosis(state, 502).value["ready"], true);
 }
 
 #[test]
 fn doctor_distinguishes_on_console_from_wrong_account() {
     let guidance = |state: Value| {
-        diagnose(state, 502)["nextSteps"]
+        diagnosis(state, 502).value["nextSteps"]
             .as_array()
             .unwrap()
             .iter()
@@ -1089,7 +1095,7 @@ fn doctor_distinguishes_on_console_from_wrong_account() {
 fn doctor_reports_an_unqueried_input_service_as_unknown() {
     let mut console = status();
     console["session"]["onConsole"] = json!(true);
-    let report = diagnose(console, 502);
+    let report = diagnosis(console, 502).value;
     assert_eq!(check(&report, "Helper in the background"), false);
     assert_eq!(check(&report, "Accessibility allowed"), Value::Null);
     assert_eq!(check(&report, "Input service ready"), Value::Null);
@@ -1116,7 +1122,10 @@ fn doctor_warns_when_the_input_service_build_is_not_the_installed_one() {
         let mut state = ready_status();
         state["inputService"]["build"] = service;
         state["installedBuild"] = installed;
-        diagnose(state, 502)["warnings"].as_array().unwrap().len()
+        diagnosis(state, 502).value["warnings"]
+            .as_array()
+            .unwrap()
+            .len()
     };
 
     assert_eq!(warnings(json!("abc"), json!("abc")), 0);

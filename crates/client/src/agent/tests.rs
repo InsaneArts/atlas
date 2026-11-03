@@ -2,7 +2,7 @@ use super::{elements::*, expect::*, input::*, launch::*, quit::*, target::*, win
 use crate::app_selection::{Closing, Process};
 use atlas_control::interrupt::Interrupt;
 use atlas_core::{
-    actions::{Button, Expect},
+    actions::{Batch, Button, Expect},
     error::{Code, Error, Holder, Result},
     screen::select::{ElementFilter, NameMatch},
     screen::{
@@ -498,7 +498,7 @@ fn sugar_produces_valid_actions() {
         drag((1.0, 2.0), (300.0, 400.0), Button::Left),
         keys(&["cmd+s".into(), "return".into()]).unwrap(),
     ] {
-        atlas_core::actions::validate(&actions, &display()).unwrap();
+        Batch::decode(&actions).unwrap().check(&display()).unwrap();
     }
 }
 
@@ -519,7 +519,9 @@ fn typing_splits_long_text_on_grapheme_boundaries() {
     );
 
     for batch in &batches {
-        atlas_core::actions::validate(&json!([{ "type": "type", "text": batch }]), &display())
+        Batch::decode(&json!([{ "type": "type", "text": batch }]))
+            .unwrap()
+            .check(&display())
             .unwrap();
     }
 
@@ -571,7 +573,10 @@ fn text_is_typed_in_parts_of_at_most_sixteen_characters() {
             .map(|part| json!({"type": "type", "text": part}))
             .collect();
         assert!(parts.len() <= TYPE_BATCH / TYPE_PART);
-        atlas_core::actions::validate(&Value::Array(parts), &display()).unwrap();
+        Batch::decode(&Value::Array(parts))
+            .unwrap()
+            .check(&display())
+            .unwrap();
     }
 }
 

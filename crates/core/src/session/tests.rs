@@ -4,7 +4,7 @@ use super::logins::{
 };
 use super::{
     Absence, Blocker, FOCUS_APP, Kind, LOGGED_OUT, Observation, PermissionObservation, Record,
-    Window, classify, diagnose, has_capability, input_build_current, require_hidden, silent,
+    Window, classify, diagnosis, has_capability, input_build_current, require_hidden, silent,
     validate_target_uid,
 };
 use crate::error::Code;
@@ -47,7 +47,7 @@ fn an_unqueried_permission_remains_distinct_from_denial() {
     ] {
         let observation = Observation::decode(&value);
         assert_eq!(observation.native.accessibility, expected);
-        let report = diagnose(value, 502);
+        let report = diagnosis(value, 502).value;
         let check = report["checks"]
             .as_array()
             .unwrap()
@@ -87,7 +87,7 @@ fn a_partial_observation_never_proves_a_hidden_session() {
         let observation = Observation::decode(&value);
         assert!(observation.require_hidden(502).is_err(), "{value}");
         assert!(!observation.input_current(502, 77), "{value}");
-        assert_eq!(diagnose(value, 502)["ready"], false);
+        assert_eq!(diagnosis(value, 502).value["ready"], false);
     }
 }
 
@@ -217,14 +217,14 @@ fn process_lists_ignore_negative_ids_but_refuse_unreadable_rows() {
 
 #[test]
 fn a_logged_out_helper_says_how_to_log_it_in() {
-    let mut report = diagnose(json!({"ok": false, "code": "io"}), 501);
+    let mut report = diagnosis(json!({"ok": false, "code": "io"}), 501).value;
     Absence::LoggedOut("atlas".into()).explain(&mut report);
     assert_eq!(report["absence"], "loggedOut");
     assert_eq!(report["account"], "atlas");
     assert_eq!(report["checks"][0]["nextStep"], LOGGED_OUT);
     assert_eq!(report["nextSteps"][0], LOGGED_OUT);
 
-    let mut gone = diagnose(json!({"ok": false, "code": "io"}), 501);
+    let mut gone = diagnosis(json!({"ok": false, "code": "io"}), 501).value;
     Absence::Missing.explain(&mut gone);
     assert_eq!(gone["absence"], "missing");
     assert!(gone.get("account").is_none());
@@ -280,7 +280,7 @@ fn a_blocked_shell_is_not_a_stopped_helper() {
         (Code::Blocked, "This shell may not connect")
     );
 
-    let report = diagnose(status, uid.max(501));
+    let report = diagnosis(status, uid.max(501)).value;
     assert_eq!(report["checks"][0]["name"], "Helper reachable from here");
     assert_eq!(report["nextSteps"][0], "This shell may not connect");
 
@@ -291,10 +291,11 @@ fn a_blocked_shell_is_not_a_stopped_helper() {
         );
     }
 
-    let stopped = diagnose(
+    let stopped = diagnosis(
         json!({"ok": false, "code": "io", "error": "No such file"}),
         501,
-    );
+    )
+    .value;
     assert_eq!(stopped["checks"][0]["name"], "Helper running");
 }
 

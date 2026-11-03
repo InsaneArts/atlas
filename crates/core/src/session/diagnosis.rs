@@ -61,20 +61,16 @@ struct Check<'a> {
     next_step: &'a str,
 }
 
-/// The doctor report for a status snapshot: each check, what to do about a
-/// failed one, and `ready` for transport, identity, permissions and the
-/// input service. Whether native Save/Open dialogs work is a separate
-/// observation (the native capability check) that `ready` never implies.
-pub fn diagnose(value: Value, uid: u32) -> Value {
-    Observation::decode(&value).diagnose(value, uid).value
-}
-
 #[cfg(any(test, feature = "test-support"))]
 pub fn diagnosis(value: Value, uid: u32) -> Diagnosis {
     Observation::decode(&value).diagnose(value, uid)
 }
 
 impl Observation {
+    /// The doctor report for a status snapshot: each check, what to do about a
+    /// failed one, and `ready` for transport, identity, permissions and the
+    /// input service. Whether native Save/Open dialogs work is a separate
+    /// observation (the native capability check) that `ready` never implies.
     pub fn diagnose(self, value: Value, uid: u32) -> Diagnosis {
         let session = self.require_hidden(uid).ok();
         let checks = self.checks(uid, session.as_ref());
