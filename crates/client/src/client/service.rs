@@ -233,7 +233,7 @@ impl Client {
 
     /// Start the installed executable as the helper's input service. The caller
     /// records the launch as a pending mutation and settles it on success.
-    pub(crate) async fn spawn_input(&self) -> Result<u32> {
+    async fn spawn_input(&self) -> Result<u32> {
         // Arguments stay separate from shell syntax, including configured paths.
         let script = concat!(
             "nohup \"$1\" input-service --uid \"$2\" --controller-uid \"$3\" --socket \"$4\" ",

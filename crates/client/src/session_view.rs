@@ -41,7 +41,7 @@ const HISTORY_SHOTS: usize = 12;
 /// A session's state, in the order the apps list sessions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SessionState {
+pub(crate) enum SessionState {
     /// An action of its own may not have finished: the person recovers.
     NeedsYou,
     /// It has the helper, or a command it started with `run` still runs.
