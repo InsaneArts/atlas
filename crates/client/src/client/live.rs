@@ -4,7 +4,11 @@ use super::Client;
 use atlas_core::{
     buffer::Buffer,
     error::{Code, Error, Result},
-    frame_pipe::diagnostics::{Backend, Outcome, Reason, Record, Ring, Stage, Timing, nanos},
+    frame_pipe::{
+        budget::Budget,
+        diagnostics::{Backend, Outcome, Reason, Record, Ring, Stage, Timing, nanos},
+        pixels::FramePixels,
+    },
     protocol::{
         CaptureBackend, RGB_STREAM, RGB_STREAM_HIGH_RES, RGB_STREAM_STOP, SCK_EXPERIMENTAL,
         SESSION_PROOF, SessionPin,
@@ -30,9 +34,10 @@ const FRESHNESS: Duration = Duration::from_millis(500);
 /// How often a stop that went unanswered is asked about while it settles.
 const DRAIN_QUERY: Duration = Duration::from_millis(50);
 
-/// One verified picture of the helper and how it was read.
-pub struct LiveFrame {
-    pub rgb: Arc<Buffer>,
+/// One verified picture of the helper and how it was read, its pixels in
+/// `P`: a shared buffer, or pixels charged to a budget.
+pub struct LiveFrame<P = Arc<Buffer>> {
+    pub rgb: P,
     pub width: u32,
     pub height: u32,
     pub epoch: Epoch,
@@ -255,6 +260,47 @@ impl LiveStream {
     /// pixels are invalid, the read passes its deadline, or the complete frame
     /// is older than its freshness limit.
     pub async fn next(&mut self, client: &Client, ring: &mut Ring) -> Result<LiveFrame> {
+        let frame = self
+            .next_into(client, ring, |_, _, length| Ok(Buffer::zeroed(length)?))
+            .await?;
+        Ok(LiveFrame {
+            rgb: Arc::new(frame.rgb),
+            width: frame.width,
+            height: frame.height,
+            epoch: frame.epoch,
+            at: frame.at,
+            metrics: frame.metrics,
+        })
+    }
+
+    /// [`next`](Self::next), its pixels reserved from `budget` before any is
+    /// allocated or read.
+    ///
+    /// # Errors
+    ///
+    /// As [`next`](Self::next), and `Busy` when the budget cannot hold the
+    /// picture, recorded at the allocation stage as an exhausted budget.
+    pub async fn next_reserved(
+        &mut self,
+        client: &Client,
+        ring: &mut Ring,
+        budget: &Budget,
+    ) -> Result<LiveFrame<FramePixels>> {
+        self.next_into(client, ring, |width, height, _| {
+            FramePixels::reserve(budget, width, height).map_err(|reason| {
+                Error::new(Code::Busy, "The frame budget cannot hold this picture")
+                    .with("reason", json!(reason))
+            })
+        })
+        .await
+    }
+
+    async fn next_into<P: Pixels>(
+        &mut self,
+        client: &Client,
+        ring: &mut Ring,
+        allocate: impl FnOnce(u32, u32, usize) -> Result<P>,
+    ) -> Result<LiveFrame<P>> {
         self.synchronized = false;
         self.acquisitions += 1;
         let mut progress = Progress::new(Record::new(self.acquisitions));
@@ -262,7 +308,7 @@ impl LiveStream {
         progress.record.requested_backend = Backend::named(self.backend.name());
         progress.record.pipe_reused = self.acquisitions > 1;
         let began = Instant::now();
-        let result = tokio::time::timeout(DEADLINE, self.capture(client, &mut progress))
+        let result = tokio::time::timeout(DEADLINE, self.capture(client, &mut progress, allocate))
             .await
             .unwrap_or_else(|_| {
                 progress.record.outcome = Outcome::Timeout;
@@ -286,6 +332,7 @@ impl LiveStream {
                 };
                 let reason = match (record.stage, error.code) {
                     (Stage::SourceAge, _) => Reason::SourceStale,
+                    (Stage::Allocation, Code::Busy) => Reason::BudgetExhausted,
                     (Stage::BodyRead, Code::Io) => Reason::Truncated,
                     (Stage::ReadyHeader, Code::Io) => Reason::TransportEnded,
                     (Stage::ReadyHeader, Code::InvalidJson) => Reason::InvalidSchema,
@@ -390,7 +437,12 @@ impl LiveStream {
         error.code == Code::StaleFrame && self.synchronized
     }
 
-    async fn capture(&mut self, client: &Client, progress: &mut Progress) -> Result<LiveFrame> {
+    async fn capture<P: Pixels>(
+        &mut self,
+        client: &Client,
+        progress: &mut Progress,
+        allocate: impl FnOnce(u32, u32, usize) -> Result<P>,
+    ) -> Result<LiveFrame<P>> {
         let began = Instant::now();
         progress.enter(Stage::BeforeProof);
         let before = client.identity().await;
@@ -429,12 +481,12 @@ impl LiveStream {
                 })
                 .ok_or_else(|| invalid("Preview dimensions overflow"))?;
             progress.enter(Stage::Allocation);
-            let mut rgb = Buffer::zeroed(length)?;
+            let mut rgb = allocate(width, height, length)?;
             progress.done();
             progress.record.allocated_bytes = length as u64;
             progress.enter(Stage::BodyRead);
             let reading = Instant::now();
-            self.socket.read_exact(&mut rgb).await?;
+            self.socket.read_exact(rgb.bytes()).await?;
             progress.done();
             Ok::<_, Error>((
                 Received {
@@ -482,7 +534,7 @@ impl LiveStream {
             ));
         }
         Ok(LiveFrame {
-            rgb: Arc::new(rgb),
+            rgb,
             width: header.width,
             height: header.height,
             epoch: after,
@@ -503,6 +555,23 @@ impl LiveStream {
                 ),
             },
         })
+    }
+}
+
+/// Where a frame's pixels are read into, allocated once its size is known.
+trait Pixels {
+    fn bytes(&mut self) -> &mut [u8];
+}
+
+impl Pixels for Buffer {
+    fn bytes(&mut self) -> &mut [u8] {
+        self
+    }
+}
+
+impl Pixels for FramePixels {
+    fn bytes(&mut self) -> &mut [u8] {
+        self.as_mut_slice()
     }
 }
 
