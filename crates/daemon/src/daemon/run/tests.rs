@@ -115,6 +115,27 @@ async fn observe_exit(
     .await;
 }
 
+/// The leader and the descendant it forks once ready and permitted, which
+/// fails if `command` ends first. The started event stays queued.
+async fn descendant_ready(
+    child: &mut Child,
+    command: std::pin::Pin<&mut impl Future<Output = Value>>,
+    receiver: &mut mpsc::Receiver<Value>,
+    observer: mpsc::Sender<Value>,
+) -> (atlas_core::process::Instance, atlas_core::process::Instance) {
+    let ready = async {
+        let leader = child.started(receiver, observer).await;
+        child.message("ready").await;
+        child.permit("start");
+        let descendant = child.message("descendant").await;
+        (leader, descendant)
+    };
+    tokio::select! {
+        reply = command => panic!("command ended before readiness: {reply}"),
+        processes = ready => processes,
+    }
+}
+
 #[tokio::test]
 async fn each_stop_cause_preserves_its_reply_and_escalation() {
     for (reason, timeout_first) in [
@@ -135,17 +156,8 @@ async fn each_stop_cause_preserves_its_reply_and_escalation() {
             cancelled.await.unwrap()
         });
         tokio::pin!(command);
-        let ready = async {
-            let leader = child.started(&mut receiver, observer).await;
-            child.message("ready").await;
-            child.permit("start");
-            let descendant = child.message("descendant").await;
-            (leader, descendant)
-        };
-        let (leader, descendant) = tokio::select! {
-            reply = &mut command => panic!("command ended before readiness: {reply}"),
-            processes = ready => processes,
-        };
+        let (leader, descendant) =
+            descendant_ready(&mut child, command.as_mut(), &mut receiver, observer).await;
         let mut cancel = Some(cancel);
         if !timeout_first {
             cancel.take().unwrap().send(reason.unwrap()).unwrap();
@@ -384,17 +396,8 @@ async fn a_child_exit_does_not_imply_its_pipe_closed() {
         std::future::pending::<Cancel>(),
     );
     tokio::pin!(command);
-    let ready = async {
-        let leader = child.started(&mut receiver, observer).await;
-        child.message("ready").await;
-        child.permit("start");
-        let descendant = child.message("descendant").await;
-        (leader, descendant)
-    };
-    let (leader, descendant) = tokio::select! {
-        reply = &mut command => panic!("command ended before readiness: {reply}"),
-        processes = ready => processes,
-    };
+    let (leader, descendant) =
+        descendant_ready(&mut child, command.as_mut(), &mut receiver, observer).await;
     tokio::time::pause();
     child.permit("exit");
     observe_exit(command.as_mut(), leader).await;
@@ -442,17 +445,8 @@ async fn cancellation_after_exit_leaves_the_descendant_running() {
             cancelled.await.unwrap()
         });
         tokio::pin!(command);
-        let ready = async {
-            let leader = child.started(&mut receiver, observer).await;
-            child.message("ready").await;
-            child.permit("start");
-            let descendant = child.message("descendant").await;
-            (leader, descendant)
-        };
-        let (leader, descendant) = tokio::select! {
-            reply = &mut command => panic!("command ended before readiness: {reply}"),
-            processes = ready => processes,
-        };
+        let (leader, descendant) =
+            descendant_ready(&mut child, command.as_mut(), &mut receiver, observer).await;
         tokio::time::pause();
         child.permit("exit");
         observe_exit(command.as_mut(), leader).await;
@@ -500,17 +494,8 @@ async fn a_wait_failure_keeps_the_outcome_uncertain_and_the_descendant_alive() {
         std::future::pending::<Cancel>(),
     );
     tokio::pin!(command);
-    let ready = async {
-        let leader = child.started(&mut receiver, observer).await;
-        child.message("ready").await;
-        child.permit("start");
-        let descendant = child.message("descendant").await;
-        (leader, descendant)
-    };
-    let (leader, descendant) = tokio::select! {
-        reply = &mut command => panic!("command ended before readiness: {reply}"),
-        processes = ready => processes,
-    };
+    let (leader, descendant) =
+        descendant_ready(&mut child, command.as_mut(), &mut receiver, observer).await;
     // Reap the owned leader while supervision is unpolled, so its real
     // wait returns ECHILD without a shipping fault hook.
     child.permit("exit");
