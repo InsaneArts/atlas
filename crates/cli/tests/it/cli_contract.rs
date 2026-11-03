@@ -266,7 +266,10 @@ fn a_click_by_reference_takes_no_point_name_or_role() {
         assert!(output.stdout.is_empty(), "{args:?}");
         let error: Value = serde_json::from_slice(&output.stderr).unwrap();
         assert_eq!(error["code"], "usage", "{args:?}");
-        assert!(error["error"].as_str().unwrap().contains("--ref"), "{args:?}");
+        assert!(
+            error["error"].as_str().unwrap().contains("--ref"),
+            "{args:?}"
+        );
     }
 }
 

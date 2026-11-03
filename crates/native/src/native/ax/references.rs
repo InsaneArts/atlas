@@ -16,8 +16,8 @@ use atlas_core::{
     process::Instance,
     screen::{
         elements::{
-            Element, LOOK_AGAIN, LOOK_NAMES, Limits, Look, Reference, Snapshot, click_point,
-            drawn, element_check, stale,
+            Element, LOOK_AGAIN, LOOK_NAMES, Limits, Look, Reference, Snapshot, click_point, drawn,
+            element_check, stale,
         },
         geometry::Bounds,
     },
@@ -172,7 +172,9 @@ impl Looks {
             .find(|look| look.name == reference.look)
             .ok_or_else(|| stale("That look is no longer kept"))?;
         if look.epoch != *epoch {
-            return Err(stale("That look was taken before the helper's display changed"));
+            return Err(stale(
+                "That look was taken before the helper's display changed",
+            ));
         }
 
         let mut at = reference.index;
@@ -306,8 +308,13 @@ pub(in crate::native) fn resolve(
     }
 
     let windows = native::windows::windows()?;
-    let expect = element_check(element, &windows, Expect::from_instance(found.instance)?, (x, y))
-        .map_err(|error| error.with("next", json!(LOOK_AGAIN)))?;
+    let expect = element_check(
+        element,
+        &windows,
+        Expect::from_instance(found.instance)?,
+        (x, y),
+    )
+    .map_err(|error| error.with("next", json!(LOOK_AGAIN)))?;
     Ok(Resolved { x, y, expect })
 }
 

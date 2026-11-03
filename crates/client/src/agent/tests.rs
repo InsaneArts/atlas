@@ -162,7 +162,13 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
     let helper = helper.serving_input(&client, &[FOCUS_APP]);
     let error = helper
         .serve(
-            elements(&client, &Target::Pid(812), &ElementFilter::default(), 10, false),
+            elements(
+                &client,
+                &Target::Pid(812),
+                &ElementFilter::default(),
+                10,
+                false,
+            ),
             |request| {
                 assert_ne!(request["op"], "elements", "no look is asked for");
                 textedit_reads(request)
@@ -174,8 +180,14 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
     assert!(error.error.contains("atlas start-input"), "{error}");
 
     for (reply, code) in [
-        (json!({"ok": true, "elements": [], "truncated": false}), "elements"),
-        (json!({"ok": true, "look": "KFPA", "elements": [], "truncated": false}), "elements"),
+        (
+            json!({"ok": true, "elements": [], "truncated": false}),
+            "elements",
+        ),
+        (
+            json!({"ok": true, "look": "KFPA", "elements": [], "truncated": false}),
+            "elements",
+        ),
         (
             json!({"ok": false, "code": "session-changed", "uncertain": true,
                 "error": "The helper changed since Atlas checked it; look again"}),
@@ -187,7 +199,13 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
         let helper = helper.serving_input(&client, &[LOOKS]);
         let error = helper
             .serve(
-                elements(&client, &Target::Pid(812), &ElementFilter::default(), 10, false),
+                elements(
+                    &client,
+                    &Target::Pid(812),
+                    &ElementFilter::default(),
+                    10,
+                    false,
+                ),
                 |request| {
                     if request["op"] == "elements" {
                         assert_eq!(request["epoch"]["processId"], 456);
@@ -1433,7 +1451,10 @@ fn the_default_listing_names_each_element_by_its_click_point_and_size() {
 #[test]
 fn a_kept_look_names_each_listed_element_by_its_reference() {
     let save = shown(3, "AXButton", Some("Save"), None);
-    let mut scan = scanned(vec![save.clone(), shown(12, "AXButton", Some("Open"), None)]);
+    let mut scan = scanned(vec![
+        save.clone(),
+        shown(12, "AXButton", Some("Open"), None),
+    ]);
     scan.look = Look::parse("kfpa");
 
     let compact = listing(812, &scan, &ElementFilter::default(), 50, false);
@@ -1451,7 +1472,13 @@ fn a_kept_look_names_each_listed_element_by_its_reference() {
     assert_eq!(one["elements"].as_array().unwrap().len(), 1);
     assert_eq!(one["elements"][0]["ref"], "kfpa12");
 
-    let unkept = listing(812, &scanned(vec![save]), &ElementFilter::default(), 50, false);
+    let unkept = listing(
+        812,
+        &scanned(vec![save]),
+        &ElementFilter::default(),
+        50,
+        false,
+    );
     assert!(unkept.get("look").is_none());
     assert!(unkept["elements"][0].get("ref").is_none());
 }
@@ -1528,7 +1555,10 @@ async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
         let expected = target
             .as_ref()
             .map_or(Value::Null, |_| json!({"pid": 812, "start": [123, 456]}));
-        assert_eq!(request.get("expect").cloned().unwrap_or(Value::Null), expected);
+        assert_eq!(
+            request.get("expect").cloned().unwrap_or(Value::Null),
+            expected
+        );
         assert!(client.controller.pending().unwrap().is_empty());
     }
 }

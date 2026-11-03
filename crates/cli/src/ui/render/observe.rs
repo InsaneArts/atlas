@@ -468,7 +468,10 @@ pub(super) fn elements(value: &Value) -> String {
             "#"
         };
         lines.push(String::new());
-        lines.push(table::render(&[first, "ROLE", "NAME", "VALUE", "AT"], &rows));
+        lines.push(table::render(
+            &[first, "ROLE", "NAME", "VALUE", "AT"],
+            &rows,
+        ));
     }
 
     let more = value["more"]

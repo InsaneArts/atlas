@@ -33,7 +33,8 @@ fn a_referenced_click_is_validated_with_its_whole_batch_before_anything_is_sent(
 
     validate(json!([{"type": "reference", "ref": "kfpa12"}, {"type": "key", "key": "return"}]))
         .unwrap();
-    let refused = validate(json!([{"type": "reference", "ref": "kfpa12", "count": 6}])).unwrap_err();
+    let refused =
+        validate(json!([{"type": "reference", "ref": "kfpa12", "count": 6}])).unwrap_err();
     assert_eq!(refused.code, "input");
     assert_eq!(
         refused.error,

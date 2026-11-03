@@ -2320,7 +2320,8 @@ fn the_input_service_offers_looks_a_click_can_name() {
 fn a_look_request_keeps_its_epoch_and_app_refusals_for_their_guards() {
     let epoch =
         r#"{"uid":501,"securitySessionId":1,"displayId":2,"width":800,"height":600,"processId":1}"#;
-    let body = format!(r#"{{"op":"elements","epoch":{epoch},"expect":{{"pid":812,"start":[123,456]}}}}"#);
+    let body =
+        format!(r#"{{"op":"elements","epoch":{epoch},"expect":{{"pid":812,"start":[123,456]}}}}"#);
     let Ok(Request::Elements {
         epoch: Ok(_),
         expect: Ok(Some(expect)),
@@ -2338,13 +2339,11 @@ fn a_look_request_keeps_its_epoch_and_app_refusals_for_their_guards() {
         assert!(
             matches!(
                 Request::decode(body.as_bytes()),
-                Ok(Request::Elements {
-                    epoch: Err(_),
-                    ..
-                } | Request::Elements {
-                    expect: Err(_) | Ok(None),
-                    ..
-                })
+                Ok(Request::Elements { epoch: Err(_), .. }
+                    | Request::Elements {
+                        expect: Err(_) | Ok(None),
+                        ..
+                    })
             ),
             "{body}"
         );

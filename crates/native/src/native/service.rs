@@ -203,9 +203,7 @@ impl Service {
         // nothing of it.
         self.check_epoch(epoch.clone())?;
         self.check_session()?;
-        let (look, snapshot) = self
-            .looks
-            .keep(epoch, read, std::time::Instant::now())?;
+        let (look, snapshot) = self.looks.keep(epoch, read, std::time::Instant::now())?;
         Ok(json!({
             "ok": true,
             "look": look.to_string(),

@@ -2,7 +2,17 @@ use super::*;
 
 #[test]
 fn every_look_name_is_four_letters_that_read_back_as_the_same_look() {
-    for number in [0, 1, 25, 26, 675, 104_729, LOOK_NAMES - 1, LOOK_NAMES, u64::MAX] {
+    for number in [
+        0,
+        1,
+        25,
+        26,
+        675,
+        104_729,
+        LOOK_NAMES - 1,
+        LOOK_NAMES,
+        u64::MAX,
+    ] {
         let look = Look::new(number);
         let name = look.to_string();
         assert_eq!(name.len(), 4, "{name}");

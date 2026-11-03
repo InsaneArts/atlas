@@ -81,11 +81,7 @@ pub fn elements(pid: i32, limits: Limits) -> Result<Snapshot> {
 /// [`elements`] with the object each element is, ending the walk once it
 /// meets `until`: what was read on the way there is all that tells that
 /// element and the elements it was reached from.
-pub(super) fn observe(
-    pid: i32,
-    limits: Limits,
-    until: Option<&AXUIElement>,
-) -> Result<Observed> {
+pub(super) fn observe(pid: i32, limits: Limits, until: Option<&AXUIElement>) -> Result<Observed> {
     // The system-wide element sets this process's global messaging timeout,
     // which covers every read below.
     if let Some(system) = ffi::system_wide() {

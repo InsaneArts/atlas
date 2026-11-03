@@ -101,14 +101,21 @@ fn two_callers_looks_each_keep_what_they_saw_and_one_never_retargets_the_other()
     for (look, base) in [(first, 100), (second, 200)] {
         let found = looks.find(at(look, 2), &epoch(), now).unwrap();
         assert_eq!(found.instance, editor());
-        assert_eq!(found.element.title.as_deref(), Some(&*format!("Button {base}.2")));
+        assert_eq!(
+            found.element.title.as_deref(),
+            Some(&*format!("Button {base}.2"))
+        );
         let objects: Vec<bool> = found
             .chain
             .iter()
             .zip([base + 2, base + 1, base])
             .map(|(kept, number)| *kept.0 == *object(number))
             .collect();
-        assert_eq!(objects, [true, true, true], "its own objects, nearest first");
+        assert_eq!(
+            objects,
+            [true, true, true],
+            "its own objects, nearest first"
+        );
     }
 }
 
@@ -119,7 +126,11 @@ fn a_look_that_gave_way_to_newer_ones_asks_for_a_fresh_look() {
     let (oldest, _) = looks.keep(epoch(), chained(editor(), 1, 1), now).unwrap();
     for number in 0..KEPT {
         looks
-            .keep(epoch(), chained(finder(), 10 + i32::try_from(number).unwrap(), 1), now)
+            .keep(
+                epoch(),
+                chained(finder(), 10 + i32::try_from(number).unwrap(), 1),
+                now,
+            )
             .unwrap();
     }
     assert_stale(&looks.find(at(oldest, 0), &epoch(), now).err().unwrap());
@@ -129,8 +140,12 @@ fn a_look_that_gave_way_to_newer_ones_asks_for_a_fresh_look() {
 fn looks_past_their_size_or_their_age_are_let_go() {
     let looks = Looks::default();
     let now = Instant::now();
-    let (first, _) = looks.keep(epoch(), sized(editor(), ELEMENTS / 2), now).unwrap();
-    let (second, _) = looks.keep(epoch(), sized(editor(), ELEMENTS / 2), now).unwrap();
+    let (first, _) = looks
+        .keep(epoch(), sized(editor(), ELEMENTS / 2), now)
+        .unwrap();
+    let (second, _) = looks
+        .keep(epoch(), sized(editor(), ELEMENTS / 2), now)
+        .unwrap();
     assert!(looks.find(at(first, 0), &epoch(), now).is_ok());
     let (third, _) = looks.keep(epoch(), sized(editor(), 1), now).unwrap();
     assert_stale(&looks.find(at(first, 0), &epoch(), now).err().unwrap());
@@ -138,7 +153,12 @@ fn looks_past_their_size_or_their_age_are_let_go() {
 
     let almost = now + LIFETIME - Duration::from_millis(1);
     assert!(looks.find(at(third, 0), &epoch(), almost).is_ok());
-    assert_stale(&looks.find(at(third, 0), &epoch(), now + LIFETIME).err().unwrap());
+    assert_stale(
+        &looks
+            .find(at(third, 0), &epoch(), now + LIFETIME)
+            .err()
+            .unwrap(),
+    );
 }
 
 #[test]
@@ -181,7 +201,10 @@ fn a_replaced_or_unnamed_process_is_refused_before_its_app_is_read_again() {
 
     let error = resolve(&looks, at(look, 0), &epoch(), Some(editor())).unwrap_err();
     assert_stale(&error);
-    assert_eq!(error.error, "That look is of another app than the one named");
+    assert_eq!(
+        error.error,
+        "That look is of another app than the one named"
+    );
 }
 
 #[test]
@@ -194,11 +217,20 @@ fn an_element_is_reached_only_through_the_same_objects_from_the_same_start() {
     let objects = [traced(1, None), traced(2, Some(0)), traced(3, Some(1))];
     assert!(reached(&objects, 2, &[kept(2), kept(1)]));
     assert!(reached(&objects, 0, &[]));
-    assert!(!reached(&objects, 2, &[kept(2)]), "a walk that started higher");
+    assert!(
+        !reached(&objects, 2, &[kept(2)]),
+        "a walk that started higher"
+    );
     assert!(!reached(&objects, 2, &[kept(2), kept(1), kept(5)]));
-    assert!(!reached(&objects, 2, &[kept(4), kept(1)]), "a replaced parent");
+    assert!(
+        !reached(&objects, 2, &[kept(4), kept(1)]),
+        "a replaced parent"
+    );
     let moved = [traced(1, None), traced(2, Some(0)), traced(3, Some(0))];
-    assert!(!reached(&moved, 2, &[kept(2), kept(1)]), "moved to another parent");
+    assert!(
+        !reached(&moved, 2, &[kept(2), kept(1)]),
+        "moved to another parent"
+    );
 }
 
 #[test]
