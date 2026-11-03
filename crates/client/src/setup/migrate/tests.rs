@@ -54,61 +54,80 @@ fn every_worker_is_given_the_required_identity() {
 }
 
 #[tokio::test]
-async fn update_preflight_refuses_a_missing_retirement_backup() {
+async fn update_preflight_inspects_only_the_managed_job_and_writes_no_record() {
     let dir = tempfile::tempdir().unwrap();
     let mut migration = sandbox(dir.path());
     migration.log.state = State::Applied;
     migration.log.plan.home = dir.path().join("helper");
-    migration.log.plan.old_plist_sha256 = atlas_daemon::test_support::text_sha256("old definition");
     let layout = migration.layout();
-    let backup = layout.root().join("backup").join(format!(
-        "{}-{}.plist",
-        migration.log.plan.old_label,
-        &migration.log.plan.old_plist_sha256[..16]
-    ));
-    fs::create_dir_all(backup.parent().unwrap()).unwrap();
+    let defined = migration.agent().plist_sha256(&layout.logs());
+    let plist = layout.agent_plist(LABEL).to_string_lossy().into_owned();
+    let shown = std::cell::RefCell::new(json!({"loaded": false, "plistKind": "absent"}));
     let inspect = async |request| match request {
-        Request::Inspect { .. } => {
-            Ok(json!({"ok": true, "jobs": {LABEL: {"loaded": false, "plistKind": "absent"}}}))
-        }
-        Request::CheckRetire {
-            label,
-            sha256,
-            missing_ok,
-            ..
-        } => {
-            atlas_daemon::test_support::retirement_with(
-                &layout,
-                &label,
-                &sha256,
-                missing_ok,
-                || Ok(atlas_daemon::helper_setup::Job::Absent),
-            )?;
-            Ok(json!({"ok": true}))
+        Request::Inspect { labels, .. } => {
+            assert_eq!(labels, vec![LABEL.to_owned()]);
+            let job = shown.borrow().clone();
+            Ok(json!({"ok": true, "jobs": {LABEL: job}}))
         }
         _ => panic!("preflight must only inspect"),
     };
-    fs::write(&backup, "old definition").unwrap();
     let program = Path::new("/updated/atlas");
     let signed = |path: &Path| {
         assert_eq!(path, program);
         Ok("updated-hash".into())
     };
+
     migration
-        .preflight_with(true, program, signed, inspect)
+        .preflight_with(program, signed, inspect)
         .await
         .unwrap();
-    fs::remove_file(&backup).unwrap();
+
+    shown.replace(json!({
+        "loaded": true, "plistKind": "regular", "plistSha256": defined, "path": plist,
+    }));
+    migration
+        .preflight_with(program, signed, inspect)
+        .await
+        .unwrap();
+
+    for differing in [
+        json!({"loaded": true, "plistKind": "regular", "plistSha256": "b".repeat(64), "path": plist}),
+        json!({"loaded": true, "plistKind": "regular", "plistSha256": defined, "path": "/elsewhere.plist"}),
+        json!({"loaded": false, "plistKind": "link"}),
+    ] {
+        shown.replace(differing.clone());
+        let error = migration
+            .preflight_with(program, signed, inspect)
+            .await
+            .unwrap_err();
+        assert!(
+            error.error.contains("differs from its setup"),
+            "{differing}: {}",
+            error.error
+        );
+    }
+
+    let unsigned = |_: &Path| Err(problem("not signed as Atlas"));
     let error = migration
-        .preflight_with(true, program, signed, inspect)
+        .preflight_with(program, unsigned, inspect)
         .await
         .unwrap_err();
-    assert!(error.error.contains("not the expected definition"));
-    assert!(!layout.agent_plist(&migration.log.plan.old_label).exists());
+    assert_eq!(error.error, "not signed as Atlas");
+
+    let config_path = migration.log.plan.config_path.clone();
+    fs::write(&config_path, "edited").unwrap();
+    let error = migration
+        .preflight_with(program, signed, inspect)
+        .await
+        .unwrap_err();
     assert!(
-        !migration.path.exists(),
-        "preflight writes no migration record"
+        error
+            .error
+            .contains("changed during setup; it was not overwritten")
     );
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), "edited");
+
+    assert!(!migration.path.exists(), "preflight writes no setup record");
 }
 
 fn config() -> Config {
@@ -121,13 +140,15 @@ fn config() -> Config {
     }
 }
 
+/// A first setup of the configuration `text` at `config_path`, as
+/// `atlas init` records it.
 fn plan(config_path: PathBuf, text: &str) -> Plan {
     Plan {
         uid: 502,
         controller: "c".into(),
         home: "/Users/h".into(),
-        old_label: "dev.atlas.live-sessiond".into(),
-        old_plist_sha256: "a".repeat(64),
+        old_label: String::new(),
+        old_plist_sha256: String::new(),
         label: LABEL.into(),
         controller_uid: 501,
         program: "/x".into(),
@@ -135,25 +156,8 @@ fn plan(config_path: PathBuf, text: &str) -> Plan {
         config_path,
         old_config: text.into(),
         new_config: text.into(),
-        fresh: false,
+        fresh: true,
     }
-}
-
-#[test]
-fn the_managed_layout_only_moves_sockets() {
-    let layout = Layout::new(502, "/Users/atlastest".into());
-    let target = managed(&config(), &layout);
-    assert_eq!(
-        target.socket_path,
-        PathBuf::from("/Users/atlastest/.atlas/helper/502.sock")
-    );
-    assert_eq!(
-        target.input_socket,
-        PathBuf::from("/Users/atlastest/.atlas/input/input.sock")
-    );
-    assert_eq!(target.identity_probe, config().identity_probe);
-    assert_eq!(target.output_dir, config().output_dir);
-    assert!(target.socket_path.to_string_lossy().len() < 104);
 }
 
 /// A setup counts for the account at its home only: a record left by a
@@ -208,6 +212,46 @@ fn logs_round_trip_privately() {
     assert_eq!(load_log(&dir.path().join("missing.json")).unwrap(), None);
 }
 
+/// The stored record keeps every field a setup has always written, and a
+/// migration an earlier version recorded still reads, so it is refused by
+/// name rather than as a malformed record.
+#[test]
+fn records_keep_the_format_setups_write() {
+    let stored = json!({
+        "version": 1,
+        "plan": {
+            "uid": 502,
+            "controller": "c",
+            "home": "/Users/h",
+            "oldLabel": "",
+            "oldPlistSha256": "",
+            "label": LABEL,
+            "controllerUid": 501,
+            "program": "/x",
+            "cdhash": "ab",
+            "configPath": "/c/atlas.toml",
+            "oldConfig": "a",
+            "newConfig": "a",
+            "fresh": true,
+        },
+        "state": "applied",
+        "pending": ["g"],
+        "history": [["prepare", "1"]],
+    });
+    let log: Log = serde_json::from_value(stored.clone()).unwrap();
+    assert_eq!(log.plan, plan("/c/atlas.toml".into(), "a"));
+    assert_eq!(serde_json::to_value(&log).unwrap(), stored);
+
+    let mut migrated = stored;
+    migrated["plan"]["oldLabel"] = json!("dev.atlas.live-sessiond");
+    migrated["plan"]["oldPlistSha256"] = json!("a".repeat(64));
+    migrated["plan"]["fresh"] = json!(false);
+    migrated["state"] = json!("rolling-back");
+    let log: Log = serde_json::from_value(migrated).unwrap();
+    assert!(!log.plan.fresh);
+    assert_eq!(log.state, State::RollingBack);
+}
+
 #[test]
 fn plans_resolve_relative_configuration_against_the_file() {
     let dir = tempfile::tempdir().unwrap();
@@ -224,7 +268,7 @@ fn plans_resolve_relative_configuration_against_the_file() {
 
     let migration = Migration::new(dir.path().join("setup-502.json"), log).unwrap();
     assert_eq!(
-        migration.old.config.socket_path,
+        migration.client.config.socket_path,
         fs::canonicalize(dir.path()).unwrap().join("s.sock")
     );
 }
@@ -309,64 +353,27 @@ fn helper_results_must_be_affirmative_json() {
     assert!(result(json!({"ok": true, "exitCode": 0})).is_err());
 }
 
-const OLD: &str = "helper_uid = 60001\nsocket_path = \"a.sock\"\nidentity_probe = \"p\"\n\
-                       input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
-const NEW: &str = "helper_uid = 60001\nsocket_path = \"b.sock\"\nidentity_probe = \"p\"\n\
-                       input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
+const CONFIG: &str = "helper_uid = 60001\nsocket_path = \"a.sock\"\nidentity_probe = \"p\"\n\
+                          input_socket = \"i.sock\"\noutput_dir = \"runs\"\n";
 
-/// A migration from OLD to NEW kept entirely in `dir`: its configuration
-/// file, its log and its pending-mutation state.
+/// A first setup of CONFIG kept entirely in `dir`: its configuration file,
+/// its log and its pending-mutation state.
 fn sandbox(dir: &Path) -> Migration {
     let config_path = dir.join("atlas.toml");
-    fs::write(&config_path, OLD).unwrap();
-    let mut planned = plan(config_path, OLD);
-    planned.new_config = NEW.into();
+    fs::write(&config_path, CONFIG).unwrap();
 
     let log = Log {
         version: 1,
-        plan: planned,
+        plan: plan(config_path, CONFIG),
         state: State::Applying,
         pending: Vec::new(),
         history: Vec::new(),
     };
 
     let mut migration = Migration::new(dir.join("setup.json"), log).unwrap();
-    let controller = atlas_control::Controller::at(60001, &dir.join("state"));
-    migration.old.controller = controller.clone();
-    migration.new.controller = controller;
+    migration.client.controller = atlas_control::Controller::at(60001, &dir.join("state"));
 
     migration
-}
-
-#[test]
-fn the_configuration_switches_only_from_known_contents() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut migration = sandbox(dir.path());
-    let path = migration.log.plan.config_path.clone();
-
-    migration.switch_config(OLD, NEW).unwrap();
-    assert_eq!(fs::read_to_string(&path).unwrap(), NEW);
-
-    migration.switch_config(OLD, NEW).unwrap();
-    assert_eq!(migration.log.history.len(), 1, "already switched");
-
-    fs::write(&path, "edited").unwrap();
-    assert!(migration.switch_config(NEW, OLD).is_err());
-    assert_eq!(fs::read_to_string(&path).unwrap(), "edited");
-
-    // A link is never replaced, even with the expected contents behind it.
-    let real = dir.path().join("real.toml");
-    fs::write(&real, NEW).unwrap();
-    fs::remove_file(&path).unwrap();
-    std::os::unix::fs::symlink(&real, &path).unwrap();
-    assert!(migration.switch_config(NEW, OLD).is_err());
-    assert!(
-        fs::symlink_metadata(&path)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert_eq!(fs::read_to_string(&real).unwrap(), NEW);
 }
 
 #[test]
@@ -398,7 +405,7 @@ fn uncertain_outcomes_stay_pending_and_definitive_ones_settle() {
     assert_eq!(migration.conclude(&succeeded, Ok(7)).unwrap(), 7);
     assert_eq!(migration.log.pending, vec![uncertain.clone()]);
     assert_eq!(
-        migration.old.controller.pending().unwrap(),
+        migration.client.controller.pending().unwrap(),
         vec![uncertain.clone()]
     );
 
@@ -420,7 +427,7 @@ fn only_pending_actions_this_setup_owns_let_it_continue() {
     drop(migration.begin().unwrap());
     migration.require_owned_pending().unwrap();
 
-    drop(migration.old.controller.quarantine().unwrap());
+    drop(migration.client.controller.quarantine().unwrap());
     let error = migration.require_owned_pending().unwrap_err();
     assert!(error.uncertain);
     assert_eq!(error.code, "uncertain");
@@ -445,7 +452,7 @@ fn apply_starts_only_from_a_log_it_can_continue() {
     assert_eq!(apply_start(None, path).unwrap(), Start::Plan(None));
 
     for state in [State::Applying, State::Applied] {
-        let log = recorded(state, false, 1);
+        let log = recorded(state, true, 1);
         assert_eq!(
             apply_start(Some(log.clone()), path).unwrap(),
             Start::Resume(log)
@@ -453,8 +460,9 @@ fn apply_starts_only_from_a_log_it_can_continue() {
     }
 
     for refused in [
-        recorded(State::Applied, false, 2),
-        recorded(State::RollingBack, false, 1),
+        recorded(State::Applied, true, 2),
+        recorded(State::RollingBack, true, 1),
+        recorded(State::Applied, false, 1),
     ] {
         assert!(
             apply_start(Some(refused.clone()), path).is_err(),
@@ -462,7 +470,7 @@ fn apply_starts_only_from_a_log_it_can_continue() {
         );
     }
 
-    let replanned = recorded(State::RolledBack, false, 1);
+    let replanned = recorded(State::RolledBack, true, 1);
     assert_eq!(
         apply_start(Some(replanned.clone()), path).unwrap(),
         Start::Plan(Some(replanned))
@@ -484,18 +492,51 @@ fn an_update_carries_over_only_a_setup_still_in_effect() {
 }
 
 #[test]
-fn a_first_setup_resumes_its_own_log_and_defers_to_a_migration() {
+fn a_first_setup_resumes_its_own_log() {
     let path = Path::new("/x/setup-502.json");
-    assert_eq!(fresh_start(None, path).unwrap(), Some(Start::Plan(None)));
+    assert_eq!(fresh_start(None, path).unwrap(), Start::Plan(None));
 
-    let fresh = recorded(State::Applied, true, 1);
-    assert_eq!(
-        fresh_start(Some(fresh.clone()), path).unwrap(),
-        Some(Start::Resume(fresh))
-    );
+    for state in [State::Applying, State::Applied, State::RolledBack] {
+        let fresh = recorded(state, true, 1);
+        assert_eq!(
+            fresh_start(Some(fresh.clone()), path).unwrap(),
+            Start::Resume(fresh)
+        );
+    }
 
-    let migrated = recorded(State::Applied, false, 1);
-    assert_eq!(fresh_start(Some(migrated), path).unwrap(), None);
     assert!(fresh_start(Some(recorded(State::Applied, true, 2)), path).is_err());
     assert!(fresh_start(Some(recorded(State::RollingBack, true, 1)), path).is_err());
+}
+
+/// A migration an earlier version of Atlas recorded is refused, in any
+/// state, before a pass loads it, plans or archives anything, so the
+/// actions it still owns stay pending. An unknown version is still named
+/// as one.
+#[test]
+fn a_migration_an_earlier_version_recorded_is_refused_by_name() {
+    let path = Path::new("/x/setup-502.json");
+
+    for state in [
+        State::Applying,
+        State::Applied,
+        State::RollingBack,
+        State::RolledBack,
+    ] {
+        let mut migrated = recorded(state, false, 1);
+        migrated.pending = vec!["g".into()];
+
+        for refused in [
+            apply_start(Some(migrated.clone()), path),
+            fresh_start(Some(migrated), path),
+        ] {
+            let error = refused.unwrap_err();
+            assert_eq!(error.error, earlier_migration(path).error, "{state:?}");
+            assert!(error.error.contains("earlier version of Atlas"));
+            assert!(error.error.contains("/x/setup-502.json"));
+            assert!(!error.uncertain);
+        }
+    }
+
+    let unknown = fresh_start(Some(recorded(State::Applied, false, 2)), path).unwrap_err();
+    assert_eq!(unknown.error, unknown_version(path).error);
 }

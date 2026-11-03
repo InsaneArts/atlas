@@ -1,8 +1,8 @@
 //! Helper setup. [`preview`] is read-only: it reports what exists, what is
 //! reachable and what cannot be known from here, writing nothing and starting
 //! nothing; a fact we cannot observe is `null`, never `false`. [`migrate`]
-//! moves capture to the managed private layout through the actions
-//! [`atlas_daemon::helper_setup`] runs inside the helper login.
+//! records and verifies the first setup of the managed private layout through
+//! the actions [`atlas_daemon::helper_setup`] runs inside the helper login.
 pub mod configuration;
 pub mod installed_app;
 pub mod job;

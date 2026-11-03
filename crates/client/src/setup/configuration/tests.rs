@@ -98,6 +98,30 @@ fn a_new_configuration_uses_the_managed_layout() {
     );
 }
 
+#[test]
+fn the_managed_layout_only_moves_sockets() {
+    let config = Config {
+        helper_uid: 502,
+        socket_path: "/tmp/atlas-live-502/502.sock".into(),
+        identity_probe: "/Users/Shared/Atlas/atlas".into(),
+        input_socket: "/tmp/atlas-input-502/input.sock".into(),
+        output_dir: "/Users/c/runs".into(),
+    };
+    let layout = Layout::new(502, "/Users/atlastest".into());
+    let target = managed(&config, &layout);
+    assert_eq!(
+        target.socket_path,
+        PathBuf::from("/Users/atlastest/.atlas/helper/502.sock")
+    );
+    assert_eq!(
+        target.input_socket,
+        PathBuf::from("/Users/atlastest/.atlas/input/input.sock")
+    );
+    assert_eq!(target.identity_probe, config.identity_probe);
+    assert_eq!(target.output_dir, config.output_dir);
+    assert!(target.socket_path.to_string_lossy().len() < 104);
+}
+
 fn configuration_at(root: &Path) -> Config {
     Config {
         helper_uid: 60001,
