@@ -130,19 +130,24 @@ impl Mutation<'_> {
         let valid = match self {
             // A checked batch is confirmed only with its expectation echoed: a
             // service that ignored it posted the input unchecked. An action
-            // on an element is confirmed only with how it was verified.
+            // on an element is confirmed only with how it was verified, and
+            // one already as asked (matched) sent nothing, so is not counted.
             Self::Input {
                 actions, expect, ..
             } => {
+                let count = actions.actions().len() as u64;
                 let on_elements = actions
                     .actions()
                     .iter()
                     .any(|action| action.element_action().is_some());
-                reply["performed"].as_u64() == Some(actions.actions().len() as u64)
+                let verification = Verification::deserialize(&reply["verification"]).ok();
+                let performed = reply["performed"].as_u64();
+                (performed == Some(count)
+                    || (verification == Some(Verification::Matched)
+                        && performed == count.checked_sub(1)))
                     && expect.is_none_or(|expect| reply["expect"] == json!(expect))
                     && (!on_elements
-                        || (reply["mechanism"] == "accessibility"
-                            && Verification::deserialize(&reply["verification"]).is_ok()))
+                        || (reply["mechanism"] == "accessibility" && verification.is_some()))
             }
             Self::JobStart { uid, .. } => {
                 matches!(JobReply::deserialize(reply), Ok(JobReply::Start { job }) if job_started(*uid, &job))

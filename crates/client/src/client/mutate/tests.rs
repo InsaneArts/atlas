@@ -67,7 +67,13 @@ fn an_element_action_is_confirmed_only_with_its_verification() {
     input()
         .validate(&json!({"ok": true, "performed": 1, "mechanism": "accessibility", "verification": "matched"}))
         .unwrap();
+    // An element already as asked was left as it was: nothing was sent.
+    input()
+        .validate(&json!({"ok": true, "performed": 0, "mechanism": "accessibility", "verification": "matched"}))
+        .unwrap();
     for reply in [
+        json!({"ok": true, "performed": 0, "mechanism": "accessibility", "verification": "mismatch"}),
+        json!({"ok": true, "performed": 0, "mechanism": "accessibility", "verification": "not-checked"}),
         json!({"ok": true, "performed": 1}),
         json!({"ok": true, "performed": 1, "mechanism": "accessibility"}),
         json!({"ok": true, "performed": 1, "mechanism": "accessibility", "verification": "done"}),
