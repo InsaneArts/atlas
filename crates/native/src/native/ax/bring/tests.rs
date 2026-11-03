@@ -2820,65 +2820,139 @@ fn a_controller_pinned_instance_is_not_replaced_at_native_admission() {
     );
 }
 
-/// An element of the test app: the window's title in its title bar.
+/// Elements of the test app: the window's title in its title bar, and a
+/// button in it.
 const TITLE: usize = 7;
+const BUTTON: usize = 8;
 
-/// The test app with its window's title at the top of the window, where
-/// Accessibility finds it at the press point.
+/// The test app as TextEdit showed itself in the helper: its window at
+/// (108, 287), 586 by 488, its title left beside the window buttons at
+/// (190, 295), 68 by 16, so its title band runs from 287 to 319. A press in
+/// the middle of the bar finds the window itself.
 fn titled() -> Fake {
     let mut fake = Fake::new();
-    fake.hit = Some(TITLE);
-    fake.answers
-        .insert((TITLE, "AXWindow"), Answer::Element(WINDOW));
-    fake.answers
-        .insert((WINDOW, "AXTitleUIElement"), Answer::Element(TITLE));
-    fake.answers
-        .insert((TITLE, "AXPosition"), Answer::Point(150.0, 33.0));
-    fake.answers
-        .insert((TITLE, "AXSize"), Answer::Size(120.0, 16.0));
+    fake.hit = Some(WINDOW);
+    fake.windows[0].bounds = Bounds {
+        x: 108.0,
+        y: 287.0,
+        width: 586.0,
+        height: 488.0,
+    };
+    for (element, name, answer) in [
+        (WINDOW, "AXPosition", Answer::Point(108.0, 287.0)),
+        (WINDOW, "AXSize", Answer::Size(586.0, 488.0)),
+        (WINDOW, "AXTitleUIElement", Answer::Element(TITLE)),
+        (TITLE, "AXRole", Answer::Text("AXStaticText".into())),
+        (TITLE, "AXWindow", Answer::Element(WINDOW)),
+        (TITLE, "AXPosition", Answer::Point(190.0, 295.0)),
+        (TITLE, "AXSize", Answer::Size(68.0, 16.0)),
+        (BUTTON, "AXRole", Answer::Text("AXButton".into())),
+        (BUTTON, "AXWindow", Answer::Element(WINDOW)),
+    ] {
+        fake.answers.insert((element, name), answer);
+    }
     fake
 }
 
-/// Where the drag presses: on the title.
-const PRESS: (f64, f64) = (200.0, 40.0);
+/// The middle of the title bar, where agents press.
+const PRESS: (f64, f64) = (401.0, 299.0);
 
 /// One change to the test app between two proofs, and what it is.
 type Change = (&'static str, fn(&mut Fake));
 
-fn moved(fake: &mut Fake) -> Result<Option<i64>> {
+fn moved_at(fake: &mut Fake, press: (f64, f64)) -> Result<Option<i64>> {
     let listed = fake.windows.clone();
     let deadline = fake.now.get() + REQUEST;
     let mut reader = Reader {
         ask: &mut *fake,
         deadline,
     };
-    reader.title_bar(&APP, 812, PRESS, &listed)
+    reader.title_bar(&APP, 812, press, &listed)
+}
+
+fn moved(fake: &mut Fake) -> Result<Option<i64>> {
+    moved_at(fake, PRESS)
+}
+
+#[test]
+fn a_press_anywhere_in_the_title_band_moves_the_window() {
+    for press in [
+        PRESS,
+        (401.0, 287.0),
+        (401.0, 293.0),
+        (401.0, 318.9),
+        (693.0, 300.0),
+    ] {
+        assert_eq!(
+            moved_at(&mut titled(), press).unwrap(),
+            Some(42),
+            "the window itself at {press:?}"
+        );
+    }
+    let mut on_title = titled();
+    on_title.hit = Some(TITLE);
+    assert_eq!(
+        moved_at(&mut on_title, (220.0, 300.0)).unwrap(),
+        Some(42),
+        "its title"
+    );
+}
+
+#[test]
+fn a_press_below_the_title_band_on_a_control_or_without_a_title_proves_no_move() {
+    for press in [(401.0, 319.0), (401.0, 330.0), (401.0, 600.0)] {
+        assert_eq!(
+            moved_at(&mut titled(), press).unwrap(),
+            None,
+            "the window below its band at {press:?}"
+        );
+    }
+
+    let mut control = titled();
+    control.hit = Some(BUTTON);
+    assert_eq!(moved(&mut control).unwrap(), None, "a button in the bar");
+
+    let mut untitled = titled();
+    untitled.answers.remove(&(WINDOW, "AXTitleUIElement"));
+    assert_eq!(moved(&mut untitled).unwrap(), None, "no title element");
+
+    let mut beside = titled();
+    beside.hit = Some(TITLE);
+    assert_eq!(
+        moved(&mut beside).unwrap(),
+        None,
+        "the title found where it is not"
+    );
 }
 
 #[test]
 fn window_move_proof_expires_when_its_source_changes() {
-    assert_eq!(moved(&mut titled()).unwrap(), Some(42), "its own title");
+    assert_eq!(moved(&mut titled()).unwrap(), Some(42), "its own title bar");
 
-    let changes: [Change; 10] = [
+    let changes: [Change; 11] = [
         ("nothing there", |fake| fake.hit = None),
         ("its content", |fake| fake.hit = Some(FIELD)),
         ("another process's element", |fake| {
-            fake.owners.insert(TITLE, 900);
+            fake.owners.insert(WINDOW, 900);
         }),
         ("a title that is not the window's", |fake| {
             fake.answers
                 .insert((WINDOW, "AXTitleUIElement"), Answer::Element(FIELD));
         }),
-        ("a window without a title element", |fake| {
-            fake.answers.remove(&(WINDOW, "AXTitleUIElement"));
+        ("a title another process owns", |fake| {
+            fake.owners.insert(TITLE, 900);
         }),
         ("a dialog", |fake| {
             fake.answers
                 .insert((WINDOW, "AXSubrole"), Answer::Text("AXDialog".into()));
         }),
-        ("a point beside the title", |fake| {
+        ("a title outside the window", |fake| {
             fake.answers
-                .insert((TITLE, "AXPosition"), Answer::Point(300.0, 33.0));
+                .insert((TITLE, "AXPosition"), Answer::Point(190.0, 280.0));
+        }),
+        ("a title with no frame", |fake| {
+            fake.answers.remove(&(TITLE, "AXPosition"));
+            fake.answers.remove(&(TITLE, "AXSize"));
         }),
         ("a window that moved", |fake| {
             fake.windows[0].bounds.x += 50.0
@@ -2890,8 +2964,11 @@ fn window_move_proof_expires_when_its_source_changes() {
             };
             fake.windows.push(twin);
         }),
-        ("a window now another process's", |fake| {
-            fake.owners.insert(WINDOW, 900);
+        ("a title bar now too thin for the press", |fake| {
+            fake.answers
+                .insert((TITLE, "AXPosition"), Answer::Point(190.0, 287.0));
+            fake.answers
+                .insert((TITLE, "AXSize"), Answer::Size(68.0, 10.0));
         }),
     ];
     for (what, change) in changes {

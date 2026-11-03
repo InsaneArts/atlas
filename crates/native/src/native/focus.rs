@@ -846,11 +846,12 @@ fn point(
 }
 
 /// A drag drops where [`point`] lets a pointer action land, or, when it
-/// moves the app's own window by its title, on the clear desktop: inside
-/// the display with nothing listed there (see [`windows::ground_at`]). The
-/// move is proven in this very check, from the window on top at the press
-/// point and Accessibility finding that window's title there; a widget, the
-/// Dock, another window or what could not be read still refuses.
+/// moves the app's own window by its title bar, on the clear desktop:
+/// inside the display with nothing listed there (see
+/// [`windows::ground_at`]). The move is proven in this very check, from the
+/// window on top at the press point and Accessibility finding that window's
+/// title bar there; a widget, the Dock, another window or what could not be
+/// read still refuses.
 fn dropped(
     expect: &Expect,
     from: (f64, f64),
@@ -886,11 +887,11 @@ fn dropped(
 }
 
 /// The refusal of a drop on the clear desktop by a drag not proven to move
-/// a window by its title.
+/// a window by its title bar.
 fn unproven_move() -> Error {
     let message = format!(
-        "Only a window dragged by its title can be dropped on the empty desktop, so start the \
-         drag on its title or pick another drop point; {NOT_SENT}"
+        "Only a window dragged by its title bar can be dropped on the empty desktop, so start \
+         the drag on its title bar or pick another drop point; {NOT_SENT}"
     );
     Error::new(Code::FocusChanged, message).with("reason", json!(Reason::Point))
 }

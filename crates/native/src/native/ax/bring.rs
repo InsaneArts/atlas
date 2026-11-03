@@ -180,6 +180,19 @@ pub(in crate::native) fn title_bar(
     reader.title_bar(&app, pid, point, listed)
 }
 
+/// The band across the top of a window `frame` where its title bar is,
+/// worked out from its `title` element: from the window's top edge down past
+/// the title by as much again as the title sits below that edge. None when
+/// the title is not inside the window.
+fn title_band(frame: &Bounds, title: &Bounds) -> Option<Bounds> {
+    let above = title.y - frame.y;
+    let height = above * 2.0 + title.height;
+    (above >= 0.0 && title.height > 0.0 && frame.covers(title)).then(|| Bounds {
+        height: height.min(frame.height),
+        ..frame.clone()
+    })
+}
+
 fn supports_raise(
     names: &CFArray<CFType>,
     deadline: Instant,
@@ -450,11 +463,12 @@ impl<A: Backend> Reader<A> {
         Ok((candidate.layer != windows::MENU_LAYER).then_some(candidate.number))
     }
 
-    /// The listed window of app `pid` whose own title Accessibility finds
-    /// at the point: the element there is the one its standard window names
-    /// as its title, the point is inside that title, and `listed` shows the
-    /// window once. A generic window hit or a guessed strip proves nothing;
-    /// None when anything else is there.
+    /// The listed window of app `pid` that a press at the point moves by its
+    /// title bar: Accessibility finds there either the element its standard
+    /// window names as its title, or that window itself with nothing deeper,
+    /// and the point lies in the window's title band (see [`title_band`]).
+    /// `listed` must show the window once. A window without a title
+    /// element proves nothing; None when anything else is there.
     fn title_bar(
         &mut self,
         app: &A::Element,
@@ -469,21 +483,39 @@ impl<A: Backend> Reader<A> {
         let Some(hit) = hit.filter(|hit| self.ask.owner(hit) == Some(pid)) else {
             return Ok(None);
         };
-        let Some(window) = self.reference(&hit, "AXWindow")? else {
-            return Ok(None);
+        let window = if self.text(&hit, "AXRole")?.as_deref() == Some("AXWindow") {
+            hit.clone()
+        } else {
+            match self.reference(&hit, "AXWindow")? {
+                Some(window) => window,
+                None => return Ok(None),
+            }
         };
         self.owned(&window, pid)?;
-        if self.reference(&window, "AXTitleUIElement")?.as_ref() != Some(&hit) {
+        let Some(title) = self.reference(&window, "AXTitleUIElement")? else {
+            return Ok(None);
+        };
+        self.owned(&title, pid)?;
+        if hit != title && hit != window {
             return Ok(None);
         }
         let shown = self.window(&window)?;
         if shown.role.as_deref() != Some("AXWindow")
             || shown.subrole.as_deref() != Some("AXStandardWindow")
-            || !self.frame(&hit)?.is_some_and(|title| title.contains(x, y))
         {
             return Ok(None);
         }
-        Ok(match described(&shown, frame(&shown)?, pid, listed) {
+        let frame = frame(&shown)?;
+        let Some(heading) = self.frame(&title)? else {
+            return Ok(None);
+        };
+        let pressed = |area: &Bounds| area.contains(x, y);
+        if !title_band(frame, &heading).is_some_and(|band| pressed(&band))
+            || (hit == title && !pressed(&heading))
+        {
+            return Ok(None);
+        }
+        Ok(match described(&shown, frame, pid, listed) {
             Listed::One(number) => Some(number),
             Listed::Missing | Listed::Several => None,
         })

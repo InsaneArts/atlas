@@ -1819,9 +1819,9 @@ fn a_proven_native_title_bar_drag_may_finish_on_clear_desktop() {
 
 #[test]
 fn a_drag_onto_the_desktop_without_proof_of_a_title_bar_move_is_refused() {
-    let unproven = "Only a window dragged by its title can be dropped on the empty desktop, so \
-                    start the drag on its title or pick another drop point; this action and \
-                    the rest were not sent";
+    let unproven = "Only a window dragged by its title bar can be dropped on the empty desktop, \
+                    so start the drag on its title bar or pick another drop point; this action \
+                    and the rest were not sent";
     for (title, what) in [
         (Ok(None), "content under the press point"),
         (Ok(Some(4121)), "another window's title"),
