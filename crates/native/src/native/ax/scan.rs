@@ -300,8 +300,9 @@ impl Scan {
 
     /// At most `maximum` elements from an array attribute. The value count
     /// is read first: zero is a leaf, and a count beyond what was fetched (or
-    /// any failure to enumerate a non-empty array) leaves the scan incomplete
-    /// instead of silently dropping values.
+    /// any failure to enumerate a non-empty array, a reply of another length
+    /// or a value that is no element) leaves the scan incomplete instead of
+    /// silently dropping values.
     pub(super) fn children(
         &mut self,
         element: &AXUIElement,
@@ -309,19 +310,31 @@ impl Scan {
         maximum: usize,
     ) -> Vec<CFRetained<AXUIElement>> {
         let count = self.count(element, attribute);
+        let name = CFString::from_static_str(attribute);
+        self.listed(attribute, count, maximum, |wanted| {
+            ffi::copy_values(element, &name, wanted)
+        })
+    }
+
+    /// The elements of an array attribute that holds `count` values, at most
+    /// `maximum` of them, copied by `copy` once it is told how many to ask for.
+    pub(super) fn listed(
+        &mut self,
+        attribute: &'static str,
+        count: CFIndex,
+        maximum: usize,
+        copy: impl FnOnce(CFIndex) -> Result<Option<CFRetained<CFArray<CFType>>>, AXError>,
+    ) -> Vec<CFRetained<AXUIElement>> {
         if count <= 0 {
             return Vec::new();
         }
 
-        let name = CFString::from_static_str(attribute);
         let wanted = count.min(CFIndex::try_from(maximum).unwrap_or(CFIndex::MAX));
         if wanted < count {
             self.stop(Stop::Count);
         }
 
-        let values = match ffi::copy_values(element, &name, wanted)
-            .and_then(|values| values.ok_or(AXError::Success))
-        {
+        let values = match copy(wanted).and_then(|values| values.ok_or(AXError::Success)) {
             Ok(values) => values,
             Err(status) => {
                 self.failed(status, attribute);
@@ -330,11 +343,21 @@ impl Scan {
             }
         };
 
-        // Each value is checked to be an AXUIElement before use.
-        values
+        // Each value is checked to be an AXUIElement before use. A reply with
+        // another number of values, or a value that is no element, leaves
+        // children unread; those that were read are kept.
+        let asked = usize::try_from(wanted).unwrap_or(maximum);
+        let children: Vec<_> = values
             .iter()
+            .take(asked)
             .filter_map(|value| value.downcast::<AXUIElement>().ok())
-            .collect()
+            .collect();
+        if values.len() != asked || children.len() != asked {
+            self.failed(AXError::Failure, attribute);
+            self.stop(Stop::Unread);
+        }
+
+        children
     }
 
     /// `windows`, an app's windows, without any that is `app` itself. An
