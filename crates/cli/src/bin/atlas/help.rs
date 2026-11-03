@@ -58,6 +58,7 @@ const GROUPS: &[(&str, &[Entry])] = &[
                 "click",
                 &[
                     "atlas click --app TextEdit --name Save",
+                    "atlas click --app TextEdit --ref kfpa12",
                     "atlas click 1200 880",
                 ],
             ),

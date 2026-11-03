@@ -250,6 +250,26 @@ fn invalid_arguments_report_one_json_error_before_execution() {
     );
 }
 
+/// A reference names its element by itself: given with a point, a name or
+/// a role, the click is a usage error before anything is read.
+#[test]
+fn a_click_by_reference_takes_no_point_name_or_role() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["click", "--ref", "kfpa12", "10", "20"],
+        vec!["click", "--ref", "kfpa12", "--name", "Save"],
+        vec!["click", "--ref", "kfpa12", "--role", "AXButton"],
+        vec!["click", "--ref", "kfpa12", "--window", "4", "10", "20"],
+    ] {
+        let output = fixture.missing(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "usage", "{args:?}");
+        assert!(error["error"].as_str().unwrap().contains("--ref"), "{args:?}");
+    }
+}
+
 /// Only a command that waits for control reads `ATLAS_WAIT`: a bad value
 /// is a usage error there, before anything runs, and is ignored by every
 /// other command; `--wait` takes its place.

@@ -423,10 +423,22 @@ async fn screenshot(client: &Client, args: cli::Screenshot) -> Result<Value> {
     .await
 }
 
-/// `atlas click`: at X Y, or on the element its filter finds in its target's
-/// app.
+/// `atlas click`: at X Y, on the element a reference names, or on the
+/// element its filter finds in its target's app.
 async fn click(client: &Client, args: cli::Click) -> Result<Value> {
     let button = args.button.into();
+
+    if let Some(reference) = &args.reference {
+        return agent::click_reference(
+            client,
+            args.target.target().as_ref(),
+            reference,
+            button,
+            args.count,
+            &args.modifiers,
+        )
+        .await;
+    }
 
     match ((args.x, args.y), args.target.target()) {
         ((Some(x), Some(y)), target) => {

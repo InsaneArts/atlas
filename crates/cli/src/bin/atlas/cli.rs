@@ -191,11 +191,12 @@ pub(super) enum Command {
     /// Click a point, or exactly one element of an app.
     ///
     /// Click at display point X Y (origin + screenshot pixels × pointsPerPixel),
-    /// or on exactly one accessibility element of an app with --app and
-    /// --name/--role. Named input brings its target forward, then checks
-    /// the same point before clicking. With X Y, --app or --pid selects the
-    /// app, and --window selects a particular window. A blocked or unreadable
-    /// target refuses the click. No app is launched.
+    /// on the element --ref names from atlas elements, or on exactly one
+    /// accessibility element of an app with --app and --name/--role. Named
+    /// input brings its target forward, then checks the same point before
+    /// clicking. With X Y, --app or --pid selects the app, and --window
+    /// selects a particular window. A blocked or unreadable target refuses
+    /// the click. No app is launched.
     Click(Click),
     /// List an app's buttons, fields and other elements.
     ///
@@ -203,7 +204,8 @@ pub(super) enum Command {
     /// click point (at) and size, with each window listed once; also the
     /// items of a menu the app has open (menu: true, with a check mark as
     /// mark) and, while the app is in front, its menu bar titles. more says
-    /// how many matching elements were left out.
+    /// how many matching elements were left out. Each element's ref names it
+    /// in this look (look) for atlas click --ref.
     Elements(Elements),
     /// Print the guide agents read to use Atlas (all of it by default).
     #[command(group(clap::ArgGroup::new("part").args(["skill", "commands", "errors"])))]
@@ -562,6 +564,10 @@ pub(super) struct Click {
     /// Accessibility role, for example AXButton.
     #[arg(long, conflicts_with = "x")]
     pub(super) role: Option<String>,
+    /// An element's ref from atlas elements: clicks that very element where
+    /// it is now. A ref that is gone or changed is refused; look again.
+    #[arg(long = "ref", value_name = "REF", conflicts_with_all = ["x", "name", "role"])]
+    pub(super) reference: Option<String>,
     /// Which mouse button.
     #[arg(long, value_enum, default_value_t)]
     pub(super) button: ButtonArg,
