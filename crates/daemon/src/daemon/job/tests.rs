@@ -727,9 +727,15 @@ fn an_incomplete_job_scan_never_becomes_a_complete_census() {
         let folder = directory.path().join("jobs");
         incomplete.apply(&folder);
         jobs.watch_once(None).unwrap();
-        let census = jobs.census();
+        let census = jobs.census().unwrap();
         incomplete.restore(&folder);
-        assert!(census.is_err(), "{incomplete:?}: {census:?}");
+        // The job known before is still counted, and the count says it may
+        // not be every job.
+        assert_eq!(
+            json!(census),
+            json!({"running": 1, "launching": 0, "unresolved": 0, "incomplete": true}),
+            "{incomplete:?}"
+        );
     }
 }
 
@@ -788,10 +794,10 @@ fn a_temporary_scan_failure_does_not_end_job_supervision() {
     let folder = directory.path().join("jobs");
     Incomplete::Unlistable.apply(&folder);
     let outcome = jobs.worker_outcome(Ok(jobs.watch_once(None)));
-    let census = jobs.census();
+    let census = jobs.census().unwrap();
     Incomplete::Unlistable.restore(&folder);
     assert!(outcome.is_ok(), "{outcome:?}");
-    assert!(census.is_err(), "{census:?}");
+    assert!(census.incomplete, "{census:?}");
     assert!(!jobs.unavailable.load(Ordering::SeqCst));
 
     jobs.worker_outcome(Ok(jobs.watch_once(None))).unwrap();

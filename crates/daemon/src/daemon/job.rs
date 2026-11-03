@@ -230,19 +230,17 @@ impl Jobs {
     }
 
     /// What the daemon's hello says of its jobs: how many may run, how many
-    /// are launching, and how many records it cannot read, whose jobs may
-    /// still run too.
-    /// Returns an error when supervision is unavailable or the last count
-    /// could not account for every record; unknown jobs never become zero.
+    /// are launching, how many records it cannot read, whose jobs may still
+    /// run too, and whether the last count could not read every record, so
+    /// more jobs may run than it counts.
+    /// Returns an error when supervision is unavailable; unknown jobs never become zero.
     pub(crate) fn census(&self) -> Result<Census> {
         let state = self.state()?;
-        if !state.complete {
-            return Err(Error::new(Code::Job, INCOMPLETE));
-        }
         Ok(Census {
             running: state.running,
             launching: state.launching.len(),
             unresolved: state.unresolved,
+            incomplete: !state.complete,
         })
     }
 

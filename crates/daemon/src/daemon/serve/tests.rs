@@ -1365,6 +1365,33 @@ async fn unavailable_jobs_refuse_hello_instead_of_reporting_zero() {
 }
 
 #[tokio::test]
+async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_incomplete() {
+    use std::os::unix::fs::PermissionsExt;
+    let (folder, daemon) = with_jobs(false);
+    let jobs = daemon.jobs.clone().unwrap();
+    let records = folder.path().join("jobs");
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o300)).unwrap();
+    jobs.watch_once(None).unwrap();
+    let hello = daemon.hello();
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(hello["ok"], true, "{hello}");
+    assert_eq!(
+        hello["daemon"]["capabilities"],
+        json!(["session-pin", "read", "jobs"])
+    );
+    assert_eq!(
+        hello["daemon"]["jobs"],
+        json!({"running": 0, "launching": 0, "unresolved": 0, "incomplete": true})
+    );
+
+    jobs.watch_once(None).unwrap();
+    assert_eq!(
+        daemon.hello()["daemon"]["jobs"],
+        json!({"running": 0, "launching": 0, "unresolved": 0})
+    );
+}
+
+#[tokio::test]
 async fn the_daemon_offers_jobs_and_reads() {
     let hello = &exchange(daemon(false), r#"{"op":"hello"}"#).await[0];
     assert_eq!(
