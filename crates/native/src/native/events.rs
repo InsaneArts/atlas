@@ -318,7 +318,7 @@ impl Engine {
 
     fn persist(&mut self, point: Point, flags: u64) -> Result<()> {
         if let Some(journal) = &mut self.journal {
-            journal.write(Held {
+            let held = Held {
                 epoch: self.epoch.clone(),
                 button: self.held,
                 keys: self.held_keys.clone(),
@@ -327,7 +327,12 @@ impl Engine {
                 count: self.click_count,
                 mouse_number: self.mouse_number,
                 flags,
-            })?;
+            };
+            #[cfg(test)]
+            if let Some(tap) = &mut self.tap {
+                tap.before_write(&held)?;
+            }
+            journal.write(held)?;
             #[cfg(test)]
             if let (Some(tap), Some(held)) = (&self.tap, journal.saved()) {
                 tap.written(held);
@@ -444,6 +449,12 @@ impl Engine {
 
         self.release_modifiers()?;
         self.commit()
+    }
+
+    /// Whether a release has anything to do: input still held, or a
+    /// journal that does not yet say what is.
+    pub(super) fn unsettled(&self) -> bool {
+        self.held_input() || self.journal_dirty
     }
 
     pub(super) fn held_input(&self) -> bool {

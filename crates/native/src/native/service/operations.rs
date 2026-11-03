@@ -11,12 +11,15 @@ use std::{
     },
 };
 use tokio::{
-    sync::{Mutex, watch},
+    sync::{Mutex, OwnedMutexGuard, oneshot, watch},
     task::{Id, JoinError, JoinSet},
 };
 
 /// Request futures can disappear while AX is in flight. Registered tasks
 /// own the engine guard and always join their blocking child before leaving.
+/// Engine work, which writes the journal and posts, runs on that blocking
+/// child: slow storage never holds a runtime worker, so the listener and
+/// cancellation stay responsive.
 #[derive(Default)]
 pub(super) struct Operations {
     tasks: StdMutex<Vec<Arc<Mutex<Work>>>>,
@@ -37,12 +40,53 @@ impl Operations {
     pub(super) async fn start<T: Send + 'static>(
         &self,
         work: impl std::future::Future<Output = T> + Send + 'static,
-    ) -> Result<tokio::sync::oneshot::Receiver<T>> {
+    ) -> Result<oneshot::Receiver<T>> {
         self.reap().await?;
+        self.register(work, true).map(|(receive, _)| receive)
+    }
+
+    /// Run `work` on the locked `engine` as registered cleanup and join it.
+    /// Unlike [`Self::start`] it runs while outcomes are unknown, since
+    /// releasing held input is part of settling them. If this future is
+    /// dropped, the work still ends with the engine locked and stays
+    /// registered until it is joined.
+    pub(super) async fn clean_up<E: Send + 'static, T: Send + 'static>(
+        &self,
+        engine: OwnedMutexGuard<E>,
+        work: impl FnOnce(&mut E) -> T + Send + 'static,
+    ) -> Result<(OwnedMutexGuard<E>, T)> {
+        self.reap().await?;
+        let (outcome, work) = self.register(on_engine(engine, work), false)?;
+        self.join(&mut *work.lock().await).await;
+        self.remove_joined()?;
+        outcome
+            .await
+            .map_err(|cause| worker_failed().with_source(cause))
+    }
+
+    /// [`Self::clean_up`] without waiting for it.
+    pub(super) async fn begin_clean_up<E: Send + 'static>(
+        &self,
+        engine: OwnedMutexGuard<E>,
+        work: impl FnOnce(&mut E) + Send + 'static,
+    ) -> Result<()> {
+        self.reap().await?;
+        self.register(on_engine(engine, work), false).map(drop)
+    }
+
+    /// Register `work`, then let it start; when `checked`, only while no
+    /// earlier outcome is unknown.
+    fn register<T: Send + 'static>(
+        &self,
+        work: impl std::future::Future<Output = T> + Send + 'static,
+        checked: bool,
+    ) -> Result<(oneshot::Receiver<T>, Arc<Mutex<Work>>)> {
         let mut tasks = self.tasks.lock().map_err(|_| worker_failed())?;
-        self.check()?;
-        let (send, receive) = tokio::sync::oneshot::channel();
-        let (start, registered) = tokio::sync::oneshot::channel();
+        if checked {
+            self.check()?;
+        }
+        let (send, receive) = oneshot::channel();
+        let (start, registered) = oneshot::channel();
         let task = tokio::spawn(async move {
             if registered.await.is_err() {
                 return;
@@ -51,13 +95,14 @@ impl Operations {
             // A gone requester cannot acknowledge the work; it stays registered.
             let _ = send.send(result);
         });
-        tasks.push(Arc::new(Mutex::new(Some(task))));
+        let work = Arc::new(Mutex::new(Some(task)));
+        tasks.push(work.clone());
         drop(tasks);
         // AX cannot start before registration. No await separates this
         // handoff from registration, even if the request is aborted.
         // A lost worker is observed when its registered handle is joined.
         let _ = start.send(());
-        Ok(receive)
+        Ok((receive, work))
     }
 
     /// Leave outcomes unknown until recovery, keeping what caused that.
@@ -154,6 +199,26 @@ impl Operations {
     }
 }
 
+/// `work` on the locked `engine`, on a blocking thread, giving the engine
+/// back with its result. A panic there resumes in the registered task, whose
+/// join leaves outcomes unknown until recovery.
+pub(super) async fn on_engine<E: Send + 'static, T: Send + 'static>(
+    mut engine: OwnedMutexGuard<E>,
+    work: impl FnOnce(&mut E) -> T + Send + 'static,
+) -> (OwnedMutexGuard<E>, T) {
+    let worker = tokio::task::spawn_blocking(move || {
+        let done = work(&mut engine);
+        (engine, done)
+    });
+    match worker.await {
+        Ok(done) => done,
+        Err(cause) => match cause.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(cause) => std::panic::panic_any(cause),
+        },
+    }
+}
+
 pub(super) fn worker_failed() -> Error {
     Error::new(
         Code::Uncertain,
@@ -229,15 +294,18 @@ impl Drop for Cancellation {
     }
 }
 
-pub(super) async fn drain_and_release(
+pub(super) async fn drain_and_release<E: Perform + Send + 'static>(
     operations: &Operations,
-    engine: &Mutex<impl Perform>,
+    engine: &Arc<Mutex<E>>,
     gate: &Gate,
 ) -> Result<()> {
     let drained = operations.drain().await;
-    let mut engine = engine.lock().await;
+    let engine = engine.clone().lock_owned().await;
     let released = match gate.active() {
-        Ok(false) => engine.release(),
+        Ok(false) => operations
+            .clean_up(engine, |engine| engine.release())
+            .await
+            .and_then(|(_, released)| released),
         Ok(true) => Ok(()),
         Err(error) => Err(error),
     };
@@ -246,21 +314,22 @@ pub(super) async fn drain_and_release(
 
 /// Only explicit recovery can settle an unknown worker outcome. If recovery
 /// is cancelled or any step fails, input stays blocked until another reset.
-pub(super) async fn reset<E>(
+pub(super) async fn reset<E: Send + 'static>(
     operations: &Operations,
-    engine: &Mutex<E>,
+    engine: &Arc<Mutex<E>>,
     gate: &Gate,
-    rebind: impl FnOnce(&mut E) -> Result<()>,
+    rebind: impl FnOnce(&mut E) -> Result<()> + Send + 'static,
 ) -> Result<()> {
     let _recovery = operations.recovery.lock().await;
     operations.failed.store(true, Ordering::Relaxed);
     gate.cancel(None)?;
     operations.join_all().await?;
-    let mut engine = engine.lock().await;
+    let engine = engine.clone().lock_owned().await;
     // An acquire admitted just before recovery may have held the engine
     // while the first cancellation ran. Cancel it before cleanup as well.
     gate.cancel(None)?;
-    rebind(&mut engine)?;
+    let (_engine, rebound) = operations.clean_up(engine, rebind).await?;
+    rebound?;
     let mut connections = operations.connections.lock().map_err(|_| worker_failed())?;
     for (phase, recovered) in connections.values_mut() {
         // A closed sender has finished dispatch and reply delivery. Its
@@ -274,11 +343,11 @@ pub(super) async fn reset<E>(
 
 /// Every service exit uses the same close, request cancellation and worker
 /// drain boundary, including TERM and internal failures.
-pub(super) async fn finish(
+pub(super) async fn finish<E: Perform + Send + 'static>(
     gate: &Gate,
     requests: &mut JoinSet<Result<()>>,
     operations: &Operations,
-    engine: &Mutex<impl Perform>,
+    engine: &Arc<Mutex<E>>,
 ) -> Result<()> {
     let closed = gate.close();
     let stopping = closed.is_ok();
