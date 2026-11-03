@@ -492,50 +492,32 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
     Ok(json!({"ok": true, "jobs": listed}))
 }
 
-/// A job as `job list` shows it.
+/// A job as `job list` shows it: always its identity and times; whether
+/// it was adopted, how its stop goes and the last signal sent, when known;
+/// how it ended once its state is ended; and the processes that left its
+/// group or that its leader left behind, which still run and were never
+/// signalled.
 fn listed_view(shown: &Shown) -> Value {
     let Some(job) = shown.job() else {
         return json!(shown);
     };
-    let mut view = json!({
-        "id": job.id,
-        "name": job.name,
-        "state": job.state,
-        "pid": job.pid,
-        "startedAt": job.started_at,
-        "endsAt": job.ends_at,
-    });
-    if job.adopted {
-        view["adopted"] = json!(true);
+    let mut full = json!(job);
+    let mut view = json!({});
+    for field in ["id", "name", "state", "pid", "startedAt", "endsAt"] {
+        view[field] = full[field].take();
     }
-    let (signal, remaining, refused) = match &job.progress {
-        Progress::Ended(ended) => (ended.signal.as_ref(), ended.remaining, None),
-        Progress::Stopping(stopping) => (
-            stopping.signal.as_ref(),
-            stopping.remaining,
-            stopping.refused,
-        ),
-        Progress::Neither {} => (None, None, None),
-    };
-    if let Some(remaining) = remaining {
-        view["remaining"] = json!(remaining);
+    for field in ["adopted", "remaining", "refused", "signal"] {
+        if !full[field].is_null() {
+            view[field] = full[field].take();
+        }
     }
-    if let Some(refused) = refused {
-        view["refused"] = json!(refused);
-    }
-    if let Some(signal) = signal {
-        view["signal"] = json!(signal);
-    }
-    let ended = job.ended();
     if job.state == JobState::Ended {
-        view["how"] = json!(ended.map(|ended| ended.how));
-        view["endedAt"] = json!(ended.map(|ended| ended.ended_at));
-        view["exitCode"] = json!(ended.and_then(|ended| ended.exit_code));
+        for field in ["how", "endedAt", "exitCode"] {
+            view[field] = full[field].take();
+        }
     }
-    // Processes that left the job's group, or that its leader left behind,
-    // still run and were never signalled.
-    if let Some(ended) = ended.filter(|ended| !ended.left.is_empty()) {
-        view["left"] = json!(ended.left);
+    if full["left"].as_array().is_some_and(|left| !left.is_empty()) {
+        view["left"] = full["left"].take();
     }
     view
 }
