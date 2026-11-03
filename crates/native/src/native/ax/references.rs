@@ -48,14 +48,15 @@ const LIFETIME: Duration = Duration::from_secs(5 * 60);
 const HIT_DEPTH: usize = 12;
 
 /// One element of a look: the object it is, the index of the element it
-/// was reached from, what it reported, and the identifying attributes that
-/// read left unproven.
+/// was reached from, what it reported, the identifying attributes that
+/// read left unproven, and those whose getter failed.
 #[derive(Clone)]
 struct Seen {
     object: Kept,
     parent: Option<usize>,
     element: Element,
     unproven: Vec<&'static str>,
+    refused: Vec<&'static str>,
 }
 
 /// One look: its name, the epoch and process instance it was of, when it
@@ -274,6 +275,7 @@ pub(in crate::native) fn read(expect: &Expect) -> Result<Read> {
             parent: traced.parent,
             element: element.clone(),
             unproven: traced.unproven,
+            refused: traced.refused,
         })
         .collect();
     Ok(Read {
@@ -430,7 +432,8 @@ fn lands_on(pid: i32, (x, y): (f64, f64), target: &AXUIElement) -> bool {
 
 /// Whether `now` is the element a look saw as `then`: the same role,
 /// subrole, title, description, identifier and menu, and for a static text
-/// the same value, each proven by both reads. Any other value may change,
+/// the same value, each proven by both reads, or failing alike in both, as
+/// AppKit's getter fails for a name it lacks. Any other value may change,
 /// as typing changes it, and so may the frame.
 fn same(then: &Seen, now: &Retraced) -> bool {
     let (was, is) = (&then.element, &now.element);
@@ -439,6 +442,14 @@ fn same(then: &Seen, now: &Retraced) -> bool {
         unproven
             .iter()
             .all(|attribute| !text && *attribute == "AXValue")
+    };
+    // Only a static text's value tells it from another element.
+    let identity = |refused: &[&'static str]| -> Vec<&'static str> {
+        refused
+            .iter()
+            .copied()
+            .filter(|attribute| text || *attribute != "AXValue")
+            .collect()
     };
     was.role == is.role
         && was.subrole == is.subrole
@@ -449,6 +460,7 @@ fn same(then: &Seen, now: &Retraced) -> bool {
         && (!text || was.value == is.value)
         && proven(&then.unproven)
         && proven(&now.unproven)
+        && identity(&then.refused) == identity(&now.refused)
 }
 
 #[cfg(test)]

@@ -37,6 +37,11 @@ pub(super) const IDENTIFYING: [&str; 6] = [
     "AXValue",
 ];
 
+/// `attribute` as one of [`IDENTIFYING`], when it is one.
+fn identifying(attribute: &str) -> Option<&'static str> {
+    IDENTIFYING.into_iter().find(|name| *name == attribute)
+}
+
 /// The longest one request may wait for an answer.
 const REQUEST: Duration = Duration::from_secs(1);
 
@@ -47,7 +52,8 @@ const LEAST: Duration = Duration::from_millis(10);
 /// One traversal: its deadline, whether anything made it incomplete and
 /// why, the selector attributes the current element failed to read or
 /// reported only in part, the identifying attributes it read without
-/// proving them (failed, malformed, cut or not asked), and how often each
+/// proving them (failed, malformed, cut or not asked) and those whose
+/// getter failed as AppKit's does for a name it lacks, and how often each
 /// attribute returned each AX error.
 pub(super) struct Scan {
     pub(super) deadline: Instant,
@@ -56,6 +62,7 @@ pub(super) struct Scan {
     pub(super) unreadable: Vec<String>,
     pub(super) truncated: Vec<String>,
     pub(super) unproven: Vec<&'static str>,
+    pub(super) refused: Vec<&'static str>,
     pub(super) errors: std::collections::BTreeMap<String, usize>,
     /// The last AX error any read returned.
     pub(super) last_error: Option<AXError>,
@@ -72,6 +79,7 @@ impl Scan {
             unreadable: Vec::new(),
             truncated: Vec::new(),
             unproven: Vec::new(),
+            refused: Vec::new(),
             errors: Default::default(),
             last_error: None,
             names: CFArray::from_retained_objects(&BATCH.map(CFString::from_static_str)),
@@ -102,7 +110,7 @@ impl Scan {
     /// `attribute` was read without proving what it is, when it is one that
     /// tells an element from another.
     pub(super) fn doubt(&mut self, attribute: &str) {
-        if let Some(name) = IDENTIFYING.into_iter().find(|name| *name == attribute) {
+        if let Some(name) = identifying(attribute) {
             self.unproven.push(name);
         }
     }
@@ -122,7 +130,11 @@ impl Scan {
         self.last_error = Some(status);
         let key = format!("{attribute}:{}", status.0);
         *self.errors.entry(key).or_default() += 1;
-        if !absent(status) {
+        // A failed getter answers the same each time it is asked, so it is
+        // kept as what was read; any other failure proves nothing.
+        if getter_failed(status, attribute) {
+            self.refused.extend(identifying(attribute));
+        } else if !absent(status) {
             self.doubt(attribute);
         }
 

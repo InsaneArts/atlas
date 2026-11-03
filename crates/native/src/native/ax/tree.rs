@@ -53,19 +53,21 @@ impl Visit {
 }
 
 /// The object an element of a snapshot is, the index of the element it was
-/// reached from (none where the walk started), and the identifying
-/// attributes its read left unproven.
+/// reached from (none where the walk started), the identifying
+/// attributes its read left unproven, and those whose getter failed.
 pub(super) struct Traced {
     pub(super) object: CFRetained<AXUIElement>,
     pub(super) parent: Option<usize>,
     pub(super) unproven: Vec<&'static str>,
+    pub(super) refused: Vec<&'static str>,
 }
 
-/// One element on a path read again, and the identifying attributes that
-/// read left unproven.
+/// One element on a path read again, the identifying attributes that read
+/// left unproven, and those whose getter failed.
 pub(super) struct Retraced {
     pub(super) element: Element,
     pub(super) unproven: Vec<&'static str>,
+    pub(super) refused: Vec<&'static str>,
 }
 
 /// One traversal's snapshot and, beside each of its elements by index, the
@@ -222,6 +224,7 @@ pub(super) fn retrace(
         scan.unreadable.clear();
         scan.truncated.clear();
         scan.unproven.clear();
+        scan.refused.clear();
         let values = scan.batch(&visit.element);
         let Some(element) = read(
             &mut scan,
@@ -238,6 +241,7 @@ pub(super) fn retrace(
         found.push(Retraced {
             element,
             unproven: std::mem::take(&mut scan.unproven),
+            refused: std::mem::take(&mut scan.refused),
         });
 
         let Some(next) = next else { break };
@@ -373,6 +377,7 @@ fn walk(
         scan.unreadable.clear();
         scan.truncated.clear();
         scan.unproven.clear();
+        scan.refused.clear();
 
         let values = scan.batch(item);
         let Some(element) = read(
@@ -394,6 +399,7 @@ fn walk(
             object: visit.element.clone(),
             parent: visit.parent,
             unproven: std::mem::take(&mut scan.unproven),
+            refused: std::mem::take(&mut scan.refused),
         });
 
         // The menu under a menu bar title is closed, or read as a window of

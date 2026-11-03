@@ -43,6 +43,7 @@ fn seen(number: i32, parent: Option<usize>, element: Element) -> Seen {
         parent,
         element,
         unproven: Vec::new(),
+        refused: Vec::new(),
     }
 }
 
@@ -75,6 +76,7 @@ fn sized(instance: Instance, count: usize) -> Read {
             parent: None,
             element: button(index, "Same"),
             unproven: Vec::new(),
+            refused: Vec::new(),
         })
         .collect();
     Read {
@@ -274,6 +276,7 @@ fn again(element: Element, unproven: &[&'static str]) -> Retraced {
     Retraced {
         element,
         unproven: unproven.to_vec(),
+        refused: Vec::new(),
     }
 }
 
@@ -324,6 +327,46 @@ fn an_identifying_attribute_either_read_left_unproven_is_no_proof() {
             "{attribute} unproven then"
         );
     }
+}
+
+/// A text area whose description getter fails as AppKit's does, in the
+/// look and again now, is the same text area; one whose getter answered
+/// otherwise in either read is not.
+#[test]
+fn a_getter_that_fails_alike_in_both_reads_still_proves_the_element() {
+    let mut area = button(2, "");
+    area.role = Some("AXTextArea".into());
+    area.title = None;
+    area.identifier = Some("First Text View".into());
+    let mut then = seen(1, None, area.clone());
+    then.refused = vec!["AXDescription"];
+    let now = |refused: &[&'static str]| Retraced {
+        refused: refused.to_vec(),
+        ..again(area.clone(), &["AXValue"])
+    };
+
+    assert!(same(&then, &now(&["AXDescription"])));
+    assert!(
+        same(&then, &now(&["AXDescription", "AXValue"])),
+        "a text area's value is no identity"
+    );
+    assert!(!same(&then, &now(&[])), "described now");
+    assert!(!same(&then, &now(&["AXDescription", "AXTitle"])));
+
+    let mut label = button(4, "");
+    label.role = Some("AXStaticText".into());
+    label.title = None;
+    let mut then = seen(1, None, label.clone());
+    then.refused = vec!["AXValue"];
+    let refused_now = |refused: &[&'static str]| Retraced {
+        refused: refused.to_vec(),
+        ..again(label.clone(), &[])
+    };
+    assert!(same(&then, &refused_now(&["AXValue"])));
+    assert!(
+        !same(&then, &refused_now(&[])),
+        "a static text's value is its identity"
+    );
 }
 
 #[test]
