@@ -226,7 +226,7 @@ pub async fn click_reference(
     referenced(client, target, &action).await
 }
 
-/// Do `action` to the element its ref names through Accessibility alone,
+/// Do `action` to the element its `ref` names through Accessibility alone,
 /// one action as `atlas input` takes it (`{"type": "press", "ref": …}`).
 /// The input service finds that very object again and proves it twice,
 /// the second time just before the one request that acts; no pointer or
@@ -266,8 +266,8 @@ pub async fn element(client: &Client, target: Option<&Target>, action: &Value) -
     Ok(said)
 }
 
-/// Send `action`, which names an element by the ref in its `ref` (and for
-/// a pick, its `option`), as a batch of its own under one ownership and the
+/// Send `action`, which names an element by the `LOOK.INDEX` in its `ref`
+/// (and for a pick, its `option`), as a batch of its own under one ownership and the
 /// epoch verified first. A ref that is not one is refused before anything
 /// is asked of the helper.
 async fn referenced(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {

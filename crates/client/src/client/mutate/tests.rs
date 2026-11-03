@@ -56,7 +56,7 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
 /// one without a verification may come from a service that did not act.
 #[test]
 fn an_element_action_is_confirmed_only_with_its_verification() {
-    let actions = json!([{"type": "check", "ref": "8123abc12"}]);
+    let actions = json!([{"type": "check", "ref": "8123abc.12"}]);
     let input = || Mutation::Input {
         actions: Batch::decode(&actions).unwrap(),
         owner: "owner",

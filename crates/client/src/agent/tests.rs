@@ -1528,7 +1528,7 @@ async fn an_element_action_is_sent_whole_and_answered_briefly() {
     use crate::test_support::Helper;
     use atlas_core::{session::ELEMENT_ACTIONS, test_support::UID};
 
-    let action = json!({"type": "set-value", "ref": "8123abc12", "value": "draft"});
+    let action = json!({"type": "set-value", "ref": "8123abc.12", "value": "draft"});
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = Helper::client(directory.path(), UID);
     let helper = helper.serving_input(&client, &[LOOKS, ELEMENT_ACTIONS]);
@@ -1583,14 +1583,14 @@ async fn an_element_action_is_sent_whole_and_answered_briefly() {
 async fn a_malformed_option_or_a_physical_action_is_refused_before_anything_is_asked() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    let action = json!({"type": "pick", "ref": "8123abc12", "option": "Large"});
+    let action = json!({"type": "pick", "ref": "8123abc.12", "option": "Large"});
     let error = super::element(&client, None, &action).await.unwrap_err();
     assert_eq!(error.code, Code::Elements);
     assert_eq!(error.details["performed"], 0);
 
     for physical in [
         json!({"type": "key", "key": "cmd+q"}),
-        json!({"type": "reference", "ref": "8123abc12"}),
+        json!({"type": "reference", "ref": "8123abc.12"}),
     ] {
         let error = super::element(&client, None, &physical).await.unwrap_err();
         assert_eq!(error.code, Code::Input, "{physical}");
