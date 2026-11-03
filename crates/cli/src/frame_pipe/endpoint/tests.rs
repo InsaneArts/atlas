@@ -1,0 +1,119 @@
+use super::*;
+use std::os::unix::fs::symlink;
+
+fn me() -> u32 {
+    nix::unistd::getuid().as_raw()
+}
+
+/// A short base under /tmp, so socket paths fit a Unix address.
+fn base() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("fp")
+        .tempdir_in("/tmp")
+        .unwrap()
+}
+
+#[test]
+fn the_owner_is_the_controller_and_helper_pair_alone() {
+    let key = owner_key(501, 502);
+    assert_eq!(key, owner_key(501, 502));
+    assert_ne!(key, owner_key(502, 501));
+    assert_ne!(key, owner_key(501, 503));
+    let mut hash = Sha256::new();
+    hash.update(b"atlas-frame-owner-v1\0\0\0\x01\xf5\0\0\x01\xf6");
+    assert_eq!(
+        key,
+        <[u8; 32]>::from(hash.finalize()),
+        "the documented bytes"
+    );
+    let path = folder(Path::new(BASE), 501, &key);
+    let name = path.file_name().unwrap().to_str().unwrap();
+    assert!(name.starts_with("atlas-fp.501.") && name.len() == "atlas-fp.501.".len() + 16);
+}
+
+#[tokio::test]
+async fn one_service_binds_private_sockets_and_a_second_is_refused() {
+    let base = base();
+    let (_listeners, endpoint) = bind_in(base.path(), me(), 7001).await.unwrap();
+    let folder = endpoint.folder.clone();
+    assert_eq!(fs::metadata(&folder).unwrap().mode() & 0o777, 0o700);
+    for name in ["c.sock", "f.sock", "m.sock"] {
+        let metadata = fs::symlink_metadata(folder.join(name)).unwrap();
+        assert!(metadata.file_type().is_socket());
+        assert_eq!(metadata.mode() & 0o777, 0o600);
+    }
+    assert_eq!(
+        bind_in(base.path(), me(), 7001).await.err().unwrap().code,
+        Code::Busy
+    );
+    drop(endpoint);
+    assert!(
+        !folder.join("c.sock").exists(),
+        "its own sockets go with it"
+    );
+    assert!(
+        bind_in(base.path(), me(), 7001).await.is_ok(),
+        "then it binds again"
+    );
+}
+
+#[tokio::test]
+async fn an_unsafe_folder_is_refused_and_left_as_it_is() {
+    let base = base();
+    let path = folder(base.path(), me(), &owner_key(me(), 7002));
+    fs::create_dir(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(
+        bind_in(base.path(), me(), 7002).await.err().unwrap().code,
+        Code::Identity
+    );
+    assert_eq!(
+        fs::metadata(&path).unwrap().mode() & 0o777,
+        0o755,
+        "not repaired"
+    );
+
+    let elsewhere = base.path().join("elsewhere");
+    fs::create_dir(&elsewhere).unwrap();
+    let linked = folder(base.path(), me(), &owner_key(me(), 7003));
+    symlink(&elsewhere, &linked).unwrap();
+    assert_eq!(
+        bind_in(base.path(), me(), 7003).await.err().unwrap().code,
+        Code::Identity
+    );
+}
+
+#[tokio::test]
+async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_never_removed() {
+    let base = base();
+    let (listeners, endpoint) = bind_in(base.path(), me(), 7004).await.unwrap();
+    let control = endpoint.socket("c.sock");
+    let frame = endpoint.socket("f.sock");
+    drop((listeners, endpoint));
+
+    // A crash leaves a socket behind with nothing listening: it is cleared.
+    drop(UnixListener::bind(&control).unwrap());
+    assert!(control.exists());
+    let (listeners, endpoint) = bind_in(base.path(), me(), 7004).await.unwrap();
+
+    // A socket bound in its place later is another's, and stays.
+    fs::remove_file(&frame).unwrap();
+    let successor = UnixListener::bind(&frame).unwrap();
+    drop((listeners, endpoint));
+    assert!(
+        frame.exists(),
+        "another socket at the same path is not this one's"
+    );
+    assert!(!control.exists());
+
+    // One that answers is never taken over.
+    assert_eq!(
+        bind_in(base.path(), me(), 7004).await.err().unwrap().code,
+        Code::Busy
+    );
+    assert!(
+        !control.exists(),
+        "a refused start leaves none of its own sockets"
+    );
+    drop(successor);
+}
