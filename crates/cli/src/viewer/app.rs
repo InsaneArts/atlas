@@ -64,6 +64,10 @@ pub async fn serve(
     let (lines, receiver) = tokio::sync::mpsc::unbounded_channel();
     *unpoisoned(&viewer.app) = Some(lines);
 
+    // The frame service lives as long as this viewer. Without it the app
+    // reads pictures over this viewer's address as before.
+    let pipe = start_pipe(&viewer).await;
+
     // The record names a viewer with an app; none is left when the app
     // does not start.
     let mut app = App::launch(&program, &viewer.url, receiver).await?;
@@ -104,6 +108,10 @@ pub async fn serve(
     expiry.abort();
     viewer.close().await;
     let _ = viewer.release(None).await;
+    unpoisoned(&viewer.pipe).take();
+    if let Some(pipe) = pipe {
+        pipe.stop().await;
+    }
 
     // The record goes with this viewer, unless another has replaced it.
     if let Some((path, _)) = unpoisoned(&viewer.record).take() {
@@ -111,6 +119,23 @@ pub async fn serve(
     }
 
     Ok(Value::Null)
+}
+
+/// Start the frame service for `viewer`'s helper, its committed pictures
+/// kept for input, and offer it on `viewer`'s address; none when it cannot
+/// start, as when another service already serves this helper.
+async fn start_pipe(viewer: &Arc<Viewer>) -> Option<crate::frame_pipe::service::Service> {
+    let held = Arc::downgrade(viewer);
+    let witness: crate::frame_pipe::broker::Witness = Arc::new(move |key, epoch, at| {
+        if let Some(viewer) = held.upgrade() {
+            viewer.remember_committed(key, epoch, at);
+        }
+    });
+    let service = crate::frame_pipe::service::start(viewer.client(), viewer.frame_width, witness)
+        .await
+        .ok()?;
+    *unpoisoned(&viewer.pipe) = Some(service.descriptor().clone());
+    Some(service)
 }
 
 impl Viewer {

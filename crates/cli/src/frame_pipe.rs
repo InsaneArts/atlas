@@ -3,4 +3,5 @@
 pub(crate) mod auth;
 pub(crate) mod broker;
 pub(crate) mod endpoint;
+pub(crate) mod service;
 pub(crate) mod subscription;

@@ -4,6 +4,7 @@
 use super::{
     LEASE_SECONDS, LeaseRefusal, SERVICE, Viewer,
     frames::{FRAME_REUSE, FRAME_WIDTH, Frames},
+    unpoisoned,
 };
 use crate::menubar::Line;
 use atlas_client::{client::Client, helper_info};
@@ -85,6 +86,8 @@ pub(super) fn configured(
         input_recording: Mutex::new(()),
         closed: RwLock::new(false),
         frames: Mutex::new(Frames::default()),
+        committed: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        pipe: std::sync::Mutex::new(None),
         frame_width: FRAME_WIDTH,
         frame_reuse: FRAME_REUSE,
         capture: std::sync::Mutex::new(None),
@@ -299,6 +302,8 @@ routes! {
         Screenshots => "screenshots.json",
         Screenshot => "screenshot.png",
         Frame => "frame.png",
+        // How to pair with the frame service, when this viewer runs one.
+        Pipe => "pipe.json",
     }
     POST {
         Recover => "recover",
@@ -502,6 +507,13 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>) -> Respon
         },
         Read::Screenshots => read_reply(viewer.screenshots().await),
         Read::Screenshot => viewer.screenshot(query).await,
+        Read::Pipe => match unpoisoned(&viewer.pipe).clone() {
+            Some(descriptor) => json_response(200, descriptor),
+            None => json_response(
+                404,
+                json!({"ok": false, "code": "not-offered", "error": "This viewer runs no frame service"}),
+            ),
+        },
         Read::Frame => match viewer.frame().await {
             Ok((key, frame)) => frame_reply(key, &frame),
             Err(error) => {

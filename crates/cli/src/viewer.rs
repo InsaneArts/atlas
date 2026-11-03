@@ -65,6 +65,12 @@ struct Viewer {
     /// more begin.
     closed: RwLock<bool>,
     frames: Mutex<frames::Frames>,
+    /// Pictures an observer of the frame service committed, kept as what
+    /// input needs of them, under their frame keys.
+    committed: std::sync::Mutex<std::collections::VecDeque<(String, Arc<frames::Observation>)>>,
+    /// The frame service this viewer runs, when it runs one: what a client
+    /// needs to pair with it. A bearer secret, like the URL.
+    pipe: std::sync::Mutex<Option<Value>>,
     /// The widest picture a capture asks for, in pixels.
     frame_width: u32,
     /// How recent the last frame must be to stand in for a capture.

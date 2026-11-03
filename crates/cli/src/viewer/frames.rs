@@ -191,7 +191,24 @@ impl Viewer {
         key
     }
 
-    /// The recent frame kept under `key`, kept or live.
+    /// Keep what input needs of a picture an observer of the frame service
+    /// committed, under its frame key.
+    pub(crate) fn remember_committed(&self, key: &str, epoch: &Epoch, at: Instant) {
+        let mut committed = unpoisoned(&self.committed);
+        committed.retain(|(_, seen)| seen.at.elapsed() < FRAME_LIFETIME && seen.epoch == *epoch);
+        committed.push_back((
+            key.to_owned(),
+            Arc::new(Observation {
+                epoch: epoch.clone(),
+                at,
+            }),
+        ));
+        while committed.len() > KEPT_LIVE {
+            committed.pop_front();
+        }
+    }
+
+    /// The recent frame kept under `key`, kept, live or committed.
     pub(super) async fn observed(&self, key: &str) -> Result<Arc<Observation>> {
         let frames = self.frames.lock().await;
         frames
@@ -207,6 +224,12 @@ impl Viewer {
             .or_else(|| {
                 frames
                     .live
+                    .iter()
+                    .find(|(id, _)| id == key)
+                    .map(|(_, seen)| seen.clone())
+            })
+            .or_else(|| {
+                unpoisoned(&self.committed)
                     .iter()
                     .find(|(id, _)| id == key)
                     .map(|(_, seen)| seen.clone())
