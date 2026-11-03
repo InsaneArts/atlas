@@ -6,26 +6,70 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Output, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
     time::{Duration, Instant},
 };
 
 /// The agent tools Atlas runs: their process groups, the leaders of those
-/// whose end could not be confirmed, and whether Atlas is being stopped,
-/// after which none starts.
+/// whose end could not be confirmed, and how far a stop of Atlas has got.
 struct Tools {
     groups: Vec<i32>,
     /// Kept, never reaped elsewhere, so their groups stay safe to signal:
     /// a group stays listed while its leader is held here.
     held: Vec<Child>,
+    /// Atlas is being stopped: no tool starts from now on.
     stopping: bool,
+    /// The stop's grace is over: each supervisor kills its tool now.
+    ending: bool,
 }
 
-static RUNNING: Mutex<Tools> = Mutex::new(Tools {
-    groups: Vec::new(),
-    held: Vec::new(),
-    stopping: false,
-});
+impl Tools {
+    /// Whether a supervisor still waits for a tool: a listed group whose
+    /// leader is not held.
+    fn supervised(&self) -> bool {
+        self.groups.iter().any(|group| {
+            !self
+                .held
+                .iter()
+                .any(|child| i32::try_from(child.id()).ok() == Some(*group))
+        })
+    }
+}
+
+/// The tools Atlas runs, and the signal that one left the list or was held.
+struct Registry {
+    tools: Mutex<Tools>,
+    changed: Condvar,
+}
+
+impl Registry {
+    const fn new() -> Self {
+        Self {
+            tools: Mutex::new(Tools {
+                groups: Vec::new(),
+                held: Vec::new(),
+                stopping: false,
+                ending: false,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    /// The tools once no supervisor waits for any, or after `limit`.
+    fn settled(&self, limit: Duration) -> MutexGuard<'_, Tools> {
+        self.changed
+            .wait_timeout_while(locked(self), limit, |tools| tools.supervised())
+            .map_or_else(|poisoned| poisoned.into_inner().0, |(tools, _)| tools)
+    }
+}
+
+static RUNNING: Registry = Registry::new();
+
+/// The grace a tool has to end on request when Atlas is stopped.
+const GRACE: Duration = Duration::from_millis(300);
+/// How long a stop of Atlas waits, after killing its tools, for each to be
+/// confirmed ended.
+const REAPED: Duration = Duration::from_secs(2);
 
 /// A successful version probe proves presence; a timed-out tool is installed but silent.
 pub(super) fn presence(agent: Agent) -> Presence {
@@ -40,8 +84,9 @@ pub(super) fn presence(agent: Agent) -> Presence {
 
 /// The tools in `tools`, a lock that never stays poisoned (nothing panics
 /// while holding it).
-fn locked(tools: &Mutex<Tools>) -> std::sync::MutexGuard<'_, Tools> {
-    tools
+fn locked(registry: &Registry) -> MutexGuard<'_, Tools> {
+    registry
+        .tools
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -50,21 +95,72 @@ fn locked(tools: &Mutex<Tools>) -> std::sync::MutexGuard<'_, Tools> {
 /// and ends once this returns). No tool starts from now on, so none
 /// outlives Atlas.
 pub fn stop_running() {
-    let groups = halt(&RUNNING);
+    stop_all(&RUNNING, GRACE, REAPED);
+}
+
+/// Stop every tool in `registry`. Each group is asked to end, and after
+/// `grace` killed outright; each supervisor then kills its tool through the
+/// tool's own handle, which reaches a tool that left its group, and reaps
+/// it, and each held leader is killed and reaped the same way. Returns once
+/// every tool is confirmed ended, or `bound` after the kill at most; a
+/// leader not yet reaped stays held.
+fn stop_all(registry: &Registry, grace: Duration, bound: Duration) {
+    let groups = halt(registry);
     if groups.is_empty() {
         return;
     }
+    let deadline = Instant::now() + grace + bound;
 
-    let signal = |signal| {
-        for group in &groups {
-            let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(*group), signal);
+    signal_groups(&groups, nix::sys::signal::Signal::SIGTERM);
+    let mut tools = registry.settled(grace);
+    tools.ending = true;
+    let groups = tools.groups.clone();
+    drop(tools);
+    signal_groups(&groups, nix::sys::signal::Signal::SIGKILL);
+
+    let held = std::mem::take(&mut registry.settled(bound).held);
+    let unresolved = reap_held(registry, held, deadline);
+    locked(registry).held.extend(unresolved);
+}
+
+/// Send `signal` to each of `groups`, as far as it reaches: a supervisor or
+/// the held-leader reaping confirms each end.
+fn signal_groups(groups: &[i32], signal: nix::sys::signal::Signal) {
+    for group in groups {
+        let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(*group), signal);
+    }
+}
+
+/// Kill each of `held` through its own handle and reap it by `deadline`,
+/// unlisting each group whose leader is reaped (or reaped elsewhere, so
+/// its process ID may be another's). Gives back those still unreaped.
+fn reap_held(registry: &Registry, mut held: Vec<Child>, deadline: Instant) -> Vec<Child> {
+    for child in &mut held {
+        // One that cannot be killed is seen unreaped below, and kept.
+        let _ = child.kill();
+    }
+
+    loop {
+        let mut ended = Vec::new();
+        held.retain_mut(|child| match child.try_wait() {
+            Ok(Some(_)) => {
+                ended.extend(i32::try_from(child.id()).ok());
+                false
+            }
+            Err(error) if lost(&error) => {
+                ended.extend(i32::try_from(child.id()).ok());
+                false
+            }
+            Ok(None) | Err(_) => true,
+        });
+        locked(registry)
+            .groups
+            .retain(|group| !ended.contains(group));
+        if held.is_empty() || Instant::now() >= deadline {
+            return held;
         }
-    };
-
-    signal(nix::sys::signal::Signal::SIGTERM);
-    // A tool that ignores the request is stopped outright.
-    std::thread::sleep(Duration::from_millis(300));
-    signal(nix::sys::signal::Signal::SIGKILL);
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Whether Atlas is being stopped: whatever runs now stops at its next step.
@@ -72,10 +168,10 @@ pub fn stopping() -> bool {
     locked(&RUNNING).stopping
 }
 
-/// Mark `tools` stopping, so no tool starts from now on, and give the
+/// Mark `registry` stopping, so no tool starts from now on, and give the
 /// process groups running now.
-fn halt(tools: &Mutex<Tools>) -> Vec<i32> {
-    let mut tools = locked(tools);
+fn halt(registry: &Registry) -> Vec<i32> {
+    let mut tools = locked(registry);
     tools.stopping = true;
 
     tools.groups.clone()
@@ -83,7 +179,7 @@ fn halt(tools: &Mutex<Tools>) -> Vec<i32> {
 
 /// Start `command` and list its process group in `tools`, under one lock:
 /// a stop then reaches every tool started before it, and none starts after.
-fn start(tools: &'static Mutex<Tools>, command: &mut Command) -> Result<Tool> {
+fn start(tools: &'static Registry, command: &mut Command) -> Result<Tool> {
     let mut list = locked(tools);
     if list.stopping {
         return Err(problem("Atlas is stopping"));
@@ -154,18 +250,25 @@ impl Tool {
         }
     }
 
-    /// The leader's exit status once it exits, or None at `deadline`; a wait
-    /// that is interrupted is asked again.
+    /// The leader's exit status once it exits, or None at `deadline` or once
+    /// a stop of Atlas says to kill it ([`Tool::ending`]); a wait that is
+    /// interrupted is asked again.
     fn exited_by(&mut self, deadline: Instant) -> std::io::Result<Option<ExitStatus>> {
         loop {
             match self.try_wait() {
                 Ok(Some(status)) => return Ok(Some(status)),
-                Ok(None) if Instant::now() >= deadline => return Ok(None),
+                Ok(None) if Instant::now() >= deadline || self.ending() => return Ok(None),
                 Ok(None) => std::thread::sleep(Duration::from_millis(20)),
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    /// Whether a stop of Atlas has given up waiting for tools to end on
+    /// request, so this one is to be killed now.
+    fn ending(&self) -> bool {
+        locked(self.running.tools).ending
     }
 
     /// Kill the tool (see [`Tool::kill`]) and reap its leader. The group is
@@ -201,6 +304,7 @@ impl Tool {
             ..
         } = self;
         locked(running.tools).held.push(leader);
+        // Dropped with no group, it leaves the group listed.
         running.group = None;
     }
 }
@@ -261,17 +365,19 @@ pub(super) fn exec_in(
 /// A process group Atlas started, listed while it is waited for, so
 /// stop_running reaches it.
 struct Running {
-    tools: &'static Mutex<Tools>,
+    tools: &'static Registry,
     group: Option<i32>,
 }
 
 impl Drop for Running {
+    /// Unlist the group, unless its leader is held, and tell a waiting stop.
     fn drop(&mut self) {
         if let Some(group) = self.group {
             locked(self.tools)
                 .groups
                 .retain(|running| *running != group);
         }
+        self.tools.changed.notify_all();
     }
 }
 
@@ -496,7 +602,8 @@ fn take((collected, ended): Collected) -> Vec<u8> {
 }
 
 /// Wait for `tool` within `limit`, collecting its output. A tool that does
-/// not answer in time, or that cannot be waited for, is stopped; one whose
+/// not answer in time, that cannot be waited for, or that a stop of Atlas
+/// gave up waiting for, is stopped; one whose
 /// end cannot be confirmed is an uncertain failure that says so.
 fn supervise(agent: Agent, mut tool: Tool, limit: Duration) -> Result<Output> {
     let stdout = collect(tool.leader.stdout.take());
@@ -506,14 +613,18 @@ fn supervise(agent: Agent, mut tool: Tool, limit: Duration) -> Result<Output> {
     let status = match tool.exited_by(Instant::now() + limit) {
         Ok(Some(status)) => status,
         Ok(None) => {
-            let timeout = format!(
-                "{} did not answer within {} seconds",
-                agent.display_name(),
-                limit.as_secs()
-            );
+            let why = if tool.ending() {
+                "Atlas is stopping".to_owned()
+            } else {
+                format!(
+                    "{} did not answer within {} seconds",
+                    agent.display_name(),
+                    limit.as_secs()
+                )
+            };
             return Err(match tool.stop() {
-                Ok(()) => problem(timeout),
-                Err(cleanup) => unknown_end(&timeout, cleanup),
+                Ok(()) => problem(why),
+                Err(cleanup) => unknown_end(&why, cleanup),
             });
         }
         // Dropping the tool unlists it without a signal.

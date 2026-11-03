@@ -80,11 +80,7 @@ fn the_shells_path_is_read_between_its_markers() {
 fn no_tool_starts_once_atlas_is_stopping() {
     use std::os::unix::process::CommandExt;
 
-    static TOOLS: Mutex<Tools> = Mutex::new(Tools {
-        groups: Vec::new(),
-        held: Vec::new(),
-        stopping: false,
-    });
+    static TOOLS: Registry = Registry::new();
 
     let mut command = Command::new("/bin/sleep");
     command.arg("30").process_group(0);
@@ -112,12 +108,12 @@ struct ProcessFixture {
 }
 
 impl ProcessFixture {
-    fn start(tools: &'static Mutex<Tools>, script: &str, limit: Duration) -> Self {
+    fn start(tools: &'static Registry, script: &str, limit: Duration) -> Self {
         Self::led(tools, script, limit, Faults::default())
     }
 
     /// The fixture with its tool's waits and signals failing by `faults`.
-    fn led(tools: &'static Mutex<Tools>, script: &str, limit: Duration, faults: Faults) -> Self {
+    fn led(tools: &'static Registry, script: &str, limit: Duration, faults: Faults) -> Self {
         use std::os::unix::process::CommandExt;
 
         let mut command = Command::new("/bin/sh");
@@ -172,11 +168,7 @@ impl Drop for ProcessFixture {
 
 #[test]
 fn a_timed_out_tool_is_killed_reaped_and_unregistered() {
-    static TOOLS: Mutex<Tools> = Mutex::new(Tools {
-        groups: Vec::new(),
-        held: Vec::new(),
-        stopping: false,
-    });
+    static TOOLS: Registry = Registry::new();
     let fixture = ProcessFixture::start(&TOOLS, "exec /bin/sleep 30", Duration::from_millis(100));
     let error = fixture.answer().unwrap_err();
     assert_eq!(error.code, "agents");
@@ -196,11 +188,7 @@ fn a_timed_out_tool_is_killed_reaped_and_unregistered() {
 
 #[test]
 fn an_exited_tool_returns_while_its_descendant_holds_both_pipes() {
-    static TOOLS: Mutex<Tools> = Mutex::new(Tools {
-        groups: Vec::new(),
-        held: Vec::new(),
-        stopping: false,
-    });
+    static TOOLS: Registry = Registry::new();
     let fixture = ProcessFixture::start(
         &TOOLS,
         "/bin/sleep 30 & printf 'out\n%s\n' \"$!\"; printf 'err\n' >&2",
@@ -223,11 +211,7 @@ fn an_exited_tool_returns_while_its_descendant_holds_both_pipes() {
 
 #[test]
 fn both_output_streams_are_drained_after_the_retained_prefix_is_full() {
-    static TOOLS: Mutex<Tools> = Mutex::new(Tools {
-        groups: Vec::new(),
-        held: Vec::new(),
-        stopping: false,
-    });
+    static TOOLS: Registry = Registry::new();
     let fixture = ProcessFixture::start(
         &TOOLS,
         "/usr/bin/head -c 1114112 /dev/zero; /usr/bin/head -c 1114112 /dev/zero >&2",
@@ -241,12 +225,8 @@ fn both_output_streams_are_drained_after_the_retained_prefix_is_full() {
 }
 
 /// A list of tools of a test's own.
-fn fresh_tools() -> &'static Mutex<Tools> {
-    Box::leak(Box::new(Mutex::new(Tools {
-        groups: Vec::new(),
-        held: Vec::new(),
-        stopping: false,
-    })))
+fn fresh_tools() -> &'static Registry {
+    Box::leak(Box::new(Registry::new()))
 }
 
 type Errno = nix::errno::Errno;
@@ -496,64 +476,105 @@ fn an_interrupted_wait_is_asked_again() {
     assert!(locked(tools).groups.is_empty() && locked(tools).held.is_empty());
 }
 
+/// A real tool that left its own process group for another, with an outer
+/// watchdog that kills it by its process ID unless the test says it was
+/// answered.
+struct Strayed {
+    pid: nix::unistd::Pid,
+    anchor: Child,
+    cancel: Option<std::sync::mpsc::Sender<()>>,
+    watchdog: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Strayed {
+    /// Start a tool in `tools` that moves into another group, and wait for
+    /// it to say it has; the tool is the test's to supervise.
+    fn start(tools: &'static Registry) -> (Self, Tool) {
+        use std::{io::BufRead, os::unix::process::CommandExt};
+
+        // A group of the test's own for the tool to move into.
+        let mut anchor = Command::new("/bin/sleep");
+        anchor.arg("30").process_group(0);
+        let anchor = anchor.spawn().unwrap();
+        let elsewhere = nix::unistd::Pid::from_raw(i32::try_from(anchor.id()).unwrap());
+
+        let mut command = Command::new("/usr/bin/perl");
+        command
+            .args([
+                "-e",
+                "setpgrp(0, $ENV{ELSEWHERE}) or die; $| = 1; print \"left\\n\"; sleep 30",
+            ])
+            .env_clear()
+            .env("ELSEWHERE", elsewhere.as_raw().to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0);
+        let mut tool = start(tools, &mut command).unwrap();
+        let pid = nix::unistd::Pid::from_raw(i32::try_from(tool.leader.id()).unwrap());
+
+        let (cancel, cancelled) = std::sync::mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if cancelled.recv_timeout(Duration::from_secs(5)).is_err() {
+                let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+            }
+        });
+        let strayed = Self {
+            pid,
+            anchor,
+            cancel: Some(cancel),
+            watchdog: Some(watchdog),
+        };
+
+        let mut said = String::new();
+        let mut stdout = std::io::BufReader::new(tool.leader.stdout.take().unwrap());
+        stdout.read_line(&mut said).unwrap();
+        assert_eq!(said, "left\n", "the tool says once it has left its group");
+        assert_eq!(nix::unistd::getpgid(Some(pid)), Ok(elsewhere));
+        assert_eq!(
+            nix::sys::signal::killpg(pid, None),
+            Err(Errno::ESRCH),
+            "its own group is empty while it runs"
+        );
+
+        (strayed, tool)
+    }
+
+    /// The tool's supervisor answered, so the watchdog is not needed.
+    fn answered(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+    }
+}
+
+impl Drop for Strayed {
+    fn drop(&mut self) {
+        drop(self.cancel.take());
+        if let Some(watchdog) = self.watchdog.take() {
+            let _ = watchdog.join();
+        }
+        let _ = self.anchor.kill();
+        let _ = self.anchor.wait();
+    }
+}
+
 #[test]
 fn a_tool_that_leaves_its_process_group_is_still_stopped_at_its_deadline() {
-    use std::{io::BufRead, os::unix::process::CommandExt};
-
-    // A group of the test's own for the tool to move into.
-    let mut anchor = Command::new("/bin/sleep");
-    anchor.arg("30").process_group(0);
-    let mut anchor = anchor.spawn().unwrap();
-    let elsewhere = nix::unistd::Pid::from_raw(i32::try_from(anchor.id()).unwrap());
-
     let tools = fresh_tools();
-    let mut command = Command::new("/usr/bin/perl");
-    command
-        .args([
-            "-e",
-            "setpgrp(0, $ENV{ELSEWHERE}) or die; $| = 1; print \"left\\n\"; sleep 30",
-        ])
-        .env_clear()
-        .env("ELSEWHERE", elsewhere.as_raw().to_string())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .process_group(0);
-    let mut tool = start(tools, &mut command).unwrap();
-    let pid = nix::unistd::Pid::from_raw(i32::try_from(tool.leader.id()).unwrap());
-
-    let (cancel, cancelled) = std::sync::mpsc::channel::<()>();
-    let watchdog = std::thread::spawn(move || {
-        if cancelled.recv_timeout(Duration::from_secs(5)).is_err() {
-            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
-        }
-    });
-
-    let mut said = String::new();
-    let mut stdout = std::io::BufReader::new(tool.leader.stdout.take().unwrap());
-    stdout.read_line(&mut said).unwrap();
-    assert_eq!(said, "left\n", "the tool says once it has left its group");
-    assert_eq!(nix::unistd::getpgid(Some(pid)), Ok(elsewhere));
-    assert_eq!(
-        nix::sys::signal::killpg(pid, None),
-        Err(Errno::ESRCH),
-        "its own group is empty while it runs"
-    );
-
+    let (mut strayed, tool) = Strayed::start(tools);
+    let pid = strayed.pid;
     let (finished, result) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         let _ = finished.send(supervise(Agent::Claude, tool, Duration::from_millis(100)));
     });
     let answer = result.recv_timeout(Duration::from_secs(4));
-    // Without an answer the watchdog stops the tool now, so the worker ends.
     if answer.is_ok() {
-        let _ = cancel.send(());
+        strayed.answered();
     }
-    drop(cancel);
-    watchdog.join().unwrap();
+    // Without an answer the watchdog stops the tool now, so the worker ends.
+    drop(strayed);
     worker.join().unwrap();
-    let _ = anchor.kill();
-    let _ = anchor.wait();
 
     let error = answer
         .expect("cleanup does not wait on a tool it never stopped")
@@ -566,4 +587,64 @@ fn a_tool_that_leaves_its_process_group_is_still_stopped_at_its_deadline() {
         "the tool was reaped"
     );
     assert!(locked(tools).groups.is_empty() && locked(tools).held.is_empty());
+}
+
+#[test]
+fn stopping_atlas_stops_and_reaps_a_tool_that_left_its_process_group() {
+    let tools = fresh_tools();
+    let (mut strayed, tool) = Strayed::start(tools);
+    let pid = strayed.pid;
+    let (finished, result) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = finished.send(supervise(Agent::Claude, tool, Duration::from_secs(30)));
+    });
+
+    stop_all(tools, Duration::from_millis(100), Duration::from_secs(2));
+    let left = locked(tools).groups.clone();
+    let alive = nix::sys::signal::kill(pid, None).is_ok();
+    let answer = result.recv_timeout(Duration::from_secs(4));
+    if answer.is_ok() {
+        strayed.answered();
+    }
+    drop(strayed);
+    worker.join().unwrap();
+
+    assert!(
+        left.is_empty(),
+        "the stop returns once its tools are reaped"
+    );
+    assert!(!alive, "the tool does not outlive the stop");
+    let error = answer.unwrap().unwrap_err();
+    assert_eq!(error.error, "Atlas is stopping");
+    assert!(!error.uncertain, "the tool was stopped and reaped");
+    assert_eq!(
+        nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+        Err(Errno::ECHILD),
+        "the tool was reaped"
+    );
+}
+
+#[test]
+fn stopping_atlas_kills_and_reaps_a_held_tool_that_left_its_process_group() {
+    let tools = fresh_tools();
+    let (mut strayed, mut tool) = Strayed::start(tools);
+    let pid = strayed.pid;
+    tool.faults = Faults::default().signal_fails(Errno::EPERM);
+    let error = supervise(Agent::Claude, tool, Duration::from_millis(100)).unwrap_err();
+    assert!(error.uncertain, "its cleanup failed, so it is held");
+    assert_eq!(locked(tools).held.len(), 1);
+
+    stop_all(tools, Duration::from_millis(100), Duration::from_secs(2));
+    let alive = nix::sys::signal::kill(pid, None).is_ok();
+    let left = {
+        let tools = locked(tools);
+        (tools.groups.clone(), tools.held.len())
+    };
+    if !alive {
+        strayed.answered();
+    }
+    drop(strayed);
+
+    assert!(!alive, "the held tool does not outlive the stop");
+    assert_eq!(left, (Vec::new(), 0), "it was reaped and unlisted");
 }
