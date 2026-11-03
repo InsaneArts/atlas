@@ -234,6 +234,13 @@ impl Jobs {
         Ok(self.state()?.running)
     }
 
+    /// Hold the jobs' lock, as a slow look at them does, until what it
+    /// returns is dropped.
+    #[cfg(test)]
+    pub(super) fn held(&self) -> impl Sized + '_ {
+        self.state.lock().unwrap()
+    }
+
     /// What the daemon's hello says of its jobs: how many may run, how many
     /// are launching, how many records it cannot read, whose jobs may still
     /// run too, and whether the last count could not read every record, so
