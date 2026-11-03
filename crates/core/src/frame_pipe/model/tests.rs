@@ -97,13 +97,10 @@ fn a_profile_names_finite_geometry_and_its_exact_stride() {
         "displayScale": 2.0, "backend": "cg"}),
     ))
     .unwrap();
-    assert!(profile.valid());
     assert_eq!(profile.bytes(), 24);
-    let skewed = Profile {
-        row_stride: 13,
-        ..profile
-    };
-    assert!(!skewed.valid());
+    let mut skewed = serde_json::to_value(profile).unwrap();
+    skewed["rowStride"] = json!(13);
+    assert_eq!(decode::<Profile>(&bytes(&skewed)), Err(Refusal::Invalid));
     for (key, value) in [
         ("width", json!(0)),
         ("height", json!(4097)),
@@ -127,12 +124,20 @@ fn errors_name_a_credit_exactly_when_they_retire_one() {
         &json!({"failure": failure, "disposition": "credit-retired", "creditID": 9}),
     ))
     .unwrap();
-    assert!(retired.valid());
-    let fatal: ErrorMetadata = decode(&bytes(
-        &json!({"failure": failure, "disposition": "pair-fatal", "creditID": 9}),
-    ))
-    .unwrap();
-    assert!(!fatal.valid());
+    assert_eq!(retired.credit_id.map(Positive::get), Some(9));
+    let mut sent = failure.clone();
+    sent["dispatched"] = json!(true);
+    for wrong in [
+        json!({"failure": failure, "disposition": "pair-fatal", "creditID": 9}),
+        json!({"failure": failure, "disposition": "credit-retired"}),
+        json!({"failure": sent, "disposition": "request-refused"}),
+    ] {
+        assert_eq!(
+            decode::<ErrorMetadata>(&bytes(&wrong)),
+            Err(Refusal::Invalid),
+            "{wrong}"
+        );
+    }
     let mut native = failure.clone();
     native["reason"] = json!("/Users/someone/secret");
     assert_eq!(
@@ -165,4 +170,44 @@ fn identifiers_are_fresh_and_exactly_shaped() {
     let text = String::from_utf8(wire.clone()).unwrap();
     assert!(text.contains("\"requestedRights\":[\"observe\",\"stop-agents\"]"));
     assert_eq!(decode::<Hello>(&wire).unwrap(), hello);
+}
+
+#[test]
+fn openings_speak_this_protocol_and_keep_the_pair_tokens_fixed_life() {
+    let hello = json!({"protocolMajor": 1, "serviceInstance": hex(32, 'a'),
+        "bootstrapCapability": hex(64, 'b'), "clientChallenge": hex(32, 'c'),
+        "role": "observer", "clientKind": "swift",
+        "requestedRights": ["observe"], "offeredUpdates": ["full", "delta"]});
+    assert!(decode::<Hello>(&bytes(&hello)).is_ok());
+    for (key, value) in [
+        ("protocolMajor", json!(2)),
+        ("requestedRights", json!(["control"])),
+        ("offeredUpdates", json!(["delta"])),
+    ] {
+        let mut wrong = hello.clone();
+        wrong[key] = value;
+        assert_eq!(
+            decode::<Hello>(&bytes(&wrong)),
+            Err(Refusal::Invalid),
+            "{key}"
+        );
+    }
+    let welcome = json!({"serviceInstance": hex(32, 'a'), "observerID": hex(32, 'd'),
+        "observerGeneration": 1, "controlConnectionID": hex(32, 'e'),
+        "clientChallenge": hex(32, 'c'), "grantedRights": ["observe"],
+        "acceptedUpdates": ["full"], "pairToken": hex(64, 'f'),
+        "pairExpiresInMs": PAIR_EXPIRES_MS, "cleanupToken": hex(64, '1')});
+    assert!(decode::<Welcome>(&bytes(&welcome)).is_ok());
+    for (key, value) in [
+        ("pairExpiresInMs", json!(PAIR_EXPIRES_MS + 1)),
+        ("acceptedUpdates", json!(["unchanged"])),
+    ] {
+        let mut wrong = welcome.clone();
+        wrong[key] = value;
+        assert_eq!(
+            decode::<Welcome>(&bytes(&wrong)),
+            Err(Refusal::Invalid),
+            "{key}"
+        );
+    }
 }

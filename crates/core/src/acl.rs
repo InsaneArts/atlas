@@ -174,7 +174,11 @@ impl Acl {
 
 /// The extended ACL entries of `path`; an invalid ACL is an error.
 fn entries_of(path: &Path) -> io::Result<Vec<Entry>> {
-    match Acl::of_path(path)? {
+    checked_entries(Acl::of_path(path)?)
+}
+
+fn checked_entries(acl: Option<Acl>) -> io::Result<Vec<Entry>> {
+    match acl {
         None => Ok(Vec::new()),
         Some(acl) if acl.is_valid() => acl.entries(),
         Some(_) => Err(io::Error::new(
@@ -191,6 +195,16 @@ fn entries_of(path: &Path) -> io::Result<Vec<Entry>> {
 /// Returns the I/O error of reading the ACL, or one for an invalid ACL.
 pub fn present(path: &Path) -> io::Result<bool> {
     Ok(!entries_of(path)?.is_empty())
+}
+
+/// Whether the open `file` carries any extended ACL entry; an invalid ACL
+/// is an error.
+///
+/// # Errors
+///
+/// Returns the I/O error of reading the ACL, or one for an invalid ACL.
+pub fn present_on(file: &File) -> io::Result<bool> {
+    Ok(!checked_entries(Acl::of_file(file)?)?.is_empty())
 }
 
 /// Whether any extended ACL entry on `path` allows a write; deny entries are

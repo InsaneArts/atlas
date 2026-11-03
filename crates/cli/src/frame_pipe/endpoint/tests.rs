@@ -1,5 +1,18 @@
 use super::*;
-use std::os::unix::fs::symlink;
+use std::{os::unix::fs::symlink, process::Command};
+
+/// Give `path` an ACL entry that grants nothing its owner lacks.
+fn add_acl(path: &Path) {
+    let user = std::env::var("USER").unwrap();
+    assert!(
+        Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{user} allow readattr")])
+            .arg(path)
+            .status()
+            .unwrap()
+            .success()
+    );
+}
 
 fn me() -> u32 {
     nix::unistd::getuid().as_raw()
@@ -150,4 +163,52 @@ async fn a_folder_another_owner_claimed_or_a_loose_lock_file_is_refused() {
         0o644,
         "not repaired"
     );
+}
+
+#[tokio::test]
+async fn a_lock_or_left_socket_with_an_acl_is_refused_and_kept() {
+    let base = base();
+    let (listeners, endpoint) = bind_in(base.path(), me(), 7006).await.unwrap();
+    let (folder, lock, control) = (
+        endpoint.folder.clone(),
+        endpoint.folder.join("owner.lock"),
+        endpoint.socket("c.sock"),
+    );
+    drop((listeners, endpoint));
+
+    drop(UnixListener::bind(&control).unwrap());
+    fs::set_permissions(&control, fs::Permissions::from_mode(0o600)).unwrap();
+    add_acl(&control);
+    assert_eq!(
+        bind_in(base.path(), me(), 7006).await.err().unwrap().code,
+        Code::Identity
+    );
+    assert!(control.exists(), "not cleared");
+    fs::remove_file(&control).unwrap();
+
+    add_acl(&lock);
+    assert_eq!(
+        bind_in(base.path(), me(), 7006).await.err().unwrap().code,
+        Code::Identity
+    );
+    add_acl(&folder);
+    assert_eq!(
+        bind_in(base.path(), me(), 7006).await.err().unwrap().code,
+        Code::Identity
+    );
+}
+
+#[tokio::test]
+async fn sockets_in_a_folder_put_in_its_place_are_never_removed() {
+    let base = base();
+    let (listeners, endpoint) = bind_in(base.path(), me(), 7007).await.unwrap();
+    let folder = endpoint.folder.clone();
+    let moved = base.path().join("moved");
+    fs::rename(&folder, &moved).unwrap();
+    fs::create_dir(&folder).unwrap();
+    let stranger = folder.join("c.sock");
+    let _held = UnixListener::bind(&stranger).unwrap();
+    drop((listeners, endpoint));
+    assert!(stranger.exists(), "another folder's socket stays");
+    assert!(moved.join("f.sock").exists(), "a moved folder is let be");
 }

@@ -1,17 +1,12 @@
 use super::*;
-use crate::frame_pipe::budget::Budget;
 use std::sync::Arc;
 
 #[test]
 fn pixels_keep_their_reservation_until_the_last_share_drops() {
     let budget = Budget::new(1024);
-    let pixels = FramePixels::new(
-        Buffer::copy_from(&[1; 24]).unwrap(),
-        4,
-        2,
-        budget.reserve(24).unwrap(),
-    )
-    .unwrap();
+    let mut pixels = FramePixels::reserve(&budget, 4, 2).unwrap();
+    assert_eq!(budget.reserved(), 24);
+    pixels.as_mut_slice().fill(1);
     let shared = Arc::new(pixels);
     let reader = shared.clone();
     drop(shared);
@@ -23,46 +18,31 @@ fn pixels_keep_their_reservation_until_the_last_share_drops() {
 }
 
 #[test]
-fn pixels_must_be_exactly_their_picture_and_fully_paid_for() {
-    let budget = Budget::new(1024);
-    let make = |len: usize, width: u32, height: u32, paid: u64| {
-        FramePixels::new(
-            Buffer::zeroed(len).unwrap(),
-            width,
-            height,
-            budget.reserve(paid).unwrap(),
-        )
-    };
-    assert!(make(24, 4, 2, 24).is_ok());
-    assert_eq!(make(23, 4, 2, 24).unwrap_err(), Refusal::Invalid);
-    assert_eq!(make(24, 4, 2, 23).unwrap_err(), Refusal::Invalid);
-    assert_eq!(make(0, 0, 2, 0).unwrap_err(), Refusal::Invalid);
+fn a_picture_the_budget_cannot_hold_is_refused_before_it_is_allocated() {
+    let budget = Budget::new(24);
+    let held = FramePixels::reserve(&budget, 4, 2).unwrap();
     assert_eq!(
-        budget.reserved(),
-        0,
-        "refused pixels give their reservation back"
+        FramePixels::reserve(&budget, 1, 1).unwrap_err(),
+        Reason::BudgetExhausted
     );
+    drop(held);
+    assert_eq!(
+        FramePixels::reserve(&budget, 3, 3).unwrap_err(),
+        Reason::BudgetExhausted
+    );
+    assert_eq!(budget.reserved(), 0, "nothing is partly held");
 }
 
 #[test]
-fn spare_capacity_is_charged_and_sides_stay_within_bounds() {
-    use std::io::Write;
-    let budget = Budget::new(1 << 20);
-    let mut roomy = Buffer::with_capacity(1000).unwrap();
-    roomy.write_all(&[0; 24]).unwrap();
-    assert_eq!(
-        FramePixels::new(roomy, 4, 2, budget.reserve(24).unwrap()).unwrap_err(),
-        Refusal::Invalid,
-        "a reservation must cover the whole allocation"
-    );
-    assert_eq!(
-        FramePixels::new(
-            Buffer::zeroed(4097 * 3).unwrap(),
-            4097,
-            1,
-            budget.reserve(4097 * 3).unwrap()
-        )
-        .unwrap_err(),
-        Refusal::Invalid
-    );
+fn sides_stay_within_one_to_4096() {
+    let budget = Budget::new(u64::MAX);
+    for (width, height) in [(0, 2), (2, 0), (4097, 1), (1, 4097)] {
+        assert_eq!(
+            FramePixels::reserve(&budget, width, height).unwrap_err(),
+            Reason::WrongGeometry
+        );
+    }
+    assert_eq!(budget.reserved(), 0);
+    let largest = FramePixels::reserve(&budget, 4096, 1).unwrap();
+    assert_eq!(largest.as_slice().len(), 4096 * 3);
 }

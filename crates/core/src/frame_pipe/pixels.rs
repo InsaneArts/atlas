@@ -1,7 +1,11 @@
-//! One picture's pixels with the reservation that pays for them. Callers
+//! One picture's pixels with the reservation that pays for them, reserved
+//! before they are allocated. Callers fill it while they alone own it, then
 //! share it whole and read it as a slice; its buffer never leaves it, so no
 //! copy escapes the account.
-use super::{budget::Reservation, wire::Refusal};
+use super::{
+    budget::{Budget, Reservation},
+    diagnostics::Reason,
+};
 use crate::buffer::Buffer;
 
 /// Packed RGB pixels, three bytes each, top to bottom and left to right.
@@ -14,33 +18,36 @@ pub struct FramePixels {
 }
 
 impl FramePixels {
-    /// `buffer` as a `width` × `height` picture paid for by `reservation`.
+    /// A zeroed `width` × `height` picture, its bytes reserved from `budget`
+    /// before any is allocated.
     ///
     /// # Errors
     ///
-    /// Refuses a buffer that is not exactly that picture, or a reservation
-    /// smaller than it.
-    pub fn new(
-        buffer: Buffer,
-        width: u32,
-        height: u32,
-        reservation: Reservation,
-    ) -> Result<Self, Refusal> {
+    /// `WrongGeometry` for a side outside 1–4096, and `BudgetExhausted`
+    /// when the budget or the system cannot hold it.
+    pub fn reserve(budget: &Budget, width: u32, height: u32) -> Result<Self, Reason> {
         let side = 1..=4096;
         if !side.contains(&width) || !side.contains(&height) {
-            return Err(Refusal::Invalid);
+            return Err(Reason::WrongGeometry);
         }
         // Both sides are at most 4096, so this cannot overflow.
         let bytes = u64::from(width) * u64::from(height) * 3;
-        if buffer.len() as u64 != bytes || reservation.bytes() < buffer.capacity() as u64 {
-            return Err(Refusal::Invalid);
-        }
+        let reservation = budget.reserve(bytes).ok_or(Reason::BudgetExhausted)?;
+        let buffer = usize::try_from(bytes)
+            .ok()
+            .and_then(|len| Buffer::zeroed(len).ok())
+            .ok_or(Reason::BudgetExhausted)?;
         Ok(Self {
             buffer,
             width,
             height,
             _reservation: reservation,
         })
+    }
+
+    /// The pixels to fill, while this is the only owner.
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.buffer
     }
 
     pub fn as_slice(&self) -> &[u8] {

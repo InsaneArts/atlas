@@ -25,8 +25,10 @@ fn entries_text_and_clear_round_trip() {
     assert!(acl.text().unwrap().contains(&format!(":{user}:")));
 
     let file = File::open(&path).unwrap();
+    assert!(present_on(&file).unwrap());
     clear(&file).unwrap();
     assert!(!present(&path).unwrap());
+    assert!(!present_on(&file).unwrap());
     assert!(
         Acl::of_file(&file)
             .unwrap()

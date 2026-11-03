@@ -85,17 +85,9 @@ fn apply(base: &[u8], rectangles: &[Rectangle], pixels: &[u8], width: u32) -> Ve
 
 #[test]
 fn every_golden_vector_decodes_as_its_manifest_says_at_every_split() {
-    let full = unhex(
-        &serde_json::from_slice::<Vec<Value>>(
-            &std::fs::read(fixtures().join("manifest.json")).unwrap(),
-        )
-        .unwrap()[0]["packets"][0]["payload"]
-            .as_str()
-            .unwrap()
-            .to_owned(),
-    );
     let manifest: Vec<Value> =
         serde_json::from_slice(&std::fs::read(fixtures().join("manifest.json")).unwrap()).unwrap();
+    let full = unhex(manifest[0]["packets"][0]["payload"].as_str().unwrap());
     assert_eq!(manifest.len(), 10);
     for vector in manifest {
         let name = vector["file"].as_str().unwrap();

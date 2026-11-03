@@ -12,7 +12,7 @@ use fs2::FileExt;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt},
+    os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -49,19 +49,34 @@ pub(crate) struct Listeners {
     pub(crate) management: UnixListener,
 }
 
+/// A file system object's device and inode.
+type Identity = (u64, u64);
+
+fn identity(path: &Path) -> Option<Identity> {
+    fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| (metadata.dev(), metadata.ino()))
+}
+
 /// The bound endpoint. It holds the folder's lifetime lock, and removes on
-/// drop each socket it bound that is still that same socket.
+/// drop each socket it bound that is still that same socket in that same
+/// folder.
 pub(crate) struct Endpoint {
     folder: PathBuf,
-    bound: Vec<(PathBuf, u64)>,
+    place: Identity,
+    bound: Vec<(PathBuf, Identity)>,
     _lock: LockFile,
 }
 
 impl Drop for Endpoint {
     fn drop(&mut self) {
-        for (socket, inode) in &self.bound {
-            if fs::symlink_metadata(socket)
-                .is_ok_and(|metadata| metadata.ino() == *inode && metadata.file_type().is_socket())
+        if identity(&self.folder) != Some(self.place) {
+            return;
+        }
+        for (socket, owned) in &self.bound {
+            if identity(socket) == Some(*owned)
+                && fs::symlink_metadata(socket)
+                    .is_ok_and(|metadata| metadata.file_type().is_socket())
             {
                 // Best effort: a socket left behind is found stale next time.
                 let _ = fs::remove_file(socket);
@@ -89,25 +104,31 @@ fn unsafe_folder(folder: &Path, rule: &str) -> Error {
     )
 }
 
-/// Make the folder when absent, then hold it to its rules: a real folder of
-/// `controller`, mode 0700, with no ACL.
-fn prepare(folder: &Path, controller: u32) -> Result<()> {
+/// Make the folder when absent, then hold it to its rules through one open
+/// handle: a real folder of `controller`, mode 0700, with no ACL. Returns
+/// its identity, which every later removal checks.
+fn prepare(folder: &Path, controller: u32) -> Result<Identity> {
     match fs::DirBuilder::new().mode(0o700).create(folder) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(error) => return Err(Error::writing(folder, error)),
     }
-    let metadata = fs::symlink_metadata(folder).map_err(context("Inspect", folder))?;
+    let handle = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(folder)
+        .map_err(|_| unsafe_folder(folder, "be a folder of this account"))?;
+    let metadata = handle.metadata().map_err(context("Inspect", folder))?;
     if !metadata.is_dir() || metadata.uid() != controller {
         return Err(unsafe_folder(folder, "be a folder of this account"));
     }
     if metadata.mode() & 0o777 != 0o700 {
         return Err(unsafe_folder(folder, "have mode 0700"));
     }
-    if atlas_core::acl::present(folder).map_err(context("Read the ACL of", folder))? {
+    if atlas_core::acl::present_on(&handle).map_err(context("Read the ACL of", folder))? {
         return Err(unsafe_folder(folder, "carry no ACL"));
     }
-    Ok(())
+    Ok((metadata.dev(), metadata.ino()))
 }
 
 /// The folder's lifetime lock file, refused rather than repaired unless it is
@@ -119,7 +140,7 @@ fn owner_lock(path: &Path, controller: u32) -> Result<LockFile> {
     if !metadata.is_file() || metadata.uid() != controller || metadata.mode() & 0o777 != 0o600 {
         return Err(unsafe_folder(path, "be a 0600 file of this account"));
     }
-    if atlas_core::acl::present(path).map_err(context("Read the ACL of", path))? {
+    if atlas_core::acl::present_on(&file).map_err(context("Read the ACL of", path))? {
         return Err(unsafe_folder(path, "carry no ACL"));
     }
     Ok(LockFile(file))
@@ -157,8 +178,9 @@ fn claim(lock: &LockFile, folder: &Path, key: &[u8; 32], helper: u32) -> Result<
 }
 
 /// Remove `socket` if it was left behind: this account's socket that no one
-/// answers. Anything else there is refused.
-async fn clear_stale(socket: &Path, controller: u32) -> Result<()> {
+/// answers, still in the folder `place` names. Anything else there is
+/// refused.
+async fn clear_stale(socket: &Path, controller: u32, place: Identity) -> Result<()> {
     let Ok(metadata) = fs::symlink_metadata(socket) else {
         return Ok(());
     };
@@ -168,6 +190,9 @@ async fn clear_stale(socket: &Path, controller: u32) -> Result<()> {
     {
         return Err(unsafe_folder(socket, "be a 0600 socket of this account"));
     }
+    if atlas_core::acl::present(socket).map_err(context("Read the ACL of", socket))? {
+        return Err(unsafe_folder(socket, "carry no ACL"));
+    }
     match tokio::time::timeout(STALE, UnixStream::connect(socket)).await {
         Ok(Err(error))
             if matches!(
@@ -175,9 +200,12 @@ async fn clear_stale(socket: &Path, controller: u32) -> Result<()> {
                 std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
             ) =>
         {
-            // Only the very socket probed is removed, never one put there since.
-            let now = fs::symlink_metadata(socket).map_err(context("Inspect", socket))?;
-            if (now.dev(), now.ino()) != (metadata.dev(), metadata.ino()) {
+            // Only the very socket probed is removed, from the very folder
+            // checked, never one put there since.
+            let folder = socket.parent().unwrap_or(socket);
+            if identity(socket) != Some((metadata.dev(), metadata.ino()))
+                || identity(folder) != Some(place)
+            {
                 return Err(Error::new(
                     Code::Busy,
                     "Another frame service is starting for this helper",
@@ -204,7 +232,7 @@ pub(crate) async fn bind(controller: u32, helper: u32) -> Result<(Listeners, End
 
 async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners, Endpoint)> {
     let folder = folder(base, controller, &owner_key(controller, helper));
-    prepare(&folder, controller)?;
+    let place = prepare(&folder, controller)?;
     let lock = owner_lock(&folder.join("owner.lock"), controller)?;
     FileExt::try_lock_exclusive(&lock.0)
         .map_err(|_| Error::new(Code::Busy, "Another frame service owns this helper"))?;
@@ -213,6 +241,7 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
     // Made first, so a failure part way removes what was already bound.
     let mut endpoint = Endpoint {
         folder,
+        place,
         bound: Vec::new(),
         _lock: lock,
     };
@@ -225,16 +254,14 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
                 format!("The socket path {} is too long", socket.display()),
             ));
         }
-        clear_stale(&socket, controller).await?;
+        clear_stale(&socket, controller, place).await?;
         let listener = UnixListener::bind(&socket).map_err(context("Bind", &socket))?;
         // Owned for cleanup from the moment it exists.
-        let inode = match fs::symlink_metadata(&socket) {
-            Ok(metadata) => metadata.ino(),
-            // Not known to be this socket, so not removed: the next start
-            // finds it and clears it only if no one answers there.
-            Err(error) => return Err(context("Inspect", &socket)(error)),
-        };
-        endpoint.bound.push((socket.clone(), inode));
+        // Not known to be this socket, so not removed: the next start finds
+        // it and clears it only if no one answers there.
+        let owned = identity(&socket)
+            .ok_or_else(|| Error::new(Code::Identity, "The bound socket could not be inspected"))?;
+        endpoint.bound.push((socket.clone(), owned));
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
             .map_err(context("Set the mode of", &socket))?;
         listeners.push(listener);

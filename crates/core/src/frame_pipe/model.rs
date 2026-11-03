@@ -8,14 +8,27 @@ use super::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 
-/// `bytes` as `T`, after the lexical guard.
+/// Metadata one packet kind carries, with the rules its keys alone cannot
+/// say.
+pub trait Metadata: DeserializeOwned {
+    /// Whether its values agree with each other and with the protocol.
+    fn valid(&self) -> bool {
+        true
+    }
+}
+
+/// `bytes` as `T`, after the lexical guard and `T`'s own rules.
 ///
 /// # Errors
 ///
-/// Refuses metadata the guard refuses, or that is not exactly a `T`.
-pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Refusal> {
+/// Refuses metadata the guard refuses, that is not exactly a `T`, or that
+/// breaks `T`'s rules.
+pub fn decode<T: Metadata>(bytes: &[u8]) -> Result<T, Refusal> {
     guard(bytes)?;
-    serde_json::from_slice(bytes).map_err(|_| Refusal::Invalid)
+    serde_json::from_slice(bytes)
+        .ok()
+        .filter(T::valid)
+        .ok_or(Refusal::Invalid)
 }
 
 /// `value` as compact metadata.
@@ -255,12 +268,14 @@ pub struct Profile {
     pub backend: Source,
 }
 
-impl Profile {
+impl Metadata for Profile {
     /// Whether the row stride is exactly three bytes a pixel.
-    pub fn valid(&self) -> bool {
+    fn valid(&self) -> bool {
         u64::from(self.row_stride) == u64::from(self.width.get()) * 3
     }
+}
 
+impl Profile {
     /// The bytes of one full picture.
     pub fn bytes(&self) -> u64 {
         u64::from(self.row_stride) * u64::from(self.height.get())
@@ -412,10 +427,10 @@ pub struct ErrorMetadata {
     pub credit_id: Option<Positive>,
 }
 
-impl ErrorMetadata {
+impl Metadata for ErrorMetadata {
     /// Whether the error names a credit exactly when it retires one, and a
     /// refused request claims nothing was sent.
-    pub fn valid(&self) -> bool {
+    fn valid(&self) -> bool {
         (self.disposition == Disposition::CreditRetired) == self.credit_id.is_some()
             && (self.disposition != Disposition::RequestRefused
                 || (!self.failure.dispatched && !self.failure.uncertain))
@@ -433,19 +448,19 @@ pub struct CreditOnly {
 /// How long a pair token lasts, in milliseconds.
 pub const PAIR_EXPIRES_MS: u32 = 2000;
 
-impl Hello {
+impl Metadata for Hello {
     /// Whether it speaks this protocol and asks to observe.
-    pub fn valid(&self) -> bool {
+    fn valid(&self) -> bool {
         self.protocol_major == super::wire::MAJOR
             && self.requested_rights.contains(&Right::Observe)
             && self.offered_updates.contains(&UpdateKind::Full)
     }
 }
 
-impl Welcome {
+impl Metadata for Welcome {
     /// Whether its token lasts exactly as long as the protocol says, and it
     /// accepts full pictures.
-    pub fn valid(&self) -> bool {
+    fn valid(&self) -> bool {
         self.pair_expires_in_ms == PAIR_EXPIRES_MS
             && self.accepted_updates.contains(&UpdateKind::Full)
     }
@@ -478,6 +493,14 @@ pub struct FrameMetadata {
     pub age_at_header_ns: u64,
     pub rectangle_count: u32,
 }
+
+impl Metadata for Ref {}
+impl Metadata for Demand {}
+impl Metadata for Attach {}
+impl Metadata for Attached {}
+impl Metadata for Pair {}
+impl Metadata for CreditOnly {}
+impl Metadata for FrameMetadata {}
 
 /// The most rectangles one delta carries.
 pub const RECTANGLES_MAX: u32 = 256;
