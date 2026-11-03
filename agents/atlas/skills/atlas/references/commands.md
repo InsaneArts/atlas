@@ -376,7 +376,7 @@ Examples:
 ```text
 List an app's buttons, fields and other elements.
 
-Lists accessibility elements of the app's windows: role, name, value, click point (at) and size, with each window listed once; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles. more says how many matching elements were left out. look names this listing: atlas click --ref LOOK.INDEX clicks one of its elements.
+Lists accessibility elements of the app's windows: role, name, value, click point (at) and size, with each window listed once; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles. more says how many matching elements were left out. look names this listing: atlas click --ref LOOK.INDEX clicks one of its elements, and atlas element acts on one.
 
 Usage: atlas elements [OPTIONS]
 
@@ -572,6 +572,64 @@ Examples:
   atlas click --app TextEdit --name Save
   atlas click --app TextEdit --ref 8123abc.12
   atlas click 1200 880
+```
+
+## atlas element
+
+```text
+Act on an element from atlas elements through Accessibility.
+
+Does ACTION to the element --ref names, found again and proven the same first. No pointer or key event is sent and nothing takes focus, though the app may move focus itself. check, uncheck, expand and collapse send nothing (performed: 0) when it already is so. verification says whether it reads as asked afterwards: matched, mismatch or not-checked (a press is never checked). An action the element does not support, and a password field's value, are refused. No app is launched.
+
+Usage: atlas element [OPTIONS] --ref <LOOK.INDEX> <ACTION>
+
+Arguments:
+  <ACTION>
+          What to do
+
+          Possible values:
+          - press:            Press a button, menu item or other control
+          - set-value:        Set a field's or slider's value (--value)
+          - check:            Leave a checkbox or radio button checked
+          - uncheck:          Leave a checkbox unchecked
+          - pick:             Select one option of a list, table, tab group or open menu (--option)
+          - expand:           Leave an outline row, disclosure or pop-up expanded
+          - collapse:         Leave it collapsed
+          - scroll-into-view: Scroll its view until it shows the element
+
+Options:
+      --ref <LOOK.INDEX>
+          The element, from atlas elements, as its look and index
+
+      --value <TEXT>
+          The value set-value sets: text, or a number for a slider
+
+      --option <LOOK.INDEX>
+          The option pick selects, from the same listing, as LOOK.INDEX
+
+      --app <APP>
+          Application name: the one process of that name with a window, or the app in front
+
+      --pid <PID>
+          Exact process ID, for apps with several processes
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas element press --ref 8123abc.12
+  atlas element set-value --ref 8123abc.4 --value "hello"
+  atlas element pick --ref 8123abc.7 --option 8123abc.9
 ```
 
 ## atlas type
@@ -809,7 +867,7 @@ Examples:
 ```text
 Send several actions at once (a JSON array, or @path/to/actions.json).
 
-Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. With --app or --pid, each action is checked before it starts, as type, key, click, scroll and drag check it, and a move at its point. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
+Each action is an object with a "type": move {x, y}; click {x, y, button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?}; scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}; and, as atlas element does them, press, check, uncheck, expand, collapse and scroll-into-view {ref}, set-value {ref, value} and pick {ref, option}, first in their batch. Up to 32 actions that finish within two seconds; coordinates are display points, a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256 characters, a wait at most 250 ms. With --app or --pid, each action is checked before it starts, as type, key, click, scroll and drag check it, and a move at its point. Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
 
 Usage: atlas input [OPTIONS] <ACTIONS>
 

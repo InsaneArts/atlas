@@ -54,9 +54,9 @@ in, read Give the app what it needs.
 
 Open with `atlas open --app NAME [FILE|URL]` or `atlas open /path/App.app`,
 then `atlas wait --app NAME`. Act on a listed element (its `look` and
-`index`), with no pointer or focus, by `atlas element press --ref LOOK.INDEX`
-(or `set-value --value T`, `check`, `pick --option LOOK.INDEX`, `expand`,
-their opposites); else click it by `atlas click --app A --ref LOOK.INDEX` or
+`index`) by `atlas element press --ref LOOK.INDEX` (or `set-value --value T`,
+`check`, `pick --option`, `expand`, their opposites): no pointer or focus.
+Else click it by `atlas click --app A --ref LOOK.INDEX` or
 `--name LABEL [--role ROLE]`, which lists `candidates` unless one matches.
 Otherwise use
 `atlas click --app A X Y`, `atlas type --app A "text"`,
@@ -83,7 +83,7 @@ with an Atlas command still running (see Limits).
 After each action:
 
 1. Read the reply. `ok` means delivered, not that the app reacted;
-   `verification: matched` proves an element reads as asked: skip step 2.
+   `verification: matched` proves it did: skip step 2.
 2. Read apps and web pages by name first: `atlas elements --app A --name X`
    for text, a control, its value and state; `atlas wait --app A` (or `--title T`,
    `--gone`) for a window.
