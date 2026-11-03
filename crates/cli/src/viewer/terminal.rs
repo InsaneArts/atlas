@@ -10,6 +10,7 @@ use atlas_client::client::{
 };
 use atlas_core::{
     error::{Code, Error, Result},
+    frame_pipe::diagnostics::Ring,
     protocol::CaptureBackend,
 };
 use std::{path::Path, sync::Arc, time::Duration};
@@ -76,11 +77,13 @@ impl TerminalService {
         TerminalFrames {
             viewer: self.viewer.clone(),
             stream: None,
+            retired: None,
             connected: false,
             client: None,
             dimension: self.dimension,
             backend: self.backend,
             reconfiguring: false,
+            ring: Ring::default(),
         }
     }
 
@@ -99,11 +102,15 @@ impl TerminalService {
 pub(crate) struct TerminalFrames {
     viewer: Arc<Viewer>,
     stream: Option<LiveStream>,
+    /// A stream left for a new size, stopped before the next one opens.
+    retired: Option<LiveStream>,
     connected: bool,
     client: Option<Arc<Client>>,
     dimension: u32,
     backend: CaptureBackend,
     reconfiguring: bool,
+    /// Every acquisition's outcome, failed ones included.
+    ring: Ring,
 }
 
 impl TerminalFrames {
@@ -111,7 +118,7 @@ impl TerminalFrames {
         if self.dimension != dimension {
             self.reconfiguring = self.connected;
             self.dimension = dimension;
-            self.stream = None;
+            self.retired = self.stream.take();
             self.connected = false;
         }
     }
@@ -137,7 +144,10 @@ impl TerminalFrames {
             .as_ref()
             .is_none_or(|previous| !Arc::ptr_eq(previous, &client))
         {
+            // A stream of another helper's daemon closes; that daemon gives
+            // its source back when the connection ends.
             self.stream = None;
+            self.retired = None;
             self.connected = false;
             self.client = Some(client.clone());
         }
@@ -148,7 +158,7 @@ impl TerminalFrames {
                 .as_ref()
                 .is_some_and(|stream| stream.can_retry(error))
         }) {
-            self.stream = None;
+            self.retired = self.stream.take();
             self.connected = false;
         }
         result
@@ -156,6 +166,11 @@ impl TerminalFrames {
 
     async fn read(&mut self, client: &Client) -> Result<SharedFrame> {
         if !self.connected {
+            // A source left unconfirmed stays quarantined in the helper and
+            // refuses the next stream, which reports it; nothing is lost here.
+            if let Some(retired) = self.retired.take() {
+                let _ = retired.stop(client).await;
+            }
             let until = tokio::time::Instant::now() + RECONNECT;
             self.stream = loop {
                 match LiveStream::connect(client, self.dimension, self.backend).await {
@@ -173,7 +188,7 @@ impl TerminalFrames {
             self.connected = true;
         }
         if let Some(stream) = &mut self.stream {
-            let frame = stream.next(client).await?;
+            let frame = stream.next(client, &mut self.ring).await?;
             let key = self.viewer.remember_live(&frame).await;
             Ok(live_frame(frame, key))
         } else {

@@ -310,7 +310,24 @@ fn received(
                         .filter(|c| !c.is_control())
                         .take(160)
                         .collect();
-                    state.last_frame_error = Some(format!("{}: {reason}", error.code));
+                    // Stage and reason are fixed words from the live reader.
+                    let word = |key: &str| {
+                        error
+                            .details
+                            .get(key)
+                            .and_then(|value| value.as_str())
+                            .filter(|word| {
+                                word.len() <= 32
+                                    && word
+                                        .bytes()
+                                        .all(|byte| byte.is_ascii_lowercase() || byte == b'-')
+                            })
+                    };
+                    let stage = word("stage")
+                        .zip(word("reason"))
+                        .map(|(stage, why)| format!(" at {stage} ({why})"))
+                        .unwrap_or_default();
+                    state.last_frame_error = Some(format!("{}{stage}: {reason}", error.code));
                 }
             });
             session.release(states);

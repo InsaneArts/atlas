@@ -4,9 +4,10 @@ use super::Client;
 use atlas_core::{
     buffer::Buffer,
     error::{Code, Error, Result},
+    frame_pipe::diagnostics::{Backend, Outcome, Reason, Record, Ring, Stage, Timing, nanos},
     protocol::{
-        CaptureBackend, RGB_STREAM, RGB_STREAM_HIGH_RES, SCK_EXPERIMENTAL, SESSION_PROOF,
-        SessionPin,
+        CaptureBackend, RGB_STREAM, RGB_STREAM_HIGH_RES, RGB_STREAM_STOP, SCK_EXPERIMENTAL,
+        SESSION_PROOF, SessionPin,
     },
     session::{Epoch, InputEpoch},
     transport::refusal,
@@ -26,6 +27,8 @@ const HEADER_LIMIT: usize = 4096;
 const DEADLINE: Duration = Duration::from_secs(2);
 /// How old a frame may be, from its readiness checkpoint, when it is accepted.
 const FRESHNESS: Duration = Duration::from_millis(500);
+/// How often a stop that went unanswered is asked about while it settles.
+const DRAIN_QUERY: Duration = Duration::from_millis(50);
 
 /// One verified picture of the helper and how it was read.
 pub struct LiveFrame {
@@ -125,6 +128,11 @@ pub struct LiveStream {
     synchronized: bool,
     profile: Profile,
     backend: CaptureBackend,
+    /// The daemon and source generation serving this connection, when the
+    /// daemon confirms stops.
+    producer: Option<(u32, u64)>,
+    /// How many acquisitions this connection began.
+    acquisitions: u64,
 }
 
 impl LiveStream {
@@ -188,6 +196,8 @@ impl LiveStream {
                 ceiling: if high_res { 4096 } else { 1600 },
                 persistent_proofs: offers(SESSION_PROOF),
             },
+            producer: None,
+            acquisitions: 0,
         };
         let mut request = serde_json::to_vec(&request(&stream.epoch, limit, backend))?;
         request.push(b'\n');
@@ -204,21 +214,138 @@ impl LiveStream {
                 "The helper did not accept the raw preview protocol",
             ));
         }
+        if offers(RGB_STREAM_STOP) {
+            let daemon = accepted["daemonPID"]
+                .as_u64()
+                .and_then(|pid| u32::try_from(pid).ok())
+                .filter(|pid| *pid == stream.epoch.capture_pid);
+            let generation = accepted["producerGeneration"]
+                .as_u64()
+                .filter(|generation| *generation > 0);
+            stream.producer = Some(
+                daemon
+                    .zip(generation)
+                    .ok_or_else(|| invalid("The helper did not name its live capture source"))?,
+            );
+        }
         Ok(Some(stream))
     }
 
-    /// The next frame, bracketed by fresh session proofs.
+    /// The next frame, bracketed by fresh session proofs. Its outcome,
+    /// failed or not, goes into `ring` before it is returned, and a failure
+    /// carries the stage it ended at and why.
     ///
     /// # Errors
     ///
     /// Returns an error when either proof fails or disagrees, the header or
     /// pixels are invalid, the read passes its deadline, or the complete frame
     /// is older than its freshness limit.
-    pub async fn next(&mut self, client: &Client) -> Result<LiveFrame> {
+    pub async fn next(&mut self, client: &Client, ring: &mut Ring) -> Result<LiveFrame> {
         self.synchronized = false;
-        tokio::time::timeout(DEADLINE, self.capture(client))
+        self.acquisitions += 1;
+        let mut record = Record::new(self.acquisitions);
+        record.source_generation = self.producer.map_or(0, |(_, generation)| generation);
+        record.requested_backend = Backend::named(self.backend.name());
+        record.pipe_reused = self.acquisitions > 1;
+        let began = Instant::now();
+        let result = tokio::time::timeout(DEADLINE, self.capture(client, &mut record))
             .await
-            .map_err(|_| invalid("Preview verification timed out"))?
+            .unwrap_or_else(|_| {
+                record.outcome = Outcome::Timeout;
+                Err(invalid("Preview verification timed out"))
+            });
+        record.time(Timing::Total, began.elapsed());
+        record.pipe_synchronized = self.synchronized;
+        record.source_sequence = self.sequence;
+        let result = match result {
+            Ok(frame) => {
+                record.age_at_decision_ns = nanos(frame.at.elapsed());
+                record.end(Outcome::Accepted, Stage::None, Reason::None);
+                Ok(frame)
+            }
+            Err(error) => {
+                let outcome = match record.outcome {
+                    Outcome::Timeout => Outcome::Timeout,
+                    _ => Outcome::Rejected,
+                };
+                let reason = match record.stage {
+                    Stage::SourceAge => Reason::SourceStale,
+                    _ => Reason::of(error.code),
+                };
+                record.end(outcome, record.stage, reason);
+                Err(error
+                    .with("stage", json!(record.stage))
+                    .with("reason", json!(record.reason)))
+            }
+        };
+        ring.push(record);
+        result
+    }
+
+    /// Give the helper's live source back and wait until it says the source
+    /// is stopped and drained: by a stop request at a frame boundary, else by
+    /// asking about its generation once the connection is closed. An older
+    /// helper has only the closed connection to go by.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the helper does not confirm the source stopped
+    /// and drained within its deadline; its source then stays quarantined
+    /// there, refusing the next capture until it is confirmed.
+    pub async fn stop(mut self, client: &Client) -> Result<()> {
+        let Some((daemon, generation)) = self.producer else {
+            return Ok(());
+        };
+        let request = stop_request_id();
+        if self.synchronized {
+            let mut stop = vec![0];
+            stop.extend_from_slice(&request.to_be_bytes());
+            let answered = tokio::time::timeout(DEADLINE, async {
+                self.socket.write_all(&stop).await?;
+                read_header(&mut self.socket).await
+            })
+            .await;
+            if let Ok(Ok(reply)) = answered
+                && reply["drained"] == true
+                && reply["daemonPID"] == daemon
+                && reply["producerGeneration"] == generation
+                && reply["stopRequestID"] == request
+            {
+                return Ok(());
+            }
+        }
+        // No confirmation came: closing hands the source back, and only a
+        // fresh query of that generation can say it is drained.
+        drop(self.socket);
+        let until = tokio::time::Instant::now() + DEADLINE;
+        loop {
+            let query = atlas_core::files::token()[..32].to_owned();
+            let reply = client
+                .transport
+                .call(&json!({"op": "stream-drain-status", "daemonPID": daemon,
+                    "producerGeneration": generation, "queryID": query}))
+                .await;
+            match reply {
+                Ok(reply)
+                    if reply["queryID"] == query.as_str()
+                        && reply["daemonPID"] == daemon
+                        && reply["producerGeneration"] == generation
+                        && reply["drained"] == true =>
+                {
+                    return Ok(());
+                }
+                Ok(reply) if reply["state"] == "active" || reply["state"] == "stopping" => {}
+                _ => break,
+            }
+            if tokio::time::Instant::now() + DRAIN_QUERY >= until {
+                break;
+            }
+            tokio::time::sleep(DRAIN_QUERY).await;
+        }
+        Err(Error::new(
+            Code::Capture,
+            "The helper did not confirm that its live capture stopped",
+        ))
     }
 
     /// Whether `error` left this connection at a frame boundary, so the next
@@ -227,17 +354,22 @@ impl LiveStream {
         error.code == Code::StaleFrame && self.synchronized
     }
 
-    async fn capture(&mut self, client: &Client) -> Result<LiveFrame> {
+    async fn capture(&mut self, client: &Client, record: &mut Record) -> Result<LiveFrame> {
         let began = Instant::now();
-        let before = client.identity().await?.epoch;
+        record.stage = Stage::BeforeProof;
+        let before = client.identity().await;
+        record.time(Timing::BeforeProof, began.elapsed());
+        let before = before?.epoch;
         let before_ms = began.elapsed().as_secs_f64() * 1000.0;
         if before != self.epoch {
             return Err(changed());
         }
         let at = Instant::now();
-        let (header, rgb) = tokio::time::timeout(DEADLINE, async {
+        let read = tokio::time::timeout(DEADLINE, async {
+            record.stage = Stage::ReadyHeader;
             self.socket.write_all(&[1]).await?;
             let header = read_header(&mut self.socket).await?;
+            record.time(Timing::ReadyHeader, at.elapsed());
             let capture_wait_ms = at.elapsed().as_secs_f64() * 1000.0;
             let (width, height, sequence) =
                 validate_header(&header, &before, self.limit, self.sequence)?;
@@ -251,6 +383,7 @@ impl LiveStream {
                     ));
                 }
             };
+            record.actual_backend = Backend::named(source);
             let length = usize::try_from(width)
                 .ok()
                 .and_then(|w| {
@@ -259,9 +392,15 @@ impl LiveStream {
                         .and_then(|h| w.checked_mul(h)?.checked_mul(3))
                 })
                 .ok_or_else(|| invalid("Preview dimensions overflow"))?;
+            record.stage = Stage::Allocation;
+            let allocating = Instant::now();
             let mut rgb = Buffer::zeroed(length)?;
+            record.time(Timing::Allocation, allocating.elapsed());
+            record.allocated_bytes = length as u64;
+            record.stage = Stage::BodyRead;
             let reading = Instant::now();
             self.socket.read_exact(&mut rgb).await?;
+            record.time(Timing::BodyRead, reading.elapsed());
             Ok::<_, Error>((
                 Received {
                     width,
@@ -278,10 +417,19 @@ impl LiveStream {
                 rgb,
             ))
         })
-        .await
-        .map_err(|_| invalid("Preview frame timed out"))??;
+        .await;
+        let (header, rgb) = match read {
+            Ok(read) => read?,
+            Err(_) => {
+                record.outcome = Outcome::Timeout;
+                return Err(invalid("Preview frame timed out"));
+            }
+        };
+        record.stage = Stage::AfterProof;
         let proving = Instant::now();
-        let after = client.identity().await?.epoch;
+        let after = client.identity().await;
+        record.time(Timing::AfterProof, proving.elapsed());
+        let after = after?.epoch;
         let after_ms = proving.elapsed().as_secs_f64() * 1000.0;
         if after != before {
             return Err(changed());
@@ -290,6 +438,8 @@ impl LiveStream {
         // to present. A retry may use the same pipe, never replay this image.
         self.sequence = header.sequence;
         self.synchronized = true;
+        record.stage = Stage::SourceAge;
+        record.age_at_decision_ns = nanos(at.elapsed());
         if at.elapsed() >= FRESHNESS {
             return Err(Error::new(
                 Code::StaleFrame,
@@ -331,6 +481,12 @@ struct Received {
     source: &'static str,
     native_capture_ms: Option<f64>,
     capture_stats: Option<CaptureStats>,
+}
+
+/// A fresh, unpredictable ID for one stop request.
+fn stop_request_id() -> u64 {
+    let token = atlas_core::files::token();
+    u64::from_str_radix(&token[..16], 16).unwrap_or_default()
 }
 
 fn request(epoch: &Epoch, limit: u32, backend: CaptureBackend) -> Value {

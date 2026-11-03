@@ -42,6 +42,21 @@ fn the_live_request_is_accepted_by_the_helpers_session_pinned_protocol() {
     }
 }
 
+/// An open stream on `socket`, as a helper that confirms no stops serves it.
+fn opened(socket: UnixStream, epoch: &Epoch) -> LiveStream {
+    LiveStream {
+        socket,
+        epoch: epoch.clone(),
+        sequence: 0,
+        limit: 640,
+        synchronized: true,
+        profile: Profile::default(),
+        backend: CaptureBackend::CoreGraphics,
+        producer: None,
+        acquisitions: 0,
+    }
+}
+
 fn epoch() -> Epoch {
     Epoch {
         uid: 502,
@@ -167,7 +182,8 @@ async fn verified_frame(changed_after_capture: bool) -> Result<LiveFrame> {
         let epoch = client.identity().await.unwrap().epoch;
         assert_eq!(helper.proofs(),1);
         let (socket,mut producer) = UnixStream::pair().unwrap();
-        let mut stream = LiveStream { socket, epoch:epoch.clone(), sequence:0,limit:640, synchronized:true, profile:Profile::default(), backend:CaptureBackend::CoreGraphics };
+        let mut stream = opened(socket, &epoch);
+        let mut ring = Ring::default();
         let write = async {
             let mut ready=[0];
             producer.read_exact(&mut ready).await.unwrap();
@@ -183,7 +199,7 @@ async fn verified_frame(changed_after_capture: bool) -> Result<LiveFrame> {
             producer.write_all(&bytes).await.unwrap();
             producer.write_all(&[42;12]).await.unwrap();
         };
-        let (result,())=tokio::join!(stream.next(&client),write);
+        let (result,())=tokio::join!(stream.next(&client, &mut ring),write);
         assert_eq!(helper.proofs(),3,"The received pixels require a new independent after-proof");
         result
     }, |_| panic!("Live reads only ask for identity, never screenshots or mutations")).await
@@ -214,7 +230,8 @@ async fn after_a_consumed_stale_frame(second_sequence: u64) -> Result<LiveFrame>
     helper.serve(async {
         let epoch = client.identity().await.unwrap().epoch;
         let (socket, mut producer) = UnixStream::pair().unwrap();
-        let mut stream = LiveStream { socket, epoch: epoch.clone(), sequence: 0, limit: 640, synchronized:true, profile:Profile::default(), backend:CaptureBackend::CoreGraphics };
+        let mut stream = opened(socket, &epoch);
+        let mut ring = Ring::default();
         let produce = async {
             for (round, sequence) in [1, second_sequence].into_iter().enumerate() {
                 let mut ready = [0];
@@ -240,17 +257,26 @@ async fn after_a_consumed_stale_frame(second_sequence: u64) -> Result<LiveFrame>
             }
         };
         let consume = async {
-            let stale = stream.next(&client).await;
+            let stale = stream.next(&client, &mut ring).await;
             match stale {
                 Ok(_) => panic!("the first stale pixels must never be returned"),
                 Err(error) => {
                     assert_eq!(error.code, Code::StaleFrame);
                     assert!(stream.can_retry(&error), "complete stale frames leave a synchronized stream");
+                    assert_eq!(error.details["stage"], "source-age");
+                    assert_eq!(error.details["reason"], "source-stale");
                 }
+            }
+            let record = *ring.last().unwrap();
+            assert_eq!((record.outcome, record.stage, record.reason), (Outcome::Rejected, Stage::SourceAge, Reason::SourceStale));
+            assert!(record.pipe_synchronized);
+            assert_eq!(record.source_sequence, 1);
+            for timing in [Timing::BeforeProof, Timing::ReadyHeader, Timing::Allocation, Timing::BodyRead, Timing::AfterProof, Timing::Total] {
+                assert!(record.timing(timing).is_some(), "{timing:?} is timed even when the frame fails");
             }
             assert_eq!(helper.proofs(), 3, "stale pixels still require the independent after-proof");
             assert_eq!(stream.sequence, 1, "the consumed stale sequence must not be replayable");
-            let next = stream.next(&client).await;
+            let next = stream.next(&client, &mut ring).await;
             if let Err(error) = &next {
                 assert!(!stream.can_retry(error), "replayed headers cannot leave a retryable stream");
             }
@@ -288,7 +314,8 @@ async fn a_partially_received_pixel_body_never_leaves_a_retryable_stream() {
     helper.serve(async {
         let epoch = client.identity().await.unwrap().epoch;
         let (socket, mut producer) = UnixStream::pair().unwrap();
-        let mut stream = LiveStream { socket, epoch:epoch.clone(), sequence:0, limit:640, synchronized:true, profile:Profile::default(), backend:CaptureBackend::CoreGraphics };
+        let mut stream = opened(socket, &epoch);
+        let mut ring = Ring::default();
         let produce = async move {
             let mut ready = [0];
             producer.read_exact(&mut ready).await.unwrap();
@@ -304,11 +331,91 @@ async fn a_partially_received_pixel_body_never_leaves_a_retryable_stream() {
             producer.write_all(&[7; 6]).await.unwrap();
             // Drop with only half the promised twelve bytes delivered.
         };
-        let (result, ()) = tokio::join!(stream.next(&client), produce);
+        let (result, ()) = tokio::join!(stream.next(&client, &mut ring), produce);
         let error = match result { Ok(_) => panic!("a partial image must never escape"), Err(error) => error };
         assert!(!stream.can_retry(&error));
         assert!(!stream.can_retry(&Error::new(Code::StaleFrame, "the pipe is no longer synchronized")));
         assert_eq!(stream.sequence, 0, "an incomplete payload cannot consume a sequence");
+        let record = ring.last().unwrap();
+        assert_eq!((record.outcome, record.stage), (Outcome::Rejected, Stage::BodyRead));
+        assert!(!record.pipe_synchronized);
+        assert_eq!(record.timing(Timing::AfterProof), None, "no after-proof was taken");
         assert_eq!(helper.proofs(), 2, "there is no valid after-proof for an incomplete frame");
     }, |_| panic!("partial-frame tests never request captures or mutations")).await;
+}
+
+/// A stream on `socket` whose helper confirms stops for generation 3.
+fn confirming(socket: UnixStream, epoch: &Epoch) -> LiveStream {
+    LiveStream {
+        producer: Some((epoch.capture_pid, 3)),
+        ..opened(socket, epoch)
+    }
+}
+
+#[tokio::test]
+async fn a_stop_is_confirmed_by_the_drained_reply_to_its_own_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let (socket, mut producer) = UnixStream::pair().unwrap();
+    let stream = confirming(socket, &epoch());
+    let helper = async {
+        let mut stop = [0; 9];
+        producer.read_exact(&mut stop).await.unwrap();
+        assert_eq!(stop[0], 0, "a stop request, never READY");
+        let id = u64::from_be_bytes(stop[1..].try_into().unwrap());
+        let reply = serde_json::to_vec(&json!({"ok": true, "daemonPID": 77,
+            "producerGeneration": 3, "stopRequestID": id, "drained": true}))
+        .unwrap();
+        producer.write_u32(reply.len() as u32).await.unwrap();
+        producer.write_all(&reply).await.unwrap();
+    };
+    let (stopped, ()) = tokio::join!(stream.stop(&client), helper);
+    stopped.unwrap();
+}
+
+#[tokio::test]
+async fn an_unanswered_stop_is_settled_only_by_a_fresh_drain_query() {
+    for (state, drained) in [("stopped", true), ("quarantined", false)] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) =
+            crate::test_support::Helper::client(directory.path(), atlas_core::test_support::UID);
+        let (socket, producer) = UnixStream::pair().unwrap();
+        // The helper closes without answering the stop.
+        drop(producer);
+        let stream = confirming(socket, &epoch());
+        let mut queries = Vec::new();
+        let stopped = helper
+            .serve(stream.stop(&client), |request| {
+                assert_eq!(request["op"], "stream-drain-status");
+                assert_eq!(request["producerGeneration"], 3);
+                assert!(
+                    request.get("stopRequestID").is_none(),
+                    "no stop is claimed that the helper never answered"
+                );
+                queries.push(request["queryID"].clone());
+                Some(json!({"ok": true, "daemonPID": 77, "producerGeneration": 3,
+                    "queryID": request["queryID"], "state": state, "drained": drained}))
+            })
+            .await;
+        assert_eq!(stopped.is_ok(), drained, "{state}");
+        assert_eq!(
+            queries.len(),
+            1,
+            "a quarantined source is not asked again here"
+        );
+        assert!(atlas_core::protocol::hex32(queries[0].as_str().unwrap()));
+    }
+}
+
+#[tokio::test]
+async fn an_older_helper_has_only_the_closed_connection_to_go_by() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let (socket, mut producer) = UnixStream::pair().unwrap();
+    opened(socket, &epoch()).stop(&client).await.unwrap();
+    assert_eq!(
+        producer.read(&mut [0]).await.unwrap(),
+        0,
+        "nothing was sent"
+    );
 }
