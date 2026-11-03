@@ -91,15 +91,28 @@ pub(super) fn transactions(
     }
     let (mut recorded, active) = {
         let store = Store::open(home, Lock::Shared)?;
-        let read = (recorded_transactions(&store.path), store.active()?);
+        let read = (recorded_transactions(&store.path)?, store.active()?);
         store.confirm_read()?;
         read
     };
-    recorded.sort_by_key(|(_, updated)| std::cmp::Reverse(*updated));
+    recorded
+        .found
+        .sort_by_key(|(_, updated)| std::cmp::Reverse(*updated));
 
     let asked = |id: &String| ids.contains(id);
-    let (mut listed, mut hidden, mut unreadable, mut more) = (Vec::new(), 0, 0, 0);
-    for (id, updated) in &recorded {
+    let summary = |id: &str, updated_at, transaction: Transaction| {
+        Lenient::Known(TransactionSummary {
+            plan_id: id.to_owned(),
+            phase: transaction.phase.into(),
+            active: active.as_deref() == Some(id),
+            updated_at,
+            files: file_report(&transaction.plan),
+            retained_directories: transaction.retained_directories.len(),
+        })
+    };
+    let (mut listed, mut hidden, mut unreadable, mut more) =
+        (Vec::new(), 0, recorded.unreadable, 0);
+    for (id, updated) in &recorded.found {
         let full = listed.len() >= LISTED;
         if full && !asked(id) {
             more += 1;
@@ -111,15 +124,22 @@ pub(super) fn transactions(
             {
                 hidden += 1;
             }
-            Ok(Some(transaction)) => listed.push(Lenient::Known(TransactionSummary {
-                plan_id: id.clone(),
-                phase: transaction.phase.into(),
-                active: active.as_deref() == Some(id.as_str()),
-                updated_at: *updated,
-                files: file_report(&transaction.plan),
-                retained_directories: transaction.retained_directories.len(),
-            })),
+            Ok(Some(transaction)) => listed.push(summary(id, *updated, transaction)),
             Ok(None) | Err(_) => unreadable += 1,
+        }
+    }
+
+    // An asked plan the listing did not come across is read by its own ID,
+    // so one it missed is never taken for one the helper never started.
+    for id in ids.iter().filter(|id| !recorded.seen.contains(id)) {
+        let store = Store::open(home, Lock::Shared)?;
+        match store.transaction(id) {
+            Ok(Some(transaction)) => {
+                let updated = changed_ms(&store.folder(id).join("transaction.json"));
+                listed.push(summary(id, updated.unwrap_or(0), transaction));
+            }
+            Ok(None) => {}
+            Err(_) => unreadable += 1,
         }
     }
 
@@ -132,28 +152,62 @@ pub(super) fn transactions(
     })?)
 }
 
-/// The transactions whose record is in the store at `path`, by ID, with
-/// when each record last changed, in milliseconds since 1970. A folder
-/// without a record holds a preparation that never started, and is left
-/// out.
-fn recorded_transactions(path: &Path) -> Vec<(String, u64)> {
-    let Ok(entries) = fs::read_dir(path) else {
-        return Vec::new();
+/// What the store's folder holds of transactions, as listed.
+struct Recorded {
+    /// Each transaction whose record is there, by ID, with when its record
+    /// last changed in milliseconds since 1970, or 0 when that cannot be
+    /// told.
+    found: Vec<(String, u64)>,
+    /// The IDs listed, whether their record could be looked at or not.
+    seen: Vec<String>,
+    /// How many entries could not be looked at.
+    unreadable: u64,
+}
+
+/// The transactions in the store at `path`. A store not made yet holds
+/// none, and a folder without a record holds a preparation that never
+/// started, and is left out; every other entry that cannot be looked at
+/// is counted, never left out.
+fn recorded_transactions(path: &Path) -> Result<Recorded> {
+    let mut recorded = Recorded {
+        found: Vec::new(),
+        seen: Vec::new(),
+        unreadable: 0,
+    };
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(recorded),
+        Err(error) => return Err(error.into()),
     };
 
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_str()?.to_owned();
-            let id = name.strip_prefix("transaction-")?;
-            validate_id(id).ok()?;
-            if !fs::symlink_metadata(entry.path()).ok()?.is_dir() {
-                return None;
-            }
-            let at = changed_ms(&entry.path().join("transaction.json"))?;
-            Some((id.to_owned(), at))
-        })
-        .collect()
+    for entry in entries {
+        let Ok(entry) = entry else {
+            recorded.unreadable += 1;
+            continue;
+        };
+        let name = entry.file_name();
+        let Some(id) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix("transaction-"))
+            .filter(|id| validate_id(id).is_ok())
+        else {
+            continue;
+        };
+        recorded.seen.push(id.to_owned());
+        let folder = fs::symlink_metadata(entry.path());
+        if !folder.is_ok_and(|folder| folder.is_dir()) {
+            recorded.unreadable += 1;
+            continue;
+        }
+        match fs::symlink_metadata(entry.path().join("transaction.json")) {
+            Ok(record) => recorded
+                .found
+                .push((id.to_owned(), changed_ms_of(&record).unwrap_or(0))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => recorded.unreadable += 1,
+        }
+    }
+    Ok(recorded)
 }
 
 fn account_home(uid: u32) -> Result<PathBuf> {

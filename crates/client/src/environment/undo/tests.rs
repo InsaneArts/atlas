@@ -121,6 +121,41 @@ async fn an_unreadable_transaction_never_proves_that_a_plan_is_gone() {
     assert!(said.iter().all(Result::is_err), "{said:?}");
 }
 
+#[tokio::test]
+async fn a_record_whose_time_cannot_be_read_still_names_its_plan() {
+    let applied = Applied::new();
+    let store = state::Store::open(&applied.home, Lock::Shared).unwrap();
+    let before_1970 = std::time::UNIX_EPOCH - std::time::Duration::from_secs(24 * 60 * 60);
+    fs::File::options()
+        .write(true)
+        .open(store.folder(&applied.plan.id).join("transaction.json"))
+        .unwrap()
+        .set_modified(before_1970)
+        .unwrap();
+    drop(store);
+
+    assert_eq!(
+        applied.states(|_| ()).await.unwrap(),
+        [PlanState {
+            phase: PlanPhase::Applied,
+            targets: vec![".config/probe/settings.toml".into()],
+        }]
+    );
+}
+
+#[tokio::test]
+async fn a_record_folder_that_is_not_a_folder_never_proves_that_a_plan_is_gone() {
+    let applied = Applied::new();
+    let store = state::Store::open(&applied.home, Lock::Exclusive).unwrap();
+    let folder = store.folder(&applied.plan.id);
+    fs::remove_dir_all(&folder).unwrap();
+    fs::write(&folder, b"not a folder").unwrap();
+    drop(store);
+
+    let said = applied.states(|_| ()).await;
+    assert!(said.is_err(), "{said:?}");
+}
+
 #[test]
 fn reply_observations_keep_known_phases_and_leave_other_values_unknown() {
     for (phase, expected) in [
