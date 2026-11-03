@@ -966,6 +966,222 @@ fn open_at_login_takes_only_its_three_states() {
 }
 
 #[test]
+fn a_suspended_menu_bar_that_does_not_answer_is_not_reported_absent() {
+    use atlas_core::test_support::{TestChild, message, permitted, rerun};
+    const NAME: &str =
+        "menubar::tests::a_suspended_menu_bar_that_does_not_answer_is_not_reported_absent";
+    if std::env::var_os("ATLAS_SUSPENDED_MENUBAR").is_some() {
+        message("ready");
+        permitted("continue");
+        return;
+    }
+
+    // A live process of this very executable stands in for the menu bar;
+    // its port takes connections and never answers.
+    let mut child = TestChild::spawn(
+        rerun(NAME)
+            .arg("--nocapture")
+            .env("ATLAS_SUSPENDED_MENUBAR", "1"),
+    );
+    child.expect("ready");
+    let pid = Pid::from_raw(i32::try_from(child.process.id()).unwrap());
+    kill(pid, Signal::SIGSTOP).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let output = tempfile::tempdir().unwrap();
+    let record = output.path().join(crate::viewer::MENUBAR_RECORD);
+    fs::write(
+        &record,
+        serde_json::json!({"url": format!("http://127.0.0.1:{port}/private/"), "pid": pid.as_raw()})
+            .to_string(),
+    )
+    .unwrap();
+
+    let outcome = stop(output.path());
+    kill(pid, Signal::SIGCONT).unwrap();
+    child.permit("continue");
+    assert!(child.wait().success());
+    let error = outcome.expect_err("a menu bar that may still run is not absent");
+    assert_eq!(error.code, Code::Menubar);
+    assert!(record.exists());
+}
+
+#[test]
+fn only_a_menu_bar_known_not_to_run_is_reported_absent() {
+    use atlas_core::process::{Info, Instance};
+    use std::io::ErrorKind;
+
+    const PID: i32 = 4242;
+    let me = nix::unistd::getuid().as_raw();
+    let live = |uid: u32, zombie: bool| Info {
+        instance: Instance::new(PID, [1, 2]),
+        ppid: 1,
+        pgid: PID,
+        uid,
+        ruid: uid,
+        svuid: uid,
+        zombie,
+        stopped: false,
+        name: "atlas".into(),
+    };
+    let written = serde_json::json!({"url": "http://127.0.0.1:8123/private/", "pid": PID});
+    let record = Path::new("/nowhere/menubar.json");
+
+    #[derive(Clone)]
+    struct World {
+        read: std::result::Result<Vec<u8>, ErrorKind>,
+        info: std::result::Result<Option<Info>, ()>,
+        answers: Option<u32>,
+        atlas: std::result::Result<bool, ()>,
+    }
+    let find = |world: World| {
+        serving(
+            record,
+            |_| world.read.map_err(std::io::Error::from),
+            |_| {
+                world
+                    .info
+                    .map_err(|()| Error::new(Code::State, "unreadable"))
+            },
+            |url| {
+                assert_eq!(url, "http://127.0.0.1:8123/private/");
+                world.answers
+            },
+            |pid| {
+                assert_eq!(pid, PID);
+                world.atlas.map_err(|()| std::io::Error::other("ps failed"))
+            },
+        )
+    };
+    let running = World {
+        read: Ok(written.to_string().into_bytes()),
+        info: Ok(Some(live(me, false))),
+        answers: Some(4242),
+        atlas: Ok(true),
+    };
+    assert_eq!(
+        find(running.clone()).unwrap(),
+        Some((8123, Instance::new(PID, [1, 2])))
+    );
+
+    let absent = [
+        (
+            "no record",
+            World {
+                read: Err(ErrorKind::NotFound),
+                ..running.clone()
+            },
+        ),
+        (
+            "no process",
+            World {
+                info: Ok(None),
+                answers: None,
+                ..running.clone()
+            },
+        ),
+        (
+            "an exited process",
+            World {
+                info: Ok(Some(live(me, true))),
+                ..running.clone()
+            },
+        ),
+        (
+            "another account's",
+            World {
+                info: Ok(Some(live(me + 1, false))),
+                ..running.clone()
+            },
+        ),
+        (
+            "another program",
+            World {
+                answers: None,
+                atlas: Ok(false),
+                ..running.clone()
+            },
+        ),
+    ];
+    for (case, world) in absent {
+        assert_eq!(find(world).unwrap(), None, "{case}");
+    }
+
+    let unknown = [
+        (
+            "an unreadable record",
+            World {
+                read: Err(ErrorKind::PermissionDenied),
+                ..running.clone()
+            },
+            "can't be read",
+        ),
+        (
+            "a malformed record",
+            World {
+                read: Ok(b"{\"url\":".to_vec()),
+                ..running.clone()
+            },
+            "can't be read",
+        ),
+        (
+            "a record without its process",
+            World {
+                read: Ok(br#"{"url":"http://127.0.0.1:8123/private/"}"#.to_vec()),
+                ..running.clone()
+            },
+            "can't be read",
+        ),
+        (
+            "an unreadable process",
+            World {
+                info: Err(()),
+                ..running.clone()
+            },
+            "could not tell",
+        ),
+        (
+            "a suspended menu bar",
+            World {
+                answers: None,
+                ..running.clone()
+            },
+            "does not answer",
+        ),
+        (
+            "another answering process",
+            World {
+                answers: Some(7),
+                ..running.clone()
+            },
+            "does not answer",
+        ),
+        (
+            "a failed executable check",
+            World {
+                answers: None,
+                atlas: Err(()),
+                ..running.clone()
+            },
+            "could not tell",
+        ),
+        (
+            "an answering process that is not Atlas",
+            World {
+                atlas: Ok(false),
+                ..running.clone()
+            },
+            "not Atlas",
+        ),
+    ];
+    for (case, world, said) in unknown {
+        let error = find(world).unwrap_err();
+        assert_eq!(error.code, Code::Menubar, "{case}");
+        assert!(error.error.contains(said), "{case}: {}", error.error);
+    }
+}
+
+#[test]
 fn a_menu_bar_surviving_its_stop_deadline_is_not_reported_stopped() {
     use atlas_core::process::State;
     use nix::errno::Errno;

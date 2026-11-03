@@ -432,34 +432,26 @@ fn last_reply(log: &Path) -> Option<serde_json::Value> {
 /// was serving, so it can be started again there. Only the process its
 /// viewer answers as, which must be the one its record names and Atlas
 /// itself, is signalled; a stale record naming anything else is not. None
-/// when no such menu bar runs.
+/// only when no menu bar runs: it has no record, or the process its record
+/// names is gone or is another program now.
 ///
 /// # Errors
 ///
-/// Returns a menu bar error when it can't be signalled, its process can't
-/// be read, or it has not been seen to exit by the deadline. It may still
-/// run then, and its record stays.
+/// Returns a menu bar error when its record or process can't be read, it
+/// runs but does not answer, it can't be signalled, or it has not been seen
+/// to exit by the deadline. It may still run then, and its record stays.
 pub fn stop(output: &Path) -> Result<Option<u16>> {
-    let Some((port, pid)) = serving(output) else {
-        return Ok(None);
-    };
-    let unreadable = |error| {
-        Error::new(
-            Code::Menubar,
-            "Atlas could not tell whether the menu bar stopped",
-        )
-        .with_source(error)
-    };
-    // This very process: a PID that comes back as another is not it.
-    let Some(instance) = atlas_core::process::info(pid)
-        .map_err(unreadable)?
-        .map(|info| info.instance)
+    let record = output.join(crate::viewer::MENUBAR_RECORD);
+    let Some((port, instance)) = serving(
+        &record,
+        |record| fs::read(record),
+        atlas_core::process::info,
+        crate::viewer::answering,
+        atlas_executable,
+    )?
     else {
         return Ok(None);
     };
-    if !is_atlas(pid) {
-        return Ok(None);
-    }
 
     // It finishes what changes the helper first (a Recover can take most
     // of a minute), and keeps its port until then.
@@ -469,7 +461,7 @@ pub fn stop(output: &Path) -> Result<Option<u16>> {
         || instance.state(),
         || {
             nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(pid),
+                nix::unistd::Pid::from_raw(instance.pid),
                 nix::sys::signal::Signal::SIGINT,
             )
         },
@@ -480,14 +472,73 @@ pub fn stop(output: &Path) -> Result<Option<u16>> {
     )
 }
 
-/// The port and process of the menu bar recorded in `output`, when its
-/// viewer answers there as that process.
-fn serving(output: &Path) -> Option<(u16, i32)> {
-    let record = output.join(crate::viewer::MENUBAR_RECORD);
-    let port = crate::viewer::recorded_port(&crate::viewer::read_record(&record)?)?;
-    let running = crate::viewer::running(&record, port)?;
-    let pid = i32::try_from(crate::viewer::process(&running)?).ok()?;
-    Some((port, pid))
+/// The port and process of the menu bar `record` names, when it runs and
+/// its viewer answers as it; None when it is known not to run. It reads the
+/// record with `read`, the process with `info`, asks the viewer at the
+/// record's address which process it is with `answering`, and whether a
+/// process runs Atlas with `atlas`.
+fn serving(
+    record: &Path,
+    read: impl FnOnce(&Path) -> std::io::Result<Vec<u8>>,
+    info: impl FnOnce(i32) -> Result<Option<atlas_core::process::Info>>,
+    answering: impl FnOnce(&str) -> Option<u32>,
+    atlas: impl FnOnce(i32) -> std::io::Result<bool>,
+) -> Result<Option<(u16, atlas_core::process::Instance)>> {
+    let unreadable = || {
+        Error::new(
+            Code::Menubar,
+            format!(
+                "The menu bar's record, {}, can't be read",
+                atlas_core::config::tilde(record)
+            ),
+        )
+    };
+    let unknown = || {
+        Error::new(
+            Code::Menubar,
+            "Atlas could not tell whether the menu bar runs",
+        )
+    };
+
+    let bytes = match read(record) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(unreadable().with_source(error)),
+    };
+    let written: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(|error| unreadable().with_source(error))?;
+    let (Some(port), Some(address), Some(pid)) = (
+        crate::viewer::recorded_port(&written),
+        crate::viewer::address(&written),
+        crate::viewer::process(&written).and_then(|pid| i32::try_from(pid).ok()),
+    ) else {
+        return Err(unreadable());
+    };
+
+    // The menu bar is this account's own, and never the process asking.
+    let me = nix::unistd::getuid().as_raw();
+    let Some(process) = info(pid).map_err(|error| unknown().with_source(error))? else {
+        return Ok(None);
+    };
+    if process.zombie || !process.owned_by(me) || process.instance.is_this_one() {
+        return Ok(None);
+    }
+
+    let answers = answering(address).is_some_and(|answered| u32::try_from(pid) == Ok(answered));
+    match (answers, atlas(pid)) {
+        (true, Ok(true)) => Ok(Some((port, process.instance))),
+        (true, Ok(false)) => Err(Error::new(
+            Code::Menubar,
+            "The process serving the menu bar is not Atlas",
+        )),
+        // Its PID is another program's now.
+        (false, Ok(false)) => Ok(None),
+        (false, Ok(true)) => Err(Error::new(
+            Code::Menubar,
+            "The menu bar runs but does not answer",
+        )),
+        (_, Err(error)) => Err(unknown().with_source(error)),
+    }
 }
 
 /// Ask the menu bar serving `port` to stop with `signal`, then `look` at
@@ -530,24 +581,29 @@ fn stopped(
 const STOP_WAIT: Duration = Duration::from_secs(60);
 
 /// Whether process `pid` runs an executable named like this one (`atlas`).
+/// One that can't be read is not.
 pub(crate) fn is_atlas(pid: i32) -> bool {
-    let Some(name) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.file_name().map(|name| name.to_owned()))
-    else {
-        return false;
-    };
+    atlas_executable(pid).unwrap_or(false)
+}
 
-    std::process::Command::new("/bin/ps")
+/// Whether process `pid` runs an executable named like this one (`atlas`),
+/// or the failure to tell, a process that has gone among them.
+fn atlas_executable(pid: i32) -> std::io::Result<bool> {
+    let exe = std::env::current_exe()?;
+    let name = exe
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("this executable has no name"))?;
+
+    let output = std::process::Command::new("/bin/ps")
         .args(["-o", "comm=", "-p", &pid.to_string()])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .output()
-        .ok()
-        .is_some_and(|output| {
-            let command = String::from_utf8_lossy(&output.stdout);
-            Path::new(command.trim()).file_name() == Some(name.as_os_str())
-        })
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other("ps could not describe the process"));
+    }
+    let command = String::from_utf8_lossy(&output.stdout);
+    Ok(Path::new(command.trim()).file_name() == Some(name))
 }
 
 /// What to do with "Open at Login".
