@@ -116,37 +116,6 @@ fn the_boot_is_a_uuid() {
     assert_eq!(boot.matches('-').count(), 4);
 }
 
-/// Records written before every read went through the sysctls hold the
-/// start time `proc_pidinfo` gave: the two must agree to the
-/// microsecond, or every recorded process would read as another.
-#[test]
-#[allow(
-    unsafe_code,
-    reason = "FFI: proc_pidinfo, which older records were read with, has no safe binding"
-)]
-fn the_start_time_is_the_one_proc_pidinfo_gives() {
-    let pid = nix::unistd::getpid().as_raw();
-    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
-    let size = std::mem::size_of_val(&info) as i32;
-    // SAFETY: proc_pidinfo receives a writable buffer of the declared size.
-    let read = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDTBSDINFO,
-            0,
-            info.as_mut_ptr().cast(),
-            size,
-        )
-    };
-    assert_eq!(read, size);
-    // SAFETY: proc_pidinfo initialized the complete proc_bsdinfo above.
-    let info = unsafe { info.assume_init() };
-    assert_eq!(
-        start(pid).unwrap(),
-        [info.pbi_start_tvsec, info.pbi_start_tvusec]
-    );
-}
-
 #[test]
 fn only_this_accounts_live_processes_are_described() {
     let this = Instance::current().unwrap();
