@@ -24,11 +24,32 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Refusal> {
 ///
 /// Refuses metadata past its bound.
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, Refusal> {
-    let bytes = serde_json::to_vec(value).map_err(|_| Refusal::Invalid)?;
-    if bytes.len() > super::wire::METADATA_MAX {
-        return Err(Refusal::Oversized);
+    let mut bounded = Bounded(Vec::new());
+    serde_json::to_writer(&mut bounded, value).map_err(|error| {
+        if error.is_io() {
+            Refusal::Oversized
+        } else {
+            Refusal::Invalid
+        }
+    })?;
+    Ok(bounded.0)
+}
+
+/// Bytes that refuse to grow past the metadata bound.
+struct Bounded(Vec<u8>);
+
+impl std::io::Write for Bounded {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.0.len() + bytes.len() > super::wire::METADATA_MAX {
+            return Err(std::io::Error::other("metadata past its bound"));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
     }
-    Ok(bytes)
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// An optional key: absent is none, and null is refused.
@@ -392,9 +413,41 @@ pub struct ErrorMetadata {
 }
 
 impl ErrorMetadata {
-    /// Whether the error names a credit exactly when it retires one.
+    /// Whether the error names a credit exactly when it retires one, and a
+    /// refused request claims nothing was sent.
     pub fn valid(&self) -> bool {
         (self.disposition == Disposition::CreditRetired) == self.credit_id.is_some()
+            && (self.disposition != Disposition::RequestRefused
+                || (!self.failure.dispatched && !self.failure.uncertain))
+    }
+}
+
+/// A packet that names one credit and nothing else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreditOnly {
+    #[serde(rename = "creditID")]
+    pub credit_id: Positive,
+}
+
+/// How long a pair token lasts, in milliseconds.
+pub const PAIR_EXPIRES_MS: u32 = 2000;
+
+impl Hello {
+    /// Whether it speaks this protocol and asks to observe.
+    pub fn valid(&self) -> bool {
+        self.protocol_major == super::wire::MAJOR
+            && self.requested_rights.contains(&Right::Observe)
+            && self.offered_updates.contains(&UpdateKind::Full)
+    }
+}
+
+impl Welcome {
+    /// Whether its token lasts exactly as long as the protocol says, and it
+    /// accepts full pictures.
+    pub fn valid(&self) -> bool {
+        self.pair_expires_in_ms == PAIR_EXPIRES_MS
+            && self.accepted_updates.contains(&UpdateKind::Full)
     }
 }
 
@@ -439,7 +492,8 @@ impl FrameMetadata {
 
     /// Whether the metadata fits a packet of `kind` with `payload` bytes:
     /// a full picture is exactly its pixels, a delta names 1 to 256
-    /// rectangles on a base whose pixels fit within a full picture, and an unchanged
+    /// rectangles on a base and, records and pixels together, is smaller
+    /// than a full picture (else a full one is sent), and an unchanged
     /// one has no payload and keeps its image. Checked before any payload
     /// is reserved.
     ///
@@ -460,9 +514,8 @@ impl FrameMetadata {
             Kind::DeltaFrame => {
                 (1..=RECTANGLES_MAX).contains(&self.rectangle_count)
                     && self.base_image_sequence > 0
-                    && payload
-                        .checked_sub(RECTANGLE * u64::from(self.rectangle_count))
-                        .is_some_and(|pixels| pixels > 0 && pixels <= self.picture())
+                    && payload > RECTANGLE * u64::from(self.rectangle_count)
+                    && payload < self.picture()
             }
             Kind::UnchangedFrame => {
                 self.rectangle_count == 0
@@ -505,7 +558,12 @@ pub fn rectangles(
     height: u32,
     payload: u64,
 ) -> Result<Vec<Rectangle>, Refusal> {
-    if records.len() % RECTANGLE as usize != 0 || records.is_empty() {
+    let count = records.len() / RECTANGLE as usize;
+    if !records.len().is_multiple_of(RECTANGLE as usize)
+        || !(1..=RECTANGLES_MAX as usize).contains(&count)
+        || !(1..=4096).contains(&width)
+        || !(1..=4096).contains(&height)
+    {
         return Err(Refusal::Invalid);
     }
     let word = |bytes: &[u8]| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);

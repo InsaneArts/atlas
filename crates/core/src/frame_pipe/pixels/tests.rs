@@ -43,3 +43,26 @@ fn pixels_must_be_exactly_their_picture_and_fully_paid_for() {
         "refused pixels give their reservation back"
     );
 }
+
+#[test]
+fn spare_capacity_is_charged_and_sides_stay_within_bounds() {
+    use std::io::Write;
+    let budget = Budget::new(1 << 20);
+    let mut roomy = Buffer::with_capacity(1000).unwrap();
+    roomy.write_all(&[0; 24]).unwrap();
+    assert_eq!(
+        FramePixels::new(roomy, 4, 2, budget.reserve(24).unwrap()).unwrap_err(),
+        Refusal::Invalid,
+        "a reservation must cover the whole allocation"
+    );
+    assert_eq!(
+        FramePixels::new(
+            Buffer::zeroed(4097 * 3).unwrap(),
+            4097,
+            1,
+            budget.reserve(4097 * 3).unwrap()
+        )
+        .unwrap_err(),
+        Refusal::Invalid
+    );
+}

@@ -22,6 +22,9 @@ pub const STRING_MAX: usize = 1024;
 /// Refuses invalid UTF-8 or JSON, a value that is not an object, a bound
 /// passed, a duplicate key, or trailing data.
 pub fn guard(bytes: &[u8]) -> Result<(), Refusal> {
+    if bytes.len() > super::METADATA_MAX {
+        return Err(Refusal::Oversized);
+    }
     let text = std::str::from_utf8(bytes).map_err(|_| Refusal::Invalid)?;
     let mut lexer = Lexer {
         bytes: text.as_bytes(),

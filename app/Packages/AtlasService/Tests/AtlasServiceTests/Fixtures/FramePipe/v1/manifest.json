@@ -1,91 +1,265 @@
 [
   {
-    "file": "full-2x2.bin",
-    "bytes": 533,
+    "file": "full-4x4.bin",
+    "bytes": 570,
     "lane": "frame",
     "result": "packets",
     "packets": [
       {
         "kind": 11,
         "request": 1,
-        "payload": "ff000000ff000000ffffffff"
+        "metadata": {
+          "serviceInstance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observerID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "observerGeneration": 1,
+          "streamGeneration": 1,
+          "geometryGeneration": 1,
+          "creditID": 1,
+          "sourceSequence": 1,
+          "imageSequence": 1,
+          "baseImageSequence": 0,
+          "frameKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "viewGeneration": 1,
+          "inputRevision": 0,
+          "width": 4,
+          "height": 4,
+          "rowStride": 12,
+          "displayWidth": 2.0,
+          "displayHeight": 2.0,
+          "displayScale": 2.0,
+          "ageAtHeaderNs": 1000,
+          "rectangleCount": 0
+        },
+        "payload": "ff000000ff000000ffff0000ff000000ff000000ffff0000ff000000ff000000ffff0000ff000000ff000000ffff0000"
       }
     ]
   },
   {
-    "file": "delta-2x2.bin",
-    "bytes": 540,
+    "file": "delta-4x4.bin",
+    "bytes": 563,
     "lane": "frame",
     "result": "packets",
     "packets": [
       {
         "kind": 12,
         "request": 2,
-        "payload": "000000010000000000000001000000010000ff",
+        "metadata": {
+          "serviceInstance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observerID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "observerGeneration": 1,
+          "streamGeneration": 1,
+          "geometryGeneration": 1,
+          "creditID": 2,
+          "sourceSequence": 2,
+          "imageSequence": 2,
+          "baseImageSequence": 1,
+          "frameKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "viewGeneration": 1,
+          "inputRevision": 0,
+          "width": 4,
+          "height": 4,
+          "rowStride": 12,
+          "displayWidth": 2.0,
+          "displayHeight": 2.0,
+          "displayScale": 2.0,
+          "ageAtHeaderNs": 1000,
+          "rectangleCount": 2
+        },
+        "payload": "00000001000000000000000100000001000000000000000200000002000000010000ff00ff0000ff00",
         "rectangles": [
           [
             1,
             0,
             1,
             1
+          ],
+          [
+            0,
+            2,
+            2,
+            1
           ]
-        ],
-        "applied": "ff00000000ff0000ffffffff"
+        ]
       }
     ]
   },
   {
     "file": "unchanged.bin",
-    "bytes": 521,
+    "bytes": 522,
     "lane": "frame",
     "result": "packets",
     "packets": [
       {
         "kind": 13,
         "request": 3,
+        "metadata": {
+          "serviceInstance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observerID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "observerGeneration": 1,
+          "streamGeneration": 1,
+          "geometryGeneration": 1,
+          "creditID": 3,
+          "sourceSequence": 3,
+          "imageSequence": 2,
+          "baseImageSequence": 2,
+          "frameKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "viewGeneration": 1,
+          "inputRevision": 0,
+          "width": 4,
+          "height": 4,
+          "rowStride": 12,
+          "displayWidth": 2.0,
+          "displayHeight": 2.0,
+          "displayScale": 2.0,
+          "ageAtHeaderNs": 1000,
+          "rectangleCount": 0
+        },
         "payload": ""
       }
     ]
   },
   {
     "file": "fragmented-sequence.bin",
-    "bytes": 1915,
+    "bytes": 1976,
     "lane": "frame",
     "result": "packets",
     "packets": [
       {
         "kind": 4,
         "request": 1,
+        "metadata": {
+          "serviceInstance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observerID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "observerGeneration": 1,
+          "controlConnectionID": "dddddddddddddddddddddddddddddddd",
+          "frameChallenge": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "frameConnectionID": "ffffffffffffffffffffffffffffffff"
+        },
         "payload": ""
       },
       {
         "kind": 11,
         "request": 1,
-        "payload": "ff000000ff000000ffffffff"
+        "metadata": {
+          "serviceInstance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observerID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "observerGeneration": 1,
+          "streamGeneration": 1,
+          "geometryGeneration": 1,
+          "creditID": 1,
+          "sourceSequence": 1,
+          "imageSequence": 1,
+          "baseImageSequence": 0,
+          "frameKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "viewGeneration": 1,
+          "inputRevision": 0,
+          "width": 4,
+          "height": 4,
+          "rowStride": 12,
+          "displayWidth": 2.0,
+          "displayHeight": 2.0,
+          "displayScale": 2.0,
+          "ageAtHeaderNs": 1000,
+          "rectangleCount": 0
+        },
+        "payload": "ff000000ff000000ffff0000ff000000ff000000ffff0000ff000000ff000000ffff0000ff000000ff000000ffff0000"
       },
       {
         "kind": 12,
         "request": 2,
-        "payload": "000000010000000000000001000000010000ff"
+        "metadata": {
+          "serviceInstance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observerID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "observerGeneration": 1,
+          "streamGeneration": 1,
+          "geometryGeneration": 1,
+          "creditID": 2,
+          "sourceSequence": 2,
+          "imageSequence": 2,
+          "baseImageSequence": 1,
+          "frameKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "viewGeneration": 1,
+          "inputRevision": 0,
+          "width": 4,
+          "height": 4,
+          "rowStride": 12,
+          "displayWidth": 2.0,
+          "displayHeight": 2.0,
+          "displayScale": 2.0,
+          "ageAtHeaderNs": 1000,
+          "rectangleCount": 2
+        },
+        "payload": "00000001000000000000000100000001000000000000000200000002000000010000ff00ff0000ff00"
       },
       {
         "kind": 13,
         "request": 3,
+        "metadata": {
+          "serviceInstance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observerID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "observerGeneration": 1,
+          "streamGeneration": 1,
+          "geometryGeneration": 1,
+          "creditID": 3,
+          "sourceSequence": 3,
+          "imageSequence": 2,
+          "baseImageSequence": 2,
+          "frameKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "viewGeneration": 1,
+          "inputRevision": 0,
+          "width": 4,
+          "height": 4,
+          "rowStride": 12,
+          "displayWidth": 2.0,
+          "displayHeight": 2.0,
+          "displayScale": 2.0,
+          "ageAtHeaderNs": 1000,
+          "rectangleCount": 0
+        },
         "payload": ""
       }
     ]
   },
   {
     "file": "wrong-base.bin",
-    "bytes": 543,
+    "bytes": 544,
     "lane": "frame",
     "result": "packets",
     "packets": [
       {
         "kind": 12,
         "request": 4,
+        "metadata": {
+          "serviceInstance": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "observerID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "observerGeneration": 1,
+          "streamGeneration": 1,
+          "geometryGeneration": 1,
+          "creditID": 4,
+          "sourceSequence": 9,
+          "imageSequence": 9,
+          "baseImageSequence": 7,
+          "frameKey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "viewGeneration": 1,
+          "inputRevision": 0,
+          "width": 4,
+          "height": 4,
+          "rowStride": 12,
+          "displayWidth": 2.0,
+          "displayHeight": 2.0,
+          "displayScale": 2.0,
+          "ageAtHeaderNs": 1000,
+          "rectangleCount": 1
+        },
         "payload": "0000000000000001000000020000000100ff0000ff00",
-        "base": 7
+        "rectangles": [
+          [
+            0,
+            1,
+            2,
+            1
+          ]
+        ]
       }
     ]
   },
@@ -103,13 +277,13 @@
   },
   {
     "file": "duplicate-key.bin",
-    "bytes": 546,
+    "bytes": 583,
     "lane": "frame",
     "result": "invalid-metadata"
   },
   {
     "file": "escaped-duplicate-key.bin",
-    "bytes": 551,
+    "bytes": 588,
     "lane": "frame",
     "result": "invalid-metadata"
   },
@@ -122,6 +296,9 @@
       {
         "kind": 36,
         "request": 5,
+        "metadata": {
+          "creditID": 7
+        },
         "payload": ""
       }
     ]

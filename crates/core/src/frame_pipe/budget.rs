@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 pub const SOURCE_MAX: u64 = 4096 * 4096 * 3;
 /// The broker's whole pixel reservation.
 pub const BROKER_PIXELS: u64 = 384 * 1024 * 1024;
+/// The most observers one broker serves.
+pub const OBSERVERS_MAX: u64 = 4;
 
 /// A shared byte account with a fixed limit.
 #[derive(Clone, Debug)]
@@ -76,6 +78,7 @@ pub fn admits(source: u64, observers: u64, snapshot: bool) -> bool {
         .checked_add(observers.saturating_mul(2))
         .and_then(|copies| copies.checked_add(u64::from(snapshot)));
     source <= SOURCE_MAX
+        && observers <= OBSERVERS_MAX
         && copies
             .and_then(|copies| copies.checked_mul(source))
             .is_some_and(|bytes| bytes <= BROKER_PIXELS)

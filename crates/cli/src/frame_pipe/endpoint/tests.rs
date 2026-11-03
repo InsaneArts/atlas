@@ -117,3 +117,35 @@ async fn a_left_socket_is_cleared_only_when_no_one_answers_and_a_successor_is_ne
     );
     drop(successor);
 }
+
+#[tokio::test]
+async fn a_folder_another_owner_claimed_or_a_loose_lock_file_is_refused() {
+    let base = base();
+    let (listeners, endpoint) = bind_in(base.path(), me(), 7005).await.unwrap();
+    let lock = endpoint.folder.join("owner.lock");
+    drop((listeners, endpoint));
+    let recorded = fs::read_to_string(&lock).unwrap();
+    assert!(
+        recorded.ends_with(" 7005\n") && recorded.len() == 64 + 6,
+        "{recorded:?}"
+    );
+
+    // Only a prefix of the key names the folder: a collision is caught here.
+    fs::write(&lock, format!("{} 7005\n", "0".repeat(64))).unwrap();
+    assert_eq!(
+        bind_in(base.path(), me(), 7005).await.err().unwrap().code,
+        Code::Identity
+    );
+
+    fs::write(&lock, recorded).unwrap();
+    fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        bind_in(base.path(), me(), 7005).await.err().unwrap().code,
+        Code::Identity
+    );
+    assert_eq!(
+        fs::metadata(&lock).unwrap().mode() & 0o777,
+        0o644,
+        "not repaired"
+    );
+}

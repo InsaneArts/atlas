@@ -26,9 +26,13 @@ impl FramePixels {
         height: u32,
         reservation: Reservation,
     ) -> Result<Self, Refusal> {
+        let side = 1..=4096;
+        if !side.contains(&width) || !side.contains(&height) {
+            return Err(Refusal::Invalid);
+        }
+        // Both sides are at most 4096, so this cannot overflow.
         let bytes = u64::from(width) * u64::from(height) * 3;
-        if width == 0 || height == 0 || buffer.len() as u64 != bytes || reservation.bytes() < bytes
-        {
+        if buffer.len() as u64 != bytes || reservation.bytes() < buffer.capacity() as u64 {
             return Err(Refusal::Invalid);
         }
         Ok(Self {

@@ -6,7 +6,7 @@
 use atlas_core::{
     context::context,
     error::{Code, Error, Result},
-    files::{LockFile, open_lock},
+    files::{LockFile, LockOpen, open_lock_file},
 };
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
@@ -110,14 +110,63 @@ fn prepare(folder: &Path, controller: u32) -> Result<()> {
     Ok(())
 }
 
+/// The folder's lifetime lock file, refused rather than repaired unless it is
+/// a plain file of `controller` with mode 0600 and no ACL.
+fn owner_lock(path: &Path, controller: u32) -> Result<LockFile> {
+    let file =
+        open_lock_file(path, LockOpen::ReadWrite).map_err(|error| Error::writing(path, error))?;
+    let metadata = file.metadata().map_err(context("Inspect", path))?;
+    if !metadata.is_file() || metadata.uid() != controller || metadata.mode() & 0o777 != 0o600 {
+        return Err(unsafe_folder(path, "be a 0600 file of this account"));
+    }
+    if atlas_core::acl::present(path).map_err(context("Read the ACL of", path))? {
+        return Err(unsafe_folder(path, "carry no ACL"));
+    }
+    Ok(LockFile(file))
+}
+
+/// Record the full owner in the held lock file, or refuse a folder another
+/// controller and helper own: only part of the key names the folder.
+fn claim(lock: &LockFile, folder: &Path, key: &[u8; 32], helper: u32) -> Result<()> {
+    use std::io::{Read, Seek, Write};
+    let owner = format!(
+        "{} {helper}\n",
+        key.iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let mut file = &lock.0;
+    let mut found = String::new();
+    file.take(256)
+        .read_to_string(&mut found)
+        .map_err(context("Read the owner of", folder))?;
+    if found.is_empty() {
+        file.seek(std::io::SeekFrom::Start(0))
+            .and_then(|_| file.write_all(owner.as_bytes()))
+            .and_then(|()| file.sync_all())
+            .map_err(context("Record the owner of", folder))?;
+        return Ok(());
+    }
+    if found != owner {
+        return Err(unsafe_folder(
+            folder,
+            "belong to this controller and helper",
+        ));
+    }
+    Ok(())
+}
+
 /// Remove `socket` if it was left behind: this account's socket that no one
 /// answers. Anything else there is refused.
 async fn clear_stale(socket: &Path, controller: u32) -> Result<()> {
     let Ok(metadata) = fs::symlink_metadata(socket) else {
         return Ok(());
     };
-    if metadata.uid() != controller || !metadata.file_type().is_socket() {
-        return Err(unsafe_folder(socket, "be a socket of this account"));
+    if metadata.uid() != controller
+        || !metadata.file_type().is_socket()
+        || metadata.mode() & 0o777 != 0o600
+    {
+        return Err(unsafe_folder(socket, "be a 0600 socket of this account"));
     }
     match tokio::time::timeout(STALE, UnixStream::connect(socket)).await {
         Ok(Err(error))
@@ -126,6 +175,14 @@ async fn clear_stale(socket: &Path, controller: u32) -> Result<()> {
                 std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
             ) =>
         {
+            // Only the very socket probed is removed, never one put there since.
+            let now = fs::symlink_metadata(socket).map_err(context("Inspect", socket))?;
+            if (now.dev(), now.ino()) != (metadata.dev(), metadata.ino()) {
+                return Err(Error::new(
+                    Code::Busy,
+                    "Another frame service is starting for this helper",
+                ));
+            }
             fs::remove_file(socket).map_err(context("Remove the stale socket", socket))
         }
         _ => Err(Error::new(
@@ -148,9 +205,10 @@ pub(crate) async fn bind(controller: u32, helper: u32) -> Result<(Listeners, End
 async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners, Endpoint)> {
     let folder = folder(base, controller, &owner_key(controller, helper));
     prepare(&folder, controller)?;
-    let lock = open_lock(&folder.join("owner.lock"))?;
+    let lock = owner_lock(&folder.join("owner.lock"), controller)?;
     FileExt::try_lock_exclusive(&lock.0)
         .map_err(|_| Error::new(Code::Busy, "Another frame service owns this helper"))?;
+    claim(&lock, &folder, &owner_key(controller, helper), helper)?;
 
     // Made first, so a failure part way removes what was already bound.
     let mut endpoint = Endpoint {
@@ -169,12 +227,17 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
         }
         clear_stale(&socket, controller).await?;
         let listener = UnixListener::bind(&socket).map_err(context("Bind", &socket))?;
+        // Owned for cleanup from the moment it exists.
+        let inode = match fs::symlink_metadata(&socket) {
+            Ok(metadata) => metadata.ino(),
+            Err(error) => {
+                let _ = fs::remove_file(&socket);
+                return Err(context("Inspect", &socket)(error));
+            }
+        };
+        endpoint.bound.push((socket.clone(), inode));
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
             .map_err(context("Set the mode of", &socket))?;
-        let inode = fs::symlink_metadata(&socket)
-            .map_err(context("Inspect", &socket))?
-            .ino();
-        endpoint.bound.push((socket, inode));
         listeners.push(listener);
     }
     let mut listeners = listeners.into_iter();

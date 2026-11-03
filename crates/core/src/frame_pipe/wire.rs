@@ -225,6 +225,10 @@ fn check(head: &Head) -> Result<(), Refusal> {
     if head.request == 0 && !head.kind.unsolicited() {
         return Err(Refusal::Invalid);
     }
+    // A state change is never an answer.
+    if head.kind == Kind::State && head.request != 0 {
+        return Err(Refusal::Invalid);
+    }
     Ok(())
 }
 

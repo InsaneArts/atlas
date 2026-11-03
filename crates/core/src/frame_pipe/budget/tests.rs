@@ -30,3 +30,9 @@ fn the_broker_admits_observers_only_while_every_copy_fits() {
     assert!(!admits(SOURCE_MAX + 1, 1, false));
     assert!(!admits(u64::MAX, u64::MAX, true));
 }
+
+#[test]
+fn a_fifth_observer_is_refused_however_small_its_pictures() {
+    assert!(admits(640 * 400 * 3, OBSERVERS_MAX, true));
+    assert!(!admits(640 * 400 * 3, OBSERVERS_MAX + 1, false));
+}

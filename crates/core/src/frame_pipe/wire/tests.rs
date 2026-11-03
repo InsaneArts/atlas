@@ -166,3 +166,94 @@ fn the_encoder_refuses_what_the_decoder_would() {
     assert!(encode(Kind::FullFrame, 1, b"{}", PAYLOAD_MAX).is_ok());
     assert_eq!(Refusal::Truncated.reason(), Reason::Truncated);
 }
+
+#[test]
+fn every_kind_has_its_planned_code_and_lanes() {
+    use Lane::{Control as C, Frame as F, Management as M};
+    let planned: [(u16, &[Lane]); 50] = [
+        (1, &[C]),
+        (2, &[C]),
+        (3, &[F]),
+        (4, &[F]),
+        (5, &[C]),
+        (6, &[C]),
+        (7, &[C]),
+        (8, &[C]),
+        (9, &[C]),
+        (10, &[C]),
+        (11, &[F]),
+        (12, &[F]),
+        (13, &[F]),
+        (14, &[C]),
+        (15, &[C]),
+        (16, &[C]),
+        (17, &[C]),
+        (18, &[C]),
+        (19, &[C]),
+        (20, &[C]),
+        (21, &[C]),
+        (22, &[C]),
+        (23, &[C]),
+        (24, &[C]),
+        (25, &[C]),
+        (26, &[C]),
+        (27, &[C]),
+        (28, &[C]),
+        (29, &[C]),
+        (30, &[C]),
+        (31, &[C]),
+        (32, &[C]),
+        (33, &[C]),
+        (34, &[C]),
+        (35, &[C]),
+        (36, &[C]),
+        (37, &[C]),
+        (38, &[C, F, M]),
+        (39, &[C]),
+        (40, &[C]),
+        (41, &[M]),
+        (42, &[M]),
+        (43, &[M]),
+        (44, &[M]),
+        (45, &[M]),
+        (46, &[M]),
+        (47, &[M]),
+        (48, &[M]),
+        (49, &[M]),
+        (50, &[M]),
+    ];
+    for (code, lanes) in planned {
+        let kind = Kind::of(code).unwrap();
+        for lane in [C, F, M] {
+            assert_eq!(
+                kind.travels(lane),
+                lanes.contains(&lane),
+                "{kind:?} on {lane:?}"
+            );
+        }
+    }
+    let named = [
+        (Kind::Hello, 1),
+        (Kind::Attach, 3),
+        (Kind::FullFrame, 11),
+        (Kind::DeltaFrame, 12),
+        (Kind::UnchangedFrame, 13),
+        (Kind::Commit, 16),
+        (Kind::Input, 26),
+        (Kind::Stop, 30),
+        (Kind::CreditExpired, 36),
+        (Kind::State, 37),
+        (Kind::Error, 38),
+        (Kind::RecoveryHello, 41),
+        (Kind::AppHostClosed, 50),
+    ];
+    for (kind, code) in named {
+        assert_eq!(kind.code(), code, "{kind:?}");
+    }
+    let state = encode(Kind::State, 1, b"{}", 0);
+    assert_eq!(
+        state,
+        Err(Refusal::Invalid),
+        "a state change answers no request"
+    );
+}
