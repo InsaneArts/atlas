@@ -65,19 +65,19 @@ fn an_action_on_an_element_is_validated_with_its_whole_batch_before_anything_is_
     let validate = |batch: serde_json::Value| Batch::decode(&batch)?.check(&display);
 
     validate(json!([
-        {"type": "set-value", "ref": "8123abc12", "value": "draft"},
+        {"type": "set-value", "ref": "8123abc.12", "value": "draft"},
         {"type": "key", "key": "return"},
     ]))
     .unwrap();
     for action in [
-        json!({"type": "press", "ref": "8123abc12"}),
-        json!({"type": "scroll-into-view", "ref": "8123abc12"}),
+        json!({"type": "press", "ref": "8123abc.12"}),
+        json!({"type": "scroll-into-view", "ref": "8123abc.12"}),
     ] {
         assert!(!Kind::deserialize(&action).unwrap().personal(), "{action}");
     }
     let refused = validate(json!([
         {"type": "key", "key": "tab"},
-        {"type": "check", "ref": "8123abc12"},
+        {"type": "check", "ref": "8123abc.12"},
     ]))
     .unwrap_err();
     assert_eq!(refused.code, "input");
@@ -85,8 +85,8 @@ fn an_action_on_an_element_is_validated_with_its_whole_batch_before_anything_is_
         refused.error,
         "Action 2 was refused and nothing was sent: an action on a ref comes first in its batch"
     );
-    let elsewhere =
-        validate(json!([{"type": "pick", "ref": "8123abc12", "option": "9001abc3"}])).unwrap_err();
+    let elsewhere = validate(json!([{"type": "pick", "ref": "8123abc.12", "option": "9001abc.3"}]))
+        .unwrap_err();
     assert_eq!(elsewhere.code, "input");
 }
 
@@ -105,7 +105,7 @@ async fn an_element_action_on_a_ref_that_names_nothing_is_refused_with_nothing_s
 
     for action in [
         json!({"type": "press", "ref": "Save"}),
-        json!({"type": "pick", "ref": "8123abc12", "option": "Large"}),
+        json!({"type": "pick", "ref": "8123abc.12", "option": "Large"}),
     ] {
         let error = agent::element(&client, None, &action).await.unwrap_err();
         assert_eq!(error.code, "elements");

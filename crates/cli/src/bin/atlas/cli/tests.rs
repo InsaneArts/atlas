@@ -566,8 +566,8 @@ fn an_element_action_becomes_its_one_input_action() {
         "scroll-into-view",
     ] {
         assert_eq!(
-            action(&["element", verb, "--ref", "8123abc12", "--app", "A"]).unwrap(),
-            serde_json::json!({"type": verb, "ref": "8123abc12"})
+            action(&["element", verb, "--ref", "8123abc.12", "--app", "A"]).unwrap(),
+            serde_json::json!({"type": verb, "ref": "8123abc.12"})
         );
     }
     assert_eq!(
@@ -575,34 +575,34 @@ fn an_element_action_becomes_its_one_input_action() {
             "element",
             "set-value",
             "--ref",
-            "8123abc12",
+            "8123abc.12",
             "--value",
             "-3"
         ])
         .unwrap(),
-        serde_json::json!({"type": "set-value", "ref": "8123abc12", "value": "-3"})
+        serde_json::json!({"type": "set-value", "ref": "8123abc.12", "value": "-3"})
     );
     assert_eq!(
         action(&[
             "element",
             "pick",
             "--ref",
-            "8123abc12",
+            "8123abc.12",
             "--option",
-            "8123abc14"
+            "8123abc.14"
         ])
         .unwrap(),
-        serde_json::json!({"type": "pick", "ref": "8123abc12", "option": "8123abc14"})
+        serde_json::json!({"type": "pick", "ref": "8123abc.12", "option": "8123abc.14"})
     );
     for misplaced in [
-        &["element", "press", "--ref", "8123abc12", "--value", "x"][..],
+        &["element", "press", "--ref", "8123abc.12", "--value", "x"][..],
         &[
             "element",
             "check",
             "--ref",
-            "8123abc12",
+            "8123abc.12",
             "--option",
-            "8123abc14",
+            "8123abc.14",
         ],
         &[
             "element",
@@ -624,20 +624,20 @@ fn an_element_action_becomes_its_one_input_action() {
 
     for refused in [
         &["element", "press"][..],
-        &["element", "toggle", "--ref", "8123abc12"],
-        &["element", "set-value", "--ref", "8123abc12"],
-        &["element", "pick", "--ref", "8123abc12"],
+        &["element", "toggle", "--ref", "8123abc.12"],
+        &["element", "set-value", "--ref", "8123abc.12"],
+        &["element", "pick", "--ref", "8123abc.12"],
         &[
             "element",
             "press",
             "--ref",
-            "8123abc12",
+            "8123abc.12",
             "--app",
             "A",
             "--pid",
             "1",
         ],
-        &["element", "press", "--ref", "8123abc12", "--window", "4"],
+        &["element", "press", "--ref", "8123abc.12", "--window", "4"],
     ] {
         assert!(parse(refused).is_err(), "{refused:?}");
     }

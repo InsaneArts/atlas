@@ -65,9 +65,9 @@ const GROUPS: &[(&str, &[Entry])] = &[
             (
                 "element",
                 &[
-                    "atlas element press --ref 8123abc12",
-                    "atlas element set-value --ref 8123abc4 --value \"hello\"",
-                    "atlas element pick --ref 8123abc7 --option 8123abc9",
+                    "atlas element press --ref 8123abc.12",
+                    "atlas element set-value --ref 8123abc.4 --value \"hello\"",
+                    "atlas element pick --ref 8123abc.7 --option 8123abc.9",
                 ],
             ),
             ("type", &["atlas type \"hello\""]),

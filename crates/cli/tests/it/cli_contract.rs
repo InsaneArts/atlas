@@ -258,12 +258,12 @@ fn an_element_action_without_what_it_takes_is_a_usage_error() {
     let fixture = Fixture::new();
     for (args, named) in [
         (vec!["element", "press"], "--ref"),
-        (vec!["element", "toggle", "--ref", "8123abc12"], "toggle"),
+        (vec!["element", "toggle", "--ref", "8123abc.12"], "toggle"),
         (
-            vec!["element", "set-value", "--ref", "8123abc12"],
+            vec!["element", "set-value", "--ref", "8123abc.12"],
             "--value",
         ),
-        (vec!["element", "pick", "--ref", "8123abc12"], "--option"),
+        (vec!["element", "pick", "--ref", "8123abc.12"], "--option"),
     ] {
         let output = fixture.missing(&args);
         assert_eq!(output.status.code(), Some(2), "{args:?}");

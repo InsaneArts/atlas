@@ -616,8 +616,8 @@ pub(super) struct Element {
     /// What to do.
     #[arg(value_enum)]
     pub(super) action: ElementVerb,
-    /// The element's ref from atlas elements.
-    #[arg(long = "ref", value_name = "REF")]
+    /// The element, from atlas elements, as its look and index.
+    #[arg(long = "ref", value_name = "LOOK.INDEX")]
     pub(super) reference: String,
     /// The value set-value sets: text, or a number for a slider.
     #[arg(
@@ -627,8 +627,8 @@ pub(super) struct Element {
         required_if_eq("action", "set-value")
     )]
     pub(super) value: Option<String>,
-    /// The option pick selects: its ref, from the same atlas elements.
-    #[arg(long, value_name = "REF", required_if_eq("action", "pick"))]
+    /// The option pick selects, from the same listing, as LOOK.INDEX.
+    #[arg(long, value_name = "LOOK.INDEX", required_if_eq("action", "pick"))]
     pub(super) option: Option<String>,
     #[command(flatten)]
     pub(super) target: AppTarget,
