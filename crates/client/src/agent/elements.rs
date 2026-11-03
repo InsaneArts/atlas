@@ -334,29 +334,25 @@ pub(super) fn listing(
         listed["look"] = json!(look.to_string());
     }
 
-    if full {
-        listed["elements"] = shown
-            .iter()
-            .map(|element| {
-                let mut read = json!(element);
-                if let Some(reference) = reference(scanned.look, element) {
-                    read["ref"] = reference;
-                }
-                read
-            })
-            .collect();
-    } else {
-        let mut windows: Vec<&Bounds> = Vec::new();
-        listed["elements"] = shown
-            .iter()
-            .map(|element| {
-                let mut listed = compact(element, &mut windows);
-                if let Some(reference) = reference(scanned.look, element) {
-                    listed["ref"] = reference;
-                }
-                listed
-            })
-            .collect();
+    let mut windows: Vec<&Bounds> = Vec::new();
+    listed["elements"] = shown
+        .iter()
+        .map(|element| {
+            let mut row = if full {
+                json!(element)
+            } else {
+                compact(element, &mut windows)
+            };
+            if let Some(look) = scanned.look {
+                row["ref"] = json!(Reference {
+                    look,
+                    index: element.index,
+                });
+            }
+            row
+        })
+        .collect();
+    if !full {
         listed["windows"] = windows
             .iter()
             .map(|frame| {
@@ -387,16 +383,6 @@ pub(super) fn listing(
     }
 
     listed
-}
-
-/// The reference that names `element` in `look`, as a listing gives it.
-fn reference(look: Option<Look>, element: &Element) -> Option<Value> {
-    look.map(|look| {
-        json!(Reference {
-            look,
-            index: element.index,
-        })
-    })
 }
 
 /// Whether `element` is a group with nothing to tell, which the default
