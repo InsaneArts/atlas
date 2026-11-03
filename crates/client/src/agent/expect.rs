@@ -4,7 +4,7 @@
 use super::target::{Target, snapshot_expect, target_among, target_expect};
 use crate::{
     client::{Client, Verified, WINDOW_LOOKUP},
-    last_capture::{Observation, recorded_epoch},
+    last_capture::Observation,
 };
 use atlas_core::{
     actions::{self, Expect, Target as ActionTarget},
@@ -12,7 +12,7 @@ use atlas_core::{
     screen::windows::{DOCK_LAYER, HitWindow, Window},
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// Send `actions` as one batch. With an expectation, the app is found once
 /// control is held. The helper brings its target forward, then refuses input
@@ -50,7 +50,7 @@ pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) 
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
     if let Some((_, epoch)) = &remembered
-        && *epoch != recorded_epoch(&verified.session().epoch)
+        && *epoch != json!(verified.session().epoch)
     {
         return Err(Error::session_changed());
     }

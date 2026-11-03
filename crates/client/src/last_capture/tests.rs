@@ -1,5 +1,5 @@
 use super::*;
-use atlas_core::protocol::Region;
+use atlas_core::{protocol::Region, session::Display};
 use atlas_native::native::capture::{banded_png, sample_png};
 use std::{sync::Arc, time::Instant};
 
@@ -263,7 +263,7 @@ fn a_damaged_capture_record_is_ignored_and_replaced() {
     let pointing_at = |file: &str| {
         json!({"version": 1, "targets": {"screen 1456": {
             "sha256": hash, "file": file, "width": shot.width, "height": shot.height,
-            "epoch": recorded_epoch(&shot.epoch), "at": "1",
+            "epoch": shot.epoch, "at": "1",
         }}})
         .to_string()
     };
@@ -397,6 +397,25 @@ fn window_memory_reports_denied_replacements_and_invalidation() {
     fs::remove_file(&path).unwrap();
     fs::create_dir(&path).unwrap();
     assert!(remember_windows(dir.path(), "one", &[], &epoch()).is_err());
+}
+
+/// A capture keeps its display epoch as eight flat fields, so a record
+/// matches only exactly what Atlas writes.
+#[test]
+fn a_kept_epoch_is_its_eight_flat_fields() {
+    let mut kept = json!({
+        "uid": 502,
+        "securitySessionId": 42,
+        "displayId": 7,
+        "width": 2560.0,
+        "height": 1440.0,
+        "scale": 1.0,
+        "capturePid": 123,
+        "inputPid": 456,
+    });
+    assert_eq!(json!(epoch()), kept);
+    kept["width"] = json!(2560);
+    assert_ne!(json!(epoch()), kept, "an integer dimension is not the same");
 }
 
 #[test]

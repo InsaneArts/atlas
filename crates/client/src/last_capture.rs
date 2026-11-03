@@ -19,7 +19,7 @@ use atlas_core::{
         frame::{Frame, Size},
         windows::HitWindow,
     },
-    session::{Display, Epoch},
+    session::Epoch,
     time::timestamp,
 };
 use fs2::FileExt;
@@ -97,7 +97,7 @@ pub(crate) fn remember_windows(
     let folder = RecordFolder::at(output, &WINDOWS);
     let mut observation = Observation {
         windows: windows.map(<[_]>::to_vec),
-        epoch: recorded_epoch(epoch),
+        epoch: json!(epoch),
     };
     let mut bytes = serde_json::to_vec(&observation)?;
     let oversized = bytes.len() as u64 > RECORD_LIMIT;
@@ -193,7 +193,7 @@ pub(crate) fn keep(
     };
 
     let mut targets = read(output);
-    let epoch = recorded_epoch(&frame.epoch);
+    let epoch = json!(frame.epoch);
     let earlier = targets
         .get(key)
         .filter(|entry| {
@@ -259,34 +259,6 @@ fn locked(output: &Path) -> Option<atlas_core::files::LockFile> {
     }
 
     Some(atlas_core::files::LockFile(lock))
-}
-
-/// The display epoch a capture was taken in, as the record keeps it. It
-/// stays raw JSON: this guard matches only exactly what Atlas writes, never
-/// an array, an integer dimension or anything a typed read would accept.
-pub(crate) fn recorded_epoch(epoch: &Epoch) -> Value {
-    let Epoch {
-        uid,
-        capture_pid,
-        display: Display {
-            width,
-            height,
-            scale,
-        },
-        security_session_id,
-        display_id,
-        input_pid,
-    } = *epoch;
-    json!({
-        "uid": uid,
-        "securitySessionId": security_session_id,
-        "displayId": display_id,
-        "width": width,
-        "height": height,
-        "scale": scale,
-        "capturePid": capture_pid,
-        "inputPid": input_pid,
-    })
 }
 
 /// The earlier capture `file`, if it is a screenshot file in `output`,

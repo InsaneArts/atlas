@@ -14,10 +14,14 @@ pub struct Display {
     pub scale: f64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// The display epoch a session is in. It serializes as the flat record a
+/// capture keeps: its display's fields beside the others, in camelCase.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Epoch {
     pub uid: u32,
     pub capture_pid: u32,
+    #[serde(flatten)]
     pub display: Display,
     pub security_session_id: u64,
     pub display_id: u64,
