@@ -2,8 +2,16 @@ use super::*;
 
 #[test]
 fn null_references_are_never_owned() {
-    // SAFETY: null is never adopted.
-    assert!(unsafe { adopt::<CFType>(std::ptr::null()) }.is_none());
+    // SAFETY: the call leaves its slot null, which is never adopted.
+    let copied = unsafe { copied::<CFType>(|_| AXError::Success) };
+    assert!(copied.unwrap().is_none());
+}
+
+#[test]
+fn a_failed_copy_returns_its_error() {
+    // SAFETY: the call leaves its slot null and fails, so nothing is adopted.
+    let copied = unsafe { copied::<CFType>(|_| AXError::CannotComplete) };
+    assert_eq!(copied.unwrap_err(), AXError::CannotComplete);
 }
 
 #[test]

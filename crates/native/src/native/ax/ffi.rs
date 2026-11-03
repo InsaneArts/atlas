@@ -29,22 +29,20 @@ fn check(status: AXError) -> Result<(), AXError> {
     }
 }
 
-/// Take over the reference a successful Copy wrote to `slot`, if any.
+/// Run the Copy `call` with an empty output slot and take over the one
+/// reference a successful call wrote there: None when it wrote nothing,
+/// its error when it failed.
 ///
 /// # Safety
-/// `slot` must hold null or a reference the caller owns (from a Copy).
-unsafe fn adopt<T: objc2_core_foundation::Type>(slot: *const T) -> Option<CFRetained<T>> {
+/// On success, `call` must leave null or one owned reference of a `T` in
+/// the slot it is given.
+unsafe fn copied<T: objc2_core_foundation::Type>(
+    call: impl FnOnce(NonNull<*const T>) -> AXError,
+) -> Result<Option<CFRetained<T>>, AXError> {
+    let mut slot: *const T = std::ptr::null();
+    check(call(NonNull::from(&mut slot)))?;
     // SAFETY: per contract; ownership of the one reference moves here.
-    NonNull::new(slot.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) })
-}
-
-/// Adopt a Copy result whose array members are CoreFoundation objects.
-///
-/// # Safety
-/// `slot` must be null or an owned CFArray from a successful AX Copy call.
-unsafe fn adopt_array(slot: *const CFArray) -> Option<CFRetained<CFArray<CFType>>> {
-    // SAFETY: per contract; each member is checked by its reader before use.
-    unsafe { adopt(slot).map(|array| CFRetained::cast_unchecked(array)) }
+    Ok(NonNull::new(slot.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) }))
 }
 
 /// The element of the application `pid`; None when there is none.
@@ -90,12 +88,9 @@ pub(super) fn set_flag(element: &AXUIElement, name: &CFString, value: bool) -> A
 pub(super) fn actions(
     element: &AXUIElement,
 ) -> Result<Option<CFRetained<CFArray<CFType>>>, AXError> {
-    let mut array: *const CFArray = std::ptr::null();
-    // SAFETY: a live element and a valid output slot for the owned Copy result.
-    let status = unsafe { element.copy_action_names(NonNull::from(&mut array)) };
-    check(status)?;
-    // SAFETY: a successful Copy supplied an owned array or null.
-    Ok(unsafe { adopt_array(array) })
+    // SAFETY: a live element and a valid output slot; on success the Copy
+    // hands over one owned array of CoreFoundation objects, or null.
+    unsafe { copied(|slot| element.copy_action_names(slot.cast())) }
 }
 
 /// Request an action already checked for support.
@@ -110,13 +105,9 @@ pub(super) fn copy(
     element: &AXUIElement,
     name: &CFString,
 ) -> Result<Option<CFRetained<CFType>>, AXError> {
-    let mut value: *const CFType = std::ptr::null();
     // SAFETY: a valid output slot; on success the Copy hands over one owned
-    // reference, adopted below.
-    let status = unsafe { element.copy_attribute_value(name, NonNull::from(&mut value)) };
-    check(status)?;
-    // SAFETY: a successful Copy wrote an owned reference (or null).
-    Ok(unsafe { adopt(value) })
+    // reference, or null.
+    unsafe { copied(|slot| element.copy_attribute_value(name, slot)) }
 }
 
 /// The values of every attribute `names` names, in one request, each slot
@@ -125,20 +116,18 @@ pub(super) fn copy_many(
     element: &AXUIElement,
     names: &CFArray<CFString>,
 ) -> Result<Option<CFRetained<CFArray<CFType>>>, AXError> {
-    let mut values: *const CFArray = std::ptr::null();
     // SAFETY: the names are an array of CFStrings as required and the
-    // output slot is valid; on success the Copy hands over one owned array,
-    // adopted below.
-    let status = unsafe {
-        element.copy_multiple_attribute_values(
-            names.as_opaque(),
-            AXCopyMultipleAttributeOptions::empty(),
-            NonNull::from(&mut values),
-        )
-    };
-    check(status)?;
-    // SAFETY: a successful Copy wrote an owned array (or null).
-    Ok(unsafe { adopt_array(values) })
+    // output slot is valid; on success the Copy hands over one owned array
+    // of CoreFoundation objects, or null.
+    unsafe {
+        copied(|slot| {
+            element.copy_multiple_attribute_values(
+                names.as_opaque(),
+                AXCopyMultipleAttributeOptions::empty(),
+                slot.cast(),
+            )
+        })
+    }
 }
 
 /// At most `wanted` values of `element`'s array attribute `name`, from the
@@ -148,14 +137,9 @@ pub(super) fn copy_values(
     name: &CFString,
     wanted: CFIndex,
 ) -> Result<Option<CFRetained<CFArray<CFType>>>, AXError> {
-    let mut array: *const CFArray = std::ptr::null();
     // SAFETY: a valid output slot; on success the Copy hands over one owned
-    // array, adopted below.
-    let status =
-        unsafe { element.copy_attribute_values(name, 0, wanted, NonNull::from(&mut array)) };
-    check(status)?;
-    // SAFETY: a successful Copy wrote an owned array (or null).
-    Ok(unsafe { adopt_array(array) })
+    // array of CoreFoundation objects, or null.
+    unsafe { copied(|slot| element.copy_attribute_values(name, 0, wanted, slot.cast())) }
 }
 
 /// How many values `element`'s array attribute `name` holds.
@@ -173,15 +157,9 @@ pub(super) fn copy_for(
     name: &CFString,
     parameter: &CFType,
 ) -> Result<Option<CFRetained<CFType>>, AXError> {
-    let mut value: *const CFType = std::ptr::null();
     // SAFETY: a live parameter value and a valid output slot; on success the
-    // Copy hands over one owned reference, adopted below.
-    let status = unsafe {
-        element.copy_parameterized_attribute_value(name, parameter, NonNull::from(&mut value))
-    };
-    check(status)?;
-    // SAFETY: a successful Copy wrote an owned reference (or null).
-    Ok(unsafe { adopt(value) })
+    // Copy hands over one owned reference, or null.
+    unsafe { copied(|slot| element.copy_parameterized_attribute_value(name, parameter, slot)) }
 }
 
 /// The element of `app` at the point `x`, `y`.
@@ -190,13 +168,9 @@ pub(super) fn element_at(
     x: f32,
     y: f32,
 ) -> Result<Option<CFRetained<AXUIElement>>, AXError> {
-    let mut hit: *const AXUIElement = std::ptr::null();
     // SAFETY: a valid output slot; on success the Copy hands over one owned
-    // element, adopted below.
-    let status = unsafe { app.copy_element_at_position(x, y, NonNull::from(&mut hit)) };
-    check(status)?;
-    // SAFETY: a successful Copy wrote an owned reference (or null).
-    Ok(unsafe { adopt(hit) })
+    // element, or null.
+    unsafe { copied(|slot| app.copy_element_at_position(x, y, slot)) }
 }
 
 /// The process that owns `element`.
