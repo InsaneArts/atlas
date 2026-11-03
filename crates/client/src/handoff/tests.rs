@@ -454,6 +454,94 @@ fn pruning_names_each_copy_it_removed_by_its_token() {
     assert!(!gone.exists());
 }
 
+/// When a pruning test prunes: a fixed time.
+fn pruned_at() -> std::time::SystemTime {
+    std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000)
+}
+
+/// Make `folder` last changed `days` before [`pruned_at`].
+fn changed_before(folder: &Path, days: u64) {
+    let then = pruned_at() - Duration::from_secs(days * 24 * 60 * 60);
+    fs::File::open(folder).unwrap().set_modified(then).unwrap();
+}
+
+/// A private copy root under `dir` holding one expired copy folder, and
+/// that folder's token and path.
+fn expired_copy(dir: &Path) -> (PathBuf, Token, PathBuf) {
+    let root = dir.join("root");
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let token = Token::new();
+    let folder = copy_folder(&root, token.as_str(), "old.txt");
+    changed_before(&folder, 8);
+    (root, token, folder)
+}
+
+#[test]
+fn pruning_keeps_a_copy_folder_replaced_after_inspection() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let (root, _, folder) = expired_copy(&base);
+    let aside = base.join("aside");
+
+    let removed = prune_at(&root, &[], pruned_at(), |judged| {
+        assert_eq!(judged, folder);
+        fs::rename(judged, &aside).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(judged).unwrap();
+        fs::write(judged.join("sentinel"), "fresh").unwrap();
+    });
+
+    assert!(removed.is_empty(), "{removed:?}");
+    assert_eq!(fs::read_to_string(aside.join("old.txt")).unwrap(), "hello");
+    assert_eq!(
+        fs::read_to_string(folder.join("sentinel")).unwrap(),
+        "fresh"
+    );
+}
+
+#[test]
+fn pruning_keeps_a_copy_folder_replaced_by_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let (root, _, folder) = expired_copy(&base);
+    let aside = base.join("aside");
+
+    let removed = prune_at(&root, &[], pruned_at(), |judged| {
+        fs::rename(judged, &aside).unwrap();
+        std::os::unix::fs::symlink(&aside, judged).unwrap();
+    });
+
+    assert!(removed.is_empty(), "{removed:?}");
+    assert_eq!(fs::read_to_string(aside.join("old.txt")).unwrap(), "hello");
+    assert!(fs::symlink_metadata(&folder).unwrap().is_symlink());
+}
+
+#[test]
+fn pruning_removes_only_an_unchanged_expired_copy_nothing_uses() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let (root, token, folder) = expired_copy(&base);
+    let recent = copy_folder(&root, Token::new().as_str(), "new.txt");
+    changed_before(&recent, 6);
+    let used = copy_folder(&root, Token::new().as_str(), "used.txt");
+    fs::write(used.join(OPENED_WITH), "TextEdit").unwrap();
+    changed_before(&used, 8);
+    let outside = copy_folder(&base, "outside", "kept.txt");
+    changed_before(&outside, 8);
+    let linked = root.join(Token::new().as_str());
+    std::os::unix::fs::symlink(&outside, &linked).unwrap();
+    let mut judged = Vec::new();
+
+    let removed = prune_at(&root, apps(&["TextEdit"]).rows(), pruned_at(), |folder| {
+        judged.push(folder.to_owned());
+    });
+
+    assert_eq!(removed, [token]);
+    assert_eq!(judged, std::slice::from_ref(&folder));
+    assert!(!folder.exists());
+    assert!(recent.exists() && used.exists(), "recent and in use");
+    assert!(fs::symlink_metadata(&linked).is_ok() && outside.join("kept.txt").exists());
+}
+
 #[test]
 fn every_copy_is_claimed_in_one_write_before_any_is_made() {
     let dir = tempfile::tempdir().unwrap();

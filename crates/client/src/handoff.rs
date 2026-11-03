@@ -846,6 +846,28 @@ impl OpenCopy {
         fs::symlink_metadata(path)
             .is_ok_and(|now| now.dev() == self.metadata.dev() && now.ino() == self.metadata.ino())
     }
+
+    /// Whether the folder last changed longer than KEEP before `now`.
+    fn expired(&self, now: std::time::SystemTime) -> bool {
+        self.metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > KEEP)
+    }
+
+    /// Delete the folder at `path` where it is, once `path` is seen to name
+    /// this folder still; one swapped meanwhile is kept.
+    fn remove_at(&self, path: &Path) -> CopyRemoval {
+        if !self.still_at(path) {
+            return CopyRemoval::Unreadable;
+        }
+        match fs::remove_dir_all(path) {
+            Ok(()) => CopyRemoval::Removed,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::AlreadyGone,
+            Err(error) => CopyRemoval::Failed(error.to_string()),
+        }
+    }
 }
 
 /// The node (`DEVICE:INODE`) of the copy folder `token` names under
@@ -898,14 +920,7 @@ fn take_copy(root: &Path, name: &str, session: Option<&Key>, running: &[AppRow])
     if in_use(&folder, running) {
         return CopyRemoval::InUse;
     }
-    if !copy.still_at(&folder) {
-        return CopyRemoval::Unreadable;
-    }
-    match fs::remove_dir_all(&folder) {
-        Ok(()) => CopyRemoval::Removed,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::AlreadyGone,
-        Err(error) => CopyRemoval::Failed(error.to_string()),
-    }
+    copy.remove_at(&folder)
 }
 
 /// `path`, a folder, held open without following a link.
@@ -933,16 +948,39 @@ pub fn copy_folder(root: &Path, token: &Token) -> PathBuf {
 /// closed does not stay forever. The tokens of the folders removed come
 /// back, so their claims can be settled.
 pub(crate) fn prune_in(root: &Path, running: &[AppRow]) -> Vec<Token> {
+    prune_at(root, running, std::time::SystemTime::now(), |_| ())
+}
+
+/// [`prune_in`], as it stands at `now`, calling `judged` with each folder
+/// found expired and unused just before it is removed. Each folder is held
+/// open without following a link, judged private and expired from that
+/// one descriptor, and removed by the rule [`take_copy`] follows: only
+/// once its path is seen to name that same folder still.
+fn prune_at(
+    root: &Path,
+    running: &[AppRow],
+    now: std::time::SystemTime,
+    mut judged: impl FnMut(&Path),
+) -> Vec<Token> {
+    if root_if_owned_in(root).is_none() {
+        return Vec::new();
+    }
+    let Ok(parent) = open_folder(root) else {
+        return Vec::new();
+    };
     let mut removed = Vec::new();
-    for folder in folders(root) {
-        let old = fs::symlink_metadata(&folder)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| modified.elapsed().ok())
-            .is_some_and(|age| age > KEEP);
-        if old
-            && !in_use(&folder, running)
-            && fs::remove_dir_all(&folder).is_ok()
+    for folder in entries(root) {
+        let Some(name) = folder.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Ok(Some(copy)) = OpenCopy::open(&parent, name) else {
+            continue;
+        };
+        if copy.may_take(None).is_err() || !copy.expired(now) || in_use(&folder, running) {
+            continue;
+        }
+        judged(&folder);
+        if copy.remove_at(&folder) == CopyRemoval::Removed
             && let Some(token) = folder_token(&folder)
         {
             removed.push(token);
