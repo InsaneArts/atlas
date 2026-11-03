@@ -266,6 +266,7 @@ async fn an_unrecorded_helper_never_uses_its_daemons_word_to_adopt_an_account() 
 
 #[test]
 fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let output = dir.path().join("runs");
     let client = Client::new(Config {
@@ -296,7 +297,11 @@ fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed
         let (Progress::Say(what) | Progress::Done(what, _) | Progress::Skipped(what, _)) = progress;
         said.borrow_mut().push(what.to_owned());
     };
-    let live = Live {
+    // The menu bar's record can't be read, so whether it runs is unknown.
+    fs::create_dir(&output).unwrap();
+    fs::set_permissions(&output, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(output.join("menubar.json"), "{").unwrap();
+    let mut live = Live {
         found: &found,
         config_path: &settings,
         keep_config: false,
@@ -309,20 +314,28 @@ fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed
         progress: &progress,
         ask: &agree,
     };
+    let forgot = std::cell::Cell::new(false);
+    let disconnected = std::cell::Cell::new(false);
     let error = live
-        .stop_menubar(|asked| {
-            assert_eq!(asked, output);
-            Err(Error::new(
-                Code::Menubar,
-                "The menu bar did not stop within a minute",
-            ))
-        })
+        .rest_using(
+            |_| forgot.set(true),
+            crate::menubar::stop,
+            |_| {
+                disconnected.set(true);
+                Err(problem("removal went on"))
+            },
+        )
         .unwrap_err();
-    assert_eq!(
-        error.error,
-        "The menu bar did not stop within a minute, so Atlas.app and its settings were kept. \
-         Quit the menu bar, then run atlas uninstall again."
+    assert!(
+        error.error.ends_with(
+            "can't be read, so Atlas.app and its settings were kept. Quit the menu bar, then \
+             run atlas uninstall again."
+        ),
+        "{}",
+        error.error
     );
+    assert!(forgot.get());
+    assert!(!disconnected.get(), "nothing is removed after the menu bar");
     assert!(said.borrow().is_empty(), "nothing says it stopped");
     assert!(live.removed.is_empty());
     assert!(found.app.exists() && found.data.exists() && settings.exists());

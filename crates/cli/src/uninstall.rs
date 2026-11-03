@@ -518,15 +518,11 @@ impl Teardown for Live<'_> {
     }
 
     fn rest(&mut self) -> Result<()> {
-        self.forget_requested_opener();
-        self.stop_menubar(crate::menubar::stop)?;
-        self.disconnect()?;
-        // Stopped while the agents were changed: the app and settings stay.
-        if atlas_agents::stopping() {
-            return Err(problem("Stopped before Atlas.app was removed"));
-        }
-        self.trash()?;
-        self.remove_settings()
+        self.rest_using(
+            Self::forget_requested_opener,
+            crate::menubar::stop,
+            Self::disconnect,
+        )
     }
 
     fn remove_helper(&mut self) {
@@ -631,6 +627,27 @@ impl Teardown for Live<'_> {
 }
 
 impl Live<'_> {
+    /// [`Teardown::rest`], with what reaches beyond this Mac's Atlas files
+    /// passed in: `forget` the one-time start, `stop` the menu bar and
+    /// `disconnect` the agents. Atlas.app and the settings go only once the
+    /// menu bar is seen stopped or not running.
+    fn rest_using(
+        &mut self,
+        forget: impl FnOnce(&mut Self),
+        stop: impl FnOnce(&Path) -> Result<Option<u16>>,
+        disconnect: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        forget(self);
+        self.stop_menubar(stop)?;
+        disconnect(self)?;
+        // Stopped while the agents were changed: the app and settings stay.
+        if atlas_agents::stopping() {
+            return Err(problem("Stopped before Atlas.app was removed"));
+        }
+        self.trash()?;
+        self.remove_settings()
+    }
+
     fn kept_account(&mut self, why: &str) {
         if let Some(name) = &self.found.helper {
             (self.progress)(Progress::Skipped("Helper account", &format!("kept: {why}")));
