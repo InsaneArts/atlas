@@ -35,6 +35,18 @@ impl Acquire for Scripted {
                 Measure::new(1.0).unwrap(),
             ],
             backend: Source::Cg,
+            epoch: atlas_core::session::Epoch {
+                uid: 501,
+                capture_pid: 1,
+                display: atlas_core::session::Display {
+                    width: 2.0,
+                    height: 1.0,
+                    scale: 1.0,
+                },
+                security_session_id: 1,
+                display_id: 1,
+                input_pid: 1,
+            },
         })
     }
 

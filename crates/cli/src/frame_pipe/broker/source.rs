@@ -11,6 +11,7 @@ use atlas_core::{
         pixels::FramePixels,
     },
     protocol::CaptureBackend,
+    session::Epoch,
 };
 use std::{
     future::Future,
@@ -32,6 +33,8 @@ pub(crate) struct Picture {
     pub(crate) at: Instant,
     pub(crate) display: [Measure; 3],
     pub(crate) backend: Source,
+    /// The helper session both its proofs named.
+    pub(crate) epoch: Epoch,
 }
 
 /// What reads pictures for the source.
@@ -176,7 +179,7 @@ impl Acquire for Live {
         {
             Ok(frame) => {
                 self.sequence += 1;
-                let display = frame.epoch.display;
+                let display = &frame.epoch.display;
                 let measure = |value: f64| Measure::new(value).ok_or(Reason::WrongGeometry);
                 Ok(Picture {
                     pixels: frame.rgb,
@@ -191,6 +194,7 @@ impl Acquire for Live {
                         CaptureBackend::CoreGraphics => Source::Cg,
                         CaptureBackend::ScreenCaptureKit => Source::Sck,
                     },
+                    epoch: frame.epoch,
                 })
             }
             Err(error) => {

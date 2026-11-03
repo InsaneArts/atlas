@@ -87,6 +87,22 @@ impl Subscription {
         Ok(())
     }
 
+    /// Start the flow again under a new profile: the delivery under way and
+    /// the base are forgotten, as their pictures no longer fit; credits keep
+    /// counting up.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidSchema` before the flow first began.
+    pub(crate) fn resubscribe(&mut self) -> Result<(), Reason> {
+        if !self.subscribed {
+            return Err(Reason::InvalidSchema);
+        }
+        self.delivery = None;
+        self.base = None;
+        Ok(())
+    }
+
     /// Accept credit `credit`, granted at `now`.
     ///
     /// # Errors

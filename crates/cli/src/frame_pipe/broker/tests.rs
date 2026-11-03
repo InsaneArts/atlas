@@ -26,6 +26,23 @@ pub(super) struct Scripted {
     pub(super) stopped: Arc<AtomicU64>,
     pub(super) hang: Arc<AtomicBool>,
     pub(super) fail: Arc<Mutex<Option<Reason>>>,
+    /// The helper session the pictures show.
+    pub(super) session: Arc<AtomicU64>,
+}
+
+fn epoch(session: u64) -> Epoch {
+    Epoch {
+        uid: 501,
+        capture_pid: 1,
+        display: atlas_core::session::Display {
+            width: 4.0,
+            height: 2.0,
+            scale: 1.0,
+        },
+        security_session_id: session,
+        display_id: 1,
+        input_pid: 1,
+    }
 }
 
 impl Acquire for Scripted {
@@ -48,6 +65,7 @@ impl Acquire for Scripted {
             at: Instant::now(),
             display: [measure(4.0), measure(2.0), measure(1.0)],
             backend: Source::Cg,
+            epoch: epoch(self.session.load(Ordering::SeqCst)),
         })
     }
 
@@ -65,6 +83,8 @@ struct Running {
     service: Hex32,
     bootstrap: Hex64,
     source: Scripted,
+    /// Every commit witnessed: its frame key and session.
+    witnessed: Arc<Mutex<Vec<(String, u64)>>>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -91,9 +111,25 @@ impl Running {
         let handle = source::spawn(source.clone(), Budget::new(BROKER_PIXELS));
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let uid = nix::unistd::getuid().as_raw();
-        let task = tokio::spawn(run(listeners, uid, gate, service.clone(), handle, async {
-            let _ = stopped.await;
-        }));
+        let witnessed = Arc::new(Mutex::new(Vec::new()));
+        let record = witnessed.clone();
+        let witness: Witness = Arc::new(move |key: &str, epoch: &Epoch, _| {
+            record
+                .lock()
+                .unwrap()
+                .push((key.to_owned(), epoch.security_session_id));
+        });
+        let task = tokio::spawn(run(
+            listeners,
+            uid,
+            gate,
+            service.clone(),
+            handle,
+            witness,
+            async {
+                let _ = stopped.await;
+            },
+        ));
         Self {
             control: path("c.sock"),
             frame: path("f.sock"),
@@ -101,6 +137,7 @@ impl Running {
             service,
             bootstrap,
             source,
+            witnessed,
             stop: Some(stop),
             task,
         }
@@ -249,8 +286,12 @@ impl Client_ {
     }
 
     async fn subscribe(&mut self) -> Subscribed {
+        self.subscribe_for(SubscribeReason::First).await
+    }
+
+    async fn subscribe_for(&mut self, reason: SubscribeReason) -> Subscribed {
         let subscribe = Subscribe {
-            reason: SubscribeReason::First,
+            reason,
             demand: Demand {
                 desired_longest: Longest::new(1600).unwrap(),
                 backend: Source::Cg,
@@ -463,4 +504,50 @@ async fn shutting_down_gives_the_source_back() {
     let stopped = broker.source.stopped.clone();
     broker.shut().await;
     assert!(stopped.load(Ordering::SeqCst) >= 1);
+}
+
+#[tokio::test]
+async fn only_committed_pictures_are_witnessed() {
+    let broker = Running::start(Scripted::default()).await;
+    let mut client = Client_::pair(&broker).await;
+    let subscribed = client.subscribe().await;
+    client.credit(&subscribed, 1, Barrier::Subscribe).await;
+    let (_, _, reference) = client.picture().await;
+    assert!(broker.witnessed.lock().unwrap().is_empty());
+    let key = reference.frame_key.as_str().to_owned();
+    client.settle(1, reference).await;
+    assert_eq!(*broker.witnessed.lock().unwrap(), [(key, 0)]);
+    broker.shut().await;
+}
+
+#[tokio::test]
+async fn a_new_session_retires_old_credits_and_asks_for_a_new_subscription() {
+    let broker = Running::start(Scripted::default()).await;
+    let mut client = Client_::pair(&broker).await;
+    let first = client.subscribe().await;
+    client.credit(&first, 1, Barrier::Subscribe).await;
+    let (_, _, reference) = client.picture().await;
+    client.settle(1, reference).await;
+
+    broker.source.session.store(7, Ordering::SeqCst);
+    broker.source.hang.store(true, Ordering::SeqCst);
+    let stale = client.credit(&first, 2, Barrier::Resume).await;
+    broker.source.hang.store(false, Ordering::SeqCst);
+    let (state, _): (State, _) = client.control.expect(Kind::State).await;
+    assert_eq!(state.phase, Phase::ProfileChanged);
+    let profile = state.profile.unwrap();
+    assert_eq!(
+        profile.stream_generation.get(),
+        first.profile.stream_generation.get() + 1
+    );
+    let (error, got): (ErrorMetadata, _) = client.control.expect(Kind::Error).await;
+    assert_eq!(error.disposition, Disposition::CreditRetired);
+    assert_eq!(got.head.request, stale);
+
+    let second = client.subscribe_for(SubscribeReason::Reconfigure).await;
+    assert_eq!(second.profile, profile);
+    client.credit(&second, 3, Barrier::Reconfigure).await;
+    let (metadata, _, _) = client.picture().await;
+    assert_eq!(metadata.stream_generation, profile.stream_generation);
+    broker.shut().await;
 }

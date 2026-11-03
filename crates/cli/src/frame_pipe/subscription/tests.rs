@@ -281,3 +281,24 @@ fn only_the_latest_64_acknowledgements_are_remembered() {
         Ok(Step::Repeat)
     );
 }
+
+#[test]
+fn resubscribing_forgets_the_delivery_and_base_but_not_the_credit_order() {
+    let mut subscription = Subscription::default();
+    assert_eq!(subscription.resubscribe(), Err(Reason::InvalidSchema));
+    subscription.subscribe().unwrap();
+    let now = Instant::now();
+    let first = picture(1);
+    deliver(&mut subscription, 1, &first, now);
+    subscription
+        .acknowledge(1, id(1), Ack::Decoded(first.clone()), now)
+        .unwrap();
+    subscription
+        .acknowledge(2, id(1), Ack::Commit(first), now)
+        .unwrap();
+    subscription.credit(id(2), now).unwrap();
+    subscription.resubscribe().unwrap();
+    assert_eq!(subscription.base(), None);
+    assert_eq!(subscription.credit(id(2), now), Err(Reason::InvalidSchema));
+    assert!(subscription.credit(id(3), now).is_ok());
+}

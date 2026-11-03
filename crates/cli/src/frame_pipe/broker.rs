@@ -8,7 +8,7 @@ pub(crate) mod source;
 use super::{
     auth::{self, Gate, Half, Paired, Peer},
     endpoint::Listeners,
-    subscription::{Ack, Subscription},
+    subscription::{self, Ack, Subscription},
 };
 use atlas_core::frame_pipe::{
     budget::{self, OBSERVERS_MAX},
@@ -16,10 +16,14 @@ use atlas_core::frame_pipe::{
     model::{
         Attach, CreditOnly, Disposition, ErrorMetadata, Failure, FrameMetadata, Hello, Hex32,
         Hex64, Metadata, Pair, Positive, Profile, Ref, Side, Welcome, WireCode, decode, encode,
-        flow::{Barrier, Close, Closed, Credit, Dropped, Resynced, Settle, Subscribe, Subscribed},
+        flow::{
+            Barrier, Close, Closed, ControlOwner, Credit, Dropped, Phase, Resynced, Settle, State,
+            Subscribe, SubscribeReason, Subscribed,
+        },
     },
     wire::{Head, Kind, Lane},
 };
+use atlas_core::session::Epoch;
 use lane::{Event, Id, Outgoing};
 use source::{Answer, Latest, Picture};
 use std::{
@@ -38,6 +42,10 @@ const TICK: Duration = Duration::from_millis(20);
 /// The most sockets accepted at once: four paired observers and as many
 /// half-open lanes again.
 const SOCKETS: usize = 4 * OBSERVERS_MAX as usize;
+
+/// Told of each picture an observer committed, by its frame key, so input
+/// aimed at it can be checked against the session and time it shows.
+pub(crate) type Witness = std::sync::Arc<dyn Fn(&str, &Epoch, Instant) + Send + Sync>;
 
 /// One accepted socket.
 struct Connection {
@@ -71,6 +79,8 @@ struct Observer {
     waiting: Option<Waiting>,
     /// The newest source picture sent, so none is sent twice.
     last_sequence: u64,
+    /// The picture in flight, until it is settled.
+    sent: Option<std::sync::Arc<Picture>>,
 }
 
 /// The broker's state.
@@ -81,6 +91,9 @@ struct Broker {
     source: source::Handle,
     latest: Answer,
     profile: Option<Profile>,
+    /// The session the current profile's pictures show.
+    epoch: Option<Epoch>,
+    witness: Witness,
     connections: HashMap<Id, Connection>,
     observers: HashMap<Id, Observer>,
     events: mpsc::Sender<Event>,
@@ -96,6 +109,7 @@ pub(crate) async fn run(
     gate: Gate,
     service: Hex32,
     source: source::Handle,
+    witness: Witness,
     shutdown: impl Future<Output = ()>,
 ) {
     let (events, mut incoming) = mpsc::channel(lane::QUEUE * SOCKETS);
@@ -108,6 +122,8 @@ pub(crate) async fn run(
         source,
         latest,
         profile: None,
+        epoch: None,
+        witness,
         connections: HashMap::new(),
         observers: HashMap::new(),
         events,
@@ -326,6 +342,7 @@ impl Broker {
                 subscribed: false,
                 waiting: None,
                 last_sequence: 0,
+                sent: None,
             },
         );
         Ok(())
@@ -383,17 +400,24 @@ impl Broker {
         &mut self,
         connection: Id,
         request: u64,
-        _: &Subscribe,
+        subscribe: &Subscribe,
         now: Instant,
     ) -> Result<(), Reason> {
         let observer = self
             .observers
             .get_mut(&connection)
             .ok_or(Reason::InvalidSchema)?;
-        if observer.paired.is_none() {
+        if observer.paired.is_none() || observer.subscribing.is_some() {
             return Err(Reason::InvalidSchema);
         }
-        observer.subscription.subscribe()?;
+        if subscribe.reason == SubscribeReason::First {
+            observer.subscription.subscribe()?;
+        } else {
+            observer.subscription.resubscribe()?;
+            observer.subscribed = false;
+            observer.waiting = None;
+            observer.sent = None;
+        }
         observer.subscribing = Some((request, self.source.want()));
         self.answered(now);
         Ok(())
@@ -458,20 +482,41 @@ impl Broker {
             .observers
             .get_mut(&connection)
             .ok_or(Reason::InvalidSchema)?;
-        observer
+        let committed = match &ack {
+            Ack::Commit(reference) => Some(reference.frame_key.clone()),
+            _ => None,
+        };
+        let step = observer
             .subscription
             .acknowledge(request, credit, ack, now)?;
+        if answer != Kind::DecodedAck {
+            let sent = observer.sent.take();
+            if let (Some(key), Some(picture), subscription::Step::Done) = (committed, sent, step) {
+                (self.witness)(key.as_str(), &picture.epoch, picture.at);
+            }
+        }
         self.send(connection, answer, request, metadata)
     }
 
     /// The source answered: subscriptions waiting on it are answered, and
     /// credits are served.
     fn answered(&mut self, now: Instant) {
-        let profile = match &self.latest.latest {
-            Latest::Picture(picture) => self.profile_of(picture),
+        let found = match &self.latest.latest {
+            Latest::Picture(picture) => self
+                .profile_of(picture)
+                .map(|profile| (profile, picture.epoch.clone())),
             _ => None,
         };
-        self.profile = profile.or(self.profile);
+        if let Some((profile, epoch)) = found
+            && self.profile != Some(profile)
+        {
+            let changed = self.profile.is_some();
+            self.profile = Some(profile);
+            self.epoch = Some(epoch);
+            if changed {
+                self.profile_changed(profile);
+            }
+        }
         let controls: Vec<Id> = self.observers.keys().copied().collect();
         for control in controls {
             if let Err(reason) = self.answer_subscribe(control) {
@@ -487,8 +532,10 @@ impl Broker {
     fn profile_of(&self, picture: &Picture) -> Option<Profile> {
         let (width, height) = (picture.pixels.width(), picture.pixels.height());
         let [display_width, display_height, display_scale] = picture.display;
+        let session = self.epoch.as_ref() == Some(&picture.epoch);
         let same = self.profile.filter(|profile| {
-            (profile.width.get(), profile.height.get()) == (width, height)
+            session
+                && (profile.width.get(), profile.height.get()) == (width, height)
                 && (
                     profile.display_width,
                     profile.display_height,
@@ -502,8 +549,13 @@ impl Broker {
         let generation = self
             .profile
             .map_or(0, |profile| profile.geometry_generation.get());
+        // A new session is a new stream; the same one keeps its stream.
+        let stream = self
+            .profile
+            .map_or(0, |profile| profile.stream_generation.get());
+        let stream = if session { stream.max(1) } else { stream + 1 };
         Some(Profile {
-            stream_generation: Positive::new(1)?,
+            stream_generation: Positive::new(stream)?,
             geometry_generation: Positive::new(generation + 1)?,
             width: Side::new(width)?,
             height: Side::new(height)?,
@@ -513,6 +565,44 @@ impl Broker {
             display_scale,
             backend: picture.backend,
         })
+    }
+
+    /// Tell every subscribed observer the profile changed, retiring credits
+    /// made for the old one; each subscribes again to go on.
+    fn profile_changed(&mut self, profile: Profile) {
+        let state = State {
+            phase: Phase::ProfileChanged,
+            stream_generation: profile.stream_generation.get(),
+            geometry_generation: profile.geometry_generation.get(),
+            input_ready: false,
+            control_owner: ControlOwner::None,
+            profile: Some(profile),
+            failure: None,
+            managed_bytes: None,
+        };
+        let controls: Vec<Id> = self.observers.keys().copied().collect();
+        for control in controls {
+            let Some(observer) = self.observers.get_mut(&control) else {
+                continue;
+            };
+            if !observer.subscribed {
+                continue;
+            }
+            observer.subscribed = false;
+            let waiting = observer.waiting.take();
+            if let Some(waiting) = &waiting {
+                observer.subscription.retire(waiting.credit.credit_id);
+            }
+            let told = self.send(control, Kind::State, 0, &state).and_then(|()| {
+                waiting.map_or(Ok(()), |waiting| {
+                    let credit = waiting.credit.credit_id;
+                    self.retire(control, waiting.request, credit, Reason::WrongGeometry)
+                })
+            });
+            if let Err(reason) = told {
+                self.fail(control, 0, reason);
+            }
+        }
     }
 
     /// Answer a Subscribe once the source has a profile, if the broker can
@@ -579,6 +669,11 @@ impl Broker {
         };
         let Some(frame) = observer.frame else { return };
         let (credit, request) = (waiting.credit, waiting.request);
+        if (credit.stream_generation, credit.geometry_generation)
+            != (profile.stream_generation, profile.geometry_generation)
+        {
+            return;
+        }
         let Some(paired) = &observer.paired else {
             return;
         };
@@ -620,6 +715,7 @@ impl Broker {
         }
         observer.waiting = None;
         observer.last_sequence = picture.sequence.get();
+        observer.sent = Some(picture.clone());
         let Ok(metadata) = encode(&metadata) else {
             return;
         };
