@@ -399,6 +399,10 @@ fn render(
                             },
                         ),
                     }
+                } else if shown.as_ref().is_some_and(|frame| frame.rgb.is_some()) {
+                    // Raw pixels without acquisition timings come from the
+                    // menu bar's shared frame service.
+                    format!("Shared frame service | raw RGB | {mode}")
                 } else {
                     format!(
                         "PNG | {mode} | encode/write {:.1}/{:.1}ms | {}B",
