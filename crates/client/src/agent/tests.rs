@@ -64,7 +64,7 @@ fn textedit_reads(request: &Value) -> Option<Value> {
 
     if request["op"] == "elements" {
         assert_eq!(request["expect"], json!({"pid": 812, "start": [123, 456]}));
-        return Some(json!({"ok": true, "look": "8123c", "elements": [], "truncated": false}));
+        return Some(json!({"ok": true, "look": "8123abc", "elements": [], "truncated": false}));
     }
     if request["op"] == "apps" {
         return Some(
@@ -145,7 +145,7 @@ async fn finding_an_app_verifies_the_helper_once() {
             .await
             .unwrap();
         assert_eq!(listed["pid"], 812, "{target:?}");
-        assert_eq!(listed["look"], "8123c", "{target:?}");
+        assert_eq!(listed["look"], "8123abc", "{target:?}");
         assert_eq!(helper.proofs() - before, 1, "{target:?}");
     }
 }
@@ -185,7 +185,7 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
             "elements",
         ),
         (
-            json!({"ok": true, "look": "8123C", "elements": [], "truncated": false}),
+            json!({"ok": true, "look": "8123ABC", "elements": [], "truncated": false}),
             "elements",
         ),
         (
@@ -1426,22 +1426,22 @@ fn a_kept_look_names_each_listed_element_by_its_reference() {
         save.clone(),
         shown(12, "AXButton", Some("Open"), None),
     ]);
-    scan.look = Look::parse("8123c");
+    scan.look = Look::parse("8123abc");
 
     let compact = listing(812, &scan, &ElementFilter::default(), 50, false);
-    assert_eq!(compact["look"], "8123c");
-    assert_eq!(compact["elements"][0]["ref"], "8123c3");
+    assert_eq!(compact["look"], "8123abc");
+    assert_eq!(compact["elements"][0]["ref"], "8123abc3");
     assert_eq!(compact["elements"][0]["index"], 3, "the index stays");
-    assert_eq!(compact["elements"][1]["ref"], "8123c12");
+    assert_eq!(compact["elements"][1]["ref"], "8123abc12");
 
     let full = listing(812, &scan, &ElementFilter::default(), 50, true);
-    assert_eq!(full["look"], "8123c");
-    assert_eq!(full["elements"][0]["ref"], "8123c3");
+    assert_eq!(full["look"], "8123abc");
+    assert_eq!(full["elements"][0]["ref"], "8123abc3");
     assert_eq!(full["elements"][0]["title"], "Save");
 
     let one = listing(812, &scan, &named("Open"), 50, false);
     assert_eq!(one["elements"].as_array().unwrap().len(), 1);
-    assert_eq!(one["elements"][0]["ref"], "8123c12");
+    assert_eq!(one["elements"][0]["ref"], "8123abc12");
 
     let unkept = listing(
         812,
@@ -1460,7 +1460,7 @@ fn a_kept_look_names_each_listed_element_by_its_reference() {
 async fn a_malformed_reference_is_refused_before_anything_is_asked() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    for reference in ["", "8123c", "8123c012", "8123C1", "save"] {
+    for reference in ["", "8123abc", "8123abc012", "8123ABC1", "save"] {
         let error = click_reference(&client, None, reference, Button::Left, 1, &[])
             .await
             .unwrap_err();
@@ -1496,7 +1496,7 @@ async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
         let mut sent = Vec::new();
         let reply = helper
             .serve(
-                click_reference(&client, target.as_ref(), "8123c12", Button::Left, 2, &[]),
+                click_reference(&client, target.as_ref(), "8123abc12", Button::Left, 2, &[]),
                 |request| match request["op"].as_str() {
                     Some("acquire" | "release") => Some(json!({"ok": true})),
                     Some("input") => {
@@ -1520,7 +1520,7 @@ async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
         };
         assert_eq!(
             request["actions"],
-            json!([{"type": "reference", "ref": "8123c12", "button": "left", "count": 2,
+            json!([{"type": "reference", "ref": "8123abc12", "button": "left", "count": 2,
                 "modifiers": []}])
         );
         let expected = target
@@ -3085,7 +3085,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                         return Some(json!({"ok": true, "apps": [{"pid": 812, "name": "Editor"}], "starts": {"812": [123,456]}}));
                     }
                     if request["op"] == "elements" {
-                        return Some(json!({"ok": true, "look": "8123c", "elements": [], "truncated": false}));
+                        return Some(json!({"ok": true, "look": "8123abc", "elements": [], "truncated": false}));
                     }
                     assert_eq!(request["op"], "windows");
                     let dock = request["dock"].as_bool().unwrap();

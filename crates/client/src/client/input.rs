@@ -112,7 +112,15 @@ impl Client {
         });
         let mut transport = self.input_transport();
         transport.timeout = LOOK_TIMEOUT;
-        let reply = transport.call(&request).await.map_err(Error::certain)?;
+        let connection = transport.connect().await.map_err(Error::certain)?;
+        // Once asked, a read with no answer in time is the one the probe
+        // gave none for.
+        let reply = async { connection.dispatch(&request).await?.finish().await }
+            .await
+            .map_err(|cause| {
+                Error::new(Code::Elements, "The accessibility probe returned no result")
+                    .with_source(cause)
+            })?;
         if reply["ok"] != true {
             // As the probe's failures read: a refusal of the session keeps
             // its code, and the read's own failure is the elements'.
