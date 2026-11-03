@@ -1,8 +1,9 @@
 //! Accessibility elements of an app's windows: looked at by the helper's
 //! input service, which keeps each look, listed compactly or in full under
-//! the look's name, and clicked by that look and an element's index, or by
-//! name or role only when exactly one visible element matches. Screenshots find
-//! their app the same way.
+//! the look's name, and clicked or acted on through Accessibility by that
+//! look and an element's index, or clicked by name or role only when
+//! exactly one visible element matches. Screenshots find their app the
+//! same way.
 use super::{
     input::click,
     target::{Target, target_expect},
@@ -214,9 +215,62 @@ pub async fn click_reference(
     count: u8,
     modifiers: &[String],
 ) -> Result<Value> {
-    let reference = Reference::parse(reference).ok_or_else(|| {
-        stale("That is not a ref from atlas elements").with("performed", json!(0))
-    })?;
+    let action = json!({
+        "type": "reference",
+        "ref": reference,
+        "button": which,
+        "count": count,
+        "modifiers": modifiers,
+    });
+    referenced(client, target, &action).await
+}
+
+/// Do `action` to the element its ref names through Accessibility alone,
+/// one action as `atlas input` takes it (`{"type": "press", "ref": …}`).
+/// The input service finds that very object again and proves it twice,
+/// the second time just before the one request that acts; no pointer or
+/// key event is sent and nothing is asked to take focus. With `target`,
+/// the look must be of that app. The reply says only how many actions were
+/// performed, how, and whether the element reads as asked afterwards.
+///
+/// # Errors
+///
+/// Refuses, with nothing sent, a malformed ref, one whose look is gone or
+/// of another app or display, an element that changed, is disabled, does
+/// not support the action or is a password field given a value, and an
+/// input service that cannot act on elements. Identity and ownership
+/// errors propagate; an action the app did not acknowledge is uncertain and
+/// must be recovered, never repeated.
+pub async fn element(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
+    let reply = referenced(client, target, action).await?;
+    if reply["ok"] != true {
+        return Ok(reply);
+    }
+    let mut said = json!({
+        "ok": true,
+        "performed": reply["performed"],
+        "mechanism": reply["mechanism"],
+        "verification": reply["verification"],
+    });
+    if let Some(warnings) = reply.get("warnings") {
+        said["warnings"] = warnings.clone();
+    }
+    Ok(said)
+}
+
+/// Send `action`, which names an element by the ref in its `ref` (and for
+/// a pick, its `option`), as a batch of its own under one ownership and the
+/// epoch verified first. A ref that is not one is refused before anything
+/// is asked of the helper.
+async fn referenced(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
+    let malformed = ["ref", "option"].iter().any(|key| {
+        action
+            .get(key)
+            .is_some_and(|text| text.as_str().and_then(Reference::parse).is_none())
+    });
+    if malformed {
+        return Err(stale("That is not a ref from atlas elements").with("performed", json!(0)));
+    }
 
     let ownership = client.controller.acquire_beside_commands()?;
     let verified = client.verify().await?;
@@ -226,13 +280,7 @@ pub async fn click_reference(
         None => None,
     };
 
-    let actions = json!([{
-        "type": "reference",
-        "ref": reference,
-        "button": which,
-        "count": count,
-        "modifiers": modifiers,
-    }]);
+    let actions = json!([action]);
     client
         .input_owned(
             &ownership,

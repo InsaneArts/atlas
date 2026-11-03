@@ -9,8 +9,8 @@ use atlas_core::{
     actions::{self, Expect},
     error::{Code, Error, Holder, Result},
     session::{
-        Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS, NativeObservation,
-        Observation, Session,
+        ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
+        NativeObservation, Observation, Session,
     },
     transport::Transport,
 };
@@ -349,12 +349,30 @@ impl Client {
             self.repin(session).await?
         };
 
-        // The service whose capability was read is the one that checks.
-        if expect.is_some() && session.epoch.input_pid != input_pid {
+        // The service whose capability was read is the one that checks, and
+        // the one that acts on elements.
+        let replaced = session.epoch.input_pid != input_pid;
+        if expect.is_some() && replaced {
             return Err(Error::session_changed());
         }
 
         let actions = actions?;
+        if actions
+            .actions()
+            .iter()
+            .any(|action| action.element_action().is_some())
+        {
+            if !observation.native.has_capability(ELEMENT_ACTIONS) {
+                return Err(Error::new(
+                    Code::Startup,
+                    "The helper's input service cannot act on elements: run atlas start-input, \
+                     then try again",
+                ));
+            }
+            if replaced {
+                return Err(Error::session_changed());
+            }
+        }
         actions.check(&session.epoch.display)?;
 
         self.input_in_session(actions, expected, lease, expect, &session)

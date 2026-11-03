@@ -1520,6 +1520,75 @@ async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
     }
 }
 
+/// An action on an element goes to the input service as the one action
+/// it is, and its reply says only how many were performed, how, and how
+/// it reads now. A service that cannot act on elements is never sent one.
+#[tokio::test]
+async fn an_element_action_is_sent_whole_and_answered_briefly() {
+    use crate::test_support::Helper;
+    use atlas_core::{session::ELEMENT_ACTIONS, test_support::UID};
+
+    let action = json!({"type": "set-value", "ref": "8123abc12", "value": "draft"});
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[LOOKS, ELEMENT_ACTIONS]);
+    let mut sent = Vec::new();
+    let reply = helper
+        .serve(
+            element(&client, None, &action),
+            |request| match request["op"].as_str() {
+                Some("acquire" | "release") => Some(json!({"ok": true})),
+                Some("input") => {
+                    sent.push(request.clone());
+                    Some(json!({"ok": true, "performed": 1, "app": "TextEdit",
+                        "bundleId": "com.apple.TextEdit", "mechanism": "accessibility",
+                        "verification": "mismatch"}))
+                }
+                _ => textedit_reads(request),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reply,
+        json!({"ok": true, "performed": 1, "mechanism": "accessibility",
+            "verification": "mismatch"})
+    );
+    let [request] = sent.as_slice() else {
+        panic!("one input request: {sent:?}");
+    };
+    assert_eq!(request["actions"], json!([action]));
+    assert!(client.controller.pending().unwrap().is_empty());
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[LOOKS]);
+    let error = helper
+        .serve(element(&client, None, &action), |request| {
+            assert_ne!(request["op"], "input", "nothing is sent");
+            match request["op"].as_str() {
+                Some("acquire" | "release") => Some(json!({"ok": true})),
+                _ => textedit_reads(request),
+            }
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Startup);
+    assert!(!error.uncertain);
+}
+
+/// A pick's option must be a ref too, refused before anything is asked.
+#[tokio::test]
+async fn a_malformed_option_is_refused_before_anything_is_asked() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let action = json!({"type": "pick", "ref": "8123abc12", "option": "Large"});
+    let error = element(&client, None, &action).await.unwrap_err();
+    assert_eq!(error.code, Code::Elements);
+    assert_eq!(error.details["performed"], 0);
+    assert!(client.controller.pending().unwrap().is_empty());
+}
+
 #[test]
 fn the_default_listing_omits_only_groups_without_information() {
     let bare = shown(0, "AXGroup", None, None);

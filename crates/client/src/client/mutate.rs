@@ -8,7 +8,7 @@ use super::{
 };
 use atlas_control::{Lease, Ownership, Pending, SharedLease};
 use atlas_core::{
-    actions::{Batch, Expect},
+    actions::{Batch, Expect, Verification},
     error::{Code, Error, Result},
     protocol::{
         Expected, JobId, JobReply, JobStart, JobState, JobView, SessionPin, StopCameTo, Stopped,
@@ -129,12 +129,20 @@ impl Mutation<'_> {
 
         let valid = match self {
             // A checked batch is confirmed only with its expectation echoed: a
-            // service that ignored it posted the input unchecked.
+            // service that ignored it posted the input unchecked. An action
+            // on an element is confirmed only with how it was verified.
             Self::Input {
                 actions, expect, ..
             } => {
+                let on_elements = actions
+                    .actions()
+                    .iter()
+                    .any(|action| action.element_action().is_some());
                 reply["performed"].as_u64() == Some(actions.actions().len() as u64)
                     && expect.is_none_or(|expect| reply["expect"] == json!(expect))
+                    && (!on_elements
+                        || (reply["mechanism"] == "accessibility"
+                            && Verification::deserialize(&reply["verification"]).is_ok()))
             }
             Self::JobStart { uid, .. } => {
                 matches!(JobReply::deserialize(reply), Ok(JobReply::Start { job }) if job_started(*uid, &job))
