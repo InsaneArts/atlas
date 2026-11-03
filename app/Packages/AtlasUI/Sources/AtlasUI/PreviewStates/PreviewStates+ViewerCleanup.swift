@@ -77,8 +77,8 @@
       return state
     }()
 
-    /// The helper line while one check fails and one is not checked yet: in orange, saying the helper needs setup, its
-    /// tooltip naming both, with the count of the rest.
+    /// The helper line while one check fails and the Save and Open dialogs are not checked yet: in orange, saying the
+    /// helper needs setup, its tooltip naming the failed check with the count of the rest, then the dialogs.
     @MainActor public static let viewerHelperNeedsSetup: ViewerState = {
       var state = viewerIdle
       state.sidebar.helper = ViewerHelperLine(
@@ -87,8 +87,8 @@
         help: viewerHelperHelp(
           ready: [
             "Mouse and keyboard: Not ready. Recover… starts them again.",
-            "Save and Open dialogs: Not checked yet",
             "1 more check passes",
+            "Save and Open dialogs: Not checked yet",
           ],
           login: ["Logged in: 09:12", "Agents: Claude, Codex"]
         ),

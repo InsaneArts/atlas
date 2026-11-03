@@ -104,9 +104,15 @@ public struct StatusReading: Equatable, Sendable {
   /// Each readiness check, then the native Save and Open check, which never counts as ready. An unknown check is
   /// unobservable, not failed.
   public var statusRows: [StatusRow] {
+    readinessRows + [nativeDialogsRow].compactMap { $0 }
+  }
+
+  /// Each readiness check alone: whether the helper is ready, which the native Save and Open check never decides. An
+  /// unknown check is unobservable, not failed.
+  public var readinessRows: [StatusRow] {
     // A silent helper's steps name commands; the overview's reason stands for them.
     let silent = !status.overview.mode.answers
-    var rows = status.checks.map { check in
+    return status.checks.map { check in
       let subject = StatusRow.Subject.check(check.name)
       return switch check.ok {
       case true: StatusRow(subject: subject, state: .ready, detail: .passed)
@@ -116,18 +122,6 @@ public struct StatusReading: Equatable, Sendable {
       default: StatusRow(subject: subject, state: .bad, detail: .failed(check))
       }
     }
-    let native = status.capabilities.nativeDialogs
-    switch native.state {
-    case .passed:
-      rows.append(StatusRow(subject: .nativeDialogs, state: .ready, detail: .worked(ageSeconds: native.ageSeconds)))
-    case .failed:
-      rows.append(StatusRow(subject: .nativeDialogs, state: .bad, detail: .didNotWork(ageSeconds: native.ageSeconds)))
-    case .unchecked:
-      if !native.reason.isEmpty {
-        rows.append(StatusRow(subject: .nativeDialogs, state: .unknown, detail: .notChecked))
-      }
-    }
-    return rows
   }
 
   /// Recovery is offered only without control, when Recover can help: an action's outcome is unknown, or the helper

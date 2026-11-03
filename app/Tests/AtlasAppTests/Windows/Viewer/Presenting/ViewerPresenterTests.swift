@@ -272,4 +272,37 @@ struct ViewerPresenterTests {
     #expect(ViewerPresenter.readyFacts([keys]).map(\.name) == ["Mouse and keyboard"], "no count when none pass")
     #expect(ViewerPresenter.readyFacts([]).isEmpty, "nothing before any check is known")
   }
+
+  @Test("a ready helper reports unavailable dialogs without asking for setup")
+  func unavailableDialogsKeepTheHelperReady() throws {
+    let passing: [[String: Any]] = [
+      ["name": "Helper running", "ok": true],
+      ["name": "Input service ready", "ok": true],
+    ]
+    let failedDialogs: [String: Any] = ["state": "failed", "ageSeconds": 300, "reason": "Did not complete"]
+    let ready = watching(
+      try status([
+        "checks": passing,
+        "capabilities": ["nativeDialogs": failedDialogs],
+        "overview": ["mode": "observing", "state": "idle", "account": "atlas"],
+      ])
+    )
+    let line = ViewerPresenter.helperLine(ready)
+    #expect(line.tone == .ready)
+    #expect(line.words == "Helper ready · atlas")
+    let facts = line.help.components(separatedBy: "\n")
+    #expect(facts.contains("Ready to act: All checks pass"), "\(facts)")
+    #expect(facts.contains("Save and Open dialogs unavailable: Didn't work 5 min ago."), "\(facts)")
+
+    let notReady = watching(
+      try status([
+        "checks": [["name": "Helper running", "ok": true], ["name": "Input service ready", "ok": false]],
+        "capabilities": ["nativeDialogs": failedDialogs],
+        "overview": ["mode": "observing", "state": "idle", "account": "atlas"],
+      ])
+    )
+    let setup = ViewerPresenter.helperLine(notReady)
+    #expect(setup.tone == .attention)
+    #expect(setup.words == "Helper needs setup · 1 check", "a readiness check still asks for setup, alone")
+  }
 }

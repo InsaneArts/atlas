@@ -34,9 +34,24 @@ extension StatusReading {
       }
   }
 
-  /// Each readiness check, as the Ready card lists it.
+  /// Each readiness check, as the Ready card lists it: never the native Save and Open check, which is no part of the
+  /// helper's readiness.
   var readinessItems: [ReadinessItem] {
-    statusRows.map { ReadinessItem(name: $0.subject.word, text: $0.detail.word, state: $0.state.readiness) }
+    readinessRows.map(Self.item)
+  }
+
+  /// The native Save and Open check, in AtlasUI's terms, beside the readiness checks; nil while the service says
+  /// nothing of it.
+  var nativeDialogsItem: ReadinessItem? {
+    nativeDialogsRow.map(Self.item)
+  }
+
+  /// One check in AtlasUI's terms: its name, what it found and how it stands.
+  ///
+  /// - Parameter row: The check.
+  /// - Returns: The item.
+  private static func item(_ row: StatusRow) -> ReadinessItem {
+    ReadinessItem(name: row.subject.word, text: row.detail.word, state: row.state.readiness)
   }
 
   /// One action in AtlasUI's terms: what was done, by whom, and its mark: a warning sign for a failure, the not-sent
