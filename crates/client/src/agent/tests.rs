@@ -1419,39 +1419,25 @@ fn the_default_listing_names_each_element_by_its_click_point_and_size() {
     );
 }
 
+/// A kept look adds its name to the listing and nothing to its elements:
+/// a reference is that name and an element's index.
 #[test]
-fn a_kept_look_names_each_listed_element_by_its_reference() {
-    let save = shown(3, "AXButton", Some("Save"), None);
-    let mut scan = scanned(vec![
-        save.clone(),
+fn a_kept_look_adds_only_its_name_to_the_listing() {
+    let elements = vec![
+        shown(3, "AXButton", Some("Save"), None),
         shown(12, "AXButton", Some("Open"), None),
-    ]);
+    ];
+    let mut scan = scanned(elements.clone());
     scan.look = Look::parse("8123abc");
-
-    let compact = listing(812, &scan, &ElementFilter::default(), 50, false);
-    assert_eq!(compact["look"], "8123abc");
-    assert_eq!(compact["elements"][0]["ref"], "8123abc3");
-    assert_eq!(compact["elements"][0]["index"], 3, "the index stays");
-    assert_eq!(compact["elements"][1]["ref"], "8123abc12");
-
-    let full = listing(812, &scan, &ElementFilter::default(), 50, true);
-    assert_eq!(full["look"], "8123abc");
-    assert_eq!(full["elements"][0]["ref"], "8123abc3");
-    assert_eq!(full["elements"][0]["title"], "Save");
-
-    let one = listing(812, &scan, &named("Open"), 50, false);
-    assert_eq!(one["elements"].as_array().unwrap().len(), 1);
-    assert_eq!(one["elements"][0]["ref"], "8123abc12");
-
-    let unkept = listing(
-        812,
-        &scanned(vec![save]),
-        &ElementFilter::default(),
-        50,
-        false,
-    );
-    assert!(unkept.get("look").is_none());
-    assert!(unkept["elements"][0].get("ref").is_none());
+    for full in [false, true] {
+        let mut kept = listing(812, &scan, &ElementFilter::default(), 50, full);
+        let plain = scanned(elements.clone());
+        let unkept = listing(812, &plain, &ElementFilter::default(), 50, full);
+        assert_eq!(kept["look"], "8123abc");
+        assert_eq!(kept["elements"][1]["index"], 12);
+        kept.as_object_mut().unwrap().remove("look");
+        assert_eq!(kept, unkept, "full: {full}");
+    }
 }
 
 /// A reference that is not one a listing gives is refused before control
@@ -1460,7 +1446,7 @@ fn a_kept_look_names_each_listed_element_by_its_reference() {
 async fn a_malformed_reference_is_refused_before_anything_is_asked() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    for reference in ["", "8123abc", "8123abc012", "8123ABC1", "save"] {
+    for reference in ["", "8123abc", "8123abc.012", "8123ABC.1", "save"] {
         let error = click_reference(&client, None, reference, Button::Left, 1, &[])
             .await
             .unwrap_err();
@@ -1496,7 +1482,7 @@ async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
         let mut sent = Vec::new();
         let reply = helper
             .serve(
-                click_reference(&client, target.as_ref(), "8123abc12", Button::Left, 2, &[]),
+                click_reference(&client, target.as_ref(), "8123abc.12", Button::Left, 2, &[]),
                 |request| match request["op"].as_str() {
                     Some("acquire" | "release") => Some(json!({"ok": true})),
                     Some("input") => {
@@ -1520,7 +1506,7 @@ async fn a_referenced_click_asks_the_input_service_to_find_its_element_again() {
         };
         assert_eq!(
             request["actions"],
-            json!([{"type": "reference", "ref": "8123abc12", "button": "left", "count": 2,
+            json!([{"type": "reference", "ref": "8123abc.12", "button": "left", "count": 2,
                 "modifiers": []}])
         );
         let expected = target

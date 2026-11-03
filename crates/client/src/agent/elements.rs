@@ -1,7 +1,7 @@
 //! Accessibility elements of an app's windows: looked at by the helper's
-//! input service, which keeps each look, listed compactly or in full with
-//! a reference to each element, and clicked by that reference, or by name
-//! or role only when exactly one visible element matches. Screenshots find
+//! input service, which keeps each look, listed compactly or in full under
+//! the look's name, and clicked by that look and an element's index, or by
+//! name or role only when exactly one visible element matches. Screenshots find
 //! their app the same way.
 use super::{
     input::click,
@@ -160,9 +160,9 @@ async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<
 }
 
 /// Accessibility elements of the target app's windows that match `filter`,
-/// at most `max` of them, listed compactly unless `full`, each with the
-/// reference a click can name it by. The helper's input service reads them
-/// and keeps the look; listing them grants nothing.
+/// at most `max` of them, listed compactly unless `full`, under the name of
+/// the look a click names one by, with its index. The helper's input
+/// service reads them and keeps the look; listing them grants nothing.
 ///
 /// # Errors
 ///
@@ -302,8 +302,8 @@ pub async fn screenshot(
 
 /// The elements of one scan that match `filter`, as `elements` lists them:
 /// each by its role, name, value, click point and size, its window listed
-/// once, or with every attribute the scan read when `full`, and by its
-/// reference when the scan is a kept look. A name that matches nothing
+/// once, or with every attribute the scan read when `full`, under the
+/// look's name when the scan is a kept look. A name that matches nothing
 /// lists the closest names.
 pub(super) fn listing(
     pid: i64,
@@ -334,25 +334,14 @@ pub(super) fn listing(
         listed["look"] = json!(look.to_string());
     }
 
-    let mut windows: Vec<&Bounds> = Vec::new();
-    listed["elements"] = shown
-        .iter()
-        .map(|element| {
-            let mut row = if full {
-                json!(element)
-            } else {
-                compact(element, &mut windows)
-            };
-            if let Some(look) = scanned.look {
-                row["ref"] = json!(Reference {
-                    look,
-                    index: element.index,
-                });
-            }
-            row
-        })
-        .collect();
-    if !full {
+    if full {
+        listed["elements"] = json!(shown);
+    } else {
+        let mut windows: Vec<&Bounds> = Vec::new();
+        listed["elements"] = shown
+            .iter()
+            .map(|element| compact(element, &mut windows))
+            .collect();
         listed["windows"] = windows
             .iter()
             .map(|frame| {
