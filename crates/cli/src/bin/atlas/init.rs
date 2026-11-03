@@ -1,13 +1,10 @@
 //! Terminal choices, progress and waiting for attended setup.
 use super::prompt;
 use atlas_cli::onboarding::{close_attended, create_helper};
-use atlas_cli::{
-    menubar::LoginItem,
-    ui::{
-        self,
-        progress::{Spinner, done, heading, say, skipped},
-        style,
-    },
+use atlas_cli::ui::{
+    self,
+    progress::{Spinner, done, heading, say, skipped},
+    style,
 };
 use atlas_client::setup::{FULL_NAME, missing, validate_account_name as valid_account_name};
 use atlas_client::setup::{
@@ -166,14 +163,13 @@ fn open_at_login(done_steps: &mut Vec<Value>, settings: &Path) {
         return;
     }
 
-    let status = atlas_cli::menubar::login("status")
-        .map(|reply| LoginItem::decode(&reply))
-        .unwrap_or_default();
-    if status.enabled {
+    // Anything but a plain yes in the app's reply is no.
+    let status = atlas_cli::menubar::login("status").unwrap_or_default();
+    if status["enabled"] == true {
         atlas_cli::menubar::decide_login();
-    } else if status.available {
+    } else if status["available"] == true {
         match atlas_cli::menubar::login("on") {
-            Ok(login) if LoginItem::decode(&login).enabled => {
+            Ok(login) if login["enabled"] == true => {
                 atlas_cli::menubar::decide_login();
                 done(
                     "Menu bar",

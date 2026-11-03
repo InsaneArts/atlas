@@ -212,11 +212,17 @@ impl Startup {
         record: &Path,
         ready: &Ready,
     ) -> Result<(bool, serde_json::Value)> {
-        let reply = ServeReply::decode(&last_reply(log).unwrap_or_default());
-        let already = status.success() && reply.already_running;
+        // Only these fields of the serving process's last reply decide a
+        // failed start; one of another shape says nothing.
+        let reply = last_reply(log).unwrap_or_default();
+        let code = reply["code"]
+            .as_str()
+            .and_then(Code::parse)
+            .unwrap_or(Code::Menubar);
+        let already = status.success() && reply["alreadyRunning"] == true;
 
         // A competing menu bar can hold the port before its record appears.
-        if already || reply.code == Code::PortInUse {
+        if already || code == Code::PortInUse {
             for _ in 0..25 {
                 self.check(ready, "port contention")?;
                 if let Some(running) = self.viewer_running(record) {
@@ -231,12 +237,13 @@ impl Startup {
                 self.port
             )
         } else {
-            reply
-                .error
-                .unwrap_or_else(|| format!("it stopped; see {}", log.display()))
+            reply["error"].as_str().map_or_else(
+                || format!("it stopped; see {}", log.display()),
+                str::to_owned,
+            )
         };
         Err(Error::new(
-            reply.code,
+            code,
             format!("The menu bar did not start: {reason}"),
         ))
     }
@@ -410,27 +417,6 @@ fn startup_cancelled() -> Error {
     Error::new(Code::Menubar, "The menu bar start was cancelled")
 }
 
-/// What decides a failed start, from the serving process's last reply:
-/// anything else in the reply, or any field of another shape, says nothing.
-struct ServeReply {
-    already_running: bool,
-    code: Code,
-    error: Option<String>,
-}
-
-impl ServeReply {
-    fn decode(reply: &serde_json::Value) -> Self {
-        Self {
-            already_running: reply["alreadyRunning"] == true,
-            code: reply["code"]
-                .as_str()
-                .and_then(Code::parse)
-                .unwrap_or(Code::Menubar),
-            error: reply["error"].as_str().map(str::to_owned),
-        }
-    }
-}
-
 /// The last JSON reply the serving process wrote to its log.
 fn last_reply(log: &Path) -> Option<serde_json::Value> {
     let said = fs::read_to_string(log).ok()?;
@@ -525,26 +511,6 @@ impl Login {
     }
 }
 
-/// "Open at Login" as the app's reply says it is: anything but a plain yes
-/// is no.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LoginItem {
-    pub ok: bool,
-    pub enabled: bool,
-    pub available: bool,
-}
-
-impl LoginItem {
-    /// What decides a login item in `reply`; the reply stays the report.
-    pub fn decode(reply: &serde_json::Value) -> Self {
-        Self {
-            ok: reply["ok"] == true,
-            enabled: reply["enabled"] == true,
-            available: reply["available"] == true,
-        }
-    }
-}
-
 /// Turn "Open at Login" `on` or `off`, or report its `status`, as the
 /// command line names them.
 ///
@@ -567,7 +533,7 @@ pub(crate) fn set_login(login: Login) -> Result<serde_json::Value> {
         .map_err(|_| Error::new(Code::Menubar, "The menu bar did not report its login item"))?;
 
     // Turning it on or off is the person's choice, and init keeps it.
-    if login != Login::Status && LoginItem::decode(&reply).ok {
+    if login != Login::Status && reply["ok"] == true {
         decide_login();
     }
 
