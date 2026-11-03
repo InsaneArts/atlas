@@ -32,7 +32,7 @@ mod batch;
 mod operations;
 mod request;
 
-use batch::{Failure, Perform, run};
+use batch::{Done, Failure, Perform, run};
 use operations::{
     Cancellation, ConnectionPhase, Operations, combine_cleanup, connection_outcome,
     drain_and_release, finish, on_engine, reset, worker_failed,
@@ -46,8 +46,9 @@ const MAX_REQUEST: usize = 64 * 1024;
 /// What this service can do beyond plain input, as its hello lists it:
 /// authenticated shutdown, the person's Stop, checking an agent's target
 /// app, with the Dock covering where it takes clicks, and the window and
-/// field it names, and reading an app's elements as looks a click can name.
-const CAPABILITIES: [&str; 7] = [
+/// field it names, reading an app's elements as looks a click can name, and
+/// acting on an element of a look through Accessibility.
+const CAPABILITIES: [&str; 8] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,
@@ -55,6 +56,7 @@ const CAPABILITIES: [&str; 7] = [
     atlas_core::session::FOCUS_WINDOW,
     atlas_core::session::FOCUS_FIELD,
     atlas_core::session::LOOKS,
+    atlas_core::session::ELEMENT_ACTIONS,
 ];
 
 struct Service {
@@ -407,13 +409,14 @@ impl Service {
             gate: self.gate.clone(),
             owner: Some(owner),
         };
-        let (field, dock_pressed) = match self.execute(grant, actions, expect.clone()).await? {
+        let (done, dock_pressed) = match self.execute(grant, actions, expect.clone()).await? {
             Ok(done) => done,
             Err(failure) => return Ok(failure.reply()),
         };
 
+        let acted = done.acted.as_ref();
         let landed = if report_app {
-            landed(dock_pressed).await
+            landed(dock_pressed, acted.map(|acted| acted.instance.pid)).await
         } else {
             None
         };
@@ -431,8 +434,13 @@ impl Service {
         }
         // The role of the field it named, so an agent's activity may name
         // the field by the name it gave: never the field's own text.
-        if let Some(role) = field {
+        if let Some(role) = done.field {
             reply["field"] = json!({ "role": role });
+        }
+        // How an action on an element went, never what it set.
+        if let Some(acted) = acted {
+            reply["mechanism"] = json!("accessibility");
+            reply["verification"] = json!(acted.verification);
         }
 
         cancellation.owner = None;
@@ -442,8 +450,8 @@ impl Service {
     /// Run a batch as registered work, which owns the engine through its
     /// last effect: a request that vanishes meanwhile cannot end it early.
     /// The batch runs on a blocking thread, its pauses on this runtime.
-    /// Once done, the role of the field it named and whether it pressed the
-    /// Dock; an action that failed gives its failure instead.
+    /// Once done, what it came to and whether it pressed the Dock; an
+    /// action that failed gives its failure instead.
     async fn execute(
         &self,
         grant: Grant,
@@ -466,7 +474,7 @@ impl Service {
                     engine.dock_pressed = false;
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
                     engine.target = None;
-                    Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
+                    Ok::<_, Error>(result.map(|done| (done, engine.dock_pressed)))
                 })
             }))
             .await?;
@@ -478,19 +486,22 @@ impl Service {
 }
 
 /// What a batch came to: see [`Service::execute`].
-type Performed = std::result::Result<(Option<&'static str>, bool), Box<Failure>>;
+type Performed = std::result::Result<(Done, bool), Box<Failure>>;
 
-/// The recipient for the agent's activity log: Dock after AXPress, otherwise
-/// the owner of the frontmost ordinary window and its bundle identifier, read
-/// once the engine is free.
-async fn landed(dock_pressed: bool) -> Option<(String, Option<String>)> {
+/// The recipient for the agent's activity log: Dock after AXPress, the app
+/// an action on an element acted in (process `acted`), otherwise the owner
+/// of the frontmost ordinary window; with its bundle identifier, read once
+/// the engine is free.
+async fn landed(dock_pressed: bool, acted: Option<i32>) -> Option<(String, Option<String>)> {
     if dock_pressed {
         return Some(("Dock".to_owned(), Some("com.apple.dock".to_owned())));
     }
 
-    tokio::task::spawn_blocking(|| {
+    tokio::task::spawn_blocking(move || {
         let windows = super::windows::windows().ok()?;
-        let window = windows.into_iter().find(|window| window.layer == 0)?;
+        let window = windows.into_iter().find(|window| {
+            window.layer == 0 && acted.is_none_or(|pid| window.pid == i64::from(pid))
+        })?;
         Some((window.owner?, super::apps::bundle_id(window.pid)))
     })
     .await
@@ -549,10 +560,7 @@ fn hold(
 /// Refuse the person's input that names an agent's target: an expectation,
 /// or a referenced element, which brings its own.
 fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Result<()> {
-    let named = expect.is_some()
-        || actions
-            .iter()
-            .any(|action| matches!(action, Action::Reference { .. }));
+    let named = expect.is_some() || actions.iter().any(|action| action.reference().is_some());
     if named && gate.holder()? == Some(Holder::Person) {
         return Err(Error::new(
             Code::Input,

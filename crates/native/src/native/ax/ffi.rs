@@ -90,9 +90,18 @@ pub(super) fn settable(element: &AXUIElement, name: &CFString) -> Result<bool, A
 
 /// Request a typed boolean attribute change.
 pub(super) fn set_flag(element: &AXUIElement, name: &CFString, value: bool) -> AXError {
-    // SAFETY: both references are live; the value is a CFBoolean, never an
-    // unchecked cast of another CoreFoundation type.
-    unsafe { element.set_attribute_value(name, CFBoolean::new(value).as_ref()) }
+    set(element, name, CFBoolean::new(value))
+}
+
+/// Request that attribute `name` take `value`, which callers make of the
+/// type the attribute holds: a boolean flag, or the text or number its
+/// value was read as.
+pub(super) fn set(element: &AXUIElement, name: &CFString, value: &CFType) -> AXError {
+    // SAFETY: the element, name and value are live CoreFoundation objects
+    // for the length of the call, and the value is a whole CoreFoundation
+    // object of the type the caller read the attribute as, never an
+    // unchecked cast; no reference escapes the call.
+    unsafe { element.set_attribute_value(name, value) }
 }
 
 /// Copy supported action names. Each member is checked before use.

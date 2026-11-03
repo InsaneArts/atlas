@@ -1,12 +1,12 @@
-//! Ordered batch execution, referenced elements found again, focus budget
-//! and failure settlement.
+//! Ordered batch execution, referenced elements found again and acted on,
+//! focus budget and failure settlement.
 use super::{Engine, Gate, worker_failed};
 use crate::native::{
-    ax::{self, Resolved},
+    ax::{self, Acted, Resolved},
     focus::{self, Need},
 };
 use atlas_core::{
-    actions::{Action, Expect},
+    actions::{Action, ElementAction, Expect},
     error::{Code, Error, Result},
     screen::{
         elements::{Reference, stale},
@@ -42,6 +42,16 @@ pub(super) trait Perform {
     /// Refuse unless the element `resolved` names is still the one to click,
     /// once its app was brought forward, asking nothing to move or focus.
     async fn confirm(&mut self, resolved: Resolved) -> Result<()>;
+    /// Carry out `action` on the element `reference` names through
+    /// Accessibility alone, in window `window` when the batch names one:
+    /// found again and proven just before the request that acts, with
+    /// nothing posted and nothing asked to take focus.
+    async fn act(
+        &mut self,
+        reference: Reference,
+        action: ElementAction,
+        window: Option<i64>,
+    ) -> Result<Acted>;
     /// Carry out one action through posted events or a Dock AXPress.
     async fn perform(&mut self, action: Action) -> Result<()>;
     /// Events posted or AX presses acknowledged so far.
@@ -141,6 +151,35 @@ impl Perform for Engine {
         .await
     }
 
+    /// The whole action runs on one blocking thread, which makes and keeps
+    /// every object it asks or acts on, with the engine locked meanwhile.
+    /// Its guard reads the gate anew at each step and holds no lock across
+    /// a request, so a cancellation never waits for one. The found app is
+    /// the batch's target through its last post, as for a referenced click.
+    async fn act(
+        &mut self,
+        reference: Reference,
+        action: ElementAction,
+        window: Option<i64>,
+    ) -> Result<Acted> {
+        self.check()?;
+        let looks = self.looks.clone();
+        let epoch = self.epoch.clone();
+        let named = self.target;
+        let guard = self.preparation_guard();
+        // A worker lost after the request that acts leaves its outcome
+        // unknown, as `preparation_worker` says.
+        let acted = preparation_worker(move || {
+            ax::act_on(&looks, reference, &action, &epoch, named, window, &guard)
+        })
+        .await?;
+        if acted.changed {
+            self.posted += 1;
+        }
+        self.target = Some(acted.instance);
+        Ok(acted)
+    }
+
     async fn perform(&mut self, action: Action) -> Result<()> {
         Engine::perform(self, action).await
     }
@@ -183,24 +222,34 @@ pub(super) async fn checked_preparation<T: Send + 'static>(
     }
 }
 
+/// What a batch came to: the role of the field its checks named, when every
+/// check of it found the same, and what its action on an element through
+/// Accessibility came to, when it had one.
+pub(super) struct Done {
+    pub(super) field: Option<&'static str>,
+    pub(super) acted: Option<Acted>,
+}
+
 /// Carry out `actions` in order on `engine`, which the caller holds
 /// locked, each checked against `expect` just before it starts: a key
 /// after the batch's first against the app alone, since an earlier key
 /// (tab, return, cmd+w) may move the window or field on purpose, and a
 /// referenced click against what its element, found again first, must
-/// reach. On the first failure, revoke `gate`, release what is held and
-/// return the [`Failure`]. Once all are done, the role of the field
-/// `expect` names, when every check of it found the same.
+/// reach. An action on an element through Accessibility finds and proves
+/// its own element, in the app and window `expect` names. On the first
+/// failure, revoke `gate`, release what is held and return the
+/// [`Failure`].
 pub(super) async fn run(
     engine: &mut impl Perform,
     gate: &Gate,
     actions: Vec<Action>,
     expect: Option<&Expect>,
-) -> std::result::Result<Option<&'static str>, Box<Failure>> {
+) -> std::result::Result<Done, Box<Failure>> {
     let mut budget = focus::PREPARE_BUDGET;
     let later = expect.map(Expect::app_only);
     let mut pressed = false;
     let mut roles = BTreeSet::new();
+    let mut acted = None;
 
     for (performed, action) in actions.into_iter().enumerate() {
         let before = engine.posted();
@@ -213,14 +262,32 @@ pub(super) async fn run(
             | Action::Scroll { .. }
             | Action::Type { .. }
             | Action::Wait { .. }
-            | Action::Reference { .. } => false,
+            | Action::Reference { .. }
+            | Action::Press { .. }
+            | Action::SetValue { .. }
+            | Action::Check { .. }
+            | Action::Uncheck { .. }
+            | Action::Pick { .. }
+            | Action::Expand { .. }
+            | Action::Collapse { .. }
+            | Action::ScrollIntoView { .. } => false,
         };
         let continuation = key && pressed;
         let expected = if continuation { later.as_ref() } else { expect };
         pressed |= key;
         let prepare = !continuation && !engine.held_input();
 
-        match step(engine, action, expected, prepare, &mut budget).await {
+        let outcome = match action.element_action() {
+            Some((reference, element)) => engine
+                .act(reference, element, expected.and_then(Expect::window))
+                .await
+                .map(|done| {
+                    acted = Some(done);
+                    None
+                }),
+            None => step(engine, action, expected, prepare, &mut budget).await,
+        };
+        match outcome {
             Ok(role) => roles.extend(role),
             Err(error) => {
                 // Only a poisoned gate fails this, and that refuses every later grant.
@@ -231,10 +298,11 @@ pub(super) async fn run(
     }
 
     let mut roles = roles.into_iter();
-    Ok(match (roles.next(), roles.next()) {
+    let field = match (roles.next(), roles.next()) {
         (Some(role), None) => Some(role),
         _ => None,
-    })
+    };
+    Ok(Done { field, acted })
 }
 
 /// One action of a batch, checked against `expected` (when it names an app)

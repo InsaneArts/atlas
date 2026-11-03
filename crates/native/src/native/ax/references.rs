@@ -129,9 +129,23 @@ pub(in crate::native) struct Read {
 /// and the element followed by each element it was reached from, nearest
 /// first.
 #[derive(Clone)]
-struct Found {
+pub(super) struct Found {
     instance: Instance,
     chain: Vec<Seen>,
+}
+
+impl Found {
+    /// The process the element is in.
+    pub(super) fn instance(&self) -> Instance {
+        self.instance
+    }
+}
+
+/// A referenced element met again where its look saw it: what it reports
+/// now and the object it is now, and what an action on it must reach.
+pub(super) struct Met {
+    pub(super) element: Retraced,
+    pub(super) expect: Expect,
 }
 
 /// Where a referenced element is clicked and what the click must reach,
@@ -299,10 +313,7 @@ pub(in crate::native) fn resolve(
     epoch: &InputEpoch,
     named: Option<Instance>,
 ) -> Result<Resolved> {
-    let found = looks.find(reference, epoch, Instant::now())?;
-    if named.is_some_and(|named| named != found.instance) {
-        return Err(stale("That look is of another app than the one named"));
-    }
+    let found = kept(looks, reference, epoch, named)?;
     let (x, y, expect) = locate(&found, epoch)?;
     Ok(Resolved {
         x,
@@ -333,18 +344,66 @@ pub(in crate::native) fn confirm(resolved: &Resolved, epoch: &InputEpoch) -> Res
     Ok(())
 }
 
-/// Where the element `found` names is clicked now and what the click must
-/// reach: its app the same process, and its path from where a walk starts
-/// read again within [`RESOLVE`], each element on it proven the same as the
-/// look saw it.
+/// What the look `reference` names keeps of its element: the look still
+/// kept, taken in `epoch`, and of the app `named` when a batch names one.
 ///
 /// # Errors
 ///
-/// Refuses, with nothing sent, an app that quit or was replaced, an element
-/// no longer where the look saw it, read too slowly, changed or not proven
-/// the same, a disabled control, and an element off screen or whose window
-/// cannot be told.
-fn locate(found: &Found, epoch: &InputEpoch) -> Result<(f64, f64, Expect)> {
+/// Refuses, with nothing sent, a look no longer kept, of another service,
+/// epoch or app, and an index it has no element at.
+pub(super) fn kept(
+    looks: &Looks,
+    reference: Reference,
+    epoch: &InputEpoch,
+    named: Option<Instance>,
+) -> Result<Found> {
+    let found = looks.find(reference, epoch, Instant::now())?;
+    if named.is_some_and(|named| named != found.instance) {
+        return Err(stale("That look is of another app than the one named"));
+    }
+    Ok(found)
+}
+
+/// The element `found` names, met again within `time` where its look saw
+/// it, with what an action on it must reach: its own window, or the app
+/// alone for a menu's item. Nothing is asked to move or take focus.
+///
+/// # Errors
+///
+/// Refuses, with nothing sent, an element [`again`] refuses and one whose
+/// window cannot be told.
+pub(super) fn meet(found: &Found, time: Duration) -> Result<Met> {
+    let element = again(found, time)?;
+    // Only a menu bar title is told by its point, and it always has a
+    // frame: no point is one that lies on no menu bar.
+    let point = element
+        .element
+        .frame
+        .as_ref()
+        .map_or((f64::NAN, f64::NAN), |frame| {
+            click_point(element.element.role.as_deref(), frame)
+        });
+    let windows = native::windows::windows()?;
+    let expect = element_check(
+        &element.element,
+        &windows,
+        Expect::from_instance(found.instance)?,
+        point,
+    )
+    .map_err(|error| error.with("next", json!(LOOK_AGAIN)))?;
+    Ok(Met { element, expect })
+}
+
+/// The element `found` names, read again: its app the same process, and its
+/// path from where a walk starts read again within `time`, each element on
+/// it proven the same as the look saw it.
+///
+/// # Errors
+///
+/// Refuses, with nothing sent, an app that quit or was replaced, and an
+/// element no longer where the look saw it, read too slowly, changed or not
+/// proven the same.
+fn again(found: &Found, time: Duration) -> Result<Retraced> {
     let replaced = |cause: Error| stale("The app it is in quit or was replaced").with_source(cause);
     check_application(Some(found.instance)).map_err(replaced)?;
     let path: Vec<&AXUIElement> = found
@@ -354,15 +413,15 @@ fn locate(found: &Found, epoch: &InputEpoch) -> Result<(f64, f64, Expect)> {
         .map(|seen| &*seen.object.0)
         .collect();
     let started = Instant::now();
-    let retraced = retrace(found.instance.pid, &path, RESOLVE)?;
+    let retraced = retrace(found.instance.pid, &path, time)?;
     check_application(Some(found.instance)).map_err(replaced)?;
     // A read that ended late may describe an app that has moved on since.
-    if started.elapsed() > RESOLVE {
+    if started.elapsed() > time {
         return Err(stale(
             "The app answered too slowly to find the element again",
         ));
     }
-    let retraced = retraced
+    let mut retraced = retraced
         .filter(|retraced| retraced.len() == found.chain.len())
         .ok_or_else(|| stale("The element is no longer where that look saw it"))?;
     if !found
@@ -374,8 +433,19 @@ fn locate(found: &Found, epoch: &InputEpoch) -> Result<(f64, f64, Expect)> {
     {
         return Err(stale("The element changed since that look"));
     }
+    retraced.pop().ok_or_else(unavailable)
+}
 
-    let element = &retraced.last().ok_or_else(unavailable)?.element;
+/// Where the element `found` names is clicked now and what the click must
+/// reach: met again within [`RESOLVE`] as [`again`] meets it.
+///
+/// # Errors
+///
+/// Refuses, with nothing sent, an element [`again`] refuses, a disabled
+/// control, and an element off screen or whose window cannot be told.
+fn locate(found: &Found, epoch: &InputEpoch) -> Result<(f64, f64, Expect)> {
+    let met = again(found, RESOLVE)?;
+    let element = &met.element;
     if element.enabled == Some(false) {
         return Err(Error::new(
             Code::Input,

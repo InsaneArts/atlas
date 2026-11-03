@@ -63,11 +63,14 @@ pub(super) struct Traced {
 }
 
 /// One element on a path read again, the identifying attributes that read
-/// left unproven, and those whose getter failed.
+/// left unproven and those whose getter failed, and the object it was read
+/// from: made on this thread from the app's own element, so it may be asked
+/// and acted on here.
 pub(super) struct Retraced {
     pub(super) element: Element,
     pub(super) unproven: Vec<&'static str>,
     pub(super) refused: Vec<&'static str>,
+    pub(super) object: CFRetained<AXUIElement>,
 }
 
 /// One traversal's snapshot and, beside each of its elements by index, the
@@ -242,6 +245,7 @@ pub(super) fn retrace(
             element,
             unproven: std::mem::take(&mut scan.unproven),
             refused: std::mem::take(&mut scan.refused),
+            object: visit.element.clone(),
         });
 
         let Some(next) = next else { break };

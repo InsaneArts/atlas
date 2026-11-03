@@ -259,6 +259,28 @@ fn a_replaced_or_unnamed_process_is_refused_before_its_app_is_read_again() {
     );
 }
 
+/// An element an action names is kept only for the app a batch names, and
+/// a replaced process is refused before anything of it is read again.
+#[test]
+fn an_element_to_act_on_is_kept_for_its_own_app_and_met_only_while_it_runs() {
+    let looks = Looks::default();
+    let me = i32::try_from(std::process::id()).unwrap();
+    let reused = Instance::new(me, [1, 0]);
+    let (look, _) = looks
+        .keep(epoch(), chained(reused, 1, 1), Instant::now())
+        .unwrap();
+    assert_stale(
+        &kept(&looks, at(look, 0), &epoch(), Some(editor()))
+            .err()
+            .unwrap(),
+    );
+    let found = kept(&looks, at(look, 0), &epoch(), Some(reused)).unwrap();
+    assert_eq!(found.instance(), reused);
+    let error = meet(&found, RESOLVE).err().unwrap();
+    assert_stale(&error);
+    assert_eq!(error.error, "The app it is in quit or was replaced");
+}
+
 /// An app that shows no readable window proves no path into it, so no
 /// element of it is found again.
 #[test]
@@ -277,6 +299,7 @@ fn again(element: Element, unproven: &[&'static str]) -> Retraced {
         element,
         unproven: unproven.to_vec(),
         refused: Vec::new(),
+        object: object(1),
     }
 }
 

@@ -744,11 +744,20 @@ impl Engine {
             }
             Action::Wait { ms } => self.delay(Duration::from_millis(ms.into())).await?,
             // A batch finds a referenced element again and clicks it as a
-            // click; one that reaches here was never found, so nothing posts.
-            Action::Reference { .. } => {
+            // click, or acts on it through Accessibility; one that reaches
+            // here was never found, so nothing posts.
+            Action::Reference { .. }
+            | Action::Press { .. }
+            | Action::SetValue { .. }
+            | Action::Check { .. }
+            | Action::Uncheck { .. }
+            | Action::Pick { .. }
+            | Action::Expand { .. }
+            | Action::Collapse { .. }
+            | Action::ScrollIntoView { .. } => {
                 return Err(Error::new(
                     Code::Input,
-                    "A referenced element must be found again before it is clicked",
+                    "A referenced element must be found again before it is acted on",
                 ));
             }
         }

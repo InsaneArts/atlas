@@ -7,10 +7,11 @@
 //! start. An element's attributes are asked for in one request. A scan that
 //! hit a limit or a communication failure reports itself incomplete. The
 //! input service keeps each look's objects so a reference names one of
-//! them alone.
+//! them alone, and acts on one through Accessibility alone.
 use atlas_core::screen::elements::ABSENT;
 use objc2_application_services::AXError;
 
+mod actions;
 mod batch;
 mod bring;
 mod ffi;
@@ -25,6 +26,7 @@ mod tree;
 #[cfg(test)]
 pub(crate) use atlas_core::screen::elements::{Element, Limits};
 pub(crate) use atlas_core::screen::geometry::Bounds;
+pub(super) use actions::{Acted, act_on};
 pub(super) use bring::{bring, check_application, described, target_application, title_bar};
 pub(super) use ffi::act;
 pub(super) use keyboard::{
