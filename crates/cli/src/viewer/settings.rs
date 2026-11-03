@@ -17,8 +17,16 @@ impl Viewer {
     /// (Getting Started set one up, say), the viewer serves that one without
     /// a restart. Control held in the previous helper ends there first, in a
     /// task of its own that is waited on for a moment; while control is
-    /// still held (or being taken) the move waits for a later read.
+    /// still held (or being taken) the move waits for a later read. The
+    /// record follows the helper served on every read, so a move that failed
+    /// is tried again.
     pub(super) async fn follow_settings(self: &Arc<Self>) {
+        self.apply_settings().await;
+        self.move_record();
+    }
+
+    /// Serve what the settings file names, when its text changed.
+    async fn apply_settings(self: &Arc<Self>) {
         let Some(path) = self.settings.clone() else {
             return;
         };
@@ -68,12 +76,11 @@ impl Viewer {
 
         self.frames.lock().await.items.clear();
         *unpoisoned(&self.input_started) = None;
-        self.move_record();
     }
 
     /// The settings name another output folder for the same helper: serve
     /// it with `config` (whose file reads `text`) in place of `current`,
-    /// control and all, and move the record there.
+    /// control and all.
     async fn follow_output(&self, current: &Arc<Client>, config: Config, text: Vec<u8>) {
         let mut next = Client::clone(current);
         next.config = config;
@@ -94,25 +101,24 @@ impl Viewer {
             *client = next;
             *unpoisoned(&self.settings_text) = Some(text);
         }
-
-        self.move_record();
     }
 
-    /// Keep this viewer's record in the output folder the settings name
-    /// now, so commands reading them still find the menu bar.
+    /// Keep this viewer's record in the output folder of the helper served
+    /// now, so commands reading the settings still find the menu bar. The
+    /// kept record is where it was last written; it changes only once the
+    /// new one is written.
     fn move_record(&self) {
-        let client = self.client();
+        // Moves take the record first and the client inside it, so the last
+        // one to run writes where the newest client says.
         let mut kept = unpoisoned(&self.record);
         let Some((path, record)) = kept.clone() else {
             return;
         };
 
-        let Ok(output) = client.output_dir() else {
-            return;
-        };
-
-        let moved = output.join(MENUBAR_RECORD);
-        if moved == path {
+        // Every read comes here: the folder is checked only to move.
+        let client = self.client();
+        let moved = client.config.output_dir.join(MENUBAR_RECORD);
+        if moved == path || client.output_dir().is_err() {
             return;
         }
 
