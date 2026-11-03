@@ -502,6 +502,12 @@ impl Controller {
         turns::candidates(&self.waiting)
     }
 
+    /// [`Controller::waiting_candidates`] as read at `now`.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn waiting_candidates_at(&self, now: std::time::SystemTime) -> Vec<Note> {
+        turns::candidates_at(&self.waiting, now)
+    }
+
     pub fn running_candidates(&self) -> Vec<Note> {
         let marked = self.commands();
         let mut notes: Vec<_> = by_generation::read::<ByGeneration<Note>>(&self.running)

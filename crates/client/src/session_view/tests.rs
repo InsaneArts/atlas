@@ -743,6 +743,9 @@ fn showing_a_session_samples_each_bounded_waiter_once_however_often_it_is_shown(
         .create(&waiting)
         .unwrap();
     let now_ms = now_ms();
+    // Every note is touched at `at` and read then, however long writing
+    // them takes, so each is still fresh.
+    let at = std::time::UNIX_EPOCH + std::time::Duration::from_millis(now_ms);
     for index in 0..200 {
         let note = Note {
             session: Some(own.key().clone()),
@@ -752,13 +755,16 @@ fn showing_a_session_samples_each_bounded_waiter_once_however_often_it_is_shown(
             process: Instance::new(i32::MAX - index, [1, 0]),
             since: now_ms,
         };
-        fs::write(
-            std::path::Path::new(&waiting).join(format!("{index:016x}.json")),
-            serde_json::to_vec(&note).unwrap(),
-        )
-        .unwrap();
+        let path = std::path::Path::new(&waiting).join(format!("{index:016x}.json"));
+        fs::write(&path, serde_json::to_vec(&note).unwrap()).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
     }
-    let candidates = controller.waiting_candidates();
+    let candidates = controller.waiting_candidates_at(at);
     assert_eq!(candidates.len(), BUDGET);
     let (_, reads) = atlas_core::process::measure_states(|| {
         let processes = Snapshot::sample(candidates.iter().map(|note| note.process), |instance| {
