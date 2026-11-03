@@ -83,7 +83,7 @@ with an Atlas command still running (see Limits).
 After each action:
 
 1. Read the reply. `ok` means delivered, not that the app reacted;
-   `verification: matched` means an element reads as asked.
+   `verification: matched` proves an element reads as asked: skip step 2.
 2. Read apps and web pages by name first: `atlas elements --app A --name X`
    for text, a control, its value and state; `atlas wait --app A` (or `--title T`,
    `--gone`) for a window.
