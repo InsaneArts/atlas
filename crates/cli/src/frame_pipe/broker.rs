@@ -90,6 +90,9 @@ struct Broker {
     gate: Gate,
     source: source::Handle,
     latest: Answer,
+    /// The newest demand made of the source; one is under way while the
+    /// latest answer is older.
+    wanted: u64,
     profile: Option<Profile>,
     /// The session the current profile's pictures show.
     epoch: Option<Epoch>,
@@ -121,6 +124,7 @@ pub(crate) async fn run(
         gate,
         source,
         latest,
+        wanted: 0,
         profile: None,
         epoch: None,
         witness,
@@ -418,7 +422,8 @@ impl Broker {
             observer.waiting = None;
             observer.sent = None;
         }
-        observer.subscribing = Some((request, self.source.want()));
+        self.wanted = self.source.want();
+        observer.subscribing = Some((request, self.wanted));
         self.answered(now);
         Ok(())
     }
@@ -446,7 +451,10 @@ impl Broker {
             observer.subscription.retire(credit.credit_id);
             return self.retire(connection, request, credit.credit_id, Reason::WrongGeometry);
         }
-        let demand = (credit.barrier != Barrier::Ordinary).then(|| self.source.want());
+        let demand = (credit.barrier != Barrier::Ordinary).then(|| {
+            self.wanted = self.source.want();
+            self.wanted
+        });
         observer.waiting = Some(Waiting {
             credit,
             request,
@@ -638,8 +646,8 @@ impl Broker {
     }
 
     /// Serve `control`'s waiting credit with the latest picture when it is
-    /// fresh, new to the observer and answers the credit's demand; else ask
-    /// the source for another.
+    /// fresh, new to the observer and answers the credit's demand; else
+    /// wait for the next one.
     fn serve(&mut self, control: Id, now: Instant) {
         let Some(profile) = self.profile else { return };
         let candidate = match &self.latest.latest {
@@ -662,8 +670,10 @@ impl Broker {
         let last = observer.last_sequence;
         let Some(picture) = candidate.filter(|picture| answered && picture.sequence.get() > last)
         else {
-            if answered {
-                waiting.demand = Some(self.source.want());
+            // Wait for the acquisition under way, or start one: an ordinary
+            // credit takes the next picture, a barrier one has its own demand.
+            if self.latest.demand >= self.wanted {
+                self.wanted = self.source.want();
             }
             return;
         };
@@ -736,7 +746,9 @@ impl Broker {
         }
         // The next picture is read while this one travels, so the observer's
         // next credit finds it fresh; the source's cadence bounds the rate.
-        self.source.want();
+        if self.latest.demand >= self.wanted {
+            self.wanted = self.source.want();
+        }
     }
 
     /// Expire unserved credits, end deliveries left unsettled and lanes
