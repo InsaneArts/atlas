@@ -51,7 +51,7 @@ impl Jobs {
     pub fn watch_once(&self, forced: Option<How>) -> Result<()> {
         let mut state = self.state()?;
         let now = now_ms();
-        let records = state.store.records();
+        let records = state.inventory().found;
         let processes = self.processes();
         for read in records {
             let Found::Record(mut record) = read else {
@@ -70,8 +70,8 @@ impl Jobs {
         if state
             .pruned
             .is_none_or(|pruned| pruned.elapsed() >= PRUNE_EVERY)
+            && state.store.prune(now)
         {
-            state.store.prune(now);
             state.pruned = Some(Instant::now());
         }
         Ok(())
@@ -87,10 +87,19 @@ impl Jobs {
     }
 
     /// Count again, from the records, the jobs that may still run and
-    /// whether one is stopping.
+    /// whether one is stopping, and whether the records could all be read.
+    /// The jobs found are known from then on; one a scan that could not
+    /// account for every record left out stays known.
     pub(super) fn count(&self, state: &mut State) {
         let (mut running, mut stopping, mut unresolved) = (0, false, 0);
-        for read in state.store.records() {
+        let scan = state.inventory();
+        let found = scan.found.iter().map(|read| read.id().clone());
+        if scan.complete {
+            state.known = found.collect();
+        } else {
+            state.known.extend(found);
+        }
+        for read in scan.found {
             match read {
                 // A job still launching is counted as launching.
                 Found::Record(record) if state.launching.contains(&record.id) => {}
@@ -105,6 +114,7 @@ impl Jobs {
         state.running = running;
         state.stopping = stopping;
         state.unresolved = unresolved;
+        state.complete = scan.complete;
     }
 
     /// Look at one job: stop a running one when it must stop (as `forced`
@@ -369,7 +379,7 @@ impl Jobs {
     pub(super) fn adopt(&self) -> Result<()> {
         let mut state = self.state()?;
         let processes = self.processes();
-        for read in state.store.records() {
+        for read in state.inventory().found {
             let Found::Record(mut record) = read else {
                 continue;
             };

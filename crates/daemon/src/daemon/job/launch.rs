@@ -503,11 +503,19 @@ impl Jobs {
     }
 }
 
-/// Refuse a start past the limit on jobs running, in the helper or for `task`.
+/// Refuse a start past the limit on jobs running, in the helper or for `task`,
+/// or when the records cannot all be read, so the jobs running are not known.
 fn within_limits(state: &State, task: Option<&Key>) -> std::result::Result<(), Value> {
-    let records = state.store.records();
+    let scan = state.inventory();
+    if !scan.complete {
+        return Err(JobFailure::new(
+            JobRefusal::Unobserved,
+            "Atlas could not read every background job record, so it started no job; try again",
+        )
+        .into_value());
+    }
     let running = || {
-        records
+        scan.found
             .iter()
             .filter_map(|read| match read {
                 Found::Record(record) => Some(record),
