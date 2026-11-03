@@ -3,7 +3,7 @@
 //! what failed, what was cut and why the traversal is incomplete.
 use super::{
     INCOMPLETE, absent,
-    batch::{BATCH, Batch, Slot, Source},
+    batch::{BATCH, Batch, Source},
     ffi,
     text::{bounded_string, getter_failed, prefix_range, prefix_text},
 };
@@ -118,12 +118,11 @@ impl Scan {
     /// would be.
     fn take(&mut self, batch: &Batch, attribute: &str) -> Option<CFRetained<CFType>> {
         match batch.slot(attribute) {
-            Some(Slot::Value(value)) => Some(value.clone()),
-            Some(Slot::Failed(status)) => {
+            Some(Ok(value)) => value.clone(),
+            Some(Err(status)) => {
                 self.failed(*status, attribute);
                 None
             }
-            Some(Slot::Empty | Slot::Unread) => None,
             None => {
                 self.stop(Stop::Unread);
                 None

@@ -1,5 +1,5 @@
 use super::*;
-use crate::native::ax::batch::{BATCH, Slot};
+use crate::native::ax::batch::BATCH;
 use atlas_core::screen::select::ElementFilter;
 use objc2_core_foundation::{CFBoolean, CFNumber, CFString, Type};
 
@@ -10,10 +10,10 @@ fn a_malformed_subrole_withholds_the_value_without_reaching_either_getter() {
             slots: BATCH
                 .iter()
                 .map(|name| match *name {
-                    "AXRole" => Slot::Value(CFString::from_static_str("AXTextField").into()),
-                    "AXSubrole" => Slot::Value(CFBoolean::new(true).retain().into()),
-                    "AXNumberOfCharacters" => Slot::Value(CFNumber::new_isize(characters).into()),
-                    _ => Slot::Empty,
+                    "AXRole" => Ok(Some(CFString::from_static_str("AXTextField").into())),
+                    "AXSubrole" => Ok(Some(CFBoolean::new(true).retain().into())),
+                    "AXNumberOfCharacters" => Ok(Some(CFNumber::new_isize(characters).into())),
+                    _ => Ok(None),
                 })
                 .collect(),
             stalled: false,
@@ -37,9 +37,9 @@ fn a_withheld_static_text_value_remains_a_possible_duplicate_without_a_getter() 
         slots: BATCH
             .iter()
             .map(|name| match *name {
-                "AXRole" => Slot::Value(CFString::from_static_str("AXStaticText").into()),
-                "AXSubrole" => Slot::Failed(AXError::Failure),
-                _ => Slot::Empty,
+                "AXRole" => Ok(Some(CFString::from_static_str("AXStaticText").into())),
+                "AXSubrole" => Err(AXError::Failure),
+                _ => Ok(None),
             })
             .collect(),
         stalled: false,

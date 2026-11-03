@@ -26,16 +26,10 @@ pub(super) const BATCH: [&str; 12] = [
     "AXNumberOfCharacters",
 ];
 
-/// One attribute's answer in a batched read.
-pub(super) enum Slot {
-    Value(CFRetained<CFType>),
-    /// The read failed with this error.
-    Failed(AXError),
-    /// The element has no value for it.
-    Empty,
-    /// Not asked: the scan had closed, or the reply could not be read.
-    Unread,
-}
+/// One attribute's answer in a batched read: its value, the error the read
+/// failed with, or none when the element has no value for it or it was not
+/// asked (the scan had closed, or the reply could not be read).
+pub(super) type Slot = Result<Option<CFRetained<CFType>>, AXError>;
 
 /// What a batched read returned in one slot: an error value is the error
 /// it holds (one that cannot be read, or that claims success, is taken as
@@ -45,14 +39,9 @@ pub(super) fn slot(value: CFRetained<CFType>) -> Slot {
         && ffi::kind(answer) == AXValueType::AXError
     {
         let code = ffi::error(answer).filter(|code| *code != AXError::Success);
-        return Slot::Failed(code.unwrap_or(AXError::Failure));
+        return Err(code.unwrap_or(AXError::Failure));
     }
-
-    if value.downcast_ref::<CFNull>().is_some() {
-        Slot::Empty
-    } else {
-        Slot::Value(value)
-    }
+    Ok(value.downcast_ref::<CFNull>().is_none().then_some(value))
 }
 
 /// The attributes in `BATCH` of one element, read in one request.
@@ -66,7 +55,7 @@ pub(super) struct Batch {
 impl Batch {
     pub(super) fn unread() -> Self {
         Self {
-            slots: BATCH.iter().map(|_| Slot::Unread).collect(),
+            slots: BATCH.iter().map(|_| Ok(None)).collect(),
             stalled: false,
         }
     }
@@ -75,7 +64,7 @@ impl Batch {
     /// leaves the scan incomplete.
     pub(super) fn failed(status: AXError) -> Self {
         Self {
-            slots: BATCH.iter().map(|_| Slot::Failed(status)).collect(),
+            slots: BATCH.iter().map(|_| Err(status)).collect(),
             stalled: true,
         }
     }
@@ -99,10 +88,8 @@ impl Batch {
     /// How many UTF-16 units the element's text holds, when it said. Never
     /// recorded as a failure: most elements hold no text.
     pub(super) fn characters(&self) -> Option<CFIndex> {
-        match self.slot("AXNumberOfCharacters")? {
-            Slot::Value(value) => value.downcast_ref::<CFNumber>()?.as_isize(),
-            Slot::Failed(_) | Slot::Empty | Slot::Unread => None,
-        }
+        let value = self.slot("AXNumberOfCharacters")?.as_ref().ok()?.as_ref()?;
+        value.downcast_ref::<CFNumber>()?.as_isize()
     }
 
     /// How many units a text holds that is read only from its start: one
@@ -114,7 +101,7 @@ impl Batch {
         let secure = subrole == Some("AXSecureTextField")
             || matches!(
                 self.slot("AXSubrole"),
-                Some(Slot::Failed(status)) if !absent(*status)
+                Some(Err(status)) if !absent(*status)
             );
         if !text || secure {
             return None;

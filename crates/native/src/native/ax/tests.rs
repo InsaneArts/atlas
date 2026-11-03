@@ -483,10 +483,9 @@ fn recorded(scan: &Scan) -> impl PartialEq + std::fmt::Debug + use<> {
 /// What one slot holds, in words.
 fn held(slot: &Slot) -> String {
     match slot {
-        Slot::Value(_) => "value".into(),
-        Slot::Failed(status) => format!("failed {}", status.0),
-        Slot::Empty => "empty".into(),
-        Slot::Unread => "unread".into(),
+        Ok(Some(_)) => "value".into(),
+        Err(status) => format!("failed {}", status.0),
+        Ok(None) => "empty".into(),
     }
 }
 
@@ -625,7 +624,7 @@ fn a_closed_scan_sends_no_batch_and_takes_nothing() {
     scan.deadline = Instant::now();
 
     let batch = scan.batch(&system).unwrap();
-    assert!(batch.slots.iter().all(|slot| matches!(slot, Slot::Unread)));
+    assert!(batch.slots.iter().all(|slot| matches!(slot, Ok(None))));
     let from = Source::Batch(&batch);
     assert_eq!(scan.text(from, "AXRole"), None);
     assert_eq!(scan.frame(from), None);
@@ -641,7 +640,7 @@ fn a_batch_of_the_wrong_length_leaves_the_scan_incomplete() {
     for reply in [Some(&*short), None] {
         let mut scan = open_scan();
         let batch = scan.received(AXError::Success, reply).unwrap();
-        assert!(batch.slots.iter().all(|slot| matches!(slot, Slot::Unread)));
+        assert!(batch.slots.iter().all(|slot| matches!(slot, Ok(None))));
         assert_eq!(scan.text(Source::Batch(&batch), "AXRole"), None);
 
         assert_eq!(
@@ -752,7 +751,7 @@ fn a_batch_that_could_not_complete_stalls_its_element() {
             batch
                 .slots
                 .iter()
-                .all(|slot| matches!(slot, Slot::Failed(failed) if *failed == status))
+                .all(|slot| matches!(slot, Err(failed) if *failed == status))
         );
         assert!(scan.errors.is_empty(), "nothing is recorded until taken");
     }
