@@ -5,7 +5,7 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio},
+    process::{Child, Command, ExitStatus, Output, Stdio},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -17,7 +17,7 @@ struct Tools {
     groups: Vec<i32>,
     /// Kept, never reaped elsewhere, so their groups stay safe to signal:
     /// a group stays listed while its leader is held here.
-    held: Vec<Box<dyn Leader>>,
+    held: Vec<Child>,
     stopping: bool,
 }
 
@@ -98,60 +98,67 @@ fn start(tools: &'static Mutex<Tools>, command: &mut Command) -> Result<Tool> {
     Ok(Tool {
         leader: child,
         running: Running { tools, group },
+        #[cfg(test)]
+        faults: tests::Faults::default(),
     })
-}
-
-/// What supervising a tool asks of the process that leads its group.
-trait Leader: Send {
-    /// Its output streams, each taken once.
-    fn pipes(&mut self) -> (Option<ChildStdout>, Option<ChildStderr>);
-    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>>;
-    fn wait(&mut self) -> std::io::Result<ExitStatus>;
-    /// Kill everything in its process group.
-    fn kill_group(&mut self) -> nix::Result<()>;
-    /// Kill the leader itself, through its own handle, wherever its group is.
-    fn kill(&mut self) -> std::io::Result<()>;
-}
-
-impl Leader for Child {
-    fn pipes(&mut self) -> (Option<ChildStdout>, Option<ChildStderr>) {
-        (self.stdout.take(), self.stderr.take())
-    }
-
-    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
-        Child::try_wait(self)
-    }
-
-    fn wait(&mut self) -> std::io::Result<ExitStatus> {
-        Child::wait(self)
-    }
-
-    fn kill_group(&mut self) -> nix::Result<()> {
-        let group = i32::try_from(self.id()).map_err(|_| nix::errno::Errno::ESRCH)?;
-        nix::sys::signal::killpg(
-            nix::unistd::Pid::from_raw(group),
-            nix::sys::signal::Signal::SIGKILL,
-        )
-    }
-
-    fn kill(&mut self) -> std::io::Result<()> {
-        Child::kill(self)
-    }
 }
 
 /// A tool Atlas started: the process leading its group and the group's
 /// listing, owned together.
-struct Tool<L: Leader = Child> {
-    leader: L,
+struct Tool {
+    leader: Child,
     running: Running,
+    /// Failures a test makes the leader's waits and signals report.
+    #[cfg(test)]
+    faults: tests::Faults,
 }
 
-impl<L: Leader + 'static> Tool<L> {
+impl Tool {
+    /// Whether the leader has exited, without waiting.
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        #[cfg(test)]
+        if let Some(error) = self.faults.try_wait() {
+            return Err(error);
+        }
+        self.leader.try_wait()
+    }
+
+    /// Wait for the leader to exit, and reap it.
+    fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        #[cfg(test)]
+        if let Some(error) = self.faults.wait() {
+            return Err(error);
+        }
+        self.leader.wait()
+    }
+
+    /// Kill everything in the leader's process group, then the leader through
+    /// its own handle, as a leader that left its group is no longer in it.
+    /// Neither finding nothing to signal is a failure: the leader is
+    /// unreaped, so its process ID is still its own, and it has exited.
+    fn kill(&mut self) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(error) = self.faults.signal() {
+            return Err(error);
+        }
+        let group = nix::unistd::Pid::from_raw(
+            i32::try_from(self.leader.id()).map_err(std::io::Error::other)?,
+        );
+        match nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL) {
+            Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+            Err(errno) => return Err(errno.into()),
+        }
+        match self.leader.kill() {
+            Err(error) if error.raw_os_error() == Some(nix::errno::Errno::ESRCH as i32) => Ok(()),
+            killed => killed,
+        }
+    }
+
     /// The leader's exit status once it exits, or None at `deadline`; a wait
     /// that is interrupted is asked again.
     fn exited_by(&mut self, deadline: Instant) -> std::io::Result<Option<ExitStatus>> {
         loop {
-            match self.leader.try_wait() {
+            match self.try_wait() {
                 Ok(Some(status)) => return Ok(Some(status)),
                 Ok(None) if Instant::now() >= deadline => return Ok(None),
                 Ok(None) => std::thread::sleep(Duration::from_millis(20)),
@@ -161,33 +168,20 @@ impl<L: Leader + 'static> Tool<L> {
         }
     }
 
-    /// Kill the tool's group, then its leader through its own handle, as a
-    /// leader that left its group is no longer in it, and reap the leader.
-    /// The group is unlisted once the leader is reaped, or once something
-    /// else reaped it: its process ID may then be another's, so it is never
-    /// signalled again. When a signal or the reap fails otherwise, the leader
-    /// stays unreaped, so its group stays listed for a stop to reach and the
-    /// leader is held in the list.
+    /// Kill the tool (see [`Tool::kill`]) and reap its leader. The group is
+    /// unlisted once the leader is reaped, or once something else reaped it:
+    /// its process ID may then be another's, so it is never signalled again.
+    /// When a signal or the reap fails otherwise, the leader stays unreaped,
+    /// so its group stays listed for a stop to reach and the leader is held
+    /// in the list.
     fn stop(mut self) -> std::io::Result<()> {
-        match self.leader.kill_group() {
-            Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
-            Err(errno) => {
-                self.hold();
-                return Err(errno.into());
-            }
-        }
-        match self.leader.kill() {
-            Ok(()) => {}
-            // Unreaped, so its process ID is still its own: it has exited.
-            Err(error) if error.raw_os_error() == Some(nix::errno::Errno::ESRCH as i32) => {}
-            Err(error) => {
-                self.hold();
-                return Err(error);
-            }
+        if let Err(error) = self.kill() {
+            self.hold();
+            return Err(error);
         }
 
         loop {
-            match self.leader.wait() {
+            match self.wait() {
                 Ok(_) => return Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(error) if lost(&error) => return Err(error),
@@ -204,8 +198,9 @@ impl<L: Leader + 'static> Tool<L> {
         let Self {
             leader,
             mut running,
+            ..
         } = self;
-        locked(running.tools).held.push(Box::new(leader));
+        locked(running.tools).held.push(leader);
         running.group = None;
     }
 }
@@ -425,7 +420,7 @@ fn shell_path() -> &'static [PathBuf] {
             return Vec::new();
         };
 
-        let output = collect(tool.leader.pipes().0);
+        let output = collect(tool.leader.stdout.take());
         match tool.exited_by(Instant::now() + Duration::from_secs(3)) {
             Ok(Some(_)) => {}
             // Something else reaped it: dropping the tool unlists it without
@@ -503,13 +498,9 @@ fn take((collected, ended): Collected) -> Vec<u8> {
 /// Wait for `tool` within `limit`, collecting its output. A tool that does
 /// not answer in time, or that cannot be waited for, is stopped; one whose
 /// end cannot be confirmed is an uncertain failure that says so.
-fn supervise(
-    agent: Agent,
-    mut tool: Tool<impl Leader + 'static>,
-    limit: Duration,
-) -> Result<Output> {
-    let (stdout, stderr) = tool.leader.pipes();
-    let (stdout, stderr) = (collect(stdout), collect(stderr));
+fn supervise(agent: Agent, mut tool: Tool, limit: Duration) -> Result<Output> {
+    let stdout = collect(tool.leader.stdout.take());
+    let stderr = collect(tool.leader.stderr.take());
     let untracked = format!("Atlas lost track of {}", agent.display_name());
 
     let status = match tool.exited_by(Instant::now() + limit) {

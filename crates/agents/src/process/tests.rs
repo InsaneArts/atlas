@@ -113,16 +113,11 @@ struct ProcessFixture {
 
 impl ProcessFixture {
     fn start(tools: &'static Mutex<Tools>, script: &str, limit: Duration) -> Self {
-        Self::led(tools, script, limit, |child| child)
+        Self::led(tools, script, limit, Faults::default())
     }
 
-    /// The fixture with its leader seen through `lead`.
-    fn led<L: Leader + 'static>(
-        tools: &'static Mutex<Tools>,
-        script: &str,
-        limit: Duration,
-        lead: impl FnOnce(Child) -> L,
-    ) -> Self {
+    /// The fixture with its tool's waits and signals failing by `faults`.
+    fn led(tools: &'static Mutex<Tools>, script: &str, limit: Duration, faults: Faults) -> Self {
         use std::os::unix::process::CommandExt;
 
         let mut command = Command::new("/bin/sh");
@@ -134,12 +129,9 @@ impl ProcessFixture {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        let Tool { leader, running } = start(tools, &mut command).unwrap();
-        let group = nix::unistd::Pid::from_raw(i32::try_from(leader.id()).unwrap());
-        let tool = Tool {
-            leader: lead(leader),
-            running,
-        };
+        let mut tool = start(tools, &mut command).unwrap();
+        tool.faults = faults;
+        let group = nix::unistd::Pid::from_raw(i32::try_from(tool.leader.id()).unwrap());
         let (cancel, cancelled) = std::sync::mpsc::channel();
         let watchdog = std::thread::spawn(move || {
             if cancelled.recv_timeout(Duration::from_secs(5)).is_err() {
@@ -263,10 +255,11 @@ fn os_error(errno: Errno) -> std::io::Error {
     std::io::Error::from_raw_os_error(errno as i32)
 }
 
-/// A real leader whose waits and group signal fail as a test says, and whose
-/// cleanup wait can be held until the test releases it.
-struct Faulty {
-    child: Child,
+/// What a test makes a real tool's waits and signals report: failures, in
+/// order, before the real answers, and a cleanup wait held until the test
+/// releases it.
+#[derive(Default)]
+pub(super) struct Faults {
     try_waits: std::collections::VecDeque<std::io::Error>,
     waits: std::collections::VecDeque<std::io::Error>,
     signal: Option<Errno>,
@@ -274,16 +267,28 @@ struct Faulty {
     held: Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
 }
 
-impl Faulty {
-    fn new(child: Child) -> Self {
-        Self {
-            child,
-            try_waits: Default::default(),
-            waits: Default::default(),
-            signal: None,
-            signalled: Default::default(),
-            held: None,
+impl Faults {
+    /// The failure the next `try_wait` reports instead of asking, if any.
+    pub(super) fn try_wait(&mut self) -> Option<std::io::Error> {
+        self.try_waits.pop_front()
+    }
+
+    /// The failure the next `wait` reports instead of reaping, if any, once
+    /// a held wait is released.
+    pub(super) fn wait(&mut self) -> Option<std::io::Error> {
+        if let Some((reached, release)) = self.held.take() {
+            let _ = reached.send(());
+            let _ = release.recv();
         }
+        self.waits.pop_front()
+    }
+
+    /// The failure a kill reports instead of signalling, if any; every kill
+    /// is counted.
+    pub(super) fn signal(&mut self) -> Option<std::io::Error> {
+        self.signalled
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.signal.map(os_error)
     }
 
     fn try_wait_fails(mut self, errno: Errno) -> Self {
@@ -316,48 +321,6 @@ impl Faulty {
     }
 }
 
-impl Leader for Faulty {
-    fn pipes(&mut self) -> (Option<ChildStdout>, Option<ChildStderr>) {
-        self.child.pipes()
-    }
-
-    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
-        match self.try_waits.pop_front() {
-            Some(error) => Err(error),
-            None => Leader::try_wait(&mut self.child),
-        }
-    }
-
-    fn wait(&mut self) -> std::io::Result<ExitStatus> {
-        if let Some((reached, release)) = self.held.take() {
-            let _ = reached.send(());
-            let _ = release.recv();
-        }
-        match self.waits.pop_front() {
-            Some(error) => Err(error),
-            None => Leader::wait(&mut self.child),
-        }
-    }
-
-    fn kill_group(&mut self) -> nix::Result<()> {
-        self.signalled
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        match self.signal {
-            Some(errno) => Err(errno),
-            None => self.child.kill_group(),
-        }
-    }
-
-    fn kill(&mut self) -> std::io::Result<()> {
-        self.signalled
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        match self.signal {
-            Some(errno) => Err(os_error(errno)),
-            None => Leader::kill(&mut self.child),
-        }
-    }
-}
-
 /// Stop and reap what a test left of its isolated group.
 fn reap(group: nix::unistd::Pid) {
     let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
@@ -373,11 +336,9 @@ fn a_child_wait_error_retains_supervision_until_cleanup_is_confirmed() {
         tools,
         "exec /bin/sleep 30",
         Duration::from_secs(2),
-        |child| {
-            Faulty::new(child)
-                .try_wait_fails(Errno::EINVAL)
-                .holding(reached, released)
-        },
+        Faults::default()
+            .try_wait_fails(Errno::EINVAL)
+            .holding(reached, released),
     );
 
     cleanup
@@ -413,7 +374,7 @@ fn a_child_wait_error_retains_supervision_until_cleanup_is_confirmed() {
 #[test]
 fn a_tool_whose_cleanup_fails_stays_listed_and_held() {
     let timed_out = "Claude Code did not answer within 0 seconds; whether it stopped is unknown";
-    type Fault = fn(Faulty) -> Faulty;
+    type Fault = fn(Faults) -> Faults;
     let cases: [(&str, Duration, Fault, &str); 3] = [
         (
             "signal",
@@ -441,9 +402,8 @@ fn a_tool_whose_cleanup_fails_stays_listed_and_held() {
 
     for (name, limit, fault, said) in cases {
         let tools = fresh_tools();
-        let fixture = ProcessFixture::led(tools, "exec /bin/sleep 30", limit, |child| {
-            fault(Faulty::new(child))
-        });
+        let fixture =
+            ProcessFixture::led(tools, "exec /bin/sleep 30", limit, fault(Faults::default()));
         let error = fixture.answer().unwrap_err();
         assert_eq!(error.error, said, "{name}");
         assert!(error.uncertain, "{name}");
@@ -467,11 +427,9 @@ fn a_leader_whose_identity_is_lost_is_never_signalled_again() {
         tools,
         "exec /bin/sleep 30",
         Duration::from_secs(2),
-        |child| {
-            Faulty::new(child)
-                .try_wait_fails(Errno::ECHILD)
-                .counting(&signalled)
-        },
+        Faults::default()
+            .try_wait_fails(Errno::ECHILD)
+            .counting(&signalled),
     );
     let error = fixture.answer().unwrap_err();
     assert_eq!(
@@ -494,7 +452,7 @@ fn a_leader_whose_identity_is_lost_is_never_signalled_again() {
         tools,
         "exec /bin/sleep 30",
         Duration::from_millis(100),
-        |child| Faulty::new(child).wait_fails(Errno::ECHILD),
+        Faults::default().wait_fails(Errno::ECHILD),
     );
     let error = fixture.answer().unwrap_err();
     assert_eq!(
@@ -514,9 +472,12 @@ fn a_leader_whose_identity_is_lost_is_never_signalled_again() {
 #[test]
 fn an_interrupted_wait_is_asked_again() {
     let tools = fresh_tools();
-    let fixture = ProcessFixture::led(tools, "printf done", Duration::from_secs(2), |child| {
-        Faulty::new(child).try_wait_fails(Errno::EINTR)
-    });
+    let fixture = ProcessFixture::led(
+        tools,
+        "printf done",
+        Duration::from_secs(2),
+        Faults::default().try_wait_fails(Errno::EINTR),
+    );
     let output = fixture.answer().unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"done");
@@ -527,7 +488,7 @@ fn an_interrupted_wait_is_asked_again() {
         tools,
         "exec /bin/sleep 30",
         Duration::from_millis(100),
-        |child| Faulty::new(child).wait_fails(Errno::EINTR),
+        Faults::default().wait_fails(Errno::EINTR),
     );
     let error = fixture.answer().unwrap_err();
     assert_eq!(error.error, "Claude Code did not answer within 0 seconds");
