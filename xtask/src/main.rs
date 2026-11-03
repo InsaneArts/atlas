@@ -33,10 +33,12 @@ const PLIST_HEAD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 "#;
 const PLIST_TAIL: &str = "</dict>\n</plist>\n";
 const USAGE: &str = "usage: cargo xtask dist --sign IDENTITY [--notarize PROFILE] [--out DIR]
+       cargo xtask preview --sign IDENTITY [--out DIR]
 
   --sign IDENTITY     Developer ID Application identity to sign with
   --notarize PROFILE  notarytool keychain profile; notarize and staple
-  --out DIR           output directory (default: target/dist)";
+  --out DIR           output directory (default: target/dist, or
+                      target/terminal-preview for preview)";
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -60,6 +62,13 @@ fn main() -> ExitCode {
 fn run(args: Vec<String>) -> Result<()> {
     match args.split_first() {
         Some((command, rest)) if command == "dist" => dist(&options(rest, &root())?),
+        Some((command, rest)) if command == "preview" => {
+            let mut options = options(rest, &root())?;
+            if options.out == root().join("target/dist") {
+                options.out = root().join("target/terminal-preview");
+            }
+            preview(&options)
+        }
         _ => Err(USAGE.to_owned()),
     }
 }
@@ -208,7 +217,8 @@ fn compile_icon(icon: &Path, app: &Path, stage: &Path) -> Result<()> {
 
 /// No slice of `binary` may require a newer macOS than the advertised one.
 fn check_minimum(binary: &Path) -> Result<()> {
-    for (_, arch) in TARGETS {
+    let architectures = output("/usr/bin/lipo", &["-archs", text(binary)?])?;
+    for arch in architectures.split_whitespace() {
         let build = output(
             "/usr/bin/xcrun",
             &["vtool", "-arch", arch, "-show-build", text(binary)?],
@@ -375,7 +385,8 @@ fn dist(options: &Options) -> Result<()> {
     let upload = options.out.join("notarize.zip");
 
     // Verified (and notarized when asked): only now replace the previous build.
-    let published = build(options, &stage, &upload).and_then(|app| publish(&app, &options.out));
+    let published =
+        build(options, &stage, &upload, false).and_then(|app| publish(&app, &options.out));
     // The upload and the staging directory go whether or not it worked.
     let _ = fs::remove_file(&upload);
     let _ = fs::remove_dir_all(&stage);
@@ -410,6 +421,25 @@ fn dist(options: &Options) -> Result<()> {
     Ok(())
 }
 
+/// A signed, host-architecture test app. It follows the release signing rules
+/// but never publishes an archive or changes the installed application.
+fn preview(options: &Options) -> Result<()> {
+    if options.notarize.is_some() {
+        return Err("preview does not publish or notarize; use dist for releases".into());
+    }
+    publishable(&options.out)?;
+    let stage = options.out.join(format!("stage/{}", std::process::id()));
+    io(fs::create_dir_all(&stage))?;
+    let built = build(options, &stage, &stage.join("unused.zip"), true)
+        .and_then(|app| publish(&app, &options.out));
+    let _ = fs::remove_dir_all(&stage);
+    println!(
+        "Signed local preview: {}\nNot installed or activated.",
+        built?.display()
+    );
+    Ok(())
+}
+
 fn archive(app: &Path, zip: &Path) -> Result<()> {
     exec(
         "/usr/bin/ditto",
@@ -429,50 +459,51 @@ fn sha256(path: &Path) -> Result<String> {
 }
 
 /// Build, sign and verify Atlas.app in `stage` (notarizing it through
-/// `upload` when asked): the app, ready to publish.
-fn build(options: &Options, stage: &Path, upload: &Path) -> Result<PathBuf> {
+/// `upload` when asked): the app, ready to publish. `host_only` builds for
+/// this Mac's architecture alone.
+fn build(options: &Options, stage: &Path, upload: &Path, host_only: bool) -> Result<PathBuf> {
     let root = root();
-    let app = compile_executables(&root, stage)?;
+    let app = compile_executables(&root, stage, host_only)?;
     assemble_resources(&root, &app, stage)?;
     sign_and_verify(options, &app, upload)?;
     Ok(app)
 }
 
-fn compile_executables(root: &Path, stage: &Path) -> Result<PathBuf> {
+fn compile_executables(root: &Path, stage: &Path, host_only: bool) -> Result<PathBuf> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     // Exactly this package's binary, into a target directory of our own.
     let manifest = root.join("Cargo.toml");
     let target_dir = root.join("target/xtask");
+    let targets: &[(&str, &str)] = if host_only { &[] } else { &TARGETS };
     let mut cli = Vec::new();
+    let args = [
+        "build",
+        "--manifest-path",
+        text(&manifest)?,
+        "--package",
+        "atlas-cli",
+        "--bin",
+        "atlas",
+        "--release",
+        "--locked",
+        "--target-dir",
+        text(&target_dir)?,
+    ];
 
-    for (rust, _) in TARGETS {
-        exec(
-            &cargo,
-            &[
-                "build",
-                "--manifest-path",
-                text(&manifest)?,
-                "--package",
-                "atlas-cli",
-                "--bin",
-                "atlas",
-                "--release",
-                "--locked",
-                "--target",
-                rust,
-                "--target-dir",
-                text(&target_dir)?,
-            ],
-        )?;
-
+    if host_only {
+        exec(&cargo, &args)?;
+        cli.push(target_dir.join("release/atlas"));
+    }
+    for &(rust, _) in targets {
+        exec(&cargo, &[args.as_slice(), &["--target", rust]].concat())?;
         cli.push(target_dir.join(format!("{rust}/release/atlas")));
     }
 
-    // The Swift app package, for both architectures in one build.
+    // The Swift app package, for every architecture in one build.
     let package = root.join("app");
     let mut swift = vec!["build", "-c", "release", "--package-path", text(&package)?];
 
-    for (_, arch) in TARGETS {
+    for &(_, arch) in targets {
         swift.extend(["--arch", arch]);
     }
 
@@ -496,9 +527,18 @@ fn compile_executables(root: &Path, stage: &Path) -> Result<PathBuf> {
         info_plist(atlas_core::VERSION),
     ))?;
 
-    universal(&cli, &macos.join("atlas"))?;
+    if host_only {
+        io(fs::copy(&cli[0], macos.join("atlas")))?;
+        check_minimum(&macos.join("atlas"))?;
+    } else {
+        universal(&cli, &macos.join("atlas"))?;
+    }
     io(fs::copy(&executable, macos.join(APP_EXECUTABLE)))?;
-    check_universal(&macos.join(APP_EXECUTABLE))?;
+    if host_only {
+        check_minimum(&macos.join(APP_EXECUTABLE))?;
+    } else {
+        check_universal(&macos.join(APP_EXECUTABLE))?;
+    }
     Ok(app)
 }
 

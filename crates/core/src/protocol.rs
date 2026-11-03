@@ -118,6 +118,40 @@ pub struct SessionPin {
 /// The daemon capability to keep background jobs, as its hello lists it.
 pub const JOBS: &str = "jobs";
 
+/// Readiness-driven, unencoded RGB frames on a persistent connection.
+pub const RGB_STREAM: &str = "rgb-stream-v1";
+/// The raw frame protocol with preview sizes through 4096 pixels.
+pub const RGB_STREAM_HIGH_RES: &str = "rgb-stream-4096";
+/// The experimental ScreenCaptureKit source for raw frames.
+pub const SCK_EXPERIMENTAL: &str = "capture-sck-experimental";
+/// Fresh independent session proofs from a persistent child, without a
+/// process per request.
+pub const SESSION_PROOF: &str = "session-proof-v1";
+
+/// Where a raw frame's pixels come from in the helper.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CaptureBackend {
+    #[default]
+    CoreGraphics,
+    ScreenCaptureKit,
+}
+
+impl CaptureBackend {
+    /// The word for it on the wire.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::CoreGraphics => "cg",
+            Self::ScreenCaptureKit => "sck",
+        }
+    }
+}
+
+/// Whether `challenge` may name one independent session proof: 1 to 128
+/// printable ASCII bytes.
+pub fn valid_challenge(challenge: &str) -> bool {
+    (1..=128).contains(&challenge.len()) && challenge.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
 /// The daemon capability to read files for the person's side to collect.
 pub const READ: &str = "read";
 
@@ -170,10 +204,31 @@ macro_rules! requests {
 
 requests! { request =>
     "hello" Hello = Ok(Request::Hello),
+    /// One fresh session proof from the helper's persistent proof worker.
+    "session-proof" SessionProof { challenge: String } = Ok(Request::SessionProof {
+        challenge: request["challenge"]
+            .as_str()
+            .filter(|challenge| valid_challenge(challenge))
+            .ok_or_else(|| bad("session-proof requires a printable ASCII challenge of 1–128 bytes"))?
+            .to_owned(),
+    }),
     "host-session" HostSession(Vec<crate::host::verification::HostClaim>) =
         crate::host::verification::claims(&request["claims"])
             .map(Request::HostSession)
             .ok_or_else(|| bad("invalid host session claims")),
+    /// Raw frames on this connection, each after a readiness byte.
+    "stream" Stream { max_dimension: u32, pin: SessionPin, backend: CaptureBackend } =
+        Ok(Request::Stream {
+            backend: match request["backend"].as_str() {
+                None if request["backend"].is_null() => CaptureBackend::CoreGraphics,
+                Some("cg") => CaptureBackend::CoreGraphics,
+                Some("sck") => CaptureBackend::ScreenCaptureKit,
+                _ => return Err(bad("stream backend must be cg or sck")),
+            },
+            max_dimension: whole(&request["maxDimension"], 320..=4096, "\"maxDimension\" must be 320–4096")?
+                as u32,
+            pin: pin(request)?.ok_or_else(|| bad("stream requires a session pin"))?,
+        }),
     "apps" Apps { pin: Option<SessionPin> } = Ok(Request::Apps { pin: pin(request)? }),
     "windows" Windows { dock: bool, pin: Option<SessionPin> } = Ok(Request::Windows {
         dock: boolean(request, "dock")?,
@@ -250,7 +305,9 @@ impl Request {
         use Console::{Any, Hidden, Open};
         let (console, pin, phase) = match self {
             Self::Hello => (Open, None, Read("hello")),
+            Self::SessionProof { .. } => (Hidden, None, Read("session-proof")),
             Self::HostSession(_) => (Any, None, Read("host-session")),
+            Self::Stream { pin, .. } => (Hidden, Some(*pin), Read("stream")),
             Self::Apps { pin } => (Any, *pin, Read("apps")),
             Self::Windows { pin, .. } => (Hidden, *pin, Read("windows")),
             Self::Screenshot { .. } => (Hidden, None, Read("screenshot")),

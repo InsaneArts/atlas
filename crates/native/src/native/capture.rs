@@ -21,6 +21,12 @@ use objc2_image_io::{
     CGImageDestination, CGImageSource, kCGImageDestinationLossyCompressionQuality,
 };
 
+mod raw;
+mod stream;
+
+pub use raw::RawShot;
+pub use stream::{stop_display_stream, stream_diagnostics, stream_display_rgb};
+
 /// premultipliedFirst | byteOrder32Little: the native BGRA layout.
 const BGRA: u32 = CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0;
 
@@ -269,6 +275,32 @@ fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
 /// Returns an error when Screen Recording is not allowed or the display can't
 /// be captured.
 pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
+    let (image, scale) = display_image(display, area)?;
+    let (image, target_width, target_height) = resized(image, limit)?;
+
+    Ok(Shot {
+        png: png(&image)?,
+        width: size(target_width)?,
+        height: size(target_height)?,
+        scale,
+    })
+}
+
+/// The checked whole display as packed sRGB pixels, without image encoding.
+/// Session and display-epoch checks belong to the caller, around each capture.
+///
+/// # Errors
+///
+/// Returns an error when Screen Recording is not allowed or the display can't
+/// be captured or read.
+pub fn main_display_rgb(display: u32, limit: Option<u32>) -> Result<RawShot> {
+    let (image, scale) = display_image(display, None)?;
+    raw::from_image(&image, limit, scale)
+}
+
+/// The one synchronous, consent-gated source of encoded and raw captures:
+/// the image, and the display's backing pixels per point.
+fn display_image(display: u32, area: Option<CGRect>) -> Result<(CFRetained<CGImage>, f64)> {
     if !permitted() {
         return Err(Error::new(
             Code::Permission,
@@ -310,14 +342,7 @@ pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> R
         1.0
     };
 
-    let (image, target_width, target_height) = resized(image, limit)?;
-
-    Ok(Shot {
-        png: png(&image)?,
-        width: size(target_width)?,
-        height: size(target_height)?,
-        scale,
-    })
+    Ok((image, scale))
 }
 
 #[cfg(test)]

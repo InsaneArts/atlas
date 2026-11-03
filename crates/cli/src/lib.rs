@@ -4,6 +4,7 @@
 pub mod mcp;
 pub mod menubar;
 pub mod onboarding;
+pub mod terminal;
 pub mod ui;
 pub mod uninstall;
 pub mod viewer;

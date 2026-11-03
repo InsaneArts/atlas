@@ -1,7 +1,10 @@
 //! The viewer's HTTP server on the loopback interface: connections within
 //! their limits, each request only from the viewer's own origin and private
 //! address, routed once and answered in a task of its own.
-use super::{LEASE_SECONDS, LeaseRefusal, SERVICE, Viewer, frames::Frames};
+use super::{
+    LEASE_SECONDS, LeaseRefusal, SERVICE, Viewer,
+    frames::{FRAME_REUSE, FRAME_WIDTH, Frames},
+};
 use crate::menubar::Line;
 use atlas_client::{client::Client, helper_info};
 use atlas_control::Lease;
@@ -82,6 +85,8 @@ pub(super) fn configured(
         input_recording: Mutex::new(()),
         closed: RwLock::new(false),
         frames: Mutex::new(Frames::default()),
+        frame_width: FRAME_WIDTH,
+        frame_reuse: FRAME_REUSE,
         capture: std::sync::Mutex::new(None),
         requests: Semaphore::new(CONCURRENT_REQUESTS),
         urgent: Semaphore::new(URGENT_REQUESTS),
@@ -149,6 +154,10 @@ fn serve_connection(
     viewer: &Arc<Viewer>,
     mut closed: watch::Receiver<()>,
 ) {
+    // Small input requests must not wait behind Nagle and delayed ACKs.
+    if stream.set_nodelay(true).is_err() {
+        return;
+    }
     let (named, mut naming) = watch::channel(false);
     let service = hyper::service::service_fn({
         let viewer = viewer.clone();

@@ -4,7 +4,7 @@ use super::capture::{Capture, Screen, screenshot};
 use crate::daemon::{
     consent, facts,
     job::{self, Jobs},
-    preferences, read, run,
+    preferences, proof, read, run,
 };
 use atlas_core::{
     error::{Code, Error, Result},
@@ -37,6 +37,8 @@ use tokio::{
     sync::{Mutex, Notify, Semaphore, mpsc, oneshot, watch},
     task::{Id, JoinError, JoinHandle, JoinSet},
 };
+
+mod stream;
 
 /// Connections served at once.
 const CONNECTIONS: usize = 32;
@@ -177,6 +179,10 @@ pub struct Daemon {
     /// Foreground commands outlive a cancelled socket handler until their
     /// process group and observed event writer have finished.
     runs: Mutex<JoinSet<Result<()>>>,
+    /// The one live frame stream; held through its native source's drain.
+    stream_slot: Semaphore,
+    /// The persistent child that answers session-proof requests.
+    proof_worker: Mutex<Option<proof::Worker>>,
 }
 
 impl Daemon {
@@ -190,6 +196,7 @@ impl Daemon {
             manager,
             screen: Screen {
                 capture,
+                raw_capture: capture::main_display_rgb,
                 windows: windows::windows,
                 bundle_id: apps::bundle_id,
                 dock: |windows| {
@@ -202,6 +209,8 @@ impl Daemon {
             stopping: watch::Sender::new(false),
             jobs: None,
             runs: Mutex::new(JoinSet::new()),
+            stream_slot: Semaphore::new(1),
+            proof_worker: Mutex::new(None),
         }
     }
 
@@ -656,10 +665,19 @@ pub(crate) async fn handle(
     );
     let (request, policy) = match admitted {
         Ok(admitted) => admitted,
-        Err(refusal) => return write(&mut writer, &refusal).await,
+        Err((refusal, true)) => return stream::write_header(&mut writer, &refusal).await,
+        Err((refusal, false)) => return write(&mut writer, &refusal).await,
     };
 
     let reply = match request {
+        Request::Stream {
+            max_dimension,
+            pin,
+            backend,
+        } => return stream::serve(daemon, reader, writer, max_dimension, pin, backend).await,
+        Request::SessionProof { challenge } => proof::query(&daemon.proof_worker, &challenge)
+            .await
+            .unwrap_or_else(refused),
         Request::HostSession(claims) => tokio::task::spawn_blocking(move || {
             atlas_core::host::verification::verify(&claims, caller, peer.uid())
         })
@@ -715,28 +733,33 @@ pub(crate) async fn handle(
     write(&mut writer, &reply).await
 }
 
-/// The connection's one request and its policy, or the reply refusing it, in
-/// the order of refusal: unreadable, malformed, from the helper's own account,
-/// then the policy's own checks.
+/// The connection's one request and its policy, or the reply refusing it and
+/// whether that reply is framed as a stream's, in the order of refusal:
+/// unreadable, malformed, from the helper's own account, then the policy's
+/// own checks.
 async fn admit(
     reader: &mut OwnedReadHalf,
     daemon: &Daemon,
     controller: bool,
-) -> std::result::Result<(Request, Policy), Value> {
+) -> std::result::Result<(Request, Policy), (Value, bool)> {
     let line = endpoint::read_line(reader, MAX_REQUEST)
         .await
-        .map_err(refused)?;
-    let request = protocol::parse(&line)?;
+        .map_err(|error| (refused(error), false))?;
+    let request = protocol::parse(&line).map_err(|refusal| (refusal, false))?;
+    let framed = matches!(request, Request::Stream { .. });
     let policy = request.policy();
     if !controller && !policy.open_to_helper() {
-        return Err(failure(
-            Code::Permission,
-            "Only the account Atlas works for may ask the helper that",
+        return Err((
+            failure(
+                Code::Permission,
+                "Only the account Atlas works for may ask the helper that",
+            ),
+            framed,
         ));
     }
 
     match policy.check(daemon.screen.on_console, daemon.screen.session) {
-        Some(refusal) => Err(refusal),
+        Some(refusal) => Err((refusal, framed)),
         None => Ok((request, policy)),
     }
 }

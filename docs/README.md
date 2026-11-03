@@ -10,7 +10,7 @@ Start with [Getting started](getting-started.md) to understand the requirements,
 
 [Using Atlas](using-atlas.md) walks through testing an app, watching the helper, taking control and stopping agent input. [Agent connections](agents.md) also covers refreshing a connection, project instructions and the viewing routes available in each host.
 
-[Command-line guide](cli.md) explains the command groups, output and exit status. [Configuration](configuration.md) explains which settings Atlas reads and where it stores data. [Helper files and environment](environment.md) shows how to preview, copy and roll back a small selection of files or variables.
+[Terminal viewer](terminal-viewer.md) shows the helper inside a Rex or Kitty terminal pane. [Command-line guide](cli.md) explains the command groups, output and exit status. [Configuration](configuration.md) explains which settings Atlas reads and where it stores data. [Helper files and environment](environment.md) shows how to preview, copy and roll back a small selection of files or variables.
 
 [Maintenance](maintenance.md) covers updates, recovery, uninstall choices and reinstalling for an onboarding test. [Troubleshooting](troubleshooting.md) helps you diagnose readiness, input, viewing and connection problems.
 

@@ -113,26 +113,35 @@ pub async fn serve(
     Ok(Value::Null)
 }
 
+impl Viewer {
+    /// End control whose lease ran out. False once shutdown began, whose own
+    /// release ends control instead.
+    pub(super) async fn end_expired(&self) -> bool {
+        // Ending expired control is a change like any other.
+        let Some(_changing) = self.changing().await else {
+            return false;
+        };
+
+        let expired = {
+            let mut lease = self.lease.lock().await;
+            lease.expire();
+            lease.expired()
+        };
+        if expired {
+            let _ = self.release(None).await;
+        }
+        true
+    }
+}
+
 /// End control whose lease ran out, in a task of its own, until shutdown
 /// begins.
 fn expire_control(viewer: Arc<Viewer>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
-
-            // Ending expired control is a change like any other; once
-            // shutdown began, its own release ends control.
-            let Some(_changing) = viewer.changing().await else {
+            if !viewer.end_expired().await {
                 break;
-            };
-
-            let expired = {
-                let mut lease = viewer.lease.lock().await;
-                lease.expire();
-                lease.expired()
-            };
-            if expired {
-                let _ = viewer.release(None).await;
             }
         }
     })

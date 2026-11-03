@@ -11,6 +11,7 @@ pub mod acl;
 pub mod actions;
 pub mod app_bundle;
 pub mod bounded;
+pub mod buffer;
 pub mod config;
 pub mod context;
 pub mod digest;

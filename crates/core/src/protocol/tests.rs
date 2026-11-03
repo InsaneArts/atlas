@@ -545,3 +545,43 @@ fn read_requests_parse_within_their_bounds() {
         assert_eq!(refused(&line)["code"], "bad-request", "{line}");
     }
 }
+
+#[test]
+fn protocol_bounds_challenges_before_starting_any_worker() {
+    assert_eq!(
+        parse(br#"{"op":"session-proof","challenge":"abc-123"}"#).unwrap(),
+        Request::SessionProof {
+            challenge: "abc-123".into()
+        }
+    );
+    for challenge in [
+        json!(""),
+        json!("x".repeat(129)),
+        json!("a\nb"),
+        json!("ა"),
+        Value::Null,
+    ] {
+        assert!(
+            parse(
+                &serde_json::to_vec(&json!({"op":"session-proof","challenge":challenge})).unwrap()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn a_stream_requires_a_bounded_size_and_explicit_session_pin() {
+    for side in [0, 319, 4097, u32::MAX] {
+        assert!(parse(json!({"op":"stream","maxDimension":side,"session":{"securitySessionId":42,"displayId":7}}).to_string().as_bytes()).is_err());
+    }
+    assert!(parse(br#"{"op":"stream","maxDimension":640}"#).is_err());
+    assert_eq!(parse(br#"{"op":"stream","maxDimension":640,"session":{"securitySessionId":42,"displayId":7}}"#).unwrap(),Request::Stream {
+            max_dimension: 640,
+            pin: SessionPin {
+                security_session_id: 42,
+                display_id: 7,
+            },
+            backend: CaptureBackend::CoreGraphics,
+        });
+}

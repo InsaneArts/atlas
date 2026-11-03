@@ -553,6 +553,7 @@ async fn the_helpers_own_processes_may_only_say_hello() {
     for request in [
         r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
         r#"{"op":"windows"}"#,
+        r#"{"op":"session-proof","challenge":"fresh"}"#,
         r#"{"op":"screenshot"}"#,
         r#"{"op":"apps"}"#,
         r#"{"op":"restart"}"#,
@@ -687,6 +688,7 @@ async fn nothing_acts_while_the_helper_is_on_screen() {
     for request in [
         r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
         r#"{"op":"windows"}"#,
+        r#"{"op":"session-proof","challenge":"fresh"}"#,
         r#"{"op":"screenshot"}"#,
         r#"{"op":"screenshot","pid":200}"#,
         r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,
@@ -1378,7 +1380,15 @@ async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_inc
     assert_eq!(hello["ok"], true, "{hello}");
     assert_eq!(
         hello["daemon"]["capabilities"],
-        json!(["session-pin", "read", "jobs"])
+        json!([
+            "session-pin",
+            "read",
+            "rgb-stream-v1",
+            "rgb-stream-4096",
+            "session-proof-v1",
+            "capture-sck-experimental",
+            "jobs"
+        ])
     );
     assert_eq!(
         hello["daemon"]["jobs"],
@@ -1432,7 +1442,15 @@ fn a_blocked_hello_lookup_leaves_other_daemon_requests_responsive() {
     assert_eq!(hello["op"], "hello");
     assert_eq!(
         hello["daemon"]["capabilities"],
-        json!(["session-pin", "read", "jobs"])
+        json!([
+            "session-pin",
+            "read",
+            "rgb-stream-v1",
+            "rgb-stream-4096",
+            "session-proof-v1",
+            "capture-sck-experimental",
+            "jobs"
+        ])
     );
     assert_eq!(
         hello["daemon"]["jobs"],
@@ -1445,7 +1463,14 @@ async fn the_daemon_offers_jobs_and_reads() {
     let hello = &exchange(daemon(false), r#"{"op":"hello"}"#).await[0];
     assert_eq!(
         hello["daemon"]["capabilities"],
-        json!(["session-pin", "read"]),
+        json!([
+            "session-pin",
+            "read",
+            "rgb-stream-v1",
+            "rgb-stream-4096",
+            "session-proof-v1",
+            "capture-sck-experimental",
+        ]),
         "no jobs without their folder"
     );
     let refused = &exchange(daemon(false), r#"{"op":"job","action":"show"}"#).await[0];
@@ -1455,7 +1480,15 @@ async fn the_daemon_offers_jobs_and_reads() {
     let hello = &exchange(daemon.clone(), r#"{"op":"hello"}"#).await[0];
     assert_eq!(
         hello["daemon"]["capabilities"],
-        json!(["session-pin", "read", "jobs"])
+        json!([
+            "session-pin",
+            "read",
+            "rgb-stream-v1",
+            "rgb-stream-4096",
+            "session-proof-v1",
+            "capture-sck-experimental",
+            "jobs"
+        ])
     );
     assert_eq!(
         hello["daemon"]["jobs"],

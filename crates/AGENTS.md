@@ -12,7 +12,7 @@ layers above it in this list:
 | `control` | `atlas-control` | exclusion, cancellation, pending mutations and viewer leases       |
 | `client`  | `atlas-client`  | the controller side: verified requests and the work built on them  |
 | `agents`  | `atlas-agents`  | connecting coding agents: plugins, project sections and the guide  |
-| `cli`     | `atlas-cli`     | the `atlas` binary, viewer, MCP server, menu bar, onboarding, `ui` |
+| `cli`     | `atlas-cli`     | the `atlas` binary, viewers, MCP server, menu bar, onboarding, `ui` |
 
 Command grammar and attended interaction stay in `cli/src/bin/atlas`, release
 tooling in `xtask`, which sits above every crate.
@@ -58,7 +58,9 @@ that layer's crate. Shipped builds never carry the feature. `cargo test` does bu
   controller's side: the executor, configuration and migration. `onboarding`
   orchestrates their workflow. Terminal prompts belong in `cli/src/bin/atlas`.
 - `viewer` owns its HTTP service and personal-control lifetime; `mcp` adapts its
-  declared tools. `ui` formats output; domain authority must not depend on it.
+  declared tools; `terminal` draws the viewer in a Kitty graphics terminal and
+  sends input only through the viewer's routes. `ui` formats output; domain
+  authority must not depend on it.
 - Shared names, errors and time belong in their existing leaf modules; wire
   types in `protocol`, host identity in `host`, accounts in `account`, where
   Atlas is installed and who signed it in `app_bundle`. A leaf never reaches up

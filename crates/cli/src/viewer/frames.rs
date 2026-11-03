@@ -2,32 +2,58 @@
 //! for every request asking, and the recent frames kept for control
 //! requests to name.
 use super::{Viewer, unpoisoned};
+use atlas_client::client::live::LiveFrame;
 use atlas_client::overview::{READ_DEADLINE, late};
 use atlas_core::screen::frame::Frame;
 use atlas_core::{
     error::{Code, Error, Result},
     files,
+    session::Epoch,
 };
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::sync::watch;
 
 /// How long a frame is kept and may be named by control requests.
 const FRAME_LIFETIME: Duration = Duration::from_secs(8);
 /// How recent the last frame must be to stand in for a capture.
-const FRAME_REUSE: Duration = Duration::from_millis(400);
+pub(super) const FRAME_REUSE: Duration = Duration::from_millis(400);
 /// The widest picture of the helper the viewer asks for, in pixels.
-const FRAME_WIDTH: u32 = 1600;
+pub(super) const FRAME_WIDTH: u32 = 1600;
 /// How many recent frames are kept for control requests to name.
 const KEPT_FRAMES: usize = 24;
+/// How many live frames, which keep no pixels here, may be named at once.
+const KEPT_LIVE: usize = 256;
 
 /// The recent frames, each under the key control requests name it by.
 #[derive(Default)]
 pub(super) struct Frames {
     pub(super) items: VecDeque<(String, Arc<Frame>)>,
+    /// Live frames a terminal shows, kept only as what input needs of them.
+    live: VecDeque<(String, Arc<Observation>)>,
     /// Counts input sent, so a capture can tell whether it shows the latest.
     pub(super) input_revision: u64,
     /// The input revision the newest frame was captured at.
     capture_revision: Option<u64>,
+}
+
+/// What input authority needs of a frame: its verified epoch and capture
+/// time, never its pixels or codec.
+pub(super) struct Observation {
+    pub(super) epoch: Epoch,
+    pub(super) at: Instant,
+}
+
+impl Frames {
+    /// Forget every frame, kept or live, and what input they showed.
+    pub(super) fn clear(&mut self) {
+        self.items.clear();
+        self.live.clear();
+        self.capture_revision = None;
+    }
 }
 
 /// A frame capture in progress: the input it shows, and its outcome once
@@ -120,7 +146,7 @@ impl Viewer {
 
             if frames.capture_revision == Some(revision)
                 && let Some((key, frame)) = frames.items.back()
-                && frame.at.elapsed() < FRAME_REUSE
+                && frame.at.elapsed() < self.frame_reuse
             {
                 return Ok((key.clone(), frame.clone()));
             }
@@ -128,7 +154,7 @@ impl Viewer {
             revision
         };
 
-        let frame = Arc::new(client.frame(Some(FRAME_WIDTH)).await?);
+        let frame = Arc::new(client.frame(Some(self.frame_width)).await?);
         if frame.at.elapsed() >= FRAME_LIFETIME {
             return Err(Error::stale_frame());
         }
@@ -145,15 +171,46 @@ impl Viewer {
         Ok((key, frame))
     }
 
-    /// The recent frame kept under `key`.
-    pub(super) async fn observed(&self, key: &str) -> Result<Arc<Frame>> {
-        self.frames
-            .lock()
-            .await
+    /// Keep what input needs of a live `frame`, under the key returned.
+    pub(super) async fn remember_live(&self, frame: &LiveFrame) -> String {
+        let key = files::token();
+        let mut frames = self.frames.lock().await;
+        frames
+            .live
+            .retain(|(_, seen)| seen.at.elapsed() < FRAME_LIFETIME && seen.epoch == frame.epoch);
+        frames.live.push_back((
+            key.clone(),
+            Arc::new(Observation {
+                epoch: frame.epoch.clone(),
+                at: frame.at,
+            }),
+        ));
+        while frames.live.len() > KEPT_LIVE {
+            frames.live.pop_front();
+        }
+        key
+    }
+
+    /// The recent frame kept under `key`, kept or live.
+    pub(super) async fn observed(&self, key: &str) -> Result<Arc<Observation>> {
+        let frames = self.frames.lock().await;
+        frames
             .items
             .iter()
             .find(|(id, _)| id == key)
-            .map(|(_, frame)| frame.clone())
+            .map(|(_, frame)| {
+                Arc::new(Observation {
+                    epoch: frame.epoch.clone(),
+                    at: frame.at,
+                })
+            })
+            .or_else(|| {
+                frames
+                    .live
+                    .iter()
+                    .find(|(id, _)| id == key)
+                    .map(|(_, seen)| seen.clone())
+            })
             .filter(|frame| frame.at.elapsed() < FRAME_LIFETIME)
             .ok_or_else(Error::stale_frame)
     }

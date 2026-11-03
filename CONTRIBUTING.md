@@ -58,7 +58,7 @@ compile is not evidence that the packaged helper passes macOS consent checks.
 | `crates/control` | who may act on the helper, cancellation and what is still pending        |
 | `crates/client`  | requests to the helper, copies into it, and setup from the controller    |
 | `crates/agents`  | connecting coding agents to Atlas, and the guide they read               |
-| `crates/cli`     | the `atlas` command, viewer, MCP server, menu bar and onboarding         |
+| `crates/cli`     | the `atlas` command, viewers, MCP server, menu bar and onboarding        |
 | `app/`           | Atlas.app in Swift 6: AtlasApp and its `Packages/`                       |
 | `agents/`        | bundled skills, MCP registration and supported host integrations         |
 | `scripts/`       | repository checks and live checks against a real helper                  |

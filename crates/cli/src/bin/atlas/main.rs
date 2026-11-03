@@ -22,8 +22,22 @@ use policy::Policy;
 use serde_json::json;
 use std::{
     io::{IsTerminal, Write},
+    path::PathBuf,
     process::ExitCode,
 };
+
+/// The terminal attaches to the installed helper by default, even when run
+/// from a development checkout with settings of its own. Clap has already
+/// resolved an explicit --config or ATLAS_CONFIG here.
+fn configuration(command: Option<&Command>, given: Option<PathBuf>) -> PathBuf {
+    if given.is_none()
+        && matches!(command, Some(Command::Monitor { terminal: true, .. }))
+        && let Ok(installed) = atlas_core::config::installed_path()
+    {
+        return installed;
+    }
+    atlas_core::config::effective(given)
+}
 
 fn main() -> ExitCode {
     let matches = match help::command().try_get_matches() {
@@ -32,7 +46,7 @@ fn main() -> ExitCode {
     };
 
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
-    let config = atlas_core::config::effective(cli.config.take());
+    let config = configuration(cli.command.as_ref(), cli.config.take());
 
     // `atlas` alone shows what it can do; opened as an app (Finder,
     // Launchpad, `open`), it shows the window instead. launchd names the
@@ -54,6 +68,18 @@ fn main() -> ExitCode {
     };
 
     let policy = Policy::of(&command);
+
+    // A proof worker reads only its private, parent-owned standard input. It
+    // needs no client, controller claim, signal task or activity attribution.
+    if matches!(command, Command::SessionProofServe) {
+        return match atlas_daemon::daemon::proof::serve_blocking() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("{}", json!(error));
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     // Commands run by Atlas itself always answer in JSON, and their
     // failures carry no step for an agent: another Atlas process reads them.

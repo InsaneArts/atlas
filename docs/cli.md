@@ -95,7 +95,7 @@ A job's `left` list names processes still running. After `leader-gone`, they may
 | Command       | Use it to                                                                                      |
 | ------------- | ---------------------------------------------------------------------------------------------- |
 | `switch`      | Lock the screen so you can choose another login. `--list` only lists accounts.                 |
-| `monitor`     | Open Atlas's native viewer, starting the menu bar if needed.                                   |
+| `monitor`     | Open Atlas's native viewer, or use `--terminal` for a Kitty graphics terminal pane.            |
 | `restart`     | Recover the helper and confirm a new hidden session before clearing an unknown action outcome. |
 | `logout`      | Log the helper out. Apps quit and you must log in again before using it.                       |
 | `start-input` | Start or reset the helper's input service.                                                     |

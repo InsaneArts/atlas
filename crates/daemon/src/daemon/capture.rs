@@ -13,10 +13,14 @@ use serde_json::{Map, Value, json};
 /// Real display capture in the daemon, synthetic pixels in contract tests.
 pub(super) type Capture = fn(u32, Option<CGRect>, Option<u32>) -> Result<capture::Shot>;
 
+/// Real raw display capture in the daemon, synthetic pixels in stream tests.
+pub(super) type RawCapture = fn(u32, Option<u32>) -> Result<capture::RawShot>;
+
 /// Observations from this helper login, shared by capture and window reads.
 #[derive(Clone, Copy)]
 pub(super) struct Screen {
     pub(super) capture: Capture,
+    pub(super) raw_capture: RawCapture,
     pub(super) windows: fn() -> Result<Vec<Window>>,
     pub(super) bundle_id: fn(i64) -> Option<String>,
     pub(super) dock: fn(&[Window]) -> Dock,

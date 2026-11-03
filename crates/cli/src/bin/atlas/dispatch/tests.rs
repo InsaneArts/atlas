@@ -595,6 +595,8 @@ fn servers_helper_commands_and_setup_previews_carry_no_host_session() {
         &["watch"],
         &["menubar"],
         &["monitor"],
+        &["monitor", "--terminal"],
+        &["monitor", "--terminal", "--read-only"],
         &["session-info"],
         &["permissions-info"],
         &["elements-info", "1"],
