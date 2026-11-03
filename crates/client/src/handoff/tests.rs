@@ -889,3 +889,184 @@ fn a_copy_quit_target_is_only_one_this_session_may_take() {
     );
     assert_eq!(copy_node(&root, &token, &other), None);
 }
+
+/// How long a test waits for what should happen at once before it takes
+/// the runtime for stalled.
+const WATCHDOG: Duration = Duration::from_secs(5);
+
+/// An operation a request started on a runtime of its own thread, beside
+/// a heartbeat that answers whenever that runtime is free, until the
+/// operation ends or the request is dropped.
+struct Request<T> {
+    ping: tokio::sync::mpsc::UnboundedSender<std::sync::mpsc::Sender<()>>,
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    ended: std::sync::mpsc::Receiver<Option<T>>,
+}
+
+impl<T: Send + 'static> Request<T> {
+    fn start<F: Future<Output = T>>(operation: impl FnOnce() -> F + Send + 'static) -> Self {
+        let (ping, mut pings) = tokio::sync::mpsc::unbounded_channel();
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let (end, ended) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                tokio::spawn(async move {
+                    while let Some(answer) = pings.recv().await {
+                        let _ = std::sync::mpsc::Sender::send(&answer, ());
+                    }
+                });
+                let outcome = tokio::select! {
+                    outcome = operation() => Some(outcome),
+                    _ = stopped => None,
+                };
+                let _ = end.send(outcome);
+            });
+        });
+        Self {
+            ping,
+            stop: Some(stop),
+            ended,
+        }
+    }
+
+    /// Whether the runtime answered the heartbeat in time.
+    fn responsive(&self) -> bool {
+        let (answer, answered) = std::sync::mpsc::channel();
+        self.ping.send(answer).is_ok() && answered.recv_timeout(WATCHDOG).is_ok()
+    }
+
+    /// Drop the request's future, as a requester that went away does.
+    fn abandon(mut self) {
+        let _ = self.stop.take().unwrap().send(());
+        assert!(
+            matches!(self.ended.recv_timeout(WATCHDOG), Ok(None)),
+            "the request was not dropped"
+        );
+    }
+}
+
+/// Two files under `dir` for the helper, which it cannot read.
+fn unreadable_pair(dir: &Path) -> Vec<Target> {
+    ["a.txt", "b.txt"]
+        .into_iter()
+        .map(|name| {
+            let path = dir.join(name);
+            fs::write(&path, "hello").unwrap();
+            Target::Path(path)
+        })
+        .collect()
+}
+
+fn handing(targets: Vec<Target>, claims: Claims) -> Handing {
+    Handing {
+        answers: vec![false; targets.len()],
+        targets,
+        running: Vec::new(),
+        session: None,
+        claims,
+    }
+}
+
+#[test]
+fn a_blocked_handoff_copy_leaves_the_runtime_responsive_and_retains_controller_exclusion() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, output, claims, task) = claiming(dir.path());
+    let controller = atlas_control::Controller::at(7001, &dir.path().join("state"));
+    let ownership = Arc::new(controller.acquire(false).unwrap());
+    let handing = handing(unreadable_pair(dir.path()), claims);
+    let (entered, entry) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let (seen, seen_task) = (output.clone(), task.clone());
+    let mut first = true;
+    let copying = move |path: &Path, root: &Path, token: &Token| {
+        if std::mem::take(&mut first) {
+            let _ = entered.send(states(&seen, &seen_task));
+            let _ = released.recv();
+        }
+        copy(path, root, token)
+    };
+    let prepared = root.clone();
+    let request = Request::start(move || async move {
+        handing
+            .on_worker(&ownership, move || Ok(prepared), copying)
+            .await
+    });
+
+    let intents = entry.recv_timeout(WATCHDOG).unwrap();
+    let responsive = request.responsive();
+    if !responsive {
+        let _ = release.send(());
+    }
+    assert!(responsive, "the runtime waited for the copy");
+    assert_eq!(intents, [State::Intent, State::Intent]);
+    let busy = |controller: &atlas_control::Controller| {
+        controller.acquire(false).err().map(|error| error.code) == Some(Code::Busy)
+    };
+    assert!(busy(&controller), "another controller got in");
+
+    request.abandon();
+    assert!(busy(&controller), "control ended with the request");
+    assert_eq!(states(&output, &task), [State::Intent, State::Intent]);
+
+    release.send(()).unwrap();
+    let _next = controller.clone().waiting(WATCHDOG).acquire(false).unwrap();
+    assert_eq!(states(&output, &task), [State::Made, State::Made]);
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+}
+
+#[test]
+fn a_failed_handoff_cleans_earlier_copies_before_releasing_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, output, claims, task) = claiming(dir.path());
+    let controller = atlas_control::Controller::at(7001, &dir.path().join("state"));
+    let ownership = Arc::new(controller.acquire(false).unwrap());
+    let handing = handing(unreadable_pair(dir.path()), claims);
+    let (entered, entry) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let mut tried = Vec::new();
+    let copying = move |path: &Path, root: &Path, token: &Token| {
+        tried.push(path.file_name().unwrap().to_owned());
+        if tried.len() == 1 {
+            return copy(path, root, token);
+        }
+        let _ = entered.send(tried.clone());
+        let _ = released.recv();
+        // The copy fails after making its folder, and cannot remove it.
+        fs::create_dir(root.join(token.as_str())).unwrap();
+        Err(problem("Could not copy"))
+    };
+    let prepared = root.clone();
+    let request = Request::start(move || async move {
+        handing
+            .on_worker(&ownership, move || Ok(prepared), copying)
+            .await
+    });
+
+    let tried = entry.recv_timeout(WATCHDOG).unwrap();
+    let responsive = request.responsive();
+    if !responsive {
+        let _ = release.send(());
+    }
+    assert!(responsive, "the runtime waited for the copy");
+    assert_eq!(tried, ["a.txt", "b.txt"]);
+    assert_eq!(
+        fs::read_dir(&root).unwrap().count(),
+        1,
+        "the first copy is made"
+    );
+
+    request.abandon();
+    release.send(()).unwrap();
+    let _next = controller.clone().waiting(WATCHDOG).acquire(false).unwrap();
+    let left: Vec<PathBuf> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(left.len(), 1, "the first copy went: {left:?}");
+    assert!(!left[0].join("a.txt").exists());
+    assert_eq!(states(&output, &task), [State::Gone, State::Intent]);
+}

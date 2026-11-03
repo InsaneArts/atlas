@@ -27,6 +27,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
     time::Duration,
 };
 
@@ -246,25 +247,16 @@ pub(crate) struct Copied {
 /// The paths among `targets` as the helper can open them: unchanged when it
 /// can read them (or they are copies already), otherwise copied first. Every
 /// target is checked before anything is copied; when a copy fails, the
-/// copies already made for the others go.
+/// copies already made for the others go. What is copied here is copied by
+/// a worker of its own that holds `ownership` until it is done, so a caller
+/// that stops waiting neither stalls other work nor lets another controller
+/// in before the copies are settled.
 pub(crate) async fn hand_over(
     client: &Client,
-    ownership: &Ownership,
+    ownership: &Arc<Ownership>,
     targets: Vec<Target>,
     running: &[AppRow],
 ) -> Result<Handed> {
-    // The app the targets open with: its copies go when it is closed.
-    let opened_with: Vec<String> = match targets.first() {
-        Some(Target::Name(name)) if targets.len() > 1 => vec![name.clone()],
-        Some(Target::Path(path))
-            if targets.len() > 1
-                && path.extension().is_some_and(|extension| extension == "app") =>
-        {
-            names(path)
-        }
-        Some(Target::Name(_) | Target::Path(_)) | None => Vec::new(),
-    };
-
     let root_path = PathBuf::from(ROOT);
     let checks: Vec<PathBuf> = targets
         .iter()
@@ -274,25 +266,95 @@ pub(crate) async fn hand_over(
         })
         .collect();
     let answers = readable(client, ownership, &checks).await?;
-    let placed = placement(targets, answers, running)?;
 
-    let root = if placed
-        .iter()
-        .any(|placed| matches!(placed, Placed::Copy { .. }))
-    {
-        self::root(client.config.helper_uid)?
-    } else {
-        root_path
-    };
-    let claims = Claims::of(client);
-    let owner = Owner {
-        session: client.host_session.as_ref().map(HostSession::key),
-        claims: &claims,
-        opened_with: &opened_with,
-    };
-    handed_in(&root, placed, &owner, copy, |folder| {
-        fs::symlink_metadata(folder)
-    })
+    let helper = client.config.helper_uid;
+    Handing {
+        targets,
+        answers,
+        running: running.to_vec(),
+        session: client.host_session.as_ref().map(HostSession::key).cloned(),
+        claims: Claims::of(client),
+    }
+    .on_worker(ownership, move || root(helper), copy)
+    .await
+}
+
+/// What [`hand_over`] does here once the helper said what it can read,
+/// owned so that it can go on by itself.
+struct Handing {
+    targets: Vec<Target>,
+    /// Whether the helper can read each path outside ROOT, in order.
+    answers: Vec<bool>,
+    running: Vec<AppRow>,
+    session: Option<Key>,
+    claims: Claims,
+}
+
+impl Handing {
+    /// [`Handing::locally`] on a blocking worker that holds `ownership`
+    /// until the copies, their removal and their claims are all done, even
+    /// when nobody waits for its answer any more.
+    async fn on_worker(
+        self,
+        ownership: &Arc<Ownership>,
+        prepare: impl FnOnce() -> Result<PathBuf> + Send + 'static,
+        copy: impl FnMut(&Path, &Path, &Token) -> Result<PathBuf> + Send + 'static,
+    ) -> Result<Handed> {
+        let ownership = Arc::clone(ownership);
+        // A dropped handle leaves the worker running: it ends, and lets
+        // control go, only once everything it began is settled.
+        tokio::task::spawn_blocking(move || {
+            let _ownership = ownership;
+            self.locally(prepare, copy)
+        })
+        .await
+        .map_err(|cause| {
+            problem(
+                "Atlas stopped copying for the helper before it finished; what it copied stays \
+                 claimed for this task.",
+            )
+            .with_source(cause)
+        })?
+    }
+
+    /// Place every target, then make the copies needed under the root
+    /// `prepare` readies, only when one is: claimed, made with `copy`,
+    /// labelled and settled as [`handed_in`] says.
+    fn locally(
+        self,
+        prepare: impl FnOnce() -> Result<PathBuf>,
+        copy: impl FnMut(&Path, &Path, &Token) -> Result<PathBuf>,
+    ) -> Result<Handed> {
+        // The app the targets open with: its copies go when it is closed.
+        let opened_with: Vec<String> = match self.targets.first() {
+            Some(Target::Name(name)) if self.targets.len() > 1 => vec![name.clone()],
+            Some(Target::Path(path))
+                if self.targets.len() > 1
+                    && path.extension().is_some_and(|extension| extension == "app") =>
+            {
+                names(path)
+            }
+            Some(Target::Name(_) | Target::Path(_)) | None => Vec::new(),
+        };
+
+        let placed = placement(self.targets, self.answers, &self.running)?;
+        let root = if placed
+            .iter()
+            .any(|placed| matches!(placed, Placed::Copy { .. }))
+        {
+            prepare()?
+        } else {
+            PathBuf::from(ROOT)
+        };
+        let owner = Owner {
+            session: self.session.as_ref(),
+            claims: &self.claims,
+            opened_with: &opened_with,
+        };
+        handed_in(&root, placed, &owner, copy, |folder| {
+            fs::symlink_metadata(folder)
+        })
+    }
 }
 
 /// What one target becomes for the helper.

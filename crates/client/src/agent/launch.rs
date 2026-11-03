@@ -9,7 +9,7 @@ use crate::{
 use atlas_control::Ownership;
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
-use std::{path::Path, time::Instant};
+use std::{path::Path, sync::Arc, time::Instant};
 
 /// How much of what `open` and its cleanup print is read.
 const OUTPUT: usize = 4096;
@@ -51,7 +51,7 @@ pub(super) async fn open_in(
     // Copying, launching and pruning happen under one ownership, so no other
     // open, close or controller interleaves; only commands agents started
     // with `run` go on beside it.
-    let ownership = client.controller.acquire_beside_commands()?;
+    let ownership = Arc::new(client.controller.acquire_beside_commands()?);
     let verified = client.verify().await?;
     let listed = client.apps_in(&verified).await?;
     let running = listed.rows();
