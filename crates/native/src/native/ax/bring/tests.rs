@@ -2995,3 +2995,83 @@ fn window_move_proof_expires_when_its_source_changes() {
     late.delay = REQUEST;
     assert!(moved(&mut late).is_err(), "a proof past its deadline");
 }
+
+#[test]
+fn a_press_on_a_widget_refuses_with_what_the_final_check_finds_there() {
+    let pressed = || {
+        let mut fake = Fake::new();
+        fake.windows.push(Window {
+            number: 9083,
+            pid: 31082,
+            owner: Some("Notification Center".into()),
+            title: Some("Month".into()),
+            layer: atlas_core::screen::windows::WIDGET_LAYER,
+            alpha: 1.0,
+            bounds: Bounds {
+                x: 500.0,
+                y: 400.0,
+                width: 180.0,
+                height: 180.0,
+            },
+            system: Some(atlas_core::screen::windows::System::NotificationCenter),
+        });
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        prepare(
+            &mut fake,
+            &Expect::new(812).unwrap(),
+            Need::Point(560.0, 493.0),
+            deadline,
+            &|| Ok(()),
+            &mut |_| false,
+        )
+        .map(|_| ())
+        .unwrap_err()
+    };
+    let widget = || {
+        Error::new(
+            Code::FocusChanged,
+            "A desktop widget is at that point, not the app's window, so bring it there or \
+             pick another point; this action and the rest were not sent",
+        )
+        .with("reason", serde_json::json!("point"))
+        .with(
+            "found",
+            serde_json::json!({"app": "Notification Center", "pid": 31082}),
+        )
+    };
+
+    let error = pressed();
+    assert_eq!(
+        error.error,
+        "The app's window is not on top at that point, so bring it there or pick another \
+         point; this action and the rest were not sent",
+        "preparation alone names nothing"
+    );
+    assert!(error.details.get("found").is_none());
+    let said = explained(error, || Err(widget()));
+    assert_eq!(said.error, widget().error);
+    assert_eq!(said.details["found"]["app"], "Notification Center");
+
+    assert_eq!(
+        explained(pressed(), || Ok(None)).error,
+        pressed().error,
+        "a final check that finds nothing wrong changes nothing"
+    );
+    assert_eq!(
+        explained(pressed(), || Err(widget().uncertain())).error,
+        pressed().error
+    );
+    let found = widget();
+    assert_eq!(
+        explained(found, || panic!(
+            "a refusal naming what it found is not asked again"
+        ))
+        .error,
+        widget().error
+    );
+    let app = refused(Reason::App);
+    assert_eq!(
+        explained(app, || panic!("only a point refusal")).details["reason"],
+        "app"
+    );
+}

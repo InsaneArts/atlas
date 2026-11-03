@@ -1030,10 +1030,31 @@ pub(in crate::native) fn bring(
     let preparation = deadline
         .checked_sub(SETTLE_BUDGET)
         .ok_or_else(|| Unread::Slow.error())?;
-    let target = prepare(Live, expect, need, preparation, guard, &mut |number| {
+    let prepared = prepare(Live, expect, need, preparation, guard, &mut |number| {
         verify(number, preparation).is_ok()
-    })?;
+    });
+    let target = match prepared {
+        Ok(target) => target,
+        Err(error) => return Err(explained(error, || verify(None, preparation))),
+    };
     settle(target, expect, deadline, guard, verify)
+}
+
+/// A press point where no window of the app's is refuses as the final,
+/// read-only check `verify` words it, naming what is there (a widget, the
+/// Dock, another app's window), so preparation and verification say the
+/// same; any other refusal, or one `verify` does not refuse, stays as it is.
+fn explained(error: Error, verify: impl FnOnce() -> Result<Option<&'static str>>) -> Error {
+    if error.code != Code::FocusChanged
+        || Reason::of(&error) != Some(Reason::Point)
+        || error.details.contains_key("found")
+    {
+        return error;
+    }
+    match verify() {
+        Err(said) if said.code == Code::FocusChanged && !said.uncertain => said,
+        Ok(_) | Err(_) => error,
+    }
 }
 
 fn settle<A: Backend>(
