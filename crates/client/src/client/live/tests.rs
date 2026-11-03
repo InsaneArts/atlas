@@ -504,10 +504,10 @@ async fn an_older_helper_has_only_the_closed_connection_to_go_by() {
     let (socket, mut producer) = UnixStream::pair().unwrap();
     let mut stream = opened(socket, &epoch());
     stream.stop(&client).await.unwrap();
-    drop(stream);
     assert_eq!(
         producer.read(&mut [0]).await.unwrap(),
         0,
-        "nothing was sent"
+        "the connection closes with nothing sent, while the stream still exists"
     );
+    drop(stream);
 }

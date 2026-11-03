@@ -107,7 +107,7 @@ fn connection_from(
 /// A daemon whose native source stops as `stop` says.
 fn stopping(stop: fn() -> Result<()>) -> Arc<Daemon> {
     let mut daemon = Arc::try_unwrap(daemon(raw)).ok().unwrap();
-    daemon.source = Source::new(stop);
+    daemon.source = Arc::new(Source::new(stop));
     Arc::new(daemon)
 }
 

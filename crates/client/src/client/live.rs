@@ -315,15 +315,17 @@ impl LiveStream {
     /// and drained in time; its source then stays quarantined there,
     /// refusing every capture until it is confirmed.
     pub async fn stop(&mut self, client: &Client) -> Result<()> {
+        let until = tokio::time::Instant::now() + DEADLINE;
         let Some(Served {
             daemon,
             generation,
             instance,
         }) = self.producer
         else {
+            // A CoreGraphics stream's source is given back as it closes.
+            let _ = tokio::time::timeout_at(until, self.socket.shutdown()).await;
             return Ok(());
         };
-        let until = tokio::time::Instant::now() + DEADLINE;
         if self.synchronized {
             self.synchronized = false;
             let request = stop_request_id();

@@ -118,8 +118,16 @@ impl TerminalFrames {
         if self.dimension != dimension {
             self.reconfiguring = self.connected;
             self.dimension = dimension;
-            self.retired = self.stream.take();
+            self.retire();
             self.connected = false;
+        }
+    }
+
+    /// Leave the open stream, if there is one, to be stopped before the next
+    /// opens; a stream still waiting for its stop to be confirmed stays.
+    fn retire(&mut self) {
+        if let Some(stream) = self.stream.take() {
+            self.retired = Some(stream);
         }
     }
 
@@ -158,7 +166,7 @@ impl TerminalFrames {
                 .as_ref()
                 .is_some_and(|stream| stream.can_retry(error))
         }) {
-            self.retired = self.stream.take();
+            self.retire();
             self.connected = false;
         }
         result

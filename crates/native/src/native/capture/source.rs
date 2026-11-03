@@ -11,7 +11,7 @@ use atlas_core::{
 };
 use std::{
     collections::VecDeque,
-    sync::{Mutex, MutexGuard, PoisonError},
+    sync::{Mutex, MutexGuard, PoisonError, RwLock},
 };
 
 /// How many drained generations are remembered for late drain queries.
@@ -20,9 +20,13 @@ const TOMBSTONES: usize = 16;
 /// Stops the native source and drains its callbacks; only Ok confirms it.
 pub type Stop = fn() -> Result<()>;
 
-/// The live source and its owner.
+/// The live source and its owner. `state` is only ever held briefly;
+/// `fence` is held by one-shot captures while they run, and taken whole by
+/// a native stop, so no quarantine begins under a capture that passed its
+/// check.
 pub struct Source {
     state: Mutex<State>,
+    fence: RwLock<()>,
     stop: Stop,
 }
 
@@ -93,6 +97,7 @@ impl Source {
                 lifecycle: Lifecycle::Stopped,
                 ..State::default()
             }),
+            fence: RwLock::new(()),
             stop,
         }
     }
@@ -138,11 +143,9 @@ impl Source {
     /// Returns busy while an earlier live source's stop is unconfirmed.
     pub fn one_shot<T>(&self, capture: impl FnOnce() -> T) -> Result<T> {
         self.confirm()?;
-        let state = self.state();
-        if matches!(
-            state.lifecycle,
-            Lifecycle::Quarantined | Lifecycle::Stopping
-        ) {
+        let _capturing = self.fence.read().unwrap_or_else(PoisonError::into_inner);
+        let lifecycle = self.state().lifecycle;
+        if matches!(lifecycle, Lifecycle::Quarantined | Lifecycle::Stopping) {
             return Err(quarantined());
         }
         Ok(capture())
@@ -156,10 +159,13 @@ impl Source {
     ///
     /// Returns the native stop's failure; the source is then quarantined.
     pub fn stop(&self, owner: Owner, stop_request: Option<u64>) -> Result<()> {
-        self.state().lifecycle = Lifecycle::Stopping;
         let stopped = match owner.backend {
             CaptureBackend::CoreGraphics => Ok(()),
-            CaptureBackend::ScreenCaptureKit => (self.stop)(),
+            CaptureBackend::ScreenCaptureKit => {
+                let _fence = self.fence.write().unwrap_or_else(PoisonError::into_inner);
+                self.state().lifecycle = Lifecycle::Stopping;
+                (self.stop)()
+            }
         };
         self.settle(owner.generation, stopped.is_ok(), stop_request);
         stopped
@@ -168,6 +174,12 @@ impl Source {
     /// Ask a quarantined source to stop again, which blocks; anything else
     /// is left as it is.
     fn confirm(&self) -> Result<()> {
+        match self.state().lifecycle {
+            Lifecycle::Quarantined => {}
+            Lifecycle::Stopping => return Err(quarantined()),
+            _ => return Ok(()),
+        }
+        let _fence = self.fence.write().unwrap_or_else(PoisonError::into_inner);
         let generation = {
             let mut state = self.state();
             match (state.lifecycle, state.owner) {

@@ -122,8 +122,12 @@ fn no_state_change_can_begin_while_a_one_shot_capture_runs() {
     });
     capturing.recv().unwrap();
     assert!(
-        source.state.try_lock().is_err(),
-        "a stop, admission or quarantine waits for the capture that passed the check"
+        source.fence.try_write().is_err(),
+        "a native stop or quarantine retry waits for the capture that passed the check"
+    );
+    assert!(
+        source.state.try_lock().is_ok(),
+        "the state stays free for reads"
     );
     finish.send(()).unwrap();
     shot.join().unwrap();
