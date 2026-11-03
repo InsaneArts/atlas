@@ -754,6 +754,8 @@ const RESOLVE_MS: u32 = 500;
 const _: () = assert!(2 * RESOLVE_MS + 5 * CLICK_MS <= BATCH_MS);
 /// [`ACT`].
 const ACT_MS: u32 = 1000;
+// An action on an element and the keys that follow it fit one batch.
+const _: () = assert!(ACT_MS + 4 * KEY_MS <= BATCH_MS);
 
 /// # Errors
 ///

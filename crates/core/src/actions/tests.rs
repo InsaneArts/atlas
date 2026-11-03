@@ -490,7 +490,6 @@ fn an_action_on_an_element_is_typed_by_its_word_and_checked_with_its_whole_batch
             .element_action()
             .is_none()
     );
-    assert!(ACT_MS + 4 * KEY_MS <= BATCH_MS);
 
     for (action, problem) in [
         (
