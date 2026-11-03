@@ -10,7 +10,7 @@ use super::{
 };
 use crate::client::{Client, Run, Verified, WINDOW_LOOKUP, require_looks};
 use atlas_core::{
-    actions::{Batch, Button},
+    actions::{Action, Batch, Button},
     error::{Code, Error, Result},
     protocol::{Crop, Region},
     screen::{
@@ -22,6 +22,7 @@ use atlas_core::{
     },
     transport::run_output,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, time::Instant};
 
@@ -242,6 +243,13 @@ pub async fn click_reference(
 /// errors propagate; an action the app did not acknowledge is uncertain and
 /// must be recovered, never repeated.
 pub async fn element(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
+    // An action that does not decode is refused as its batch is, below.
+    if Action::deserialize(action).is_ok_and(|action| action.element_action().is_none()) {
+        return Err(Error::new(
+            Code::Input,
+            "Only an action on an element is done this way; nothing was sent",
+        ));
+    }
     let reply = referenced(client, target, action).await?;
     if reply["ok"] != true {
         return Ok(reply);

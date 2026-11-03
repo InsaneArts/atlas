@@ -1577,15 +1577,24 @@ async fn an_element_action_is_sent_whole_and_answered_briefly() {
     assert!(!error.uncertain);
 }
 
-/// A pick's option must be a ref too, refused before anything is asked.
+/// A pick's option must be a ref too, and an action that sends events is
+/// no action on an element: both are refused before anything is asked.
 #[tokio::test]
-async fn a_malformed_option_is_refused_before_anything_is_asked() {
+async fn a_malformed_option_or_a_physical_action_is_refused_before_anything_is_asked() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
     let action = json!({"type": "pick", "ref": "8123abc12", "option": "Large"});
     let error = element(&client, None, &action).await.unwrap_err();
     assert_eq!(error.code, Code::Elements);
     assert_eq!(error.details["performed"], 0);
+
+    for physical in [
+        json!({"type": "key", "key": "cmd+q"}),
+        json!({"type": "reference", "ref": "8123abc12"}),
+    ] {
+        let error = element(&client, None, &physical).await.unwrap_err();
+        assert_eq!(error.code, Code::Input, "{physical}");
+    }
     assert!(client.controller.pending().unwrap().is_empty());
 }
 
