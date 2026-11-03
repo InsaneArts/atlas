@@ -8,6 +8,8 @@ use super::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 
+pub mod flow;
+
 /// Metadata one packet kind carries, with the rules its keys alone cannot
 /// say.
 pub trait Metadata: DeserializeOwned {
