@@ -350,6 +350,19 @@ pub fn overview(
         _ => reason.trim_end_matches('.').to_owned(),
     };
 
+    // Background jobs that may still run, as the helper's daemon says.
+    // Records the daemon cannot read are counted apart: their jobs may
+    // still run, so the person's Stop stays offered. A count that could not
+    // read every record says so: more jobs than it counts may run.
+    let counted = &session["daemon"]["jobs"];
+    let mut jobs = json!({
+        "running": counted["running"].as_u64().unwrap_or(0),
+        "launching": counted["launching"].as_u64().unwrap_or(0),
+        "unresolved": counted["unresolved"].as_u64().unwrap_or(0),
+    });
+    if counted["incomplete"] == true {
+        jobs["incomplete"] = json!(true);
+    }
     let value = json!({
         "mode": mode,
         "state": state,
@@ -368,14 +381,7 @@ pub fn overview(
         "inFlight": pending.in_flight,
         "commands": pending.commands,
         "nativeDialogs": report.native,
-        // Background jobs that may still run, as the helper's daemon says.
-        // Records the daemon cannot read are counted apart: their jobs may
-        // still run, so the person's Stop stays offered.
-        "jobs": {
-            "running": session["daemon"]["jobs"]["running"].as_u64().unwrap_or(0),
-            "launching": session["daemon"]["jobs"]["launching"].as_u64().unwrap_or(0),
-            "unresolved": session["daemon"]["jobs"]["unresolved"].as_u64().unwrap_or(0),
-        },
+        "jobs": jobs,
         "activity": activity.iter().map(|row| shown(row, now)).collect::<Vec<_>>(),
     });
     Overview {
