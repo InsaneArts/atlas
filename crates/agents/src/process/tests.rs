@@ -347,6 +347,15 @@ impl Leader for Faulty {
             None => self.child.kill_group(),
         }
     }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.signalled
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match self.signal {
+            Some(errno) => Err(os_error(errno)),
+            None => Leader::kill(&mut self.child),
+        }
+    }
 }
 
 /// Stop and reap what a test left of its isolated group.
@@ -523,5 +532,77 @@ fn an_interrupted_wait_is_asked_again() {
     let error = fixture.answer().unwrap_err();
     assert_eq!(error.error, "Claude Code did not answer within 0 seconds");
     assert!(!error.uncertain, "the tool was stopped and reaped");
+    assert!(locked(tools).groups.is_empty() && locked(tools).held.is_empty());
+}
+
+#[test]
+fn a_tool_that_leaves_its_process_group_is_still_stopped_at_its_deadline() {
+    use std::{io::BufRead, os::unix::process::CommandExt};
+
+    // A group of the test's own for the tool to move into.
+    let mut anchor = Command::new("/bin/sleep");
+    anchor.arg("30").process_group(0);
+    let mut anchor = anchor.spawn().unwrap();
+    let elsewhere = nix::unistd::Pid::from_raw(i32::try_from(anchor.id()).unwrap());
+
+    let tools = fresh_tools();
+    let mut command = Command::new("/usr/bin/perl");
+    command
+        .args([
+            "-e",
+            "setpgrp(0, $ENV{ELSEWHERE}) or die; $| = 1; print \"left\\n\"; sleep 30",
+        ])
+        .env_clear()
+        .env("ELSEWHERE", elsewhere.as_raw().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut tool = start(tools, &mut command).unwrap();
+    let pid = nix::unistd::Pid::from_raw(i32::try_from(tool.leader.id()).unwrap());
+
+    let (cancel, cancelled) = std::sync::mpsc::channel::<()>();
+    let watchdog = std::thread::spawn(move || {
+        if cancelled.recv_timeout(Duration::from_secs(5)).is_err() {
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+        }
+    });
+
+    let mut said = String::new();
+    let mut stdout = std::io::BufReader::new(tool.leader.stdout.take().unwrap());
+    stdout.read_line(&mut said).unwrap();
+    assert_eq!(said, "left\n", "the tool says once it has left its group");
+    assert_eq!(nix::unistd::getpgid(Some(pid)), Ok(elsewhere));
+    assert_eq!(
+        nix::sys::signal::killpg(pid, None),
+        Err(Errno::ESRCH),
+        "its own group is empty while it runs"
+    );
+
+    let (finished, result) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _ = finished.send(supervise(Agent::Claude, tool, Duration::from_millis(100)));
+    });
+    let answer = result.recv_timeout(Duration::from_secs(4));
+    // Without an answer the watchdog stops the tool now, so the worker ends.
+    if answer.is_ok() {
+        let _ = cancel.send(());
+    }
+    drop(cancel);
+    watchdog.join().unwrap();
+    worker.join().unwrap();
+    let _ = anchor.kill();
+    let _ = anchor.wait();
+
+    let error = answer
+        .expect("cleanup does not wait on a tool it never stopped")
+        .unwrap_err();
+    assert_eq!(error.error, "Claude Code did not answer within 0 seconds");
+    assert!(!error.uncertain, "the tool was stopped and reaped");
+    assert_eq!(
+        nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+        Err(Errno::ECHILD),
+        "the tool was reaped"
+    );
     assert!(locked(tools).groups.is_empty() && locked(tools).held.is_empty());
 }

@@ -109,6 +109,8 @@ trait Leader: Send {
     fn wait(&mut self) -> std::io::Result<ExitStatus>;
     /// Kill everything in its process group.
     fn kill_group(&mut self) -> nix::Result<()>;
+    /// Kill the leader itself, through its own handle, wherever its group is.
+    fn kill(&mut self) -> std::io::Result<()>;
 }
 
 impl Leader for Child {
@@ -130,6 +132,10 @@ impl Leader for Child {
             nix::unistd::Pid::from_raw(group),
             nix::sys::signal::Signal::SIGKILL,
         )
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        Child::kill(self)
     }
 }
 
@@ -155,17 +161,28 @@ impl<L: Leader + 'static> Tool<L> {
         }
     }
 
-    /// Kill the tool's group and reap its leader. The group is unlisted once
-    /// the leader is reaped, or once something else reaped it: its process ID
-    /// may then be another's, so it is never signalled again. When the signal
-    /// or the reap fails otherwise, the leader stays unreaped, so its group
-    /// stays listed for a stop to reach and the leader is held in the list.
+    /// Kill the tool's group, then its leader through its own handle, as a
+    /// leader that left its group is no longer in it, and reap the leader.
+    /// The group is unlisted once the leader is reaped, or once something
+    /// else reaped it: its process ID may then be another's, so it is never
+    /// signalled again. When a signal or the reap fails otherwise, the leader
+    /// stays unreaped, so its group stays listed for a stop to reach and the
+    /// leader is held in the list.
     fn stop(mut self) -> std::io::Result<()> {
         match self.leader.kill_group() {
             Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
             Err(errno) => {
                 self.hold();
                 return Err(errno.into());
+            }
+        }
+        match self.leader.kill() {
+            Ok(()) => {}
+            // Unreaped, so its process ID is still its own: it has exited.
+            Err(error) if error.raw_os_error() == Some(nix::errno::Errno::ESRCH as i32) => {}
+            Err(error) => {
+                self.hold();
+                return Err(error);
             }
         }
 
