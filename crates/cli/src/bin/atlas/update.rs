@@ -4,7 +4,7 @@ use atlas_client::client::Client;
 use atlas_core::host::HostSession;
 use atlas_core::{
     config::Config,
-    error::{Code, Result},
+    error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
 
@@ -113,9 +113,11 @@ async fn update_using(
             .ok()
             .and_then(|loaded| Client::new(loaded).ok())
             .and_then(|client| client.output_dir().ok().map(std::path::Path::to_path_buf));
-        let port = output.and_then(|output| atlas_cli::menubar::stop(&output));
-
-        report["previous"] = atlas_client::update::finished()?;
+        let port = retire_previous(
+            &mut report,
+            || output.map_or(Ok(None), |output| atlas_cli::menubar::stop(&output)),
+            atlas_client::update::finished,
+        )?;
 
         if let Some(port) = port {
             spinner.set("Restarting the menu bar…");
@@ -139,6 +141,30 @@ async fn update_using(
     }
 
     Ok(report)
+}
+
+/// Stop a running menu bar with `stop`, then drop the previous app with
+/// `finish`, noting it in `report`: the port the menu bar served, to start
+/// it again there. A menu bar not seen to stop may still run from the
+/// previous app, which is kept, as is the record that resumes the update.
+fn retire_previous(
+    report: &mut Value,
+    stop: impl FnOnce() -> Result<Option<u16>>,
+    finish: impl FnOnce() -> Result<Value>,
+) -> Result<Option<u16>> {
+    let port = stop().map_err(|error| {
+        Error::new(
+            error.code,
+            format!(
+                "{}, so the previous Atlas.app was kept. Quit the menu bar, then run atlas \
+                 update again.",
+                error.error
+            ),
+        )
+        .with_source(error)
+    })?;
+    report["previous"] = finish()?;
+    Ok(port)
 }
 
 /// Check the staged app immediately before replacement, while still holding control.

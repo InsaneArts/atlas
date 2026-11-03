@@ -431,28 +431,98 @@ fn last_reply(log: &Path) -> Option<serde_json::Value> {
 /// Stop a running menu bar (as `uninstall` and `update` must): the port it
 /// was serving, so it can be started again there. Only the process its
 /// viewer answers as, which must be the one its record names and Atlas
-/// itself, is signalled; a stale record naming anything else is not.
-pub fn stop(output: &Path) -> Option<u16> {
-    let record = output.join(crate::viewer::MENUBAR_RECORD);
-    let port = crate::viewer::recorded_port(&crate::viewer::read_record(&record)?)?;
-
-    let running = crate::viewer::running(&record, port)?;
-    let pid = i32::try_from(crate::viewer::process(&running)?).ok()?;
+/// itself, is signalled; a stale record naming anything else is not. None
+/// when no such menu bar runs.
+///
+/// # Errors
+///
+/// Returns a menu bar error when it can't be signalled, its process can't
+/// be read, or it has not been seen to exit by the deadline. It may still
+/// run then, and its record stays.
+pub fn stop(output: &Path) -> Result<Option<u16>> {
+    let Some((port, pid)) = serving(output) else {
+        return Ok(None);
+    };
+    let unreadable = |error| {
+        Error::new(
+            Code::Menubar,
+            "Atlas could not tell whether the menu bar stopped",
+        )
+        .with_source(error)
+    };
+    // This very process: a PID that comes back as another is not it.
+    let Some(instance) = atlas_core::process::info(pid)
+        .map_err(unreadable)?
+        .map(|info| info.instance)
+    else {
+        return Ok(None);
+    };
     if !is_atlas(pid) {
-        return None;
+        return Ok(None);
     }
-
-    let pid = nix::unistd::Pid::from_raw(pid);
-    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGINT).ok()?;
 
     // It finishes what changes the helper first (a Recover can take most
     // of a minute), and keeps its port until then.
     let deadline = std::time::Instant::now() + STOP_WAIT;
-    while nix::sys::signal::kill(pid, None).is_ok() && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    stopped(
+        port,
+        || instance.state(),
+        || {
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid),
+                nix::sys::signal::Signal::SIGINT,
+            )
+        },
+        || {
+            std::thread::sleep(Duration::from_millis(100));
+            std::time::Instant::now() < deadline
+        },
+    )
+}
 
-    Some(port)
+/// The port and process of the menu bar recorded in `output`, when its
+/// viewer answers there as that process.
+fn serving(output: &Path) -> Option<(u16, i32)> {
+    let record = output.join(crate::viewer::MENUBAR_RECORD);
+    let port = crate::viewer::recorded_port(&crate::viewer::read_record(&record)?)?;
+    let running = crate::viewer::running(&record, port)?;
+    let pid = i32::try_from(crate::viewer::process(&running)?).ok()?;
+    Some((port, pid))
+}
+
+/// Ask the menu bar serving `port` to stop with `signal`, then `look` at
+/// its process until it is gone, while `wait` allows: only a process seen
+/// gone has stopped. One already gone is not signalled, and was not
+/// running to be stopped.
+fn stopped(
+    port: u16,
+    mut look: impl FnMut() -> atlas_core::process::State,
+    signal: impl FnOnce() -> nix::Result<()>,
+    mut wait: impl FnMut() -> bool,
+) -> Result<Option<u16>> {
+    use atlas_core::process::State;
+    if look() == State::Gone {
+        return Ok(None);
+    }
+    match signal() {
+        Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
+        Err(errno) => {
+            return Err(
+                Error::new(Code::Menubar, "Atlas could not stop the menu bar").with_source(errno),
+            );
+        }
+    }
+    loop {
+        if look() == State::Gone {
+            return Ok(Some(port));
+        }
+        if !wait() {
+            return Err(Error::new(
+                Code::Menubar,
+                "The menu bar did not stop within a minute",
+            ));
+        }
+    }
 }
 
 /// How long [`stop`] waits for the menu bar to exit: 60 seconds, beyond a

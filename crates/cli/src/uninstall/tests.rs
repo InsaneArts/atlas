@@ -265,6 +265,70 @@ async fn an_unrecorded_helper_never_uses_its_daemons_word_to_adopt_an_account() 
 }
 
 #[test]
+fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let output = dir.path().join("runs");
+    let client = Client::new(Config {
+        helper_uid: 7001,
+        socket_path: dir.path().join("no-daemon.sock"),
+        input_socket: dir.path().join("no-input.sock"),
+        identity_probe: dir.path().join("atlas"),
+        output_dir: output.clone(),
+    })
+    .unwrap();
+    let found = Found {
+        app: dir.path().join("Atlas.app"),
+        executable: dir.path().join("atlas"),
+        client: Some(client),
+        unloaded: None,
+        helper: None,
+        known: None,
+        data: dir.path().join("data"),
+        leftovers: vec![],
+    };
+    for kept in [&found.app, &found.data] {
+        fs::create_dir(kept).unwrap();
+    }
+    let settings = dir.path().join("settings");
+    fs::write(&settings, "").unwrap();
+    let said = std::cell::RefCell::new(Vec::new());
+    let progress = |progress: Progress<'_>| {
+        let (Progress::Say(what) | Progress::Done(what, _) | Progress::Skipped(what, _)) = progress;
+        said.borrow_mut().push(what.to_owned());
+    };
+    let live = Live {
+        found: &found,
+        config_path: &settings,
+        keep_config: false,
+        yes: true,
+        removed: vec![],
+        warnings: vec![],
+        hint: None,
+        deleted: false,
+        exclusion: None,
+        progress: &progress,
+        ask: &agree,
+    };
+    let error = live
+        .stop_menubar(|asked| {
+            assert_eq!(asked, output);
+            Err(Error::new(
+                Code::Menubar,
+                "The menu bar did not stop within a minute",
+            ))
+        })
+        .unwrap_err();
+    assert_eq!(
+        error.error,
+        "The menu bar did not stop within a minute, so Atlas.app and its settings were kept. \
+         Quit the menu bar, then run atlas uninstall again."
+    );
+    assert!(said.borrow().is_empty(), "nothing says it stopped");
+    assert!(live.removed.is_empty());
+    assert!(found.app.exists() && found.data.exists() && settings.exists());
+}
+
+#[test]
 fn a_linked_cache_is_refused_without_unlinking_control_state() {
     let dir = tempfile::tempdir().unwrap();
     let target = dir.path().join("state");

@@ -519,7 +519,7 @@ impl Teardown for Live<'_> {
 
     fn rest(&mut self) -> Result<()> {
         self.forget_requested_opener();
-        self.stop_menubar();
+        self.stop_menubar(crate::menubar::stop)?;
         self.disconnect()?;
         // Stopped while the agents were changed: the app and settings stay.
         if atlas_agents::stopping() {
@@ -639,18 +639,30 @@ impl Live<'_> {
         }
     }
 
-    /// Stop a running menu bar and its opening at login. Turning it off here
-    /// is not the person's choice: unless they had turned it off themselves,
-    /// the record of a choice goes, so setting Atlas up again turns it on
-    /// again (settings kept with --keep-config keep that record otherwise).
-    fn stop_menubar(&self) {
-        let stopped = self
+    /// Stop a running menu bar with `stop`, then its opening at login.
+    /// Turning it off here is not the person's choice: unless they had
+    /// turned it off themselves, the record of a choice goes, so setting
+    /// Atlas up again turns it on again (settings kept with --keep-config
+    /// keep that record otherwise). A menu bar not seen to stop changes
+    /// nothing, and is an error.
+    fn stop_menubar(&self, stop: impl FnOnce(&Path) -> Result<Option<u16>>) -> Result<()> {
+        let output = self
             .found
             .client
             .as_ref()
-            .and_then(|client| client.output_dir().ok().map(Path::to_path_buf))
-            .and_then(|output| crate::menubar::stop(&output))
-            .is_some();
+            .and_then(|client| client.output_dir().ok().map(Path::to_path_buf));
+        let stopped = match output {
+            Some(output) => stop(&output).map_err(|error| {
+                problem(format!(
+                    "{}, so Atlas.app and its settings were kept. Quit the menu bar, then run \
+                     atlas uninstall again.",
+                    error.error
+                ))
+                .with_source(error)
+            })?,
+            None => None,
+        }
+        .is_some();
 
         let decided = crate::menubar::login_decided();
         let enabled = crate::menubar::set_login(crate::menubar::Login::Status)
@@ -667,10 +679,11 @@ impl Live<'_> {
             (true, true) => "stopped and no longer opens at login",
             (true, false) => "stopped",
             (false, true) => "no longer opens at login",
-            (false, false) => return,
+            (false, false) => return Ok(()),
         };
 
         (self.progress)(Progress::Done("Menu bar", said));
+        Ok(())
     }
 
     /// Agents forget the plugin (only those using a marketplace of Atlas's

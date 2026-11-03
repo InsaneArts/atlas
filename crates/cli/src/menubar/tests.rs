@@ -966,6 +966,71 @@ fn open_at_login_takes_only_its_three_states() {
 }
 
 #[test]
+fn a_menu_bar_surviving_its_stop_deadline_is_not_reported_stopped() {
+    use atlas_core::process::State;
+    use nix::errno::Errno;
+
+    /// Stop with each look answering the next of `looks` (the last again
+    /// once they run out), `signal`'s outcome and three waits allowed.
+    fn stop_seeing(looks: &[State], signal: nix::Result<()>) -> (Result<Option<u16>>, bool, usize) {
+        let mut looks = looks.iter().copied();
+        let mut last = State::Running;
+        let mut signalled = false;
+        let mut waits = 0;
+        let outcome = stopped(
+            8123,
+            || {
+                last = looks.next().unwrap_or(last);
+                last
+            },
+            || {
+                signalled = true;
+                signal
+            },
+            || {
+                waits += 1;
+                waits < 3
+            },
+        );
+        (outcome, signalled, waits)
+    }
+
+    for still in [State::Running, State::Stopped, State::Unknown] {
+        let (outcome, signalled, waits) = stop_seeing(&[still], Ok(()));
+        let error = outcome.unwrap_err();
+        assert_eq!(error.code, Code::Menubar, "{still:?}");
+        assert_eq!(error.error, "The menu bar did not stop within a minute");
+        assert!(signalled);
+        assert_eq!(waits, 3, "it waits out its deadline: {still:?}");
+    }
+
+    let (outcome, signalled, _) =
+        stop_seeing(&[State::Running, State::Running, State::Gone], Ok(()));
+    assert_eq!(outcome.unwrap(), Some(8123), "seen to exit");
+    assert!(signalled);
+
+    let (outcome, signalled, _) = stop_seeing(&[State::Running, State::Gone], Err(Errno::ESRCH));
+    assert_eq!(
+        outcome.unwrap(),
+        Some(8123),
+        "gone before the signal landed"
+    );
+    assert!(signalled);
+
+    let (outcome, signalled, waits) = stop_seeing(&[State::Running], Err(Errno::EPERM));
+    assert_eq!(
+        outcome.unwrap_err().error,
+        "Atlas could not stop the menu bar"
+    );
+    assert!(signalled);
+    assert_eq!(waits, 0, "a refused signal is not exit evidence");
+
+    let (outcome, signalled, _) = stop_seeing(&[State::Gone], Ok(()));
+    assert_eq!(outcome.unwrap(), None, "another process now has its PID");
+    assert!(!signalled, "and is never signalled");
+}
+
+#[test]
 fn rendering_selects_the_appearance() {
     assert_eq!(render_args("/tmp/a.png", false), ["--render", "/tmp/a.png"]);
     assert_eq!(

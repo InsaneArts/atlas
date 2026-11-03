@@ -258,3 +258,34 @@ fn an_update_stops_when_a_child_does_not_acknowledge_success() {
     let stderr = exited(1, "", r#"{"ok":false,"error":"refused"}"#);
     assert_eq!(child_reply(&stderr).unwrap()["error"], "refused");
 }
+
+#[test]
+fn an_update_retains_the_previous_app_while_menu_bar_shutdown_is_unconfirmed() {
+    let mut report = json!({"ok": true});
+    let error = retire_previous(
+        &mut report,
+        || {
+            Err(Error::new(
+                Code::Menubar,
+                "The menu bar did not stop within a minute",
+            ))
+        },
+        || panic!("the previous app was removed"),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, Code::Menubar);
+    assert_eq!(
+        error.error,
+        "The menu bar did not stop within a minute, so the previous Atlas.app was kept. Quit the \
+         menu bar, then run atlas update again."
+    );
+    assert!(report.get("previous").is_none(), "{report}");
+
+    for running in [Some(8123), None] {
+        let mut report = json!({"ok": true});
+        let port =
+            retire_previous(&mut report, || Ok(running), || Ok(json!({"removed": true}))).unwrap();
+        assert_eq!(port, running, "restarted only where it ran");
+        assert_eq!(report["previous"], json!({"removed": true}));
+    }
+}
