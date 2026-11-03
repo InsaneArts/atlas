@@ -376,7 +376,7 @@ Examples:
 ```text
 List an app's buttons, fields and other elements.
 
-Lists accessibility elements of the app's windows: role, name, value, click point (at) and size, with each window listed once; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles. more says how many matching elements were left out.
+Lists accessibility elements of the app's windows: role, name, value, click point (at) and size, with each window listed once; also the items of a menu the app has open (menu: true, with a check mark as mark) and, while the app is in front, its menu bar titles. more says how many matching elements were left out. Each element's ref names it in this look (look) for atlas click --ref.
 
 Usage: atlas elements [OPTIONS]
 
@@ -511,7 +511,7 @@ Examples:
 ```text
 Click a point, or exactly one element of an app.
 
-Click at display point X Y (origin + screenshot pixels × pointsPerPixel), or on exactly one accessibility element of an app with --app and --name/--role. Named input brings its target forward, then checks the same point before clicking. With X Y, --app or --pid selects the app, and --window selects a particular window. A blocked or unreadable target refuses the click. No app is launched.
+Click at display point X Y (origin + screenshot pixels × pointsPerPixel), on the element --ref names from atlas elements, or on exactly one accessibility element of an app with --app and --name/--role. Named input brings its target forward, then checks the same point before clicking. With X Y, --app or --pid selects the app, and --window selects a particular window. A blocked or unreadable target refuses the click. No app is launched.
 
 Usage: atlas click [OPTIONS] [X] [Y]
 
@@ -537,6 +537,9 @@ Options:
 
       --role <ROLE>
           Accessibility role, for example AXButton
+
+      --ref <REF>
+          An element's ref from atlas elements: clicks that very element where it is now. A ref that is gone or changed is refused; look again
 
       --button <BUTTON>
           Which mouse button
@@ -567,6 +570,7 @@ Global options:
 
 Examples:
   atlas click --app TextEdit --name Save
+  atlas click --app TextEdit --ref 8123abc12
   atlas click 1200 880
 ```
 

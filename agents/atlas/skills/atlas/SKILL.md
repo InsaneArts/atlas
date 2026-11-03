@@ -25,8 +25,8 @@ and type while the person uses their desktop. If `atlas` is missing or
 ## Reading output
 
 Commands print compact JSON when their output is not a terminal (add
-`--json` if you see plain text) and exit non-zero on failure; read both stdout
-and stderr. A failure has a `code`, an `error` and a short `next`;
+`--json` if you see plain text) and exit non-zero on failure; then read both
+stdout and stderr. A failure has a `code`, an `error` and a short `next`;
 where this guide says more about a code, follow this guide.
 
 Chain steps with `&&`, never `;`, `|| true` or `>/dev/null`: those hide
@@ -76,7 +76,7 @@ use `atlas job start -- PROGRAM ARGS`.
 
 Without a qualified native panel flow, cancel Save/Open and use `run` to
 create files or `open` to open them; use Chrome/Firefox for web pages. Do not
-retry a blank page or inert confirmation. Read Limits for file workarounds,
+retry a blank page or inert confirmation. First read Limits for file workarounds,
 drag-and-drop and protected folders.
 
 A command that changes the helper waits its turn, up to 30 s (`--wait`).
