@@ -5,3 +5,6 @@ pub mod diagnostics;
 pub mod model;
 pub mod pixels;
 pub mod wire;
+
+#[cfg(test)]
+mod tests;

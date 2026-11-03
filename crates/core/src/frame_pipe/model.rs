@@ -398,5 +398,154 @@ impl ErrorMetadata {
     }
 }
 
+/// What every picture packet says of itself.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrameMetadata {
+    pub service_instance: Hex32,
+    #[serde(rename = "observerID")]
+    pub observer_id: Hex32,
+    pub observer_generation: Positive,
+    pub stream_generation: Positive,
+    pub geometry_generation: Positive,
+    #[serde(rename = "creditID")]
+    pub credit_id: Positive,
+    pub source_sequence: Positive,
+    pub image_sequence: Positive,
+    pub base_image_sequence: u64,
+    pub frame_key: Hex64,
+    pub view_generation: Positive,
+    pub input_revision: u64,
+    pub width: Side,
+    pub height: Side,
+    pub row_stride: u32,
+    pub display_width: Measure,
+    pub display_height: Measure,
+    pub display_scale: Measure,
+    pub age_at_header_ns: u64,
+    pub rectangle_count: u32,
+}
+
+/// The most rectangles one delta carries.
+pub const RECTANGLES_MAX: u32 = 256;
+/// The bytes of one rectangle's record: x, y, width and height.
+pub const RECTANGLE: u64 = 16;
+
+impl FrameMetadata {
+    /// The full picture's bytes.
+    pub fn picture(&self) -> u64 {
+        u64::from(self.width.get()) * u64::from(self.height.get()) * 3
+    }
+
+    /// Whether the metadata fits a packet of `kind` with `payload` bytes:
+    /// a full picture is exactly its pixels, a delta names 1 to 256
+    /// rectangles on a base whose pixels fit within a full picture, and an unchanged
+    /// one has no payload and keeps its image. Checked before any payload
+    /// is reserved.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a metadata and length that disagree.
+    pub fn check(&self, kind: super::wire::Kind, payload: u64) -> Result<(), Refusal> {
+        use super::wire::Kind;
+        if u64::from(self.row_stride) != u64::from(self.width.get()) * 3 {
+            return Err(Refusal::Invalid);
+        }
+        let fits = match kind {
+            Kind::FullFrame => {
+                self.base_image_sequence == 0
+                    && self.rectangle_count == 0
+                    && payload == self.picture()
+            }
+            Kind::DeltaFrame => {
+                (1..=RECTANGLES_MAX).contains(&self.rectangle_count)
+                    && self.base_image_sequence > 0
+                    && payload
+                        .checked_sub(RECTANGLE * u64::from(self.rectangle_count))
+                        .is_some_and(|pixels| pixels > 0 && pixels <= self.picture())
+            }
+            Kind::UnchangedFrame => {
+                self.rectangle_count == 0
+                    && payload == 0
+                    && self.base_image_sequence == self.image_sequence.get()
+            }
+            _ => false,
+        };
+        if fits { Ok(()) } else { Err(Refusal::Invalid) }
+    }
+}
+
+/// One changed area of a delta, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rectangle {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Rectangle {
+    /// Its pixels' bytes.
+    pub fn bytes(&self) -> u64 {
+        u64::from(self.width) * u64::from(self.height) * 3
+    }
+}
+
+/// A delta's rectangle records, read from the front of its payload, for a
+/// `width` × `height` picture whose payload is `payload` bytes. They must be
+/// non-empty, inside the picture, sorted by y then x, apart from each other,
+/// and leave exactly their pixels' bytes.
+///
+/// # Errors
+///
+/// Refuses records that break any of those rules.
+pub fn rectangles(
+    records: &[u8],
+    width: u32,
+    height: u32,
+    payload: u64,
+) -> Result<Vec<Rectangle>, Refusal> {
+    if records.len() % RECTANGLE as usize != 0 || records.is_empty() {
+        return Err(Refusal::Invalid);
+    }
+    let word = |bytes: &[u8]| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let mut found: Vec<Rectangle> = Vec::new();
+    let mut pixels = 0_u64;
+    for record in records.chunks_exact(RECTANGLE as usize) {
+        let rectangle = Rectangle {
+            x: word(&record[0..4]),
+            y: word(&record[4..8]),
+            width: word(&record[8..12]),
+            height: word(&record[12..16]),
+        };
+        let inside = rectangle.width > 0
+            && rectangle.height > 0
+            && u64::from(rectangle.x) + u64::from(rectangle.width) <= u64::from(width)
+            && u64::from(rectangle.y) + u64::from(rectangle.height) <= u64::from(height);
+        let ordered = found
+            .last()
+            .is_none_or(|last| (last.y, last.x) < (rectangle.y, rectangle.x));
+        let apart = || {
+            found.iter().all(|other| {
+                rectangle.x >= other.x + other.width
+                    || other.x >= rectangle.x + rectangle.width
+                    || rectangle.y >= other.y + other.height
+                    || other.y >= rectangle.y + rectangle.height
+            })
+        };
+        // Overlap is checked only for a rectangle inside the picture, whose
+        // edges cannot overflow.
+        if !inside || !ordered || !apart() {
+            return Err(Refusal::Invalid);
+        }
+        pixels += rectangle.bytes();
+        found.push(rectangle);
+    }
+    if records.len() as u64 + pixels != payload {
+        return Err(Refusal::Invalid);
+    }
+    Ok(found)
+}
+
 #[cfg(test)]
 mod tests;

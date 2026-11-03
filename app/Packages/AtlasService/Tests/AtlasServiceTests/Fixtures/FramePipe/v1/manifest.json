@@ -1,0 +1,129 @@
+[
+  {
+    "file": "full-2x2.bin",
+    "bytes": 533,
+    "lane": "frame",
+    "result": "packets",
+    "packets": [
+      {
+        "kind": 11,
+        "request": 1,
+        "payload": "ff000000ff000000ffffffff"
+      }
+    ]
+  },
+  {
+    "file": "delta-2x2.bin",
+    "bytes": 540,
+    "lane": "frame",
+    "result": "packets",
+    "packets": [
+      {
+        "kind": 12,
+        "request": 2,
+        "payload": "000000010000000000000001000000010000ff",
+        "rectangles": [
+          [
+            1,
+            0,
+            1,
+            1
+          ]
+        ],
+        "applied": "ff00000000ff0000ffffffff"
+      }
+    ]
+  },
+  {
+    "file": "unchanged.bin",
+    "bytes": 521,
+    "lane": "frame",
+    "result": "packets",
+    "packets": [
+      {
+        "kind": 13,
+        "request": 3,
+        "payload": ""
+      }
+    ]
+  },
+  {
+    "file": "fragmented-sequence.bin",
+    "bytes": 1915,
+    "lane": "frame",
+    "result": "packets",
+    "packets": [
+      {
+        "kind": 4,
+        "request": 1,
+        "payload": ""
+      },
+      {
+        "kind": 11,
+        "request": 1,
+        "payload": "ff000000ff000000ffffffff"
+      },
+      {
+        "kind": 12,
+        "request": 2,
+        "payload": "000000010000000000000001000000010000ff"
+      },
+      {
+        "kind": 13,
+        "request": 3,
+        "payload": ""
+      }
+    ]
+  },
+  {
+    "file": "wrong-base.bin",
+    "bytes": 543,
+    "lane": "frame",
+    "result": "packets",
+    "packets": [
+      {
+        "kind": 12,
+        "request": 4,
+        "payload": "0000000000000001000000020000000100ff0000ff00",
+        "base": 7
+      }
+    ]
+  },
+  {
+    "file": "truncated-prefix.bin",
+    "bytes": 20,
+    "lane": "frame",
+    "result": "truncated"
+  },
+  {
+    "file": "oversized-length.bin",
+    "bytes": 32,
+    "lane": "frame",
+    "result": "oversized"
+  },
+  {
+    "file": "duplicate-key.bin",
+    "bytes": 546,
+    "lane": "frame",
+    "result": "invalid-metadata"
+  },
+  {
+    "file": "escaped-duplicate-key.bin",
+    "bytes": 551,
+    "lane": "frame",
+    "result": "invalid-metadata"
+  },
+  {
+    "file": "stale-credit.bin",
+    "bytes": 46,
+    "lane": "control",
+    "result": "packets",
+    "packets": [
+      {
+        "kind": 36,
+        "request": 5,
+        "payload": ""
+      }
+    ]
+  }
+]
