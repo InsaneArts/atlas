@@ -2441,7 +2441,7 @@ fn the_input_service_offers_actions_on_the_elements_of_a_look() {
 }
 
 fn pressed() -> Action {
-    serde_json::from_value(json!({"type": "press", "ref": "8123abc12"})).unwrap()
+    serde_json::from_value(json!({"type": "press", "ref": "8123abc.12"})).unwrap()
 }
 
 /// An action on an element asks for no focus and posts no event: its own
@@ -2472,7 +2472,7 @@ async fn an_element_action_is_carried_out_with_no_focus_check_and_no_event() {
     assert_eq!(
         stand.acted,
         [(
-            Reference::parse("8123abc12").unwrap(),
+            Reference::parse("8123abc.12").unwrap(),
             ElementAction::Press,
             Some(42)
         )]

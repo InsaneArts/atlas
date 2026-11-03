@@ -440,42 +440,42 @@ fn an_action_on_an_element_is_typed_by_its_word_and_checked_with_its_whole_batch
         assert_eq!(action.target(), Target::Nothing);
         let (reference, done) = action.element_action().unwrap();
         assert_eq!(Some(reference), action.reference());
-        assert_eq!(reference.to_string(), "8123abc12");
+        assert_eq!(reference.to_string(), "8123abc.12");
         done
     };
 
-    let option = Reference::parse("8123abc14").unwrap();
+    let option = Reference::parse("8123abc.14").unwrap();
     for (action, done) in [
         (
-            json!({"type": "press", "ref": "8123abc12"}),
+            json!({"type": "press", "ref": "8123abc.12"}),
             ElementAction::Press,
         ),
         (
-            json!({"type": "set-value", "ref": "8123abc12", "value": ""}),
+            json!({"type": "set-value", "ref": "8123abc.12", "value": ""}),
             ElementAction::SetValue(String::new()),
         ),
         (
-            json!({"type": "check", "ref": "8123abc12"}),
+            json!({"type": "check", "ref": "8123abc.12"}),
             ElementAction::Check(true),
         ),
         (
-            json!({"type": "uncheck", "ref": "8123abc12"}),
+            json!({"type": "uncheck", "ref": "8123abc.12"}),
             ElementAction::Check(false),
         ),
         (
-            json!({"type": "pick", "ref": "8123abc12", "option": "8123abc14"}),
+            json!({"type": "pick", "ref": "8123abc.12", "option": "8123abc.14"}),
             ElementAction::Pick(option),
         ),
         (
-            json!({"type": "expand", "ref": "8123abc12"}),
+            json!({"type": "expand", "ref": "8123abc.12"}),
             ElementAction::Expand(true),
         ),
         (
-            json!({"type": "collapse", "ref": "8123abc12"}),
+            json!({"type": "collapse", "ref": "8123abc.12"}),
             ElementAction::Expand(false),
         ),
         (
-            json!({"type": "scroll-into-view", "ref": "8123abc12"}),
+            json!({"type": "scroll-into-view", "ref": "8123abc.12"}),
             ElementAction::ScrollIntoView,
         ),
     ] {
@@ -484,7 +484,7 @@ fn an_action_on_an_element_is_typed_by_its_word_and_checked_with_its_whole_batch
         assert_eq!(kind().remembered_point(&action), None);
         assert_eq!(one(action.clone()), done);
     }
-    let click = json!([{"type": "reference", "ref": "8123abc12"}]);
+    let click = json!([{"type": "reference", "ref": "8123abc.12"}]);
     assert!(
         Batch::decode(&click).unwrap().actions()[0]
             .element_action()
@@ -493,15 +493,15 @@ fn an_action_on_an_element_is_typed_by_its_word_and_checked_with_its_whole_batch
 
     for (action, problem) in [
         (
-            json!({"type": "set-value", "ref": "8123abc12", "value": "a".repeat(VALUE_MAX + 1)}),
+            json!({"type": "set-value", "ref": "8123abc.12", "value": "a".repeat(VALUE_MAX + 1)}),
             "a value is at most 4096 characters",
         ),
         (
-            json!({"type": "pick", "ref": "8123abc12", "option": "8123abd14"}),
+            json!({"type": "pick", "ref": "8123abc.12", "option": "8123abd.14"}),
             "an option is another element of its control's listing",
         ),
         (
-            json!({"type": "pick", "ref": "8123abc12", "option": "8123abc12"}),
+            json!({"type": "pick", "ref": "8123abc.12", "option": "8123abc.12"}),
             "an option is another element of its control's listing",
         ),
     ] {
@@ -511,20 +511,20 @@ fn an_action_on_an_element_is_typed_by_its_word_and_checked_with_its_whole_batch
         );
     }
     assert_eq!(
-        check(&json!([{"type": "key", "key": "tab"}, {"type": "check", "ref": "8123abc12"}]))
+        check(&json!([{"type": "key", "key": "tab"}, {"type": "check", "ref": "8123abc.12"}]))
             .unwrap_err()
             .error,
         "Action 2 was refused and nothing was sent: an action on a ref comes first in its batch"
     );
-    check(&json!([{"type": "check", "ref": "8123abc12"}, {"type": "key", "key": "tab"}])).unwrap();
+    check(&json!([{"type": "check", "ref": "8123abc.12"}, {"type": "key", "key": "tab"}])).unwrap();
 
     for malformed in [
         json!([{"type": "press", "ref": "Save"}]),
         json!([{"type": "press"}]),
-        json!([{"type": "press", "ref": "8123abc12", "value": "x"}]),
-        json!([{"type": "set-value", "ref": "8123abc12"}]),
-        json!([{"type": "pick", "ref": "8123abc12"}]),
-        json!([{"type": "setvalue", "ref": "8123abc12", "value": "x"}]),
+        json!([{"type": "press", "ref": "8123abc.12", "value": "x"}]),
+        json!([{"type": "set-value", "ref": "8123abc.12"}]),
+        json!([{"type": "pick", "ref": "8123abc.12"}]),
+        json!([{"type": "setvalue", "ref": "8123abc.12", "value": "x"}]),
     ] {
         assert_eq!(
             check(&malformed).unwrap_err().code,
