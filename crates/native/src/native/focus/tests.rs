@@ -60,9 +60,13 @@ struct Seen {
     clock: Option<Instant>,
     /// The Accessibility status behind an unreadable system focus.
     status: Option<objc2_application_services::AXError>,
+    /// Whose title Accessibility finds at a drag's press point; nothing
+    /// unless a test sets it.
+    title: Option<Result<Option<i64>>>,
     focus_reads: usize,
     window_reads: usize,
     keyboard_reads: usize,
+    title_reads: usize,
     app_focused: bool,
 }
 
@@ -134,6 +138,15 @@ impl Look for Seen {
 
     fn dock(&mut self) -> Dock {
         self.dock.clone().unwrap_or(Dock::Icons(Vec::new()))
+    }
+
+    fn title_bar(&mut self, _: i64, _: (f64, f64)) -> Result<Option<i64>> {
+        self.title_reads += 1;
+        match &self.title {
+            Some(Ok(title)) => Ok(*title),
+            Some(Err(_)) => Err(Error::new(Code::Native, "unreadable")),
+            None => Ok(None),
+        }
     }
 }
 
@@ -1757,6 +1770,201 @@ fn a_drag_is_checked_at_its_press_point_only() {
         "point",
         "a drop where no window of the app is"
     );
+}
+
+/// The Dock with its icons along the bottom, the app's window, another
+/// app's window and a widget; the rest of the display empty desktop.
+fn desktop() -> Vec<Window> {
+    vec![
+        window(2, "Dock", 20, (0.0, 0.0, 1000.0, 800.0)),
+        numbered(4120, APP, Some("Untitled"), (100.0, 100.0, 400.0, 300.0)),
+        window(OTHER, "Calculator", 0, (600.0, 100.0, 200.0, 200.0)),
+        widget((8.0, 430.0, 180.0, 180.0)),
+    ]
+}
+
+/// A drag pressing on the app's window's title, at the top of it.
+fn moving(to: (f64, f64)) -> Need {
+    Need::Drag {
+        from: (300.0, 110.0),
+        to,
+    }
+}
+
+/// A check of `need` where Accessibility finds the title of window
+/// `title` at the press point, and how often it was asked.
+fn moved_with(
+    title: Result<Option<i64>>,
+    need: Need,
+    listed: Vec<Window>,
+) -> (Result<Option<&'static str>>, usize) {
+    let mut look = Seen::focused(Some(APP)).showing(listed).docked(icons());
+    look.title = Some(title);
+    let outcome = require(&expect(), need, &display(), &mut look, later());
+    (outcome, look.title_reads)
+}
+
+#[test]
+fn a_proven_native_title_bar_drag_may_finish_on_clear_desktop() {
+    for to in [(800.0, 600.0), (300.0, 650.0), (999.0, 729.0), (0.0, 420.0)] {
+        let (outcome, reads) = moved_with(Ok(Some(4120)), moving(to), desktop());
+        assert!(outcome.is_ok(), "{to:?}: {outcome:?}");
+        assert_eq!(reads, 1, "{to:?}: proven afresh, once");
+    }
+
+    let (outcome, reads) = moved_with(Ok(Some(4120)), moving((200.0, 200.0)), desktop());
+    assert!(outcome.is_ok(), "a drop on its own window");
+    assert_eq!(reads, 0, "needs no proof");
+}
+
+#[test]
+fn a_drag_onto_the_desktop_without_proof_of_a_title_bar_move_is_refused() {
+    let unproven = "Only a window dragged by its title can be dropped on the empty desktop, so \
+                    start the drag on its title or pick another drop point; this action and \
+                    the rest were not sent";
+    for (title, what) in [
+        (Ok(None), "content under the press point"),
+        (Ok(Some(4121)), "another window's title"),
+        (
+            Err(Error::new(Code::Native, "unreadable")),
+            "a proof that could not be read",
+        ),
+    ] {
+        let (outcome, reads) = moved_with(title, moving((800.0, 600.0)), desktop());
+        let error = outcome.unwrap_err();
+        assert_eq!(error.error, unproven, "{what}");
+        assert_eq!(
+            refusal(Err(error)),
+            json!({"reason": "point", "found": null}),
+            "{what}"
+        );
+        assert_eq!(reads, 1, "{what}");
+    }
+
+    let on_the_menu_bar = Need::Drag {
+        from: (300.0, 10.0),
+        to: (800.0, 600.0),
+    };
+    let mut listed = desktop();
+    listed.insert(0, menu_bar());
+    let (outcome, reads) = moved_with(Ok(Some(4120)), on_the_menu_bar, listed);
+    assert_eq!(
+        outcome.unwrap_err().error,
+        unproven,
+        "a press on the menu bar"
+    );
+    assert_eq!(reads, 0, "no window of the app's is pressed to prove");
+}
+
+#[test]
+fn a_proven_window_move_still_refuses_anything_but_clear_desktop() {
+    for (to, found, what) in [
+        (
+            (300.0, 770.0),
+            json!({"app": "Dock", "pid": 2}),
+            "a Dock icon or the Trash",
+        ),
+        (
+            (700.0, 200.0),
+            json!({"app": "Calculator", "pid": OTHER}),
+            "another app's window",
+        ),
+        (
+            (50.0, 500.0),
+            json!({"app": "Notification Center", "pid": 3}),
+            "a widget",
+        ),
+    ] {
+        let (outcome, reads) = moved_with(Ok(Some(4120)), moving(to), desktop());
+        assert_eq!(
+            refusal(outcome),
+            json!({"reason": "point", "found": found}),
+            "{what}"
+        );
+        assert_eq!(reads, 0, "{what}: no proof is asked for");
+    }
+
+    for to in [(1000.0, 400.0), (-1.0, 400.0), (500.0, 800.0)] {
+        let (outcome, reads) = moved_with(Ok(Some(4120)), moving(to), desktop());
+        assert_eq!(
+            refusal(outcome)["reason"],
+            "point",
+            "{to:?}: off the display"
+        );
+        assert_eq!(reads, 0, "{to:?}");
+    }
+
+    let mut claimed = desktop();
+    claimed.insert(
+        0,
+        window(5, "Notification Center", 23, (700.0, 500.0, 250.0, 150.0)),
+    );
+    let (outcome, reads) = moved_with(Ok(Some(4120)), moving((800.0, 600.0)), claimed);
+    assert_eq!(
+        refusal(outcome)["reason"],
+        "unreadable",
+        "an unproven surface"
+    );
+    assert_eq!(reads, 0);
+
+    let mut faint = desktop();
+    let mut invisible = window(6, "Shade", 0, (700.0, 500.0, 250.0, 150.0));
+    invisible.alpha = 0.0;
+    faint.insert(0, invisible);
+    let (outcome, reads) = moved_with(Ok(Some(4120)), moving((800.0, 600.0)), faint);
+    assert_eq!(
+        refusal(outcome)["reason"],
+        "point",
+        "a window that shows nothing"
+    );
+    assert_eq!(reads, 0);
+
+    let mut look = Seen::focused(Some(APP))
+        .showing(desktop())
+        .docked(Dock::Unread);
+    look.title = Some(Ok(Some(4120)));
+    let outcome = require(
+        &expect(),
+        moving((800.0, 600.0)),
+        &display(),
+        &mut look,
+        later(),
+    );
+    assert_eq!(refusal(outcome)["reason"], "unreadable", "a Dock not read");
+}
+
+#[test]
+fn a_named_window_moves_onto_the_desktop_only_by_its_own_title() {
+    let check = |number| {
+        let mut look = Seen::focused(Some(APP)).showing(desktop()).docked(icons());
+        look.title = Some(Ok(Some(4120)));
+        let selected = expect().in_window(number).unwrap();
+        require(
+            &selected,
+            moving((800.0, 600.0)),
+            &display(),
+            &mut look,
+            later(),
+        )
+    };
+    assert!(check(4120).is_ok());
+    assert_eq!(refusal(check(4121))["reason"], "window");
+}
+
+#[test]
+fn each_check_proves_the_move_again() {
+    let mut look = Seen::focused(Some(APP)).showing(desktop()).docked(icons());
+    look.title = Some(Ok(Some(4120)));
+    let check =
+        |look: &mut Seen| require(&expect(), moving((800.0, 600.0)), &display(), look, later());
+    assert!(check(&mut look).is_ok());
+    look.title = Some(Ok(None));
+    assert_eq!(
+        refusal(check(&mut look))["reason"],
+        "point",
+        "the window's title is no longer under the press point"
+    );
+    assert_eq!(look.title_reads, 2);
 }
 
 #[test]

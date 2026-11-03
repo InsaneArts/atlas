@@ -34,6 +34,7 @@ struct Fake {
     count_errors: VecDeque<AXError>,
     count_reads: usize,
     pauses: Vec<Duration>,
+    hit: Option<usize>,
 }
 
 impl Fake {
@@ -74,6 +75,7 @@ impl Fake {
             count_errors: VecDeque::new(),
             count_reads: 0,
             pauses: Vec::new(),
+            hit: None,
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -206,6 +208,11 @@ impl Backend for &mut Fake {
             after(self);
         }
         self.status
+    }
+    fn hit(&mut self, app: &usize, _: f64, _: f64) -> Result<Option<usize>> {
+        assert_eq!(*app, APP);
+        assert!(self.bounds.last().is_some_and(|bound| *bound <= REQUEST));
+        Ok(self.hit)
     }
 }
 
@@ -2811,4 +2818,103 @@ fn a_controller_pinned_instance_is_not_replaced_at_native_admission() {
         target_application(&Expect::new(pid.into()).unwrap()).unwrap(),
         current
     );
+}
+
+/// An element of the test app: the window's title in its title bar.
+const TITLE: usize = 7;
+
+/// The test app with its window's title at the top of the window, where
+/// Accessibility finds it at the press point.
+fn titled() -> Fake {
+    let mut fake = Fake::new();
+    fake.hit = Some(TITLE);
+    fake.answers
+        .insert((TITLE, "AXWindow"), Answer::Element(WINDOW));
+    fake.answers
+        .insert((WINDOW, "AXTitleUIElement"), Answer::Element(TITLE));
+    fake.answers
+        .insert((TITLE, "AXPosition"), Answer::Point(150.0, 33.0));
+    fake.answers
+        .insert((TITLE, "AXSize"), Answer::Size(120.0, 16.0));
+    fake
+}
+
+/// Where the drag presses: on the title.
+const PRESS: (f64, f64) = (200.0, 40.0);
+
+/// One change to the test app between two proofs, and what it is.
+type Change = (&'static str, fn(&mut Fake));
+
+fn moved(fake: &mut Fake) -> Result<Option<i64>> {
+    let listed = fake.windows.clone();
+    let deadline = fake.now.get() + REQUEST;
+    let mut reader = Reader {
+        ask: &mut *fake,
+        deadline,
+    };
+    reader.title_bar(&APP, 812, PRESS, &listed)
+}
+
+#[test]
+fn window_move_proof_expires_when_its_source_changes() {
+    assert_eq!(moved(&mut titled()).unwrap(), Some(42), "its own title");
+
+    let changes: [Change; 10] = [
+        ("nothing there", |fake| fake.hit = None),
+        ("its content", |fake| fake.hit = Some(FIELD)),
+        ("another process's element", |fake| {
+            fake.owners.insert(TITLE, 900);
+        }),
+        ("a title that is not the window's", |fake| {
+            fake.answers
+                .insert((WINDOW, "AXTitleUIElement"), Answer::Element(FIELD));
+        }),
+        ("a window without a title element", |fake| {
+            fake.answers.remove(&(WINDOW, "AXTitleUIElement"));
+        }),
+        ("a dialog", |fake| {
+            fake.answers
+                .insert((WINDOW, "AXSubrole"), Answer::Text("AXDialog".into()));
+        }),
+        ("a point beside the title", |fake| {
+            fake.answers
+                .insert((TITLE, "AXPosition"), Answer::Point(300.0, 33.0));
+        }),
+        ("a window that moved", |fake| {
+            fake.windows[0].bounds.x += 50.0
+        }),
+        ("a window listed twice", |fake| {
+            let twin = Window {
+                number: 43,
+                ..fake.windows[0].clone()
+            };
+            fake.windows.push(twin);
+        }),
+        ("a window now another process's", |fake| {
+            fake.owners.insert(WINDOW, 900);
+        }),
+    ];
+    for (what, change) in changes {
+        let mut fake = titled();
+        change(&mut fake);
+        assert!(
+            !matches!(moved(&mut fake), Ok(Some(_))),
+            "{what}: no move is proven"
+        );
+    }
+
+    let mut slow = titled();
+    slow.answers.insert(
+        (WINDOW, "AXTitleUIElement"),
+        Answer::Failed(AXError::CannotComplete),
+    );
+    assert_eq!(
+        moved(&mut slow).unwrap_err().details["unread"],
+        "slow",
+        "a read that fails proves nothing"
+    );
+
+    let mut late = titled();
+    late.delay = REQUEST;
+    assert!(moved(&mut late).is_err(), "a proof past its deadline");
 }

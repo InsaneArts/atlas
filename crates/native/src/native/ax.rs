@@ -22,7 +22,7 @@ mod tree;
 #[cfg(test)]
 pub(crate) use atlas_core::screen::elements::{Element, Limits};
 pub(crate) use atlas_core::screen::geometry::Bounds;
-pub(super) use bring::{bring, check_application, described, target_application};
+pub(super) use bring::{bring, check_application, described, target_application, title_bar};
 pub(super) use ffi::act;
 pub(super) use keyboard::{
     Asked, Focused, Judged, Keyboard, Status, Unread, Within, frontmost, keyboard, remaining,

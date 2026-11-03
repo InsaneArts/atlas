@@ -13,7 +13,7 @@ use atlas_core::{
     screen::{
         elements::Element,
         select::{ElementFilter, shown_name},
-        windows::{self, Bounds, Dock, Listed, Screen, Surface, Window},
+        windows::{self, Bounds, Dock, Ground, Listed, Screen, Surface, Window},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -250,6 +250,10 @@ trait Look {
     /// Where the Dock takes clicks; [`Dock::Unread`] when that cannot be
     /// read in time.
     fn dock(&mut self) -> Dock;
+    /// The listed window of process `pid` that a drag pressing at `point`
+    /// moves by its own title, proven afresh; None when anything else is
+    /// there.
+    fn title_bar(&mut self, pid: i64, point: (f64, f64)) -> Result<Option<i64>>;
 }
 
 /// The live helper, read until `deadline`, its window list and its Dock at
@@ -322,6 +326,15 @@ impl Look for Live {
             .unwrap_or(Dock::Unread);
         self.dock = Some(dock.clone());
         dock
+    }
+
+    /// Asked of the app's own element, against the window list this look
+    /// read, in what time is left.
+    fn title_bar(&mut self, pid: i64, point: (f64, f64)) -> Result<Option<i64>> {
+        let left = self.left()?;
+        let deadline = Instant::now() + left.min(FOCUS_TIMEOUT);
+        let listed = self.windows()?;
+        ax::title_bar(pid, point, listed, deadline)
     }
 }
 
@@ -410,7 +423,7 @@ fn require(
             .map(|()| None),
         Need::Drag { from, to } => active(expect, look)
             .and_then(|()| point(expect, from, Spot::At, display, look))
-            .and_then(|()| point(expect, to, Spot::Drop, display, look))
+            .and_then(|()| dropped(expect, from, to, display, look))
             .map(|()| None),
     };
     let unread = outcome
@@ -830,6 +843,56 @@ fn point(
         _ => format!("{} window is at {at}, not the app's", found.whose()),
     };
     Err(refused_with(Reason::Point, fact, found))
+}
+
+/// A drag drops where [`point`] lets a pointer action land, or, when it
+/// moves the app's own window by its title, on the clear desktop: inside
+/// the display with nothing listed there (see [`windows::ground_at`]). The
+/// move is proven in this very check, from the window on top at the press
+/// point and Accessibility finding that window's title there; a widget, the
+/// Dock, another window or what could not be read still refuses.
+fn dropped(
+    expect: &Expect,
+    from: (f64, f64),
+    to: (f64, f64),
+    display: &Bounds,
+    look: &mut impl Look,
+) -> Result<()> {
+    let refusal = match point(expect, to, Spot::Drop, display, look) {
+        Ok(()) => return Ok(()),
+        Err(refusal) if Reason::of(&refusal) == Some(Reason::Point) => refusal,
+        Err(refusal) => return Err(refusal),
+    };
+    let screen = Screen::new(display.clone(), look.dock());
+    let listed = look.windows().map_err(unreadable_from)?;
+    if windows::ground_at(listed, to.0, to.1, &screen) != Ground::Clear {
+        return Err(refusal);
+    }
+    let source = windows::top_at(listed, from.0, from.1, &screen)
+        .filter(|window| {
+            window.pid == expect.pid()
+                && window.layer == 0
+                && expect.window().is_none_or(|wanted| wanted == window.number)
+        })
+        .map(|window| window.number);
+    let Some(source) = source else {
+        return Err(unproven_move());
+    };
+    match look.title_bar(expect.pid(), from) {
+        Ok(Some(title)) if title == source => Ok(()),
+        Ok(_) => Err(unproven_move()),
+        Err(error) => Err(unproven_move().with_source(error)),
+    }
+}
+
+/// The refusal of a drop on the clear desktop by a drag not proven to move
+/// a window by its title.
+fn unproven_move() -> Error {
+    let message = format!(
+        "Only a window dragged by its title can be dropped on the empty desktop, so start the \
+         drag on its title or pick another drop point; {NOT_SENT}"
+    );
+    Error::new(Code::FocusChanged, message).with("reason", json!(Reason::Point))
 }
 
 /// A pointer action at a point goes ahead only where window `wanted`, one

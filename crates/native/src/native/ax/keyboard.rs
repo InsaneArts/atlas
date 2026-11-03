@@ -338,7 +338,7 @@ impl<A: Ask> Reader<A> {
     }
 
     /// The frame from position and size, both there or both absent.
-    fn frame(&mut self, element: &A::Element) -> Result<Option<Bounds>> {
+    pub(super) fn frame(&mut self, element: &A::Element) -> Result<Option<Bounds>> {
         let position = self.answer(element, "AXPosition")?;
         let size = self.answer(element, "AXSize")?;
         match (position, size) {

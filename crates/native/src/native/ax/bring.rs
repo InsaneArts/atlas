@@ -51,6 +51,9 @@ pub(super) trait Backend: Ask {
         deadline: Instant,
     ) -> Result<bool>;
     fn write(&mut self, element: &Self::Element, operation: Write) -> AXError;
+    /// The element of `app` Accessibility finds at the point; None when it
+    /// finds none.
+    fn hit(&mut self, app: &Self::Element, x: f64, y: f64) -> Result<Option<Self::Element>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,6 +153,31 @@ impl Backend for Live {
             Write::Raise => ffi::act(element, &CFString::from_static_str("AXRaise")),
         }
     }
+
+    fn hit(&mut self, app: &Self::Element, x: f64, y: f64) -> Result<Option<Self::Element>> {
+        match ffi::element_at(app, x as f32, y as f32) {
+            Ok(element) => Ok(element),
+            Err(AXError::NoValue) => Ok(None),
+            Err(status) => Err(Unread::Failed.asking("AXUIElementCopyElementAtPosition", status)),
+        }
+    }
+}
+
+/// The listed window of app `pid` that a drag pressing at `point` moves by
+/// its own title, as Accessibility proves it before `deadline`; None when
+/// anything else is there. Nothing is written.
+pub(in crate::native) fn title_bar(
+    pid: i64,
+    point: (f64, f64),
+    listed: &[Window],
+    deadline: Instant,
+) -> Result<Option<i64>> {
+    let mut reader = Reader {
+        ask: Live,
+        deadline,
+    };
+    let app = reader.ask.app(pid)?;
+    reader.title_bar(&app, pid, point, listed)
 }
 
 fn supports_raise(
@@ -420,6 +448,45 @@ impl<A: Backend> Reader<A> {
             })
             .ok_or_else(|| refused(Reason::Point))?;
         Ok((candidate.layer != windows::MENU_LAYER).then_some(candidate.number))
+    }
+
+    /// The listed window of app `pid` whose own title Accessibility finds
+    /// at the point: the element there is the one its standard window names
+    /// as its title, the point is inside that title, and `listed` shows the
+    /// window once. A generic window hit or a guessed strip proves nothing;
+    /// None when anything else is there.
+    fn title_bar(
+        &mut self,
+        app: &A::Element,
+        pid: i64,
+        (x, y): (f64, f64),
+        listed: &[Window],
+    ) -> Result<Option<i64>> {
+        self.owned(app, pid)?;
+        self.bound(app, REQUEST)?;
+        let hit = self.ask.hit(app, x, y)?;
+        self.left()?;
+        let Some(hit) = hit.filter(|hit| self.ask.owner(hit) == Some(pid)) else {
+            return Ok(None);
+        };
+        let Some(window) = self.reference(&hit, "AXWindow")? else {
+            return Ok(None);
+        };
+        self.owned(&window, pid)?;
+        if self.reference(&window, "AXTitleUIElement")?.as_ref() != Some(&hit) {
+            return Ok(None);
+        }
+        let shown = self.window(&window)?;
+        if shown.role.as_deref() != Some("AXWindow")
+            || shown.subrole.as_deref() != Some("AXStandardWindow")
+            || !self.frame(&hit)?.is_some_and(|title| title.contains(x, y))
+        {
+            return Ok(None);
+        }
+        Ok(match described(&shown, frame(&shown)?, pid, listed) {
+            Listed::One(number) => Some(number),
+            Listed::Missing | Listed::Several => None,
+        })
     }
 
     fn resolve(&mut self, app: &A::Element, pid: i64, number: i64) -> Result<A::Element> {
