@@ -203,10 +203,9 @@ fn in_the_way(reason: Option<&str>, unread: Option<&str>) -> (&'static str, &'st
             "The focused element sits deeper in your app than Atlas reads",
             "check this window or field with --app alone",
         ),
-        (Some("unreadable"), Some("slow")) => (
-            "Your app did not say in time where its focus is, as when it is busy",
-            "wait a moment",
-        ),
+        (Some("unreadable"), Some("slow")) => {
+            ("Your app did not say where its focus is", "wait a moment")
+        }
         (Some("unreadable"), _) => (
             "Atlas couldn't tell what was in front, often because the active app has no window",
             "click where your app shows, or open the app if none of it shows",
@@ -236,10 +235,13 @@ pub fn focus_advice(result: &serde_json::Value) -> Option<String> {
             "{what}. Earlier actions were sent: check typed or performed and what landed, {remedy}, then send only the rest."
         ));
     }
+    // An app that does not say where its focus is may keep not saying it,
+    // so repeating the command is not promised to work.
     if (reason, unread) == (Some("unreadable"), Some("slow")) {
-        return Some(
-            "The app was busy and nothing was sent. Run the same command again.".to_owned(),
-        );
+        return Some(format!(
+            "{what}, and nothing was sent. Wait a moment and try once more; if it refuses again, \
+             tell the person the app is not answering instead of repeating the command."
+        ));
     }
 
     let remedy = crate::name::capitalized(remedy);

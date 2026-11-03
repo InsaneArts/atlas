@@ -94,11 +94,11 @@ fn every_failure_for_programs_says_what_to_do_next() {
 }
 
 #[test]
-fn a_slow_focus_read_asks_for_the_same_command_again() {
+fn a_slow_focus_read_is_tried_once_more_and_then_told_to_the_person() {
     for (unread, expected) in [
         (
             "slow",
-            "The app was busy and nothing was sent. Run the same command again.",
+            "Your app did not say where its focus is, and nothing was sent. Wait a moment and try once more; if it refuses again, tell the person the app is not answering instead of repeating the command.",
         ),
         (
             "failed",
