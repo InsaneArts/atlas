@@ -1,7 +1,7 @@
 //! The `hello` reply: who the daemon runs as, in which session, on which
 //! display, with which permissions.
 use atlas_core::protocol::Census;
-use atlas_native::native::{accessibility_trusted as accessibility, capture, cf};
+use atlas_native::native::{accessibility_trusted as accessibility, capture, cf, resources};
 use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
 };
@@ -111,7 +111,7 @@ pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
         "session": {"managerName": manager, "onConsole": console_state()},
         "display": display(),
         "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
-            "capabilities": capabilities},
+            "capabilities": capabilities, "resources": resources::own()},
     });
     if let Some(jobs) = jobs {
         hello["daemon"]["jobs"] = json!(jobs);

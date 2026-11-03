@@ -117,6 +117,8 @@ mod lease;
 #[cfg(target_os = "macos")]
 pub mod processes;
 #[cfg(target_os = "macos")]
+pub mod resources;
+#[cfg(target_os = "macos")]
 pub mod service;
 #[cfg(target_os = "macos")]
 #[allow(
