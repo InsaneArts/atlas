@@ -91,7 +91,7 @@ enum Wanted {
 /// # Errors
 ///
 /// Refuses, with nothing done, a reference [`kept`] or [`meet`] refuses, an
-/// element in another window or of another process, an option outside its
+/// element of a web page, in another window or of another process, an option outside its
 /// control, a window a sheet or modal blocks, a disabled control, a
 /// password field's value, an action the element does not support, a state
 /// it cannot read when acting would toggle it, and an app too slow to leave
@@ -112,6 +112,12 @@ pub(in crate::native) fn act_on(
         ElementAction::Pick(option) => Some(kept(looks, *option, epoch, Some(control.instance()))?),
         _ => None,
     };
+    // A web page's controls often take an Accessibility request without
+    // acting on it, so they are left to clicks and typing; the look already
+    // says, so nothing is read to tell.
+    if control.in_web_page() || option.as_ref().is_some_and(Found::in_web_page) {
+        return Err(in_web_page());
+    }
 
     let first = meet_all(&control, option.as_ref(), deadline)?;
     if window.is_some_and(|window| first.expect.window() != Some(window)) {
@@ -555,6 +561,17 @@ fn unsupported(what: &str) -> Error {
         format!("The element cannot be {what}; nothing was sent"),
     )
     .with("next", json!(INSTEAD))
+}
+
+fn in_web_page() -> Error {
+    Error::new(
+        Code::Input,
+        "Atlas acts only on an app's own controls this way, not a web page's; nothing was sent",
+    )
+    .with(
+        "next",
+        json!("In a web page, click it with atlas click --ref, or click and type."),
+    )
 }
 
 fn disabled() -> Error {

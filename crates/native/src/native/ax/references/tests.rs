@@ -281,6 +281,25 @@ fn an_element_to_act_on_is_kept_for_its_own_app_and_met_only_while_it_runs() {
     assert_eq!(error.error, "The app it is in quit or was replaced");
 }
 
+/// An element is in a web page when it, or any element its look reached
+/// it from, is the page's web area; nothing else is.
+#[test]
+fn an_element_is_in_a_web_page_when_its_look_reached_it_through_one() {
+    let looks = Looks::default();
+    let now = Instant::now();
+    let mut page = chained(editor(), 1, 4);
+    page.seen[1].element.role = Some("AXWebArea".into());
+    let (look, _) = looks.keep(epoch(), page, now).unwrap();
+    let found = |index| looks.find(at(look, index), &epoch(), now).unwrap();
+
+    assert!(!found(0).in_web_page(), "the window above the page");
+    assert!(found(1).in_web_page(), "the page itself");
+    assert!(found(3).in_web_page(), "a field deep in the page");
+
+    let (app, _) = looks.keep(epoch(), chained(editor(), 10, 3), now).unwrap();
+    assert!(!looks.find(at(app, 2), &epoch(), now).unwrap().in_web_page());
+}
+
 /// An option the look saw reached from its control lies that far below it,
 /// and nothing else lies below anything.
 #[test]

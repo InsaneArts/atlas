@@ -120,6 +120,19 @@ fn refusals_before_the_action_send_nothing_and_say_what_to_do() {
     );
 }
 
+/// A web page's element is refused for certain, with nothing sent, and the
+/// agent is told to click and type there instead.
+#[test]
+fn an_element_of_a_web_page_is_refused_with_the_way_to_reach_it() {
+    let error = in_web_page();
+    assert_eq!(error.code, Code::Input);
+    assert!(!error.uncertain);
+    assert_eq!(
+        error.details["next"],
+        "In a web page, click it with atlas click --ref, or click and type."
+    );
+}
+
 #[test]
 fn nothing_is_read_once_the_deadline_has_passed() {
     let error = left(Instant::now()).unwrap_err();

@@ -140,6 +140,15 @@ impl Found {
         self.instance
     }
 
+    /// Whether the look reached the element through a web page: it, or an
+    /// element on its path, is a web area. Its role is proven again with
+    /// the rest of its identity when the element is met.
+    pub(super) fn in_web_page(&self) -> bool {
+        self.chain
+            .iter()
+            .any(|seen| seen.element.role.as_deref() == Some("AXWebArea"))
+    }
+
     /// How many elements up the path to `inner` this element is, when the
     /// look saw `inner` reached from it.
     pub(super) fn above(&self, inner: &Found) -> Option<usize> {
