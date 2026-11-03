@@ -1,0 +1,45 @@
+{
+  "id": "answer-input-uncertain",
+  "newline": true,
+  "serialized": "{\"id\":7,\"jsonrpc\":\"2.0\",\"result\":{\"content\":[{\"text\":\"The input outcome is unknown: 東京 \\\"draft\\\"\\nKeep pending work\",\"type\":\"text\"}],\"isError\":true,\"structuredContent\":{\"canControl\":true,\"canResume\":true,\"control\":true,\"error\":{\"code\":\"input\",\"error\":\"The input outcome is unknown: 東京 \\\"draft\\\"\\nKeep pending work\",\"ok\":false,\"uncertain\":true}}}}\n",
+  "bytes": 355,
+  "rowsPointer": null,
+  "rows": 0,
+  "helperRequests": 0,
+  "helperProofs": 0,
+  "helperOperations": [],
+  "viewerRequests": 1,
+  "viewerReply": {
+    "ok": false,
+    "code": "input",
+    "uncertain": true,
+    "error": "The input outcome is unknown: 東京 \"draft\"\nKeep pending work"
+  },
+  "viewerRequest": {
+    "lease": "synthetic-lease",
+    "frame": "synthetic-frame",
+    "actions": [
+      {
+        "type": "type",
+        "text": "東京 \"draft\"\n"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "tools/call",
+    "params": {
+      "name": "send_input",
+      "arguments": {
+        "frame": "synthetic-frame",
+        "actions": [
+          {
+            "type": "type",
+            "text": "東京 \"draft\"\n"
+          }
+        ]
+      }
+    }
+  }
+}

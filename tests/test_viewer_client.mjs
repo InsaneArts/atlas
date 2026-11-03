@@ -143,17 +143,33 @@ test('input names the latest frame, and the keep-alive renews with it', async ()
   }
 });
 
-test('release stops the keep-alive', async () => {
+test('release stops the keep-alive', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const schedule = globalThis.setInterval;
+  const flights = [];
+  t.mock.method(globalThis, 'setInterval', (callback, delay, ...args) =>
+    schedule(
+      (...values) => {
+        flights.push(Promise.resolve(callback(...values)));
+      },
+      delay,
+      ...args,
+    ),
+  );
   const service = await stub();
   const client = new ViewerClient(service.url, { frameEvery: 20, renewEvery: 30 });
   try {
     await client.acquire();
-    await wait(80);
-    await client.release();
-    // Anything already in flight lands first.
-    await wait(30);
+    t.mock.timers.tick(80);
+    // Release while callbacks are in flight, then join their actual completion.
+    await Promise.all([client.release(), ...flights.splice(0)]);
+    assert.ok(service.requests.filter((request) => request.route === 'frame.png').length >= 2);
+    assert.ok(posts(service.requests, 'control/renew').length >= 1);
     const count = service.requests.length;
-    await wait(120);
+    t.mock.timers.tick(120);
+    const later = flights.splice(0);
+    await Promise.all(later);
+    assert.equal(later.length, 0, 'Release must cancel both keep-alive timers');
     assert.equal(service.requests.length, count);
     await assert.rejects(client.key('escape'), /Take control first/);
   } finally {

@@ -1,0 +1,694 @@
+//! Bounded file reads, private staging and descriptor-relative installation.
+use super::{
+    Result, STATE,
+    model::{Fingerprint, Node},
+    problem,
+};
+use atlas_core::{
+    acl::{self, Acl},
+    files::{Lock, LockFile},
+    fs_move::{Replace, rename_within},
+};
+use nix::{
+    errno::Errno,
+    fcntl::{OFlag, openat},
+    sys::stat::{Mode, mkdirat},
+    unistd::{Gid, UnlinkatFlags, fchown, unlinkat},
+};
+use sha2::{Digest, Sha256};
+use std::os::macos::fs::MetadataExt as _;
+use std::{
+    ffi::{CStr, CString},
+    fs,
+    io::Write,
+    os::unix::{
+        ffi::OsStrExt,
+        fs::{MetadataExt, PermissionsExt},
+    },
+    path::{Component, Path, PathBuf},
+    process::Command,
+};
+
+pub(super) fn read_limited(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    let file = open_regular(path, false)?.ok_or_else(|| problem("Environment file is missing"))?;
+    read_file(file, limit)
+}
+
+pub(super) fn read_file(file: fs::File, limit: u64) -> Result<Vec<u8>> {
+    if !file.metadata()?.is_file() {
+        return Err(problem(
+            "Environment files must be regular files, not links or devices",
+        ));
+    }
+
+    let bytes = atlas_core::files::read_up_to(file, limit + 1)?;
+
+    if bytes.len() as u64 > limit {
+        return Err(problem("Environment file exceeds its size limit"));
+    }
+
+    Ok(bytes)
+}
+
+pub(super) fn open_regular(path: &Path, create: bool) -> Result<Option<fs::File>> {
+    let Some(parent) = directory(
+        path.parent().ok_or_else(|| problem("Missing parent"))?,
+        false,
+    )?
+    else {
+        return Ok(None);
+    };
+
+    let name = component(
+        path.file_name()
+            .ok_or_else(|| problem("Missing file name"))?,
+    )?;
+
+    let flags = if create {
+        OFlag::O_RDWR | OFlag::O_CREAT
+    } else {
+        OFlag::O_RDONLY
+    };
+
+    let opened = openat(
+        &parent,
+        name.as_c_str(),
+        flags | OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    );
+    let file = match opened {
+        Ok(fd) => fs::File::from(fd),
+        Err(Errno::ENOENT) => return Ok(None),
+        Err(error) => return Err(std::io::Error::from(error).into()),
+    };
+
+    if !file.metadata()?.is_file() {
+        return Err(problem("Expected a regular environment file"));
+    }
+
+    Ok(Some(file))
+}
+
+pub(super) fn snapshot(path: &Path) -> Result<Option<(Fingerprint, Vec<u8>)>> {
+    let Some(file) = open_regular(path, false)? else {
+        return Ok(None);
+    };
+
+    let metadata = file.metadata()?;
+    let acl = descriptor_acl(&file)?;
+    let xattrs = attributes::attributes(&file)?;
+    let flags = metadata.st_flags();
+
+    // Replacing these files could silently discard information or affect aliases.
+    if metadata.uid() != nix::unistd::getuid().as_raw()
+        || metadata.nlink() != 1
+        || acl
+        || flags != 0
+        || metadata.mode() & 0o7000 != 0
+    {
+        return Err(problem(format!(
+            "Unsupported destination metadata (owner={}, links={}, ACL={}, flags={}, mode={:o}); it was not changed",
+            metadata.uid(),
+            metadata.nlink(),
+            acl,
+            flags,
+            metadata.mode() & 0o7777
+        )));
+    }
+
+    let bytes = read_file(file.try_clone()?, super::MAX_FILE)?;
+    let after = file.metadata()?;
+    if metadata.len() != after.len()
+        || metadata.mtime() != after.mtime()
+        || metadata.mtime_nsec() != after.mtime_nsec()
+        || metadata.ctime() != after.ctime()
+        || metadata.ctime_nsec() != after.ctime_nsec()
+    {
+        return Err(problem("Environment file changed while being read"));
+    }
+
+    Ok(Some((
+        Fingerprint {
+            node: node(&metadata),
+            sha256: digest(&bytes),
+            size: bytes.len() as u64,
+            mode: metadata.mode() & 0o7777,
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            acl,
+            xattrs,
+            flags,
+        },
+        bytes,
+    )))
+}
+
+mod attributes;
+
+pub(super) use attributes::{QUARANTINE, owned_attributes, restore_attributes};
+
+pub(super) fn fingerprint(path: &Path) -> Result<Option<Fingerprint>> {
+    Ok(snapshot(path)?.map(|(fingerprint, _)| fingerprint))
+}
+
+/// When `path` last changed, in milliseconds since 1970, when that can be told.
+pub(super) fn changed_ms(path: &Path) -> Option<u64> {
+    let at = fs::symlink_metadata(path).ok()?.modified().ok()?;
+    let since = at.duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(since.as_millis()).ok()
+}
+
+pub(super) fn node(metadata: &fs::Metadata) -> Node {
+    Node {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    }
+}
+
+fn component(name: &std::ffi::OsStr) -> Result<CString> {
+    CString::new(name.as_bytes()).map_err(|_| problem("Invalid filesystem component"))
+}
+
+pub(super) fn digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn relative_target(path: &Path) -> Result<()> {
+    relative_path(path, false)
+}
+
+pub(super) fn relative_directory(path: &Path) -> Result<()> {
+    relative_path(path, true)
+}
+
+/// `path` with its components joined by `/` and ASCII-lowercased, so names
+/// that differ only by case compare equal.
+fn folded(path: &Path) -> String {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn relative_path(path: &Path, directory: bool) -> Result<()> {
+    let normalized = folded(path);
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+        || normalized == STATE
+        || normalized.starts_with(&format!("{STATE}/"))
+        || (!directory && STATE.starts_with(&format!("{normalized}/")))
+    {
+        return Err(problem(
+            "Targets must be relative files inside the helper home, outside provisioning state",
+        ));
+    }
+
+    Ok(())
+}
+
+pub(super) fn unique_targets<'a>(targets: impl Iterator<Item = &'a Path>) -> Result<()> {
+    let mut seen = Vec::<&Path>::new();
+
+    for path in targets {
+        relative_target(path)?;
+
+        // Configuration destinations use portable ASCII names. Conservatively
+        // reject case aliases even on case-sensitive volumes.
+        if !path.to_str().is_some_and(|text| text.is_ascii()) {
+            return Err(problem("Environment target names must be ASCII"));
+        }
+
+        if seen.iter().any(|other| overlap(other, path)) {
+            return Err(problem(
+                "Environment targets overlap or differ only by case",
+            ));
+        }
+
+        seen.push(path);
+    }
+
+    Ok(())
+}
+
+/// Whether two targets name the same file up to case, or one lies inside
+/// the other.
+pub(super) fn overlap(first: &Path, second: &Path) -> bool {
+    let (first, second) = (folded(first), folded(second));
+
+    first == second
+        || first.starts_with(&format!("{second}/"))
+        || second.starts_with(&format!("{first}/"))
+}
+
+pub(super) fn has_acl(path: &Path) -> Result<bool> {
+    acl::present(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::InvalidData => problem("Invalid filesystem ACL"),
+        _ => error.into(),
+    })
+}
+
+/// Clear the ACL a new folder inherited from its parent.
+pub(super) fn remove_inherited_acl(path: &Path) -> Result<()> {
+    let folder =
+        directory(path, false)?.ok_or_else(|| problem("Missing provisioning directory"))?;
+    acl::clear(&folder).map_err(|error| {
+        problem(format!("Could not make provisioning data private: {error}")).with_source(error)
+    })
+}
+
+pub(super) fn destination(home: &Path, relative: &Path) -> Result<PathBuf> {
+    relative_target(relative)?;
+    checked_path(home, relative)
+}
+
+pub(super) fn directory_destination(home: &Path, relative: &Path) -> Result<PathBuf> {
+    relative_directory(relative)?;
+    checked_path(home, relative)
+}
+
+fn checked_path(home: &Path, relative: &Path) -> Result<PathBuf> {
+    let mut path = home.to_owned();
+
+    for part in relative.components() {
+        path.push(part);
+
+        match fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(problem(format!("Refusing symlink: {}", path.display())));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(path)
+}
+
+pub(super) fn open_directory(path: &Path) -> Result<fs::File> {
+    directory(path, true)?.ok_or_else(|| problem("Missing provisioning directory"))
+}
+
+pub(super) fn directory(path: &Path, create: bool) -> Result<Option<fs::File>> {
+    if !path.is_absolute() {
+        return Err(problem("Provisioning paths must be absolute"));
+    }
+
+    let open = |directory: &fs::File, name: &CStr| {
+        openat(
+            directory,
+            name,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+    };
+    let mut directory = fs::File::open("/")?;
+
+    for part in path.components() {
+        let Component::Normal(name) = part else {
+            if part == Component::RootDir {
+                continue;
+            }
+            return Err(problem("Invalid provisioning directory"));
+        };
+
+        let name = component(name)?;
+        let mut opened = open(&directory, &name);
+        if create && matches!(opened, Err(Errno::ENOENT)) {
+            match mkdirat(&directory, name.as_c_str(), Mode::from_bits_truncate(0o700)) {
+                Ok(()) | Err(Errno::EEXIST) => {}
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            }
+            opened = open(&directory, &name);
+        }
+
+        directory = match opened {
+            Ok(fd) => fs::File::from(fd),
+            Err(Errno::ENOENT) => return Ok(None),
+            Err(error) => return Err(std::io::Error::from(error).into()),
+        };
+    }
+
+    Ok(Some(directory))
+}
+
+pub(super) fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
+    atomic_install(path, bytes, mode, false)
+}
+
+pub(super) fn atomic_install(
+    path: &Path,
+    bytes: &[u8],
+    mode: u32,
+    create_only: bool,
+) -> Result<()> {
+    let parent = open_directory(
+        path.parent()
+            .ok_or_else(|| problem("Missing parent directory"))?,
+    )?;
+    installation_parent(&parent)?;
+
+    let name = component(
+        path.file_name()
+            .ok_or_else(|| problem("Missing file name"))?,
+    )?;
+    let temporary = partial_name(path)?;
+
+    // Every write to one path is serialized by its owner's lock, so a file
+    // under the partial name is one an interrupted write left: it goes.
+    match unlinkat(&parent, temporary.as_c_str(), UnlinkatFlags::NoRemoveDir) {
+        Ok(()) | Err(Errno::ENOENT) => {}
+        Err(error) => return Err(std::io::Error::from(error).into()),
+    }
+
+    let mut file = fs::File::from(
+        openat(
+            &parent,
+            temporary.as_c_str(),
+            OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::from_bits_truncate(mode as libc::mode_t),
+        )
+        .map_err(std::io::Error::from)?,
+    );
+
+    let result = (|| -> Result<()> {
+        acl::clear(&file)?;
+        file.set_permissions(fs::Permissions::from_mode(mode))?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+
+        // An exclusive rename refuses an existing destination atomically,
+        // and never leaves the new inode under two names.
+        rename_at(&parent, &temporary, &name, create_only)?;
+        parent.sync_all()?;
+
+        Ok(())
+    })();
+    if result.is_err() {
+        // A failed cleanup leaves the reserved partial name for the next write.
+        let _ = unlinkat(&parent, temporary.as_c_str(), UnlinkatFlags::NoRemoveDir);
+    }
+
+    result
+}
+
+/// The name a write to `path` uses until it is complete.
+fn partial_name(path: &Path) -> Result<CString> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| problem("Missing file name"))?;
+
+    let mut partial = b".atlas-partial-".to_vec();
+    partial.extend_from_slice(name.as_bytes());
+
+    CString::new(partial).map_err(|_| problem("Invalid path"))
+}
+
+/// Remove what an interrupted write to `path` left, if anything.
+pub(super) fn discard_partial(path: &Path) -> Result<()> {
+    let folder = path
+        .parent()
+        .ok_or_else(|| problem("Missing parent directory"))?;
+    let name = partial_name(path)?;
+
+    // Only a folder with something to remove is checked.
+    let left = folder.join(std::ffi::OsStr::from_bytes(name.as_bytes()));
+    if fs::symlink_metadata(left).is_err() {
+        return Ok(());
+    }
+
+    let Some(parent) = directory(folder, false)? else {
+        return Ok(());
+    };
+    installation_parent(&parent)?;
+
+    match unlinkat(&parent, name.as_c_str(), UnlinkatFlags::NoRemoveDir) {
+        Ok(()) => {
+            parent.sync_all()?;
+            Ok(())
+        }
+        Err(Errno::ENOENT) => Ok(()),
+        Err(error) => Err(std::io::Error::from(error).into()),
+    }
+}
+
+/// Rename `from` to `to` inside `parent`; `exclusive` refuses an existing `to`.
+fn rename_at(parent: &fs::File, from: &CStr, to: &CStr, exclusive: bool) -> Result<()> {
+    let replace = if exclusive {
+        Replace::Never
+    } else {
+        Replace::Allowed
+    };
+    Ok(rename_within(parent, from, to, replace)?)
+}
+
+/// Move a recorded prepared inode into place. No-replace is atomic for creates.
+pub(super) fn install_prepared(source: &Path, target: &Path, create_only: bool) -> Result<()> {
+    let missing =
+        || problem("Prepared replacement and its destination need a directory and a name");
+
+    if source.parent() != target.parent() {
+        return Err(problem(
+            "Prepared replacement must share its destination directory",
+        ));
+    }
+
+    let parent = directory(target.parent().ok_or_else(missing)?, false)?
+        .ok_or_else(|| problem("Destination parent disappeared"))?;
+    installation_parent(&parent)?;
+    let source = component(source.file_name().ok_or_else(missing)?)?;
+    let target = component(target.file_name().ok_or_else(missing)?)?;
+
+    rename_at(&parent, &source, &target, create_only)?;
+    parent.sync_all()?;
+
+    Ok(())
+}
+
+pub(super) fn set_group(path: &Path, gid: u32) -> Result<()> {
+    let file = open_regular(path, false)?.ok_or_else(|| problem("Prepared file is missing"))?;
+    if file.metadata()?.gid() != gid {
+        fchown(&file, None, Some(Gid::from_raw(gid))).map_err(std::io::Error::from)?;
+        file.sync_all()?;
+    }
+
+    Ok(())
+}
+
+/// The existing, installable parent of `path`, and `path`'s own name in it.
+fn parent_entry(path: &Path) -> Result<(fs::File, CString)> {
+    let parent = directory(
+        path.parent().ok_or_else(|| problem("Missing parent"))?,
+        false,
+    )?
+    .ok_or_else(|| problem("Parent directory disappeared"))?;
+    installation_parent(&parent)?;
+
+    let name = component(path.file_name().ok_or_else(|| problem("Missing name"))?)?;
+    Ok((parent, name))
+}
+
+pub(super) fn unlink(path: &Path, is_directory: bool) -> Result<()> {
+    let (parent, name) = parent_entry(path)?;
+    let kind = if is_directory {
+        UnlinkatFlags::RemoveDir
+    } else {
+        UnlinkatFlags::NoRemoveDir
+    };
+
+    unlinkat(&parent, name.as_c_str(), kind).map_err(std::io::Error::from)?;
+    parent.sync_all()?;
+
+    Ok(())
+}
+
+pub(super) fn private_directory(path: &Path) -> Result<fs::File> {
+    if let Some(dir) = directory(path, false)? {
+        validate_private(&dir, true)?;
+        return Ok(dir);
+    }
+
+    open_directory(path.parent().ok_or_else(|| problem("Missing parent"))?)?;
+    create_private_directory(path)
+}
+
+/// Unlike the idempotent state-directory opener, this never claims an existing
+/// user directory as one created by the transaction.
+pub(super) fn create_private_directory(path: &Path) -> Result<fs::File> {
+    let (parent, name) = parent_entry(path)?;
+    mkdirat(&parent, name.as_c_str(), Mode::from_bits_truncate(0o700))
+        .map_err(std::io::Error::from)?;
+
+    let dir = directory(path, false)?.ok_or_else(|| problem("New directory disappeared"))?;
+    acl::clear(&dir)?;
+    dir.set_permissions(fs::Permissions::from_mode(0o700))?;
+    validate_private(&dir, true)?;
+    dir.sync_all()?;
+    parent.sync_all()?;
+
+    Ok(dir)
+}
+
+/// The private store folder at `path` and its lock file, which `take` locks:
+/// the folder is made when `access` is exclusive. None when reading a store
+/// that was never made; no lock file when nothing has written to it yet.
+pub(super) fn open_store(
+    path: &Path,
+    access: Lock,
+    take: impl FnOnce(&LockFile) -> Result<()>,
+) -> Result<Option<Option<LockFile>>> {
+    let write = access == Lock::Exclusive;
+    let folder = if write {
+        Some(private_directory(path)?)
+    } else {
+        directory(path, false)?
+    };
+    let Some(folder) = folder else {
+        return Ok(None);
+    };
+
+    validate_private(&folder, true)?;
+    let lock = open_regular(&path.join("lock"), write)?.map(LockFile);
+    if let Some(lock) = &lock {
+        validate_private(&lock.0, false)?;
+        take(lock)?;
+    }
+
+    Ok(Some(lock))
+}
+
+pub(super) fn validate_private(file: &fs::File, directory: bool) -> Result<()> {
+    let metadata = file.metadata()?;
+    if metadata.uid() != nix::unistd::getuid().as_raw()
+        || (directory && !metadata.is_dir())
+        || (!directory && !metadata.is_file())
+        || metadata.mode() & 0o7777 != if directory { 0o700 } else { 0o600 }
+        || (!directory && metadata.nlink() != 1)
+        || descriptor_acl(file)?
+    {
+        return Err(problem(
+            "Provisioning state must be private and owned by the current user",
+        ));
+    }
+
+    Ok(())
+}
+
+pub(super) fn installation_parent(directory: &fs::File) -> Result<()> {
+    let metadata = directory.metadata()?;
+    if metadata.uid() != nix::unistd::getuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+        || writable_acl(directory)?
+    {
+        return Err(problem(
+            "Installation parent must be owned by the current user and have no shared write access",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Refuse `target` unless every folder above it that already exists in
+/// `home` is one a copy can be put into, as apply requires.
+pub(super) fn installable_parents(home: &Path, target: &Path) -> Result<()> {
+    let parents = target
+        .parent()
+        .ok_or_else(|| problem("Missing target parent"))?;
+    let mut path = home.to_owned();
+
+    for part in parents.components() {
+        path.push(part);
+
+        let refused = || {
+            problem(format!(
+                "Cannot copy {}: ~/{} is not a folder only the helper can change",
+                target.display(),
+                path.strip_prefix(home).unwrap_or(&path).display(),
+            ))
+        };
+
+        let Some(folder) = directory(&path, false).map_err(|cause| refused().with_source(cause))?
+        else {
+            return Ok(());
+        };
+
+        installation_parent(&folder).map_err(|cause| refused().with_source(cause))?;
+    }
+
+    Ok(())
+}
+
+/// The entries of `file`'s ACL; none without one.
+fn acl_entries(file: &fs::File) -> Result<Vec<acl::Entry>> {
+    Ok(Acl::of_file(file)?
+        .map(|acl| acl.entries())
+        .transpose()?
+        .unwrap_or_default())
+}
+
+fn descriptor_acl(file: &fs::File) -> Result<bool> {
+    Ok(!acl_entries(file)?.is_empty())
+}
+
+/// The helper's short name, as an ACL entry names it. Resolved once per
+/// operation and passed to every allow_helper of it.
+pub(super) fn helper_name(uid: u32) -> Result<String> {
+    let identity = atlas_core::bounded::output(
+        Command::new("/usr/bin/id").args(["-un", &uid.to_string()]),
+        atlas_core::bounded::LOOKUP,
+    )?;
+    let name =
+        String::from_utf8(identity.stdout).map_err(|_| problem("Invalid helper short name"))?;
+    let name = name.trim();
+    if !identity.status.success() || !acl_name(name) {
+        return Err(problem("Could not resolve helper UID to an ACL identity"));
+    }
+
+    Ok(name.to_owned())
+}
+
+fn acl_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+}
+
+/// Let the helper named `helper` (from helper_name) read `path`.
+pub(super) fn allow_helper(path: &Path, helper: &str, executable: bool) -> Result<()> {
+    if !acl_name(helper) {
+        return Err(problem("Could not resolve helper UID to an ACL identity"));
+    }
+
+    let rights = if executable {
+        "read,execute,readattr,readsecurity"
+    } else {
+        "read,readattr,readsecurity"
+    };
+
+    let output = atlas_core::bounded::output(
+        Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{helper} allow {rights}")])
+            .arg(path),
+        atlas_core::bounded::FILE,
+    )?;
+    if !output.status.success() {
+        let reason = String::from_utf8_lossy(&output.stderr);
+        let reason = reason.trim();
+        return Err(problem(if reason.is_empty() {
+            "Could not grant the helper access to staged files".to_owned()
+        } else {
+            format!("Could not grant the helper access to staged files: {reason}")
+        }));
+    }
+
+    Ok(())
+}
+
+fn writable_acl(directory: &fs::File) -> Result<bool> {
+    Ok(acl_entries(directory)?
+        .iter()
+        .any(|entry| entry.allow && entry.mask & acl::WRITE_RIGHTS != 0))
+}

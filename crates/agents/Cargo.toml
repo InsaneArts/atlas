@@ -1,0 +1,32 @@
+[package]
+name = "atlas-agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Connect coding agents to Atlas: plugins, project sections and the guide"
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Helpers and hooks for the tests of crates above; never in a shipped build.
+test-support = []
+
+[dependencies]
+atlas-client.workspace = true
+atlas-core.workspace = true
+fs2.workspace = true
+nix = { workspace = true, features = ["process", "signal", "user"] }
+rand = { workspace = true, features = ["thread_rng"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["time"] }
+toml.workspace = true
+
+[dev-dependencies]
+atlas-core = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

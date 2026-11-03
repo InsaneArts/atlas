@@ -1,0 +1,195 @@
+[
+  {
+    "id": "choose-empty",
+    "rowsPointer": null,
+    "rows": 0,
+    "newline": false,
+    "bytes": 138,
+    "serialized": "{\"code\":\"elements\",\"error\":\"No visible element matches. Run atlas elements --app NAME to see what is there.\",\"ok\":false,\"uncertain\":false}",
+    "input": [],
+    "name": "Save",
+    "helperRequests": 0,
+    "helperOperations": [],
+    "helperProofs": 0
+  },
+  {
+    "id": "choose-ambiguous",
+    "rowsPointer": "/candidates",
+    "rows": 5,
+    "newline": false,
+    "bytes": 683,
+    "serialized": "{\"candidates\":[{\"at\":[60,35],\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\"},{\"at\":[61,35],\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\"},{\"at\":[62,35],\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\"},{\"at\":[63,35],\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\"},{\"at\":[64,35],\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\"}],\"code\":\"elements\",\"error\":\"7 elements match. Run atlas elements with the same --name to tell them apart, then add --role, or click the one you mean at its point.\",\"ok\":false,\"uncertain\":false}",
+    "input": [
+      {
+        "index": 0,
+        "depth": 1,
+        "role": "AXButton",
+        "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+        "enabled": true,
+        "frame": {
+          "x": 10,
+          "y": 20,
+          "width": 100,
+          "height": 30
+        },
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 640,
+          "height": 480
+        }
+      },
+      {
+        "index": 1,
+        "depth": 1,
+        "role": "AXButton",
+        "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+        "enabled": true,
+        "frame": {
+          "x": 11,
+          "y": 20,
+          "width": 100,
+          "height": 30
+        },
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 640,
+          "height": 480
+        }
+      },
+      {
+        "index": 2,
+        "depth": 1,
+        "role": "AXButton",
+        "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+        "enabled": true,
+        "frame": {
+          "x": 12,
+          "y": 20,
+          "width": 100,
+          "height": 30
+        },
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 640,
+          "height": 480
+        }
+      },
+      {
+        "index": 3,
+        "depth": 1,
+        "role": "AXButton",
+        "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+        "enabled": true,
+        "frame": {
+          "x": 13,
+          "y": 20,
+          "width": 100,
+          "height": 30
+        },
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 640,
+          "height": 480
+        }
+      },
+      {
+        "index": 4,
+        "depth": 1,
+        "role": "AXButton",
+        "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+        "enabled": true,
+        "frame": {
+          "x": 14,
+          "y": 20,
+          "width": 100,
+          "height": 30
+        },
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 640,
+          "height": 480
+        }
+      },
+      {
+        "index": 5,
+        "depth": 1,
+        "role": "AXButton",
+        "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+        "enabled": true,
+        "frame": {
+          "x": 15,
+          "y": 20,
+          "width": 100,
+          "height": 30
+        },
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 640,
+          "height": 480
+        }
+      },
+      {
+        "index": 6,
+        "depth": 1,
+        "role": "AXButton",
+        "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+        "enabled": true,
+        "frame": {
+          "x": 16,
+          "y": 20,
+          "width": 100,
+          "height": 30
+        },
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 640,
+          "height": 480
+        }
+      }
+    ],
+    "name": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+    "helperRequests": 0,
+    "helperOperations": [],
+    "helperProofs": 0
+  },
+  {
+    "id": "choose-disabled",
+    "rowsPointer": null,
+    "rows": 0,
+    "newline": false,
+    "bytes": 282,
+    "serialized": "{\"code\":\"input\",\"error\":\"The selected control is disabled; no click was sent\",\"next\":\"Choose an enabled control. If this is Save/Open, cancel with Escape and use atlas run to create files or atlas open to open them; do not retry an inert confirmation.\",\"ok\":false,\"uncertain\":false}",
+    "input": [
+      {
+        "index": 0,
+        "depth": 1,
+        "role": "AXButton",
+        "title": "Save",
+        "enabled": false,
+        "frame": {
+          "x": 10,
+          "y": 20,
+          "width": 100,
+          "height": 30
+        },
+        "window": {
+          "x": 0,
+          "y": 0,
+          "width": 640,
+          "height": 480
+        }
+      }
+    ],
+    "name": "Save",
+    "helperRequests": 0,
+    "helperOperations": [],
+    "helperProofs": 0
+  }
+]

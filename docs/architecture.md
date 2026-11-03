@@ -33,24 +33,40 @@ The Unix transport checks the kernel-reported peer UID. The helper servers also 
 
 ## Rust responsibilities
 
-The library entry point is [`src/lib/lib.rs`](../src/lib/lib.rs). The binary keeps argument parsing, presentation and dispatch separate so library behavior does not depend on terminal formatting.
+The Rust code is a workspace under [`crates/`](../crates), one package per layer. A package depends only on the layers before it, so the compiler keeps these layers apart:
 
-| Area                                                    | Responsibility                                                                                          |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `src/bin/cli.rs`, `help.rs`, `output.rs`, `dispatch.rs` | CLI grammar, grouped help, output/exit behavior and routing into library operations.                    |
-| `client`, `transport`, `session`                        | Helper requests, bounded transport and validation of account/session/display evidence.                  |
-| `control`                                               | Controller exclusion, viewer leases and persistent unknown-action records.                              |
-| `host_session`                                          | Which agent session a command comes from, its records, and naming sessions in replies.                  |
-| `daemon`                                                | The signed helper daemon, protocol, session facts and bounded child-command execution.                  |
-| `native`                                                | macOS capture, accessibility and input bindings, event execution, cancellation and held-input recovery. |
-| `agent`, `handoff`, `readiness`                         | User-facing app operations, staged app copies and dependency checks.                                    |
-| `viewer`, `menubar`, `overview`                         | Local viewing/control service, native app launch and shared status/activity views.                      |
-| `mcp`, `agents`, `claude_app`                           | Embedded host views and installation of supported agent connections.                                    |
-| `environment`                                           | Explicit file snapshots, environment profiles and resumable apply/rollback transactions.                |
-| `init`, `onboarding`, `setup`                           | Guided setup, setup facts, account identity and managed helper installation or repair.                  |
-| `update`, `uninstall`                                   | Verified app replacement, helper handover and ordered removal.                                          |
+| Folder           | Package         | Layer                                                            |
+| ---------------- | --------------- | ---------------------------------------------------------------- |
+| `crates/core`    | `atlas-core`    | Names, errors, time, wire types, observed screens and sessions.  |
+| `crates/native`  | `atlas-native`  | macOS calls and input execution.                                 |
+| `crates/daemon`  | `atlas-daemon`  | The helper daemon and the helper's own setup.                    |
+| `crates/control` | `atlas-control` | Exclusion, cancellation, pending mutations and viewer leases.    |
+| `crates/client`  | `atlas-client`  | The controller side: helper requests, environment and setup.     |
+| `crates/agents`  | `atlas-agents`  | Connecting coding agents: plugins, project sections, the guide.  |
+| `crates/cli`     | `atlas-cli`     | The `atlas` binary, viewer, MCP server, menu bar and onboarding. |
 
-Paths without a directory prefix in this table are under `src/lib`. Prefer the owner of the behavior over another layer that happens to call it. For example, an input cancellation rule belongs in control/native code; a button label belongs in the app's presentation code.
+The binary keeps argument parsing, presentation and dispatch separate so library behavior does not depend on terminal formatting.
+
+| Area                                                                                     | Responsibility                                                                                                        |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `crates/cli/src/bin/atlas/` `cli.rs`, `help.rs`, `policy.rs`, `output.rs`, `dispatch.rs` | CLI grammar, grouped help, command policy, output/exit behavior and routing into library operations.                  |
+| `client`, `transport`, `session`                                                         | Helper requests, bounded transport and validation of account/session/display evidence.                                |
+| `control`                                                                                | Controller exclusion, viewer leases and persistent unknown-action records.                                            |
+| `host_session`                                                                           | Which agent session a command comes from, its records, and naming sessions in replies.                                |
+| `task`, `cleanup`, `collect`                                                             | Durable task claims, resumable cleanup receipts and verified copies collected from the helper.                        |
+| `daemon`                                                                                 | The signed helper daemon, protocol, session facts and bounded child-command execution.                                |
+| `native`                                                                                 | macOS capture, accessibility and input bindings, event execution, cancellation and held-input recovery.               |
+| `screen`                                                                                 | Portable observed geometry, windows, elements and selection, without native effects.                                  |
+| `agent`, `handoff`, `readiness`                                                          | User-facing app operations, staged app copies and dependency checks.                                                  |
+| `viewer`, `menubar`, `overview`                                                          | Local viewing/control service, native app launch and shared status/activity views.                                    |
+| `mcp`, `agents`, `claude_app`                                                            | Embedded host views and installation of supported agent connections.                                                  |
+| `environment`                                                                            | Explicit file snapshots, environment profiles and resumable apply/rollback transactions.                              |
+| `onboarding`, `setup`; `crates/cli/src/bin/atlas/init.rs`                                | Setup rules, account identity and managed helper installation or repair; attended terminal setup stays in the binary. |
+| `update`, `uninstall`                                                                    | Verified app replacement, helper handover and ordered removal.                                                        |
+
+Names without a path in this table are crates or modules, each in the crate of its layer. Prefer the owner of the behavior over another layer that happens to call it. For example, an input cancellation rule belongs in control/native code; a button label belongs in the app's presentation code.
+
+The [Rust contributor instructions](../crates/AGENTS.md) describe extension paths and the compiler-enforced decisions for commands, input actions, requests, tools, settings and records. A new operation follows its existing owner and exhaustive policy matches; it does not need a new service layer. Observation models, wire replies and durable recovery records have different compatibility and privacy obligations.
 
 ## Ownership, cancellation and uncertain results
 
@@ -83,13 +99,17 @@ Collecting a file reads in the helper and changes nothing there. The daemon chec
 
 A task's record names what it made. Cleanup takes a thing away only after checking that thing itself: its label, that nothing runs from it, and for an install that it is the unchanged copy Atlas made, its folder's node, mode and owner and every entry inside it. A session or task key only chooses which records to look at. Cleanup holds control from start to end, writes a receipt before each step, and resumes from it after a crash without looking around the helper again. It does not delete an install at once: it moves it, never over anything and never by copying, into a private holding folder of the helper's install store (`~/.config/atlas/installs/held/<installId>/`), so a wrong judgement can be undone for 7 days; a holding folder on another volume than `~/Applications` keeps the install where it is. Held installs are deleted after 7 days by a prune that looks only at entries of that folder the store's records name as held, and deletes each only while it is still the folder Atlas placed. A placed install is registered with LaunchServices in the helper, so `open --app NAME` finds it; when LaunchServices still does not, `open` tries the task's own install by its recorded path. A copy is Atlas's own duplicate of a file of the person's: cleanup and `close` remove it by one rule, only after its private folder, owner, mode, label and node are read from one descriptor, nothing runs from it, and its path is seen to name that same folder still. A copy folder without a session label is removed only when the task's own record claims its token, which is no wider than `close`, which removes every unlabelled copy of an app it quits. Cleanup quits only processes running from a copy or install proven to be the task's at that moment, and never one running from a copy macOS moved an app to (App Translocation): such a process keeps the install in place and is left for the agent to close. An install record Atlas cannot read is never acted on: the install is kept as it is and said to be unreadable.
 
+Cleanup discovers supported task records and earlier receipts beyond the recent-display prefix. Each scan holds only its own store lock and checks the directory identity before and after reading. A preview may create private lock metadata in an existing store. Physical read failures and scan-budget exhaustion refuse cleanup rather than report an empty scope. Each pass admits at most 4,096 directory entries, with encoded-byte budgets of 64 MiB for tasks and 128 MiB for receipts. Only matching session records are retained; decoded data and work projections take additional memory. Unsupported formats remain opaque, preserved and omitted from discovery, as with ordinary record reads.
+
+Finishing a cleanup effect and acknowledging its records are separate. A finished receipt step can retain `settled: false` when task or session records are unknown, unreadable, beyond a complete-scan budget or unwritable. Reconciliation validates each existing store completely within its bounds before changing its records, then reads it back under the same store lock. It preserves unknown data and retries bookkeeping without repeating a finished effect. Ordinary recent listings have a separate, smaller scan budget.
+
 The input journal records held keys and mouse buttons separately. A replacement input service cleans up held input before accepting new work. Tests for cancellation or recovery must include failure during execution and cleanup, not just a successful command followed by release.
 
 ## Native and embedded views
 
 The local viewer service supplies pictures, status, activity, apps, screenshots and control to AtlasApp. Frames have identities and freshness limits; user input is checked against the frame and control lease it came from. Status polling is not proof that a fresh picture has arrived.
 
-The MCP server offers status and `show_screen` to agent hosts. A host that supports embedded UI can render the bundled view in `src/lib/mcp/screen.js`. The view's own polling and controls are separate from model-facing tools. Host capability and tool visibility checks preserve that distinction, including the rule that only the person resumes stopped agents.
+The MCP server offers status and `show_screen` to agent hosts. A host that supports embedded UI can render the bundled view in `crates/cli/src/mcp/screen.js`. The view's own polling and controls are separate from model-facing tools. Host capability and tool visibility checks preserve that distinction, including the rule that only the person resumes stopped agents.
 
 The native window and an embedded card can fail independently. Keep host rendering or routing issues separate from capture permission and helper readiness. [Agent connections](agents.md) describes the routes visible to users.
 

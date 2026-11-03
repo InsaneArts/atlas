@@ -1,0 +1,1440 @@
+use super::*;
+use crate::{
+    doing::Doing,
+    host_session::{Host, HostSession, Instance},
+    test_support::client,
+};
+use atlas_core::{
+    error::{Code, Error},
+    files::open_lock,
+};
+use fs2::FileExt;
+use serde_json::json;
+use std::{
+    collections::BTreeMap,
+    fs::OpenOptions,
+    os::unix::fs::{DirBuilderExt, PermissionsExt},
+};
+
+const TEST_NOW: u64 = u64::MAX / 2;
+
+fn session(id: &str) -> HostSession {
+    HostSession::new(Host::Claude, id).unwrap()
+}
+
+fn remember_windows(client: &Client, key: &Key) {
+    let epoch = atlas_core::session::Epoch {
+        uid: atlas_core::test_support::UID,
+        capture_pid: 123,
+        input_pid: 456,
+        security_session_id: 42,
+        display_id: 7,
+        display: atlas_core::session::Display {
+            width: 1000.0,
+            height: 800.0,
+            scale: 1.0,
+        },
+    };
+    crate::last_capture::remember_windows(&client.config.output_dir, key, Some(&[]), &epoch)
+        .unwrap();
+}
+
+fn store(client: &Client) -> Store {
+    Store::at(client.output_dir().unwrap())
+}
+
+/// A capture name `n` nanoseconds after a fixed moment.
+fn capture(n: u64) -> Capture {
+    Capture::parse(&format!("{}-capture.png", 1_761_660_429_000_000_000 + n)).unwrap()
+}
+
+/// Note `kind` for `session` doing `verb`, replying `reply`.
+fn noted(client: &Client, session: &HostSession, kind: Kind, verb: &'static str, reply: Value) {
+    let now = store(client)
+        .read(session.key())
+        .map_or(TEST_NOW, |record| record.last_seen + 1);
+    note_at(
+        client,
+        session,
+        Some(&Doing::new(verb)),
+        &ReplyFacts::new(kind, &Ok(reply)),
+        || now,
+    )
+    .unwrap();
+}
+
+/// Note an environment request of `session` that `changes` the helper, or
+/// only previews, replying `reply`.
+fn environment(client: &Client, session: &HostSession, changes: bool, reply: Value) {
+    let kind = Kind::Environment { changes };
+    let result = Ok(reply);
+    let facts = ReplyFacts::new(kind, &result);
+    note_at(client, session, None, &facts, || TEST_NOW).unwrap();
+    forget_rolled_back_facts(client, &facts).unwrap();
+}
+
+#[test]
+fn a_first_command_makes_the_record_and_later_ones_update_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("first");
+
+    noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
+    let first = store(&client).read(session.key()).unwrap();
+    noted(
+        &client,
+        &session,
+        Kind::Other,
+        "click",
+        json!({"ok": false}),
+    );
+    noted(&client, &session, Kind::Other, "type", json!({"ok": true}));
+    let later = store(&client).read(session.key()).unwrap();
+
+    let files: Vec<_> = fs::read_dir(client.output_dir().unwrap().join("sessions"))
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
+        .collect();
+    assert_eq!(files.len(), 1);
+    assert_eq!(later.started, first.started);
+    assert_eq!(first.started, TEST_NOW);
+    assert_eq!(later.last_seen, TEST_NOW + 2);
+    assert_eq!(
+        later.counts,
+        BTreeMap::from([("click".into(), 2), ("type".into(), 1)])
+    );
+    assert_eq!(later.host_session.as_str(), "first");
+    assert_eq!(later.version, 1);
+}
+
+#[test]
+fn reads_that_do_nothing_in_the_helper_record_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("reader");
+
+    note(
+        &client,
+        &session,
+        Kind::Other,
+        None,
+        &Ok(json!({"ok": true})),
+    )
+    .unwrap();
+    assert_eq!(store(&client).read(session.key()), None);
+
+    environment(&client, &session, false, json!({"ok": true}));
+    let record = store(&client).read(session.key()).unwrap();
+    assert_eq!(record.counts, BTreeMap::from([("environment".into(), 1)]));
+}
+
+#[test]
+fn a_refused_command_is_seen_but_not_counted() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("refused");
+    let click = Doing::new("click");
+
+    for refusal in [
+        Error::new(Code::Busy, "Another command has control"),
+        Error::stopped(),
+        Error::new(Code::Uncertain, "An earlier outcome is unknown"),
+    ] {
+        note(&client, &session, Kind::Other, Some(&click), &Err(refusal)).unwrap();
+    }
+    let refused = json!({"ok": false, "code": "busy", "uncertain": false});
+    note(&client, &session, Kind::Other, Some(&click), &Ok(refused)).unwrap();
+    let record = store(&client).read(session.key()).unwrap();
+    assert!(record.counts.is_empty(), "{:?}", record.counts);
+
+    let maybe = Error::new(Code::Transport, "No reply").uncertain();
+    note(&client, &session, Kind::Other, Some(&click), &Err(maybe)).unwrap();
+    let failed = json!({"ok": false, "code": "focus-changed", "uncertain": false});
+    note(&client, &session, Kind::Other, Some(&click), &Ok(failed)).unwrap();
+    let record = store(&client).read(session.key()).unwrap();
+    assert_eq!(record.counts["click"], 2, "what may have acted counts");
+}
+
+#[test]
+fn an_uncertain_refusal_does_not_invent_confirmed_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (owner, other) = (session("owner"), session("other"));
+    let plan = Token::new();
+    environment(
+        &client,
+        &owner,
+        true,
+        json!({"planId": plan, "phase": "applied"}),
+    );
+    let before = store(&client).read(owner.key()).unwrap();
+
+    for reply in [
+        json!({"ok": false, "code": "uncertain", "uncertain": true, "planId": plan}),
+        json!({"ok": false, "code": "busy", "uncertain": true, "planId": plan,
+            "phase": "rollingBack"}),
+    ] {
+        environment(&client, &other, true, reply);
+        assert_eq!(store(&client).read(owner.key()).unwrap(), before);
+    }
+    let record = store(&client).read(other.key()).unwrap();
+    assert_eq!(record.counts["environment"], 2);
+    assert_eq!(record.plans[0].phase, Phase::RollingBack);
+}
+
+#[test]
+fn an_absent_reply_leaves_existing_copy_labels_intact() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let owner = session("copies");
+    let store = store(&client);
+    store.folder.make().unwrap();
+    let mut record = Record::new(&owner, TEST_NOW, None);
+    record.copies = (0..65).map(|_| Token::new()).collect();
+    store.write(&record).unwrap();
+    let doing = Doing::new("open");
+    let facts = ReplyFacts::new(
+        Kind::Open,
+        &Err(Error::new(Code::Transport, "No reply").uncertain()),
+    );
+    note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
+    assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
+
+    let facts = ReplyFacts::new(Kind::Open, &Ok(Value::Null));
+    note_at(&client, &owner, Some(&doing), &facts, || TEST_NOW).unwrap();
+    record.copies.truncate(64);
+    assert_eq!(store.read(owner.key()).unwrap().copies, record.copies);
+}
+
+#[test]
+fn an_unreadable_phase_leaves_existing_attribution_intact() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let owner = session("owner");
+    let plan = Token::new();
+    environment(
+        &client,
+        &owner,
+        true,
+        json!({"planId": plan, "phase": "applied"}),
+    );
+    let before = store(&client).read(owner.key()).unwrap().plans;
+    for phase in [
+        Value::Null,
+        json!(false),
+        json!(7),
+        json!({}),
+        json!("future"),
+    ] {
+        environment(
+            &client,
+            &owner,
+            true,
+            json!({"ok": true, "planId": plan, "phase": phase}),
+        );
+        assert_eq!(store(&client).read(owner.key()).unwrap().plans, before);
+    }
+}
+
+#[test]
+fn success_uncertainty_and_partial_phases_keep_their_independent_rules() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (owner, other) = (session("owner"), session("other"));
+    let plan = Token::new();
+    for (ok, uncertain, phase, expected) in [
+        (false, false, "applying", Phase::Applying),
+        (false, true, "rollingBack", Phase::RollingBack),
+        (true, true, "applied", Phase::Applied),
+    ] {
+        environment(
+            &client,
+            &owner,
+            true,
+            json!({"ok": ok, "uncertain": uncertain, "planId": plan, "phase": phase}),
+        );
+        assert_eq!(
+            store(&client).read(owner.key()).unwrap().plans[0].phase,
+            expected
+        );
+    }
+    environment(
+        &client,
+        &other,
+        true,
+        json!({"ok": true, "uncertain": true, "planId": plan, "phase": "rolledBack"}),
+    );
+    assert!(store(&client).read(owner.key()).unwrap().plans.is_empty());
+    assert!(store(&client).read(other.key()).unwrap().plans.is_empty());
+}
+
+#[test]
+fn a_failed_reply_with_a_terminal_phase_changes_only_its_own_labels() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (owner, other) = (session("owner"), session("other"));
+    let plan = Token::new();
+    for session in [&owner, &other] {
+        environment(
+            &client,
+            session,
+            true,
+            json!({"planId": plan, "phase": "applied"}),
+        );
+    }
+    let before = store(&client).read(other.key()).unwrap();
+    environment(
+        &client,
+        &owner,
+        true,
+        json!({"ok": false, "uncertain": true, "planId": plan, "phase": "rolledBack"}),
+    );
+    assert!(store(&client).read(owner.key()).unwrap().plans.is_empty());
+    assert_eq!(store(&client).read(other.key()).unwrap(), before);
+}
+
+#[test]
+fn settlement_uses_decoded_facts_even_when_its_projection_changes() {
+    use crate::task::{Claims, Owned, State, Task, store::Store as Tasks};
+
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let output = client.output_dir().unwrap();
+    let (owner, other) = (session("owner"), session("other"));
+    let plan = Token::new();
+    let owned = Owned::Plan { id: plan.clone() };
+    let mut tasks = Vec::new();
+    for session in [&owner, &other] {
+        environment(
+            &client,
+            session,
+            true,
+            json!({"planId": plan, "phase": "applied"}),
+        );
+        let task = Task::of(session.key(), None).unwrap();
+        Claims::in_store(Tasks::at(output), task.clone())
+            .claim(&owned, State::Made)
+            .unwrap();
+        tasks.push(task);
+    }
+    let kind = Kind::Environment { changes: true };
+    let mut projection = Ok(json!({"ok": true, "phase": "rolledBack", "planId": plan,
+        "keptTargets": ["private target"], "retainedDirectories": []}));
+    let facts = ReplyFacts::new(kind, &projection);
+    projection.as_mut().unwrap()["phase"] = json!("future");
+    projection.as_mut().unwrap()["planId"] = json!("private token");
+    projection.as_mut().unwrap()["keptTargets"] = json!([]);
+    note_at(&client, &other, None, &facts, || TEST_NOW).unwrap();
+    forget_rolled_back_facts(&client, &facts).unwrap();
+    crate::task::settle_rolled_back_facts(&client, &facts).unwrap();
+    for (session, task) in [&owner, &other].into_iter().zip(tasks) {
+        let mut expected = Record::new(session, TEST_NOW, None);
+        expected
+            .counts
+            .insert("environment".into(), if session == &other { 2 } else { 1 });
+        assert_eq!(store(&client).read(session.key()).unwrap(), expected);
+        let claims: Vec<_> = Tasks::at(output)
+            .load(task.key())
+            .unwrap()
+            .claims()
+            .collect();
+        assert_eq!(claims, [(owned.clone(), State::Kept)]);
+    }
+}
+
+#[test]
+fn the_record_keeps_atlas_names_and_tokens_but_never_file_names_or_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("private");
+    let token = Token::new();
+    let copy = format!("{}/{token}/Quarterly Plan.txt", handoff::ROOT);
+
+    noted(
+        &client,
+        &session,
+        Kind::Other,
+        "type",
+        json!({"ok": true, "typed": 12, "text": "secret words"}),
+    );
+    noted(
+        &client,
+        &session,
+        Kind::Open,
+        "open",
+        json!({"ok": true, "opened": true, "copied": [{"from": "/tmp/Quarterly Plan.txt", "to": copy}]}),
+    );
+    let shot = capture(1);
+    noted(
+        &client,
+        &session,
+        Kind::Screenshot,
+        "screenshot",
+        json!({"ok": true, "path": format!("/somewhere/{}", shot.as_str())}),
+    );
+
+    let path = store(&client).folder.path(session.key());
+    let written = fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("secret"), "{written}");
+    assert!(!written.contains("Quarterly"), "{written}");
+    assert!(!written.contains("/somewhere"), "{written}");
+    let record = store(&client).read(session.key()).unwrap();
+    assert_eq!(record.copies, [token]);
+    assert_eq!(record.screenshots, [shot]);
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let folder = path.parent().unwrap();
+    assert_eq!(
+        fs::metadata(folder).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}
+
+#[test]
+fn screenshots_keep_only_capture_names_newest_first_and_at_most_fifty() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("shots");
+    let take = |path: String| {
+        noted(
+            &client,
+            &session,
+            Kind::Screenshot,
+            "screenshot",
+            json!({"ok": true, "path": path}),
+        );
+    };
+
+    for n in 0..55 {
+        take(format!("/output/{}", capture(n).as_str()));
+    }
+    take("/output/notes.png".into());
+    take(format!("/output/{}", capture(10).as_str()));
+
+    let record = store(&client).read(session.key()).unwrap();
+    assert_eq!(record.screenshots.len(), 50);
+    assert_eq!(record.screenshots[0], capture(10), "a repeat moves up");
+    assert_eq!(record.screenshots[1], capture(54));
+    assert!(
+        record
+            .screenshots
+            .iter()
+            .all(|name| name.as_str() != "notes.png")
+    );
+    assert_eq!(record.counts["screenshot"], 57);
+}
+
+#[test]
+fn a_close_drops_the_copies_it_removed() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("closing");
+    let (kept, gone) = (Token::new(), Token::new());
+    let copied = |token: &Token| json!({"from": "/tmp/a.txt", "to": format!("{}/{token}/a.txt", handoff::ROOT)});
+
+    noted(
+        &client,
+        &session,
+        Kind::Open,
+        "open",
+        json!({"ok": false, "copied": [copied(&kept), copied(&gone)]}),
+    );
+    noted(
+        &client,
+        &session,
+        Kind::Close,
+        "close",
+        json!({"ok": true, "removed": [format!("{}/{gone}", handoff::ROOT)]}),
+    );
+
+    let record = store(&client).read(session.key()).unwrap();
+    assert_eq!(
+        record.copies,
+        [kept],
+        "a failed launch's copies are kept until closed"
+    );
+}
+
+#[test]
+fn a_rolled_back_plan_leaves_the_record_and_a_preview_never_enters_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (applier, previewer) = (session("applier"), session("previewer"));
+    let (plan, other) = (Token::new(), Token::new());
+
+    environment(
+        &client,
+        &previewer,
+        false,
+        json!({"ok": true, "applied": false, "planId": other}),
+    );
+    environment(
+        &client,
+        &applier,
+        true,
+        json!({"ok": true, "planId": plan, "phase": "applied"}),
+    );
+    environment(
+        &client,
+        &applier,
+        true,
+        json!({"ok": true, "planId": "not-a-plan", "phase": "applied"}),
+    );
+    let record = store(&client).read(applier.key()).unwrap();
+    assert_eq!(record.plans.len(), 1);
+    assert_eq!(
+        (&record.plans[0].plan_id, record.plans[0].phase),
+        (&plan, Phase::Applied)
+    );
+
+    // A rollback preview answers with the transaction's own phase: it
+    // looks at the plan, and changes and owns nothing.
+    let preview = json!({"ok": true, "planId": plan, "phase": "applied", "applied": true,
+        "rolledBack": false, "preview": true, "resumeRequired": false});
+    environment(&client, &previewer, false, preview.clone());
+    environment(&client, &previewer, true, preview);
+    assert!(
+        store(&client)
+            .read(previewer.key())
+            .unwrap()
+            .plans
+            .is_empty()
+    );
+    assert_eq!(store(&client).read(applier.key()).unwrap().plans.len(), 1);
+
+    environment(
+        &client,
+        &applier,
+        true,
+        json!({"ok": true, "planId": plan, "phase": "rolledBack"}),
+    );
+    let record = store(&client).read(applier.key()).unwrap();
+    assert!(record.plans.is_empty());
+    assert_eq!(record.counts["environment"], 3);
+}
+
+#[test]
+fn a_plan_rolled_back_by_anyone_leaves_every_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let (applier, other) = (session("applier"), session("other"));
+    let (plan, kept) = (Token::new(), Token::new());
+    environment(
+        &client,
+        &applier,
+        true,
+        json!({"ok": true, "planId": plan, "phase": "applied"}),
+    );
+    environment(
+        &client,
+        &applier,
+        true,
+        json!({"ok": true, "planId": kept, "phase": "applied"}),
+    );
+
+    // Another session's failed rollback changes nothing.
+    let failed =
+        json!({"ok": false, "planId": plan, "phase": "rollingBack", "resumeRequired": true});
+    environment(&client, &other, true, failed);
+    assert_eq!(store(&client).read(applier.key()).unwrap().plans.len(), 2);
+
+    // The person's rollback at a terminal: no session of its own.
+    let rolled = Ok(json!({"ok": true, "planId": plan, "phase": "rolledBack", "rolledBack": true}));
+    forget_rolled_back(&client, Kind::Environment { changes: true }, &rolled).unwrap();
+    let record = store(&client).read(applier.key()).unwrap();
+    assert_eq!(record.plans.len(), 1);
+    assert_eq!(record.plans[0].plan_id, kept);
+    assert_eq!(store(&client).read(other.key()).unwrap().plans.len(), 0);
+}
+
+#[test]
+fn a_claude_session_after_clear_links_to_the_one_before_and_ends_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let process = Instance::current().unwrap();
+    let before = session("before").run_by(Some(process));
+    let after = session("after").run_by(Some(process));
+
+    noted(&client, &before, Kind::Other, "click", json!({"ok": true}));
+    noted(&client, &after, Kind::Other, "click", json!({"ok": true}));
+
+    let store = store(&client);
+    let (before, after) = (
+        store.read(before.key()).unwrap(),
+        store.read(after.key()).unwrap(),
+    );
+    assert_eq!(after.previous, Some(before.key.clone()));
+    assert!(before.ended.is_some());
+    assert_eq!(after.ended, None);
+    assert_eq!(after.host_process, Some(process));
+}
+
+#[test]
+fn sessions_sharing_a_non_claude_host_process_remain_independently_active() {
+    for host in [Host::Codex, Host::Opencode, Host::Pi] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(directory.path());
+        let process = parent();
+        let sessions: Vec<_> = ["first", "second", "third"]
+            .into_iter()
+            .map(|id| HostSession::new(host, id).unwrap().run_by(Some(process)))
+            .collect();
+
+        for session in &sessions {
+            touch(&client, session).unwrap();
+        }
+        for session in &sessions {
+            noted(&client, session, Kind::Other, "click", json!({"ok": true}));
+        }
+        for session in &sessions {
+            let record = store(&client).read(session.key()).unwrap();
+            assert_eq!(record.host_process, Some(process));
+            assert_eq!(record.previous, None);
+            assert_eq!(record.ended, None);
+            assert!(record.active(now_ms()));
+            assert_eq!(record.counts["click"], 1);
+        }
+    }
+}
+
+#[test]
+fn a_claude_clear_never_ends_another_host_sharing_the_process() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let process = parent();
+    let other = HostSession::new(Host::Opencode, "other")
+        .unwrap()
+        .run_by(Some(process));
+    noted(&client, &other, Kind::Other, "click", json!({"ok": true}));
+    let before = store(&client).read(other.key()).unwrap();
+
+    let claude = session("claude").run_by(Some(process));
+    touch(&client, &claude).unwrap();
+
+    assert_eq!(store(&client).read(other.key()).unwrap(), before);
+    assert_eq!(store(&client).read(claude.key()).unwrap().previous, None);
+}
+
+#[test]
+fn a_session_resumed_in_a_new_process_is_the_same_record_and_not_ended() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let gone = session("resumed").run_by(Some(Instance::new(i32::MAX, [1, 0])));
+
+    noted(&client, &gone, Kind::Other, "click", json!({"ok": true}));
+    let ended = store(&client).read(gone.key()).unwrap();
+    assert_eq!(
+        ended.ended_at(),
+        Some(ended.last_seen),
+        "its process is gone"
+    );
+
+    let resumed = session("resumed").run_by(Some(parent()));
+    noted(&client, &resumed, Kind::Other, "click", json!({"ok": true}));
+    let record = store(&client).read(gone.key()).unwrap();
+    assert_eq!(record.ended_at(), None);
+    assert_eq!(record.counts["click"], 2);
+}
+
+/// A process that is this one's ancestor: its parent.
+fn parent() -> Instance {
+    let pid = nix::unistd::getppid().as_raw();
+    atlas_core::host::ancestry::process(pid).unwrap().instance
+}
+
+#[test]
+fn any_command_of_a_resumed_session_takes_its_new_process_before_it_acts() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let gone = session("resumed").run_by(Some(Instance::new(i32::MAX, [1, 0])));
+    noted(&client, &gone, Kind::Other, "click", json!({"ok": true}));
+    let before = store(&client).read(gone.key()).unwrap();
+    assert!(before.ended_at().is_some(), "its first process is gone");
+
+    // A read records nothing of its own, but the session is seen, in the
+    // host process this command runs in.
+    let resumed = session("resumed").run_by(Some(parent()));
+    assert_eq!(resumed.ancestor(), Some(parent()));
+    touch(&client, &resumed).unwrap();
+    let after = store(&client).read(gone.key()).unwrap();
+    assert_eq!(after.host_process, Some(parent()));
+    assert_eq!(after.ended_at(), None);
+    assert!(after.active(now_ms()));
+    assert_eq!(after.counts, before.counts, "nothing is counted");
+}
+
+#[test]
+fn a_forged_id_naming_an_unrelated_process_neither_revives_nor_takes_a_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let real = session("real").run_by(Some(Instance::new(i32::MAX, [1, 0])));
+    noted(&client, &real, Kind::Other, "click", json!({"ok": true}));
+    let mut ended = store(&client).read(real.key()).unwrap();
+    ended.last_seen -= 60_000;
+    ended.ended = Some(ended.last_seen);
+    store(&client).write(&ended).unwrap();
+
+    // A live process, but not one this command runs in: the command itself.
+    let forged = session("real").run_by(Instance::current());
+    assert_eq!(forged.ancestor(), None, "not this command's host");
+    store(&client)
+        .touch(&forged, None, TEST_NOW, &client.controller)
+        .unwrap();
+    assert_eq!(
+        store(&client).read(real.key()).unwrap(),
+        ended,
+        "nothing changes: not its process, its end, nor when it was seen"
+    );
+
+    // A record that has not ended is seen again, and no more.
+    let mut open = ended.clone();
+    open.ended = None;
+    store(&client).write(&open).unwrap();
+    store(&client)
+        .touch(&forged, None, TEST_NOW, &client.controller)
+        .unwrap();
+    let seen = store(&client).read(real.key()).unwrap();
+    assert_eq!(seen.host_process, open.host_process);
+    assert_eq!(seen.last_seen, TEST_NOW);
+}
+
+#[test]
+fn a_verified_read_creates_lifetime_metadata_without_an_action() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let store = store(&client);
+    let fresh = session("fresh").run_by(Some(parent()));
+
+    touch(&client, &fresh).unwrap();
+    let metadata = store.read(fresh.key()).unwrap();
+    assert!(metadata.counts.is_empty());
+    assert!(metadata.screenshots.is_empty());
+    assert_eq!(metadata.host_process, Some(parent()));
+
+    noted(&client, &fresh, Kind::Other, "click", json!({"ok": true}));
+    let written = store.read(fresh.key()).unwrap();
+    store
+        .touch(
+            &fresh,
+            Some(parent()),
+            written.last_seen + 1000,
+            &client.controller,
+        )
+        .unwrap();
+    assert_eq!(
+        store.read(fresh.key()).unwrap(),
+        written,
+        "nothing to write"
+    );
+
+    let later = written.last_seen + 60_000;
+    store
+        .touch(&fresh, Some(parent()), later, &client.controller)
+        .unwrap();
+    assert_eq!(store.read(fresh.key()).unwrap().last_seen, later);
+}
+
+#[test]
+fn a_session_ended_by_clear_stays_ended_unless_resumed_in_another_process() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let before = session("before").run_by(Some(parent()));
+    let after = session("after").run_by(Some(parent()));
+    noted(&client, &before, Kind::Other, "click", json!({"ok": true}));
+    noted(&client, &after, Kind::Other, "click", json!({"ok": true}));
+    let cleared = store(&client).read(before.key()).unwrap();
+    assert!(cleared.ended.is_some());
+
+    let later = cleared.last_seen + 60_000;
+    store(&client)
+        .touch(&before, Some(parent()), later, &client.controller)
+        .unwrap();
+    assert_eq!(
+        store(&client).read(before.key()).unwrap(),
+        cleared,
+        "the same process, so still ended"
+    );
+    store(&client)
+        .touch(&before, None, later, &client.controller)
+        .unwrap();
+    assert_eq!(store(&client).read(before.key()).unwrap(), cleared);
+
+    let resumed = Instance::current().unwrap();
+    store(&client)
+        .touch(&before, Some(resumed), later, &client.controller)
+        .unwrap();
+    let revived = store(&client).read(before.key()).unwrap();
+    assert_eq!(revived, cleared, "another live root cannot take the record");
+}
+
+#[test]
+fn a_delayed_action_after_clear_does_not_revive_its_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let before = session("before").run_by(Some(parent()));
+    let after = session("after").run_by(Some(parent()));
+    noted(&client, &before, Kind::Other, "click", json!({"ok": true}));
+    noted(&client, &after, Kind::Other, "click", json!({"ok": true}));
+    let cleared = store(&client).read(before.key()).unwrap();
+    assert!(cleared.ended.is_some());
+
+    noted(&client, &before, Kind::Other, "click", json!({"ok": true}));
+
+    let delayed = store(&client).read(before.key()).unwrap();
+    assert_eq!(delayed.ended, cleared.ended);
+    assert_eq!(delayed.host_process, cleared.host_process);
+    assert_eq!(delayed.counts["click"], cleared.counts["click"] + 1);
+}
+
+#[test]
+fn a_touch_never_waits_for_another_command_writing_the_records() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("contended").run_by(Some(Instance::new(i32::MAX, [1, 0])));
+    noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
+    let before = fs::read(store(&client).folder.path(session.key())).unwrap();
+
+    let other = OpenOptions::new()
+        .write(true)
+        .open(client.output_dir().unwrap().join("sessions/.lock"))
+        .unwrap();
+    FileExt::lock_exclusive(&other).unwrap();
+    let resumed = session.clone().run_by(Some(parent()));
+    let touched = touch(&client, &resumed);
+    let _ = FileExt::unlock(&other);
+
+    assert_eq!(touched.unwrap_err().code, "busy");
+    assert_eq!(
+        fs::read(store(&client).folder.path(session.key())).unwrap(),
+        before
+    );
+}
+
+/// A record of `id` last seen `days_ago`, written straight into `store`.
+fn aged(store: &Store, id: &str, days_ago: u64, plans: usize) -> Record {
+    let mut record = Record::new(&session(id), 0, None);
+    record.last_seen = TEST_NOW - days_ago * 24 * 60 * 60 * 1000;
+    record.started = record.last_seen;
+    for _ in 0..plans {
+        record.planned(Token::new(), Phase::Applied, record.last_seen);
+    }
+    store.write(&record).unwrap();
+    record
+}
+
+#[test]
+fn records_idle_a_week_go_unless_they_list_leftovers() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let copies = directory.path().join("copies");
+    fs::DirBuilder::new().mode(0o700).create(&copies).unwrap();
+    let store = store(&client).copying_into(&copies);
+    store.folder.make().unwrap();
+
+    let mut copied = aged(&store, "copied", 8, 0);
+    let token = Token::new();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(copies.join(token.as_str()))
+        .unwrap();
+    copied.copies.push(token);
+    store.write(&copied).unwrap();
+    let planned = aged(&store, "planned", 8, 1);
+    let idle = aged(&store, "idle", 8, 0);
+    let recent = aged(&store, "recent", 1, 0);
+    let boundary = aged(&store, "boundary", 7, 0);
+    for record in [&copied, &planned, &idle, &recent, &boundary] {
+        remember_windows(&client, &record.key);
+    }
+
+    store
+        .update(&session("new"), TEST_NOW, &client.controller, |_| {})
+        .unwrap();
+
+    store.prune_at(session("new").key(), &[], TEST_NOW);
+
+    assert!(store.read(&copied.key).is_some(), "its copy is still there");
+    assert!(
+        store.read(&planned.key).is_some(),
+        "its plan is not rolled back"
+    );
+    assert!(store.read(&recent.key).is_some());
+    assert!(
+        store.read(&boundary.key).is_some(),
+        "exactly a week is retained"
+    );
+    assert_eq!(store.read(&idle.key), None);
+    for record in [&copied, &planned, &recent, &boundary] {
+        assert!(
+            crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
+                .unwrap()
+                .is_some()
+        );
+    }
+    assert!(
+        crate::last_capture::remembered_windows(&client.config.output_dir, &idle.key)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn at_most_sixty_four_records_stay_and_those_with_leftovers_go_last() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let store = store(&client);
+    store.folder.make().unwrap();
+
+    let with_leftovers: Vec<Record> = (0..3)
+        .map(|n| aged(&store, &format!("left-{n}"), 6, 1))
+        .collect();
+    let others: Vec<Record> = (0..MAX_RECORDS)
+        .map(|n| aged(&store, &format!("other-{n}"), 5 - (n as u64 % 5), 0))
+        .collect();
+
+    for record in with_leftovers.iter().chain(&others) {
+        remember_windows(&client, &record.key);
+    }
+    let new = session("newest");
+    store
+        .update(&new, TEST_NOW, &client.controller, |_| {})
+        .unwrap();
+
+    let left = store.listed(LISTED);
+    assert_eq!(left.len(), MAX_RECORDS);
+    assert!(
+        left.iter().any(|record| record.key == *new.key()),
+        "the new one stays"
+    );
+    for record in &with_leftovers {
+        assert!(
+            store.read(&record.key).is_some(),
+            "the oldest, but with leftovers"
+        );
+    }
+    let gone = others
+        .iter()
+        .filter(|record| store.read(&record.key).is_none())
+        .count();
+    assert_eq!(gone, 3 + 1);
+    for record in with_leftovers.iter().chain(&others) {
+        assert_eq!(
+            crate::last_capture::remembered_windows(&client.config.output_dir, &record.key)
+                .unwrap()
+                .is_some(),
+            store.read(&record.key).is_some(),
+        );
+    }
+}
+
+#[test]
+fn a_record_that_cannot_be_written_never_fails_the_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let output = client.output_dir().unwrap().to_owned();
+    fs::set_permissions(&output, fs::Permissions::from_mode(0o500)).unwrap();
+
+    let reply = json!({"ok": true, "performed": 1});
+    let result: Result<Value> = Ok(reply.clone());
+    let noted = note(
+        &client,
+        &session("blocked"),
+        Kind::Other,
+        Some(&Doing::new("click")),
+        &result,
+    );
+    fs::set_permissions(&output, fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert!(noted.is_err());
+    assert_eq!(
+        result.ok(),
+        Some(reply),
+        "the command's own result is untouched"
+    );
+    assert!(!output.join("sessions").exists());
+}
+
+#[test]
+fn a_command_whose_record_is_being_written_elsewhere_returns_without_recording() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("contended");
+    noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
+    let before = fs::read(store(&client).folder.path(session.key())).unwrap();
+
+    // Another command holds the records' lock, as one suspended midway
+    // would, for as long as this one runs.
+    let other = OpenOptions::new()
+        .write(true)
+        .open(client.output_dir().unwrap().join("sessions/.lock"))
+        .unwrap();
+    FileExt::lock_exclusive(&other).unwrap();
+
+    let reply = json!({"ok": true, "performed": 1});
+    let result: Result<Value> = Ok(reply.clone());
+    let noted = note(
+        &client,
+        &session,
+        Kind::Other,
+        Some(&Doing::new("click")),
+        &result,
+    );
+    let _ = FileExt::unlock(&other);
+
+    assert_eq!(noted.unwrap_err().code, "busy");
+    assert_eq!(
+        result.ok(),
+        Some(reply),
+        "the command's own result is untouched"
+    );
+    assert_eq!(
+        fs::read(store(&client).folder.path(session.key())).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn a_reader_never_sees_half_a_record() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("busy");
+    noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
+    let path = store(&client).folder.path(session.key());
+
+    let writing = {
+        let (client, session) = (client.clone(), session.clone());
+        std::thread::spawn(move || {
+            for n in 0..200 {
+                let shot = json!({"ok": true, "path": format!("/o/{}", capture(n).as_str())});
+                noted(&client, &session, Kind::Screenshot, "screenshot", shot);
+            }
+        })
+    };
+    let mut reads = 0;
+    while !writing.is_finished() {
+        if let Ok(bytes) = fs::read(&path) {
+            serde_json::from_slice::<Record>(&bytes).unwrap();
+            reads += 1;
+        }
+    }
+    writing.join().unwrap();
+    assert!(reads > 0);
+}
+
+#[test]
+fn a_record_through_a_link_or_too_large_or_with_foreign_names_is_not_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("linked");
+    noted(&client, &session, Kind::Other, "click", json!({"ok": true}));
+    let store = store(&client);
+    let path = store.folder.path(session.key());
+
+    let elsewhere = directory.path().join("elsewhere.json");
+    fs::rename(&path, &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    assert_eq!(store.read(session.key()), None);
+    assert!(store.all().is_empty());
+
+    fs::remove_file(&path).unwrap();
+    let mut large = fs::read_to_string(&elsewhere).unwrap();
+    large.insert_str(
+        1,
+        &format!("\"padding\":\"{}\",", "x".repeat(SESSIONS.bytes as usize)),
+    );
+    fs::write(&path, large).unwrap();
+    assert_eq!(store.read(session.key()), None);
+
+    let mut foreign: Value = serde_json::from_slice(&fs::read(&elsewhere).unwrap()).unwrap();
+    for (field, value) in [
+        ("copies", json!(["../../Users/me/Documents"])),
+        ("screenshots", json!(["/Users/me/Desktop/notes.png"])),
+        ("hostSession", json!("a session with spaces")),
+    ] {
+        let mut record = foreign.clone();
+        record[field] = value;
+        fs::write(&path, record.to_string()).unwrap();
+        assert_eq!(store.read(session.key()), None, "{field}");
+    }
+    foreign["plans"] = json!([{"planId": "nope", "phase": "applied", "at": 1}]);
+    fs::write(&path, foreign.to_string()).unwrap();
+    assert_eq!(store.read(session.key()), None);
+
+    let sessions = client.output_dir().unwrap().join("sessions");
+    fs::remove_dir_all(&sessions).unwrap();
+    let real = directory.path().join("real-sessions");
+    fs::DirBuilder::new().mode(0o700).create(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &sessions).unwrap();
+    assert!(store.folder.make().is_err(), "a linked folder is refused");
+    assert!(store.all().is_empty());
+}
+
+#[test]
+fn preserved_records_survive_recording_forgetting_predecessors_and_pruning_after_reopen() {
+    let process = Instance::current().unwrap();
+    let owner = session("preserved").run_by(Some(process));
+    let plan = Token::new();
+    let mut record = Record::new(&owner, 1, None);
+    record.planned(plan.clone(), Phase::Applied, 1);
+    let mut future = serde_json::to_value(&record).unwrap();
+    future["version"] = json!(VERSION + 1);
+    future["futureField"] = json!("private durable canary");
+    let mut mismatched = serde_json::to_value(&record).unwrap();
+    mismatched["key"] = json!(session("different").key());
+
+    for bytes in [
+        b"{malformed private durable canary".to_vec(),
+        serde_json::to_vec(&future).unwrap(),
+        serde_json::to_vec(&mismatched).unwrap(),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(directory.path());
+        let store = store(&client);
+        store.folder.make().unwrap();
+        let path = store.folder.path(owner.key());
+        fs::write(&path, &bytes).unwrap();
+        for successor in ["first-successor", "reopened-successor"] {
+            let reopened = Store::at(client.output_dir().unwrap());
+            let cache = Mutex::new(None);
+            let recent = reopened.recent_in(&cache, Store::all);
+            assert!(recent.iter().all(|seen| seen.record.key != *owner.key()));
+            assert!(reopened.checked_recent().is_none());
+
+            let result = Ok(json!({"ok": true, "performed": 1}));
+            let error = note(
+                &client,
+                &owner,
+                Kind::Other,
+                Some(&Doing::new("click")),
+                &result,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, Code::State);
+            assert_eq!(
+                error.error,
+                "This session's record cannot be read by this version of Atlas, so it was left as it is"
+            );
+            assert_eq!(result.ok(), Some(json!({"ok": true, "performed": 1})));
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            assert_eq!(
+                reopened
+                    .touch(&owner, Some(process), TEST_NOW, &client.controller)
+                    .unwrap_err()
+                    .code,
+                Code::State
+            );
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+
+            reopened.forget_plan(&plan).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            let successor = session(successor).run_by(Some(process));
+            assert!(matches!(reopened.read_file(successor.key()), Read::Missing));
+            reopened
+                .update(&successor, TEST_NOW, &client.controller, |_| {})
+                .unwrap();
+            assert_eq!(reopened.read(successor.key()).unwrap().previous, None);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+
+            for n in 0..=MAX_RECORDS {
+                aged(&reopened, &format!("idle-{n}"), 8, 0);
+            }
+            reopened.prune_at(successor.key(), &[], TEST_NOW);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            for n in 0..=MAX_RECORDS {
+                aged(&reopened, &format!("recent-{n}"), 1, 0);
+            }
+            reopened.prune_at(successor.key(), &[], TEST_NOW);
+            assert_eq!(fs::read(&path).unwrap(), bytes);
+            fs::remove_file(reopened.folder.path(successor.key())).unwrap();
+        }
+    }
+}
+
+#[test]
+fn an_unreadable_record_is_preserved_until_it_can_be_read_again() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let owner = session("unreadable");
+    noted(&client, &owner, Kind::Other, "click", json!({"ok": true}));
+    let store = store(&client);
+    let path = store.folder.path(owner.key());
+    let bytes = fs::read(&path).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    assert!(store.read(owner.key()).is_none());
+    let result = Ok(json!({"ok": true}));
+    assert_eq!(
+        note(
+            &client,
+            &owner,
+            Kind::Other,
+            Some(&Doing::new("click")),
+            &result
+        )
+        .unwrap_err()
+        .code,
+        Code::State
+    );
+    assert_eq!(
+        store
+            .touch(&owner, None, TEST_NOW, &client.controller)
+            .unwrap_err()
+            .code,
+        Code::State
+    );
+    store.forget_plan(&Token::new()).unwrap();
+    store.prune_at(
+        session("other").key(),
+        &[],
+        TEST_NOW + atlas_core::time::ms(IDLE_FOR) + 1,
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(
+        Store::at(client.output_dir().unwrap())
+            .read(owner.key())
+            .unwrap()
+            .counts["click"],
+        1
+    );
+}
+
+#[test]
+fn a_directory_revision_invalidates_a_cached_session_without_waiting() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let store = store(&client);
+    let kept = Mutex::new(None);
+    let reads = std::cell::Cell::new(0);
+    let modified = std::time::SystemTime::UNIX_EPOCH;
+    let observed = |revision, age| {
+        store.folder.cached_observed(
+            &kept,
+            COPIES_FRESH,
+            revision,
+            |_| age,
+            || {
+                reads.set(reads.get() + 1);
+                store.seen(store.all())
+            },
+        )
+    };
+
+    assert!(observed(None, Duration::ZERO).is_empty());
+    assert_eq!(reads.get(), 0, "no folder, nothing to read");
+    noted(
+        &client,
+        &session("polled"),
+        Kind::Other,
+        "click",
+        json!({"ok": true}),
+    );
+    let first = observed(Some(modified), Duration::ZERO);
+    let reused = observed(Some(modified), COPIES_FRESH - Duration::from_nanos(1));
+    assert!(Arc::ptr_eq(&first, &reused));
+    assert_eq!(first.len(), 1);
+    assert_eq!(reads.get(), 1, "the second poll reads nothing");
+
+    noted(
+        &client,
+        &session("another"),
+        Kind::Other,
+        "click",
+        json!({"ok": true}),
+    );
+    let revised = modified + Duration::from_secs(1);
+    assert_eq!(observed(Some(revised), Duration::ZERO).len(), 2);
+    assert_eq!(reads.get(), 2);
+    assert_eq!(observed(Some(revised), COPIES_FRESH).len(), 2);
+    assert_eq!(
+        reads.get(),
+        3,
+        "copies are recounted at the exact age boundary"
+    );
+    assert!(observed(None, Duration::ZERO).is_empty());
+    assert_eq!(
+        reads.get(),
+        3,
+        "missing metadata never serves a cached result"
+    );
+}
+
+#[test]
+fn a_status_read_counts_the_copy_folders_still_there() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let copies = directory.path().join("copies");
+    fs::DirBuilder::new().mode(0o700).create(&copies).unwrap();
+    let store = store(&client).copying_into(&copies);
+    store.folder.make().unwrap();
+    let mut record = aged(&store, "copier", 0, 0);
+    let (there, gone) = (Token::new(), Token::new());
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(copies.join(there.as_str()))
+        .unwrap();
+    record.copies = vec![there, gone];
+    store.write(&record).unwrap();
+
+    let seen = store.recent_in(&Mutex::new(None), Store::all);
+    assert_eq!(seen[0].copies_left, 1);
+}
+
+#[test]
+fn a_new_record_works_in_its_sessions_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let left = session("left").in_folder(Some("left"));
+    noted(&client, &left, Kind::Other, "click", json!({"ok": true}));
+    assert_eq!(
+        store(&client).read(left.key()).unwrap().folder.as_deref(),
+        Some("left")
+    );
+
+    let nowhere = session("nowhere");
+    noted(&client, &nowhere, Kind::Other, "click", json!({"ok": true}));
+    assert_eq!(store(&client).read(nowhere.key()).unwrap().folder, None);
+}
+
+#[test]
+fn an_unverified_first_read_records_activity_without_claiming_a_process() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    for own in [
+        session("reader"),
+        session("forged").run_by(Instance::current()),
+    ] {
+        assert_eq!(own.ancestor(), None);
+        touch(&client, &own).unwrap();
+        let record = store(&client).read(own.key()).unwrap();
+        assert_eq!(record.host_process, None);
+        assert!(record.counts.is_empty());
+        assert!(record.screenshots.is_empty());
+        assert_eq!(record.ended, None);
+    }
+}
+
+fn authoritative(id: &str, folder: Option<&str>) -> HostSession {
+    let mut own = session(id).run_by(Some(parent())).in_folder(folder);
+    own.folder_from_host = true;
+    own
+}
+
+#[test]
+fn an_authoritative_folder_replaces_a_legacy_child_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let child = session("parent")
+        .run_by(Some(parent()))
+        .in_folder(Some("child"));
+    noted(&client, &child, Kind::Other, "click", json!({"ok": true}));
+    let before = store(&client).read(child.key()).unwrap();
+    assert!(!before.folder_from_host);
+    let root = authoritative("parent", Some("parent"));
+    touch(&client, &root).unwrap();
+    let after = store(&client).read(root.key()).unwrap();
+    assert_eq!(after.folder.as_deref(), Some("parent"));
+    assert!(after.folder_from_host);
+    assert_eq!(before.counts, after.counts);
+    assert_eq!(before.started, after.started);
+}
+
+#[test]
+fn version_one_records_default_to_an_unauthoritative_folder() {
+    let record = Record::new(&session("legacy"), 1, Some("child".into()));
+    let mut value = serde_json::to_value(record).unwrap();
+    value.as_object_mut().unwrap().remove("folderFromHost");
+    let read: Record = serde_json::from_value(value).unwrap();
+    assert_eq!(read.version, 1);
+    assert!(!read.folder_from_host);
+}
+
+#[test]
+fn a_failed_folder_read_keeps_only_an_authoritative_folder() {
+    for trusted in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = client(directory.path());
+        let mut root = authoritative("parent", Some("parent"));
+        root.folder_from_host = trusted;
+        touch(&client, &root).unwrap();
+        let failed = session("parent").run_by(Some(parent()));
+        touch(&client, &failed).unwrap();
+        let read = store(&client).read(root.key()).unwrap();
+        assert_eq!(read.folder.as_deref(), trusted.then_some("parent"));
+        assert_eq!(read.folder_from_host, trusted);
+    }
+}
+
+#[test]
+fn a_replacement_host_does_not_inherit_an_authoritative_folder() {
+    for folder in [None, Some("new")] {
+        let mut old = authoritative("resumed", Some("old"));
+        old.process = Some(Instance::new(i32::MAX, [1, 0]));
+        let mut record = Record::new(&old, 1, old.folder.clone());
+        let mut resumed = authoritative("resumed", folder);
+        resumed.folder_from_host = folder.is_some();
+        assert!(record.touched(&resumed, resumed.process(), 2));
+        assert_eq!(record.host_process, resumed.process());
+        assert_eq!(record.folder.as_deref(), folder);
+        assert_eq!(record.folder_from_host, folder.is_some());
+    }
+}
+
+#[test]
+fn successful_home_or_root_suppression_is_authoritative() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let root = authoritative("root", None);
+    touch(&client, &root).unwrap();
+    let read = store(&client).read(root.key()).unwrap();
+    assert!(read.folder_from_host);
+    assert_eq!(read.folder, None);
+}
+
+#[test]
+fn an_old_command_cannot_replace_a_resumed_process() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let root = authoritative("resumed", Some("parent"));
+    touch(&client, &root).unwrap();
+    let old = session("resumed")
+        .run_by(Some(Instance::new(i32::MAX, [1, 0])))
+        .in_folder(Some("old"));
+    noted(&client, &old, Kind::Other, "click", json!({"ok": true}));
+    let read = store(&client).read(root.key()).unwrap();
+    assert_eq!(read.host_process, root.process());
+    assert_eq!(read.folder.as_deref(), Some("parent"));
+}
+
+#[test]
+fn entry_attachment_does_not_wait_for_a_held_marker_lock_or_lose_pending_attribution() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = client(directory.path());
+    let pid = nix::unistd::getppid().as_raw();
+    let process = atlas_core::host::ancestry::process(pid).unwrap().instance;
+    let own = session("owner")
+        .run_by(Some(process))
+        .in_folder(Some("parent"));
+    client.controller = client.controller.labelled(Some(&own));
+    let claim = client.controller.quarantine().unwrap();
+    let generation = claim.generation().to_owned();
+    drop(claim);
+    let lock = open_lock(client.controller.marker_lock_path()).unwrap();
+    FileExt::lock_exclusive(&lock.0).unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let caller = client.clone();
+    let worker = std::thread::spawn(move || {
+        let result = touch(&caller, &own);
+        send.send(result.map_err(|error| error.code)).unwrap();
+    });
+    let result = receive.recv_timeout(Duration::from_secs(30));
+    drop(lock);
+    worker.join().unwrap();
+    assert_eq!(result.unwrap().unwrap_err(), "busy");
+    assert!(Store::at(client.output_dir().unwrap()).all().is_empty());
+    let causes = client.controller.pending_causes().unwrap();
+    assert_eq!(causes[0].generation, generation);
+    assert_eq!(causes[0].session, Some(session("owner").key().clone()));
+}

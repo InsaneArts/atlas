@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const roots = [
   'app',
-  'src',
+  'crates',
   'scripts',
   'tests',
   'agents',

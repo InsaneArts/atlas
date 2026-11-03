@@ -1,0 +1,1217 @@
+//! Command-line grammar, value parsing and argument adapters.
+//! The declarative grammar stays together so argument relationships and
+//! generated help remain beside their commands; parser and guide parity tests
+//! check the same schema. A command with many arguments keeps them in a struct
+//! of its own, which its handler takes whole.
+use atlas_agents::Agent;
+use atlas_client::agent;
+use atlas_control::{CONTROL_WAIT, CONTROL_WAIT_MAX};
+use atlas_core::host::Key;
+use atlas_core::{
+    actions::Button,
+    protocol::{self, JobId, Region},
+};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum, builder::TypedValueParser};
+use std::{ffi::OsStr, path::PathBuf, time::Duration};
+
+#[derive(Parser)]
+#[command(
+    name = "atlas",
+    version,
+    about = "A hidden second macOS desktop where agents test apps while you keep working"
+)]
+pub(super) struct Cli {
+    /// Print JSON (the default when the output is not a terminal).
+    #[arg(long, global = true, help_heading = "Global options")]
+    pub(super) json: bool,
+    /// Permit service restarts while other sessions or background jobs are active.
+    /// A controller or an unfinished action can still block the restart.
+    #[arg(long, global = true, help_heading = "Global options")]
+    pub(super) allow_disrupt: bool,
+    /// Use another settings file.
+    #[arg(
+        long,
+        value_name = "FILE",
+        env = "ATLAS_CONFIG",
+        hide_env = true,
+        help_heading = "Global options",
+        global = true
+    )]
+    pub(super) config: Option<PathBuf>,
+    /// Seconds a command that changes the helper waits for another Atlas
+    /// command to finish before answering busy, in place of `ATLAS_WAIT`: 30
+    /// unless given, 0 answers at once, at most 600.
+    #[arg(
+        long,
+        global = true,
+        value_name = "SECONDS",
+        hide = true,
+        value_parser = control_wait()
+    )]
+    pub(super) wait: Option<Duration>,
+    #[command(subcommand)]
+    pub(super) command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+pub(super) enum Command {
+    /// Copy selected settings and files into the helper.
+    #[command(
+        args_conflicts_with_subcommands = true,
+        long_about = "Copy selected settings and files into the helper.\n\nPreview a one-way copy into the helper. The TOML manifest lists [[files]] tables: source (absolute or relative to the manifest), target (an ASCII path inside the helper's home) and optional executable. Quit apps that write these files before applying. A different file already in the helper, or one changed there after Atlas copied it, is a conflict; a target inside, around or differing only in case from another, or from a file copied earlier, is refused. Rollback undoes it, leaves a file changed in the helper since as it is, and deletes the copies Atlas kept for it. Accounts, sign-ins and running apps' databases are never copied."
+    )]
+    Environment(Environment),
+    #[command(hide = true)]
+    EnvironmentWorker {
+        packet: PathBuf,
+        #[arg(long)]
+        apply: bool,
+    },
+    #[command(hide = true)]
+    SessionInfo,
+    /// This process's permissions as macOS grants them now (the helper's
+    /// daemon asks a fresh process: its own Screen Recording reading only
+    /// changes when it restarts).
+    #[command(hide = true)]
+    PermissionsInfo,
+    #[command(hide = true)]
+    ElementsInfo { pid: i32 },
+    /// The helper daemon inside the helper login (started by its LaunchAgent).
+    #[command(hide = true)]
+    HelperServe(Service),
+    #[command(hide = true)]
+    InputService(Service),
+    /// Inspect the helper's setup, or finish it (advanced).
+    #[command(
+        long_about = "Inspect the helper's setup, or finish it (advanced).\n\nWithout flags, report the helper account, configuration, endpoints and services without changing anything. --apply finishes or re-checks the first setup atlas init started: Atlas's own signed helper daemon runs as a managed LaunchAgent on a private socket directory, and every step is recorded so an interruption resumes."
+    )]
+    Setup(Setup),
+    #[command(hide = true)]
+    SetupHelper(SetupHelper),
+    /// Show where Atlas keeps its settings, sockets and screenshots.
+    Config,
+    /// Show the helper: who it is, where it is and what it may do.
+    Status,
+    /// List what this agent session did in the helper.
+    ///
+    /// Its recent actions, its screenshots, the copies open made that are
+    /// still there, the environment plans it applied and not yet rolled
+    /// back, whether an action of its own is unknown, and each task it
+    /// named with ATLAS_TASK=NAME. Claude Code, Codex, opencode and Pi name
+    /// their session themselves; elsewhere set ATLAS_SESSION=NAME. Without a
+    /// session, or with --all, every session's. It only reads: it works
+    /// while another agent or the person has control, or after a Stop.
+    Activity(Activity),
+    /// Check that everything is ready, and say what to fix if not.
+    Doctor(Doctor),
+    /// Check that native Save and Open dialogs work in the helper.
+    ///
+    /// Exercises real Save/Open dialogs with the AppKit fixture and records the outcome.
+    VerifyNative {
+        /// The compiled DesktopFixture test app, where the helper can run it.
+        #[arg(long, default_value = atlas_client::capability::FIXTURE)]
+        fixture: PathBuf,
+    },
+    /// Put this build where the helper can run it.
+    Install,
+    /// Start (or reset) the helper's input service.
+    StartInput,
+    /// Watch and control the helper in Atlas's viewer window.
+    ///
+    /// Starts the menu bar first when it is not running.
+    Monitor {
+        /// Local port for the viewer.
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+    },
+    /// Stop agents in the helper until the person resumes them.
+    #[command(hide = true)]
+    Stop,
+    /// Let agents act in the helper again: the person's, from a viewer
+    /// (Atlas.app, the Claude Code pane); refused for an agent.
+    #[command(hide = true)]
+    Resume,
+    /// Serve agent apps over MCP on standard input and output: the status,
+    /// and a live view of the helper's screen with Stop.
+    #[command(hide = true)]
+    Mcp(Mcp),
+    /// The helper's status as it changes, one JSON line each, for agent apps.
+    #[command(hide = true)]
+    Watch {
+        /// Local port of the menu bar's viewer.
+        #[arg(long, default_value_t = 8765)]
+        port: u16,
+        /// A private folder to keep the helper's newest screen in.
+        #[arg(long)]
+        frames: Option<std::path::PathBuf>,
+        /// Say the status once and end.
+        #[arg(long)]
+        once: bool,
+    },
+    /// Show the helper in the menu bar, to watch it or take control.
+    ///
+    /// The menu bar runs on its own, so the terminal can close. Quit it from
+    /// its menu; that stops its viewer and releases control.
+    Menubar(Menubar),
+    /// Save a screenshot of the helper's screen, an app's windows or a region.
+    ///
+    /// Reports origin and pointsPerPixel: the image's pixel (px, py) is the
+    /// display point (origin.x + px × pointsPerPixel, origin.y + py ×
+    /// pointsPerPixel). With --app the picture holds the app's windows, its
+    /// sheets, panels and open menus with a small margin; overlapping lists other
+    /// apps' windows in front of them (take a full screenshot to see those).
+    #[command(visible_alias = "capture")]
+    Screenshot(Screenshot),
+    /// List the apps open in the helper.
+    ///
+    /// Lists apps with a Dock icon and menu bar apps that are not part of
+    /// macOS; `more` says how many other processes were left out.
+    Apps {
+        /// List every process, macOS's own background ones too.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Send several actions at once (a JSON array, or @path/to/actions.json).
+    ///
+    /// Each action is an object with a "type": move {x, y}; click {x, y,
+    /// button?, count?, modifiers?}; drag {fromX, fromY, toX, toY, button?};
+    /// scroll {x, y, dx?, dy?}; type {text}; key {key}; wait {ms}. Up to 32
+    /// actions that finish within two seconds; coordinates are display points,
+    /// a click is 1 to 5 clicks, a scroll at most 100 lines, text at most 256
+    /// characters, a wait at most 250 ms. With --app or --pid, each action is
+    /// checked before it starts, as type, key, click, scroll and drag check it,
+    /// and a move at its point.
+    /// Example: [{"type":"click","x":200,"y":120},{"type":"type","text":"hi"}]
+    Input {
+        /// A JSON array of actions, or @path/to/actions.json.
+        actions: String,
+        #[command(flatten)]
+        target: AppTarget,
+    },
+    /// Click a point, or exactly one element of an app.
+    ///
+    /// Click at display point X Y (origin + screenshot pixels × pointsPerPixel),
+    /// or on exactly one accessibility element of an app with --app and
+    /// --name/--role. Named input brings its target forward, then checks
+    /// the same point before clicking. With X Y, --app or --pid selects the
+    /// app, and --window selects a particular window. A blocked or unreadable
+    /// target refuses the click. No app is launched.
+    Click(Click),
+    /// List an app's buttons, fields and other elements.
+    ///
+    /// Lists accessibility elements of the app's windows: role, name, value,
+    /// click point (at) and size, with each window listed once; also the
+    /// items of a menu the app has open (menu: true, with a check mark as
+    /// mark) and, while the app is in front, its menu bar titles. more says
+    /// how many matching elements were left out.
+    Elements(Elements),
+    /// Print the guide agents read to use Atlas (all of it by default).
+    #[command(group(clap::ArgGroup::new("part").args(["skill", "commands", "errors"])))]
+    AgentGuide(AgentGuide),
+    /// Check that tools and apps are ready in the helper.
+    Readiness {
+        /// A command-line tool to check (repeat for more).
+        #[arg(long = "tool", value_name = "NAME")]
+        tools: Vec<String>,
+        /// An app to check (repeat for more).
+        #[arg(long = "app", value_name = "NAME")]
+        apps: Vec<String>,
+    },
+    /// Move the pointer to a point.
+    Move {
+        /// Display point X.
+        x: f64,
+        /// Display point Y.
+        y: f64,
+    },
+    /// Drag from one point to another.
+    ///
+    /// What is dragged (a window, a slider's knob, a selection) moves by
+    /// exactly the distance between the points; the button itself is released
+    /// up to one point past the end, in the direction of travel, never off the
+    /// display. Drag-and-drop onto a target (selected text, files, list items)
+    /// does not begin in the helper: macOS starts such a drag only from a real
+    /// mouse. With --app or --pid, bring the target forward, then check that
+    /// app at both ends. --window selects the starting window. A blocked or
+    /// unreadable target refuses the drag; no app is launched.
+    Drag(Drag),
+    /// Scroll at a point.
+    ///
+    /// Scroll at X Y by lines, as a mouse wheel's notches (about 10 points
+    /// each, as the app has it); negative values scroll up or left. With
+    /// --app or --pid, bring the target forward and check the same point;
+    /// --window selects a particular window. A blocked or unreadable target
+    /// refuses the scroll. No app is launched.
+    Scroll(Scroll),
+    /// Type text.
+    ///
+    /// The text is typed as given: a real newline or tab in it (in a shell,
+    /// $'one\ntwo') or on standard input arrives as a line break or tab,
+    /// while the two characters \n are typed as they are. Long text is typed
+    /// in parts without breaking characters, and Atlas keeps control until the
+    /// last part, so no other input lands in between. With --app or --pid,
+    /// bring the app forward; --window selects a particular document and
+    /// --field establishes its named field where supported. Check focus before
+    /// every 16 characters. A blocked or unreadable target refuses the text.
+    /// No app is launched.
+    Type(Type),
+    /// Press keys, for example cmd+s or escape.
+    ///
+    /// Keys are pressed in order: `key cmd+s` or `key escape return`. A key is
+    /// a letter, digit or punctuation mark, or one of return, tab, space,
+    /// escape, backspace, forwarddelete, left, right, up, down, home, end,
+    /// pageup, pagedown and f1 to f12; the plus key is written + on its own or
+    /// at the end of a chord (cmd++). Named input brings the target forward
+    /// and checks it before the first key. Later keys only check the app,
+    /// since a key may move the window or field on purpose. A blocked or
+    /// unreadable target refuses input. No app is launched.
+    Key(Keys),
+    /// List the helper's windows, front to back.
+    ///
+    /// Every app's windows, floating panels and alerts. --all adds menus,
+    /// the menu bar, the Dock and other system layers.
+    Windows {
+        /// Only windows of this app.
+        #[arg(long)]
+        app: Option<String>,
+        /// Only windows whose title contains this.
+        #[arg(long)]
+        title: Option<String>,
+        /// Include menus, the menu bar, the Dock and other system layers.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Open an app, files or URLs in the helper.
+    Open(Open),
+    /// Quit an app in the helper and remove the copies `open` made for it.
+    ///
+    /// The app quits at once, without asking to save: save first (key cmd+s).
+    /// --all quits every app left open, another agent's too: use it only when
+    /// the person asks. Atlas and macOS's own in /System/Library (Finder among
+    /// them) stay.
+    #[command(group(clap::ArgGroup::new("which").required(true).args(["app", "all"])))]
+    Close {
+        /// The app's name, as `atlas apps` lists it.
+        #[arg(long)]
+        app: Option<String>,
+        /// Quit every app left open, another agent's too (not Atlas or macOS's own).
+        #[arg(long, conflicts_with = "app")]
+        all: bool,
+    },
+    /// Install an app into the helper's Applications folder for this task.
+    ///
+    /// Copies an .app from this Mac into ~/Applications in the helper, never
+    /// over anything already there, registers it so atlas open --app NAME
+    /// finds it, and records it, so that atlas cleanup --apply moves it aside
+    /// in the helper once the task is done, unless it changed meanwhile.
+    /// Settings and data the app writes in the helper stay.
+    InstallApp {
+        /// The .app to install.
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+    },
+    /// See what this task left in the helper, and clean it up with --apply.
+    ///
+    /// Lists the copies into the helper this task applied, the apps it
+    /// installed, the copies it opened and the apps running from them. With
+    /// --apply it quits those apps, rolls the copies into the helper back
+    /// newest first, moves the installs aside in the helper (held, and removed
+    /// after 7 days), removes the copies, and reports what it kept and why.
+    /// Run it again to finish what is left. Apps opened by name that still run
+    /// are listed, not quit.
+    Cleanup(Cleanup),
+    /// Wait for a window to appear (or, with --gone, to close).
+    Wait(Wait),
+    /// Run a command in the helper and print its output.
+    ///
+    /// The command starts in the helper's home and finds programs where
+    /// readiness looks for them: the helper's .local/bin and .cargo/bin,
+    /// Homebrew, /usr/local/bin and the system folders. It is stopped after
+    /// --timeout seconds (20 unless given, at most 600). Other agents may
+    /// act while it runs; recovery, restart and updates answer busy until
+    /// it ends. Atlas exits 1 when the command's exit code is not 0 or it
+    /// was stopped, with the reply still ok. For a server or worker that
+    /// must keep running, use atlas job start.
+    Run(Run),
+    /// Keep a server or worker running in the helper, and stop it.
+    ///
+    /// A job starts in the helper's home like run, in a session and process
+    /// group of its own, and keeps running after this command returns, for
+    /// up to --timeout seconds. Atlas also ends it when the person stops
+    /// agents and when the helper comes on screen. Stopping checks that it
+    /// is still the same process, then ends its group and says what is left.
+    /// A process the job starts that calls setsid leaves the job's group and
+    /// session. Atlas never stops it. If Atlas did not see it before its
+    /// parent exited, it may also be missing from reports.
+    Job {
+        #[command(subcommand)]
+        command: JobCommand,
+    },
+    /// Copy files a task made in the helper into a private folder here.
+    ///
+    /// Each FILE is a regular file owned by the helper, in its home (a path
+    /// relative to it) or in /tmp, that has not changed for two seconds.
+    /// The reply gives each copy's path, size and SHA-256. The file in the
+    /// helper is left as it is.
+    Collect {
+        /// Files in the helper, at most 16.
+        #[arg(required = true, value_name = "FILE", num_args = 1..=16)]
+        files: Vec<String>,
+        /// The largest file accepted, such as 200M (64M unless given, at most 1G).
+        #[arg(long, value_name = "SIZE", default_value = "64M", value_parser = file_size)]
+        max_size: u64,
+    },
+    /// The first process of a background job, started by the helper daemon.
+    #[command(hide = true)]
+    JobLaunch {
+        #[arg(long)]
+        log: PathBuf,
+        #[arg(long)]
+        argv0: String,
+        #[arg(last = true, required = true)]
+        program: Vec<String>,
+    },
+    /// Restart the helper after something went wrong.
+    ///
+    /// Confirms a new hidden helper before clearing an action of unknown outcome.
+    /// Defers while another session is active; --allow-disrupt permits interrupting it.
+    Restart,
+    /// Log the helper out.
+    ///
+    /// Its apps quit as at any log-out; one asking to save holds it up. --force ends the session anyway. You log in to the helper again to use it.
+    Logout {
+        /// End the helper's session without asking its apps.
+        #[arg(long)]
+        force: bool,
+        /// Log out without asking first.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Lock the screen so you can switch to the helper.
+    ///
+    /// You log in on the lock screen; Atlas never sees a password.
+    Switch(Switch),
+    /// Update Atlas, checking its signature first.
+    ///
+    /// Verifies the release's checksum, Developer ID signature and version, then moves the helper onto it. Defers while another session or a background job is active; --allow-disrupt permits interrupting it.
+    Update(Update),
+    /// Set Atlas up, step by step (safe to run again).
+    ///
+    /// Helper account, first sign-in, permissions, the helper job and input.
+    Init,
+    /// Remove Atlas from this Mac (asks first).
+    ///
+    /// The helper is logged out first. Its account and files stay unless you pass --remove-helper; the app goes to the Trash.
+    Uninstall(Uninstall),
+    /// Connect Claude Code and Codex, or show which are connected.
+    ///
+    /// Adds a plugin that teaches the agent to use Atlas and guides setup.
+    Agents {
+        #[command(subcommand)]
+        action: Option<AgentsCommand>,
+    },
+    /// After an update, run by the new executable: move the helper onto it.
+    #[command(hide = true)]
+    UpdateFinish,
+    /// The steps the Atlas window's onboarding drives (JSON only).
+    #[command(hide = true)]
+    Onboarding {
+        #[command(subcommand)]
+        step: OnboardingCommand,
+    },
+}
+
+#[derive(clap::Args)]
+pub(super) struct Environment {
+    /// TOML manifest listing only the files to provision.
+    pub(super) manifest: Option<PathBuf>,
+    /// Apply the previewed changes; otherwise inspect without changing selected files.
+    #[arg(long)]
+    pub(super) apply: bool,
+    #[command(subcommand)]
+    pub(super) command: Option<EnvironmentCommand>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Service {
+    #[arg(long)]
+    pub(super) uid: u32,
+    #[arg(long)]
+    pub(super) controller_uid: u32,
+    #[arg(long)]
+    pub(super) socket: PathBuf,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Setup {
+    /// Helper account short name. Defaults to the configured helper.
+    #[arg(long, conflicts_with = "apply")]
+    pub(super) helper: Option<String>,
+    /// Finish or re-check the first setup in the managed private layout.
+    #[arg(long)]
+    pub(super) apply: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct SetupHelper {
+    pub(super) request: String,
+    /// Refuse unless this account matches this JSON account identity.
+    #[arg(long)]
+    pub(super) account: String,
+    /// Refuse unless this account is logged out.
+    #[arg(long)]
+    pub(super) logged_out: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Activity {
+    /// Every session's, not only this one's.
+    #[arg(long, conflicts_with = "session")]
+    pub(super) all: bool,
+    /// Another session's, by the key --all lists.
+    #[arg(long, value_name = "KEY", value_parser = session_key)]
+    pub(super) session: Option<Key>,
+    /// How many recent actions to list: 10 unless given, at most 50.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 10,
+        value_parser = clap::value_parser!(u16).range(1..=50)
+    )]
+    pub(super) limit: u16,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Doctor {
+    /// Include every check and the helper's full status (in --json too).
+    #[arg(long)]
+    pub(super) verbose: bool,
+    /// Show how long the last login of the past two hours took, step by step.
+    #[arg(long, conflicts_with = "verbose")]
+    pub(super) login_timing: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Mcp {
+    /// Local port of the menu bar's viewer.
+    #[arg(long, default_value_t = 8765)]
+    pub(super) port: u16,
+    /// Offer only the status and the screen: no Stop, Resume or Recover.
+    #[arg(long)]
+    pub(super) read_only: bool,
+    /// Require a private view capability for person-operated MCP actions.
+    #[arg(long, hide = true)]
+    pub(super) guard_app_controls: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Menubar {
+    /// Local port for the viewer it opens.
+    #[arg(long, default_value_t = 8765, value_parser = clap::value_parser!(u16).range(1..))]
+    pub(super) port: u16,
+    /// Serve the menu bar from this process (how it runs on its own).
+    #[arg(long, hide = true, conflicts_with_all = ["render", "login"])]
+    pub(super) serve: bool,
+    /// Instead, draw the panel in light and dark to PNGs in DIR and exit.
+    #[arg(long, value_name = "DIR")]
+    pub(super) render: Option<PathBuf>,
+    /// Instead, turn "Open at Login" on or off, or report it.
+    #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
+    pub(super) login: Option<atlas_cli::menubar::Login>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Screenshot {
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Only this part of the display: X,Y,W,H in display points, widened to
+    /// whole points.
+    #[arg(
+        long,
+        value_name = "X,Y,W,H",
+        allow_hyphen_values = true,
+        value_parser = region,
+        conflicts_with_all = ["app", "pid"]
+    )]
+    pub(super) region: Option<Region>,
+    /// Shrink the longer side to at most this many pixels; 0 keeps the
+    /// full size. Without it: at most 1456 and one pixel per display point.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(0..=8192))]
+    pub(super) max_dimension: Option<u32>,
+    /// Save a new file even when nothing changed since the last screenshot.
+    #[arg(long)]
+    pub(super) new_file: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Click {
+    /// Display point X (origin + screenshot pixels × pointsPerPixel).
+    #[arg(requires = "y")]
+    pub(super) x: Option<f64>,
+    /// Display point Y.
+    pub(super) y: Option<f64>,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Bring window N (from atlas windows) forward and check the point.
+    /// Nothing is sent if it is still covered or unreadable.
+    #[arg(long, value_name = "N", requires = "x")]
+    pub(super) window: Option<i64>,
+    /// Exact element title, label text, description or identifier.
+    #[arg(long, conflicts_with = "x")]
+    pub(super) name: Option<String>,
+    /// Accessibility role, for example AXButton.
+    #[arg(long, conflicts_with = "x")]
+    pub(super) role: Option<String>,
+    /// Which mouse button.
+    #[arg(long, value_enum, default_value_t)]
+    pub(super) button: ButtonArg,
+    /// Clicks in a row, 1 to 5: 2 for a double click.
+    #[arg(long, default_value_t = 1)]
+    pub(super) count: u8,
+    /// Comma-separated: cmd, ctrl, alt, shift, fn.
+    #[arg(long, value_delimiter = ',')]
+    pub(super) modifiers: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Elements {
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Only elements with this accessibility role, for example AXButton.
+    #[arg(long)]
+    pub(super) role: Option<String>,
+    /// Only elements with this exact title, label text, description or identifier.
+    #[arg(long)]
+    pub(super) name: Option<String>,
+    /// Show at most this many elements.
+    #[arg(long, default_value_t = 50)]
+    pub(super) max: usize,
+    /// Show every attribute the scan read, as it read it.
+    #[arg(long)]
+    pub(super) full: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct AgentGuide {
+    /// Print the short version the agent plugins load (SKILL.md), which lists the rest.
+    #[arg(long)]
+    pub(super) skill: bool,
+    /// Print every command and its options (Markdown).
+    #[arg(long)]
+    pub(super) commands: bool,
+    /// Print what each error code means and what to do (Markdown).
+    #[arg(long)]
+    pub(super) errors: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Drag {
+    /// Start point X.
+    pub(super) from_x: f64,
+    /// Start point Y.
+    pub(super) from_y: f64,
+    /// End point X.
+    pub(super) to_x: f64,
+    /// End point Y.
+    pub(super) to_y: f64,
+    /// Which mouse button.
+    #[arg(long, value_enum, default_value_t)]
+    pub(super) button: ButtonArg,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Only if window N (from atlas windows) is the top one at the
+    /// start point. Nothing is sent otherwise.
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Scroll {
+    /// Display point X.
+    pub(super) x: f64,
+    /// Display point Y.
+    pub(super) y: f64,
+    /// Lines to scroll sideways, at most 100; negative scrolls left.
+    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+    pub(super) dx: i32,
+    /// Lines to scroll, at most 100; negative scrolls up.
+    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+    pub(super) dy: i32,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Bring window N (from atlas windows) forward and check the point.
+    /// Nothing is sent if it is still covered or unreadable.
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Type {
+    /// The text to type.
+    #[arg(required_unless_present = "stdin", allow_hyphen_values = true)]
+    pub(super) text: Option<String>,
+    /// Read the text from standard input instead.
+    #[arg(long, conflicts_with = "text")]
+    pub(super) stdin: bool,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Bring window N (from atlas windows) forward; refuse if a sheet
+    /// blocks it or its focus cannot be proved.
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
+    /// Establish a named field where supported, as atlas elements
+    /// --name matches it, then check its focus before sending.
+    #[arg(long, value_name = "NAME")]
+    pub(super) field: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Keys {
+    /// Keys or chords such as cmd+s, escape, return, shift+tab.
+    #[arg(required = true)]
+    pub(super) keys: Vec<String>,
+    #[command(flatten)]
+    pub(super) target: AppTarget,
+    /// Bring window N (from atlas windows) forward; refuse if a sheet
+    /// blocks it or its focus cannot be proved.
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
+    /// Establish a named field where supported, as atlas elements
+    /// --name matches it, then check its focus before sending.
+    #[arg(long, value_name = "NAME")]
+    pub(super) field: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Open {
+    /// The app to open (or to open the targets with).
+    #[arg(long)]
+    pub(super) app: Option<String>,
+    /// A variable for the app's environment when it launches (repeat for more).
+    #[arg(long = "env", value_name = "NAME=VALUE")]
+    pub(super) environment: Vec<String>,
+    /// Files or URLs to open.
+    #[arg(value_name = "FILE|URL")]
+    pub(super) targets: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Cleanup {
+    /// Do it; otherwise only show what would be done.
+    #[arg(long)]
+    pub(super) apply: bool,
+    /// An ended session's work, by the key atlas activity --all shows.
+    #[arg(long, value_name = "KEY", value_parser = session_key)]
+    pub(super) session: Option<Key>,
+    /// Only one task, by the key atlas activity shows for it.
+    #[arg(long, value_name = "KEY", value_parser = session_key)]
+    pub(super) task: Option<Key>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Wait {
+    /// A window of this app.
+    #[arg(long)]
+    pub(super) app: Option<String>,
+    /// A window whose title contains this.
+    #[arg(long)]
+    pub(super) title: Option<String>,
+    /// Wait for the window to close instead.
+    #[arg(long)]
+    pub(super) gone: bool,
+    /// Seconds, at most 86400 (a day).
+    #[arg(long, default_value_t = 10, value_parser = whole(0, WAIT_MAX_SECONDS, "seconds"))]
+    pub(super) timeout: u64,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Switch {
+    /// The account you will choose on the lock screen (the helper by default).
+    pub(super) account: Option<String>,
+    /// Just lock the screen.
+    #[arg(long, conflicts_with = "account")]
+    pub(super) lock: bool,
+    /// List the accounts you can switch to.
+    #[arg(long)]
+    pub(super) list: bool,
+    /// Lock without asking first.
+    #[arg(long)]
+    pub(super) yes: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Update {
+    /// Accept a signed release that is not notarized.
+    #[arg(long)]
+    pub(super) allow_unnotarized: bool,
+    /// Reinstall even when the release is not newer.
+    #[arg(long)]
+    pub(super) force: bool,
+    /// Install this release tag instead of the latest.
+    #[arg(long)]
+    pub(super) version: Option<String>,
+    /// Only say whether a newer release is out; install nothing.
+    #[arg(long, conflicts_with_all = ["allow_unnotarized", "force"])]
+    pub(super) check: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Run {
+    /// Seconds before the command is stopped, 1 to 600.
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = atlas_client::client::RUN_TIMEOUT.as_secs(),
+        value_parser = whole(1, atlas_client::client::RUN_TIMEOUT_MAX.as_secs(), "seconds")
+    )]
+    pub(super) timeout: u64,
+    /// The program and its arguments, after `--`.
+    #[arg(last = true, required = true, value_name = "COMMAND")]
+    pub(super) argv: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Uninstall {
+    /// Keep configuration, setup records and logs.
+    #[arg(long)]
+    pub(super) keep_config: bool,
+    /// Do not ask.
+    #[arg(long)]
+    pub(super) yes: bool,
+    /// Also delete the helper account and its files, once it is logged out.
+    #[arg(long)]
+    pub(super) remove_helper: bool,
+}
+
+#[derive(Subcommand)]
+pub(super) enum OnboardingCommand {
+    /// Everything the window needs to choose its step.
+    Status,
+    /// Make an existing standard account the helper.
+    Choose { account: String },
+    /// Create a standard account (its password on standard input) and
+    /// make it the helper.
+    Create {
+        #[arg(long)]
+        account: String,
+        #[arg(long = "full-name", default_value = atlas_client::setup::FULL_NAME)]
+        full_name: String,
+    },
+    /// In the helper: let the account that asked use this one (the one the
+    /// window showed).
+    Accept {
+        #[arg(long = "controller-uid")]
+        controller_uid: u32,
+        #[arg(long = "controller-name")]
+        controller_name: String,
+    },
+    /// Serve the unprivileged setup connection after Allow.
+    #[command(hide = true)]
+    AcceptWorker {
+        #[arg(long)]
+        ticket: String,
+    },
+    /// Mark the window open or closed in this account.
+    Window {
+        #[arg(value_enum)]
+        state: WindowState,
+    },
+    /// Take back this account's request of a helper that never answered.
+    Forget,
+    /// Close the logins deleted accounts left open (macOS asks to approve).
+    Close {
+        /// Log out the helper instead, where Atlas isn't answering.
+        #[arg(long)]
+        helper: bool,
+    },
+    /// Back in the person's account: start input and check everything.
+    Finish,
+    /// Open the menu bar at login (on or off), decided once.
+    Login {
+        #[arg(value_enum)]
+        state: OnOff,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(super) enum WindowState {
+    Open,
+    Closed,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(super) enum OnOff {
+    On,
+    Off,
+}
+
+#[derive(Subcommand)]
+pub(super) enum AgentsCommand {
+    /// Which agents are on this Mac and whether Atlas is connected.
+    ///
+    /// JSON keeps Claude Code (`claude`) and the Claude app (`claude-app`)
+    /// as separate connection parts. Atlas.app groups them into one Claude
+    /// row, connected only when every installed part is connected.
+    Status {
+        /// One plain line for an agent's session start.
+        #[arg(long)]
+        brief: bool,
+    },
+    /// Tell a project's agents to test with Atlas: adds a short section to
+    /// its AGENTS.md, and to a CLAUDE.md it has that does not include AGENTS.md.
+    Project {
+        /// The project folder (default: this one).
+        dir: Option<PathBuf>,
+    },
+    /// Take the Atlas section out of a project's AGENTS.md and CLAUDE.md.
+    Forget {
+        /// The project folder (default: this one).
+        dir: Option<PathBuf>,
+    },
+    /// Cursor's internal command-hook adapter.
+    #[command(hide = true)]
+    CursorHook {
+        #[arg(value_enum)]
+        event: CursorHookEvent,
+    },
+    /// Connect Atlas to coding agents (all installed by default).
+    ///
+    /// Use --claude --app together to connect both Claude parts. Select only
+    /// the parts installed on this Mac. JSON reports each part's result by id.
+    Install {
+        #[command(flatten)]
+        picks: AgentPicks,
+    },
+    /// Disconnect Atlas from coding agents.
+    ///
+    /// Use --claude --app together to disconnect both Claude parts.
+    Remove {
+        #[command(flatten)]
+        picks: AgentPicks,
+    },
+}
+
+/// The agents and Claude app a connect or disconnect names; none named
+/// means every installed one.
+#[derive(clap::Args)]
+pub(super) struct AgentPicks {
+    /// Only Claude Code.
+    #[arg(long)]
+    claude: bool,
+    /// Only Codex.
+    #[arg(long)]
+    codex: bool,
+    /// Only opencode.
+    #[arg(long)]
+    opencode: bool,
+    /// Only Pi.
+    #[arg(long)]
+    pi: bool,
+    /// Only Cursor.
+    #[arg(long)]
+    cursor: bool,
+    /// Only the Claude app.
+    #[arg(long)]
+    pub(super) app: bool,
+}
+
+impl AgentPicks {
+    fn picks(&self, agent: Agent) -> bool {
+        let Self {
+            claude,
+            codex,
+            opencode,
+            pi,
+            cursor,
+            app: _,
+        } = self;
+        *match agent {
+            Agent::Claude => claude,
+            Agent::Codex => codex,
+            Agent::Opencode => opencode,
+            Agent::Pi => pi,
+            Agent::Cursor => cursor,
+        }
+    }
+
+    /// The coding agents picked.
+    pub(super) fn agents(&self) -> Vec<Agent> {
+        Agent::ALL
+            .into_iter()
+            .filter(|agent| self.picks(*agent))
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub(super) enum CursorHookEvent {
+    SessionStart,
+    BeforeShell,
+}
+
+#[derive(Subcommand)]
+pub(super) enum EnvironmentCommand {
+    /// Freeze selected files, exported variables and readiness requirements.
+    Profile {
+        /// TOML profile (version = 2) of files, tools, applications, environment and references.
+        profile: PathBuf,
+        /// Apply it; otherwise only preview.
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Run a command with the selected helper environment and helper tool paths.
+    ///
+    /// It is stopped after --timeout seconds (20 unless given, at most 600).
+    Run(Run),
+    /// Copy a previewed plan into the helper (or finish one that stopped).
+    Apply {
+        /// The ID the preview printed.
+        #[arg(value_name = "ID")]
+        plan_id: String,
+    },
+    /// List copies into the helper and their state, newest first.
+    ///
+    /// Shows each plan's ID, state and the files it copies, never their
+    /// contents, and which session made it. Plans rolled back completely
+    /// are left out unless --all.
+    List {
+        /// Include plans rolled back completely.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Show what undoing a copy would do, or undo it with --apply.
+    Rollback {
+        /// The ID the copy printed.
+        #[arg(value_name = "ID")]
+        transaction_id: String,
+        /// Undo the copy; otherwise show what undoing it would do.
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Inspect selected tools, apps, variables and reference paths without launching them.
+    Discover {
+        /// A tool by its bare command name, such as cat.
+        #[arg(long = "tool")]
+        tools: Vec<String>,
+        /// An app by its name, such as Safari.
+        #[arg(long = "app")]
+        apps: Vec<String>,
+        /// Report only whether the named variable is defined, never its value.
+        #[arg(long = "env")]
+        environment: Vec<String>,
+        /// Check existing access without changing permissions.
+        #[arg(long = "reference")]
+        references: Vec<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+pub(super) enum JobCommand {
+    /// Start a job and print its id.
+    Start {
+        /// A short name to know it by; the program's name unless given.
+        #[arg(long, value_parser = job_name)]
+        name: Option<String>,
+        /// Seconds before Atlas stops it, 1 to 86400.
+        #[arg(
+            long,
+            value_name = "SECONDS",
+            default_value_t = 3600,
+            value_parser = whole(1, protocol::JOB_LIFETIME_MAX.as_secs(), "seconds")
+        )]
+        timeout: u64,
+        /// The program and its arguments, after `--`.
+        #[arg(last = true, required = true, value_name = "COMMAND")]
+        argv: Vec<String>,
+    },
+    /// List this task's jobs; --all lists every job in the helper.
+    List {
+        #[arg(long)]
+        all: bool,
+    },
+    /// Print the end of a job's output.
+    Log {
+        #[arg(value_parser = job_id)]
+        id: JobId,
+        /// Bytes from the end, at most 1048576.
+        #[arg(
+            long,
+            default_value_t = 16384,
+            value_parser = whole(1, protocol::JOB_LOG_MAX as u64, "bytes")
+                .map(|bytes| bytes as usize)
+        )]
+        bytes: usize,
+        /// Read a job of another task, after that task's session was lost.
+        #[arg(long, value_name = "KEY", value_parser = session_key)]
+        task: Option<Key>,
+    },
+    /// Stop a job: TERM, then KILL after --grace seconds.
+    Stop {
+        #[arg(value_parser = job_id)]
+        id: JobId,
+        /// Seconds between TERM and KILL, 1 to 60.
+        #[arg(
+            long,
+            default_value_t = 5,
+            value_parser = whole(1, protocol::JOB_GRACE_MAX.as_secs(), "seconds")
+        )]
+        grace: u64,
+        /// Stop a job of another task, after that task's session was lost.
+        #[arg(long, value_name = "KEY", value_parser = session_key)]
+        task: Option<Key>,
+    },
+}
+
+/// A job's ID, as `job start` printed it.
+fn job_id(value: &str) -> std::result::Result<JobId, String> {
+    JobId::parse(value).ok_or_else(|| "Give the job's id, as atlas job start printed it.".into())
+}
+
+/// `job start --name`: a short name to know a job by.
+fn job_name(value: &str) -> std::result::Result<String, String> {
+    protocol::job_name(value)
+        .then(|| value.to_owned())
+        .ok_or_else(|| {
+            "Give a name of 1 to 64 characters, none of them a control character.".into()
+        })
+}
+
+/// `collect --max-size`: a whole number of bytes with an optional K, M or
+/// G (binary units), from 1 byte to 1 GiB.
+fn file_size(value: &str) -> std::result::Result<u64, String> {
+    let refused = || "Give a size such as 200M, at most 1G.".to_owned();
+    let (digits, unit) = match value.char_indices().last() {
+        Some((at, unit)) if unit.is_ascii_alphabetic() => (&value[..at], Some(unit)),
+        _ => (value, None),
+    };
+    let scale: u64 = match unit.map(|unit| unit.to_ascii_uppercase()) {
+        None => 1,
+        Some('K') => 1 << 10,
+        Some('M') => 1 << 20,
+        Some('G') => 1 << 30,
+        Some(_) => return Err(refused()),
+    };
+    digits
+        .parse::<u64>()
+        .ok()
+        .and_then(|count| count.checked_mul(scale))
+        .filter(|bytes| (1..=protocol::READ_SIZE_MAX).contains(bytes))
+        .ok_or_else(refused)
+}
+
+/// `screenshot --region`: X,Y,W,H in display points.
+fn region(value: &str) -> std::result::Result<Region, String> {
+    let [x, y, width, height] = value
+        .split(',')
+        .map(|part| part.trim().parse::<f64>())
+        .collect::<std::result::Result<Vec<f64>, _>>()
+        .ok()
+        .and_then(|numbers| <[f64; 4]>::try_from(numbers).ok())
+        .filter(|numbers| numbers.iter().all(|number| number.is_finite()))
+        .ok_or("Give the region as X,Y,W,H in display points, for example 100,80,800,600.")?;
+
+    if width <= 0.0 || height <= 0.0 {
+        return Err("The region's width and height must be more than 0.".into());
+    }
+
+    Region::from_points(x, y, width, height).ok_or_else(|| {
+        "Give a region within 16384 points of the display's corner, at most 16384 points across."
+            .into()
+    })
+}
+
+/// `activity --session`: a session's key, as `activity --all` lists it.
+fn session_key(value: &str) -> std::result::Result<Key, String> {
+    Key::parse(value).ok_or_else(|| {
+        "Give a session's key: 12 lowercase hex digits, as atlas activity --all lists them.".into()
+    })
+}
+
+/// The longest `wait --timeout`: a day.
+const WAIT_MAX_SECONDS: u64 = 24 * 60 * 60;
+
+/// `--wait` or `ATLAS_WAIT`: whole seconds, 0 for none.
+fn control_wait() -> impl TypedValueParser<Value = Duration> {
+    whole(0, CONTROL_WAIT_MAX.as_secs(), "seconds").map(Duration::from_secs)
+}
+
+/// A whole number from `least` to `most` of `unit`, said in a sentence when refused.
+fn whole(least: u64, most: u64, unit: &'static str) -> impl TypedValueParser<Value = u64> {
+    clap::builder::StringValueParser::new().try_map(move |value| {
+        value
+            .parse::<u64>()
+            .ok()
+            .filter(|n| (least..=most).contains(n))
+            .ok_or_else(|| format!("Give {least} to {most} {unit}."))
+    })
+}
+
+/// The wait a command that waits is given: `--wait`'s, else the variable
+/// `ATLAS_WAIT`'s, else the default. Only such a command reads the
+/// variable, so a bad one stops no other command.
+pub(super) fn control_wait_given(
+    flag: Option<Duration>,
+    variable: Option<&OsStr>,
+) -> std::result::Result<Duration, clap::Error> {
+    match (flag, variable) {
+        (Some(wait), _) => Ok(wait),
+        (None, Some(variable)) => control_wait().parse_ref(
+            &Cli::command(),
+            Some(&clap::Arg::new("ATLAS_WAIT").value_name("ATLAS_WAIT")),
+            variable,
+        ),
+        (None, None) => Ok(CONTROL_WAIT),
+    }
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub(super) enum ButtonArg {
+    #[default]
+    Left,
+    Middle,
+    Right,
+}
+
+impl From<ButtonArg> for Button {
+    fn from(button: ButtonArg) -> Self {
+        match button {
+            ButtonArg::Left => Button::Left,
+            ButtonArg::Middle => Button::Middle,
+            ButtonArg::Right => Button::Right,
+        }
+    }
+}
+
+/// The helper app a command is about.
+#[derive(clap::Args)]
+#[group(multiple = false)]
+pub(super) struct AppTarget {
+    /// Application name: the one process of that name with a window, or
+    /// the app in front.
+    #[arg(long)]
+    pub(super) app: Option<String>,
+    /// Exact process ID, for apps with several processes.
+    #[arg(long)]
+    pub(super) pid: Option<i32>,
+}
+
+impl AppTarget {
+    pub(super) fn target(self) -> Option<agent::Target> {
+        self.pid
+            .map(|pid| agent::Target::Pid(pid.into()))
+            .or(self.app.map(agent::Target::Name))
+    }
+
+    /// Where input must land: this app, and the `window` and `field` when
+    /// named.
+    pub(super) fn expected(
+        self,
+        window: Option<i64>,
+        field: Option<String>,
+    ) -> atlas_core::error::Result<Option<agent::Expected>> {
+        agent::Expected::new(self.target(), window, field)
+    }
+}
+
+#[cfg(test)]
+mod tests;

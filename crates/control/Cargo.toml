@@ -1,0 +1,31 @@
+[package]
+name = "atlas-control"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Exclusion, cancellation and pending work for one Atlas helper"
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Helpers and hooks for the tests of crates above; never in a shipped build.
+test-support = ["atlas-core/test-support"]
+
+[dependencies]
+atlas-core.workspace = true
+fs2.workspace = true
+libc.workspace = true
+nix = { workspace = true, features = ["process", "signal", "user"] }
+rand = { workspace = true, features = ["thread_rng"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "signal", "sync", "time"] }
+
+[dev-dependencies]
+atlas-core = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

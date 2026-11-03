@@ -1,16 +1,18 @@
 [package]
 name = "xtask"
 version = "0.0.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 
 [dependencies]
-libc = "0.2"
-sha2 = "0.10"
-atlas = { path = ".." }
+atlas-cli.workspace = true
+atlas-client.workspace = true
+atlas-core.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-tempfile = "3"

@@ -1,0 +1,3476 @@
+[
+  {
+    "id": "elements-0-compact",
+    "rowsPointer": "/elements",
+    "rows": 0,
+    "newline": false,
+    "bytes": 105,
+    "serialized": "{\"elements\":[],\"matching\":0,\"more\":0,\"ok\":true,\"pid\":812,\"scanIncomplete\":false,\"scanned\":0,\"windows\":[]}",
+    "input": {
+      "ok": true,
+      "elements": [],
+      "truncated": false
+    },
+    "full": false,
+    "max": 50,
+    "helperOperations": [
+      "windows",
+      "run"
+    ],
+    "helperProofs": 1,
+    "helperRequests": 4
+  },
+  {
+    "id": "elements-0-full",
+    "rowsPointer": "/elements",
+    "rows": 0,
+    "newline": false,
+    "bytes": 92,
+    "serialized": "{\"elements\":[],\"matching\":0,\"more\":0,\"ok\":true,\"pid\":812,\"scanIncomplete\":false,\"scanned\":0}",
+    "input": {
+      "ok": true,
+      "elements": [],
+      "truncated": false
+    },
+    "full": true,
+    "max": 50,
+    "helperOperations": [
+      "windows",
+      "run"
+    ],
+    "helperProofs": 1,
+    "helperRequests": 4
+  },
+  {
+    "id": "elements-8-compact",
+    "rowsPointer": "/elements",
+    "rows": 8,
+    "newline": false,
+    "bytes": 2238,
+    "serialized": "{\"elements\":[{\"at\":[60,35],\"index\":0,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[61,35],\"index\":1,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[62,35],\"index\":2,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[63,35],\"index\":3,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[64,35],\"index\":4,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[65,35],\"index\":5,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[66,35],\"index\":6,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[67,35],\"index\":7,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0}],\"matching\":8,\"more\":0,\"ok\":true,\"pid\":812,\"scanIncomplete\":false,\"scanned\":8,\"windows\":[{\"height\":480,\"width\":640,\"x\":0,\"y\":0}]}",
+    "input": {
+      "ok": true,
+      "elements": [
+        {
+          "index": 0,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 10,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 1,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 11,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 2,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 12,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 3,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 13,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 4,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 14,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 5,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 15,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 6,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 16,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 7,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 17,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        }
+      ],
+      "truncated": false
+    },
+    "full": false,
+    "max": 50,
+    "helperOperations": [
+      "windows",
+      "run"
+    ],
+    "helperProofs": 1,
+    "helperRequests": 4
+  },
+  {
+    "id": "elements-8-full",
+    "rowsPointer": "/elements",
+    "rows": 8,
+    "newline": false,
+    "bytes": 2971,
+    "serialized": "{\"elements\":[{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":10.0,\"y\":20.0},\"index\":0,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":11.0,\"y\":20.0},\"index\":1,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":12.0,\"y\":20.0},\"index\":2,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":13.0,\"y\":20.0},\"index\":3,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":14.0,\"y\":20.0},\"index\":4,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":15.0,\"y\":20.0},\"index\":5,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":16.0,\"y\":20.0},\"index\":6,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":17.0,\"y\":20.0},\"index\":7,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}}],\"matching\":8,\"more\":0,\"ok\":true,\"pid\":812,\"scanIncomplete\":false,\"scanned\":8}",
+    "input": {
+      "ok": true,
+      "elements": [
+        {
+          "index": 0,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 10,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 1,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 11,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 2,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 12,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 3,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 13,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 4,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 14,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 5,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 15,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 6,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 16,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 7,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 17,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        }
+      ],
+      "truncated": false
+    },
+    "full": true,
+    "max": 50,
+    "helperOperations": [
+      "windows",
+      "run"
+    ],
+    "helperProofs": 1,
+    "helperRequests": 4
+  },
+  {
+    "id": "elements-80-compact",
+    "rowsPointer": "/elements",
+    "rows": 50,
+    "newline": false,
+    "bytes": 13295,
+    "serialized": "{\"elements\":[{\"at\":[60,35],\"index\":0,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[61,35],\"index\":1,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[62,35],\"index\":2,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[63,35],\"index\":3,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[64,35],\"index\":4,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[65,35],\"index\":5,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[66,35],\"index\":6,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[67,35],\"index\":7,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[68,35],\"index\":8,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[69,35],\"index\":9,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[70,35],\"index\":10,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[71,35],\"index\":11,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[72,35],\"index\":12,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[73,35],\"index\":13,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[74,35],\"index\":14,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[75,35],\"index\":15,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[76,35],\"index\":16,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[77,35],\"index\":17,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[78,35],\"index\":18,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[79,35],\"index\":19,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[80,35],\"index\":20,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[81,35],\"index\":21,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[82,35],\"index\":22,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[83,35],\"index\":23,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[84,35],\"index\":24,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[85,35],\"index\":25,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[86,35],\"index\":26,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[87,35],\"index\":27,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[88,35],\"index\":28,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[89,35],\"index\":29,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[90,35],\"index\":30,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[91,35],\"index\":31,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[92,35],\"index\":32,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[93,35],\"index\":33,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[94,35],\"index\":34,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[95,35],\"index\":35,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[96,35],\"index\":36,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[97,35],\"index\":37,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[98,35],\"index\":38,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[99,35],\"index\":39,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[100,35],\"index\":40,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[101,35],\"index\":41,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[102,35],\"index\":42,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[103,35],\"index\":43,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[104,35],\"index\":44,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[105,35],\"index\":45,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[106,35],\"index\":46,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[107,35],\"index\":47,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[108,35],\"index\":48,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0},{\"at\":[109,35],\"index\":49,\"name\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"role\":\"AXButton\",\"size\":[100,30],\"window\":0}],\"matching\":80,\"more\":30,\"ok\":true,\"pid\":812,\"scanIncomplete\":false,\"scanned\":80,\"windows\":[{\"height\":480,\"width\":640,\"x\":0,\"y\":0}]}",
+    "input": {
+      "ok": true,
+      "elements": [
+        {
+          "index": 0,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 10,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 1,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 11,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 2,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 12,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 3,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 13,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 4,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 14,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 5,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 15,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 6,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 16,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 7,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 17,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 8,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 18,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 9,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 19,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 10,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 20,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 11,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 21,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 12,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 22,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 13,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 23,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 14,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 24,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 15,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 25,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 16,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 26,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 17,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 27,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 18,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 28,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 19,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 29,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 20,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 30,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 21,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 31,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 22,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 32,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 23,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 33,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 24,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 34,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 25,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 35,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 26,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 36,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 27,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 37,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 28,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 38,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 29,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 39,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 30,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 40,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 31,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 41,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 32,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 42,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 33,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 43,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 34,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 44,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 35,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 45,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 36,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 46,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 37,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 47,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 38,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 48,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 39,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 49,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 40,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 50,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 41,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 51,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 42,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 52,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 43,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 53,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 44,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 54,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 45,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 55,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 46,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 56,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 47,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 57,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 48,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 58,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 49,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 59,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 50,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 60,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 51,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 61,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 52,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 62,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 53,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 63,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 54,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 64,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 55,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 65,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 56,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 66,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 57,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 67,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 58,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 68,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 59,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 69,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 60,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 70,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 61,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 71,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 62,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 72,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 63,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 73,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 64,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 74,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 65,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 75,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 66,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 76,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 67,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 77,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 68,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 78,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 69,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 79,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 70,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 80,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 71,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 81,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 72,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 82,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 73,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 83,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 74,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 84,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 75,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 85,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 76,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 86,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 77,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 87,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 78,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 88,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 79,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 89,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        }
+      ],
+      "truncated": false
+    },
+    "full": false,
+    "max": 50,
+    "helperOperations": [
+      "windows",
+      "run"
+    ],
+    "helperProofs": 1,
+    "helperRequests": 4
+  },
+  {
+    "id": "elements-80-full",
+    "rowsPointer": "/elements",
+    "rows": 50,
+    "newline": false,
+    "bytes": 18134,
+    "serialized": "{\"elements\":[{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":10.0,\"y\":20.0},\"index\":0,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":11.0,\"y\":20.0},\"index\":1,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":12.0,\"y\":20.0},\"index\":2,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":13.0,\"y\":20.0},\"index\":3,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":14.0,\"y\":20.0},\"index\":4,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":15.0,\"y\":20.0},\"index\":5,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":16.0,\"y\":20.0},\"index\":6,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":17.0,\"y\":20.0},\"index\":7,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":18.0,\"y\":20.0},\"index\":8,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":19.0,\"y\":20.0},\"index\":9,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":20.0,\"y\":20.0},\"index\":10,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":21.0,\"y\":20.0},\"index\":11,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":22.0,\"y\":20.0},\"index\":12,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":23.0,\"y\":20.0},\"index\":13,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":24.0,\"y\":20.0},\"index\":14,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":25.0,\"y\":20.0},\"index\":15,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":26.0,\"y\":20.0},\"index\":16,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":27.0,\"y\":20.0},\"index\":17,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":28.0,\"y\":20.0},\"index\":18,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":29.0,\"y\":20.0},\"index\":19,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":30.0,\"y\":20.0},\"index\":20,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":31.0,\"y\":20.0},\"index\":21,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":32.0,\"y\":20.0},\"index\":22,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":33.0,\"y\":20.0},\"index\":23,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":34.0,\"y\":20.0},\"index\":24,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":35.0,\"y\":20.0},\"index\":25,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":36.0,\"y\":20.0},\"index\":26,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":37.0,\"y\":20.0},\"index\":27,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":38.0,\"y\":20.0},\"index\":28,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":39.0,\"y\":20.0},\"index\":29,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":40.0,\"y\":20.0},\"index\":30,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":41.0,\"y\":20.0},\"index\":31,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":42.0,\"y\":20.0},\"index\":32,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":43.0,\"y\":20.0},\"index\":33,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":44.0,\"y\":20.0},\"index\":34,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":45.0,\"y\":20.0},\"index\":35,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":46.0,\"y\":20.0},\"index\":36,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":47.0,\"y\":20.0},\"index\":37,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":48.0,\"y\":20.0},\"index\":38,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":49.0,\"y\":20.0},\"index\":39,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":50.0,\"y\":20.0},\"index\":40,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":51.0,\"y\":20.0},\"index\":41,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":52.0,\"y\":20.0},\"index\":42,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":53.0,\"y\":20.0},\"index\":43,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":54.0,\"y\":20.0},\"index\":44,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":55.0,\"y\":20.0},\"index\":45,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":56.0,\"y\":20.0},\"index\":46,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":57.0,\"y\":20.0},\"index\":47,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":58.0,\"y\":20.0},\"index\":48,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}},{\"depth\":1,\"enabled\":true,\"frame\":{\"height\":30.0,\"width\":100.0,\"x\":59.0,\"y\":20.0},\"index\":49,\"role\":\"AXButton\",\"title\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tlineÉditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"window\":{\"height\":480.0,\"width\":640.0,\"x\":0.0,\"y\":0.0}}],\"matching\":80,\"more\":30,\"ok\":true,\"pid\":812,\"scanIncomplete\":false,\"scanned\":80}",
+    "input": {
+      "ok": true,
+      "elements": [
+        {
+          "index": 0,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 10,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 1,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 11,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 2,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 12,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 3,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 13,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 4,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 14,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 5,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 15,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 6,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 16,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 7,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 17,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 8,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 18,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 9,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 19,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 10,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 20,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 11,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 21,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 12,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 22,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 13,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 23,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 14,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 24,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 15,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 25,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 16,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 26,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 17,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 27,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 18,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 28,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 19,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 29,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 20,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 30,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 21,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 31,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 22,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 32,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 23,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 33,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 24,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 34,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 25,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 35,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 26,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 36,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 27,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 37,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 28,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 38,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 29,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 39,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 30,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 40,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 31,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 41,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 32,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 42,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 33,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 43,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 34,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 44,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 35,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 45,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 36,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 46,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 37,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 47,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 38,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 48,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 39,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 49,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 40,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 50,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 41,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 51,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 42,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 52,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 43,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 53,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 44,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 54,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 45,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 55,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 46,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 56,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 47,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 57,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 48,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 58,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 49,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 59,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 50,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 60,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 51,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 61,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 52,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 62,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 53,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 63,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 54,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 64,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 55,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 65,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 56,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 66,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 57,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 67,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 58,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 68,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 59,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 69,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 60,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 70,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 61,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 71,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 62,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 72,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 63,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 73,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 64,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 74,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 65,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 75,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 66,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 76,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 67,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 77,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 68,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 78,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 69,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 79,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 70,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 80,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 71,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 81,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 72,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 82,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 73,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 83,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 74,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 84,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 75,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 85,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 76,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 86,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 77,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 87,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 78,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 88,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        },
+        {
+          "index": 79,
+          "depth": 1,
+          "role": "AXButton",
+          "title": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tlineÉditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+          "enabled": true,
+          "frame": {
+            "x": 89,
+            "y": 20,
+            "width": 100,
+            "height": 30
+          },
+          "window": {
+            "x": 0,
+            "y": 0,
+            "width": 640,
+            "height": 480
+          }
+        }
+      ],
+      "truncated": false
+    },
+    "full": true,
+    "max": 50,
+    "helperOperations": [
+      "windows",
+      "run"
+    ],
+    "helperProofs": 1,
+    "helperRequests": 4
+  }
+]

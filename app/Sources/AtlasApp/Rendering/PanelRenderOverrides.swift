@@ -162,7 +162,7 @@ struct PanelRenderOverrides: Equatable, Sendable {
     ]
   }
 
-  /// The state the service gives a mode (`src/lib/overview.rs`, `kind()`), for renders only: the app itself always
+  /// The state the service gives a mode (`crates/client/src/overview.rs`, `kind()`), for renders only: the app itself always
   /// reads the state the service sends.
   ///
   /// - Parameters:

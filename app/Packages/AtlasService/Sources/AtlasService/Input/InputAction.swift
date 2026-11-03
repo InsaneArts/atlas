@@ -1,5 +1,5 @@
 /// One input action for the helper, exactly as the service's `input`
-/// endpoint takes it (`src/lib/actions.rs`). Coordinates are display points.
+/// endpoint takes it (`crates/core/src/actions.rs`). Coordinates are display points.
 public enum InputAction: Encodable, Equatable, Sendable {
   /// Where a pointer action is in a press.
   public enum Phase: String, Encodable, Sendable {

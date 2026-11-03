@@ -1,0 +1,659 @@
+//! Views of what was done in the helper: input, typing, commands, opening,
+//! waiting and recovery.
+use super::{
+    Rendered, advised_card, card, element_name, failed, items, numbered, printable_strings,
+    strings, style, text, with_sessions,
+};
+use atlas_core::error::Code;
+use serde_json::Value;
+
+/// An input action, said as done; a failure says how far it got.
+pub(super) fn action(done: &str, value: &Value) -> Rendered {
+    if value["ok"] == false
+        && let Some(performed) = value["performed"].as_u64()
+        && performed > 0
+    {
+        let mut rendered = failed(value).unwrap_or_default();
+        rendered.err.push_str(&format!(
+            "\n  {}",
+            style::dim(format!(
+                "{} finished first.",
+                text::count(performed as usize, "action")
+            ))
+        ));
+
+        return rendered;
+    }
+
+    if let Some(failure) = failed(value) {
+        return failure;
+    }
+
+    let element = &value["element"];
+    let done = match (element["role"].as_str(), element_name(element)) {
+        (Some(role), Some(name)) => format!(
+            "{done} \"{}\" ({})",
+            text::printable(name),
+            super::role_word(role)
+        ),
+        (Some(role), None) => format!("{done} the {}", super::role_word(role)),
+        _ => done.to_owned(),
+    };
+
+    Rendered::out(format!("{} {done}", style::ok()))
+}
+
+pub(super) fn typed(value: &Value) -> Rendered {
+    let characters = value["typed"].as_u64().unwrap_or(0) as usize;
+
+    if value["ok"] == false {
+        let message = format!(
+            "Typed {} before it stopped: {}",
+            text::count(characters, "character"),
+            value["error"]
+                .as_str()
+                .unwrap_or("the helper did not confirm the rest")
+        );
+        let shown = match value["code"].as_str() {
+            Some(_) => advised_card(&message, value),
+            None => card(&message, Some(Code::Input), value["uncertain"] == true),
+        };
+        return Rendered::err(with_sessions(shown, value));
+    }
+
+    Rendered::out(format!(
+        "{} Typed {}",
+        style::ok(),
+        text::count(characters, "character")
+    ))
+}
+
+/// The command's own output, as it printed it; a note only when it failed.
+pub(super) fn run(value: &Value) -> Rendered {
+    if let Some(failure) = failed(value) {
+        return failure;
+    }
+
+    let mut rendered = Rendered::out(value["output"].as_str().unwrap_or("").to_owned());
+    let mut notes = Vec::new();
+
+    if value["output"].is_null() && value["events"].is_array() {
+        notes.push(format!(
+            "{} The output could not be decoded; --json shows it as sent.",
+            style::warn()
+        ));
+    }
+
+    if value["outputTruncated"] == true {
+        notes.push(format!(
+            "{} The output was cut at 1 MB; write longer output to a file and read parts of it.",
+            style::warn()
+        ));
+    }
+
+    if value["outputUnfinished"] == true {
+        notes.push(format!(
+            "{} Something the command started still held its output; the end may be missing.",
+            style::warn()
+        ));
+    }
+
+    let took = value["durationMs"]
+        .as_f64()
+        .map(|ms| format!(" · {}", text::duration(ms)))
+        .unwrap_or_default();
+    let signal = &value["signal"];
+
+    if value["timedOut"] == true {
+        notes.push(format!(
+            "{} Timed out and was stopped{took}; --timeout gives it longer",
+            style::fail()
+        ));
+    } else if !signal.is_null() {
+        let name = signal
+            .as_str()
+            .map_or_else(|| signal.to_string(), str::to_owned);
+        notes.push(format!("{} Stopped by signal {name}{took}", style::fail()));
+    } else if let Some(code) = value["exitCode"].as_i64().filter(|code| *code != 0) {
+        notes.push(format!("{} Exited with {code}{took}", style::fail()));
+    }
+
+    rendered.err = notes.join("\n");
+
+    rendered
+}
+
+/// What was opened. The copies made for it are said either way: a failed
+/// launch leaves them where close removes them.
+pub(super) fn opened(what: &str, value: &Value) -> Rendered {
+    let copied = if value["copied"]
+        .as_array()
+        .is_some_and(|copied| !copied.is_empty())
+    {
+        format!(
+            "\n  {}",
+            style::dim(format!(
+                "copied first to {}, where the helper can read it",
+                atlas_client::handoff::ROOT
+            ))
+        )
+    } else {
+        String::new()
+    };
+
+    match failed(value) {
+        Some(failure) => Rendered::err(format!("{}{copied}", failure.err)),
+        None => Rendered::out(format!(
+            "{} Opened {}{copied}",
+            style::ok(),
+            text::printable(what)
+        )),
+    }
+}
+
+pub(super) fn wait(value: &Value, gone: bool) -> String {
+    let after = value["waitedMs"]
+        .as_f64()
+        .map(|ms| format!(" after {}", text::duration(ms)))
+        .unwrap_or_default();
+
+    if gone {
+        return format!("{} The window closed{after}", style::ok());
+    }
+
+    let window = value["windows"].get(0);
+    let name = window
+        .map(|window| {
+            let owner = window["owner"].as_str().unwrap_or("A window");
+            match window["title"].as_str().filter(|title| !title.is_empty()) {
+                Some(title) => format!("{} \"{}\"", text::printable(owner), text::printable(title)),
+                None => text::printable(owner).into_owned(),
+            }
+        })
+        .unwrap_or_else(|| "The window".to_owned());
+
+    format!("{} {name} appeared{after}", style::ok())
+}
+
+pub(super) fn restart(value: &Value) -> String {
+    let mut line = format!("{} The helper restarted and is ready", style::ok());
+
+    if value["inputReplaced"] == true {
+        line.push_str(&format!("  {}", style::dim("input service updated")));
+    }
+
+    line
+}
+
+pub(super) fn logout(_: &Value) -> String {
+    format!(
+        "{} The helper is logged out  {}",
+        style::ok(),
+        style::dim("atlas switch to log in to it again")
+    )
+}
+
+pub(super) fn start_input(value: &Value) -> String {
+    let how = if value["alreadyRunning"] == true {
+        "was already running"
+    } else if value["recovered"] == true {
+        "was reset and is ready"
+    } else if value["replaced"] == true || value["upgraded"] == true {
+        "was updated and is ready"
+    } else {
+        "started"
+    };
+
+    format!("{} The input service {how}", style::ok())
+}
+
+pub(super) fn install(value: &Value) -> String {
+    let path = value["path"].as_str().map(text::tilde).unwrap_or_default();
+    let said = if value["alreadyInstalled"] == true {
+        "The shared command is current"
+    } else {
+        "Installed the shared command"
+    };
+
+    format!("{} {said}  {}", style::ok(), style::dim(path))
+}
+
+/// The copies into the helper `environment list` found: each plan's ID,
+/// state and the files it copies.
+pub(super) fn plans(value: &Value) -> String {
+    let plans = value["plans"].as_array().map_or(&[][..], Vec::as_slice);
+    let count = |field: &str| value[field].as_u64().unwrap_or(0);
+    let (hidden, more, unreadable) = (count("hidden"), count("more"), count("unreadable"));
+
+    let mut lines = Vec::new();
+    if plans.is_empty() {
+        // Nothing listed is proof of nothing only when nothing was left out.
+        lines.push(if hidden + more + unreadable == 0 {
+            format!("{} Nothing has been copied into the helper", style::ok())
+        } else {
+            "No copy into the helper is listed".to_owned()
+        });
+    } else {
+        lines.push(plan_table(plans));
+    }
+    if unreadable > 0 {
+        lines.push(format!(
+            "{} {} could not be read, so this list may be missing some",
+            style::warn(),
+            text::count(usize::try_from(unreadable).unwrap_or(usize::MAX), "record")
+        ));
+    }
+    if more > 0 {
+        lines.push(style::dim(format!("{more} older not shown")));
+    }
+    if hidden > 0 {
+        lines.push(style::dim(format!(
+            "{hidden} undone completely not shown (--all lists them)"
+        )));
+    }
+    lines.join("\n")
+}
+
+/// The plans `environment list` found, one row each.
+fn plan_table(plans: &[Value]) -> String {
+    let rows: Vec<Vec<String>> = plans
+        .iter()
+        .map(|plan| {
+            let targets: Vec<String> = items(&plan["files"])
+                .filter_map(|file| file["target"].as_str())
+                .map(|target| text::printable(target).into_owned())
+                .collect();
+            vec![
+                plan["planId"].as_str().unwrap_or("?").to_owned(),
+                plan_state(plan["state"].as_str().unwrap_or("")).to_owned(),
+                targets.join(", "),
+            ]
+        })
+        .collect();
+    crate::ui::table::render(&["PLAN", "STATE", "FILES"], &rows)
+}
+
+/// A listed plan's state, in words.
+fn plan_state(state: &str) -> &str {
+    match state {
+        "previewed" => "previewed",
+        "applying" => "stopped while copying",
+        "applied" => "copied",
+        "rollingBack" => "stopped while undoing",
+        "rolledBack" => "undone",
+        "running" => "in use now",
+        "unknown" => "outcome unknown",
+        other => other,
+    }
+}
+
+/// An environment preview, copy or undo: what changes in the helper's home,
+/// and the one command that comes next.
+pub(super) fn environment(value: &Value) -> Rendered {
+    let Some(files) = value["files"].as_array() else {
+        return super::checked(value, super::generic);
+    };
+
+    let id = value["planId"].as_str().unwrap_or("ID");
+    if let Some(stopped) = environment_interrupted(value, id) {
+        return stopped;
+    }
+
+    if value["error"].is_string() {
+        return failed(value).unwrap_or_default();
+    }
+
+    let word = |operation: &str| match operation {
+        "create" => "add",
+        "update" => "update",
+        "permissions" => "fix permissions",
+        "unchanged" => "already there",
+        _ => "conflict",
+    };
+    let line = |what: &str, target: &str| format!("  {:<16} ~/{}", what, text::printable(target));
+    let listed = |file: &Value| {
+        line(
+            word(file["operation"].as_str().unwrap_or("")),
+            file["target"].as_str().unwrap_or("?"),
+        )
+    };
+    let count = |n: usize| text::count(n, "file");
+    if value["rolledBack"] == true || value["preview"] == true {
+        return Rendered::out(environment_rollback(value, id).join("\n"));
+    }
+    let mut lines = Vec::new();
+    if value["applied"] == true {
+        lines.push(format!("{} Copied into the helper", style::ok()));
+        lines.extend(files.iter().map(listed));
+        lines.push(environment_next(
+            "To undo",
+            format!("atlas environment rollback {id} --apply"),
+        ));
+    } else {
+        let conflicts: Vec<String> = files
+            .iter()
+            .filter(|file| file["operation"] == "conflict")
+            .map(|file| line("in the way", file["target"].as_str().unwrap_or("?")))
+            .collect();
+        if !conflicts.is_empty() {
+            let mut err = vec![card(
+                &format!(
+                    "Nothing was copied: {} in the helper already {} or changed there since Atlas copied {}.",
+                    count(conflicts.len()),
+                    if conflicts.len() == 1 {
+                        "exists"
+                    } else {
+                        "exist"
+                    },
+                    if conflicts.len() == 1 { "it" } else { "them" }
+                ),
+                None,
+                false,
+            )];
+            err.extend(conflicts);
+
+            return Rendered::err(err.join("\n"));
+        }
+
+        if files.iter().all(|file| file["operation"] == "unchanged") {
+            lines.push(format!(
+                "{} The helper already has these files",
+                style::ok()
+            ));
+        } else {
+            lines.push(format!(
+                "Would copy into the helper ({}):",
+                count(files.len())
+            ));
+            lines.extend(files.iter().map(listed));
+            lines.push(environment_next(
+                "To copy",
+                format!("atlas environment apply {id}"),
+            ));
+        }
+    }
+
+    Rendered::out(lines.join("\n"))
+}
+
+/// A continuation report owns the same precedence over ordinary failure output.
+fn environment_interrupted(value: &Value, id: &str) -> Option<Rendered> {
+    // Stopped part way, whatever the reason: say how to finish.
+    // A refused or previewed undo is an error like any other, not a stopped copy.
+    let undo = value["operation"] == "rollback" || value["operation"] == "rollbackPreview";
+    let partial = value["operation"] != "rollbackPreview"
+        && (value["resumeRequired"] == true
+            || (value["error"].is_string()
+                && (value["phase"] == "applying" || value["phase"] == "rollingBack")))
+        && (!undo || value["phase"] == "rollingBack");
+    if partial {
+        let undoing = undo || value["phase"] == "rollingBack" || value["phase"] == "rolledBack";
+        let reason = value["error"]
+            .as_str()
+            .map(|error| format!(": {error}"))
+            .unwrap_or_default();
+
+        // A copy that can no longer finish is finished by undoing it.
+        let (what, command) = if undoing {
+            (
+                "Undoing stopped part way",
+                format!("atlas environment rollback {id} --apply"),
+            )
+        } else if value["rollbackRequired"] == true {
+            (
+                "Copying stopped part way",
+                format!("atlas environment rollback {id} --apply"),
+            )
+        } else {
+            (
+                "Copying stopped part way",
+                format!("atlas environment apply {id}"),
+            )
+        };
+
+        return Some(Rendered::err(format!(
+            "{}\n{}",
+            card(&format!("{what}{reason}"), None, false),
+            environment_next("To finish", command)
+        )));
+    }
+
+    None
+}
+
+/// Undo and undo-preview share target formatting and keep different follow-up words.
+fn environment_rollback(value: &Value, id: &str) -> Vec<String> {
+    let targets = |key: &str| -> Vec<String> {
+        strings(&value[key])
+            .map(|target| format!("  ~/{}", text::printable(target)))
+            .collect()
+    };
+    let count = |n: usize| text::count(n, "file");
+    let mut lines = Vec::new();
+
+    if value["rolledBack"] == true {
+        lines.push(format!("{} Undone in the helper", style::ok()));
+        lines.extend(targets("completedTargets"));
+
+        let kept = targets("keptTargets");
+        if !kept.is_empty() {
+            lines.push(format!(
+                "Kept {} the helper changed since the copy:",
+                count(kept.len())
+            ));
+            lines.extend(kept);
+        }
+    } else if value["preview"] == true {
+        let pending = targets("pendingTargets");
+        let kept = targets("keptTargets");
+
+        if pending.is_empty() {
+            lines.push(format!(
+                "{} No files change back in the helper",
+                style::ok()
+            ));
+        } else {
+            lines.push(format!(
+                "Undoing restores or removes {} in the helper:",
+                count(pending.len())
+            ));
+            lines.extend(pending);
+        }
+
+        if !kept.is_empty() {
+            lines.push(format!(
+                "It keeps {} the helper changed since the copy:",
+                count(kept.len())
+            ));
+            lines.extend(kept);
+        }
+
+        lines.push(environment_next(
+            "To undo",
+            format!("atlas environment rollback {id} --apply"),
+        ));
+    }
+    lines
+}
+
+fn environment_next(what: &str, command: String) -> String {
+    format!("  {} {what}: {}", style::dim("→"), style::cmd(command))
+}
+
+/// An app closed in the helper, and whether its copy went with it.
+pub(super) fn close(value: &Value) -> String {
+    // `close --all` names every app it quit.
+    if value["apps"].is_array() {
+        let names = printable_strings(&value["apps"]);
+        let mut line = if names.is_empty() {
+            format!("{} No apps were open", style::ok())
+        } else {
+            format!("{} Closed {}", style::ok(), names.join(", "))
+        };
+
+        if value["removed"]
+            .as_array()
+            .is_some_and(|removed| !removed.is_empty())
+        {
+            line.push_str(&style::dim(" · removed Atlas's copies"));
+        }
+
+        if value["skipped"]
+            .as_array()
+            .is_some_and(|skipped| !skipped.is_empty())
+        {
+            let skipped = printable_strings(&value["skipped"]);
+            line.push_str(&format!(
+                "\n{} Left {}: it changed before it could be quit",
+                style::warn(),
+                skipped.join(", ")
+            ));
+        }
+
+        line.push_str(&copies_left(value));
+        return line;
+    }
+
+    let name = text::printable(value["app"].as_str().unwrap_or("The app")).into_owned();
+
+    let mut line = if value["closed"] == true {
+        format!("{} Closed {name}", style::ok())
+    } else {
+        format!("{} {name} was not running", style::ok())
+    };
+
+    if value["removed"]
+        .as_array()
+        .is_some_and(|removed| !removed.is_empty())
+    {
+        line.push_str(&style::dim(" · removed Atlas's copy of it"));
+    }
+
+    line.push_str(&copies_left(value));
+    line
+}
+
+/// What a close left of Atlas's copies: those another session made, and
+/// those that could not be removed.
+fn copies_left(value: &Value) -> String {
+    let copies = |count: u64| text::amount(count, "copy", "copies");
+    let mut said = String::new();
+    if let Some(others) = value["keptOthers"].as_u64().filter(|count| *count > 0) {
+        said.push_str(&style::dim(format!(
+            " · kept {} another session made",
+            copies(others)
+        )));
+    }
+    if let Some(failed) = value["failed"]
+        .as_array()
+        .filter(|failed| !failed.is_empty())
+    {
+        said.push_str(&format!(
+            "\n{} Could not remove {}; run the same close again",
+            style::warn(),
+            copies(u64::try_from(failed.len()).unwrap_or(u64::MAX))
+        ));
+    }
+    said
+}
+
+/// What `environment discover` found, here and in the helper.
+pub(super) fn discover(value: &Value) -> String {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+
+    for item in items(&value["selections"]) {
+        let name = text::printable(item["name"].as_str().unwrap_or("?")).into_owned();
+        let here = item["host"]
+            .as_str()
+            .map(|path| text::tilde(std::path::Path::new(path)))
+            .unwrap_or_else(|| "not found".to_owned());
+
+        let helper = match item["kind"].as_str() {
+            Some("tool") => items(&item["helperCandidates"])
+                .find(|candidate| candidate["access"]["executable"] == true)
+                .and_then(|candidate| candidate["path"].as_str())
+                .map(|path| text::printable(path).into_owned())
+                .unwrap_or_else(|| "not found".to_owned()),
+            _ => "not checked".to_owned(),
+        };
+
+        let found = item["host"].is_string() && helper != "not found";
+        let mark = if found { style::ok() } else { style::unknown() };
+        rows.push(vec![format!("{mark} {name}"), here, helper]);
+    }
+
+    for variable in items(&value["environment"]) {
+        let yes = |key: &str| {
+            if variable[key] == true {
+                "set"
+            } else {
+                "not set"
+            }
+        };
+
+        let mark = if variable["hostDefined"] == true && variable["helperInheritedDefined"] == true
+        {
+            style::ok()
+        } else {
+            style::unknown()
+        };
+
+        rows.push(vec![
+            format!(
+                "{mark} ${}",
+                text::printable(variable["name"].as_str().unwrap_or("?"))
+            ),
+            yes("hostDefined").to_owned(),
+            yes("helperInheritedDefined").to_owned(),
+        ]);
+    }
+
+    for reference in items(&value["references"]) {
+        let access = |side: &Value| {
+            match (side["readable"] == true, side["writable"] == true) {
+                (true, true) => "read and write",
+                (true, false) => "read only",
+                _ => "no access",
+            }
+            .to_owned()
+        };
+
+        let mark = if reference["helper"]["readable"] == true {
+            style::ok()
+        } else {
+            style::unknown()
+        };
+
+        rows.push(vec![
+            format!(
+                "{mark} {}",
+                text::tilde(std::path::Path::new(
+                    reference["path"].as_str().unwrap_or("?")
+                ))
+            ),
+            access(&reference["host"]),
+            access(&reference["helper"]),
+        ]);
+    }
+
+    if rows.is_empty() {
+        return "Nothing to check: name --tool, --app, --env or --reference.".to_owned();
+    }
+
+    crate::ui::table::render(&["", "HERE", "IN THE HELPER"], &rows)
+}
+
+/// `setup` without --apply: whether anything needs doing.
+pub(super) fn setup_preview(value: &Value) -> String {
+    let steps = numbered(&value["nextSteps"]);
+    if steps.is_empty() {
+        return format!("{} The helper's setup is current", style::ok());
+    }
+
+    let mut lines = vec![format!(
+        "{} The helper's setup needs attention:",
+        style::unknown()
+    )];
+    lines.extend(steps);
+    lines.join("\n")
+}

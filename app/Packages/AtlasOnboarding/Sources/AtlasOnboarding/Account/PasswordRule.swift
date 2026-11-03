@@ -1,7 +1,7 @@
 /// What a new helper account's password must be before Atlas hands it to macOS.
 public enum PasswordRule {
   /// The longest password, in UTF-8 bytes, that Atlas passes on: 256, what `atlas onboarding create` reads from
-  /// standard input (`src/lib/onboarding.rs`). An accented letter or a symbol takes more than one byte.
+  /// standard input (`crates/cli/src/onboarding.rs`). An accented letter or a symbol takes more than one byte.
   static let maxBytes = 256
 
   /// What is wrong with the password, if anything; nothing while either field is empty.

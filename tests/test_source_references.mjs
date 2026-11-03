@@ -184,7 +184,7 @@ test('the source checker covers each source tree and top-level contributor docum
   const base = fixture(t);
   const files = [
     'app/Example.swift',
-    'src/example.rs',
+    'crates/example/src/example.rs',
     'scripts/example.mjs',
     'tests/example.js',
     'agents/example.md',

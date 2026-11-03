@@ -9,10 +9,10 @@ import Observation
 /// anything is under way here; the helper's own commands wait for all of it to be answered first.
 @Observable
 final class ControlBarrier {
-  /// 10 s: how long a lease the service grants stays alive unrenewed (`LEASE_SECONDS`, src/lib/viewer.rs).
+  /// 10 s: how long a lease the service grants stays alive unrenewed (`LEASE_SECONDS`, crates/cli/src/viewer.rs).
   static let leaseLifetime: Duration = .seconds(10)
   /// 8 s: the client's request timeout (`ViewerClient.timeout`). The service runs every request to its end after the
-  /// client gives up (src/lib/viewer/http.rs, `handle`), so a lost acquisition may still be granted after its reply was
+  /// client gives up (crates/cli/src/viewer/http.rs, `handle`), so a lost acquisition may still be granted after its reply was
   /// given up on; this bounds how much later, short of a service that hangs, which the status check below covers.
   static let lateGrant: Duration = .seconds(8)
   /// 1 s: between the status readings that end the hold on a lost acquisition, as often as the panel's own.
@@ -151,7 +151,7 @@ final class ControlBarrier {
   }
 
   /// Sends one release, keeping the lease pending while its outcome is unknown. The service saying the lease is lost
-  /// (`lease-lost`, src/lib/control.rs) is a confirmed answer: that lease already ended, and this app holds nothing.
+  /// (`lease-lost`, crates/client/src/control.rs) is a confirmed answer: that lease already ended, and this app holds nothing.
   ///
   /// - Parameter lease: The lease to end.
   /// - Returns: Why it was refused, or nil once it was answered.

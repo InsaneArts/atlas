@@ -1,0 +1,40 @@
+{
+  "id": "answer-private-frame",
+  "newline": true,
+  "rowsPointer": "/result/structuredContent/status/activity",
+  "rows": 0,
+  "bytes": 689,
+  "serialized": "{\"id\":7,\"jsonrpc\":\"2.0\",\"result\":{\"_meta\":{\"atlas/frame\":{\"data\":\"c3ludGhldGljIHByaXZhdGUgaW1hZ2Ug5p2x5Lqs\",\"height\":360,\"id\":\"synthetic-frame\",\"mimeType\":\"image/jpeg\",\"width\":640}},\"content\":[{\"text\":\"Atlas: Idle. Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline.\",\"type\":\"text\"}],\"structuredContent\":{\"canControl\":true,\"canResume\":true,\"control\":false,\"screen\":true,\"status\":{\"activity\":[],\"commands\":0,\"display\":{\"height\":1440,\"scale\":1,\"width\":2560},\"headline\":\"Éditeur 東京 🦀 \\\"draft\\\" \\\\ folder\\nnext\\tline\",\"helper\":\"Helper 東京\",\"holder\":null,\"label\":\"Idle\",\"pending\":0,\"reason\":null,\"self\":null,\"sessions\":[],\"sessionsShown\":false,\"state\":\"idle\"},\"unchanged\":false}}}\n",
+  "frame": {
+    "id": "synthetic-frame",
+    "mimeType": "image/jpeg",
+    "data": "c3ludGhldGljIHByaXZhdGUgaW1hZ2Ug5p2x5Lqs",
+    "width": 640,
+    "height": 360
+  },
+  "status": {
+    "activity": [],
+    "commands": 0,
+    "display": {
+      "height": 1440,
+      "scale": 1,
+      "width": 2560
+    },
+    "headline": "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline",
+    "helper": "Helper 東京",
+    "holder": null,
+    "label": "Idle",
+    "pending": 0,
+    "reason": null,
+    "self": null,
+    "sessions": [],
+    "sessionsShown": false,
+    "state": "idle"
+  },
+  "helperOperations": [
+    "screenshot"
+  ],
+  "helperProofs": 2,
+  "helperRequests": 5,
+  "decodedImageBytes": 30
+}

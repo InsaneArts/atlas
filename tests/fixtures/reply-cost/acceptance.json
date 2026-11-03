@@ -1,0 +1,17 @@
+{
+  "purpose": "Characterize current replies. These measurements do not authorize their cost or change current output defaults.",
+  "laterNormalSummaryTarget": {
+    "serializedUtf8Bytes": 16384,
+    "rows": 50,
+    "scope": "The entire outgoing JSON-RPC/tool envelope, including line delimiter, escaping, content, structuredContent and private _meta payloads."
+  },
+  "namedBoundedExceptions": {
+    "image": "Explicit image and private-frame payloads remain subject to their existing encoded frame budget and transport cap; decoded image bytes are reported separately.",
+    "log": "Explicit requested run/log output retains its existing output/event/transport caps. Decoded run text is capped at 1048576 bytes before JSON escaping.",
+    "schema": "Explicit tool/resource schema listings remain subject to the existing transport cap; their whole envelope is counted.",
+    "full": "Explicit full element/app listings retain their existing scan, row and transport limits. Later budget work must define an envelope ceiling without changing selection semantics."
+  },
+  "syntheticOnly": true,
+  "liveBaseline": false,
+  "notes": "Activity timestamps are intentionally beyond the fixture clock so ages are deterministically zero. The private-frame case preloads a synthetic frame cache; it is envelope accounting, not native image or desktop evidence. App fixtures omit bundles/icons so native icon discovery is never invoked. Helper request counts cover the fake daemon socket; failed input-socket connections are not requests delivered to that helper."
+}

@@ -70,7 +70,7 @@ public enum ActivityAction: Equatable, Sendable {
   /// was cut short.
   private static let leads = ["couldn't ", "didn't ", "stopped "]
 
-  /// The verbs Atlas writes for rows (`src/lib/doing.rs`), by their kind.
+  /// The verbs Atlas writes for rows (`crates/client/src/doing.rs`), by their kind.
   private static let written: [String: ActivityAction] = [
     "click": .pointer, "double-click": .pointer, "right-click": .pointer, "drag": .pointer, "move": .pointer,
     "type": .typing, "key": .keys, "scroll": .scroll, "screenshot": .screenshot, "open": .window,
@@ -78,7 +78,7 @@ public enum ActivityAction: Equatable, Sendable {
     "job-start": .command, "job-stop": .command, "collect": .command,
   ]
 
-  /// The verbs the service's words lead with (`src/lib/doing.rs`), done, failed and under way, by their kind.
+  /// The verbs the service's words lead with (`crates/client/src/doing.rs`), done, failed and under way, by their kind.
   private static let verbs: [String: ActivityAction] = [
     "clicked": .pointer, "click": .pointer, "double-clicked": .pointer, "double-click": .pointer,
     "right-clicked": .pointer, "right-click": .pointer, "dragged": .pointer, "drag": .pointer,

@@ -10,7 +10,7 @@ If your shell says `atlas` is not found, check that Atlas.app is installed and t
 
 If Atlas says it is not set up, inspect `atlas config` and any `--config` argument or `ATLAS_CONFIG` value you selected. An installed app uses `~/.config/atlas.toml`, while a development executable may use a checkout-local file. See [Configuration](configuration.md).
 
-For `config-invalid`, read the filename and parse error. Repair that file rather than creating a second configuration with a guessed helper UID. Unknown TOML keys and a legacy JSON file beside the TOML settings can cause a refusal.
+For `config-invalid`, read the filename and parse error. Repair that file rather than creating a second configuration with a guessed helper UID. Unknown TOML keys can cause a refusal.
 
 ## The helper is logged out or on screen
 
