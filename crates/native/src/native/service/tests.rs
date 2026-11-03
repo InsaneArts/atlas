@@ -1792,6 +1792,8 @@ struct Stand {
     release_fails: bool,
     /// What a referenced element is found as; none when its look is gone.
     found: Option<Resolved>,
+    /// Whether the element changes once its app is brought forward.
+    moves: bool,
     /// Where each click it carried out landed.
     clicked: Vec<(f64, f64)>,
     lock: Weak<Mutex<Stand>>,
@@ -1816,6 +1818,7 @@ impl Stand {
                 releases: 0,
                 release_fails: false,
                 found: None,
+                moves: false,
                 clicked: Vec::new(),
                 lock: lock.clone(),
             })
@@ -1887,6 +1890,16 @@ impl Perform for Stand {
         self.found
             .clone()
             .ok_or_else(|| stale("That look is no longer kept"))
+    }
+
+    async fn confirm(&mut self, _: &Resolved) -> Result<()> {
+        self.assert_locked();
+        let index = self.logged("confirm");
+        self.log.push(format!("confirm {index}"));
+        if self.moves {
+            return Err(stale("The element moved while its app was brought forward"));
+        }
+        Ok(())
     }
 
     async fn perform(&mut self, action: Action) -> Result<()> {
@@ -2251,7 +2264,7 @@ async fn input_without_an_expectation_is_never_checked() {
 }
 
 fn referenced() -> Action {
-    serde_json::from_value(json!({"type": "reference", "ref": "kfpaq12"})).unwrap()
+    serde_json::from_value(json!({"type": "reference", "ref": "8123c12"})).unwrap()
 }
 
 #[tokio::test]
@@ -2285,11 +2298,7 @@ async fn a_found_reference_is_checked_against_its_own_window_and_clicked_where_i
     let found = Expect::new(812).unwrap().in_window(42).unwrap();
     for expect in [None, app()] {
         let stand = Stand::locked(&[Step::Post, Step::Post]);
-        stand.lock().await.found = Some(Resolved {
-            x: 30.0,
-            y: 40.0,
-            expect: found.clone(),
-        });
+        stand.lock().await.found = Some(Resolved::at(30.0, 40.0, found.clone()));
         let gate = Arc::new(Gate::default());
         let actions = vec![referenced(), keys(1).remove(0)];
         let outcome = {
@@ -2303,12 +2312,49 @@ async fn a_found_reference_is_checked_against_its_own_window_and_clicked_where_i
         assert_eq!(stand.preparations.first(), Some(&true));
         assert_eq!(stand.asked.first(), Some(&found));
         let checked = if expect.is_some() {
-            vec!["resolve 0", "check 0", "post 0", "check 1", "post 1"]
+            vec![
+                "resolve 0",
+                "check 0",
+                "confirm 0",
+                "post 0",
+                "check 1",
+                "post 1",
+            ]
         } else {
-            vec!["resolve 0", "check 0", "post 0", "post 1"]
+            vec!["resolve 0", "check 0", "confirm 0", "post 0", "post 1"]
         };
         assert_eq!(stand.log, checked);
     }
+}
+
+/// An element that changes once its app is brought forward is refused
+/// after that preparation, before anything is posted.
+#[tokio::test]
+async fn a_reference_that_moves_while_its_app_is_brought_forward_is_never_clicked() {
+    let stand = Stand::locked(&[Step::Post]);
+    {
+        let mut stand = stand.lock().await;
+        stand.found = Some(Resolved::at(
+            30.0,
+            40.0,
+            Expect::new(812).unwrap().in_window(42).unwrap(),
+        ));
+        stand.moves = true;
+    }
+    let gate = Arc::new(Gate::default());
+    let outcome = {
+        let mut engine = stand.lock().await;
+        run(&mut *engine, &gate, vec![referenced()], None).await
+    };
+    let reply = outcome.unwrap_err();
+    assert_eq!(reply["code"], "elements");
+    assert_eq!(reply["next"], LOOK_AGAIN);
+    assert_eq!(reply["performed"], 0);
+    assert_eq!(reply["uncertain"], false);
+    let stand = stand.lock().await;
+    assert_eq!(stand.log, ["resolve 0", "check 0", "confirm 0"]);
+    assert_eq!(stand.preparations, [true], "prepared once, never again");
+    assert_eq!(stand.posted, 0);
 }
 
 /// A batch that names a window clicks a referenced element only in it,
@@ -2316,11 +2362,11 @@ async fn a_found_reference_is_checked_against_its_own_window_and_clicked_where_i
 #[tokio::test]
 async fn a_reference_found_outside_the_window_named_is_refused() {
     let stand = Stand::locked(&[Step::Post]);
-    stand.lock().await.found = Some(Resolved {
-        x: 30.0,
-        y: 40.0,
-        expect: Expect::new(812).unwrap().in_window(43).unwrap(),
-    });
+    stand.lock().await.found = Some(Resolved::at(
+        30.0,
+        40.0,
+        Expect::new(812).unwrap().in_window(43).unwrap(),
+    ));
     let named = Expect::new(812).unwrap().in_window(42).unwrap();
     let gate = Arc::new(Gate::default());
     let outcome = {
@@ -2376,7 +2422,7 @@ fn a_look_request_keeps_its_epoch_and_app_refusals_for_their_guards() {
     }
 }
 
-/// A look reads nothing for an epoch the service does not enforce, even
+/// A look reads nothing for an epoch this session does not prove now, even
 /// while agents are stopped, and that refusal changes nothing.
 #[tokio::test]
 async fn a_look_for_another_epoch_is_refused_before_anything_is_read() {
@@ -2391,7 +2437,12 @@ async fn a_look_for_another_epoch_is_refused_before_anything_is_read() {
         expect: Ok(Some(Expect::new(812).unwrap())),
     };
     let error = service.dispatch(request, &phase).await.unwrap_err();
-    assert_eq!(error.code, Code::SessionChanged);
+    // A test runs in no hidden session, or in one whose epoch is another.
+    assert!(
+        matches!(error.code, Code::SessionChanged | Code::Identity),
+        "{}",
+        error.error
+    );
     assert!(!error.uncertain);
     assert!(matches!(
         *observed.borrow(),
@@ -2609,6 +2660,9 @@ impl Perform for Blocked {
         .await
     }
     async fn resolve(&mut self, _: Reference) -> Result<Resolved> {
+        Err(stale("No look is kept here"))
+    }
+    async fn confirm(&mut self, _: &Resolved) -> Result<()> {
         Err(stale("No look is kept here"))
     }
     async fn perform(&mut self, _: Action) -> Result<()> {

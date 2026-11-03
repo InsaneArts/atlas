@@ -1,13 +1,16 @@
 //! The looks the input service keeps: each scan of an app with the object
-//! every element of it is, for one process instance in one input epoch, so
-//! a reference names the object that look saw and nothing else. Looks are
-//! bounded in number, size and age; a reference to one no longer kept is
+//! every element of it is, for one process instance in one session epoch,
+//! so a reference names the object that look saw and nothing else. Looks
+//! are bounded in number, size and age, and named by this service's process
+//! and a count it never reuses; a reference to one no longer kept is
 //! refused, never matched again by name or place. The objects stay in this
 //! process: replies carry only a look's name.
 use super::{
+    batch::Source,
     bring::{check_application, target_application},
-    ffi::Kept,
-    tree::{Observed, observe},
+    ffi::{self, Kept},
+    scan::Scan,
+    tree::{Observed, Retraced, observe, retrace},
 };
 use crate::native;
 use atlas_core::{
@@ -16,13 +19,14 @@ use atlas_core::{
     process::Instance,
     screen::{
         elements::{
-            Element, LOOK_AGAIN, LOOK_NAMES, Limits, Look, Reference, Snapshot, click_point, drawn,
+            Element, LOOK_AGAIN, Limits, Look, Reference, Snapshot, click_point, drawn,
             element_check, stale,
         },
         geometry::Bounds,
     },
     session::InputEpoch,
 };
+use objc2_application_services::AXUIElement;
 use serde_json::json;
 use std::{
     collections::VecDeque,
@@ -39,16 +43,19 @@ const ELEMENTS: usize = 6000;
 /// How long a look is kept.
 const LIFETIME: Duration = Duration::from_secs(5 * 60);
 
-/// The step between the names of looks given one after another: prime to
-/// [`LOOK_NAMES`], so no name comes back before every other has been given.
-const STRIDE: u64 = 104_729;
+/// How many elements up from what lies at a point the referenced one may be:
+/// a control's own label or icon is hit first.
+const HIT_DEPTH: usize = 12;
 
 /// One element of a look: the object it is, the index of the element it
-/// was reached from, and what it reported.
+/// was reached from, what it reported, and the identifying attributes that
+/// read left unproven.
+#[derive(Clone)]
 struct Seen {
     object: Kept,
     parent: Option<usize>,
     element: Element,
+    unproven: Vec<&'static str>,
 }
 
 /// One look: its name, the epoch and process instance it was of, when it
@@ -61,11 +68,11 @@ struct Taken {
     seen: Vec<Seen>,
 }
 
-/// The looks kept, oldest first, and how many names were given.
-#[derive(Default)]
+/// The looks kept, oldest first, and the name the next one gets; none once
+/// this service has given every name it has.
 struct Shelf {
     looks: VecDeque<Taken>,
-    given: u64,
+    next: Option<Look>,
 }
 
 impl Shelf {
@@ -85,20 +92,20 @@ impl Shelf {
 /// go of looks, never across an Accessibility call.
 pub(in crate::native) struct Looks {
     shelf: Mutex<Shelf>,
-    /// Where this service's names start, drawn afresh for each service, so
-    /// a name an earlier one gave rarely names anything here.
-    base: u64,
 }
 
 impl Default for Looks {
+    /// The looks of this service process, whose ID begins each name, so no
+    /// name another service gave can name one of them.
     fn default() -> Self {
-        use std::hash::{BuildHasher, Hasher};
-
         Self {
-            shelf: Mutex::default(),
-            base: std::collections::hash_map::RandomState::new()
-                .build_hasher()
-                .finish(),
+            shelf: Mutex::new(Shelf {
+                looks: VecDeque::new(),
+                next: Some(Look {
+                    service: std::process::id(),
+                    sequence: 0,
+                }),
+            }),
         }
     }
 }
@@ -111,19 +118,38 @@ pub(in crate::native) struct Read {
 }
 
 /// What a kept look holds of one referenced element: the process it is in,
-/// and the element's object and what it reported, followed by those of each
-/// element it was reached from, nearest first.
+/// and the element followed by each element it was reached from, nearest
+/// first.
+#[derive(Clone)]
 struct Found {
     instance: Instance,
-    chain: Vec<(Kept, Element)>,
+    chain: Vec<Seen>,
 }
 
-/// Where a referenced element is clicked now, and what the click must reach.
-#[derive(Debug, Clone)]
+/// Where a referenced element is clicked and what the click must reach,
+/// with what its look kept of it, to find it again just before the click.
+#[derive(Clone)]
 pub(in crate::native) struct Resolved {
     pub(in crate::native) x: f64,
     pub(in crate::native) y: f64,
     pub(in crate::native) expect: Expect,
+    found: Found,
+}
+
+#[cfg(test)]
+impl Resolved {
+    /// A resolution a stand-in engine hands back: kept of nothing.
+    pub(in crate::native) fn at(x: f64, y: f64, expect: Expect) -> Self {
+        Self {
+            x,
+            y,
+            expect,
+            found: Found {
+                instance: Instance::new(0, [0, 0]),
+                chain: Vec::new(),
+            },
+        }
+    }
 }
 
 fn unavailable() -> Error {
@@ -131,9 +157,13 @@ fn unavailable() -> Error {
 }
 
 impl Looks {
-    /// Keep `read`, taken in `epoch`, under a new name, letting the oldest
-    /// looks go while more would be kept than the bounds allow. The
+    /// Keep `read`, taken in `epoch`, under the next name, letting the
+    /// oldest looks go while more would be kept than the bounds allow. The
     /// snapshot comes back to be listed.
+    ///
+    /// # Errors
+    ///
+    /// Refuses once this service has given every name it has.
     pub(in crate::native) fn keep(
         &self,
         epoch: InputEpoch,
@@ -141,6 +171,12 @@ impl Looks {
         now: Instant,
     ) -> Result<(Look, Snapshot)> {
         let mut shelf = self.shelf.lock().map_err(|_| unavailable())?;
+        let name = shelf.next.ok_or_else(|| {
+            Error::new(
+                Code::Elements,
+                "The input service has named every look it can; run atlas start-input",
+            )
+        })?;
         shelf.expire(now);
         while !shelf.looks.is_empty()
             && (shelf.looks.len() >= KEPT || shelf.size() + read.seen.len() > ELEMENTS)
@@ -148,8 +184,7 @@ impl Looks {
             shelf.looks.pop_front();
         }
 
-        let name = Look::new(self.base % LOOK_NAMES + (shelf.given % LOOK_NAMES) * STRIDE);
-        shelf.given += 1;
+        shelf.next = name.after();
         shelf.looks.push_back(Taken {
             name,
             epoch,
@@ -164,6 +199,12 @@ impl Looks {
     /// when that look is still kept and was taken in `epoch`.
     fn find(&self, reference: Reference, epoch: &InputEpoch, now: Instant) -> Result<Found> {
         let mut shelf = self.shelf.lock().map_err(|_| unavailable())?;
+        if shelf
+            .next
+            .is_some_and(|next| next.service != reference.look.service)
+        {
+            return Err(stale("That look was taken by an earlier input service"));
+        }
         shelf.expire(now);
         let look = shelf
             .looks
@@ -181,14 +222,13 @@ impl Looks {
             .seen
             .get(at)
             .ok_or_else(|| stale("That look has no element of that number"))?;
-        let kept = |seen: &Seen| (Kept(seen.object.0.clone()), seen.element.clone());
-        let mut chain = vec![kept(seen)];
+        let mut chain = vec![seen.clone()];
         // Each element was reached from one found before it, so every step
         // goes to a smaller index and the walk up ends.
         let mut parent = seen.parent;
         while let Some(above) = parent.filter(|above| *above < at) {
             let seen = look.seen.get(above).ok_or_else(unavailable)?;
-            chain.push(kept(seen));
+            chain.push(seen.clone());
             (at, parent) = (above, seen.parent);
         }
 
@@ -201,7 +241,7 @@ impl Looks {
 
 /// Read the elements of the app `expect` names, as `atlas elements` lists
 /// them, with the object each one is. Refused when that process is gone,
-/// or was replaced while it was read.
+/// or was replaced while it was read: the look would be of another.
 ///
 /// # Errors
 ///
@@ -210,7 +250,7 @@ pub(in crate::native) fn read(expect: &Expect) -> Result<Read> {
     let instance = target_application(expect).map_err(|cause| {
         Error::new(Code::Elements, "No app is running with that process ID").with_source(cause)
     })?;
-    let Observed { snapshot, objects } = observe(instance.pid, Limits::default(), None)?;
+    let Observed { snapshot, objects } = observe(instance.pid, Limits::default())?;
     check_application(Some(instance)).map_err(|cause| {
         Error::new(
             Code::Elements,
@@ -226,6 +266,7 @@ pub(in crate::native) fn read(expect: &Expect) -> Result<Read> {
             object: Kept(traced.object),
             parent: traced.parent,
             element: element.clone(),
+            unproven: traced.unproven,
         })
         .collect();
     Ok(Read {
@@ -236,17 +277,13 @@ pub(in crate::native) fn read(expect: &Expect) -> Result<Read> {
 }
 
 /// Where the element `reference` names is now and what a click there must
-/// reach, found by reading its app again until that very object is met,
-/// through the same elements the look reached it through. A batch `named`
-/// for an app finds references only in that very process.
+/// reach: the look still kept, of this epoch and of the app `named` when a
+/// batch names one, and its element met again where the look saw it.
 ///
 /// # Errors
 ///
-/// Refuses, with nothing sent, a look no longer kept or taken in another
-/// epoch, an app that quit or was replaced, an object no longer reached the
-/// same way or not met in time, an element whose identity changed, a
-/// disabled control, and an element off screen or whose window cannot be
-/// told.
+/// Refuses, with nothing sent, a look no longer kept, of another service,
+/// epoch or app, and an element [`locate`] refuses.
 pub(in crate::native) fn resolve(
     looks: &Looks,
     reference: Reference,
@@ -257,37 +294,79 @@ pub(in crate::native) fn resolve(
     if named.is_some_and(|named| named != found.instance) {
         return Err(stale("That look is of another app than the one named"));
     }
+    let (x, y, expect) = locate(&found, epoch)?;
+    Ok(Resolved {
+        x,
+        y,
+        expect,
+        found,
+    })
+}
+
+/// Whether the element `resolved` names is still the one to click, once its
+/// app was brought forward and just before the click: met again where its
+/// look saw it, at the same point, and what is hit there. Nothing is asked
+/// to move or take focus.
+///
+/// # Errors
+///
+/// Refuses, with nothing sent, an element [`locate`] refuses, one that
+/// moved, and a point where something else is hit.
+pub(in crate::native) fn confirm(resolved: &Resolved, epoch: &InputEpoch) -> Result<()> {
+    let (x, y, _) = locate(&resolved.found, epoch)?;
+    if (x, y) != (resolved.x, resolved.y) {
+        return Err(stale("The element moved while its app was brought forward"));
+    }
+    let target = resolved.found.chain.first().ok_or_else(unavailable)?;
+    if !lands_on(resolved.found.instance.pid, (x, y), &target.object.0) {
+        return Err(stale("Something else is at the element's point now"));
+    }
+    Ok(())
+}
+
+/// Where the element `found` names is clicked now and what the click must
+/// reach: its app the same process, and its path from where a walk starts
+/// read again within [`RESOLVE`], each element on it proven the same as the
+/// look saw it.
+///
+/// # Errors
+///
+/// Refuses, with nothing sent, an app that quit or was replaced, an element
+/// no longer where the look saw it, read too slowly, changed or not proven
+/// the same, a disabled control, and an element off screen or whose window
+/// cannot be told.
+fn locate(found: &Found, epoch: &InputEpoch) -> Result<(f64, f64, Expect)> {
     let replaced = |cause: Error| stale("The app it is in quit or was replaced").with_source(cause);
     check_application(Some(found.instance)).map_err(replaced)?;
-
-    let (object, _) = found.chain.first().ok_or_else(unavailable)?;
-    let limits = Limits {
-        time: RESOLVE,
-        ..Limits::default()
-    };
+    let path: Vec<&AXUIElement> = found
+        .chain
+        .iter()
+        .rev()
+        .map(|seen| &*seen.object.0)
+        .collect();
     let started = Instant::now();
-    let observed = observe(found.instance.pid, limits, Some(&*object.0)).map_err(|error| {
-        if error.code == Code::Elements {
-            error.with("next", json!(LOOK_AGAIN))
-        } else {
-            error
-        }
-    })?;
+    let retraced = retrace(found.instance.pid, &path, RESOLVE)?;
     check_application(Some(found.instance)).map_err(replaced)?;
-    // A read whose last answers came late may describe an app that has
-    // moved on, and would hold the click past its share of the batch.
-    if started.elapsed() > 2 * RESOLVE {
+    // A read that ended late may describe an app that has moved on since.
+    if started.elapsed() > RESOLVE {
         return Err(stale(
             "The app answered too slowly to find the element again",
         ));
     }
+    let retraced = retraced
+        .filter(|retraced| retraced.len() == found.chain.len())
+        .ok_or_else(|| stale("The element is no longer where that look saw it"))?;
+    if !found
+        .chain
+        .iter()
+        .rev()
+        .zip(&retraced)
+        .all(|(then, now)| same(then, now))
+    {
+        return Err(stale("The element changed since that look"));
+    }
 
-    let index = met_again(&found.chain, &observed)?;
-    let element = observed
-        .snapshot
-        .elements
-        .get(index)
-        .ok_or_else(unavailable)?;
+    let element = &retraced.last().ok_or_else(unavailable)?.element;
     if element.enabled == Some(false) {
         return Err(Error::new(
             Code::Input,
@@ -295,7 +374,6 @@ pub(in crate::native) fn resolve(
         )
         .with("next", json!(DISABLED_CONTROL)));
     }
-
     let frame = element
         .frame
         .as_ref()
@@ -314,64 +392,56 @@ pub(in crate::native) fn resolve(
         (x, y),
     )
     .map_err(|error| error.with("next", json!(LOOK_AGAIN)))?;
-    Ok(Resolved { x, y, expect })
+    Ok((x, y, expect))
 }
 
-/// Where the element `chain` names (with each element it was reached from,
-/// nearest first) is met again in `observed`: the very same object, reached
-/// through the very same objects from where the walk started, each of them
-/// still the same element.
-fn met_again(chain: &[(Kept, Element)], observed: &Observed) -> Result<usize> {
-    let Observed { snapshot, objects } = observed;
-    let (object, _) = chain.first().ok_or_else(unavailable)?;
-    let index = objects
-        .iter()
-        .position(|traced| *traced.object == *object.0)
-        .ok_or_else(|| {
-            stale(if snapshot.incomplete {
-                "The element was not found again in time"
-            } else {
-                "The element is no longer there"
-            })
-        })?;
-
-    let moved = || stale("The element is no longer where that look saw it");
-    let mut at = Some(index);
-    for (kept, then) in chain {
-        let traced = at
-            .and_then(|at| objects.get(at))
-            .filter(|traced| *traced.object == *kept.0)
-            .ok_or_else(moved)?;
-        let now = at
-            .and_then(|at| snapshot.elements.get(at))
-            .ok_or_else(unavailable)?;
-        if !same(then, now) {
-            return Err(stale("The element changed since that look"));
+/// Whether what app `pid` has at `(x, y)` is `target`, or lies within it a
+/// few elements down. Anything that fails to read is not it.
+fn lands_on(pid: i32, (x, y): (f64, f64), target: &AXUIElement) -> bool {
+    let Some(app) = ffi::application(pid) else {
+        return false;
+    };
+    let mut scan = Scan::new(Instant::now() + RESOLVE);
+    scan.bound(&app);
+    let Ok(Some(mut hit)) = ffi::element_at(&app, x as f32, y as f32) else {
+        return false;
+    };
+    for _ in 0..HIT_DEPTH {
+        if *hit == *target {
+            return true;
         }
-        at = traced.parent;
+        let Some(parent) = scan
+            .attribute(Source::Element(&hit), "AXParent")
+            .and_then(|parent| parent.downcast::<AXUIElement>().ok())
+        else {
+            return false;
+        };
+        hit = parent;
     }
-    match at {
-        Some(_) => Err(moved()),
-        None => Ok(index),
-    }
+    false
 }
 
 /// Whether `now` is the element a look saw as `then`: the same role,
 /// subrole, title, description, identifier and menu, and for a static text
-/// the same value, each read whole. Any other value may change, as typing
-/// changes it, and so may the frame.
-fn same(then: &Element, now: &Element) -> bool {
-    let text = then.role.as_deref() == Some("AXStaticText");
-    let identifying = |name: &String| text || name != "AXValue";
-    then.role == now.role
-        && then.subrole == now.subrole
-        && then.title == now.title
-        && then.description == now.description
-        && then.identifier == now.identifier
-        && then.menu == now.menu
-        && (!text || then.value == now.value)
-        && !now.unreadable.iter().any(identifying)
-        && !then.truncated.iter().chain(&now.truncated).any(identifying)
+/// the same value, each proven by both reads. Any other value may change,
+/// as typing changes it, and so may the frame.
+fn same(then: &Seen, now: &Retraced) -> bool {
+    let (was, is) = (&then.element, &now.element);
+    let text = was.role.as_deref() == Some("AXStaticText");
+    let proven = |unproven: &[&str]| {
+        unproven
+            .iter()
+            .all(|attribute| !text && *attribute == "AXValue")
+    };
+    was.role == is.role
+        && was.subrole == is.subrole
+        && was.title == is.title
+        && was.description == is.description
+        && was.identifier == is.identifier
+        && was.menu == is.menu
+        && (!text || was.value == is.value)
+        && proven(&then.unproven)
+        && proven(&now.unproven)
 }
 
 #[cfg(test)]

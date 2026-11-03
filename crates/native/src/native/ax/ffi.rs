@@ -46,13 +46,14 @@ unsafe fn copied<T: objc2_core_foundation::Type>(
 }
 
 /// An element a look keeps, carried between the service's worker threads.
+#[derive(Clone)]
 pub(super) struct Kept(pub(super) CFRetained<AXUIElement>);
 
-// SAFETY: an AXUIElement is an immutable CoreFoundation reference to an
-// object in another process: its retain and release are thread-safe, and
-// Accessibility calls on it are messages that the service already makes
-// from whichever blocking worker runs them. A kept element is only compared
-// and read, one worker at a time, and never set up or changed in place.
+// SAFETY: an AXUIElement is a CoreFoundation reference to an object in
+// another process: its retain and release are thread-safe, and comparing
+// two is a pure CoreFoundation call. A kept element is only ever compared
+// with others; no Accessibility request is made of it and nothing on it is
+// set, so no state of it is shared between threads.
 unsafe impl Send for Kept {}
 
 /// The element of the application `pid`; None when there is none.

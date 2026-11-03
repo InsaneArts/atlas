@@ -39,6 +39,9 @@ pub(super) trait Perform {
     /// Find the element `reference` names again, before anything is checked
     /// or posted: where to click it now and what that click must reach.
     async fn resolve(&mut self, reference: Reference) -> Result<Resolved>;
+    /// Refuse unless the element `resolved` names is still the one to click,
+    /// once its app was brought forward, asking nothing to move or focus.
+    async fn confirm(&mut self, resolved: &Resolved) -> Result<()>;
     /// Carry out one action through posted events or a Dock AXPress.
     async fn perform(&mut self, action: Action) -> Result<()>;
     /// Events posted or AX presses acknowledged so far.
@@ -114,6 +117,29 @@ impl Perform for Engine {
             .ok_or_else(|| stale("That look names no process"))?;
         self.target = Some(found);
         Ok(resolved)
+    }
+
+    /// Read on a blocking thread under the same guards as a check, as
+    /// [`Perform::resolve`] is.
+    async fn confirm(&mut self, resolved: &Resolved) -> Result<()> {
+        self.check()?;
+        let resolved = resolved.clone();
+        let epoch = self.epoch.clone();
+        let guard = self.preparation_guard();
+        checked_preparation(
+            move || {
+                guard()?;
+                ax::confirm(&resolved, &epoch)
+            },
+            || {
+                self.check().and_then(|()| {
+                    crate::native::ax::check_application(self.target)?;
+                    drop(self.grant.as_ref().ok_or_else(worker_failed)?.authorize()?);
+                    Ok(())
+                })
+            },
+        )
+        .await
     }
 
     async fn perform(&mut self, action: Action) -> Result<()> {
@@ -213,9 +239,10 @@ pub(super) async fn run(
 }
 
 /// One action of a batch, checked against `expected` (when it names an app)
-/// and carried out: a referenced click is found again first and is then
-/// checked against what its own element must reach. Once done, the role of
-/// the field the check named, when it named one.
+/// and carried out. A referenced click is found again first, checked
+/// against what its own element must reach, and confirmed to be that very
+/// element once more just before it is posted. Once done, the role of the
+/// field the check named, when it named one.
 async fn step(
     engine: &mut impl Perform,
     action: Action,
@@ -223,39 +250,42 @@ async fn step(
     prepare: bool,
     budget: &mut Duration,
 ) -> Result<Option<&'static str>> {
-    let (action, found) = match action {
+    let (reference, button, count, modifiers) = match action {
         Action::Reference {
             reference,
             button,
             count,
             modifiers,
-        } => {
-            let Resolved { x, y, expect } = engine.resolve(reference).await?;
-            // A batch that names a window clicks a reference only in it.
-            if let Some(window) = expected.and_then(Expect::window)
-                && expect.window() != Some(window)
-            {
-                return Err(stale("That element is not in the window named"));
-            }
-            let click = Action::Click {
-                x,
-                y,
-                button,
-                count,
-                modifiers,
+        } => (reference, button, count, modifiers),
+        action => {
+            let role = match expected {
+                Some(expected) => {
+                    require_within(engine, expected, action.target(), budget, prepare).await?
+                }
+                None => None,
             };
-            (click, Some(expect))
+            engine.perform(action).await?;
+            return Ok(role);
         }
-        action => (action, None),
     };
 
-    let role = match found.as_ref().or(expected) {
-        Some(expected) => {
-            require_within(engine, expected, action.target(), budget, prepare).await?
-        }
-        None => None,
+    let resolved = engine.resolve(reference).await?;
+    // A batch that names a window clicks a reference only in it.
+    if let Some(window) = expected.and_then(Expect::window)
+        && resolved.expect.window() != Some(window)
+    {
+        return Err(stale("That element is not in the window named"));
+    }
+    let click = Action::Click {
+        x: resolved.x,
+        y: resolved.y,
+        button,
+        count,
+        modifiers,
     };
-    engine.perform(action).await?;
+    let role = require_within(engine, &resolved.expect, click.target(), budget, prepare).await?;
+    engine.confirm(&resolved).await?;
+    engine.perform(click).await?;
     Ok(role)
 }
 

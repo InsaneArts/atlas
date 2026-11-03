@@ -120,12 +120,6 @@ impl Service {
 
     fn check(&self) -> Result<()> {
         self.operations.check()?;
-        self.check_session()
-    }
-
-    /// Whether this service's hidden session, display and Accessibility
-    /// permission are still the ones it enforces.
-    fn check_session(&self) -> Result<()> {
         if InputEpoch::from_proof(&session_info()?, std::process::id())? != self.epoch()?
             || !accessibility_trusted()
         {
@@ -145,8 +139,8 @@ impl Service {
     ) -> Result<Value> {
         // Stop, release, recovery and shutdown keep working after session or
         // permission loss, so only control and its uses need both intact. A
-        // look checks its epoch before its session, as input does, and goes
-        // on during a Stop or the person's control: it sends nothing.
+        // look proves its own session and goes on during a Stop or the
+        // person's control: it sends nothing.
         match &request {
             Request::Renew { .. }
             | Request::Unknown { .. }
@@ -180,16 +174,18 @@ impl Service {
         }
     }
 
-    /// One look at the elements of the app `expect` names, kept so that a
-    /// reference names one of its objects alone. It grants nothing: a click
-    /// finds its element again under its own control and checks.
+    /// One look at the elements of the app `expect` names, in the session
+    /// `expected` names as the session proves itself now, whatever epoch
+    /// input is pinned to; kept so that a reference names one of its
+    /// objects alone. It grants nothing: a click finds its element again
+    /// under its own control and checks. Missing Accessibility is the read's
+    /// own failure, as for any other reader.
     async fn look(
         &self,
         expected: Result<InputEpoch>,
         expect: Result<Option<Expect>>,
     ) -> Result<Value> {
-        let epoch = self.check_epoch(expected?)?;
-        self.check_session()?;
+        let epoch = proven(expected?)?;
         let expect =
             expect?.ok_or_else(|| Error::new(Code::Input, "A look names the app it reads"))?;
         let read = tokio::task::spawn_blocking(move || super::ax::read(&expect))
@@ -201,8 +197,7 @@ impl Service {
 
         // A session or display that changed while the app was read keeps
         // nothing of it.
-        self.check_epoch(epoch.clone())?;
-        self.check_session()?;
+        let epoch = proven(epoch)?;
         let (look, snapshot) = self.looks.keep(epoch, read, std::time::Instant::now())?;
         Ok(json!({
             "ok": true,
@@ -501,6 +496,16 @@ async fn landed(dock_pressed: bool) -> Option<(String, Option<String>)> {
     .await
     .ok()
     .flatten()
+}
+
+/// `expected`, when this process's hidden session proves it is the one
+/// now: the session, display and process it names.
+fn proven(expected: InputEpoch) -> Result<InputEpoch> {
+    let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
+    if current != expected {
+        return Err(Error::session_changed());
+    }
+    Ok(current)
 }
 
 fn hold(
