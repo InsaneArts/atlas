@@ -524,6 +524,10 @@ pub struct Census {
     pub launching: usize,
     /// How many records cannot be read, whose jobs may still run too.
     pub unresolved: usize,
+    /// Whether the records could not all be read, so the counts are only of
+    /// those that could, and more jobs may still run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub incomplete: bool,
 }
 
 /// The daemon's refusal of a job request: why, and which job, with the

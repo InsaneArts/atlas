@@ -19,6 +19,8 @@ extension ViewerWords {
   static let readyToAct = "Ready to act"
   /// That fact's value.
   static let allChecksPass = "All checks pass"
+  /// The native Save and Open dialogs' fact's name once their check failed, beside a helper that may be ready.
+  static let dialogsUnavailable = "Save and Open dialogs unavailable"
   /// No agent is connected to Atlas yet.
   static let noAgents = "None"
   /// An environment plan a session applied, as its fact's name.

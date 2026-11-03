@@ -966,6 +966,342 @@ fn open_at_login_takes_only_its_three_states() {
 }
 
 #[test]
+fn a_suspended_menu_bar_that_does_not_answer_is_not_reported_absent() {
+    use atlas_core::test_support::{TestChild, message, permitted, rerun};
+    const NAME: &str =
+        "menubar::tests::a_suspended_menu_bar_that_does_not_answer_is_not_reported_absent";
+    if std::env::var_os("ATLAS_SUSPENDED_MENUBAR").is_some() {
+        message("ready");
+        permitted("continue");
+        return;
+    }
+
+    // A live process of this very executable stands in for the menu bar;
+    // its port takes connections and never answers.
+    let mut child = TestChild::spawn(
+        rerun(NAME)
+            .arg("--nocapture")
+            .env("ATLAS_SUSPENDED_MENUBAR", "1"),
+    );
+    child.expect("ready");
+    let pid = Pid::from_raw(i32::try_from(child.process.id()).unwrap());
+    kill(pid, Signal::SIGSTOP).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let output = tempfile::tempdir().unwrap();
+    let record = output.path().join(crate::viewer::MENUBAR_RECORD);
+    fs::write(
+        &record,
+        serde_json::json!({"url": format!("http://127.0.0.1:{port}/private/"), "pid": pid.as_raw()})
+            .to_string(),
+    )
+    .unwrap();
+
+    let outcome = stop(output.path());
+    kill(pid, Signal::SIGCONT).unwrap();
+    child.permit("continue");
+    assert!(child.wait().success());
+    let error = outcome.expect_err("a menu bar that may still run is not absent");
+    assert_eq!(error.code, Code::Menubar);
+    assert!(record.exists());
+}
+
+#[test]
+fn a_menu_bar_whose_records_are_unknown_runs_while_any_other_atlas_does() {
+    use atlas_core::process::{Info, Instance};
+    let process = |pid: i32, ppid: i32, name: &str, zombie: bool| Info {
+        instance: Instance::new(pid, [1, 0]),
+        ppid,
+        pgid: pid,
+        uid: 501,
+        ruid: 501,
+        svuid: 501,
+        zombie,
+        stopped: false,
+        name: name.to_owned(),
+    };
+    let unlocated = || Error::new(Code::Config, "The settings do not load");
+    let atlas = std::ffi::OsStr::new("atlas");
+    let find = |listed: Vec<Info>| elsewhere(unlocated(), Ok(listed), 30, atlas);
+
+    // This process, the Atlas that started it, exited ones and other programs.
+    let quiet = vec![
+        process(10, 1, "atlas", false),
+        process(20, 10, "zsh", false),
+        process(30, 20, "atlas", false),
+        process(40, 1, "atlas", true),
+        process(50, 1, "AtlasApp", false),
+    ];
+    assert_eq!(find(quiet.clone()).unwrap(), None);
+
+    let mut busy = quiet;
+    busy.push(process(60, 1, "atlas", false));
+    let error = find(busy).unwrap_err();
+    assert_eq!(error.code, Code::Menubar);
+    assert_eq!(
+        error.error,
+        "Atlas can't find the menu bar's record while Atlas runs as process 60"
+    );
+
+    // The kernel keeps only the first 16 bytes of a longer name.
+    let long = std::ffi::OsStr::new("atlas-0123456789abcdef");
+    let listed = vec![process(60, 1, "atlas-0123456789", false)];
+    assert!(elsewhere(unlocated(), Ok(listed), 30, long).is_err());
+
+    let unlisted = elsewhere(
+        unlocated(),
+        Err(Error::new(Code::State, "no listing")),
+        30,
+        atlas,
+    )
+    .unwrap_err();
+    assert_eq!(
+        unlisted.error,
+        "Atlas could not tell whether the menu bar runs"
+    );
+}
+
+#[test]
+fn only_a_menu_bar_known_not_to_run_is_reported_absent() {
+    use atlas_core::process::{Info, Instance};
+    use std::io::ErrorKind;
+
+    const PID: i32 = 4242;
+    let me = nix::unistd::getuid().as_raw();
+    let live = |uid: u32, zombie: bool| Info {
+        instance: Instance::new(PID, [1, 2]),
+        ppid: 1,
+        pgid: PID,
+        uid,
+        ruid: uid,
+        svuid: uid,
+        zombie,
+        stopped: false,
+        name: "atlas".into(),
+    };
+    let written = serde_json::json!({"url": "http://127.0.0.1:8123/private/", "pid": PID});
+    let record = Path::new("/nowhere/menubar.json");
+
+    #[derive(Clone)]
+    struct World {
+        read: std::result::Result<Vec<u8>, ErrorKind>,
+        info: std::result::Result<Option<Info>, ()>,
+        answers: Option<u32>,
+        atlas: std::result::Result<bool, ()>,
+    }
+    let find = |world: World| {
+        serving(
+            record,
+            |_| world.read.map_err(std::io::Error::from),
+            |_| {
+                world
+                    .info
+                    .map_err(|()| Error::new(Code::State, "unreadable"))
+            },
+            |url| {
+                assert_eq!(url, "http://127.0.0.1:8123/private/");
+                world.answers
+            },
+            |pid| {
+                assert_eq!(pid, PID);
+                world.atlas.map_err(|()| std::io::Error::other("ps failed"))
+            },
+        )
+    };
+    let running = World {
+        read: Ok(written.to_string().into_bytes()),
+        info: Ok(Some(live(me, false))),
+        answers: Some(4242),
+        atlas: Ok(true),
+    };
+    assert_eq!(
+        find(running.clone()).unwrap(),
+        Some((8123, Instance::new(PID, [1, 2])))
+    );
+
+    let absent = [
+        (
+            "no record",
+            World {
+                read: Err(ErrorKind::NotFound),
+                ..running.clone()
+            },
+        ),
+        (
+            "no process",
+            World {
+                info: Ok(None),
+                answers: None,
+                ..running.clone()
+            },
+        ),
+        (
+            "an exited process",
+            World {
+                info: Ok(Some(live(me, true))),
+                ..running.clone()
+            },
+        ),
+        (
+            "another account's",
+            World {
+                info: Ok(Some(live(me + 1, false))),
+                ..running.clone()
+            },
+        ),
+        (
+            "another program",
+            World {
+                answers: None,
+                atlas: Ok(false),
+                ..running.clone()
+            },
+        ),
+    ];
+    for (case, world) in absent {
+        assert_eq!(find(world).unwrap(), None, "{case}");
+    }
+
+    let unknown = [
+        (
+            "an unreadable record",
+            World {
+                read: Err(ErrorKind::PermissionDenied),
+                ..running.clone()
+            },
+            "can't be read",
+        ),
+        (
+            "a malformed record",
+            World {
+                read: Ok(b"{\"url\":".to_vec()),
+                ..running.clone()
+            },
+            "can't be read",
+        ),
+        (
+            "a record without its process",
+            World {
+                read: Ok(br#"{"url":"http://127.0.0.1:8123/private/"}"#.to_vec()),
+                ..running.clone()
+            },
+            "can't be read",
+        ),
+        (
+            "an unreadable process",
+            World {
+                info: Err(()),
+                ..running.clone()
+            },
+            "could not tell",
+        ),
+        (
+            "a suspended menu bar",
+            World {
+                answers: None,
+                ..running.clone()
+            },
+            "does not answer",
+        ),
+        (
+            "another answering process",
+            World {
+                answers: Some(7),
+                ..running.clone()
+            },
+            "does not answer",
+        ),
+        (
+            "a failed executable check",
+            World {
+                answers: None,
+                atlas: Err(()),
+                ..running.clone()
+            },
+            "could not tell",
+        ),
+        (
+            "an answering process that is not Atlas",
+            World {
+                atlas: Ok(false),
+                ..running.clone()
+            },
+            "not Atlas",
+        ),
+    ];
+    for (case, world, said) in unknown {
+        let error = find(world).unwrap_err();
+        assert_eq!(error.code, Code::Menubar, "{case}");
+        assert!(error.error.contains(said), "{case}: {}", error.error);
+    }
+}
+
+#[test]
+fn a_menu_bar_surviving_its_stop_deadline_is_not_reported_stopped() {
+    use atlas_core::process::State;
+    use nix::errno::Errno;
+
+    /// Stop with each look answering the next of `looks` (the last again
+    /// once they run out), `signal`'s outcome and three waits allowed.
+    fn stop_seeing(looks: &[State], signal: nix::Result<()>) -> (Result<Option<u16>>, bool, usize) {
+        let mut looks = looks.iter().copied();
+        let mut last = State::Running;
+        let mut signalled = false;
+        let mut waits = 0;
+        let outcome = stopped(
+            8123,
+            || {
+                last = looks.next().unwrap_or(last);
+                last
+            },
+            || {
+                signalled = true;
+                signal
+            },
+            || {
+                waits += 1;
+                waits < 3
+            },
+        );
+        (outcome, signalled, waits)
+    }
+
+    for still in [State::Running, State::Stopped, State::Unknown] {
+        let (outcome, signalled, waits) = stop_seeing(&[still], Ok(()));
+        let error = outcome.unwrap_err();
+        assert_eq!(error.code, Code::Menubar, "{still:?}");
+        assert_eq!(error.error, "The menu bar did not stop within a minute");
+        assert!(signalled);
+        assert_eq!(waits, 3, "it waits out its deadline: {still:?}");
+    }
+
+    let (outcome, signalled, _) =
+        stop_seeing(&[State::Running, State::Running, State::Gone], Ok(()));
+    assert_eq!(outcome.unwrap(), Some(8123), "seen to exit");
+    assert!(signalled);
+
+    let (outcome, signalled, _) = stop_seeing(&[State::Running, State::Gone], Err(Errno::ESRCH));
+    assert_eq!(
+        outcome.unwrap(),
+        Some(8123),
+        "gone before the signal landed"
+    );
+    assert!(signalled);
+
+    let (outcome, signalled, waits) = stop_seeing(&[State::Running], Err(Errno::EPERM));
+    assert_eq!(
+        outcome.unwrap_err().error,
+        "Atlas could not stop the menu bar"
+    );
+    assert!(signalled);
+    assert_eq!(waits, 0, "a refused signal is not exit evidence");
+
+    let (outcome, signalled, _) = stop_seeing(&[State::Gone], Ok(()));
+    assert_eq!(outcome.unwrap(), None, "another process now has its PID");
+    assert!(!signalled, "and is never signalled");
+}
+
+#[test]
 fn rendering_selects_the_appearance() {
     assert_eq!(render_args("/tmp/a.png", false), ["--render", "/tmp/a.png"]);
     assert_eq!(

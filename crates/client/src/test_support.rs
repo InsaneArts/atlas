@@ -1,6 +1,6 @@
 //! What the client's tests and those above it share: temporary clients, a
-//! stand-in for the helper's daemon, and unprivileged stand-ins for
-//! interrupted mutation transactions.
+//! stand-in for the helper's daemon, unprivileged stand-ins for
+//! interrupted mutation transactions, and a watch on stalled requests.
 #![allow(
     clippy::missing_errors_doc,
     clippy::missing_panics_doc,
@@ -8,11 +8,13 @@
 )]
 mod executor;
 mod helper;
+mod requester;
 
 pub use executor::{
     Fixture, WORKER, executor_ready, executor_worker, interrupted_executor, pause_executor,
 };
 pub use helper::{Helper, completed, exited};
+pub use requester::{Requester, WATCHDOG};
 
 use crate::{
     client::Client,

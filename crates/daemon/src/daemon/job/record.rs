@@ -144,12 +144,23 @@ impl Record {
     }
 
     /// Whether this record may be acted on: it is of this build's format,
-    /// and once it names a process, that process's identity is sound. A
-    /// record that fails this is shown and never acted on.
+    /// once it names a process, that process's identity is sound, and its
+    /// state carries what that state needs and nothing it contradicts. A
+    /// running job has neither a stop nor an end, a stopping one has its
+    /// stop and no end, and an ended one has its end and may keep the stop
+    /// that led to it. A record that fails this is shown and never acted on.
     pub(super) fn sound(&self) -> bool {
         let process = self.pid.is_some() || self.start.is_some() || self.pgid.is_some();
+        let consistent = match self.state {
+            JobState::Starting => false,
+            JobState::Launched | JobState::Running => {
+                self.stopping.is_none() && self.ended.is_none()
+            }
+            JobState::Stopping => self.stopping.is_some() && self.ended.is_none(),
+            JobState::Ended => self.ended.is_some(),
+        };
         self.version == VERSION
-            && self.state != JobState::Starting
+            && consistent
             && (!(process || self.state.live()) || self.identity().is_some())
     }
 
@@ -204,3 +215,6 @@ impl Record {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

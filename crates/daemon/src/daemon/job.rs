@@ -55,7 +55,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use store::{Found, Store};
+use store::{Found, Scan, Store};
 use tokio::process::Child;
 use verdict::Verdict;
 
@@ -63,6 +63,10 @@ use verdict::Verdict;
 const LOG_LIMIT: u64 = 32 * 1024 * 1024;
 /// What the daemon says of a record it cannot read.
 const UNREADABLE: &str = "Atlas cannot tell whether this job's process is running";
+/// What the daemon says when a scan of its records cannot account for
+/// every job.
+const INCOMPLETE: &str =
+    "Atlas could not read every background job record; a job may still be running.";
 
 /// What the daemon holds of the jobs it supervises.
 struct State {
@@ -70,10 +74,19 @@ struct State {
     /// The leaders this daemon started, held unreaped until their group is
     /// empty so the group's ID stays theirs.
     children: HashMap<JobId, Child>,
+    /// Launchers kept before they made a session of their own, which could
+    /// not be seen to exit. Their group was never theirs, so they are never
+    /// signalled: supervision only collects each one's exit, then ends it.
+    presession: HashMap<JobId, Child>,
     /// How many jobs may still run, as the records said last.
     running: usize,
     /// How many records could not be read, so their jobs may still run.
     unresolved: usize,
+    /// Whether the last count could account for every record.
+    complete: bool,
+    /// The jobs the records named when they were last counted, read again
+    /// by their IDs when a scan leaves them out.
+    known: HashSet<JobId>,
     /// Whether one is stopping, so it is looked at more often.
     stopping: bool,
     pruned: Option<Instant>,
@@ -89,6 +102,28 @@ impl State {
     fn left_launched(&self, record: &Record) -> bool {
         record.state == JobState::Launched && !self.launching.contains(&record.id)
     }
+
+    /// Every record a scan finds, with those of the jobs known before and
+    /// of the leaders held here that it left out read again by their IDs,
+    /// and whether the scan could account for every record. Every job
+    /// found is still checked by its record and a fresh look before
+    /// anything is done to it.
+    fn inventory(&self) -> Scan {
+        let mut scan = self.store.scan();
+        let listed: HashSet<&JobId> = scan.found.iter().map(Found::id).collect();
+        let omitted: HashSet<&JobId> = self
+            .known
+            .iter()
+            .chain(self.children.keys())
+            .filter(|id| !listed.contains(id))
+            .collect();
+        let reread: Vec<Found> = omitted
+            .into_iter()
+            .filter_map(|id| self.store.read(id))
+            .collect();
+        scan.found.extend(reread);
+        scan
+    }
 }
 
 /// The helper's background jobs.
@@ -102,6 +137,8 @@ pub struct Jobs {
     /// Independent of poison; only a fresh supervisor can trust ownership again.
     unavailable: AtomicBool,
     state: Mutex<State>,
+    #[cfg(test)]
+    wait_fault: Mutex<Option<launch::WaitFault>>,
 }
 
 impl Jobs {
@@ -159,13 +196,18 @@ impl Jobs {
             state: Mutex::new(State {
                 store: Store::open(daemon)?,
                 children: HashMap::new(),
+                presession: HashMap::new(),
                 running: 0,
                 unresolved: 0,
+                complete: false,
+                known: HashSet::new(),
                 stopping: false,
                 pruned: None,
                 launching: HashSet::new(),
                 stopped_all: None,
             }),
+            #[cfg(test)]
+            wait_fault: Mutex::new(None),
         };
         jobs.adopt()?;
         Ok(jobs)
@@ -192,9 +234,17 @@ impl Jobs {
         Ok(self.state()?.running)
     }
 
+    /// Hold the jobs' lock, as a slow look at them does, until what it
+    /// returns is dropped.
+    #[cfg(test)]
+    pub(super) fn held(&self) -> impl Sized + '_ {
+        self.state.lock().unwrap()
+    }
+
     /// What the daemon's hello says of its jobs: how many may run, how many
-    /// are launching, and how many records it cannot read, whose jobs may
-    /// still run too.
+    /// are launching, how many records it cannot read, whose jobs may still
+    /// run too, and whether the last count could not read every record, so
+    /// more jobs may run than it counts.
     /// Returns an error when supervision is unavailable; unknown jobs never become zero.
     pub(crate) fn census(&self) -> Result<Census> {
         let state = self.state()?;
@@ -202,6 +252,7 @@ impl Jobs {
             running: state.running,
             launching: state.launching.len(),
             unresolved: state.unresolved,
+            incomplete: !state.complete,
         })
     }
 
@@ -338,7 +389,8 @@ impl Jobs {
     /// screen, or a log-out or uninstall. A job still launching is stopped
     /// as soon as it runs. The reply counts the jobs stopping and ended,
     /// and names those nothing could be sent to and those whose processes
-    /// could not be read.
+    /// could not be read. When the records cannot all be read, the jobs
+    /// known are still stopped, and the reply says the outcome is not known.
     pub fn stop_all(&self, reason: StopReason) -> Value {
         let mut state = match self.state() {
             Ok(state) => state,
@@ -349,7 +401,8 @@ impl Jobs {
         state.stopped_all = Some((now, How::from(reason)));
         let (mut stopping, mut ended) = (0, 0);
         let (mut refused, mut unobserved, mut unresolved) = (Vec::new(), Vec::new(), Vec::new());
-        for read in state.store.records() {
+        let scan = state.inventory();
+        for read in scan.found {
             let mut record = match read {
                 Found::Record(record) => *record,
                 // A start is writing it; it is stopped as soon as it runs.
@@ -394,6 +447,13 @@ impl Jobs {
             }
         }
         self.count(&mut state);
+        if !scan.complete {
+            return JobFailure {
+                uncertain: true,
+                ..JobFailure::new(JobRefusal::Unobserved, INCOMPLETE)
+            }
+            .into_value();
+        }
         JobReply::StopAll(StoppedAll {
             stopping,
             ended,
@@ -418,14 +478,11 @@ impl Jobs {
                 None => return unknown(id),
             },
             None => {
-                let (records, complete) = state.store.scanned_records();
-                if !complete {
-                    return JobFailure::new(
-                        JobRefusal::Unobserved,
-                        "Atlas could not read every background job record; a job may still be running.",
-                    ).into_value();
+                let scan = state.store.scan();
+                if !scan.complete {
+                    return JobFailure::new(JobRefusal::Unobserved, INCOMPLETE).into_value();
                 }
-                records
+                scan.found
             }
         };
         let mut views = Vec::new();

@@ -28,7 +28,11 @@ extension SettingsPresenter {
         status: mode.summary(line: "")
       ),
       closeLogin: closeLogin(snapshot, canRun: !alertRunning && !waits),
-      ready: ready(reading.readinessItems, recoverLines: recoverLines, checking: snapshot.session.checking),
+      ready: ready(
+        reading.readinessItems + [reading.nativeDialogsItem].compactMap { $0 },
+        recoverLines: recoverLines,
+        checking: snapshot.session.checking
+      ),
       buttons: SettingsHelperButtons(
         canSwitch: facts.isOnConsole && !running.contains(.switchToHelper) && !alertRunning && !waits,
         canCheck: !snapshot.session.checking,

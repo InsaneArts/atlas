@@ -153,8 +153,17 @@ pub(super) fn fingerprint(path: &Path) -> Result<Option<Fingerprint>> {
 
 /// When `path` last changed, in milliseconds since 1970, when that can be told.
 pub(super) fn changed_ms(path: &Path) -> Option<u64> {
-    let at = fs::symlink_metadata(path).ok()?.modified().ok()?;
-    let since = at.duration_since(std::time::UNIX_EPOCH).ok()?;
+    changed_ms_of(&fs::symlink_metadata(path).ok()?)
+}
+
+/// When what `metadata` describes last changed, in milliseconds since 1970;
+/// none for a time before then or one that cannot be read.
+pub(super) fn changed_ms_of(metadata: &fs::Metadata) -> Option<u64> {
+    let since = metadata
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
     u64::try_from(since.as_millis()).ok()
 }
 

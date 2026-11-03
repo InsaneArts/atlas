@@ -4,21 +4,23 @@
 //! keyboard focus; pointer actions need the app's own window, or the named
 //! one, to be the top one at the point. Preparation requests focus first;
 //! the final verifier independently proves where input would land.
-use super::ax::{self, Focused, Judged, Keyboard, Unread, Within};
+use super::ax::{self, Asked, Focused, Judged, Keyboard, Status, Unread, Within};
 use crate::native::windows as native_windows;
 use atlas_core::{
-    actions::Expect,
+    actions::{Button, Expect},
     error::{Code, Error, Result},
+    process::Start,
     screen::{
         elements::Element,
         select::{ElementFilter, shown_name},
-        windows::{self, Bounds, Dock, Listed, Screen, Window},
+        windows::{self, Bounds, Dock, Listed, Screen, Surface, Window},
     },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    fmt::Display,
+    fmt::{self, Display},
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -248,6 +250,10 @@ trait Look {
     /// Where the Dock takes clicks; [`Dock::Unread`] when that cannot be
     /// read in time.
     fn dock(&mut self) -> Dock;
+    /// The listed window of process `pid` that a drag pressing at `point`
+    /// moves by its own title, proven afresh; None when anything else is
+    /// there.
+    fn title_bar(&mut self, pid: i64, point: (f64, f64)) -> Result<Option<i64>>;
 }
 
 /// The live helper, read until `deadline`, its window list and its Dock at
@@ -321,10 +327,34 @@ impl Look for Live {
         self.dock = Some(dock.clone());
         dock
     }
+
+    /// Asked of the app's own element, against the window list this look
+    /// read, in what time is left.
+    fn title_bar(&mut self, pid: i64, point: (f64, f64)) -> Result<Option<i64>> {
+        let left = self.left()?;
+        let deadline = Instant::now() + left.min(FOCUS_TIMEOUT);
+        let listed = self.windows()?;
+        ax::title_bar(pid, point, listed, deadline)
+    }
+}
+
+/// [`require`] against the live helper, taking until `deadline` at most,
+/// noting why when it could not tell.
+pub(super) fn check(
+    expect: &Expect,
+    need: Need,
+    display: &Bounds,
+    deadline: Instant,
+) -> Result<Option<&'static str>> {
+    let result = checked(expect, need, display, deadline);
+    if let Err(error) = &result {
+        note(error);
+    }
+    result
 }
 
 /// [`require`] against the live helper, taking until `deadline` at most.
-pub(super) fn check(
+fn checked(
     expect: &Expect,
     need: Need,
     display: &Bounds,
@@ -346,19 +376,29 @@ pub(super) fn prepare(
     if need == Need::Nothing {
         return Ok(None);
     }
+    let started = Instant::now();
     ax::bring(expect, need, deadline, &guard, |number, until| {
         let selected = match number {
             Some(number) if expect.window() != Some(number) => expect.clone().in_window(number)?,
             _ => expect.clone(),
         };
-        check(&selected, need, display, until)
+        checked(&selected, need, display, until)
     })
     .map_err(|error| {
-        if error.code == Code::Native {
+        let error = if error.code == Code::Native {
             unread_by(error)
         } else {
             error
-        }
+        };
+        let now = Instant::now();
+        let error = probed(
+            error,
+            expect,
+            now.saturating_duration_since(started),
+            deadline.saturating_duration_since(now),
+        );
+        note(&error);
+        error
     })
 }
 
@@ -374,25 +414,191 @@ fn require(
     look: &mut impl Look,
     deadline: Instant,
 ) -> Result<Option<&'static str>> {
+    let started = look.now();
     let outcome = match need {
         Need::Nothing => return Ok(None),
         Need::Keys => active(expect, look).and_then(|()| inside(expect, look)),
         Need::Point(x, y) | Need::Pointer(x, y) => active(expect, look)
             .and_then(|()| point(expect, (x, y), Spot::At, display, look))
             .map(|()| None),
-        Need::Drag { from, to } => active(expect, look)
+        Need::Drag { from, to, button } => active(expect, look)
             .and_then(|()| point(expect, from, Spot::At, display, look))
-            .and_then(|()| point(expect, to, Spot::Drop, display, look))
+            .and_then(|()| dropped(expect, (from, to), button, display, look))
             .map(|()| None),
     };
     let unread = outcome
         .as_ref()
         .is_err_and(|error| Reason::of(error) == Some(Reason::Unreadable));
-    if (outcome.is_ok() || unread) && look.now() >= deadline {
-        return Err(refused(Reason::Unreadable).with("unread", json!(Unread::Slow)));
+    let outcome = if (outcome.is_ok() || unread) && look.now() >= deadline {
+        let late = refused(Reason::Unreadable).with("unread", json!(Unread::Slow));
+        Err(match outcome {
+            Err(error) => late.with_source(error),
+            Ok(_) => late,
+        })
+    } else {
+        outcome
+    };
+
+    let now = look.now();
+    outcome.map_err(|error| {
+        probed(
+            error,
+            expect,
+            now.saturating_duration_since(started),
+            deadline.saturating_duration_since(now),
+        )
+    })
+}
+
+/// Why a check could not tell what is in front, kept with its refusal as a
+/// private cause and noted in the input service's log: the Accessibility
+/// request that failed and its status, as far as the failed read said; how
+/// long the check had run and had left; and the target's process. Never a
+/// title, a value or other text an app shows.
+#[derive(Debug)]
+struct Probe {
+    call: Option<&'static str>,
+    status: Option<i32>,
+    elapsed: Duration,
+    remaining: Duration,
+    pid: i64,
+    start: Option<Start>,
+    cause: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+
+impl Display for Probe {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Focus could not be read: ")?;
+        match (self.call, self.status) {
+            (Some(call), Some(status)) => write!(f, "{call} failed with status {status}")?,
+            (None, Some(status)) => write!(f, "a request failed with status {status}")?,
+            (_, None) => f.write_str("no request said why")?,
+        }
+        let millis = |duration: Duration| duration.as_secs_f64() * 1000.0;
+        write!(
+            f,
+            ", {:.1} ms in, {:.1} ms left, for process {}",
+            millis(self.elapsed),
+            millis(self.remaining),
+            self.pid
+        )?;
+        if let Some([seconds, micros]) = self.start {
+            write!(f, " started {seconds}.{micros:06}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for Probe {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.cause.as_deref().map(|cause| cause as _)
+    }
+}
+
+/// `error` with its [`Probe`] once it says what is in front could not be
+/// told, `elapsed` into a check with `remaining` left; any other error, or
+/// one already probed, as it is.
+fn probed(mut error: Error, expect: &Expect, elapsed: Duration, remaining: Duration) -> Error {
+    if Reason::of(&error) != Some(Reason::Unreadable) || probe_of(&error).is_some() {
+        return error;
+    }
+    let (call, status) = request(&error);
+    let cause = error.source.take();
+    error.with_source(Probe {
+        call,
+        status,
+        elapsed,
+        remaining,
+        pid: expect.pid(),
+        start: expect.instance().map(|instance| instance.start),
+        cause,
+    })
+}
+
+fn probe_of(error: &Error) -> Option<&Probe> {
+    error.source.as_deref()?.downcast_ref::<Probe>()
+}
+
+/// The request that failed behind `error`, and its status, as far as its
+/// causes say.
+fn request(error: &Error) -> (Option<&'static str>, Option<i32>) {
+    let mut cause = std::error::Error::source(error);
+    while let Some(current) = cause {
+        if let Some(asked) = current.downcast_ref::<Asked>() {
+            return (Some(asked.call), Some(asked.status.0));
+        }
+        if let Some(Status(status)) = current.downcast_ref::<Status>() {
+            return (None, Some(status.0));
+        }
+        cause = current.source();
+    }
+    (None, None)
+}
+
+/// The shortest time between two probes noted in the log.
+const PROBE_GAP: Duration = Duration::from_secs(5);
+
+/// The most probes one input service notes, so an app stuck refusing for
+/// hours cannot fill the log.
+const PROBES: usize = 1000;
+
+/// Which probes the log has been given.
+struct Notes {
+    last: Option<Instant>,
+    skipped: usize,
+    written: usize,
+}
+
+impl Notes {
+    const fn new() -> Self {
+        Self {
+            last: None,
+            skipped: 0,
+            written: 0,
+        }
     }
 
-    outcome
+    /// Whether a probe at `now` is noted, and if so how many were left out
+    /// since the last one that was.
+    fn admit(&mut self, now: Instant) -> Option<usize> {
+        let due = self
+            .last
+            .is_none_or(|last| now.saturating_duration_since(last) >= PROBE_GAP);
+        if !due || self.written >= PROBES {
+            self.skipped += 1;
+            return None;
+        }
+        self.last = Some(now);
+        self.written += 1;
+        Some(std::mem::take(&mut self.skipped))
+    }
+}
+
+static NOTES: Mutex<Notes> = Mutex::new(Notes::new());
+
+/// Note `error`'s probe, when it has one, in the input service's log.
+fn note(error: &Error) {
+    // Tests never write to the service's log.
+    if cfg!(any(test, feature = "test-support")) {
+        return;
+    }
+    let Some(probe) = probe_of(error) else {
+        return;
+    };
+    // A writer that panicked holding the notes loses this evidence and
+    // nothing else.
+    let Ok(mut notes) = NOTES.lock() else {
+        return;
+    };
+    let Some(skipped) = notes.admit(Instant::now()) else {
+        return;
+    };
+    drop(notes);
+    // Best effort: a log that cannot be written loses this line, nothing else.
+    let _ = std::io::Write::write_fmt(
+        &mut std::io::stderr(),
+        format_args!("{probe} ({skipped} more since the last)\n"),
+    );
 }
 
 /// Prove the target app is active, independently of its window focus.
@@ -599,8 +805,10 @@ fn covered(listed: &[Window], pid: i64, number: i64) -> bool {
 /// layer, is uncovered at the point, the Dock covering what is under it
 /// where it takes clicks. The active app owns the menu bar. With a window named,
 /// only where that window is uncovered, judged where it presses: a drop
-/// lands in the app's window if not the same one. Where the Dock could not
-/// be read and is on top, what is in front is unreadable.
+/// lands in the app's window if not the same one. A desktop widget covers
+/// what is behind it. Where the Dock could not be read, or a window named as
+/// Notification Center's was not proven to be, and is on top, what is in
+/// front is unreadable.
 fn point(
     expect: &Expect,
     (x, y): (f64, f64),
@@ -624,14 +832,70 @@ fn point(
         let fact = format!("No window of the app is at {at}");
         return Err(refused_because(Reason::Point, fact));
     };
-    readable_dock(top, &screen)?;
+    readable(top, &screen)?;
 
     let found = Found {
         window: None,
         ..Found::at(top)
     };
-    let fact = format!("{} window is at {at}, not the app's", found.whose());
+    let fact = match screen.surface(top) {
+        Some(Surface::Widget) => format!("A desktop widget is at {at}, not the app's window"),
+        _ => format!("{} window is at {at}, not the app's", found.whose()),
+    };
     Err(refused_with(Reason::Point, fact, found))
+}
+
+/// A drag drops where [`point`] lets a pointer action land, or, when it
+/// holds the left button and moves the app's own window by its title bar,
+/// on the clear desktop: inside the display with nothing listed there (see
+/// [`windows::clear_at`]). The move is proven in this very check, from the
+/// window on top at the press point and Accessibility finding that window's
+/// title bar there; a widget, the Dock, another window or what could not be
+/// read still refuses.
+fn dropped(
+    expect: &Expect,
+    (from, to): ((f64, f64), (f64, f64)),
+    button: Button,
+    display: &Bounds,
+    look: &mut impl Look,
+) -> Result<()> {
+    let refusal = match point(expect, to, Spot::Drop, display, look) {
+        Ok(()) => return Ok(()),
+        // Only the left button moves a window by its title bar.
+        Err(refusal) if button != Button::Left => return Err(refusal),
+        Err(refusal) if Reason::of(&refusal) == Some(Reason::Point) => refusal,
+        Err(refusal) => return Err(refusal),
+    };
+    let screen = Screen::new(display.clone(), look.dock());
+    let listed = look.windows().map_err(unreadable_from)?;
+    if !windows::clear_at(listed, to.0, to.1, &screen) {
+        return Err(refusal);
+    }
+    let source = windows::top_at(listed, from.0, from.1, &screen)
+        .filter(|window| {
+            window.pid == expect.pid()
+                && window.layer == 0
+                && expect.window().is_none_or(|wanted| wanted == window.number)
+        })
+        .map(|window| window.number);
+    let Some(source) = source else {
+        return Err(unproven_move());
+    };
+    match look.title_bar(expect.pid(), from) {
+        Ok(Some(title)) if title == source => Ok(()),
+        Ok(_) => Err(unproven_move()),
+        Err(error) => Err(unproven_move().with_source(error)),
+    }
+}
+
+/// The refusal of a drop on the clear desktop by a drag not proven to move
+/// a window by its title bar.
+fn unproven_move() -> Error {
+    let message = format!(
+        "Only a window dragged by its title bar can be dropped on the empty desktop, so start \
+         the drag on its title bar or pick another drop point; {NOT_SENT}"
+    );
+    Error::new(Code::FocusChanged, message).with("reason", json!(Reason::Point))
 }
 
 /// A pointer action at a point goes ahead only where window `wanted`, one
@@ -658,7 +922,7 @@ fn at_window(
         let fact = format!("Window {wanted} is not at that point");
         return Err(refused_because(Reason::Window, fact));
     };
-    readable_dock(top, screen)?;
+    readable(top, screen)?;
 
     let found = Found::at(top);
     let (reason, whose) = if top.pid == pid {
@@ -673,14 +937,19 @@ fn at_window(
     Err(refused_with(reason, fact, found))
 }
 
-/// Refuse when the Dock is `top` and where it takes clicks could not be read.
-fn readable_dock(top: &Window, screen: &Screen) -> Result<()> {
-    if top.is_dock() && *screen.dock() == Dock::Unread {
-        let fact = "Atlas could not read where the Dock takes clicks";
-        return Err(refused_because(Reason::Unreadable, fact));
+/// Refuse when what `top` shows at the point is not known: the Dock where
+/// it takes clicks could not be read, or a window named as Notification
+/// Center's whose process was not proven to be it.
+fn readable(top: &Window, screen: &Screen) -> Result<()> {
+    if !screen.unread(top) {
+        return Ok(());
     }
-
-    Ok(())
+    let fact = if top.is_dock() {
+        "Atlas could not read where the Dock takes clicks"
+    } else {
+        "Atlas could not prove that Notification Center shows the window there"
+    };
+    Err(refused_because(Reason::Unreadable, fact))
 }
 
 fn unreadable_from(error: Error) -> Error {

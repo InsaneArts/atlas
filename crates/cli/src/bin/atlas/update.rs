@@ -4,7 +4,7 @@ use atlas_client::client::Client;
 use atlas_core::host::HostSession;
 use atlas_core::{
     config::Config,
-    error::{Code, Result},
+    error::{Code, Error, Result},
 };
 use serde_json::{Value, json};
 
@@ -102,21 +102,18 @@ async fn update_using(
         finish.arg("--allow-disrupt");
     }
     let output = finish.arg("--config").arg(config).output()?;
-    let finished = child_reply(&output)
-        .unwrap_or_else(|_| json!({"ok": false, "error": "The new version did not report"}));
-    report["ok"] = finished["ok"].clone();
+    let (moved, finished) = helper_moved(&output);
+    report["ok"] = json!(moved);
     report["helper"] = finished;
 
-    if report["ok"] == true {
+    if moved {
         // A running menu bar moves onto the new version too. It stops before
         // the previous app, the bundle it still runs from, is removed.
-        let output = Config::load(config)
-            .ok()
-            .and_then(|loaded| Client::new(loaded).ok())
-            .and_then(|client| client.output_dir().ok().map(std::path::Path::to_path_buf));
-        let port = output.and_then(|output| atlas_cli::menubar::stop(&output));
-
-        report["previous"] = atlas_client::update::finished()?;
+        let port = retire_previous(
+            &mut report,
+            || stop_menubar(config),
+            atlas_client::update::finished,
+        )?;
 
         if let Some(port) = port {
             spinner.set("Restarting the menu bar…");
@@ -140,6 +137,40 @@ async fn update_using(
     }
 
     Ok(report)
+}
+
+/// Stop the menu bar of the settings at `config`. Settings that don't say
+/// where its records are leave it known not to run only when no other
+/// Atlas process runs.
+fn stop_menubar(config: &std::path::Path) -> Result<Option<u16>> {
+    let output = Config::load(config)
+        .and_then(Client::new)
+        .and_then(|client| client.output_dir().map(std::path::Path::to_path_buf));
+    atlas_cli::menubar::stop_located(output)
+}
+
+/// Stop a running menu bar with `stop`, then drop the previous app with
+/// `finish`, noting it in `report`: the port the menu bar served, to start
+/// it again there. A menu bar not seen to stop may still run from the
+/// previous app, which is kept, as is the record that resumes the update.
+fn retire_previous(
+    report: &mut Value,
+    stop: impl FnOnce() -> Result<Option<u16>>,
+    finish: impl FnOnce() -> Result<Value>,
+) -> Result<Option<u16>> {
+    let port = stop().map_err(|error| {
+        Error::new(
+            error.code,
+            format!(
+                "{}, so the previous Atlas.app was kept. Quit the menu bar, then run atlas \
+                 update again.",
+                error.error
+            ),
+        )
+        .with_source(error)
+    })?;
+    report["previous"] = finish()?;
+    Ok(port)
 }
 
 /// Check the staged app immediately before replacement, while still holding control.
@@ -206,30 +237,65 @@ async fn update_finish_using(
         steps.push(&["setup", "--apply"]);
     }
 
-    let mut done = Vec::new();
-
-    for step in steps {
+    let done = match run_steps(&steps, |step| {
         let mut command = std::process::Command::new(&executable);
         command.args(step);
         if allow_disrupt {
             command.arg("--allow-disrupt");
         }
-        let output = command.arg("--json").arg("--config").arg(config).output()?;
-        let reply = child_reply(&output).unwrap_or(Value::Null);
-        if !output.status.success() || reply["ok"] == false {
-            return Ok(json!({
+        command.arg("--json").arg("--config").arg(config).output()
+    })? {
+        Ok(done) => done,
+        Err(failed) => return Ok(failed),
+    };
+
+    let agents = atlas_agents::refresh();
+    Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
+}
+
+/// Run `steps` in order through `run`, stopping at the first that fails:
+/// the steps completed, or the failed-step report.
+fn run_steps(
+    steps: &[&[&str]],
+    mut run: impl FnMut(&[&str]) -> std::io::Result<std::process::Output>,
+) -> Result<std::result::Result<Vec<String>, Value>> {
+    let mut done = Vec::new();
+
+    for step in steps {
+        if let Err(failure) = acknowledged(&run(step)?, "The step") {
+            return Ok(Err(json!({
                 "ok": false,
                 "failedStep": step.join(" "),
-                "failure": reply,
+                "failure": failure,
                 "completedSteps": done,
-            }));
+            })));
         }
 
         done.push(step.join(" "));
     }
 
-    let agents = atlas_agents::refresh();
-    Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
+    Ok(Ok(done))
+}
+
+/// Whether `update-finish` moved the helper, and its report.
+fn helper_moved(output: &std::process::Output) -> (bool, Value) {
+    match acknowledged(output, "The new version") {
+        Ok(finished) => (true, finished),
+        Err(failure) => (false, failure),
+    }
+}
+
+/// The reply of an Atlas command run here, `who`, when it acknowledged
+/// success: it exited successfully and answered an object whose `ok` is
+/// true. Otherwise its failure: its own reply when that says `ok` is false,
+/// or else one saying it did not report or confirm.
+fn acknowledged(output: &std::process::Output, who: &str) -> std::result::Result<Value, Value> {
+    match child_reply(output) {
+        Ok(reply) if reply["ok"] == false => Err(reply),
+        Ok(reply) if output.status.success() && reply["ok"] == true => Ok(reply),
+        Ok(_) => Err(json!({"ok": false, "error": format!("{who} did not confirm it finished")})),
+        Err(_) => Err(json!({"ok": false, "error": format!("{who} did not report")})),
+    }
 }
 
 /// What an Atlas command run here answered: replies go to stdout, errors

@@ -300,8 +300,9 @@ impl Scan {
 
     /// At most `maximum` elements from an array attribute. The value count
     /// is read first: zero is a leaf, and a count beyond what was fetched (or
-    /// any failure to enumerate a non-empty array) leaves the scan incomplete
-    /// instead of silently dropping values.
+    /// any failure to enumerate a non-empty array, a reply of another length
+    /// or a value that is no element) leaves the scan incomplete instead of
+    /// silently dropping values.
     pub(super) fn children(
         &mut self,
         element: &AXUIElement,
@@ -330,11 +331,13 @@ impl Scan {
             }
         };
 
-        // Each value is checked to be an AXUIElement before use.
-        values
-            .iter()
-            .filter_map(|value| value.downcast::<AXUIElement>().ok())
-            .collect()
+        let (children, whole) = elements(&values, usize::try_from(wanted).unwrap_or(maximum));
+        if !whole {
+            self.failed(AXError::Failure, attribute);
+            self.stop(Stop::Unread);
+        }
+
+        children
     }
 
     /// `windows`, an app's windows, without any that is `app` itself. An
@@ -387,3 +390,21 @@ impl Scan {
         }
     }
 }
+
+/// The elements of `values`, an array attribute's reply asked for `asked`
+/// of them, each checked to be an AXUIElement before use, at most `asked`;
+/// and whether the reply was whole: exactly `asked` values, every one an
+/// element. What was read is kept either way.
+fn elements(values: &CFArray<CFType>, asked: usize) -> (Vec<CFRetained<AXUIElement>>, bool) {
+    let children: Vec<_> = values
+        .iter()
+        .take(asked)
+        .filter_map(|value| value.downcast::<AXUIElement>().ok())
+        .collect();
+    let whole = values.len() == asked && children.len() == asked;
+
+    (children, whole)
+}
+
+#[cfg(test)]
+mod tests;

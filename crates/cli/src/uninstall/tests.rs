@@ -264,6 +264,137 @@ async fn an_unrecorded_helper_never_uses_its_daemons_word_to_adopt_an_account() 
     assert!(hint.contains("System Settings > Users & Groups"));
 }
 
+/// What a teardown would remove: Atlas.app and its data, in `dir`, with
+/// settings that load (and keep the menu bar's records in `runs`) or don't.
+fn removable(dir: &Path, loaded: bool) -> Found {
+    use std::os::unix::fs::PermissionsExt;
+    let output = dir.join("runs");
+    fs::create_dir(&output).unwrap();
+    fs::set_permissions(&output, fs::Permissions::from_mode(0o700)).unwrap();
+    let client = Client::new(Config {
+        helper_uid: 7001,
+        socket_path: dir.join("no-daemon.sock"),
+        input_socket: dir.join("no-input.sock"),
+        identity_probe: dir.join("atlas"),
+        output_dir: output,
+    })
+    .unwrap();
+    let found = Found {
+        app: dir.join("Atlas.app"),
+        executable: dir.join("atlas"),
+        client: loaded.then_some(client),
+        unloaded: (!loaded).then(|| "The settings do not load".to_owned()),
+        helper: None,
+        known: None,
+        data: dir.join("data"),
+        leftovers: vec![],
+    };
+    for kept in [&found.app, &found.data] {
+        fs::create_dir(kept).unwrap();
+    }
+    fs::write(dir.join("settings"), "").unwrap();
+    found
+}
+
+/// Carry out the rest of a teardown of `found`, with what reaches beyond
+/// `dir` stood in for: its outcome, the effects it reached, and what it
+/// said it removed.
+fn rest_of(dir: &Path, found: &Found) -> (Result<()>, Vec<&'static str>, Vec<Value>) {
+    let settings = dir.join("settings");
+    let mut live = Live {
+        found,
+        config_path: &settings,
+        keep_config: false,
+        yes: true,
+        removed: vec![],
+        warnings: vec![],
+        hint: None,
+        deleted: false,
+        exclusion: None,
+        progress: &silent,
+        ask: &agree,
+    };
+    let (outcome, reached) = stand_in::standing_in(|| live.rest());
+    (outcome, reached, live.removed)
+}
+
+const EVERY_EFFECT: [&str; 5] = ["opener", "login", "agents", "trash", "settings"];
+
+#[test]
+fn uninstall_retains_the_app_and_settings_while_menu_bar_shutdown_is_unconfirmed() {
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), true);
+    let (outcome, reached, _) = rest_of(dir.path(), &found);
+    assert!(outcome.is_ok());
+    assert_eq!(reached, EVERY_EFFECT, "with no menu bar, everything goes");
+
+    // The menu bar's record can't be read, so whether it runs is unknown.
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), true);
+    fs::write(dir.path().join("runs/menubar.json"), "{").unwrap();
+    let (outcome, reached, removed) = rest_of(dir.path(), &found);
+    let error = outcome.unwrap_err();
+    assert!(
+        error.error.ends_with(
+            "can't be read, so Atlas.app and its settings were kept. Quit the menu bar, then \
+             run atlas uninstall again."
+        ),
+        "{}",
+        error.error
+    );
+    assert_eq!(reached, ["opener"], "nothing is removed after the menu bar");
+    assert!(removed.is_empty());
+    assert!(found.app.exists() && found.data.exists() && dir.path().join("settings").exists());
+}
+
+#[test]
+fn uninstall_with_unloadable_settings_keeps_the_app_while_a_menu_bar_may_run() {
+    use atlas_core::process::{Info, Instance};
+    let exe = std::env::current_exe().unwrap();
+    let name = exe.file_name().unwrap().to_str().unwrap();
+    let process = |pid: i32, ppid: i32| Info {
+        instance: Instance::new(pid, [1, 0]),
+        ppid,
+        pgid: pid,
+        uid: 501,
+        ruid: 501,
+        svuid: 501,
+        zombie: false,
+        stopped: false,
+        name: name.get(..16).unwrap_or(name).to_owned(),
+    };
+    let me = i32::try_from(std::process::id()).unwrap();
+    let listing = |listed: Vec<Info>| {
+        crate::menubar::LISTED.with(|listing| *listing.borrow_mut() = Some(listed));
+    };
+
+    // Only this very process runs Atlas: no menu bar can run.
+    listing(vec![process(me, 1)]);
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), false);
+    let (outcome, reached, _) = rest_of(dir.path(), &found);
+    assert!(outcome.is_ok());
+    assert_eq!(reached, EVERY_EFFECT);
+
+    // Another Atlas process may be the menu bar, its records unknown.
+    listing(vec![process(me, 1), process(me + 100_000, 1)]);
+    let dir = tempfile::tempdir().unwrap();
+    let found = removable(dir.path(), false);
+    let (outcome, reached, removed) = rest_of(dir.path(), &found);
+    crate::menubar::LISTED.with(|listing| listing.borrow_mut().take());
+    let error = outcome.unwrap_err();
+    assert!(
+        error
+            .error
+            .starts_with("Atlas can't find the menu bar's record while Atlas runs as process"),
+        "{}",
+        error.error
+    );
+    assert_eq!(reached, ["opener"], "nothing is removed after the menu bar");
+    assert!(removed.is_empty());
+    assert!(found.app.exists() && found.data.exists() && dir.path().join("settings").exists());
+}
+
 #[test]
 fn a_linked_cache_is_refused_without_unlinking_control_state() {
     let dir = tempfile::tempdir().unwrap();

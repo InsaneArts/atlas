@@ -24,6 +24,8 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation;
 
 mod dock;
+#[cfg(test)]
+pub(super) mod tap;
 
 /// The only place events go: the helper login's own session event tap, never
 /// the global HID tap.
@@ -92,15 +94,15 @@ struct Source(
 
 impl Source {
     #[cfg(not(test))]
-    fn get(&self) -> &CGEventSource {
-        &self.0
+    fn get(&self) -> Option<&CGEventSource> {
+        Some(&self.0)
     }
 
+    /// A test engine has none: its events are created without one and
+    /// reach only its tap.
     #[cfg(test)]
-    fn get(&self) -> &CGEventSource {
-        self.0
-            .as_ref()
-            .expect("An idle test engine cannot post events")
+    fn get(&self) -> Option<&CGEventSource> {
+        self.0.as_deref()
     }
 }
 
@@ -138,12 +140,24 @@ pub(super) struct Engine {
     /// When macOS last confirmed that this process may post events; none
     /// until it has, or after it said no.
     post_access: Option<Instant>,
+    #[cfg(test)]
+    tap: Option<tap::Tap>,
 }
 
 impl Engine {
     #[cfg(test)]
     pub(super) fn idle(epoch: InputEpoch) -> Self {
         Self::with_source(epoch, Source(None))
+    }
+
+    /// A test engine whose checks pass, which finds no Dock and whose events
+    /// reach only `tap`, journaling to `journal` when given one.
+    #[cfg(test)]
+    pub(super) fn tapped(epoch: InputEpoch, journal: Option<PathBuf>, tap: tap::Tap) -> Self {
+        let mut engine = Self::with_source(epoch, Source(None));
+        engine.journal = journal.map(Journal::new);
+        engine.tap = Some(tap);
+        engine
     }
 
     fn with_source(epoch: InputEpoch, source: Source) -> Self {
@@ -165,6 +179,8 @@ impl Engine {
             drag_started: false,
             flags: 0,
             post_access: None,
+            #[cfg(test)]
+            tap: None,
         }
     }
 
@@ -231,6 +247,12 @@ impl Engine {
     }
 
     pub(super) fn check(&mut self) -> Result<()> {
+        #[cfg(test)]
+        if let Some(tap) = &self.tap {
+            tap.check();
+            return Ok(());
+        }
+
         Self::check_epoch(&self.epoch)?;
 
         // Without it macOS drops posted events silently: refuse instead.
@@ -296,7 +318,7 @@ impl Engine {
 
     fn persist(&mut self, point: Point, flags: u64) -> Result<()> {
         if let Some(journal) = &mut self.journal {
-            journal.write(Held {
+            let held = Held {
                 epoch: self.epoch.clone(),
                 button: self.held,
                 keys: self.held_keys.clone(),
@@ -305,7 +327,16 @@ impl Engine {
                 count: self.click_count,
                 mouse_number: self.mouse_number,
                 flags,
-            })?;
+            };
+            #[cfg(test)]
+            if let Some(tap) = &mut self.tap {
+                tap.before_write(&held)?;
+            }
+            journal.write(held)?;
+            #[cfg(test)]
+            if let (Some(tap), Some(held)) = (&self.tap, journal.saved()) {
+                tap.written(held);
+            }
         }
 
         Ok(())
@@ -332,13 +363,27 @@ impl Engine {
         // Exactly the modifiers asked for: an arrow key's own numeric pad and
         // function flags would leave macOS reading function as held.
         CGEvent::set_flags(Some(&event), CGEventFlags(flags));
-        CGEvent::post(TAP, Some(&event));
+        self.emit(&event);
         self.dock_pressed = false;
 
         self.posted += 1;
         self.flags = flags;
 
         Ok(())
+    }
+
+    #[cfg(not(test))]
+    fn emit(&self, event: &CGEvent) {
+        CGEvent::post(TAP, Some(event));
+    }
+
+    /// Only a tapped test engine has anywhere to send events.
+    #[cfg(test)]
+    fn emit(&self, event: &CGEvent) {
+        self.tap
+            .as_ref()
+            .expect("An idle test engine cannot post events")
+            .post(event);
     }
 
     fn mouse(
@@ -350,7 +395,7 @@ impl Engine {
         flags: u64,
     ) -> Result<()> {
         let event = created(CGEvent::new_mouse_event(
-            Some(self.source.get()),
+            self.source.get(),
             kind,
             point,
             Mouse::from(button).number,
@@ -404,6 +449,12 @@ impl Engine {
 
         self.release_modifiers()?;
         self.commit()
+    }
+
+    /// Whether a release has anything to do: input still held, or a
+    /// journal that does not yet say what is.
+    pub(super) fn unsettled(&self) -> bool {
+        self.held_input() || self.journal_dirty
     }
 
     pub(super) fn held_input(&self) -> bool {
@@ -513,11 +564,7 @@ impl Engine {
 
     #[allow(unsafe_code, reason = "FFI: key text is passed as a UTF-16 pointer")]
     fn key_event(&mut self, code: u16, down: bool, flags: u64, text: Option<&[u16]>) -> Result<()> {
-        let event = created(CGEvent::new_keyboard_event(
-            Some(self.source.get()),
-            code,
-            down,
-        ))?;
+        let event = created(CGEvent::new_keyboard_event(self.source.get(), code, down))?;
 
         if let Some(text) = text {
             // SAFETY: the pointer and length describe the live UTF-16 slice.
@@ -669,7 +716,7 @@ impl Engine {
                 // A wheel's positive turn scrolls up and left; the command's
                 // positive lines scroll down and right, as documented.
                 let event = created(CGEvent::new_scroll_wheel_event2(
-                    Some(self.source.get()),
+                    self.source.get(),
                     CGScrollEventUnit::Line,
                     2,
                     -dy,

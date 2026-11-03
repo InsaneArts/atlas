@@ -96,13 +96,16 @@ fn signal_using(command: &mut Command) -> Result<Value> {
         .stdout
         .take()
         .ok_or_else(|| problem("No setup pipe"))?;
-    let receiver = executor::forward(output);
+    let mut receiver = executor::forward(output);
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut bytes = Vec::new();
     let ready = loop {
-        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(chunk) => bytes.extend(chunk),
-            Err(_) => break false,
+        match receiver.next(deadline.saturating_duration_since(Instant::now())) {
+            executor::Said::Bytes(chunk) => bytes.extend(chunk),
+            executor::Said::Nothing if Instant::now() < deadline => continue,
+            executor::Said::Nothing | executor::Said::Ended | executor::Said::Failed(_) => {
+                break false;
+            }
         }
         if bytes.contains(&b'\n') || bytes.len() > 64 {
             break bytes == b"ready\n";

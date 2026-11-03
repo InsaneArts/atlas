@@ -4,9 +4,10 @@ import AtlasUI
 
 extension ViewerPresenter {
   /// The helper's health at the sidebar's foot: ready with its short name while it can act, in green; needing setup
-  /// with how many checks do not pass, in orange, while any does not, or the helper is not ready; needing the person,
-  /// or logged out, in orange; connecting, in grey. Its tooltip lists every fact about the helper, and a click offers
-  /// the helper's commands.
+  /// with how many readiness checks do not pass, in orange, while any does not, or the helper is not ready; needing the
+  /// person, or logged out, in orange; connecting, in grey. Save and Open dialogs that do not work are no readiness
+  /// check: the helper stays ready, and its tooltip, which lists every fact about the helper, says they are
+  /// unavailable. A click offers the helper's commands.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The line.

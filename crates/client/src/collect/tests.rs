@@ -556,6 +556,165 @@ async fn collecting_writes_no_file_names_to_the_activity_log() {
     assert_eq!(crate::doing::says(&row), "collected 1 file");
 }
 
+/// A fault that holds the first time `held` is reached: it says so on
+/// `began`, then waits until `released` lets it go, as a slow disk may.
+fn hold_at(
+    held: Step,
+    began: tokio::sync::oneshot::Sender<()>,
+    released: std::sync::mpsc::Receiver<()>,
+) -> Arc<Fault> {
+    let first = Mutex::new(Some((began, released)));
+    Arc::new(move |step| {
+        if step == held
+            && let Some((began, released)) = first.lock().unwrap().take()
+        {
+            let _ = began.send(());
+            let _ = released.recv();
+        }
+        Ok(())
+    })
+}
+
+/// Run `test` on a runtime of one thread, in a thread of its own, so a
+/// held copy can be let go even when that runtime stalls. The runtime has
+/// one blocking thread too, so blocking work queued after the copy's runs
+/// only once the copy's has finished.
+fn on_one_thread<T: Send + 'static>(
+    test: impl std::future::Future<Output = T> + Send + 'static,
+) -> std::thread::JoinHandle<T> {
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(test)
+    })
+}
+
+#[test]
+fn a_blocked_collection_write_or_sync_leaves_other_client_work_responsive() {
+    for held in [Step::Append, Step::Sync] {
+        let (release, released) = std::sync::mpsc::channel();
+        let (answered, responsive) = std::sync::mpsc::channel();
+        let (began, beginning) = tokio::sync::oneshot::channel();
+        let fault = hold_at(held, began, released);
+        let test = on_one_thread(async move {
+            let place = Place::new();
+            place.serve();
+            let bytes = random(3 * 1024 * 1024 + 7);
+            place.file("a.bin", &bytes);
+            place.settle();
+            let mut collection =
+                Collection::of(&place.client, PIN, &["a.bin".to_owned()], 64 << 20).unwrap();
+            collection.fault = fault;
+            let running = tokio::spawn(collection.run());
+            beginning.await.unwrap();
+            let read = json!({"op": "read", "path": "a.bin", "offset": 0, "length": 0,
+                "maxSize": 64 << 20, "session": PIN});
+            let other = place
+                .client
+                .transport
+                .connect()
+                .await
+                .unwrap()
+                .dispatch(&read)
+                .await
+                .unwrap()
+                .finish()
+                .await
+                .unwrap();
+            let early = walk(&place.client.output_dir().unwrap().join(COLLECTED));
+            let _ = answered.send((other, early));
+            let collected = running.await.unwrap().unwrap();
+            assert!(collected.failed.is_empty(), "{held:?}");
+            assert_eq!(fs::read(&collected.kept[0].path).unwrap(), bytes);
+            assert!(collected.receipt.is_some());
+        });
+        let responsive = responsive.recv_timeout(Duration::from_secs(10));
+        release.send(()).unwrap();
+        test.join().unwrap();
+        let (other, early) =
+            responsive.expect("the runtime stalled while the copy was written or synced");
+        assert_eq!(other["ok"], true, "{held:?}: {other}");
+        assert!(
+            early
+                .iter()
+                .all(|path| path.to_string_lossy().ends_with(".partial")),
+            "{held:?}: no copy or receipt before it is done: {early:?}"
+        );
+    }
+}
+
+#[test]
+fn a_cancelled_collection_still_cleans_up_and_reads_nothing_more() {
+    let (release, released) = std::sync::mpsc::channel();
+    let (answered, cancelled) = std::sync::mpsc::channel();
+    let (began, beginning) = tokio::sync::oneshot::channel();
+    let fault = hold_at(Step::Append, began, released);
+    let test = on_one_thread(async move {
+        let place = Place::new();
+        let asked = place.serve();
+        place.file("a.bin", b"abc");
+        place.file("b.bin", b"def");
+        place.settle();
+        let files = ["a.bin".to_owned(), "b.bin".to_owned()];
+        let mut collection = Collection::of(&place.client, PIN, &files, 1024).unwrap();
+        collection.fault = fault;
+        let running = tokio::spawn(collection.run());
+        beginning.await.unwrap();
+        running.abort();
+        let stopped = running.await.is_err_and(|error| error.is_cancelled());
+        let _ = answered.send(stopped);
+        // The copy's worker holds the only blocking thread until it is done.
+        tokio::task::spawn_blocking(|| ()).await.unwrap();
+        let left = walk(&place.client.output_dir().unwrap().join(COLLECTED));
+        let asked = *asked.lock().unwrap();
+        (left, asked)
+    });
+    let stopped = cancelled.recv_timeout(Duration::from_secs(10));
+    release.send(()).unwrap();
+    let (left, asked) = test.join().unwrap();
+    assert!(
+        stopped.expect("cancelling waited for the copy"),
+        "the collection was cancelled"
+    );
+    assert!(left.is_empty(), "nothing begun is left: {left:?}");
+    assert_eq!(asked, 1, "nothing more is read once cancelled");
+}
+
+#[tokio::test]
+async fn a_failed_write_or_sync_keeps_no_copy_and_leaves_the_others_collected() {
+    for failing in [Step::Append, Step::Sync] {
+        let place = Place::new();
+        place.serve();
+        place.file("a.bin", b"abc");
+        place.file("b.bin", b"def");
+        place.settle();
+        let files = ["a.bin".to_owned(), "b.bin".to_owned()];
+        let mut collection = Collection::of(&place.client, PIN, &files, 1024).unwrap();
+        let failed = std::sync::atomic::AtomicBool::new(false);
+        collection.fault = Arc::new(move |step| {
+            if step == failing && !failed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return Err(std::io::Error::from_raw_os_error(libc::ENOSPC));
+            }
+            Ok(())
+        });
+        let collected = collection.run().await.unwrap();
+        assert_eq!(collected.failed.len(), 1, "{failing:?}");
+        assert_eq!(collected.failed[0].0, "a.bin");
+        assert_eq!(collected.failed[0].1.reason, ReadRefusal::Space);
+        assert_eq!(collected.kept.len(), 1);
+        assert_eq!(fs::read(&collected.kept[0].path).unwrap(), b"def");
+        let left = walk(&place.client.output_dir().unwrap().join(COLLECTED));
+        assert!(
+            left.iter()
+                .all(|path| !path.to_string_lossy().ends_with(".partial")),
+            "{failing:?}: {left:?}"
+        );
+    }
+}
+
 #[test]
 fn receipts_are_exact() {
     assert!(ReceiptId::parse("1761650000123-a1b2c3").is_some());

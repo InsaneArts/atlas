@@ -94,6 +94,51 @@ async fn a_copy_of_a_file_no_step_removes_lets_every_step_run() {
 }
 
 #[tokio::test]
+async fn an_unreadable_plan_cannot_remove_the_source_of_a_missing_collected_copy() {
+    let place = Place::new();
+    let key = session("unread-plan");
+    let task = default_task(&key);
+    let plan = plan_claimed(&place, &task);
+    let receipt = collected(&place, &task);
+    let fake = Fake::at(&place.root);
+    fake.intact.borrow_mut().insert(
+        receipt.to_string(),
+        crate::collect::Intact {
+            missing: vec![copy_of(
+                "/Users/atlas/atlas-work/report.pdf",
+                "atlas-work/report.pdf",
+            )],
+            ..Default::default()
+        },
+    );
+    fake.unread_plans.set(true);
+    let scope = own(&key);
+
+    let previewed = preview(&fake, &place.output, &scope, &place.loaded(&scope)).await;
+    assert_eq!(previewed.unwrap_err().code, Code::Environment);
+
+    let reply = place.apply(&fake, &scope).await;
+    assert_eq!(kinds(&reply), ["check-outputs", "undo-plan"]);
+    assert_eq!(states(&reply), ["failed", "blocked"], "{reply}");
+    assert_eq!(reply["steps"][1]["reason"], "output-not-kept");
+    assert_eq!(
+        (&reply["ok"], &reply["state"]),
+        (&json!(false), &json!("blocked"))
+    );
+    assert!(
+        !fake.logged().contains(&format!("undo {plan}")),
+        "a plan whose reach cannot be read is never rolled back"
+    );
+    let record = Tasks::at(&place.output).load(task.key()).unwrap();
+    assert!(
+        record
+            .claims()
+            .any(|(owned, state)| owned == Owned::Plan { id: plan.clone() }
+                && state == State::Made)
+    );
+}
+
+#[tokio::test]
 async fn a_receipt_that_is_gone_keeps_every_source_and_job_stops_go_on() {
     let place = Place::new();
     let key = session("receipt-gone");

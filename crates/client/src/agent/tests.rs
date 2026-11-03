@@ -306,6 +306,7 @@ fn window(number: i64, pid: i64, owner: &str, layer: i64) -> Window {
         title: None,
         layer,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x: 10.0,
             y: 20.0,

@@ -119,6 +119,35 @@ struct StatusReadingTests {
     #expect(StatusReading(try status(["checks": []])).statusRows.isEmpty)
   }
 
+  @Test("failed native dialogs do not fail helper readiness")
+  func nativeDialogsAreNoReadinessCheck() throws {
+    let checks: [[String: Any]] = [
+      ["name": "Helper running", "ok": true],
+      ["name": "Input service ready", "ok": true],
+    ]
+    let reading = { (dialogs: [String: Any]) in
+      StatusReading(try status(["checks": checks, "capabilities": ["nativeDialogs": dialogs]]))
+    }
+
+    let failed = try reading(["state": "failed", "ageSeconds": 300, "reason": "Did not complete"])
+    #expect(failed.readinessRows.map(\.state) == [.ready, .ready])
+    #expect(failed.readinessRows.allSatisfy { $0.subject != .nativeDialogs })
+    #expect(failed.nativeDialogsRow?.state == .bad, "the failure stays failed, beside readiness")
+    #expect(failed.nativeDialogsRow?.detail == .didNotWork(ageSeconds: 300))
+    #expect(failed.statusRows.map(\.subject).last == .nativeDialogs, "the combined rows still show it")
+
+    let passed = try reading(["state": "passed", "ageSeconds": 60])
+    #expect(passed.nativeDialogsRow?.detail == .worked(ageSeconds: 60))
+    let stale = try reading(["state": "stale", "reason": "Changed"])
+    #expect(stale.nativeDialogsRow?.state == .unknown)
+    #expect(stale.nativeDialogsRow?.detail == .notChecked)
+    let unchecked = try reading([:])
+    #expect(unchecked.nativeDialogsRow == nil)
+    for reading in [passed, stale, unchecked] {
+      #expect(reading.readinessRows.map(\.state) == [.ready, .ready])
+    }
+  }
+
   @Test("a silent helper's failed checks stand on its overview's reason, and its unknown ones stay unknown")
   func silentHelper() throws {
     let reading = try status([

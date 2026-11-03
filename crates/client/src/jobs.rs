@@ -585,6 +585,11 @@ pub struct Everyone {
     pub(crate) refused: u64,
     /// How many the helper could not observe, so it signalled nothing.
     pub(crate) unknown: u64,
+    /// How many records the helper could not read, whose jobs may still run.
+    pub(crate) unresolved: u64,
+    /// How many other records could not be read when Atlas stopped waiting:
+    /// each may be of a job told to stop, which may still run.
+    pub(crate) unread: u64,
     /// Why the helper could not be told, when it could not.
     pub(crate) error: Option<String>,
 }
@@ -598,9 +603,11 @@ impl Everyone {
         }
     }
 
-    /// How many of those told to stop have stopped.
+    /// How many of those told to stop have stopped. One whose record could
+    /// not be read again is not known to have.
     pub fn stopped(&self) -> u64 {
-        self.asked.saturating_sub(self.left)
+        self.asked
+            .saturating_sub(self.left.saturating_add(self.unread))
     }
 
     /// A warning for jobs still running or a helper that could not be told.
@@ -631,7 +638,24 @@ impl Everyone {
                 them(self.unknown)
             )
         });
-        warning.into_iter().chain(refused).chain(unknown).collect()
+        let unresolved = self.unresolved.saturating_add(self.unread);
+        let unresolved = (unresolved > 0).then(|| {
+            let (records, they) = if unresolved == 1 {
+                ("record", "it")
+            } else {
+                ("records", "they")
+            };
+            format!(
+                "Atlas could not read the {records} of {}; {they} may still be running",
+                jobs(unresolved)
+            )
+        });
+        warning
+            .into_iter()
+            .chain(refused)
+            .chain(unknown)
+            .chain(unresolved)
+            .collect()
     }
 
     /// Add what this came to to `reply`: `jobsStopped` and its warnings.
@@ -651,27 +675,75 @@ impl Everyone {
 /// control the caller holds.
 pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
     let request = json!({"op": "job", "action": "stop-all", "reason": reason});
-    let reply = match client.transport.call(&request).await {
+    stopped_every(client, client.transport.call(&request)).await
+}
+
+/// [`stop_every`] once `asked` brings the helper's reply to its request.
+async fn stopped_every(
+    client: &Client,
+    asked: impl std::future::Future<Output = Result<Value>>,
+) -> Everyone {
+    let reply = match asked.await {
         Ok(reply) if reply["ok"] == true => reply,
-        // A helper with no daemon running keeps none.
-        Err(error) if error.code == Code::Io && !client.transport.path.exists() => {
+        // A helper with no daemon running keeps none. A removed socket does
+        // not acknowledge a request already sent.
+        Err(error)
+            if error.code == Code::Io && !error.uncertain && !client.transport.path.exists() =>
+        {
             return Everyone::default();
         }
         Ok(reply) => return Everyone::failed(refused(&reply).error),
         Err(error) => return Everyone::failed(error.error),
     };
+    // Only the reply to a stop of every job, with no doubt about it, says
+    // what was stopped.
     let all = match JobReply::deserialize(&reply) {
-        Ok(JobReply::StopAll(all)) => all,
-        _ => Default::default(),
+        Ok(JobReply::StopAll(all)) if reply["uncertain"] != true => all,
+        _ => return Everyone::failed("the helper did not confirm what it stopped".into()),
     };
     let asked = all.stopping;
     let refused = all.refused.len() as u64;
     let unknown = all.unknown.len() as u64;
-    let mut left = asked;
-    let started = Instant::now();
-    while left > 0 && started.elapsed() < JOB_GRACE + BEYOND_GRACE {
+    let unresolved = all.unresolved.len() as u64;
+    let named: Vec<JobId> = all.unresolved.into_iter().map(|job| job.id).collect();
+    let Outstanding { left, unread } = outstanding(asked, &named, || shown_all(client)).await;
+    Everyone {
+        asked,
+        left,
+        refused,
+        unknown,
+        unresolved,
+        unread,
+        error: None,
+    }
+}
+
+/// What may still run of the jobs a stop of every job told to stop, once
+/// Atlas stopped waiting.
+#[derive(Debug, PartialEq, Eq)]
+struct Outstanding {
+    /// Jobs still running or stopping.
+    left: u64,
+    /// Records that could not be read, other than those the stop named.
+    unread: u64,
+}
+
+/// Wait, as long as a stop's grace and KILL take, for the `asked` jobs a
+/// stop of every job told to stop to end, looking at every job with `look`.
+/// `named` are the records the stop already said it could not read.
+async fn outstanding<F, Looked>(asked: u64, named: &[JobId], mut look: F) -> Outstanding
+where
+    F: FnMut() -> Looked,
+    Looked: std::future::Future<Output = Result<Vec<Shown>>>,
+{
+    // The stop says how many it stops, not which, so a record that cannot
+    // be read now, other than those it named, may be of one of them: it is
+    // waited for like a job still running.
+    let (mut left, mut unread) = (asked, 0);
+    let started = tokio::time::Instant::now();
+    while left.saturating_add(unread) > 0 && started.elapsed() < JOB_GRACE + BEYOND_GRACE {
         tokio::time::sleep(POLL).await;
-        if let Ok(jobs) = shown_all(client).await {
+        if let Ok(jobs) = look().await {
             left = jobs
                 .iter()
                 .filter(|job| match job.state() {
@@ -679,15 +751,14 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
                     Some(JobState::Starting | JobState::Launched | JobState::Ended) | None => false,
                 })
                 .count() as u64;
+            unread = jobs
+                .iter()
+                .filter(|job| job.state().is_none())
+                .filter(|job| job.id().is_none_or(|id| !named.contains(&id)))
+                .count() as u64;
         }
     }
-    Everyone {
-        asked,
-        left,
-        refused,
-        unknown,
-        error: None,
-    }
+    Outstanding { left, unread }
 }
 
 /// Single-job reads keep transport failures certain and refusals whole

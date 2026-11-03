@@ -51,6 +51,9 @@ pub(super) trait Backend: Ask {
         deadline: Instant,
     ) -> Result<bool>;
     fn write(&mut self, element: &Self::Element, operation: Write) -> AXError;
+    /// The element of `app` Accessibility finds at the point; None when it
+    /// finds none.
+    fn hit(&mut self, app: &Self::Element, x: f64, y: f64) -> Result<Option<Self::Element>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -76,7 +79,8 @@ impl Backend for Live {
         limit: usize,
         deadline: Instant,
     ) -> Result<Vec<Self::Element>> {
-        let name = CFString::from_static_str(name);
+        let attribute = name;
+        let name = CFString::from_static_str(attribute);
         let bound = || {
             Reader {
                 ask: Live,
@@ -88,7 +92,7 @@ impl Backend for Live {
         let count = match ffi::count(element, &name) {
             Ok(count) if count >= 0 && count as usize <= limit => count,
             Err(error) if absent(error) => return Ok(Vec::new()),
-            Err(error) => return Err(Unread::Malformed.reading(error)),
+            Err(error) => return Err(Unread::Malformed.asking(attribute, error)),
             _ => return Err(Unread::Malformed.error()),
         };
         bound()?;
@@ -96,11 +100,13 @@ impl Backend for Live {
             return Ok(Vec::new());
         }
         let values = ffi::copy_values(element, &name, count)
-            .map_err(|error| Unread::Failed.reading(error))?
+            .map_err(|error| Unread::Failed.asking(attribute, error))?
             .ok_or_else(|| Unread::Malformed.error())?;
         bound()?;
         if values.len() != count as usize
-            || ffi::count(element, &name).map_err(|error| Unread::Failed.reading(error))? != count
+            || ffi::count(element, &name)
+                .map_err(|error| Unread::Failed.asking(attribute, error))?
+                != count
         {
             return Err(Unread::Failed.error());
         }
@@ -147,6 +153,44 @@ impl Backend for Live {
             Write::Raise => ffi::act(element, &CFString::from_static_str("AXRaise")),
         }
     }
+
+    fn hit(&mut self, app: &Self::Element, x: f64, y: f64) -> Result<Option<Self::Element>> {
+        match ffi::element_at(app, x as f32, y as f32) {
+            Ok(element) => Ok(element),
+            Err(AXError::NoValue) => Ok(None),
+            Err(status) => Err(Unread::Failed.asking("AXUIElementCopyElementAtPosition", status)),
+        }
+    }
+}
+
+/// The listed window of app `pid` that a drag pressing at `point` moves by
+/// its own title, as Accessibility proves it before `deadline`; None when
+/// anything else is there. Nothing is written.
+pub(in crate::native) fn title_bar(
+    pid: i64,
+    point: (f64, f64),
+    listed: &[Window],
+    deadline: Instant,
+) -> Result<Option<i64>> {
+    let mut reader = Reader {
+        ask: Live,
+        deadline,
+    };
+    let app = reader.ask.app(pid)?;
+    reader.title_bar(&app, pid, point, listed)
+}
+
+/// The band across the top of a window `frame` where its title bar is,
+/// worked out from its `title` element: from the window's top edge down past
+/// the title by as much again as the title sits below that edge. None when
+/// the title is not inside the window.
+fn title_band(frame: &Bounds, title: &Bounds) -> Option<Bounds> {
+    let above = title.y - frame.y;
+    let height = above * 2.0 + title.height;
+    (above >= 0.0 && title.height > 0.0 && frame.covers(title)).then(|| Bounds {
+        height: height.min(frame.height),
+        ..frame.clone()
+    })
 }
 
 fn supports_raise(
@@ -417,6 +461,64 @@ impl<A: Backend> Reader<A> {
             })
             .ok_or_else(|| refused(Reason::Point))?;
         Ok((candidate.layer != windows::MENU_LAYER).then_some(candidate.number))
+    }
+
+    /// The listed window of app `pid` that a press at the point moves by its
+    /// title bar: Accessibility finds there either the element its standard
+    /// window names as its title, or that window itself with nothing deeper,
+    /// and the point lies in the window's title band (see [`title_band`]).
+    /// `listed` must show the window once. A window without a title
+    /// element proves nothing; None when anything else is there.
+    fn title_bar(
+        &mut self,
+        app: &A::Element,
+        pid: i64,
+        (x, y): (f64, f64),
+        listed: &[Window],
+    ) -> Result<Option<i64>> {
+        self.owned(app, pid)?;
+        self.bound(app, REQUEST)?;
+        let hit = self.ask.hit(app, x, y)?;
+        self.left()?;
+        let Some(hit) = hit.filter(|hit| self.ask.owner(hit) == Some(pid)) else {
+            return Ok(None);
+        };
+        let window = if self.text(&hit, "AXRole")?.as_deref() == Some("AXWindow") {
+            hit.clone()
+        } else {
+            match self.reference(&hit, "AXWindow")? {
+                Some(window) => window,
+                None => return Ok(None),
+            }
+        };
+        self.owned(&window, pid)?;
+        let Some(title) = self.reference(&window, "AXTitleUIElement")? else {
+            return Ok(None);
+        };
+        self.owned(&title, pid)?;
+        if hit != title && hit != window {
+            return Ok(None);
+        }
+        let shown = self.window(&window)?;
+        if shown.role.as_deref() != Some("AXWindow")
+            || shown.subrole.as_deref() != Some("AXStandardWindow")
+        {
+            return Ok(None);
+        }
+        let frame = frame(&shown)?;
+        let Some(heading) = self.frame(&title)? else {
+            return Ok(None);
+        };
+        let pressed = |area: &Bounds| area.contains(x, y);
+        if !title_band(frame, &heading).is_some_and(|band| pressed(&band))
+            || (hit == title && !pressed(&heading))
+        {
+            return Ok(None);
+        }
+        Ok(match described(&shown, frame, pid, listed) {
+            Listed::One(number) => Some(number),
+            Listed::Missing | Listed::Several => None,
+        })
     }
 
     fn resolve(&mut self, app: &A::Element, pid: i64, number: i64) -> Result<A::Element> {
@@ -928,10 +1030,31 @@ pub(in crate::native) fn bring(
     let preparation = deadline
         .checked_sub(SETTLE_BUDGET)
         .ok_or_else(|| Unread::Slow.error())?;
-    let target = prepare(Live, expect, need, preparation, guard, &mut |number| {
+    let prepared = prepare(Live, expect, need, preparation, guard, &mut |number| {
         verify(number, preparation).is_ok()
-    })?;
+    });
+    let target = match prepared {
+        Ok(target) => target,
+        Err(error) => return Err(explained(error, || verify(None, preparation))),
+    };
     settle(target, expect, deadline, guard, verify)
+}
+
+/// A press point where no window of the app's is refuses as the final,
+/// read-only check `verify` words it, naming what is there (a widget, the
+/// Dock, another app's window), so preparation and verification say the
+/// same; any other refusal, or one `verify` does not refuse, stays as it is.
+fn explained(error: Error, verify: impl FnOnce() -> Result<Option<&'static str>>) -> Error {
+    if error.code != Code::FocusChanged
+        || Reason::of(&error) != Some(Reason::Point)
+        || error.details.contains_key("found")
+    {
+        return error;
+    }
+    match verify() {
+        Err(said) if said.code == Code::FocusChanged && !said.uncertain => said,
+        Ok(_) | Err(_) => error,
+    }
 }
 
 fn settle<A: Backend>(

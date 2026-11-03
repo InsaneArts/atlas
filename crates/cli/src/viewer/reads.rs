@@ -59,7 +59,8 @@ impl Viewer {
 
         let (pending, total) = atlas_client::overview::pending(&client.controller);
 
-        self.start_input_after_login(
+        // The status never waits for input to start; shutdown does.
+        let _starting = self.start_input_after_login(
             &client,
             &doctor.diagnosis.observation,
             total == 0 && !active,
@@ -340,13 +341,15 @@ impl Viewer {
     /// (which taking control refuses). Input starts or re-pins once per
     /// helper daemon and display, as Recover would, so agents and viewers
     /// carry on by themselves: only in the background, with Accessibility on
-    /// and nothing pending or held.
+    /// and nothing pending or held. Like any change in the helper it runs
+    /// whole before shutdown ends, and not at all once shutdown began; the
+    /// caller may wait on it or not.
     fn start_input_after_login(
-        &self,
+        self: &Arc<Self>,
         client: &Arc<Client>,
         session: &atlas_core::session::Observation,
         settled: bool,
-    ) {
+    ) -> Option<tokio::task::JoinHandle<()>> {
         let native = &session.native;
         let starts = settled
             && native.control_active != Some(true)
@@ -357,7 +360,7 @@ impl Viewer {
             .flatten()
             .filter(|hidden| !hidden.input);
         let (Some(hidden), Some(daemon)) = (hidden, session.capture_pid) else {
-            return;
+            return None;
         };
 
         let display = &hidden.epoch.display;
@@ -371,12 +374,18 @@ impl Viewer {
             .lock()
             .map(|mut started| started.replace(key.clone()) != Some(key))
             .unwrap_or(false);
-        if first {
-            let client = client.clone();
-            tokio::spawn(async move {
-                let _ = client.start_input().await;
-            });
+        if !first {
+            return None;
         }
+        let (viewer, client) = (self.clone(), client.clone());
+        Some(tokio::spawn(async move {
+            let Some(_changing) = viewer.changing().await else {
+                return;
+            };
+            // A failed start is read again by the next status; its unknown
+            // outcomes stay pending in the controller.
+            let _ = client.start_input().await;
+        }))
     }
 
     /// What cleaning up the session `query` names would do, as the person

@@ -665,7 +665,14 @@ pub(crate) async fn handle(
         })
         .await
         .unwrap_or_else(|_| failure(Code::State, "The caller's host could not be verified")),
-        Request::Hello => daemon.hello(),
+        // The census waits for the jobs' lock, and the facts look up the
+        // account and read the display: neither holds a runtime thread.
+        Request::Hello => {
+            let daemon = daemon.clone();
+            tokio::task::spawn_blocking(move || daemon.hello())
+                .await
+                .unwrap_or_else(|_| failure(Code::Daemon, "The helper could not say hello"))
+        }
         Request::Apps { .. } => match tokio::task::spawn_blocking(|| {
             atlas_native::native::processes::snapshot(
                 || Ok(apps::running()),

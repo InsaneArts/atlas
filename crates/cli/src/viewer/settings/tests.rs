@@ -5,6 +5,111 @@ use atlas_core::test_support::SETTINGS;
 use serde_json::json;
 use std::time::Duration;
 
+/// A viewer following `settings` (written from SETTINGS) in `base`, with its
+/// own record kept in `out`.
+async fn followed(base: &Path, settings: &Path) -> (Arc<Viewer>, std::path::PathBuf) {
+    std::fs::write(settings, SETTINGS).unwrap();
+    let mut client = Client::new(Config::load(settings).unwrap()).unwrap();
+    client.controller = atlas_control::Controller::at(60001, &base.join("state"));
+    let (_, viewer) = bind(client, 0, Some(settings)).await.unwrap();
+
+    let record = base.join("out").join(MENUBAR_RECORD);
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    let written = json!({"url": viewer.url, "pid": std::process::id()});
+    std::fs::write(&record, written.to_string()).unwrap();
+    *viewer.record.lock().unwrap() = Some((record.clone(), written));
+    (viewer, record)
+}
+
+/// Keep `record` from being written with a folder in its place, inside a
+/// private output folder.
+fn obstruct(record: &Path) {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(record.parent().unwrap())
+        .unwrap();
+    std::fs::create_dir(record).unwrap();
+}
+
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[tokio::test]
+async fn an_unchanged_settings_file_retries_a_failed_viewer_record_move() {
+    for (changed, folder, uid) in [
+        (SETTINGS.replace("\"out\"", "\"moved\""), "moved", 60001),
+        (
+            SETTINGS
+                .replace("60001", "60002")
+                .replace("\"out\"", "\"elsewhere\""),
+            "elsewhere",
+            60002,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let settings = base.join("u.toml");
+        let (viewer, record) = followed(&base, &settings).await;
+
+        let moved = base.join(folder).join(MENUBAR_RECORD);
+        obstruct(&moved);
+        std::fs::write(&settings, changed).unwrap();
+        viewer.follow_settings().await;
+        assert_eq!(viewer.client().config.helper_uid, uid);
+        assert_eq!(viewer.client().output_dir().unwrap(), base.join(folder));
+        assert!(record.exists(), "{folder}: discovery stays where it was");
+        assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, record);
+
+        std::fs::remove_dir(&moved).unwrap();
+        viewer.follow_settings().await;
+        assert!(moved.is_file(), "{folder}: a later read moves it");
+        assert_eq!(mode(&moved), 0o600);
+        assert_eq!(
+            read_record(&moved).unwrap()["pid"],
+            json!(std::process::id())
+        );
+        assert!(!record.exists(), "{folder}: its old record is removed");
+        assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, moved);
+    }
+}
+
+#[tokio::test]
+async fn a_record_retry_publishes_the_current_output_after_another_settings_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let settings = base.join("u.toml");
+    let (viewer, record) = followed(&base, &settings).await;
+
+    let blocked = base.join("moved").join(MENUBAR_RECORD);
+    obstruct(&blocked);
+    std::fs::write(&settings, SETTINGS.replace("\"out\"", "\"moved\"")).unwrap();
+    viewer.follow_settings().await;
+    assert!(record.exists());
+
+    // Another viewer has since recorded itself where this one was.
+    let other = json!({"url": "http://127.0.0.1:1/other/", "pid": std::process::id() + 1});
+    std::fs::write(&record, other.to_string()).unwrap();
+    std::fs::write(&settings, SETTINGS.replace("\"out\"", "\"newest\"")).unwrap();
+    viewer.follow_settings().await;
+
+    let newest = base.join("newest").join(MENUBAR_RECORD);
+    assert!(newest.is_file());
+    assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, newest);
+    assert!(blocked.is_dir(), "the older output is never published");
+    assert_eq!(
+        read_record(&record).unwrap(),
+        other,
+        "another's record stays"
+    );
+
+    viewer.follow_settings().await;
+    assert!(newest.is_file());
+    assert!(blocked.is_dir());
+}
+
 #[test]
 fn screenshot_rows_keep_the_folder_they_were_listed_from() {
     use std::future::{Future, poll_fn};

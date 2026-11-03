@@ -169,16 +169,25 @@ pub(crate) enum NativeState {
 
 /// Doctor's view of native dialogs: unknown, stale, passed or failed, and
 /// its report.
-fn assessment(
-    record: Option<&Record>,
-    current: Option<&Generation>,
-    at: u64,
-) -> (NativeState, Value) {
+fn assessment(evidence: &Evidence, current: Option<&Generation>, at: u64) -> (NativeState, Value) {
     use NativeState::{Failed, Passed, Stale, Unknown};
-    let Some(record) = record else {
-        let reason = "Native Save/Open has no recorded check. Panels can be inert without \
-                      authenticated Screen Sharing; use atlas run or atlas open instead.";
-        return (Unknown, json!({"state": Unknown, "reason": reason}));
+    let record = match evidence {
+        Evidence::Present(record) => record,
+        Evidence::Missing => {
+            let reason = "Native Save/Open has no recorded check. Panels can be inert without \
+                          authenticated Screen Sharing; use atlas run or atlas open instead.";
+            return (Unknown, json!({"state": Unknown, "reason": reason}));
+        }
+        Evidence::Unreadable => {
+            let reason = "Native Save/Open's recorded check could not be read; \
+                          use atlas run or atlas open instead.";
+            return (Unknown, json!({"state": Unknown, "reason": reason}));
+        }
+        Evidence::Invalid => {
+            let reason = "Native Save/Open's recorded check is malformed and was ignored; \
+                          use atlas run or atlas open instead.";
+            return (Unknown, json!({"state": Unknown, "reason": reason}));
+        }
     };
 
     let (state, reason) = if !record.consistent() {
@@ -219,11 +228,25 @@ fn assessment(
 pub(crate) const WEB_CONTENT: &str = "Safari/WebKit can stay blank without authenticated Screen Sharing. \
                            Use Chrome/Firefox for web pages; do not retry a blank page.";
 
-fn read_record(uid: u32) -> Option<Record> {
-    record_path(uid)
-        .ok()
-        .and_then(|path| fs::read(path).ok())
-        .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
+/// What the record file holds. Only a file that is not there means no check
+/// was recorded; one that could not be located, read or decoded is evidence
+/// that was there to see but cannot be judged.
+enum Evidence {
+    Missing,
+    Unreadable,
+    Invalid,
+    Present(Record),
+}
+
+fn read_record(path: Result<PathBuf>) -> Evidence {
+    let Ok(path) = path else {
+        return Evidence::Unreadable;
+    };
+    match fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_or(Evidence::Invalid, Evidence::Present),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Evidence::Missing,
+        Err(_) => Evidence::Unreadable,
+    }
 }
 
 /// Doctor's report with the recorded native-dialog observation in place of
@@ -239,10 +262,10 @@ pub struct Doctor {
 }
 
 pub fn doctor_report(status: Value, uid: u32) -> Doctor {
-    let record = read_record(uid);
+    let evidence = read_record(record_path(uid));
     let observation = Observation::decode(&status);
     let current = boot_time().and_then(|boot| generation_at(&observation, uid, boot));
-    let (native, projection) = assessment(record.as_ref(), current.as_ref(), now());
+    let (native, projection) = assessment(&evidence, current.as_ref(), now());
     let mut diagnosis = observation.diagnose(status, uid);
     diagnosis.value = with_capabilities(diagnosis.value, native, projection);
     Doctor {

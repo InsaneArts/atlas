@@ -1524,9 +1524,27 @@ async fn an_unconfirmed_stop_all_reply_never_fabricates_an_empty_job_summary() {
         assert!(result.get("jobs").is_none(), "{result}");
         assert_eq!(
             result["warnings"],
-            json!(["Atlas could not confirm whether the helper stopped its background jobs"])
+            json!(["Atlas could not confirm that every background job was stopped"])
         );
         assert!(!result.to_string().contains("private-stop-all-reply-canary"));
+    }
+}
+
+#[tokio::test]
+async fn a_stop_all_the_helper_could_not_complete_says_so_rather_than_unreachable() {
+    for reply in [
+        json!({"ok": false, "code": "job", "reason": "unobserved", "uncertain": true,
+            "error": "Atlas could not read every background job record; a job may still be running."}),
+        json!({"ok": false, "code": "job", "uncertain": false,
+            "error": "The helper could not answer about its jobs; restart the daemon to recover"}),
+    ] {
+        let (_dir, _client, result) = stop_with_job_reply(reply.clone()).await;
+        assert!(result.get("jobs").is_none(), "{result}");
+        assert_eq!(
+            result["warnings"],
+            json!(["Atlas could not confirm that every background job was stopped"]),
+            "{reply}"
+        );
     }
 }
 

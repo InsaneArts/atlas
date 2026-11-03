@@ -165,6 +165,19 @@ struct ViewerStatusTests {
     #expect(try !overview(["launching": -1, "unresolved": "x"]).offersStop, "odd counts read as none")
   }
 
+  @Test("a count of jobs that could not read every record keeps Stop offered, whatever it counts")
+  func stopStaysWhileJobsCannotAllBeCounted() throws {
+    func overview(_ jobs: [String: Any]) throws -> ViewerStatus.Overview {
+      try status(["overview": ["mode": "observing", "jobs": jobs]]).overview
+    }
+    let incomplete = try overview(["running": 0, "launching": 0, "unresolved": 0, "incomplete": true])
+    #expect(incomplete.jobs.incomplete)
+    #expect(incomplete.jobs.mayRun)
+    #expect(incomplete.offersStop, "more jobs may run than were counted")
+    #expect(try !overview(["running": 0, "incomplete": false]).offersStop)
+    #expect(try !overview(["running": 0, "incomplete": "yes"]).offersStop, "a mistyped flag reads as complete")
+  }
+
   @Test("missing or mistyped fields fall back to safe defaults, and an unknown mode reads as unavailable")
   func defaults() throws {
     let empty = try status([:])

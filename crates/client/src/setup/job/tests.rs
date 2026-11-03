@@ -102,9 +102,10 @@ async fn a_job_installation_test_caller() {
         socket: layout.socket(),
     };
     let mode = std::env::var("ATLAS_MUTATION_TEST_MODE").unwrap();
-    let run = |request: &Request| {
+    let paused = mode.clone();
+    let run = move |request: &Request| {
         let pause = matches!(
-            (mode.as_str(), request),
+            (paused.as_str(), request),
             ("retire", Request::Retire { .. })
                 | ("install" | "fresh-install", Request::Install { .. })
                 | ("restore", Request::Restore { .. })
@@ -113,7 +114,7 @@ async fn a_job_installation_test_caller() {
         if pause {
             crate::test_support::pause_executor(&directory, crate::test_support::WORKER);
         }
-        if mode == "restore" && matches!(request, Request::Install { .. }) {
+        if paused == "restore" && matches!(request, Request::Install { .. }) {
             return Err(setup::account::problem("installation was refused"));
         }
         Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "b".repeat(64)}}}))
@@ -228,4 +229,376 @@ fn an_earlier_job_is_set_aside_and_restored_on_failure() {
         error.ends_with("could not be put back: no backup"),
         "{error}"
     );
+}
+
+/// The helper job a test installs for a helper at home in `directory`,
+/// with the layout it lives in.
+fn test_agent(directory: &Path) -> (atlas_core::account::Account, Agent, Layout) {
+    let helper = atlas_core::account::Account {
+        uid: 7001,
+        name: "helper".into(),
+        home: directory.join("home"),
+    };
+    let layout = Layout::new(helper.uid, helper.home.clone());
+    let agent = Agent {
+        label: LABEL.into(),
+        program: directory.join("atlas"),
+        uid: helper.uid,
+        controller_uid: nix::unistd::getuid().as_raw(),
+        socket: layout.socket(),
+    };
+    (helper, agent, layout)
+}
+
+/// A setup run in the helper that finds an earlier job and installs the
+/// new one when `installs`, or else is refused and puts the earlier one
+/// back, noting each action in `actions` and holding the first `phase`
+/// until `released` says go on, once `entered` was told it began.
+fn held_at(
+    phase: &'static str,
+    installs: bool,
+    actions: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    entered: std::sync::mpsc::Sender<()>,
+    released: std::sync::mpsc::Receiver<()>,
+) -> impl Fn(&Request) -> Result<Value> + Send + 'static {
+    let actions = std::sync::Arc::clone(actions);
+    let held = std::sync::atomic::AtomicBool::new(false);
+    move |request| {
+        let action = serde_json::to_value(request).unwrap()["action"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        actions.lock().unwrap().push(action.clone());
+        if action == phase && !held.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let _ = entered.send(());
+            let _ = released.recv();
+        }
+        match request {
+            Request::Inspect { .. } => {
+                Ok(json!({"ok": true, "jobs": {LABEL: {"plistSha256": "0".repeat(64)}}}))
+            }
+            Request::Install { .. } if !installs => {
+                Err(setup::account::problem("installation was refused"))
+            }
+            _ => Ok(json!({"ok": true})),
+        }
+    }
+}
+
+/// Whether another controller is refused because this one holds control.
+fn excluded(controller: &atlas_control::Controller) -> bool {
+    controller.acquire(false).err().map(|error| error.code) == Some(Code::Busy)
+}
+
+const ROLLED_BACK: [&str; 5] = ["inspect", "retire", "install", "retire", "restore"];
+
+/// The client of a helper whose daemon is a stand-in at its socket, and
+/// that client's controller. Active work is not checked for.
+fn answered_client(directory: &Path) -> (Client, atlas_control::Controller) {
+    let mut client = crate::test_support::client(directory);
+    client.allow_disrupt = true;
+    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+    let controller = client.controller.clone();
+    (client, controller)
+}
+
+/// A daemon at `socket`, served from a thread of its own so that it
+/// outlasts any request, and bound before this returns. It tells the
+/// returned receiver of each request, and answers it with the next value
+/// the returned sender gives.
+fn stand_in(
+    socket: &Path,
+) -> (
+    std::sync::mpsc::Receiver<()>,
+    tokio::sync::mpsc::UnboundedSender<Value>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let (asked, asks) = std::sync::mpsc::channel();
+    let (answer, mut answers) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async move {
+            let listener = tokio::net::UnixListener::from_std(listener).unwrap();
+            loop {
+                let (peer, _) = listener.accept().await.unwrap();
+                let mut peer = BufReader::new(peer);
+                let mut line = String::new();
+                peer.read_line(&mut line).await.unwrap();
+                if asked.send(()).is_err() {
+                    return;
+                }
+                let Some(reply) = answers.recv().await else {
+                    return;
+                };
+                peer.get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+    });
+    (asks, answer)
+}
+
+/// The stand-in's answer when daemon process `pid` runs.
+fn daemon(pid: u32) -> Value {
+    json!({"ok": true, "user": {"uid": 1}, "daemon": {"pid": pid}})
+}
+
+/// Whether another controller, once nobody holds control, is refused until
+/// recovery settles an unknown outcome.
+fn needs_recovery(controller: &atlas_control::Controller) -> bool {
+    controller
+        .clone()
+        .waiting(crate::test_support::WATCHDOG)
+        .acquire(false)
+        .err()
+        .map(|error| error.code)
+        == Some(Code::Uncertain)
+}
+
+#[test]
+fn a_blocked_helper_installation_leaves_the_runtime_responsive_and_retains_exclusion_through_rollback()
+ {
+    use crate::test_support::{Requester, WATCHDOG};
+    for phase in ["prepare", "inspect", "retire", "install", "restore"] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let controller = client.controller.clone();
+        let (_, agent, layout) = test_agent(directory.path());
+        let actions = std::sync::Arc::default();
+        let (entered, entry) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let run = held_at(phase, false, &actions, entered, released);
+        let requester = Requester::start(move || async move {
+            prepare_and_install(&client, "controller", agent, &layout.logs(), run).await
+        });
+
+        entry.recv_timeout(WATCHDOG).unwrap();
+        let responsive = requester.responsive();
+        if !responsive {
+            let _ = release.send(());
+        }
+        assert!(responsive, "{phase}: the runtime waited for setup");
+        assert!(excluded(&controller), "{phase}: another controller got in");
+        assert_eq!(controller.pending().unwrap().len(), 1, "{phase}");
+
+        release.send(()).unwrap();
+        let error = requester.outcome().unwrap_err();
+        assert_eq!(error.error, "installation was refused", "{phase}");
+        let mut done = vec!["prepare"];
+        done.extend(ROLLED_BACK);
+        assert_eq!(*actions.lock().unwrap(), done, "{phase}");
+        let (_next, unknown) = controller.acquire_for_cleanup().unwrap();
+        assert!(unknown, "{phase}: an unacknowledged setup stays pending");
+    }
+}
+
+#[test]
+fn a_cancelled_helper_replacement_remains_owned_until_its_executor_and_readiness_checks_finish() {
+    use crate::test_support::{Requester, WATCHDOG};
+    for phase in ["install", "restore"] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let controller = client.controller.clone();
+        let (helper, agent, layout) = test_agent(directory.path());
+        let actions = std::sync::Arc::default();
+        let (entered, entry) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let run = held_at(phase, false, &actions, entered, released);
+        let requester = Requester::start(move || async move {
+            replace_job(&client, &helper, agent, &layout, run).await
+        });
+
+        entry.recv_timeout(WATCHDOG).unwrap();
+        let responsive = requester.responsive();
+        if !responsive {
+            let _ = release.send(());
+        }
+        assert!(
+            responsive,
+            "{phase}: the runtime waited for the replacement"
+        );
+        requester.abandon();
+        assert!(
+            excluded(&controller),
+            "{phase}: control ended with the request"
+        );
+        assert_eq!(controller.pending().unwrap().len(), 1, "{phase}");
+        assert!(
+            controller.unresolved().unwrap().is_empty(),
+            "{phase}: the claim ended with the request"
+        );
+
+        release.send(()).unwrap();
+        let (_next, unknown) = controller
+            .clone()
+            .waiting(WATCHDOG)
+            .acquire_for_cleanup()
+            .unwrap();
+        assert_eq!(*actions.lock().unwrap(), ROLLED_BACK, "{phase}");
+        assert!(unknown, "{phase}: an unverified replacement stays pending");
+        assert_eq!(controller.unresolved().unwrap().len(), 1, "{phase}");
+    }
+}
+
+#[test]
+fn only_a_new_daemon_answering_clears_a_replacement() {
+    use crate::test_support::{Requester, WATCHDOG};
+    let directory = tempfile::tempdir().unwrap();
+    let (client, controller) = answered_client(directory.path());
+    drop(controller.quarantine().unwrap());
+    let other = controller.pending().unwrap();
+    let (helper, agent, layout) = test_agent(directory.path());
+    let (asks, answer) = stand_in(&client.transport.path);
+    let requester = Requester::start(move || async move {
+        replace_job(&client, &helper, agent, &layout, |_| {
+            Ok(json!({"ok": true}))
+        })
+        .await
+    });
+
+    asks.recv_timeout(WATCHDOG).unwrap();
+    answer.send(daemon(100)).unwrap();
+    for unready in [json!({"ok": false, "error": "not yet"}), daemon(100)] {
+        asks.recv_timeout(WATCHDOG).unwrap();
+        assert_eq!(controller.pending().unwrap().len(), 2);
+        assert!(excluded(&controller), "control ended before readiness");
+        answer.send(unready).unwrap();
+    }
+    asks.recv_timeout(WATCHDOG).unwrap();
+    answer.send(daemon(200)).unwrap();
+
+    requester.outcome().unwrap();
+    assert_eq!(controller.pending().unwrap(), other);
+}
+
+#[test]
+fn a_helper_installation_is_settled_only_for_a_requester_that_hears_it_succeed() {
+    use crate::test_support::{Requester, WATCHDOG};
+    for abandoned in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path());
+        let controller = client.controller.clone();
+        let (_, agent, layout) = test_agent(directory.path());
+        let actions = std::sync::Arc::default();
+        let (entered, entry) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let run = held_at("install", true, &actions, entered, released);
+        let requester = Requester::start(move || async move {
+            prepare_and_install(&client, "controller", agent, &layout.logs(), run).await
+        });
+
+        entry.recv_timeout(WATCHDOG).unwrap();
+        let responsive = requester.responsive();
+        if !responsive {
+            let _ = release.send(());
+        }
+        assert!(responsive, "{abandoned}: the runtime waited for setup");
+        assert!(
+            excluded(&controller),
+            "{abandoned}: another controller got in"
+        );
+        if !abandoned {
+            release.send(()).unwrap();
+            requester.outcome().unwrap();
+            assert!(controller.pending().unwrap().is_empty());
+            assert!(controller.acquire(false).is_ok());
+            continue;
+        }
+
+        requester.abandon();
+        assert!(excluded(&controller), "control ended with the request");
+        assert!(controller.unresolved().unwrap().is_empty(), "claim let go");
+        release.send(()).unwrap();
+        assert!(
+            needs_recovery(&controller),
+            "an installation nobody heard of was settled"
+        );
+        assert_eq!(
+            *actions.lock().unwrap(),
+            ["prepare", "inspect", "retire", "install"]
+        );
+        assert_eq!(controller.unresolved().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn a_replacement_abandoned_while_installing_or_awaiting_its_daemon_keeps_control_until_its_daemon_answers()
+ {
+    use crate::test_support::{Requester, WATCHDOG};
+    for during in ["installation", "readiness"] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, controller) = answered_client(directory.path());
+        let (helper, agent, layout) = test_agent(directory.path());
+        let actions = std::sync::Arc::default();
+        let (entered, entry) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let held = if during == "installation" {
+            "install"
+        } else {
+            "none"
+        };
+        let run = held_at(held, true, &actions, entered, released);
+        let (asks, answer) = stand_in(&client.transport.path);
+        let requester = Requester::start(move || async move {
+            replace_job(&client, &helper, agent, &layout, run).await
+        });
+        let owned = |controller: &atlas_control::Controller| {
+            excluded(controller) && controller.unresolved().unwrap().is_empty()
+        };
+
+        asks.recv_timeout(WATCHDOG).unwrap();
+        answer.send(daemon(100)).unwrap();
+        if during == "installation" {
+            entry.recv_timeout(WATCHDOG).unwrap();
+        } else {
+            // The first look for the new daemon, left unanswered.
+            asks.recv_timeout(WATCHDOG).unwrap();
+        }
+        let responsive = requester.responsive();
+        if !responsive {
+            let _ = release.send(());
+        }
+        assert!(responsive, "{during}: the runtime waited");
+        assert!(owned(&controller), "{during}: another controller got in");
+        assert_eq!(controller.pending().unwrap().len(), 1, "{during}");
+
+        requester.abandon();
+        assert!(
+            owned(&controller),
+            "{during}: control ended with the request"
+        );
+        if during == "installation" {
+            release.send(()).unwrap();
+            asks.recv_timeout(WATCHDOG)
+                .expect("the new daemon was never looked for");
+            assert!(owned(&controller), "control ended before readiness");
+        }
+        // The same daemon still answering is no new one: control stays.
+        answer.send(daemon(100)).unwrap();
+        asks.recv_timeout(WATCHDOG).unwrap();
+        assert!(
+            owned(&controller),
+            "{during}: control ended before readiness"
+        );
+
+        answer.send(daemon(200)).unwrap();
+        assert!(
+            needs_recovery(&controller),
+            "{during}: a replacement nobody heard of was settled"
+        );
+        assert_eq!(
+            *actions.lock().unwrap(),
+            ["inspect", "retire", "install"],
+            "{during}"
+        );
+        assert_eq!(controller.unresolved().unwrap().len(), 1, "{during}");
+    }
 }

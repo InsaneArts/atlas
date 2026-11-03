@@ -34,6 +34,7 @@ struct Fake {
     count_errors: VecDeque<AXError>,
     count_reads: usize,
     pauses: Vec<Duration>,
+    hit: Option<usize>,
 }
 
 impl Fake {
@@ -49,6 +50,7 @@ impl Fake {
                 title: Some("private-title-sentinel".into()),
                 layer: 0,
                 alpha: 1.0,
+                system: None,
                 bounds: Bounds {
                     x: 10.0,
                     y: 30.0,
@@ -73,6 +75,7 @@ impl Fake {
             count_errors: VecDeque::new(),
             count_reads: 0,
             pauses: Vec::new(),
+            hit: None,
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -205,6 +208,11 @@ impl Backend for &mut Fake {
             after(self);
         }
         self.status
+    }
+    fn hit(&mut self, app: &usize, _: f64, _: f64) -> Result<Option<usize>> {
+        assert_eq!(*app, APP);
+        assert!(self.bounds.last().is_some_and(|bound| *bound <= REQUEST));
+        Ok(self.hit)
     }
 }
 
@@ -1729,6 +1737,7 @@ fn pointer_needs() -> [Need; 2] {
         Need::Drag {
             from: (30.0, 60.0),
             to: (40.0, 70.0),
+            button: atlas_core::actions::Button::Left,
         },
     ]
 }
@@ -1815,6 +1824,7 @@ fn a_point_three_pixels_outside_the_named_document_refuses_before_readiness_or_w
         Need::Drag {
             from: (701.0, 310.0),
             to: (300.0, 310.0),
+            button: atlas_core::actions::Button::Left,
         },
     ] {
         let mut fake = Fake::new();
@@ -2159,6 +2169,7 @@ fn a_focused_sheet_blocks_pointer_and_drag_preparation_in_an_inactive_app() {
         Need::Drag {
             from: (20.0, 260.0),
             to: (60.0, 80.0),
+            button: atlas_core::actions::Button::Left,
         },
     ] {
         for expect in [named(), Expect::new(812).unwrap()] {
@@ -2810,4 +2821,341 @@ fn a_controller_pinned_instance_is_not_replaced_at_native_admission() {
         target_application(&Expect::new(pid.into()).unwrap()).unwrap(),
         current
     );
+}
+
+/// Elements of the test app: the window's title in its title bar, and a
+/// button in it.
+const TITLE: usize = 7;
+const BUTTON: usize = 8;
+
+/// The test app as TextEdit showed itself in the helper: its window at
+/// (108, 287), 586 by 488, its title left beside the window buttons at
+/// (190, 295), 68 by 16, so its title band runs from 287 to 319. A press in
+/// the middle of the bar finds the window itself.
+fn titled() -> Fake {
+    let mut fake = Fake::new();
+    fake.hit = Some(WINDOW);
+    fake.windows[0].bounds = Bounds {
+        x: 108.0,
+        y: 287.0,
+        width: 586.0,
+        height: 488.0,
+    };
+    for (element, name, answer) in [
+        (WINDOW, "AXPosition", Answer::Point(108.0, 287.0)),
+        (WINDOW, "AXSize", Answer::Size(586.0, 488.0)),
+        (WINDOW, "AXTitleUIElement", Answer::Element(TITLE)),
+        (TITLE, "AXRole", Answer::Text("AXStaticText".into())),
+        (TITLE, "AXWindow", Answer::Element(WINDOW)),
+        (TITLE, "AXPosition", Answer::Point(190.0, 295.0)),
+        (TITLE, "AXSize", Answer::Size(68.0, 16.0)),
+        (BUTTON, "AXRole", Answer::Text("AXButton".into())),
+        (BUTTON, "AXWindow", Answer::Element(WINDOW)),
+    ] {
+        fake.answers.insert((element, name), answer);
+    }
+    fake
+}
+
+/// The middle of the title bar, where agents press.
+const PRESS: (f64, f64) = (401.0, 299.0);
+
+/// One change to the test app between two proofs, and what it is.
+type Change = (&'static str, fn(&mut Fake));
+
+fn moved_at(fake: &mut Fake, press: (f64, f64)) -> Result<Option<i64>> {
+    let listed = fake.windows.clone();
+    let deadline = fake.now.get() + REQUEST;
+    let mut reader = Reader {
+        ask: &mut *fake,
+        deadline,
+    };
+    reader.title_bar(&APP, 812, press, &listed)
+}
+
+fn moved(fake: &mut Fake) -> Result<Option<i64>> {
+    moved_at(fake, PRESS)
+}
+
+#[test]
+fn a_press_anywhere_in_the_title_band_moves_the_window() {
+    for press in [
+        PRESS,
+        (401.0, 287.0),
+        (401.0, 293.0),
+        (401.0, 318.9),
+        (693.0, 300.0),
+    ] {
+        assert_eq!(
+            moved_at(&mut titled(), press).unwrap(),
+            Some(42),
+            "the window itself at {press:?}"
+        );
+    }
+    let mut on_title = titled();
+    on_title.hit = Some(TITLE);
+    assert_eq!(
+        moved_at(&mut on_title, (220.0, 300.0)).unwrap(),
+        Some(42),
+        "its title"
+    );
+}
+
+#[test]
+fn a_press_below_the_title_band_on_a_control_or_without_a_title_proves_no_move() {
+    for press in [(401.0, 319.0), (401.0, 330.0), (401.0, 600.0)] {
+        assert_eq!(
+            moved_at(&mut titled(), press).unwrap(),
+            None,
+            "the window below its band at {press:?}"
+        );
+    }
+
+    let mut control = titled();
+    control.hit = Some(BUTTON);
+    assert_eq!(moved(&mut control).unwrap(), None, "a button in the bar");
+
+    let mut untitled = titled();
+    untitled.answers.remove(&(WINDOW, "AXTitleUIElement"));
+    assert_eq!(moved(&mut untitled).unwrap(), None, "no title element");
+
+    let mut beside = titled();
+    beside.hit = Some(TITLE);
+    assert_eq!(
+        moved(&mut beside).unwrap(),
+        None,
+        "the title found where it is not"
+    );
+}
+
+#[test]
+fn window_move_proof_expires_when_its_source_changes() {
+    assert_eq!(moved(&mut titled()).unwrap(), Some(42), "its own title bar");
+
+    let changes: [Change; 11] = [
+        ("nothing there", |fake| fake.hit = None),
+        ("its content", |fake| fake.hit = Some(FIELD)),
+        ("another process's element", |fake| {
+            fake.owners.insert(WINDOW, 900);
+        }),
+        ("a title that is not the window's", |fake| {
+            fake.answers
+                .insert((WINDOW, "AXTitleUIElement"), Answer::Element(FIELD));
+        }),
+        ("a title another process owns", |fake| {
+            fake.owners.insert(TITLE, 900);
+        }),
+        ("a dialog", |fake| {
+            fake.answers
+                .insert((WINDOW, "AXSubrole"), Answer::Text("AXDialog".into()));
+        }),
+        ("a title outside the window", |fake| {
+            fake.answers
+                .insert((TITLE, "AXPosition"), Answer::Point(190.0, 280.0));
+        }),
+        ("a title with no frame", |fake| {
+            fake.answers.remove(&(TITLE, "AXPosition"));
+            fake.answers.remove(&(TITLE, "AXSize"));
+        }),
+        ("a window that moved", |fake| {
+            fake.windows[0].bounds.x += 50.0
+        }),
+        ("a window listed twice", |fake| {
+            let twin = Window {
+                number: 43,
+                ..fake.windows[0].clone()
+            };
+            fake.windows.push(twin);
+        }),
+        ("a title bar now too thin for the press", |fake| {
+            fake.answers
+                .insert((TITLE, "AXPosition"), Answer::Point(190.0, 287.0));
+            fake.answers
+                .insert((TITLE, "AXSize"), Answer::Size(68.0, 10.0));
+        }),
+    ];
+    for (what, change) in changes {
+        let mut fake = titled();
+        change(&mut fake);
+        assert!(
+            !matches!(moved(&mut fake), Ok(Some(_))),
+            "{what}: no move is proven"
+        );
+    }
+
+    let mut slow = titled();
+    slow.answers.insert(
+        (WINDOW, "AXTitleUIElement"),
+        Answer::Failed(AXError::CannotComplete),
+    );
+    assert_eq!(
+        moved(&mut slow).unwrap_err().details["unread"],
+        "slow",
+        "a read that fails proves nothing"
+    );
+
+    let mut late = titled();
+    late.delay = REQUEST;
+    assert!(moved(&mut late).is_err(), "a proof past its deadline");
+}
+
+#[test]
+fn a_press_on_a_widget_refuses_with_what_the_final_check_finds_there() {
+    let pressed = || {
+        let mut fake = Fake::new();
+        fake.windows.push(Window {
+            number: 9083,
+            pid: 31082,
+            owner: Some("Notification Center".into()),
+            title: Some("Month".into()),
+            layer: atlas_core::screen::windows::WIDGET_LAYER,
+            alpha: 1.0,
+            bounds: Bounds {
+                x: 500.0,
+                y: 400.0,
+                width: 180.0,
+                height: 180.0,
+            },
+            system: Some(atlas_core::screen::windows::System::NotificationCenter),
+        });
+        let deadline = fake.now.get() + Duration::from_millis(450);
+        prepare(
+            &mut fake,
+            &Expect::new(812).unwrap(),
+            Need::Point(560.0, 493.0),
+            deadline,
+            &|| Ok(()),
+            &mut |_| false,
+        )
+        .map(|_| ())
+        .unwrap_err()
+    };
+    let widget = || {
+        Error::new(
+            Code::FocusChanged,
+            "A desktop widget is at that point, not the app's window, so bring it there or \
+             pick another point; this action and the rest were not sent",
+        )
+        .with("reason", serde_json::json!("point"))
+        .with(
+            "found",
+            serde_json::json!({"app": "Notification Center", "pid": 31082}),
+        )
+    };
+
+    let error = pressed();
+    assert_eq!(
+        error.error,
+        "The app's window is not on top at that point, so bring it there or pick another \
+         point; this action and the rest were not sent",
+        "preparation alone names nothing"
+    );
+    assert!(error.details.get("found").is_none());
+    let said = explained(error, || Err(widget()));
+    assert_eq!(said.error, widget().error);
+    assert_eq!(said.details["found"]["app"], "Notification Center");
+
+    assert_eq!(
+        explained(pressed(), || Ok(None)).error,
+        pressed().error,
+        "a final check that finds nothing wrong changes nothing"
+    );
+    assert_eq!(
+        explained(pressed(), || Err(widget().uncertain())).error,
+        pressed().error
+    );
+    let found = widget();
+    assert_eq!(
+        explained(found, || panic!(
+            "a refusal naming what it found is not asked again"
+        ))
+        .error,
+        widget().error
+    );
+    let app = refused(Reason::App);
+    assert_eq!(
+        explained(app, || panic!("only a point refusal")).details["reason"],
+        "app"
+    );
+}
+
+/// One preparation of a title-bar move onto the empty desktop, its press
+/// point turned to the window's content at a barrier after preparation
+/// proved the move and before the final check. With `reuse`, the final
+/// check takes the proof preparation read instead of reading its own. The
+/// outcome, the events a batch would post after it, and how many checks ran.
+fn move_with_its_source_changed(reuse: bool) -> (Result<Option<&'static str>>, usize, usize) {
+    let need = Need::Drag {
+        from: (200.0, 35.0),
+        to: (900.0, 700.0),
+        button: atlas_core::actions::Button::Left,
+    };
+    let expect = Expect::new(812).unwrap();
+    let mut fake = Fake::new();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let listed = fake.windows.clone();
+    // Whose title bar the press point is on, as Accessibility finds it now.
+    let source = Cell::new(Some(42));
+    let earlier = Cell::new(None);
+    let checks = Cell::new(0);
+    let mut verify = |number, until| {
+        checks.set(checks.get() + 1);
+        let title = match earlier.get() {
+            Some(proof) if reuse => proof,
+            _ => source.get(),
+        };
+        earlier.set(Some(earlier.get().unwrap_or(title)));
+        crate::native::focus::tests::verify_move(
+            &expect,
+            need,
+            number,
+            title,
+            listed.clone(),
+            until,
+        )
+    };
+    let target = prepare(
+        &mut fake,
+        &expect,
+        need,
+        deadline,
+        &|| Ok(()),
+        &mut |number| verify(number, deadline).is_ok(),
+    )
+    .unwrap();
+    assert_eq!(checks.get(), 1, "preparation proved the move");
+    assert!(
+        target.reader.ask.writes.is_empty(),
+        "the window was already in front"
+    );
+
+    source.set(None);
+    let outcome = settle(target, &expect, deadline, &|| Ok(()), &mut verify);
+    // The batch posts the drag's events only once its final check admits it.
+    let posted = if outcome.is_ok() { 3 } else { 0 };
+    (outcome, posted, checks.get())
+}
+
+#[test]
+fn a_move_proven_in_preparation_is_proven_again_before_any_input() {
+    let (outcome, posted, checks) = move_with_its_source_changed(false);
+    let error = outcome.unwrap_err();
+    assert_eq!(error.code, Code::FocusChanged);
+    assert_eq!(error.details["reason"], "point");
+    assert!(
+        error
+            .error
+            .starts_with("Only a window dragged by its title bar"),
+        "{}",
+        error.error
+    );
+    assert_eq!(posted, 0, "nothing is sent");
+    assert_eq!(checks, 2, "the final check read its own proof");
+
+    let (reused, posted, _) = move_with_its_source_changed(true);
+    assert!(
+        reused.is_ok(),
+        "a check reusing the earlier proof lets it through"
+    );
+    assert_eq!(posted, 3, "and the drag would be sent outside the app");
 }

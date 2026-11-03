@@ -20,6 +20,7 @@ use serde_json::Value;
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// Install the app at `path` into the helper for the current task.
@@ -53,7 +54,7 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
 
     // Copying, installing and removing the copy happen under one ownership,
     // so no other open, close or cleanup interleaves.
-    let ownership = client.controller.acquire(false)?;
+    let ownership = Arc::new(client.controller.acquire(false)?);
     let listed = client.running_apps().await?;
     let running = listed.rows();
 

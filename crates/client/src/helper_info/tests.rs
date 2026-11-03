@@ -17,6 +17,7 @@ fn window(number: i64, pid: i64, title: String, frame: [f64; 4]) -> Window {
         title: Some(title),
         layer: 0,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x,
             y,

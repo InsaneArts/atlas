@@ -176,7 +176,11 @@ fn a_focus_refusal_says_what_was_in_the_way() {
         (Some("unreadable"), Some("withheld"), "screen is locked"),
         (Some("unreadable"), Some("cut"), "too long to read whole"),
         (Some("unreadable"), Some("deep"), "deeper in your app"),
-        (Some("unreadable"), Some("slow"), "The app was busy"),
+        (
+            Some("unreadable"),
+            Some("slow"),
+            "did not say where its focus is",
+        ),
         (Some("made-up"), None, "Another app"),
         (Some("app"), Some("slow"), "Another app"),
         (None, None, "Another app"),
@@ -206,6 +210,29 @@ fn a_focus_refusal_says_earlier_actions_were_sent_only_when_they_were() {
             "a sentence: {nothing}"
         );
     }
+}
+
+/// An app that does not say where its focus is may keep not saying it, so
+/// a refusal that sent nothing never promises the same command will work;
+/// after one more try the agent tells the person instead of repeating it.
+#[test]
+fn an_unreadable_focus_result_does_not_promise_that_repeating_the_command_will_work() {
+    let said = focus_changed(false, Some("unreadable"), Some("slow"));
+    assert_eq!(
+        said,
+        "Your app did not say where its focus is, and nothing was sent. Wait a moment and try once more; if it refuses again, tell the person the app is not answering instead of repeating the command."
+    );
+    assert!(!said.contains("Run the same command again"), "{said}");
+    assert!(
+        !said.contains("in time"),
+        "it may have answered at once: {said}"
+    );
+
+    let sent = focus_changed(true, Some("unreadable"), Some("slow"));
+    assert!(
+        sent.starts_with("Your app did not say where its focus is. Earlier actions were sent"),
+        "{sent}"
+    );
 }
 
 /// When what is in front cannot be read, often because the active app

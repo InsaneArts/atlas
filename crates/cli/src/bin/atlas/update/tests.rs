@@ -185,3 +185,151 @@ async fn finishing_an_update_skips_a_helper_with_no_job() {
     assert!(has_helper_job(false, true), "a daemon that answers");
     assert!(!has_helper_job(false, false));
 }
+
+/// What a child that exited with `code` wrote.
+fn exited(code: i32, stdout: &str, stderr: &str) -> std::process::Output {
+    use std::os::unix::process::ExitStatusExt;
+    std::process::Output {
+        status: std::process::ExitStatus::from_raw(code << 8),
+        stdout: stdout.into(),
+        stderr: stderr.into(),
+    }
+}
+
+#[test]
+fn an_update_stops_when_a_child_does_not_acknowledge_success() {
+    const OK: &str = r#"{"ok":true}"#;
+    let unacknowledged = || {
+        [
+            exited(0, "not json", ""),
+            exited(0, "", ""),
+            exited(0, "null", ""),
+            exited(0, "true", ""),
+            exited(0, "[true]", ""),
+            exited(0, "{}", ""),
+            exited(0, r#"{"ok":"true"}"#, ""),
+            exited(0, r#"{"ok":1}"#, ""),
+            exited(0, r#"{"ok":false,"error":"refused"}"#, ""),
+            exited(1, OK, ""),
+            exited(1, "", OK),
+        ]
+    };
+    let steps: [&[&str]; 3] = [&["install"], &["restart"], &["start-input"]];
+    for second in unacknowledged() {
+        let shown = format!("{second:?}");
+        let mut ran = Vec::new();
+        let mut replies = [exited(0, OK, ""), second].into_iter();
+        let failed = run_steps(&steps, |step| {
+            ran.push(step.join(" "));
+            Ok(replies.next().unwrap_or_else(|| exited(0, OK, "")))
+        })
+        .unwrap()
+        .expect_err(&shown);
+        assert_eq!(ran, ["install", "restart"], "no next step: {shown}");
+        assert_eq!(failed["ok"], false, "{shown}");
+        assert_eq!(failed["failedStep"], "restart", "{shown}");
+        assert_eq!(failed["completedSteps"], json!(["install"]), "{shown}");
+        assert_eq!(failed["failure"]["ok"], false, "{shown}");
+        assert!(failed["failure"]["error"].is_string(), "{shown}");
+    }
+    let refused = run_steps(&steps, |_| {
+        Ok(exited(3, r#"{"ok":false,"error":"refused"}"#, ""))
+    })
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        refused["failure"],
+        json!({"ok": false, "error": "refused"}),
+        "a child's own failure is kept"
+    );
+    let done = run_steps(&steps, |_| Ok(exited(0, OK, ""))).unwrap();
+    assert_eq!(done.unwrap(), ["install", "restart", "start-input"]);
+
+    for output in unacknowledged() {
+        let (moved, report) = helper_moved(&output);
+        assert!(!moved, "{output:?}");
+        assert_eq!(report["ok"], false, "{output:?}");
+    }
+    assert!(helper_moved(&exited(0, OK, "")).0);
+
+    // Replies go to stdout, and errors to stderr when stdout says nothing.
+    let both = exited(0, OK, r#"{"ok":false}"#);
+    assert_eq!(child_reply(&both).unwrap(), json!({"ok": true}));
+    let stderr = exited(1, "", r#"{"ok":false,"error":"refused"}"#);
+    assert_eq!(child_reply(&stderr).unwrap()["error"], "refused");
+}
+
+#[test]
+fn an_update_retains_the_previous_app_while_menu_bar_shutdown_is_unconfirmed() {
+    let mut report = json!({"ok": true});
+    let error = retire_previous(
+        &mut report,
+        || {
+            Err(Error::new(
+                Code::Menubar,
+                "The menu bar did not stop within a minute",
+            ))
+        },
+        || panic!("the previous app was removed"),
+    )
+    .unwrap_err();
+    assert_eq!(error.code, Code::Menubar);
+    assert_eq!(
+        error.error,
+        "The menu bar did not stop within a minute, so the previous Atlas.app was kept. Quit the \
+         menu bar, then run atlas update again."
+    );
+    assert!(report.get("previous").is_none(), "{report}");
+
+    for running in [Some(8123), None] {
+        let mut report = json!({"ok": true});
+        let port =
+            retire_previous(&mut report, || Ok(running), || Ok(json!({"removed": true}))).unwrap();
+        assert_eq!(port, running, "restarted only where it ran");
+        assert_eq!(report["previous"], json!({"removed": true}));
+    }
+}
+
+#[test]
+fn an_update_does_not_take_unloadable_settings_for_no_menu_bar() {
+    use atlas_core::test_support::{TestChild, message, permitted};
+    if std::env::var_os("ATLAS_ANOTHER_ATLAS").is_some() {
+        message("running");
+        permitted("done");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let broken = dir.path().join("broken.toml");
+    std::fs::write(&broken, "helper_uid = [").unwrap();
+
+    // Another process of this executable may be the menu bar.
+    let mut other = TestChild::spawn(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "update::tests::an_update_does_not_take_unloadable_settings_for_no_menu_bar",
+                "--nocapture",
+            ])
+            .env("ATLAS_ANOTHER_ATLAS", "1"),
+    );
+    other.expect("running");
+    let running = stop_menubar(&broken);
+    other.permit("done");
+    assert!(other.wait().success());
+    let error = running.expect_err("where the menu bar keeps its records is unknown");
+    assert_eq!(error.code, Code::Menubar);
+    assert_eq!(
+        error.error,
+        format!(
+            "Atlas can't find the menu bar's record while Atlas runs as process {}",
+            other.process.id()
+        )
+    );
+
+    assert_eq!(
+        stop_menubar(&broken).unwrap(),
+        None,
+        "no other Atlas process runs"
+    );
+}

@@ -235,9 +235,9 @@ impl Registry {
             json!({"content": [], "structuredContent": {"closed": true}})
         } else {
             let outcome = child.run(tool, arguments).await;
-            let unknown = outcome
-                .as_ref()
-                .is_err_and(|error| error.uncertain || error.code == Code::Menubar);
+            // Only a failure that says so leaves a mutation unknown: a status
+            // read failing after an acknowledged effect is presentation.
+            let unknown = outcome.as_ref().is_err_and(|error| error.uncertain);
             if mutation && unknown {
                 reservation.usage.uncertain.store(true, Ordering::SeqCst);
             }

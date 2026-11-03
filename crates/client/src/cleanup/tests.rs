@@ -63,6 +63,8 @@ struct Fake {
     daemon_jobs: RefCell<Vec<plan::Job>>,
     /// Whether the helper's list of its jobs cannot be read.
     unlisted: Cell<bool>,
+    /// Whether the helper's records of its copies cannot be read.
+    unread_plans: Cell<bool>,
     /// Whether an earlier outcome is unknown.
     unknown: Cell<bool>,
     stopped: Cell<bool>,
@@ -109,6 +111,12 @@ impl Hands for Fake {
     async fn plan_states(&self, ids: &[Token]) -> Result<Vec<PlanState>> {
         self.plan_reads.set(self.plan_reads.get() + 1);
         self.log.borrow_mut().push("plan-states".into());
+        if self.unread_plans.get() {
+            return Err(Error::new(
+                Code::Environment,
+                "Atlas could not read every record of the helper's copies",
+            ));
+        }
         Ok(ids
             .iter()
             .map(|_| PlanState {

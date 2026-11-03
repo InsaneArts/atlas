@@ -96,9 +96,12 @@ pub enum Target {
     Point(f64, f64),
     /// A retained pointer gesture checks its point without consulting window memory.
     Pointer(f64, f64),
+    /// A drag, and the button it holds: only the left one moves a window by
+    /// its title bar.
     Drag {
         from: (f64, f64),
         to: (f64, f64),
+        button: Button,
     },
     Nothing,
 }
@@ -116,10 +119,11 @@ impl Action {
                 from_y,
                 to_x,
                 to_y,
-                ..
+                button,
             } => Target::Drag {
                 from: (*from_x, *from_y),
                 to: (*to_x, *to_y),
+                button: *button,
             },
             Self::Wait { .. } => Target::Nothing,
         }

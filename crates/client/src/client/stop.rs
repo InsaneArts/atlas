@@ -59,21 +59,19 @@ impl Client {
             peer_uid: self.transport.peer_uid,
         };
         let request = json!({"op": "job", "action": "stop-all", "reason": "person"});
+        let unconfirmed = || {
+            (
+                None,
+                Some("Atlas could not confirm that every background job was stopped".to_owned()),
+            )
+        };
         match daemon.call(&request).await {
             // A job it would not signal, could not see, or whose record it
             // cannot read may still run.
             Ok(reply) if reply["ok"] == true => {
                 let jobs = match JobReply::deserialize(&reply) {
                     Ok(JobReply::StopAll(jobs)) if reply["uncertain"] != true => jobs,
-                    _ => {
-                        return (
-                            None,
-                            Some(
-                                "Atlas could not confirm whether the helper stopped its background jobs"
-                                    .to_owned(),
-                            ),
-                        );
-                    }
+                    _ => return unconfirmed(),
                 };
                 let left = jobs.refused.len() + jobs.unknown.len() + jobs.unresolved.len();
                 let warning = (left > 0).then(|| {
@@ -87,6 +85,8 @@ impl Client {
             Ok(reply) if reply["code"] == "bad-request" && reply["uncertain"] != true => {
                 (None, None)
             }
+            // It answered, but could not stop or account for every job.
+            Ok(reply) if reply["code"] == "job" => unconfirmed(),
             // A removed socket does not acknowledge a request already sent.
             Err(error)
                 if error.code == Code::Io

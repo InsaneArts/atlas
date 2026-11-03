@@ -91,7 +91,8 @@ pub(super) fn manager_name() -> String {
 
 /// The daemon's hello: who and where the helper is, what it may do, and,
 /// when it keeps background jobs, how many may still run, are launching,
-/// or have records it cannot read (`jobs`).
+/// or have records it cannot read, and whether it could not read them all
+/// (`jobs`).
 pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
     use atlas_core::protocol::{JOBS, READ, SESSION_PIN};
 

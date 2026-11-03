@@ -531,6 +531,8 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
         left: 1,
         refused: 0,
         unknown: 0,
+        unresolved: 0,
+        unread: 0,
         error: None,
     }
     .say(&mut reply);
@@ -546,6 +548,8 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
         left: 0,
         refused: 0,
         unknown: 0,
+        unresolved: 0,
+        unread: 0,
         error: Some("Connection refused".into()),
     }
     .say(&mut reply);
@@ -759,6 +763,8 @@ fn a_log_out_or_uninstall_counts_what_it_stopped_and_says_what_it_could_not() {
         left: 0,
         refused: 1,
         unknown: 1,
+        unresolved: 0,
+        unread: 0,
         error: None,
     }
     .say(&mut reply);
@@ -776,6 +782,228 @@ fn a_log_out_or_uninstall_counts_what_it_stopped_and_says_what_it_could_not() {
             .as_str()
             .unwrap()
             .contains("could not see the processes")
+    );
+}
+
+/// Stop every job through a stand-in whose stop of every job is answered
+/// with `stopped`, and whose list of jobs is empty.
+async fn stopping_every_job_with(stopped: Value) -> Everyone {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_in(dir.path());
+    stand_in(&client.config.socket_path, move |request| {
+        Some(match request["action"].as_str() {
+            Some("stop-all") => stopped.clone(),
+            _ => json!({"ok": true, "op": "job", "action": "show", "jobs": []}),
+        })
+    });
+    stop_every(&client, StopReason::Stopped).await
+}
+
+#[tokio::test]
+async fn a_malformed_stop_acknowledgement_never_becomes_an_empty_successful_result() {
+    for reply in [
+        json!({"ok": true, "op": "job", "action": "show", "jobs": []}),
+        json!({"ok": true, "op": "job"}),
+        json!({"ok": true, "op": "job", "action": "stop-all", "stopping": "one"}),
+        json!({"ok": true, "op": "job", "action": "stop-all", "stopping": -1}),
+        json!({"ok": true, "op": "job", "action": "stop-all", "refused": {}}),
+        json!({"ok": true, "op": "job", "action": "stop-all", "unresolved": [{"id": "?"}]}),
+        json!({"ok": true, "op": "job", "action": "stop-all", "stopping": 1, "uncertain": true}),
+    ] {
+        let everyone = stopping_every_job_with(reply.clone()).await;
+        assert!(everyone.error.is_some(), "{reply}");
+        assert_eq!(everyone.stopped(), 0, "{reply}");
+        let mut said = json!({"ok": true});
+        everyone.say(&mut said);
+        assert_eq!(said["jobsStopped"], 0, "{reply}");
+        assert_eq!(
+            said["warnings"].as_array().map(Vec::len),
+            Some(1),
+            "{reply}"
+        );
+    }
+
+    // A complete stop of every job that leaves out what it need not say is
+    // still read as the older helpers sent it.
+    let everyone =
+        stopping_every_job_with(json!({"ok": true, "op": "job", "action": "stop-all"})).await;
+    assert!(everyone.error.is_none());
+    assert!(everyone.warnings().is_empty());
+}
+
+fn unreadable_row(id: &str) -> Shown {
+    shown(&json!({"id": id, "state": "unknown",
+        "error": "Atlas cannot tell whether this job's process is running"}))
+}
+
+fn ended_row(id: &str) -> Shown {
+    let mut ended = job_view(id, "ended");
+    ended["how"] = json!("stopped");
+    shown(&ended)
+}
+
+/// What [`outstanding`] comes to for one job told to stop, with the stop
+/// naming `named` unreadable, and every look listing `listed(n)` at its
+/// `n`th look; and how many looks there were.
+async fn outstanding_after(
+    named: &[JobId],
+    listed: impl Fn(usize) -> Vec<Shown>,
+) -> (Outstanding, usize) {
+    let looks = std::cell::Cell::new(0);
+    let left = outstanding(1, named, || {
+        looks.set(looks.get() + 1);
+        let jobs = listed(looks.get());
+        async move { Ok(jobs) }
+    })
+    .await;
+    (left, looks.get())
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_job_told_to_stop_whose_record_can_no_longer_be_read_is_never_counted_stopped() {
+    let started = tokio::time::Instant::now();
+    let (left, looks) = outstanding_after(&[], |_| vec![unreadable_row(ID)]).await;
+    assert_eq!(left, Outstanding { left: 0, unread: 1 });
+    assert!(
+        started.elapsed() >= JOB_GRACE + BEYOND_GRACE,
+        "it is looked at until the wait runs out, {looks} looks"
+    );
+    let everyone = Everyone {
+        asked: 1,
+        left: left.left,
+        unread: left.unread,
+        ..Everyone::default()
+    };
+    let mut reply = json!({"ok": true, "loggedOut": true});
+    everyone.say(&mut reply);
+    assert_eq!(reply["jobsStopped"], 0, "{reply}");
+    assert_eq!(
+        reply["warnings"],
+        json!(["Atlas could not read the record of 1 background job; it may still be running"])
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_job_whose_record_is_read_again_and_has_ended_counts_as_stopped() {
+    let (left, looks) = outstanding_after(&[], |look| {
+        vec![if look < 3 {
+            unreadable_row(ID)
+        } else {
+            ended_row(ID)
+        }]
+    })
+    .await;
+    assert_eq!(left, Outstanding { left: 0, unread: 0 });
+    assert_eq!(looks, 3);
+
+    // A record the stop already named unreadable is said by the stop's own
+    // count, and does not keep the wait going.
+    let other = JobId::parse("000000000000").unwrap();
+    let (left, looks) = outstanding_after(std::slice::from_ref(&other), |_| {
+        vec![ended_row(ID), unreadable_row(other.as_str())]
+    })
+    .await;
+    assert_eq!(left, Outstanding { left: 0, unread: 0 });
+    assert_eq!(looks, 1);
+}
+
+#[tokio::test]
+async fn unreadable_job_records_remain_visible_during_logout_cleanup() {
+    let everyone = stopping_every_job_with(json!({"ok": true, "op": "job", "action": "stop-all",
+        "stopping": 1, "unresolved": [{"id": ID}]}))
+    .await;
+    assert!(everyone.error.is_none());
+    assert_eq!(everyone.stopped(), 1, "only the job told to stop");
+    let mut reply = json!({"ok": true, "loggedOut": true});
+    everyone.say(&mut reply);
+    assert_eq!(reply["jobsStopped"], 1);
+    assert_eq!(
+        reply["warnings"],
+        json!(["Atlas could not read the record of 1 background job; it may still be running"])
+    );
+
+    let everyone = stopping_every_job_with(json!({"ok": true, "op": "job", "action": "stop-all",
+        "unresolved": [{"id": ID}, {"id": "000000000000"}]}))
+    .await;
+    assert_eq!(everyone.stopped(), 0);
+    assert_eq!(
+        everyone.warnings(),
+        ["Atlas could not read the records of 2 background jobs; they may still be running"]
+    );
+}
+
+#[tokio::test]
+async fn removing_the_socket_after_a_stop_was_sent_does_not_acknowledge_its_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_in(dir.path());
+    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+    std::fs::write(&client.transport.path, "endpoint").unwrap();
+    let (sent, request) = tokio::sync::oneshot::channel::<()>();
+    let socket = client.transport.path.clone();
+    // The request has gone out; then the daemon's socket is removed and the
+    // read of its reply fails.
+    let asked = async move {
+        request.await.unwrap();
+        std::fs::remove_file(&socket).unwrap();
+        Err(Error::new(Code::Io, "Connection reset by peer").uncertain())
+    };
+    sent.send(()).unwrap();
+    let everyone = stopped_every(&client, asked).await;
+    assert!(!client.transport.path.exists());
+    assert_eq!(
+        everyone.error.as_deref(),
+        Some("Connection reset by peer"),
+        "an unanswered stop is never taken to have found no jobs"
+    );
+    assert_eq!(everyone.warnings().len(), 1);
+
+    // Only a connection refused before anything was sent shows there is no
+    // daemon, and so no job.
+    let none = stopped_every(&client, async {
+        Err(Error::new(Code::Io, "Could not connect to socket"))
+    })
+    .await;
+    assert!(none.error.is_none());
+    assert!(none.warnings().is_empty());
+}
+
+#[tokio::test]
+async fn an_incomplete_stop_of_every_job_is_said_at_logout() {
+    use atlas_core::record_folder::LISTED;
+    use atlas_daemon::daemon::job::Jobs;
+
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_in(dir.path());
+    let daemon = dir.path().join("daemon");
+    std::fs::create_dir(&daemon).unwrap();
+    let jobs = Jobs::open(
+        &daemon,
+        "/nonexistent".into(),
+        nix::unistd::getuid().as_raw(),
+    )
+    .unwrap();
+    // More entries than one scan of the records reads.
+    for index in 0..LISTED {
+        std::fs::write(daemon.join(format!("jobs/unrelated-{index}")), "").unwrap();
+    }
+    stand_in(&client.config.socket_path, move |request| {
+        Some(match request["action"].as_str() {
+            Some("stop-all") => jobs.stop_all(StopReason::Stopped),
+            _ => jobs.show(None),
+        })
+    });
+    let everyone = stop_every(&client, StopReason::Stopped).await;
+    let mut reply = json!({"ok": true, "loggedOut": true});
+    everyone.say(&mut reply);
+    assert_eq!(reply["jobsStopped"], 0);
+    let warnings = reply["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{reply}");
+    assert!(
+        warnings[0]
+            .as_str()
+            .unwrap()
+            .contains("a job may still be running"),
+        "{reply}"
     );
 }
 

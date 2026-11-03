@@ -27,6 +27,7 @@ use std::{
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
     time::Duration,
 };
 
@@ -246,25 +247,16 @@ pub(crate) struct Copied {
 /// The paths among `targets` as the helper can open them: unchanged when it
 /// can read them (or they are copies already), otherwise copied first. Every
 /// target is checked before anything is copied; when a copy fails, the
-/// copies already made for the others go.
+/// copies already made for the others go. What is copied here is copied by
+/// a worker of its own that holds `ownership` until it is done, so a caller
+/// that stops waiting neither stalls other work nor lets another controller
+/// in before the copies are settled.
 pub(crate) async fn hand_over(
     client: &Client,
-    ownership: &Ownership,
+    ownership: &Arc<Ownership>,
     targets: Vec<Target>,
     running: &[AppRow],
 ) -> Result<Handed> {
-    // The app the targets open with: its copies go when it is closed.
-    let opened_with: Vec<String> = match targets.first() {
-        Some(Target::Name(name)) if targets.len() > 1 => vec![name.clone()],
-        Some(Target::Path(path))
-            if targets.len() > 1
-                && path.extension().is_some_and(|extension| extension == "app") =>
-        {
-            names(path)
-        }
-        Some(Target::Name(_) | Target::Path(_)) | None => Vec::new(),
-    };
-
     let root_path = PathBuf::from(ROOT);
     let checks: Vec<PathBuf> = targets
         .iter()
@@ -274,23 +266,95 @@ pub(crate) async fn hand_over(
         })
         .collect();
     let answers = readable(client, ownership, &checks).await?;
-    let placed = placement(targets, answers, running)?;
 
-    let root = if placed
-        .iter()
-        .any(|placed| matches!(placed, Placed::Copy { .. }))
-    {
-        self::root(client.config.helper_uid)?
-    } else {
-        root_path
-    };
-    let claims = Claims::of(client);
-    let owner = Owner {
-        session: client.host_session.as_ref().map(HostSession::key),
-        claims: &claims,
-        opened_with: &opened_with,
-    };
-    handed_in(&root, placed, &owner, copy)
+    let helper = client.config.helper_uid;
+    Handing {
+        targets,
+        answers,
+        running: running.to_vec(),
+        session: client.host_session.as_ref().map(HostSession::key).cloned(),
+        claims: Claims::of(client),
+    }
+    .on_worker(ownership, move || root(helper), copy)
+    .await
+}
+
+/// What [`hand_over`] does here once the helper said what it can read,
+/// owned so that it can go on by itself.
+struct Handing {
+    targets: Vec<Target>,
+    /// Whether the helper can read each path outside ROOT, in order.
+    answers: Vec<bool>,
+    running: Vec<AppRow>,
+    session: Option<Key>,
+    claims: Claims,
+}
+
+impl Handing {
+    /// [`Handing::locally`] on a blocking worker that holds `ownership`
+    /// until the copies, their removal and their claims are all done, even
+    /// when nobody waits for its answer any more.
+    async fn on_worker(
+        self,
+        ownership: &Arc<Ownership>,
+        prepare: impl FnOnce() -> Result<PathBuf> + Send + 'static,
+        copy: impl FnMut(&Path, &Path, &Token) -> Result<PathBuf> + Send + 'static,
+    ) -> Result<Handed> {
+        let ownership = Arc::clone(ownership);
+        // A dropped handle leaves the worker running: it ends, and lets
+        // control go, only once everything it began is settled.
+        tokio::task::spawn_blocking(move || {
+            let _ownership = ownership;
+            self.locally(prepare, copy)
+        })
+        .await
+        .map_err(|cause| {
+            problem(
+                "Atlas stopped copying for the helper before it finished; what it copied stays \
+                 claimed for this task.",
+            )
+            .with_source(cause)
+        })?
+    }
+
+    /// Place every target, then make the copies needed under the root
+    /// `prepare` readies, only when one is: claimed, made with `copy`,
+    /// labelled and settled as [`handed_in`] says.
+    fn locally(
+        self,
+        prepare: impl FnOnce() -> Result<PathBuf>,
+        copy: impl FnMut(&Path, &Path, &Token) -> Result<PathBuf>,
+    ) -> Result<Handed> {
+        // The app the targets open with: its copies go when it is closed.
+        let opened_with: Vec<String> = match self.targets.first() {
+            Some(Target::Name(name)) if self.targets.len() > 1 => vec![name.clone()],
+            Some(Target::Path(path))
+                if self.targets.len() > 1
+                    && path.extension().is_some_and(|extension| extension == "app") =>
+            {
+                names(path)
+            }
+            Some(Target::Name(_) | Target::Path(_)) | None => Vec::new(),
+        };
+
+        let placed = placement(self.targets, self.answers, &self.running)?;
+        let root = if placed
+            .iter()
+            .any(|placed| matches!(placed, Placed::Copy { .. }))
+        {
+            prepare()?
+        } else {
+            PathBuf::from(ROOT)
+        };
+        let owner = Owner {
+            session: self.session.as_ref(),
+            claims: &self.claims,
+            opened_with: &opened_with,
+        };
+        handed_in(&root, placed, &owner, copy, |folder| {
+            fs::symlink_metadata(folder)
+        })
+    }
 }
 
 /// What one target becomes for the helper.
@@ -373,14 +437,17 @@ struct Owner<'a> {
 /// with `copy`. Every copy's token is claimed for the command's task in one
 /// write before any folder is made, so a crash on the way leaves each one
 /// findable, and all are settled in one more once it is known how each
-/// went: `made` when it is there, `gone` only once its folder is seen to be
+/// went: `made` when it is there, `gone` only once `look` finds its folder
 /// absent. When a copy fails, those already made go; one whose folder
-/// stays anyway is left claimed and named in the error as `leftover`.
+/// stays anyway is left claimed and named in the error as `leftover`. A
+/// folder `look` cannot tell about is left claimed and named so too, and
+/// fails a hand-over that would otherwise have opened it.
 fn handed_in(
     root: &Path,
     placed: Vec<Placed>,
     owner: &Owner,
     mut copy: impl FnMut(&Path, &Path, &Token) -> Result<PathBuf>,
+    look: impl Fn(&Path) -> std::io::Result<fs::Metadata>,
 ) -> Result<Handed> {
     let tokens: Vec<Token> = placed
         .iter()
@@ -427,19 +494,26 @@ fn handed_in(
     for token in tokens {
         let folder = root.join(token.as_str());
         let owned = Owned::Copy { id: token };
-        match (fs::symlink_metadata(&folder).is_ok(), result.is_err()) {
-            (false, _) => settled.push((owned, State::Gone)),
-            (true, false) => settled.push((owned, State::Made)),
-            (true, true) => leftover.push(folder.to_string_lossy().into_owned()),
+        match look(&folder) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                settled.push((owned, State::Gone));
+            }
+            Ok(_) if result.is_ok() => settled.push((owned, State::Made)),
+            Ok(_) | Err(_) => leftover.push(folder.to_string_lossy().into_owned()),
         }
     }
     let _ = owner.claims.settle_all(&settled);
 
     match result {
-        Ok(()) => Ok(Handed {
+        Ok(()) if leftover.is_empty() => Ok(Handed {
             paths,
             copied: made,
         }),
+        Ok(()) => Err(problem(format!(
+            "Atlas could not check what it copied at {}; it stays claimed for this task.",
+            leftover.join(", ")
+        ))
+        .with("leftover", serde_json::json!(leftover))),
         Err(error) if leftover.is_empty() => Err(error),
         Err(mut error) => {
             error.error.push_str(&format!(
@@ -834,6 +908,28 @@ impl OpenCopy {
         fs::symlink_metadata(path)
             .is_ok_and(|now| now.dev() == self.metadata.dev() && now.ino() == self.metadata.ino())
     }
+
+    /// Whether the folder last changed longer than KEEP before `now`.
+    fn expired(&self, now: std::time::SystemTime) -> bool {
+        self.metadata
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age > KEEP)
+    }
+
+    /// Delete the folder at `path` where it is, once `path` is seen to name
+    /// this folder still; one swapped meanwhile is kept.
+    fn remove_at(&self, path: &Path) -> CopyRemoval {
+        if !self.still_at(path) {
+            return CopyRemoval::Unreadable;
+        }
+        match fs::remove_dir_all(path) {
+            Ok(()) => CopyRemoval::Removed,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::AlreadyGone,
+            Err(error) => CopyRemoval::Failed(error.to_string()),
+        }
+    }
 }
 
 /// The node (`DEVICE:INODE`) of the copy folder `token` names under
@@ -886,14 +982,7 @@ fn take_copy(root: &Path, name: &str, session: Option<&Key>, running: &[AppRow])
     if in_use(&folder, running) {
         return CopyRemoval::InUse;
     }
-    if !copy.still_at(&folder) {
-        return CopyRemoval::Unreadable;
-    }
-    match fs::remove_dir_all(&folder) {
-        Ok(()) => CopyRemoval::Removed,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => CopyRemoval::AlreadyGone,
-        Err(error) => CopyRemoval::Failed(error.to_string()),
-    }
+    copy.remove_at(&folder)
 }
 
 /// `path`, a folder, held open without following a link.
@@ -921,16 +1010,39 @@ pub fn copy_folder(root: &Path, token: &Token) -> PathBuf {
 /// closed does not stay forever. The tokens of the folders removed come
 /// back, so their claims can be settled.
 pub(crate) fn prune_in(root: &Path, running: &[AppRow]) -> Vec<Token> {
+    prune_at(root, running, std::time::SystemTime::now(), |_| ())
+}
+
+/// [`prune_in`], as it stands at `now`, calling `judged` with each folder
+/// found expired and unused just before it is removed. Each folder is held
+/// open without following a link, judged private and expired from that
+/// one descriptor, and removed by the rule [`take_copy`] follows: only
+/// once its path is seen to name that same folder still.
+fn prune_at(
+    root: &Path,
+    running: &[AppRow],
+    now: std::time::SystemTime,
+    mut judged: impl FnMut(&Path),
+) -> Vec<Token> {
+    if root_if_owned_in(root).is_none() {
+        return Vec::new();
+    }
+    let Ok(parent) = open_folder(root) else {
+        return Vec::new();
+    };
     let mut removed = Vec::new();
-    for folder in folders(root) {
-        let old = fs::symlink_metadata(&folder)
-            .and_then(|metadata| metadata.modified())
-            .ok()
-            .and_then(|modified| modified.elapsed().ok())
-            .is_some_and(|age| age > KEEP);
-        if old
-            && !in_use(&folder, running)
-            && fs::remove_dir_all(&folder).is_ok()
+    for folder in entries(root) {
+        let Some(name) = folder.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Ok(Some(copy)) = OpenCopy::open(&parent, name) else {
+            continue;
+        };
+        if copy.may_take(None).is_err() || !copy.expired(now) || in_use(&folder, running) {
+            continue;
+        }
+        judged(&folder);
+        if copy.remove_at(&folder) == CopyRemoval::Removed
             && let Some(token) = folder_token(&folder)
         {
             removed.push(token);

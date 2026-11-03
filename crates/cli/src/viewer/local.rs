@@ -53,7 +53,7 @@ pub(crate) fn running(record: &Path, port: u16) -> Option<Value> {
 
 /// The process serving the viewer that answers at `url` (its private
 /// address) right now; `None` when no viewer answers there.
-pub(super) fn answering(url: &str) -> Option<u32> {
+pub(crate) fn answering(url: &str) -> Option<u32> {
     exchange(url, "GET", "", None, Duration::from_secs(1), REPLY_LIMIT)
         .ok()
         .filter(|reply| reply.status == 200)

@@ -177,6 +177,26 @@ impl Gate {
         self.renew_at(self.lock()?, owner, Instant::now(), Instant::now)
     }
 
+    /// [`Gate::acquire`], its lease lasting `longer` past the usual one, so
+    /// a test that is slow to run never sees it expire.
+    #[cfg(test)]
+    pub(super) fn acquire_lasting(
+        self: &Arc<Self>,
+        owner: &str,
+        who: Who,
+        longer: std::time::Duration,
+    ) -> Result<Grant> {
+        let now = Instant::now();
+        self.acquire_at(self.lock()?, owner, who, now, || now + longer)
+    }
+
+    /// [`Gate::renew`], the lease lasting `longer` past the usual one.
+    #[cfg(test)]
+    pub(super) fn renew_lasting(&self, owner: &str, longer: std::time::Duration) -> Result<()> {
+        let now = Instant::now();
+        self.renew_at(self.lock()?, owner, now, || now + longer)
+    }
+
     fn renew_at(
         &self,
         mut state: MutexGuard<'_, State>,

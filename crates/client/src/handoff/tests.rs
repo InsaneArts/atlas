@@ -1,5 +1,8 @@
 use super::*;
-use crate::client::AppList;
+use crate::{
+    client::AppList,
+    test_support::{Requester, WATCHDOG},
+};
 
 #[test]
 fn only_a_real_private_folder_of_this_account_counts() {
@@ -454,6 +457,94 @@ fn pruning_names_each_copy_it_removed_by_its_token() {
     assert!(!gone.exists());
 }
 
+/// When a pruning test prunes: a fixed time.
+fn pruned_at() -> std::time::SystemTime {
+    std::time::UNIX_EPOCH + Duration::from_secs(1_800_000_000)
+}
+
+/// Make `folder` last changed `days` before [`pruned_at`].
+fn changed_before(folder: &Path, days: u64) {
+    let then = pruned_at() - Duration::from_secs(days * 24 * 60 * 60);
+    fs::File::open(folder).unwrap().set_modified(then).unwrap();
+}
+
+/// A private copy root under `dir` holding one expired copy folder, and
+/// that folder's token and path.
+fn expired_copy(dir: &Path) -> (PathBuf, Token, PathBuf) {
+    let root = dir.join("root");
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let token = Token::new();
+    let folder = copy_folder(&root, token.as_str(), "old.txt");
+    changed_before(&folder, 8);
+    (root, token, folder)
+}
+
+#[test]
+fn pruning_keeps_a_copy_folder_replaced_after_inspection() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let (root, _, folder) = expired_copy(&base);
+    let aside = base.join("aside");
+
+    let removed = prune_at(&root, &[], pruned_at(), |judged| {
+        assert_eq!(judged, folder);
+        fs::rename(judged, &aside).unwrap();
+        fs::DirBuilder::new().mode(0o700).create(judged).unwrap();
+        fs::write(judged.join("sentinel"), "fresh").unwrap();
+    });
+
+    assert!(removed.is_empty(), "{removed:?}");
+    assert_eq!(fs::read_to_string(aside.join("old.txt")).unwrap(), "hello");
+    assert_eq!(
+        fs::read_to_string(folder.join("sentinel")).unwrap(),
+        "fresh"
+    );
+}
+
+#[test]
+fn pruning_keeps_a_copy_folder_replaced_by_a_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let (root, _, folder) = expired_copy(&base);
+    let aside = base.join("aside");
+
+    let removed = prune_at(&root, &[], pruned_at(), |judged| {
+        fs::rename(judged, &aside).unwrap();
+        std::os::unix::fs::symlink(&aside, judged).unwrap();
+    });
+
+    assert!(removed.is_empty(), "{removed:?}");
+    assert_eq!(fs::read_to_string(aside.join("old.txt")).unwrap(), "hello");
+    assert!(fs::symlink_metadata(&folder).unwrap().is_symlink());
+}
+
+#[test]
+fn pruning_removes_only_an_unchanged_expired_copy_nothing_uses() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = fs::canonicalize(dir.path()).unwrap();
+    let (root, token, folder) = expired_copy(&base);
+    let recent = copy_folder(&root, Token::new().as_str(), "new.txt");
+    changed_before(&recent, 6);
+    let used = copy_folder(&root, Token::new().as_str(), "used.txt");
+    fs::write(used.join(OPENED_WITH), "TextEdit").unwrap();
+    changed_before(&used, 8);
+    let outside = copy_folder(&base, "outside", "kept.txt");
+    changed_before(&outside, 8);
+    let linked = root.join(Token::new().as_str());
+    std::os::unix::fs::symlink(&outside, &linked).unwrap();
+    let mut judged = Vec::new();
+
+    let removed = prune_at(&root, apps(&["TextEdit"]).rows(), pruned_at(), |folder| {
+        judged.push(folder.to_owned());
+    });
+
+    assert_eq!(removed, [token]);
+    assert_eq!(judged, std::slice::from_ref(&folder));
+    assert!(!folder.exists());
+    assert!(recent.exists() && used.exists(), "recent and in use");
+    assert!(fs::symlink_metadata(&linked).is_ok() && outside.join("kept.txt").exists());
+}
+
 #[test]
 fn every_copy_is_claimed_in_one_write_before_any_is_made() {
     let dir = tempfile::tempdir().unwrap();
@@ -470,10 +561,16 @@ fn every_copy_is_claimed_in_one_write_before_any_is_made() {
     let placed = to_copy(&[&sources[0], &sources[1]]);
 
     let mut seen = Vec::new();
-    let handed = handed_in(&root, placed, &owner, |path, root, token| {
-        seen.push(states(&output, &task));
-        copy(path, root, token)
-    })
+    let handed = handed_in(
+        &root,
+        placed,
+        &owner,
+        |path, root, token| {
+            seen.push(states(&output, &task));
+            copy(path, root, token)
+        },
+        |folder| fs::symlink_metadata(folder),
+    )
     .unwrap();
 
     assert_eq!(seen, [[State::Intent, State::Intent]; 2]);
@@ -496,7 +593,10 @@ fn a_failed_copy_takes_the_ones_before_it_and_each_is_settled_once_gone() {
     let missing = dir.path().join("missing.txt");
     let placed = to_copy(&[&made, &missing, &made]);
 
-    let error = handed_in(&root, placed, &owner, copy).unwrap_err();
+    let error = handed_in(&root, placed, &owner, copy, |folder| {
+        fs::symlink_metadata(folder)
+    })
+    .unwrap_err();
 
     assert!(error.error.contains("Could not copy"), "{error}");
     assert!(error.details.get("leftover").is_none());
@@ -521,16 +621,109 @@ fn a_failed_copy_whose_folder_stays_is_left_claimed_and_reported() {
     fs::write(&source, "hello").unwrap();
 
     // The copy fails after making its folder, and cannot remove it.
-    let error = handed_in(&root, to_copy(&[&source]), &owner, |_, root, token| {
-        fs::create_dir(root.join(token.as_str())).unwrap();
-        Err(problem("Could not copy"))
-    })
+    let error = handed_in(
+        &root,
+        to_copy(&[&source]),
+        &owner,
+        |_, root, token| {
+            fs::create_dir(root.join(token.as_str())).unwrap();
+            Err(problem("Could not copy"))
+        },
+        |folder| fs::symlink_metadata(folder),
+    )
     .unwrap_err();
 
     let leftover = error.details["leftover"].as_array().unwrap();
     assert_eq!(leftover.len(), 1);
     assert!(Path::new(leftover[0].as_str().unwrap()).exists());
     assert_eq!(states(&output, &task), [State::Intent]);
+}
+
+/// Look at a path as `fs::symlink_metadata` does, except that a copy
+/// folder under `root` is looked at with `fault` once it exists.
+fn faulty(
+    root: &Path,
+    fault: std::io::ErrorKind,
+) -> impl Fn(&Path) -> std::io::Result<fs::Metadata> + '_ {
+    move |path| {
+        let metadata = fs::symlink_metadata(path)?;
+        if path.parent() == Some(root) {
+            return Err(std::io::Error::from(fault));
+        }
+        Ok(metadata)
+    }
+}
+
+#[test]
+fn an_unreadable_copy_folder_keeps_its_task_claim() {
+    use std::io::ErrorKind;
+    for fault in [ErrorKind::PermissionDenied, ErrorKind::Other] {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, output, claims, task) = claiming(dir.path());
+        let owner = Owner {
+            session: None,
+            claims: &claims,
+            opened_with: &[],
+        };
+        let source = dir.path().join("note.txt");
+        fs::write(&source, "hello").unwrap();
+
+        let error = handed_in(
+            &root,
+            to_copy(&[&source]),
+            &owner,
+            copy,
+            faulty(&root, fault),
+        )
+        .unwrap_err();
+        let leftover = error.details["leftover"].as_array().unwrap();
+        assert_eq!(leftover.len(), 1, "{fault:?}");
+        assert!(Path::new(leftover[0].as_str().unwrap()).exists());
+        assert!(
+            error.error.contains(leftover[0].as_str().unwrap()),
+            "{error}"
+        );
+        assert_eq!(states(&output, &task), [State::Intent], "{fault:?}");
+
+        let error = handed_in(
+            &root,
+            to_copy(&[&source]),
+            &owner,
+            |_, root, token| {
+                fs::create_dir(root.join(token.as_str())).unwrap();
+                Err(problem("Could not copy"))
+            },
+            faulty(&root, fault),
+        )
+        .unwrap_err();
+        assert!(error.error.starts_with("Could not copy"), "{error}");
+        let leftover = error.details["leftover"].as_array().unwrap();
+        assert_eq!(leftover.len(), 1, "{fault:?}");
+        assert!(Path::new(leftover[0].as_str().unwrap()).exists());
+        assert_eq!(
+            states(&output, &task),
+            [State::Intent, State::Intent],
+            "{fault:?}"
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let (root, output, claims, task) = claiming(dir.path());
+    let owner = Owner {
+        session: None,
+        claims: &claims,
+        opened_with: &[],
+    };
+    let error = handed_in(
+        &root,
+        to_copy(&[&dir.path().join("note.txt")]),
+        &owner,
+        |_, _, _| Err(problem("Could not copy")),
+        faulty(&root, ErrorKind::PermissionDenied),
+    )
+    .unwrap_err();
+    assert!(error.details.get("leftover").is_none(), "{error}");
+    assert_eq!(states(&output, &task), [State::Gone], "a folder never made");
 }
 
 #[test]
@@ -545,7 +738,10 @@ fn the_record_keeps_no_file_names_or_paths() {
     let source = dir.path().join("Secret plan.rtf");
     fs::write(&source, "hello").unwrap();
 
-    let handed = handed_in(&root, to_copy(&[&source]), &owner, copy).unwrap();
+    let handed = handed_in(&root, to_copy(&[&source]), &owner, copy, |folder| {
+        fs::symlink_metadata(folder)
+    })
+    .unwrap();
 
     assert!(handed.paths[0].ends_with("Secret plan.rtf"));
     let record = fs::read_to_string(output.join(format!("tasks/{}.json", task.key()))).unwrap();
@@ -569,7 +765,10 @@ fn a_copy_is_said_by_where_it_came_from_and_went_and_knows_its_folder() {
     let source = dir.path().join("plan.rtf");
     fs::write(&source, "hello").unwrap();
 
-    let handed = handed_in(&root, to_copy(&[&source]), &owner, copy).unwrap();
+    let handed = handed_in(&root, to_copy(&[&source]), &owner, copy, |folder| {
+        fs::symlink_metadata(folder)
+    })
+    .unwrap();
 
     let copied = &handed.copied[0];
     assert_eq!(copied.token, token_of_copy(&handed.paths[0]));
@@ -692,4 +891,126 @@ fn a_copy_quit_target_is_only_one_this_session_may_take() {
         Some(format!("{}:{}", metadata.dev(), metadata.ino()))
     );
     assert_eq!(copy_node(&root, &token, &other), None);
+}
+
+/// Two files under `dir` for the helper, which it cannot read.
+fn unreadable_pair(dir: &Path) -> Vec<Target> {
+    ["a.txt", "b.txt"]
+        .into_iter()
+        .map(|name| {
+            let path = dir.join(name);
+            fs::write(&path, "hello").unwrap();
+            Target::Path(path)
+        })
+        .collect()
+}
+
+fn handing(targets: Vec<Target>, claims: Claims) -> Handing {
+    Handing {
+        answers: vec![false; targets.len()],
+        targets,
+        running: Vec::new(),
+        session: None,
+        claims,
+    }
+}
+
+#[test]
+fn a_blocked_handoff_copy_leaves_the_runtime_responsive_and_retains_controller_exclusion() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, output, claims, task) = claiming(dir.path());
+    let controller = atlas_control::Controller::at(7001, &dir.path().join("state"));
+    let ownership = Arc::new(controller.acquire(false).unwrap());
+    let handing = handing(unreadable_pair(dir.path()), claims);
+    let (entered, entry) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let (seen, seen_task) = (output.clone(), task.clone());
+    let mut first = true;
+    let copying = move |path: &Path, root: &Path, token: &Token| {
+        if std::mem::take(&mut first) {
+            let _ = entered.send(states(&seen, &seen_task));
+            let _ = released.recv();
+        }
+        copy(path, root, token)
+    };
+    let prepared = root.clone();
+    let request = Requester::start(move || async move {
+        handing
+            .on_worker(&ownership, move || Ok(prepared), copying)
+            .await
+    });
+
+    let intents = entry.recv_timeout(WATCHDOG).unwrap();
+    let responsive = request.responsive();
+    if !responsive {
+        let _ = release.send(());
+    }
+    assert!(responsive, "the runtime waited for the copy");
+    assert_eq!(intents, [State::Intent, State::Intent]);
+    let busy = |controller: &atlas_control::Controller| {
+        controller.acquire(false).err().map(|error| error.code) == Some(Code::Busy)
+    };
+    assert!(busy(&controller), "another controller got in");
+
+    request.abandon();
+    assert!(busy(&controller), "control ended with the request");
+    assert_eq!(states(&output, &task), [State::Intent, State::Intent]);
+
+    release.send(()).unwrap();
+    let _next = controller.clone().waiting(WATCHDOG).acquire(false).unwrap();
+    assert_eq!(states(&output, &task), [State::Made, State::Made]);
+    assert_eq!(fs::read_dir(&root).unwrap().count(), 2);
+}
+
+#[test]
+fn a_failed_handoff_cleans_earlier_copies_before_releasing_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let (root, output, claims, task) = claiming(dir.path());
+    let controller = atlas_control::Controller::at(7001, &dir.path().join("state"));
+    let ownership = Arc::new(controller.acquire(false).unwrap());
+    let handing = handing(unreadable_pair(dir.path()), claims);
+    let (entered, entry) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let mut tried = Vec::new();
+    let copying = move |path: &Path, root: &Path, token: &Token| {
+        tried.push(path.file_name().unwrap().to_owned());
+        if tried.len() == 1 {
+            return copy(path, root, token);
+        }
+        let _ = entered.send(tried.clone());
+        let _ = released.recv();
+        // The copy fails after making its folder, and cannot remove it.
+        fs::create_dir(root.join(token.as_str())).unwrap();
+        Err(problem("Could not copy"))
+    };
+    let prepared = root.clone();
+    let request = Requester::start(move || async move {
+        handing
+            .on_worker(&ownership, move || Ok(prepared), copying)
+            .await
+    });
+
+    let tried = entry.recv_timeout(WATCHDOG).unwrap();
+    let responsive = request.responsive();
+    if !responsive {
+        let _ = release.send(());
+    }
+    assert!(responsive, "the runtime waited for the copy");
+    assert_eq!(tried, ["a.txt", "b.txt"]);
+    assert_eq!(
+        fs::read_dir(&root).unwrap().count(),
+        1,
+        "the first copy is made"
+    );
+
+    request.abandon();
+    release.send(()).unwrap();
+    let _next = controller.clone().waiting(WATCHDOG).acquire(false).unwrap();
+    let left: Vec<PathBuf> = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(left.len(), 1, "the first copy went: {left:?}");
+    assert!(!left[0].join("a.txt").exists());
+    assert_eq!(states(&output, &task), [State::Gone, State::Intent]);
 }

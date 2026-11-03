@@ -26,6 +26,7 @@ fn window(pid: i64, owner: &str, layer: i64, bounds: (f64, f64, f64, f64)) -> Wi
         title: Some("Secret plans.txt".to_owned()),
         layer,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x: bounds.0,
             y: bounds.1,
@@ -57,9 +58,15 @@ struct Seen {
     unread: Option<Unread>,
     slow: Duration,
     clock: Option<Instant>,
+    /// The Accessibility status behind an unreadable system focus.
+    status: Option<objc2_application_services::AXError>,
+    /// Whose title Accessibility finds at a drag's press point; nothing
+    /// unless a test sets it.
+    title: Option<Result<Option<i64>>>,
     focus_reads: usize,
     window_reads: usize,
     keyboard_reads: usize,
+    title_reads: usize,
     app_focused: bool,
 }
 
@@ -98,8 +105,11 @@ impl Look for Seen {
 
     fn focused(&mut self) -> Result<Option<i64>> {
         self.focus_reads += 1;
-        match &self.focused {
-            Some(Ok(pid)) => Ok(*pid),
+        match (&self.focused, self.status) {
+            (Some(Ok(pid)), _) => Ok(*pid),
+            (_, Some(status)) => {
+                Err(Error::new(Code::Native, "unreadable").with_source(ax::Status(status)))
+            }
             _ => Err(Error::new(Code::Native, "unreadable")),
         }
     }
@@ -128,6 +138,15 @@ impl Look for Seen {
 
     fn dock(&mut self) -> Dock {
         self.dock.clone().unwrap_or(Dock::Icons(Vec::new()))
+    }
+
+    fn title_bar(&mut self, _: i64, _: (f64, f64)) -> Result<Option<i64>> {
+        self.title_reads += 1;
+        match &self.title {
+            Some(Ok(title)) => Ok(*title),
+            Some(Err(_)) => Err(Error::new(Code::Native, "unreadable")),
+            None => Ok(None),
+        }
     }
 }
 
@@ -163,6 +182,26 @@ pub(in crate::native) fn verify_input(
     let mut look = Seen::focused(Some(focused))
         .showing(listed)
         .typing_in(keyboard);
+    let selected = match number {
+        Some(number) => expect.clone().in_window(number)?,
+        None => expect.clone(),
+    };
+    require(&selected, need, &display(), &mut look, deadline)
+}
+
+/// A final check of `need` while the app is active and Accessibility finds
+/// the title bar of window `title` at the press point, as this check alone
+/// reads it.
+pub(in crate::native) fn verify_move(
+    expect: &Expect,
+    need: Need,
+    number: Option<i64>,
+    title: Option<i64>,
+    listed: Vec<Window>,
+    deadline: Instant,
+) -> Result<Option<&'static str>> {
+    let mut look = Seen::focused(Some(expect.pid())).showing(listed);
+    look.title = Some(Ok(title));
     let selected = match number {
         Some(number) => expect.clone().in_window(number)?,
         None => expect.clone(),
@@ -228,6 +267,7 @@ fn remembered_targeting_uses_the_same_point_as_focus_admission() {
             Need::Drag {
                 from: (10.0, 20.0),
                 to: (30.0, 40.0),
+                button: atlas_core::actions::Button::Left,
             },
             true,
         ),
@@ -372,17 +412,79 @@ fn the_menu_bar_counts_as_the_apps_only_while_it_has_keyboard_focus() {
 #[test]
 fn click_through_overlays_do_not_hide_the_window_under_them() {
     let document = window(APP, "TextEdit", 0, (100.0, 100.0, 400.0, 300.0));
-    for owner in ["Dock", "Notification Center"] {
-        let overlay = window(2, owner, 20, (0.0, 0.0, 1000.0, 800.0));
+    for (owner, system) in [
+        ("Dock", None),
+        (
+            "Notification Center",
+            Some(windows::System::NotificationCenter),
+        ),
+    ] {
+        let mut overlay = window(2, owner, 20, (0.0, 0.0, 1000.0, 800.0));
+        overlay.system = system;
         let mut look = Seen::focused(Some(APP)).showing(vec![overlay, document.clone()]);
         assert!(point_with(&mut look, 200.0, 200.0).is_ok(), "{owner}");
     }
 
     let other = window(2, "Shade", 20, (0.0, 0.0, 1000.0, 800.0));
-    let mut look = Seen::focused(Some(APP)).showing(vec![other, document]);
+    let mut look = Seen::focused(Some(APP)).showing(vec![other, document.clone()]);
     assert_eq!(
         refusal(point_with(&mut look, 200.0, 200.0))["found"]["app"],
         "Shade"
+    );
+
+    let claimed = window(2, "Notification Center", 20, (0.0, 0.0, 1000.0, 800.0));
+    let mut look = Seen::focused(Some(APP)).showing(vec![claimed, document]);
+    let error = point_with(&mut look, 200.0, 200.0).unwrap_err();
+    assert_eq!(
+        error.error,
+        "Atlas could not prove that Notification Center shows the window there, so click \
+         where the app shows and try again; this action and the rest were not sent",
+        "a name alone proves no overlay"
+    );
+    assert_eq!(error.details["reason"], "unreadable");
+}
+
+/// A desktop widget, as the helper proves Notification Center draws one.
+fn widget(bounds: (f64, f64, f64, f64)) -> Window {
+    let mut widget = window(3, "Notification Center", windows::WIDGET_LAYER, bounds);
+    widget.title = Some("Month".to_owned());
+    widget.system = Some(windows::System::NotificationCenter);
+    widget
+}
+
+#[test]
+fn a_desktop_widget_is_named_as_what_covers_the_point() {
+    let document = window(APP, "TextEdit", 0, (100.0, 100.0, 400.0, 300.0));
+    let listed = vec![document, widget((8.0, 38.0, 180.0, 180.0))];
+    let look = || Seen::focused(Some(APP)).showing(listed.clone());
+
+    assert!(
+        point_with(&mut look(), 150.0, 150.0).is_ok(),
+        "the app's window over it"
+    );
+    let error = point_with(&mut look(), 50.0, 50.0).unwrap_err();
+    assert_eq!(
+        error.error,
+        "A desktop widget is at that point, not the app's window, so bring it there or pick \
+         another point; this action and the rest were not sent"
+    );
+    assert_eq!(
+        refusal(Err(error)),
+        json!({"reason": "point", "found": {"app": "Notification Center", "pid": 3}}),
+        "never the widget's name"
+    );
+    let drag = Need::Drag {
+        from: (150.0, 150.0),
+        to: (50.0, 50.0),
+        button: atlas_core::actions::Button::Left,
+    };
+    let error = require(&expect(), drag, &display(), &mut look(), later()).unwrap_err();
+    assert!(
+        error
+            .error
+            .starts_with("A desktop widget is at the drop point, not the app's window, so"),
+        "{}",
+        error.error
     );
 }
 
@@ -467,6 +569,7 @@ fn a_drag_is_refused_when_it_would_drop_on_the_dock() {
     let drag = |to| Need::Drag {
         from: (300.0, 650.0),
         to,
+        button: atlas_core::actions::Button::Left,
     };
     assert!(docked_need(APP, &icons(), drag((400.0, 700.0))).is_ok());
 
@@ -490,6 +593,7 @@ fn a_drag_is_refused_when_it_would_drop_on_the_dock() {
     let from_icon = Need::Drag {
         from: (300.0, 770.0),
         to: (400.0, 700.0),
+        button: atlas_core::actions::Button::Left,
     };
     assert_eq!(
         refusal(docked_need(APP, &icons(), from_icon))["found"]["app"],
@@ -516,7 +620,8 @@ fn each_action_needs_what_it_touches_first() {
         need(json!({"type": "drag", "fromX": 5, "fromY": 6, "toX": 7, "toY": 8})),
         Need::Drag {
             from: (5.0, 6.0),
-            to: (7.0, 8.0)
+            to: (7.0, 8.0),
+            button: atlas_core::actions::Button::Left,
         },
         "a drag needs its start and its drop"
     );
@@ -567,6 +672,97 @@ fn a_focus_that_cannot_be_read_refuses() {
 
     let mut no_focus = Seen::default().showing(vec![menu_bar(), document]);
     assert_eq!(refusal(point_with(&mut no_focus, 200.0, 10.0)), unreadable);
+}
+
+/// Every cause behind `error`, as each says itself, innermost last.
+fn causes(error: &Error) -> String {
+    let mut said = Vec::new();
+    let mut cause = std::error::Error::source(error);
+    while let Some(current) = cause {
+        said.push(current.to_string());
+        cause = current.source();
+    }
+    said.join(" / ")
+}
+
+#[test]
+fn an_unreadable_focus_keeps_why_privately_without_any_title() {
+    let started = Instant::now();
+    let mut look = Seen::default().showing(vec![document()]);
+    look.status = Some(objc2_application_services::AXError::CannotComplete);
+    look.clock = Some(started);
+    let bound = Expect::from_instance(atlas_core::process::Instance::new(
+        APP as i32,
+        [1_700_000_000, 42],
+    ))
+    .unwrap();
+    let deadline = started + Duration::from_millis(500);
+
+    let error = require(&bound, Need::Keys, &display(), &mut look, deadline).unwrap_err();
+    let said = causes(&error);
+    assert!(said.contains("status -25204"), "{said}");
+    assert!(said.contains("0.0 ms in, 500.0 ms left"), "{said}");
+    assert!(
+        said.contains("process 812 started 1700000000.000042"),
+        "{said}"
+    );
+    assert!(!said.contains("Secret"), "{said}");
+    assert_eq!(
+        json!(error),
+        json!({
+            "ok": false,
+            "code": "focus-changed",
+            "error": error.error,
+            "uncertain": false,
+            "reason": "unreadable",
+        }),
+        "the reply says nothing more"
+    );
+}
+
+#[test]
+fn probes_reach_the_log_at_most_once_per_gap_and_never_past_their_limit() {
+    let started = Instant::now();
+    let mut notes = Notes::new();
+    assert_eq!(notes.admit(started), Some(0));
+    assert_eq!(notes.admit(started + PROBE_GAP / 2), None);
+    assert_eq!(notes.admit(started + PROBE_GAP / 2), None);
+    assert_eq!(notes.admit(started + PROBE_GAP), Some(2));
+
+    let mut at = started + PROBE_GAP;
+    for _ in 2..PROBES {
+        at += PROBE_GAP;
+        assert!(notes.admit(at).is_some());
+    }
+    assert_eq!(notes.admit(at + PROBE_GAP * 10), None, "the limit holds");
+}
+
+#[test]
+fn a_late_unreadable_focus_keeps_the_request_that_failed() {
+    let started = Instant::now();
+    let mut look = inside_with(typing(field("Email")), vec![document()]);
+    look.slow = Duration::from_millis(20);
+    look.unread = Some(Unread::Failed);
+    look.clock = Some(started);
+    let deadline = started + Duration::from_millis(5);
+    let error = require(
+        &in_field("Email"),
+        Need::Keys,
+        &display(),
+        &mut look,
+        deadline,
+    )
+    .unwrap_err();
+    assert_eq!(error.details["unread"], "slow");
+    let said = causes(&error);
+    assert!(
+        said.contains("no request said why, 20.0 ms in, 0.0 ms left, for process 812"),
+        "{said}"
+    );
+    assert!(
+        said.contains("Where the app's focus is could not be read"),
+        "{said}"
+    );
 }
 
 /// A deadline well past any test's own reads.
@@ -635,6 +831,7 @@ fn numbered(number: i64, pid: i64, title: Option<&str>, bounds: (f64, f64, f64, 
         title: title.map(str::to_owned),
         layer: 0,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x: bounds.0,
             y: bounds.1,
@@ -894,6 +1091,7 @@ fn pointer_preparation_accepts_an_exposed_point_beside_an_overlapping_floating_p
         Need::Drag {
             from: (120.0, 120.0),
             to: (130.0, 130.0),
+            button: atlas_core::actions::Button::Left,
         },
     ] {
         let panel = Window {
@@ -918,6 +1116,7 @@ fn pointer_verification_accepts_an_active_app_without_reading_window_focus() {
             Need::Drag {
                 from: (120.0, 120.0),
                 to: (130.0, 130.0),
+                button: atlas_core::actions::Button::Left,
             },
         ] {
             let mut look = Seen::focused(focused).showing(vec![document()]);
@@ -938,6 +1137,7 @@ fn pointer_preparation_refuses_a_point_covered_by_a_same_app_floating_panel() {
         Need::Drag {
             from: (200.0, 200.0),
             to: (120.0, 120.0),
+            button: atlas_core::actions::Button::Left,
         },
     ] {
         let panel = Window {
@@ -1578,7 +1778,11 @@ fn a_drag_is_checked_at_its_press_point_only() {
     let drag = |from, to| {
         require(
             &in_document(),
-            Need::Drag { from, to },
+            Need::Drag {
+                from,
+                to,
+                button: atlas_core::actions::Button::Left,
+            },
             &display(),
             &mut Seen::focused(Some(APP)).showing(listed.clone()),
             later(),
@@ -1598,6 +1802,223 @@ fn a_drag_is_checked_at_its_press_point_only() {
         "point",
         "a drop where no window of the app is"
     );
+}
+
+/// The Dock with its icons along the bottom, the app's window, another
+/// app's window and a widget; the rest of the display empty desktop.
+fn desktop() -> Vec<Window> {
+    vec![
+        window(2, "Dock", 20, (0.0, 0.0, 1000.0, 800.0)),
+        numbered(4120, APP, Some("Untitled"), (100.0, 100.0, 400.0, 300.0)),
+        window(OTHER, "Calculator", 0, (600.0, 100.0, 200.0, 200.0)),
+        widget((8.0, 430.0, 180.0, 180.0)),
+    ]
+}
+
+/// A drag pressing on the app's window's title, at the top of it.
+fn moving(to: (f64, f64)) -> Need {
+    Need::Drag {
+        from: (300.0, 110.0),
+        to,
+        button: atlas_core::actions::Button::Left,
+    }
+}
+
+/// A check of `need` where Accessibility finds the title of window
+/// `title` at the press point, and how often it was asked.
+fn moved_with(
+    title: Result<Option<i64>>,
+    need: Need,
+    listed: Vec<Window>,
+) -> (Result<Option<&'static str>>, usize) {
+    let mut look = Seen::focused(Some(APP)).showing(listed).docked(icons());
+    look.title = Some(title);
+    let outcome = require(&expect(), need, &display(), &mut look, later());
+    (outcome, look.title_reads)
+}
+
+#[test]
+fn a_proven_native_title_bar_drag_may_finish_on_clear_desktop() {
+    for to in [(800.0, 600.0), (300.0, 650.0), (999.0, 729.0), (0.0, 420.0)] {
+        let (outcome, reads) = moved_with(Ok(Some(4120)), moving(to), desktop());
+        assert!(outcome.is_ok(), "{to:?}: {outcome:?}");
+        assert_eq!(reads, 1, "{to:?}: proven afresh, once");
+    }
+
+    let (outcome, reads) = moved_with(Ok(Some(4120)), moving((200.0, 200.0)), desktop());
+    assert!(outcome.is_ok(), "a drop on its own window");
+    assert_eq!(reads, 0, "needs no proof");
+}
+
+#[test]
+fn a_drag_onto_the_desktop_without_proof_of_a_title_bar_move_is_refused() {
+    let unproven = "Only a window dragged by its title bar can be dropped on the empty desktop, \
+                    so start the drag on its title bar or pick another drop point; this action \
+                    and the rest were not sent";
+    for (title, what) in [
+        (Ok(None), "content under the press point"),
+        (Ok(Some(4121)), "another window's title"),
+        (
+            Err(Error::new(Code::Native, "unreadable")),
+            "a proof that could not be read",
+        ),
+    ] {
+        let (outcome, reads) = moved_with(title, moving((800.0, 600.0)), desktop());
+        let error = outcome.unwrap_err();
+        assert_eq!(error.error, unproven, "{what}");
+        assert_eq!(
+            refusal(Err(error)),
+            json!({"reason": "point", "found": null}),
+            "{what}"
+        );
+        assert_eq!(reads, 1, "{what}");
+    }
+
+    let on_the_menu_bar = Need::Drag {
+        from: (300.0, 10.0),
+        to: (800.0, 600.0),
+        button: atlas_core::actions::Button::Left,
+    };
+    let mut listed = desktop();
+    listed.insert(0, menu_bar());
+    let (outcome, reads) = moved_with(Ok(Some(4120)), on_the_menu_bar, listed);
+    assert_eq!(
+        outcome.unwrap_err().error,
+        unproven,
+        "a press on the menu bar"
+    );
+    assert_eq!(reads, 0, "no window of the app's is pressed to prove");
+}
+
+#[test]
+fn a_proven_window_move_still_refuses_anything_but_clear_desktop() {
+    for (to, found, what) in [
+        (
+            (300.0, 770.0),
+            json!({"app": "Dock", "pid": 2}),
+            "a Dock icon or the Trash",
+        ),
+        (
+            (700.0, 200.0),
+            json!({"app": "Calculator", "pid": OTHER}),
+            "another app's window",
+        ),
+        (
+            (50.0, 500.0),
+            json!({"app": "Notification Center", "pid": 3}),
+            "a widget",
+        ),
+    ] {
+        let (outcome, reads) = moved_with(Ok(Some(4120)), moving(to), desktop());
+        assert_eq!(
+            refusal(outcome),
+            json!({"reason": "point", "found": found}),
+            "{what}"
+        );
+        assert_eq!(reads, 0, "{what}: no proof is asked for");
+    }
+
+    for to in [(1000.0, 400.0), (-1.0, 400.0), (500.0, 800.0)] {
+        let (outcome, reads) = moved_with(Ok(Some(4120)), moving(to), desktop());
+        assert_eq!(
+            refusal(outcome)["reason"],
+            "point",
+            "{to:?}: off the display"
+        );
+        assert_eq!(reads, 0, "{to:?}");
+    }
+
+    let mut claimed = desktop();
+    claimed.insert(
+        0,
+        window(5, "Notification Center", 23, (700.0, 500.0, 250.0, 150.0)),
+    );
+    let (outcome, reads) = moved_with(Ok(Some(4120)), moving((800.0, 600.0)), claimed);
+    assert_eq!(
+        refusal(outcome)["reason"],
+        "unreadable",
+        "an unproven surface"
+    );
+    assert_eq!(reads, 0);
+
+    let mut faint = desktop();
+    let mut invisible = window(6, "Shade", 0, (700.0, 500.0, 250.0, 150.0));
+    invisible.alpha = 0.0;
+    faint.insert(0, invisible);
+    let (outcome, reads) = moved_with(Ok(Some(4120)), moving((800.0, 600.0)), faint);
+    assert_eq!(
+        refusal(outcome)["reason"],
+        "point",
+        "a window that shows nothing"
+    );
+    assert_eq!(reads, 0);
+
+    let mut look = Seen::focused(Some(APP))
+        .showing(desktop())
+        .docked(Dock::Unread);
+    look.title = Some(Ok(Some(4120)));
+    let outcome = require(
+        &expect(),
+        moving((800.0, 600.0)),
+        &display(),
+        &mut look,
+        later(),
+    );
+    assert_eq!(refusal(outcome)["reason"], "unreadable", "a Dock not read");
+}
+
+#[test]
+fn a_named_window_moves_onto_the_desktop_only_by_its_own_title() {
+    let check = |number| {
+        let mut look = Seen::focused(Some(APP)).showing(desktop()).docked(icons());
+        look.title = Some(Ok(Some(4120)));
+        let selected = expect().in_window(number).unwrap();
+        require(
+            &selected,
+            moving((800.0, 600.0)),
+            &display(),
+            &mut look,
+            later(),
+        )
+    };
+    assert!(check(4120).is_ok());
+    assert_eq!(refusal(check(4121))["reason"], "window");
+}
+
+#[test]
+fn each_check_proves_the_move_again() {
+    let mut look = Seen::focused(Some(APP)).showing(desktop()).docked(icons());
+    look.title = Some(Ok(Some(4120)));
+    let check =
+        |look: &mut Seen| require(&expect(), moving((800.0, 600.0)), &display(), look, later());
+    assert!(check(&mut look).is_ok());
+    look.title = Some(Ok(None));
+    assert_eq!(
+        refusal(check(&mut look))["reason"],
+        "point",
+        "the window's title is no longer under the press point"
+    );
+    assert_eq!(look.title_reads, 2);
+}
+
+#[test]
+fn only_a_left_button_title_bar_drag_may_drop_on_the_desktop() {
+    for (button, moves) in [("left", true), ("right", false), ("middle", false)] {
+        let action: Action = serde_json::from_value(json!({
+            "type": "drag",
+            "fromX": 300,
+            "fromY": 110,
+            "toX": 800,
+            "toY": 600,
+            "button": button,
+        }))
+        .unwrap();
+        let (outcome, _) = moved_with(Ok(Some(4120)), action.target(), desktop());
+        assert_eq!(outcome.is_ok(), moves, "{button}: {outcome:?}");
+        if !moves {
+            assert_eq!(refusal(outcome)["reason"], "point", "{button}");
+        }
+    }
 }
 
 #[test]

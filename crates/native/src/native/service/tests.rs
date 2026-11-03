@@ -2,7 +2,10 @@ use super::{
     Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Perform, Request, Result,
     admitted, hold, read_request,
 };
-use crate::native::focus::Need;
+use crate::native::{
+    events::tap::{Posted, Seen, Tap},
+    focus::Need,
+};
 use atlas_core::{error::Code, session::Display};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -37,7 +40,7 @@ fn service(marker: &std::path::Path) -> super::Service {
         engine: Arc::new(Mutex::new(super::Engine::idle(epoch.clone()))),
         operations: super::Operations::default(),
         gate: Arc::new(Gate::default()),
-        epoch: super::RwLock::new(epoch),
+        epoch: Arc::new(super::RwLock::new(epoch)),
         build: None,
         executable: None,
         stopping: tokio::sync::Notify::new(),
@@ -1347,7 +1350,12 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
     let operations = super::Operations::default();
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+    // The current controller's lease outlasts any delay in running the test,
+    // so only a refusal could end it.
+    let lasting = Duration::from_secs(60 * 60);
+    let grant = gate
+        .acquire_lasting(&owner, super::Who::Agent, lasting)
+        .unwrap();
     for operation in ["release", "renew", "input"] {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         client
@@ -1356,9 +1364,10 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
             )
             .await
             .unwrap();
-        drop(client);
         let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
         let refused = gate.clone();
+        let (decided, deciding) = tokio::sync::oneshot::channel();
+        let (left, leaving) = tokio::sync::oneshot::channel::<()>();
         let mut tasks = super::JoinSet::new();
         let task = tasks.spawn(async move {
             let _phase = phase;
@@ -1371,6 +1380,9 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
             };
             assert_eq!(refusal.code, Code::LeaseLost);
             assert!(!refusal.uncertain);
+            // The refusal is answered only once its client has gone.
+            decided.send(()).unwrap();
+            leaving.await.unwrap();
             super::reply(&mut server, Err(refusal)).await
         });
         operations
@@ -1378,13 +1390,16 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
             .lock()
             .unwrap()
             .insert(task.id(), (observed, false));
+        deciding.await.expect("the request was read and refused");
+        drop(client);
+        left.send(()).unwrap();
         let outcome = tasks.join_next_with_id().await.unwrap();
         assert!(matches!(outcome, Ok((_, Err(_)))));
         super::connection_outcome(outcome, &operations, false).unwrap();
         operations.check().unwrap();
         assert!(gate.active().unwrap());
         drop(grant.authorize().unwrap());
-        gate.renew(&owner).unwrap();
+        gate.renew_lasting(&owner, lasting).unwrap();
     }
     operations.drain().await.unwrap();
 }
@@ -2959,8 +2974,9 @@ async fn a_successful_reset_recovers_named_and_unnamed_input_after_a_join_failur
     operations.reap().await.unwrap();
     assert!(operations.check().unwrap_err().uncertain);
 
-    super::reset(&operations, &stand, &gate, |engine| {
-        assert!(!gate.active()?);
+    let cancelled = gate.clone();
+    super::reset(&operations, &stand, &gate, move |engine| {
+        assert!(!cancelled.active()?);
         engine.assert_locked();
         engine.release()
     })
@@ -3156,6 +3172,31 @@ async fn a_preparation_worker_join_failure_keeps_the_outcome_unknown() {
     assert_eq!(reply["partial"], false);
     assert_eq!(reply["performed"], 0);
 }
+
+#[tokio::test]
+async fn a_panicking_engine_worker_leaves_outcomes_unknown_until_recovery() {
+    let operations = super::Operations::default();
+    let stand = Stand::locked(&[]);
+    let engine = stand.clone().lock_owned().await;
+    let Err(error) = operations
+        .clean_up::<_, ()>(engine, |_| panic!("engine worker failed"))
+        .await
+    else {
+        panic!("a panicking worker reported an outcome");
+    };
+    assert_eq!(error.code, Code::Uncertain);
+    assert!(error.uncertain);
+    assert!(operations.check().unwrap_err().uncertain);
+    assert_eq!(operations.registered(), 0);
+    assert!(stand.try_lock().is_ok(), "the engine is free again");
+
+    super::reset(&operations, &stand, &Gate::default(), Perform::release)
+        .await
+        .unwrap();
+    operations.check().unwrap();
+    assert_eq!(stand.lock().await.releases, 1);
+}
+
 #[tokio::test]
 async fn stopping_during_preparation_cancels_ownership_without_waiting_for_the_engine() {
     blocked_operation(Ending::Stop).await;
@@ -3230,4 +3271,354 @@ async fn failed_focus_checks_spend_budget_and_untargeted_actions_spend_none() {
     assert_eq!(untouched, crate::native::focus::PREPARE_BUDGET);
     assert_eq!(engine.clock, before);
     assert_eq!(engine.budgets, [Duration::from_millis(2)]);
+}
+
+fn display_epoch() -> atlas_core::session::InputEpoch {
+    atlas_core::session::InputEpoch {
+        uid: 501,
+        security_session_id: 1,
+        display_id: 2,
+        width: 800.0,
+        height: 600.0,
+        process_id: 1,
+    }
+}
+
+/// A service whose engine journals into `directory` and posts only to `tap`.
+fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc<super::Service> {
+    let epoch = display_epoch();
+    let engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
+    Arc::new(super::Service {
+        engine: Arc::new(Mutex::new(engine)),
+        operations: super::Operations::default(),
+        gate,
+        epoch: Arc::new(super::RwLock::new(epoch)),
+        build: None,
+        executable: None,
+        stopping: tokio::sync::Notify::new(),
+        stop_marker: directory.join("stopped"),
+    })
+}
+
+fn posts(seen: &std::sync::Mutex<Vec<Seen>>) -> Vec<Posted> {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter_map(|seen| match seen {
+            Seen::Post(posted) => Some(*posted),
+            Seen::Write { .. } | Seen::Check => None,
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Opener {
+    Test,
+    Watchdog,
+}
+
+/// Where a journal write waits. The test opens it; when the runtime stalls
+/// behind the write so that the test cannot, a watchdog thread opens it
+/// instead, and the test can tell.
+#[derive(Default)]
+struct Hold {
+    opened: std::sync::Mutex<Option<Opener>>,
+    changed: std::sync::Condvar,
+}
+
+impl Hold {
+    fn watched() -> Arc<Self> {
+        let hold = Arc::new(Self::default());
+        let watched = hold.clone();
+        std::thread::spawn(move || {
+            let opened = watched.opened.lock().unwrap();
+            let (mut opened, _) = watched
+                .changed
+                .wait_timeout_while(opened, Duration::from_secs(5), |opened| opened.is_none())
+                .unwrap();
+            if opened.is_none() {
+                *opened = Some(Opener::Watchdog);
+                watched.changed.notify_all();
+            }
+        });
+        hold
+    }
+
+    fn wait(&self) {
+        let opened = self.opened.lock().unwrap();
+        drop(
+            self.changed
+                .wait_while(opened, |opened| opened.is_none())
+                .unwrap(),
+        );
+    }
+
+    fn stalled(&self) -> bool {
+        *self.opened.lock().unwrap() == Some(Opener::Watchdog)
+    }
+
+    fn open(&self) {
+        let mut opened = self.opened.lock().unwrap();
+        opened.get_or_insert(Opener::Test);
+        self.changed.notify_all();
+    }
+}
+
+/// A tap whose first journal write after `armed` is set says so and waits
+/// at `hold`.
+fn blocking_tap(
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    hold: Arc<Hold>,
+) -> (
+    Tap,
+    Arc<std::sync::Mutex<Vec<Seen>>>,
+    tokio::sync::oneshot::Receiver<()>,
+) {
+    let (entered, entering) = tokio::sync::oneshot::channel();
+    let mut entered = Some(entered);
+    let (tap, seen) = Tap::new();
+    let tap = tap.writing(Box::new(move |_| {
+        if armed.load(std::sync::atomic::Ordering::SeqCst)
+            && let Some(entered) = entered.take()
+        {
+            entered.send(()).unwrap();
+            hold.wait();
+        }
+        Ok(())
+    }));
+    (tap, seen, entering)
+}
+
+fn pending<F: std::future::Future>(future: std::pin::Pin<&mut F>) -> bool {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    future.poll(&mut context).is_pending()
+}
+
+#[tokio::test]
+async fn a_blocked_journal_leaves_cancellation_and_the_service_loop_responsive() {
+    let directory = tempfile::tempdir().unwrap();
+    let hold = Hold::watched();
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (tap, seen, entered) = blocking_tap(armed, hold.clone());
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    let owner = "a".repeat(48);
+    service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    let input = tokio::spawn({
+        let service = service.clone();
+        let owner = owner.clone();
+        async move {
+            let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+            let actions =
+                vec![serde_json::from_value(json!({"type": "move", "x": 10, "y": 20})).unwrap()];
+            service
+                .input(
+                    owner,
+                    Ok(display_epoch()),
+                    Ok(actions),
+                    Ok(None),
+                    false,
+                    &phase,
+                )
+                .await
+        }
+    });
+    entered.await.unwrap();
+
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let hello = tokio::spawn(super::handle(server, service.clone(), phase));
+    client.write_all(b"{\"op\":\"hello\"}\n").await.unwrap();
+    hello.await.unwrap().unwrap();
+    let mut reply = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut client, &mut reply)
+        .await
+        .unwrap();
+    assert!(reply.ends_with(b"\n"), "the service answered");
+    assert!(
+        !hold.stalled(),
+        "the service stalled behind a journal write"
+    );
+
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let release = service.release(owner, &phase);
+    tokio::pin!(release);
+    assert!(pending(release.as_mut()), "release waits for the write");
+    assert!(!service.gate.active().unwrap(), "ownership ended at once");
+    let acquire = service.acquire(
+        "b".repeat(48),
+        Ok(display_epoch()),
+        super::Who::Agent,
+        &phase,
+    );
+    tokio::pin!(acquire);
+    assert!(
+        pending(acquire.as_mut()),
+        "no controller passes the blocked write"
+    );
+    assert!(!hold.stalled());
+
+    hold.open();
+    let reply = input.await.unwrap().unwrap();
+    assert_eq!(reply["code"], json!(Code::Cancelled));
+    assert_eq!(reply["performed"], 0);
+    assert!(posts(&seen).is_empty(), "nothing was posted");
+    acquire.await.unwrap();
+    release.await.unwrap();
+    assert!(service.gate.active().unwrap());
+}
+
+#[tokio::test]
+async fn an_event_is_posted_only_after_its_conservative_held_state_is_durable() {
+    let click = |modifiers: &[&str]| -> Vec<Action> {
+        vec![
+            serde_json::from_value(
+                json!({"type": "click", "x": 30, "y": 40, "modifiers": modifiers}),
+            )
+            .unwrap(),
+        ]
+    };
+    let owner = "a".repeat(48);
+
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let reply = service
+        .input(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(click(&["cmd"])),
+            Ok(None),
+            false,
+            &phase,
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["ok"], true);
+    let seen = seen.lock().unwrap().clone();
+    let mut posted = 0;
+    for (index, event) in seen.iter().enumerate() {
+        let Seen::Post(event) = event else {
+            continue;
+        };
+        posted += 1;
+        assert_eq!(seen[index - 1], Seen::Check, "checked after the write");
+        let Seen::Write { button, flags, .. } = &seen[index - 2] else {
+            panic!("{event:?} was posted before its state was written");
+        };
+        assert_eq!(flags & event.flags, event.flags, "{event:?} flags held");
+        if [
+            objc2_core_graphics::CGEventType::LeftMouseDown.0,
+            objc2_core_graphics::CGEventType::LeftMouseUp.0,
+        ]
+        .contains(&event.kind)
+        {
+            assert!(button.is_some(), "{event:?} button held until it is up");
+        }
+        if event.kind == objc2_core_graphics::CGEventType::KeyUp.0 {
+            assert_eq!(event.key, 55);
+            assert_ne!(
+                flags & atlas_core::actions::COMMAND,
+                0,
+                "command held until it is up"
+            );
+        }
+    }
+    assert_eq!(
+        posted, 4,
+        "move, press, release and the command key's release"
+    );
+    let held = crate::native::journal::load(&directory.path().join("held.json"), &display_epoch())
+        .unwrap()
+        .unwrap();
+    assert!(held.button.is_none() && held.keys.is_empty() && held.flags == 0);
+
+    for cancel in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let gate = Arc::new(Gate::default());
+        let cancelling = gate.clone();
+        let mut first = true;
+        let (tap, seen) = Tap::new();
+        let tap = tap.writing(Box::new(move |_| {
+            if std::mem::take(&mut first) {
+                if cancel {
+                    cancelling.cancel(None)?;
+                } else {
+                    return Err(Error::new(Code::Native, "The disk is full"));
+                }
+            }
+            Ok(())
+        }));
+        let service = tapped_service(directory.path(), tap, gate);
+        service.gate.acquire(&owner, super::Who::Agent).unwrap();
+        let reply = service
+            .input(
+                owner.clone(),
+                Ok(display_epoch()),
+                Ok(click(&[])),
+                Ok(None),
+                false,
+                &phase,
+            )
+            .await
+            .unwrap();
+        let code = if cancel {
+            Code::Cancelled
+        } else {
+            Code::Native
+        };
+        assert_eq!(reply["code"], json!(code));
+        assert_eq!(reply["performed"], 0);
+        assert_eq!(reply["partial"], false);
+        assert!(posts(&seen).is_empty(), "nothing was posted");
+    }
+}
+
+#[tokio::test]
+async fn expiry_cleanup_remains_registered_until_its_journal_finishes() {
+    let directory = tempfile::tempdir().unwrap();
+    let hold = Hold::watched();
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (tap, seen, entered) = blocking_tap(armed.clone(), hold.clone());
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    let down =
+        serde_json::from_value(json!({"type": "pointer", "phase": "down", "x": 50, "y": 60}))
+            .unwrap();
+    service.engine.lock().await.perform(down).await.unwrap();
+    assert!(service.engine.lock().await.held_input());
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    for _ in 0..3 {
+        service.expire().await.unwrap();
+        assert!(!hold.stalled(), "expiry waited for the journal");
+        assert_eq!(
+            service.operations.registered(),
+            1,
+            "one registered cleanup however many ticks pass"
+        );
+    }
+    entered.await.unwrap();
+    assert!(
+        service.engine.try_lock().is_err(),
+        "cleanup owns the engine"
+    );
+
+    let mut requests = tokio::task::JoinSet::new();
+    let finish = super::finish(
+        &service.gate,
+        &mut requests,
+        &service.operations,
+        &service.engine,
+    );
+    tokio::pin!(finish);
+    assert!(pending(finish.as_mut()), "shutdown waits for the cleanup");
+    assert!(!hold.stalled());
+    hold.open();
+    finish.await.unwrap();
+
+    assert_eq!(service.operations.registered(), 0);
+    assert!(!service.engine.lock().await.held_input());
+    let up = posts(&seen).pop().unwrap();
+    assert_eq!(up.kind, objc2_core_graphics::CGEventType::LeftMouseUp.0);
 }

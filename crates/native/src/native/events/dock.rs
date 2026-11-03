@@ -88,6 +88,11 @@ impl Engine {
         modifiers: &[String],
         press: bool,
     ) -> Result<bool> {
+        #[cfg(test)]
+        if self.tap.is_some() {
+            return Ok(false);
+        }
+
         let display = Bounds::display(self.epoch.width, self.epoch.height);
         let guard = self.preparation_guard();
         let targeted = self.target.is_some();

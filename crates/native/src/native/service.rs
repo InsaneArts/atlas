@@ -34,7 +34,7 @@ mod request;
 use batch::{Failure, Perform, run};
 use operations::{
     Cancellation, ConnectionPhase, Operations, combine_cleanup, connection_outcome,
-    drain_and_release, finish, reset, worker_failed,
+    drain_and_release, finish, on_engine, reset, worker_failed,
 };
 use request::Request;
 
@@ -59,7 +59,8 @@ struct Service {
     engine: Arc<Mutex<Engine>>,
     operations: Operations,
     gate: Arc<Gate>,
-    epoch: RwLock<InputEpoch>,
+    /// Shared with recovery's engine work, which rebinds both together.
+    epoch: Arc<RwLock<InputEpoch>>,
     /// SHA-256 of the executable this process started from. Hashed once at
     /// start: `install` later renames a new build over the same path.
     build: Option<String>,
@@ -209,11 +210,12 @@ impl Service {
         // Release held input first; only an acknowledged release closes the
         // gate for good. Holding the engine lock keeps acquire out meanwhile,
         // and one that took the lock first is seen once it is held.
-        let mut engine = self.engine.lock().await;
+        let engine = self.engine.clone().lock_owned().await;
         self.check_uncontrolled()?;
 
         phase.send_replace(ConnectionPhase::Mutation("shutdown"));
-        if let Err(error) = engine.release() {
+        let (_engine, released) = self.operations.clean_up(engine, Engine::release).await?;
+        if let Err(error) = released {
             return Err(Error::new(
                 Code::Uncertain,
                 format!("Held input could not be released: {}", error.error),
@@ -288,14 +290,14 @@ impl Service {
         }
 
         phase.send_replace(ConnectionPhase::Mutation("reset"));
-        reset(&self.operations, &self.engine, &self.gate, |engine| {
+        let enforced = self.epoch.clone();
+        reset(&self.operations, &self.engine, &self.gate, move |engine| {
             let rebound = engine.rebind(current);
 
             // Enforce whatever epoch the engine now holds, even when its
             // release failed: the two never disagree, and the timer keeps
             // retrying that release against the display it was bound to.
-            *self
-                .epoch
+            *enforced
                 .write()
                 .map_err(|_| Error::new(Code::Native, "Input identity failed"))? =
                 engine.epoch.clone();
@@ -314,7 +316,7 @@ impl Service {
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         self.check_epoch(expected?)?;
-        let mut engine = self.engine.lock().await;
+        let mut engine = self.engine.clone().lock_owned().await;
         self.operations.check()?;
 
         if let Some(holder) = self.gate.holder()? {
@@ -327,7 +329,8 @@ impl Service {
 
         engine.check()?;
         phase.send_replace(ConnectionPhase::Mutation("acquire"));
-        engine.release()?;
+        let (mut engine, released) = self.operations.clean_up(engine, Engine::release).await?;
+        released?;
         engine.grant = Some(self.gate.acquire(&owner, who)?);
 
         Ok(json!({ "ok": true }))
@@ -395,6 +398,7 @@ impl Service {
 
     /// Run a batch as registered work, which owns the engine through its
     /// last effect: a request that vanishes meanwhile cannot end it early.
+    /// The batch runs on a blocking thread, its pauses on this runtime.
     /// Once done, the role of the field it named and whether it pressed the
     /// Dock; an action that failed gives its failure instead.
     async fn execute(
@@ -403,26 +407,30 @@ impl Service {
         actions: Vec<Action>,
         expect: Option<Expect>,
     ) -> Result<Performed> {
-        let mut engine = self.engine.clone().lock_owned().await;
+        let engine = self.engine.clone().lock_owned().await;
         let gate = self.gate.clone();
+        let runtime = tokio::runtime::Handle::current();
         let outcome = self
             .operations
-            .start(async move {
-                drop(grant.authorize()?);
-                engine.grant = Some(grant);
-                engine.target = expect
-                    .as_ref()
-                    .map(super::ax::target_application)
-                    .transpose()?;
-                engine.dock_pressed = false;
-                let result = run(&mut *engine, &gate, actions, expect.as_ref()).await;
-                engine.target = None;
-                Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
-            })
+            .start(on_engine(engine, move |engine| {
+                runtime.block_on(async move {
+                    drop(grant.authorize()?);
+                    engine.grant = Some(grant);
+                    engine.target = expect
+                        .as_ref()
+                        .map(super::ax::target_application)
+                        .transpose()?;
+                    engine.dock_pressed = false;
+                    let result = run(engine, &gate, actions, expect.as_ref()).await;
+                    engine.target = None;
+                    Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
+                })
+            }))
             .await?;
-        outcome
+        let (_, performed) = outcome
             .await
-            .map_err(|cause| worker_failed().with_source(cause))?
+            .map_err(|cause| worker_failed().with_source(cause))?;
+        performed
     }
 }
 
@@ -533,7 +541,11 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     )
     .await?;
 
-    engine.recover(socket.with_extension("held.json"))?;
+    // Recovery reads and writes the journal, so it runs off the runtime too.
+    let journal = socket.with_extension("held.json");
+    let engine = tokio::task::spawn_blocking(move || engine.recover(journal).map(|()| engine))
+        .await
+        .map_err(|cause| worker_failed().with_source(cause))??;
 
     let stop_marker = socket.with_extension("stopped");
     let gate = Arc::new(Gate::default());
@@ -545,7 +557,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         build: build.flatten(),
         executable,
         stopping: tokio::sync::Notify::new(),
-        epoch: RwLock::new(engine.epoch.clone()),
+        epoch: Arc::new(RwLock::new(engine.epoch.clone())),
         engine: Arc::new(Mutex::new(engine)),
         operations: Operations::default(),
         gate,
@@ -555,7 +567,8 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
 }
 
 impl Service {
-    /// Engine ownership spans execution and release. Posting briefly takes the gate;
+    /// Engine ownership spans execution and release, both on blocking threads, so
+    /// this loop never waits for the journal. Posting briefly takes the gate;
     /// cancellation takes only the gate. Recovery serializes before draining work
     /// and acquiring the engine, never holding a gate guard across that wait.
     async fn listen(self: &Arc<Self>, listener: &UnixListener, controller_uid: u32) -> Result<()> {
@@ -594,7 +607,7 @@ impl Service {
                     }
                 }
                 _ = timer.tick() => {
-                    if let Err(error) = self.expire() { break Err(error); }
+                    if let Err(error) = self.expire().await { break Err(error); }
                 }
                 Some(outcome) = tasks.join_next_with_id(), if !tasks.is_empty() => {
                     if let Err(error) = connection_outcome(outcome, &self.operations, false) {
@@ -620,7 +633,10 @@ impl Service {
         combine_cleanup(outcome, cleanup)
     }
 
-    fn expire(&self) -> Result<()> {
+    /// End a lost controller, and release what it left held as registered
+    /// cleanup: shutdown waits for it, and it keeps the engine until it ends,
+    /// so no later tick starts another meanwhile.
+    async fn expire(&self) -> Result<()> {
         if self.check().is_err() {
             // Only a poisoned gate fails this, and the look below reports it.
             let _ = self.gate.revoke();
@@ -631,11 +647,17 @@ impl Service {
             Ok(false) => {
                 // A controller may have acquired (and pressed) since
                 // the look above: look again once the engine is held.
-                if let Ok(mut engine) = self.engine.try_lock()
+                if let Ok(engine) = self.engine.clone().try_lock_owned()
+                    && engine.unsettled()
                     && matches!(self.gate.active(), Ok(false))
                 {
-                    // What stays held stays recorded; the next tick tries again.
-                    let _ = engine.release();
+                    self.operations
+                        .begin_clean_up(engine, |engine| {
+                            // What stays held stays recorded; a later tick
+                            // tries again.
+                            let _ = engine.release();
+                        })
+                        .await?;
                 }
             }
             Err(error) => return Err(error),

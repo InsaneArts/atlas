@@ -37,6 +37,23 @@ pub(super) enum Found {
     Unreadable(JobId),
 }
 
+impl Found {
+    /// The job the record is of.
+    pub(super) fn id(&self) -> &JobId {
+        match self {
+            Self::Record(record) => &record.id,
+            Self::Unreadable(id) => id,
+        }
+    }
+}
+
+/// The records one scan found, and whether it can account for every job:
+/// one that is not complete may have left records out.
+pub(super) struct Scan {
+    pub(super) found: Vec<Found>,
+    pub(super) complete: bool,
+}
+
 /// The records folder, and the records that could not be written to it.
 pub(super) struct Store {
     folder: RecordFolder<JobId>,
@@ -67,13 +84,9 @@ impl Store {
         self.unwritten.contains_key(id) || self.folder.holds(id)
     }
 
-    /// Every record, as read.
-    pub(super) fn records(&self) -> Vec<Found> {
-        self.scanned_records().0
-    }
-
-    /// Every record found, and whether the scan can account for all jobs.
-    pub(super) fn scanned_records(&self) -> (Vec<Found>, bool) {
+    /// Every record found, as read, and whether the scan can account for
+    /// all jobs.
+    pub(super) fn scan(&self) -> Scan {
         let listing = self.folder.listing(LISTED);
         let mut ids = listing.keys;
         for id in self.unwritten.keys() {
@@ -81,11 +94,14 @@ impl Store {
                 ids.push(id.clone());
             }
         }
-        let records = ids
+        let found = ids
             .into_iter()
             .map(|id| self.read(&id).unwrap_or(Found::Unreadable(id)))
             .collect();
-        (records, listing.complete)
+        Scan {
+            found,
+            complete: listing.complete,
+        }
     }
 
     /// The record of `id`: none when there is none, unreadable when it does
@@ -156,11 +172,16 @@ impl Store {
     /// oldest ended ones past [`RECORDS_MAX`]. A record of a job that may
     /// still run, cannot be read, or has an unacknowledged write is never
     /// removed. The in-memory result must reach disk before retention can
-    /// discard it and the previous durable record.
-    pub(super) fn prune(&mut self, now: u64) {
+    /// discard it and the previous durable record. Nothing is removed while
+    /// a scan cannot account for every record. Whether it pruned.
+    pub(super) fn prune(&mut self, now: u64) -> bool {
         let week = atlas_core::time::ms(KEEP);
-        let mut ended: Vec<(u64, JobId)> = self
-            .records()
+        let scan = self.scan();
+        if !scan.complete {
+            return false;
+        }
+        let mut ended: Vec<(u64, JobId)> = scan
+            .found
             .into_iter()
             .filter_map(|read| match read {
                 Found::Record(record)
@@ -187,5 +208,6 @@ impl Store {
                 over = over.saturating_sub(1);
             }
         }
+        true
     }
 }

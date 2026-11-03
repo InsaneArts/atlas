@@ -5,7 +5,7 @@ import Foundation
 
 extension ViewerPresenter {
   /// Every fact about the helper, as the helper line's tooltip lists them: its account, its state and its display;
-  /// whether it is ready to act; how often the picture updates and how old the newest is; and, once read, when the
+  /// whether it is ready to act; its Save and Open dialogs while they are not known to work; how often the picture updates and how old the newest is; and, once read, when the
   /// helper logged in and the agents connected to Atlas.
   ///
   /// - Parameter snapshot: What the controller holds.
@@ -18,6 +18,7 @@ extension ViewerPresenter {
       Fact(name: ViewerWords.stateRow, value: facts.input.word),
       Fact(name: Words.displayFact, value: Words.size(facts.display) ?? Words.unknown),
     ] + readyFacts(reading.readinessItems)
+      + dialogsFacts(reading.nativeDialogsItem)
       + [
         Fact(name: ViewerWords.updatesRow, value: updates(snapshot)),
         Fact(name: ViewerWords.newestRow, value: newest(snapshot)),
@@ -38,6 +39,18 @@ extension ViewerPresenter {
     let passing = items.count - open.count
     if passing > 0 { facts.append(Fact(name: ViewerWords.othersPass(passing), value: "")) }
     return facts
+  }
+
+  /// The native Save and Open dialogs, as a fact of their own beside whether the helper is ready, while they are not
+  /// known to work: unavailable when their check failed, else how the check stands. None while they work or the
+  /// service says nothing of them.
+  ///
+  /// - Parameter item: The native Save and Open check, if the service reads one.
+  /// - Returns: The fact, or none.
+  static func dialogsFacts(_ item: ReadinessItem?) -> [Fact] {
+    guard let item, item.state != .ready else { return [] }
+    let name = item.state == .notReady ? ViewerWords.dialogsUnavailable : item.name
+    return [Fact(name: name, value: item.text)]
   }
 
   /// The helper's login's facts, each only when it is known: when the helper logged in, and the agents connected to

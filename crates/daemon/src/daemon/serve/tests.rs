@@ -464,6 +464,7 @@ fn window(pid: i64, owner: &str, layer: i64, bounds: [f64; 4]) -> Window {
         title: Some(format!("{owner} window")),
         layer,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x: bounds[0],
             y: bounds[1],
@@ -1362,6 +1363,81 @@ async fn unavailable_jobs_refuse_hello_instead_of_reporting_zero() {
     assert_eq!(reply["ok"], false);
     assert_eq!(reply["code"], "job");
     assert!(reply.get("jobs").is_none());
+}
+
+#[tokio::test]
+async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_incomplete() {
+    use std::os::unix::fs::PermissionsExt;
+    let (folder, daemon) = with_jobs(false);
+    let jobs = daemon.jobs.clone().unwrap();
+    let records = folder.path().join("jobs");
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o300)).unwrap();
+    jobs.watch_once(None).unwrap();
+    let hello = daemon.hello();
+    std::fs::set_permissions(&records, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(hello["ok"], true, "{hello}");
+    assert_eq!(
+        hello["daemon"]["capabilities"],
+        json!(["session-pin", "read", "jobs"])
+    );
+    assert_eq!(
+        hello["daemon"]["jobs"],
+        json!({"running": 0, "launching": 0, "unresolved": 0, "incomplete": true})
+    );
+
+    jobs.watch_once(None).unwrap();
+    assert_eq!(
+        daemon.hello()["daemon"]["jobs"],
+        json!({"running": 0, "launching": 0, "unresolved": 0})
+    );
+}
+
+/// Hello waits for the jobs' lock while a slow look at them holds it. The
+/// runtime here has one thread, so another request is answered before the
+/// lock is let go only if hello waits off it; the outer thread lets go
+/// either way.
+#[test]
+fn a_blocked_hello_lookup_leaves_other_daemon_requests_responsive() {
+    let (_folder, daemon) = with_jobs(false);
+    let held = daemon.jobs.as_ref().unwrap().held();
+    let (answered, responsive) = std::sync::mpsc::channel();
+    let serving = daemon.clone();
+    let runtime = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let (mut client, server) = UnixStream::pair().unwrap();
+                let (phase, mut observed) = watch::channel(ConnectionPhase::Refusal);
+                let hello = tokio::spawn(handle(server, serving.clone(), true, phase));
+                client.write_all(b"{\"op\":\"hello\"}\n").await.unwrap();
+                observed
+                    .wait_for(|phase| matches!(phase, ConnectionPhase::Read("hello")))
+                    .await
+                    .unwrap();
+                let windows = exchange(serving, r#"{"op":"windows"}"#).await;
+                let _ = answered.send(windows);
+                let mut reply = String::new();
+                BufReader::new(client).read_line(&mut reply).await.unwrap();
+                hello.await.unwrap().unwrap();
+                serde_json::from_str::<Value>(&reply).unwrap()
+            })
+    });
+    let windows = responsive.recv_timeout(Duration::from_secs(10));
+    drop(held);
+    let hello = runtime.join().unwrap();
+    let windows = windows.expect("the runtime stalled while hello waited for the jobs");
+    assert_eq!(windows[0]["ok"], true);
+    assert_eq!(hello["op"], "hello");
+    assert_eq!(
+        hello["daemon"]["capabilities"],
+        json!(["session-pin", "read", "jobs"])
+    );
+    assert_eq!(
+        hello["daemon"]["jobs"],
+        json!({"running": 0, "launching": 0, "unresolved": 0})
+    );
 }
 
 #[tokio::test]

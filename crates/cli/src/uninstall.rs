@@ -4,6 +4,8 @@
 //! logged out), and moves the app to the Trash rather than deleting it.
 mod inspection;
 mod log_out;
+#[cfg(test)]
+mod stand_in;
 use inspection::{Found, survey};
 use log_out::{log_out_helper, logged_out_twice, retiring, still_logged_in, unrecorded_message};
 
@@ -519,7 +521,7 @@ impl Teardown for Live<'_> {
 
     fn rest(&mut self) -> Result<()> {
         self.forget_requested_opener();
-        self.stop_menubar();
+        self.stop_menubar()?;
         self.disconnect()?;
         // Stopped while the agents were changed: the app and settings stay.
         if atlas_agents::stopping() {
@@ -639,18 +641,37 @@ impl Live<'_> {
         }
     }
 
-    /// Stop a running menu bar and its opening at login. Turning it off here
-    /// is not the person's choice: unless they had turned it off themselves,
-    /// the record of a choice goes, so setting Atlas up again turns it on
-    /// again (settings kept with --keep-config keep that record otherwise).
-    fn stop_menubar(&self) {
-        let stopped = self
-            .found
-            .client
-            .as_ref()
-            .and_then(|client| client.output_dir().ok().map(Path::to_path_buf))
-            .and_then(|output| crate::menubar::stop(&output))
+    /// Stop a running menu bar, then its opening at login. Turning it off
+    /// here is not the person's choice: unless they had turned it off
+    /// themselves, the record of a choice goes, so setting Atlas up again
+    /// turns it on again (settings kept with --keep-config keep that record
+    /// otherwise). A menu bar not seen to stop or known not to run changes
+    /// nothing, and is an error.
+    fn stop_menubar(&self) -> Result<()> {
+        let output = match &self.found.client {
+            Some(client) => client.output_dir().map(Path::to_path_buf),
+            None => Err(Error::new(
+                Code::Config,
+                self.found
+                    .unloaded
+                    .clone()
+                    .unwrap_or_else(|| "Atlas has no settings".to_owned()),
+            )),
+        };
+        let stopped = crate::menubar::stop_located(output)
+            .map_err(|error| {
+                problem(format!(
+                    "{}, so Atlas.app and its settings were kept. Quit the menu bar, then run \
+                     atlas uninstall again.",
+                    error.error
+                ))
+                .with_source(error)
+            })?
             .is_some();
+        #[cfg(test)]
+        if stand_in::reached("login") {
+            return Ok(());
+        }
 
         let decided = crate::menubar::login_decided();
         let enabled = crate::menubar::set_login(crate::menubar::Login::Status)
@@ -667,15 +688,20 @@ impl Live<'_> {
             (true, true) => "stopped and no longer opens at login",
             (true, false) => "stopped",
             (false, true) => "no longer opens at login",
-            (false, false) => return,
+            (false, false) => return Ok(()),
         };
 
         (self.progress)(Progress::Done("Menu bar", said));
+        Ok(())
     }
 
     /// Agents forget the plugin (only those using a marketplace of Atlas's
     /// own change), and `atlas` leaves the terminal.
     fn disconnect(&mut self) -> Result<()> {
+        #[cfg(test)]
+        if stand_in::reached("agents") {
+            return Ok(());
+        }
         // An error here means no agent is installed, so there is nothing to remove.
         if let Ok(reply) = atlas_agents::change(&[], atlas_agents::Change::Disconnect) {
             let changed = agents_in(&reply).any(|agent| agent["changed"] == true);
@@ -721,6 +747,10 @@ impl Live<'_> {
     /// it could never run, and would stay among that account's login items.
     /// sudo may ask the person for their password.
     fn forget_requested_opener(&mut self) {
+        #[cfg(test)]
+        if stand_in::reached("opener") {
+            return;
+        }
         let me = nix::unistd::getuid().as_raw();
         let client = self.found.client.as_ref();
         let Some(pairing) = atlas_daemon::helper_setup::pairing::request().filter(|pairing| {
@@ -770,6 +800,10 @@ impl Live<'_> {
     /// The app goes to the Trash, where it can be recovered; what it left for
     /// the helper goes with it.
     fn trash(&mut self) -> Result<()> {
+        #[cfg(test)]
+        if stand_in::reached("trash") {
+            return Ok(());
+        }
         let app = &self.found.app;
         let trash = config::home()?
             .join(".Trash")
@@ -825,6 +859,10 @@ impl Live<'_> {
 
     /// The installed settings and the logs and records, unless kept.
     fn remove_settings(&mut self) -> Result<()> {
+        #[cfg(test)]
+        if stand_in::reached("settings") {
+            return Ok(());
+        }
         if self.keep_config {
             return Ok(());
         }

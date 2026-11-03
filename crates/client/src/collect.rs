@@ -14,7 +14,7 @@ pub(crate) use receipt::{Intact, Kept, ReadSpan, ReceiptId, intact};
 
 use crate::{
     client::Client,
-    task::{record::OutputEntry, store::Store},
+    task::{Task, record::OutputEntry, store::Store},
 };
 use atlas_core::{
     error::{Code, Error, Result},
@@ -23,7 +23,7 @@ use atlas_core::{
         FileIdentity, READ, READ_PATH_MAX, READ_RANGE_MAX, READ_SIZE_MAX, ReadRefusal, SessionPin,
     },
     time::now_ms,
-    transport::{OutputError, append_event, refusal},
+    transport::{OutputError, Transport, append_event, refusal},
 };
 use receipt::{Receipt, VERSION, owner_folder};
 use scavenge::remove_abandoned;
@@ -34,8 +34,13 @@ use std::{
     io::Write,
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Component, Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
+use tokio::runtime::Handle;
 
 /// The most files one call collects.
 pub(crate) const MAX_FILES: usize = 16;
@@ -114,21 +119,13 @@ async fn collected(
     max_size: u64,
     started: Instant,
 ) -> Result<Value> {
-    let output = client.output_dir()?;
-    // The folder is checked before anything in it is looked at.
-    let collected_root = private_folders(output, &[COLLECTED])?;
-    remove_abandoned(&collected_root);
-
-    let at = now_ms();
-    let receipt = ReceiptId::new(at);
-    let owner = owner_folder(client.task.as_ref().map(|task| task.key()));
-    let folder = private_folders(output, &[COLLECTED, &owner, receipt.as_str()])?;
-    let copies = private_folders(&folder, &["files"])?;
-
-    let (kept, failed) = copy_each(client, pin, files, max_size, &folder, &copies).await;
+    let Collected {
+        receipt,
+        kept,
+        failed,
+        warning,
+    } = Collection::of(client, pin, files, max_size)?.run().await?;
     let total: u64 = kept.iter().map(|file| file.size).sum();
-    let receipt = write_receipt(client, &folder, receipt, at, &kept)?;
-    let warning = note_output(client, output, receipt.as_ref(), at, &kept, total);
 
     let _ = client
         .record(
@@ -142,59 +139,185 @@ async fn collected(
     Ok(reply(files.len(), receipt, kept, failed, warning))
 }
 
-/// Collect each of `files` in turn, its partial file in `folder` and its
-/// copy in `copies`: the copies kept, and the files that failed and why.
-/// Once the helper itself changed, every later file is refused unread.
-async fn copy_each(
-    client: &Client,
+/// Where a test may hold or fail a copy: before each part is appended to
+/// its partial file, or before that file is synced.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    Append,
+    Sync,
+}
+
+/// What a test does at each [`Step`].
+#[cfg(test)]
+type Fault = dyn Fn(Step) -> std::io::Result<()> + Send + Sync;
+
+/// One call's collection on this Mac: the files it reads from the helper,
+/// pinned to the session verified, and where it keeps their copies.
+struct Collection {
+    transport: Transport,
+    output: PathBuf,
+    task: Option<Task>,
     pin: SessionPin,
-    files: &[String],
+    files: Vec<String>,
     max_size: u64,
-    folder: &Path,
-    copies: &Path,
-) -> (Vec<Kept>, Vec<(String, Failure)>) {
-    let mut kept: Vec<Kept> = Vec::new();
-    let mut failed: Vec<(String, Failure)> = Vec::new();
-    let mut total = 0;
-    let mut changed = false;
-    for (n, source) in files.iter().enumerate() {
-        if changed {
-            failed.push((
-                source.clone(),
-                Failure::new(ReadRefusal::SessionChanged, source),
-            ));
-            continue;
-        }
-        let names: Vec<&str> = kept
-            .iter()
-            .filter_map(|kept| kept.path.file_name()?.to_str())
-            .collect();
-        let plan = One {
-            source,
+    #[cfg(test)]
+    fault: Arc<Fault>,
+}
+
+/// What one call collected: its receipt, the copies kept, the files that
+/// failed and why, and a warning when its task's record could not note it.
+struct Collected {
+    receipt: Option<ReceiptId>,
+    kept: Vec<Kept>,
+    failed: Vec<(String, Failure)>,
+    warning: Option<&'static str>,
+}
+
+impl Collection {
+    /// The collection of `files` that `client` asks for.
+    fn of(client: &Client, pin: SessionPin, files: &[String], max_size: u64) -> Result<Self> {
+        Ok(Self {
+            transport: client.transport.clone(),
+            output: client.output_dir()?.to_owned(),
+            task: client.task.clone(),
+            pin,
+            files: files.to_vec(),
             max_size,
-            room: MAX_TOTAL.saturating_sub(total),
-            partial: folder.join(format!(".{n}.partial")),
-            copies,
-            taken: &names,
-        };
-        match plan.collect(client, pin).await {
-            Ok(file) => {
-                total += file.size;
-                kept.push(file);
+            #[cfg(test)]
+            fault: Arc::new(|_| Ok(())),
+        })
+    }
+
+    /// Collect every file into a folder of its own, write its receipt and
+    /// note it in its task's record, on a blocking thread that asks the
+    /// helper for each part through this runtime: writing and syncing the
+    /// copies never holds up the runtime's other work. A caller that goes
+    /// away stops it before its next read and before anything is kept; it
+    /// still removes what it began.
+    async fn run(self) -> Result<Collected> {
+        let runtime = Handle::current();
+        let left = Arc::new(AtomicBool::new(false));
+        let _left = Left(left.clone());
+        tokio::task::spawn_blocking(move || self.write(&runtime, &left))
+            .await
+            .map_err(|error| {
+                Error::new(Code::Collect, "The collection stopped unexpectedly").with_source(error)
+            })?
+    }
+
+    fn write(&self, runtime: &Handle, left: &AtomicBool) -> Result<Collected> {
+        // The folder is checked before anything in it is looked at.
+        let collected_root = private_folders(&self.output, &[COLLECTED])?;
+        remove_abandoned(&collected_root);
+
+        let at = now_ms();
+        let receipt = ReceiptId::new(at);
+        let owner = owner_folder(self.task.as_ref().map(Task::key));
+        let folder = private_folders(&self.output, &[COLLECTED, &owner, receipt.as_str()])?;
+        let copies = private_folders(&folder, &["files"])?;
+
+        let (kept, failed) = self.copy_each(&folder, &copies, runtime, left);
+        if left.load(Ordering::SeqCst) {
+            // No one learns of these copies: remove them, as when none was kept.
+            let _ = fs::remove_dir_all(&folder);
+            return Ok(Collected {
+                receipt: None,
+                kept: Vec::new(),
+                failed,
+                warning: None,
+            });
+        }
+        let total: u64 = kept.iter().map(|file| file.size).sum();
+        let receipt = write_receipt(self.task.as_ref(), &folder, receipt, at, &kept)?;
+        let warning = note_output(
+            self.task.as_ref(),
+            &self.output,
+            receipt.as_ref(),
+            at,
+            &kept,
+            total,
+        );
+        Ok(Collected {
+            receipt,
+            kept,
+            failed,
+            warning,
+        })
+    }
+
+    /// Collect each file in turn, its partial file in `folder` and its copy
+    /// in `copies`: the copies kept, and the files that failed and why.
+    /// Once the helper itself changed, every later file is refused unread;
+    /// once the caller left, none is.
+    fn copy_each(
+        &self,
+        folder: &Path,
+        copies: &Path,
+        runtime: &Handle,
+        left: &AtomicBool,
+    ) -> (Vec<Kept>, Vec<(String, Failure)>) {
+        let mut kept: Vec<Kept> = Vec::new();
+        let mut failed: Vec<(String, Failure)> = Vec::new();
+        let mut total = 0;
+        let mut changed = false;
+        for (n, source) in self.files.iter().enumerate() {
+            if left.load(Ordering::SeqCst) {
+                break;
             }
-            Err(failure) => {
-                changed |= failure.reason.ends_the_call();
-                failed.push((source.clone(), failure));
+            if changed {
+                failed.push((
+                    source.clone(),
+                    Failure::new(ReadRefusal::SessionChanged, source),
+                ));
+                continue;
+            }
+            let names: Vec<&str> = kept
+                .iter()
+                .filter_map(|kept| kept.path.file_name()?.to_str())
+                .collect();
+            let plan = One {
+                source,
+                max_size: self.max_size,
+                room: MAX_TOTAL.saturating_sub(total),
+                partial: folder.join(format!(".{n}.partial")),
+                copies,
+                taken: &names,
+                transport: &self.transport,
+                runtime,
+                left,
+                pin: self.pin,
+                #[cfg(test)]
+                fault: &*self.fault,
+            };
+            match plan.collect() {
+                Ok(file) => {
+                    total += file.size;
+                    kept.push(file);
+                }
+                Err(failure) => {
+                    changed |= failure.reason.ends_the_call();
+                    failed.push((source.clone(), failure));
+                }
             }
         }
+        (kept, failed)
     }
-    (kept, failed)
+}
+
+/// Set once the caller of a collection went away.
+struct Left(Arc<AtomicBool>);
+
+impl Drop for Left {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
 }
 
 /// Write the receipt of the copies `kept` into `folder`, made at `at`: the
 /// receipt, or none, and the folder removed, when nothing was kept.
 fn write_receipt(
-    client: &Client,
+    task: Option<&Task>,
     folder: &Path,
     receipt: ReceiptId,
     at: u64,
@@ -208,7 +331,7 @@ fn write_receipt(
         version: VERSION,
         receipt: receipt.clone(),
         at,
-        task: client.task.as_ref().map(|task| task.key().clone()),
+        task: task.map(|task| task.key().clone()),
         files: kept.to_vec(),
     };
     write_private(&folder.join("receipt.json"), &serde_json::to_vec(&written)?)?;
@@ -218,14 +341,14 @@ fn write_receipt(
 /// Note the collection `receipt` in its task's record in `output`: a
 /// warning, when it could not be.
 fn note_output(
-    client: &Client,
+    task: Option<&Task>,
     output: &Path,
     receipt: Option<&ReceiptId>,
     at: u64,
     kept: &[Kept],
     total: u64,
 ) -> Option<&'static str> {
-    let (receipt, task) = (receipt?, client.task.as_ref()?);
+    let (receipt, task) = (receipt?, task?);
     let entry = OutputEntry {
         receipt: receipt.clone(),
         at,
@@ -312,6 +435,15 @@ struct One<'a> {
     copies: &'a Path,
     /// The names already collected in this call.
     taken: &'a [&'a str],
+    transport: &'a Transport,
+    /// The runtime that drives the transport.
+    runtime: &'a Handle,
+    /// Whether the caller went away.
+    left: &'a AtomicBool,
+    /// The session every read is pinned to.
+    pin: SessionPin,
+    #[cfg(test)]
+    fault: &'a Fault,
 }
 
 /// What the helper said of a file it sent whole: the version read, the
@@ -357,12 +489,8 @@ impl One<'_> {
     }
 
     /// Collect it, removing whatever was begun when it fails.
-    async fn collect(
-        &self,
-        client: &Client,
-        pin: SessionPin,
-    ) -> std::result::Result<Kept, Failure> {
-        let collected = async {
+    fn collect(&self) -> std::result::Result<Kept, Failure> {
+        let collected = || {
             let name = self.name()?;
 
             let started = now_ms();
@@ -378,14 +506,13 @@ impl One<'_> {
                 identity,
                 real,
                 in_home,
-            } = self.receive(client, pin, &mut partial, &mut hasher).await?;
+            } = self.receive(&mut partial, &mut hasher)?;
             let sha256 = atlas_core::name::hex(&hasher.finalize());
-            self.confirm(client, pin, identity, &mut partial, &sha256)
-                .await?;
-            partial
-                .sync_all()
+            self.confirm(identity, &mut partial, &sha256)?;
+            self.sync(&partial)
                 .map_err(|_| self.fail(ReadRefusal::Space))?;
             drop(partial);
+            self.staying()?;
 
             let path = self.link(name)?;
             Ok(Kept {
@@ -399,8 +526,8 @@ impl One<'_> {
                     finished: now_ms(),
                 }),
             })
-        }
-        .await;
+        };
+        let collected = collected();
         let _ = fs::remove_file(&self.partial);
         collected
     }
@@ -428,10 +555,8 @@ impl One<'_> {
     /// Read the file part by part into `partial`, hashing each part, every
     /// part of the same version as the first: once the first says how large
     /// it is, it must fit what is left of the call and of the disk.
-    async fn receive(
+    fn receive(
         &self,
-        client: &Client,
-        pin: SessionPin,
         partial: &mut File,
         hasher: &mut Sha256,
     ) -> std::result::Result<Received, Failure> {
@@ -448,8 +573,8 @@ impl One<'_> {
             if let Some(first) = &first {
                 request["expect"] = json!(first.identity);
             }
-            request["session"] = json!(pin);
-            let (reply, received) = self.read_part(client, &request, partial, hasher).await?;
+            request["session"] = json!(self.pin);
+            let (reply, received) = self.read_part(&request, partial, hasher)?;
             let file = reply
                 .file
                 .ok_or_else(|| self.fail(ReadRefusal::Unreadable))?;
@@ -481,10 +606,8 @@ impl One<'_> {
 
     /// Check that the helper's digest of the version `identity` is
     /// `sha256`, the digest of the parts it sent.
-    async fn confirm(
+    fn confirm(
         &self,
-        client: &Client,
-        pin: SessionPin,
         identity: FileIdentity,
         partial: &mut File,
         sha256: &str,
@@ -497,14 +620,34 @@ impl One<'_> {
             "maxSize": self.max_size,
             "expect": identity,
         });
-        request["session"] = json!(pin);
-        let (reply, _) = self
-            .read_part(client, &request, partial, &mut Sha256::new())
-            .await?;
+        request["session"] = json!(self.pin);
+        let (reply, _) = self.read_part(&request, partial, &mut Sha256::new())?;
         if reply.sha256.as_deref() != Some(sha256) {
             return Err(self.fail(ReadRefusal::Changing));
         }
         Ok(())
+    }
+
+    /// Refused once the caller went away: nothing more is read or kept.
+    fn staying(&self) -> std::result::Result<(), Failure> {
+        if self.left.load(Ordering::SeqCst) {
+            return Err(self.fail(ReadRefusal::Gone));
+        }
+        Ok(())
+    }
+
+    /// Append `bytes` to `partial`.
+    fn append(&self, partial: &mut File, bytes: &[u8]) -> std::io::Result<()> {
+        #[cfg(test)]
+        (self.fault)(Step::Append)?;
+        partial.write_all(bytes)
+    }
+
+    /// Make what was written to `partial` durable.
+    fn sync(&self, partial: &File) -> std::io::Result<()> {
+        #[cfg(test)]
+        (self.fault)(Step::Sync)?;
+        partial.sync_all()
     }
 
     /// Link the finished partial file into the copies folder as `name`,
@@ -523,18 +666,18 @@ impl One<'_> {
     /// Send one read `request` and write the bytes of its `data` events to
     /// `partial` as they arrive, hashing them: the final reply, and how many
     /// bytes came. A refusal is the reason it gives.
-    async fn read_part(
+    fn read_part(
         &self,
-        client: &Client,
         request: &Value,
         partial: &mut File,
         hasher: &mut Sha256,
     ) -> std::result::Result<(ReadReply, u64), Failure> {
+        self.staying()?;
         let mut buffer = Vec::new();
         let mut received = 0_u64;
         let mut written = Ok(());
-        let reply = async {
-            let pending = client.transport.connect().await?.dispatch(request).await?;
+        let reply = self.runtime.block_on(async {
+            let pending = self.transport.connect().await?.dispatch(request).await?;
             pending
                 .finish_each(&mut |event| {
                     if event["event"] != "data" {
@@ -547,15 +690,14 @@ impl One<'_> {
                         return Err(bad_part(OutputError::Oversized));
                     }
                     hasher.update(&buffer);
-                    if let Err(error) = partial.write_all(&buffer) {
+                    if let Err(error) = self.append(partial, &buffer) {
                         written = Err(error);
                         return Err(Error::new(Code::Io, "The copy could not be written"));
                     }
                     Ok(())
                 })
                 .await
-        }
-        .await;
+        });
         if written.is_err() {
             return Err(self.fail(ReadRefusal::Space));
         }

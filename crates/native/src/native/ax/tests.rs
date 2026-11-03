@@ -50,6 +50,7 @@ fn a_sheet_is_the_window_of_what_it_holds() {
         title: None,
         layer: 0,
         alpha: 1.0,
+        system: None,
         bounds: crate::native::windows::Bounds {
             x: sheet.x,
             y: sheet.y,
@@ -884,6 +885,7 @@ fn an_unlisted_sheet_inherits_only_a_uniquely_listed_parent_frame() {
         title: None,
         layer: 0,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x: parent.x,
             y: parent.y,

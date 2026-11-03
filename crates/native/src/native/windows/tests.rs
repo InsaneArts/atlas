@@ -102,3 +102,130 @@ fn the_current_session_lists_windows() {
     let windows = windows().unwrap();
     assert!(windows.iter().all(|w| w.bounds.width >= 0.0 && w.pid > 0));
 }
+
+fn process(pid: i32, uid: u32, start: u64) -> Info {
+    Info {
+        instance: atlas_core::process::Instance::new(pid, [start, 0]),
+        ppid: 1,
+        pgid: pid,
+        uid,
+        ruid: uid,
+        svuid: uid,
+        zombie: false,
+        stopped: false,
+        name: "NotificationCent".into(),
+    }
+}
+
+fn notification_center() -> Option<std::path::PathBuf> {
+    Some(NOTIFICATION_CENTER.into())
+}
+
+#[test]
+fn only_the_logins_own_notification_center_process_is_proven_whatever_its_windows_are_named() {
+    let proven = system_with(
+        31082,
+        503,
+        |pid| Some(process(pid, 503, 7)),
+        |_| notification_center(),
+    );
+    assert_eq!(proven, Some(System::NotificationCenter));
+
+    let another_account = system_with(
+        31082,
+        503,
+        |pid| Some(process(pid, 501, 7)),
+        |_| notification_center(),
+    );
+    assert_eq!(another_account, None, "another account's process");
+
+    let mut borrowed = process(31082, 503, 7);
+    borrowed.ruid = 0;
+    let setuid = system_with(
+        31082,
+        503,
+        |_| Some(borrowed.clone()),
+        |_| notification_center(),
+    );
+    assert_eq!(setuid, None, "a process another account started");
+
+    let mut exited = process(31082, 503, 7);
+    exited.zombie = true;
+    let gone = system_with(
+        31082,
+        503,
+        |_| Some(exited.clone()),
+        |_| notification_center(),
+    );
+    assert_eq!(gone, None, "a process that has exited");
+
+    let impostor = system_with(
+        31082,
+        503,
+        |pid| Some(process(pid, 503, 7)),
+        |_| Some("/Users/Shared/Notification Center".into()),
+    );
+    assert_eq!(impostor, None, "another program");
+
+    let unknown = system_with(31082, 503, |pid| Some(process(pid, 503, 7)), |_| None);
+    assert_eq!(unknown, None, "a program that could not be read");
+
+    for pid in [0, -1, i64::from(i32::MAX) + 1] {
+        assert_eq!(
+            system_with(pid, 503, |_| unreachable!(), |_| unreachable!()),
+            None
+        );
+    }
+}
+
+#[test]
+fn a_process_replaced_while_its_program_is_read_is_not_proven() {
+    let starts = std::cell::Cell::new(7);
+    let replaced = system_with(
+        31082,
+        503,
+        |pid| {
+            let start = starts.get();
+            starts.set(start + 1);
+            Some(process(pid, 503, start))
+        },
+        |_| notification_center(),
+    );
+    assert_eq!(replaced, None);
+}
+
+#[test]
+fn each_process_is_asked_about_once_and_marks_all_its_windows() {
+    let listed = |pid, number| Window {
+        number,
+        pid,
+        owner: Some("Notification Center".into()),
+        title: None,
+        layer: atlas_core::screen::windows::WIDGET_LAYER,
+        alpha: 1.0,
+        bounds: Bounds {
+            x: 8.0,
+            y: 38.0,
+            width: 180.0,
+            height: 180.0,
+        },
+        system: Some(System::NotificationCenter),
+    };
+    let mut windows = vec![listed(31082, 1), listed(900, 2), listed(31082, 3)];
+    let mut asked = Vec::new();
+    attest(&mut windows, |pid| {
+        asked.push(pid);
+        (pid == 31082).then_some(System::NotificationCenter)
+    });
+    assert_eq!(asked, [31082, 900]);
+    let marks: Vec<_> = windows.iter().map(|window| window.system).collect();
+    assert_eq!(
+        marks,
+        [
+            Some(System::NotificationCenter),
+            None,
+            Some(System::NotificationCenter)
+        ],
+        "a name or an earlier mark proves nothing"
+    );
+}

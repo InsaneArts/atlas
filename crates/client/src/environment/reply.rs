@@ -133,6 +133,12 @@ impl Transactions {
                 Lenient::Later(_) => None,
             })
     }
+
+    /// Whether the helper and this build read every transaction the helper
+    /// looked at.
+    pub(super) fn all_read(&self) -> bool {
+        self.unreadable == 0 && self.known().count() == self.transactions.len()
+    }
 }
 
 /// How far an install got, as a read of the helper's installs says: none

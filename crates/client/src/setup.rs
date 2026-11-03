@@ -11,7 +11,7 @@ pub mod migrate;
 pub mod account;
 pub use account::{FULL_NAME, validate_account_name};
 pub use configuration::configure_helper;
-pub use executor::{administrator_rights_current, request_administrator_rights};
+pub use executor::{AdministratorRights, administrator_rights_current};
 pub use installed_app::link_installed_command as link_command;
 pub use job::{first_login_setup, prepare_helper, refresh_helper, restart_helper};
 

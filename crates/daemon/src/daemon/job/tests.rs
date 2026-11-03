@@ -388,7 +388,7 @@ fn assert_unwritten_job_survives_retention(now: u64, pressure: usize) {
     }
     store.prune(now);
     if pressure > 0 {
-        assert_eq!(store.records().len(), 64);
+        assert_eq!(store.scan().found.len(), 64);
     }
     assert!(matches!(store.read(&job.id), Some(Found::Record(found)) if *found == job));
     assert_eq!(std::fs::read(&path).unwrap(), previous);
@@ -444,7 +444,7 @@ fn job_log_pruning_keeps_unreadable_and_possibly_live_records() {
         }
 
         store.prune(now);
-        assert_eq!(store.records().len(), if now == 0 { 64 } else { 3 });
+        assert_eq!(store.scan().found.len(), if now == 0 { 64 } else { 3 });
         assert!(matches!(store.read(&running.id), Some(Found::Record(found)) if *found == running));
         assert!(matches!(store.read(&future.id), Some(Found::Unreadable(id)) if id == future.id));
         assert!(matches!(store.read(&unreadable), Some(Found::Unreadable(id)) if id == unreadable));
@@ -677,6 +677,192 @@ fn listing_jobs_refuses_when_the_records_folder_cannot_be_scanned() {
     assert_eq!(reply["reason"], "unobserved");
 }
 
+/// Ways a scan of the records folder cannot account for every record.
+#[derive(Clone, Copy, Debug)]
+enum Incomplete {
+    /// More entries than one scan reads.
+    Bounded,
+    /// A folder whose entries cannot be listed, though each record can
+    /// still be read and written by its name.
+    Unlistable,
+}
+
+impl Incomplete {
+    fn apply(self, folder: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        match self {
+            Self::Bounded => {
+                for index in 0..atlas_core::record_folder::LISTED {
+                    std::fs::write(folder.join(format!("unrelated-{index}")), "").unwrap();
+                }
+            }
+            Self::Unlistable => {
+                std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o300)).unwrap();
+            }
+        }
+    }
+
+    fn restore(self, folder: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        match self {
+            Self::Bounded => {
+                for index in 0..atlas_core::record_folder::LISTED {
+                    std::fs::remove_file(folder.join(format!("unrelated-{index}"))).unwrap();
+                }
+            }
+            Self::Unlistable => {
+                std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+    }
+}
+
+const INCOMPLETE: [Incomplete; 2] = [Incomplete::Bounded, Incomplete::Unlistable];
+
+#[test]
+fn an_incomplete_job_scan_never_becomes_a_complete_census() {
+    for incomplete in INCOMPLETE {
+        let table = Table::with(vec![leader()]);
+        let (directory, jobs) = jobs_with(&record(), &table);
+        let folder = directory.path().join("jobs");
+        incomplete.apply(&folder);
+        jobs.watch_once(None).unwrap();
+        let census = jobs.census().unwrap();
+        incomplete.restore(&folder);
+        // The job known before is still counted, and the count says it may
+        // not be every job.
+        assert_eq!(
+            json!(census),
+            json!({"running": 1, "launching": 0, "unresolved": 0, "incomplete": true}),
+            "{incomplete:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_incomplete_job_scan_refuses_a_new_launch_before_spawning() {
+    for incomplete in INCOMPLETE {
+        let (directory, jobs, table, start) =
+            launching("#!/bin/sh\ntouch \"$0.ran\"\nread -r -t 20 go\n");
+        let folder = directory.path().join("jobs");
+        let before = raw_job_files(directory.path());
+        incomplete.apply(&folder);
+        let reply = jobs.start(start).await;
+        incomplete.restore(&folder);
+        assert_eq!(reply["ok"], false, "{incomplete:?}: {reply}");
+        assert_eq!(reply["reason"], "unobserved", "{incomplete:?}: {reply}");
+        assert_eq!(reply["uncertain"], false, "{incomplete:?}: {reply}");
+        assert!(
+            !directory.path().join("launcher.ran").exists(),
+            "{incomplete:?}: the launcher ran"
+        );
+        assert_eq!(raw_job_files(directory.path()), before, "{incomplete:?}");
+        assert!(jobs.state().unwrap().launching.is_empty());
+        assert!(table.signals().is_empty());
+    }
+}
+
+#[test]
+fn stopping_every_job_never_acknowledges_an_incomplete_inventory() {
+    for incomplete in INCOMPLETE {
+        let table = Table::with(vec![leader()]);
+        let (directory, jobs) = jobs_with(&record(), &table);
+        let folder = directory.path().join("jobs");
+        incomplete.apply(&folder);
+        let reply = jobs.stop_all(StopReason::Person);
+        incomplete.restore(&folder);
+        assert_eq!(reply["ok"], false, "{incomplete:?}: {reply}");
+        assert_eq!(reply["uncertain"], true, "{incomplete:?}: {reply}");
+        assert!(
+            reply["error"]
+                .as_str()
+                .unwrap()
+                .contains("may still be running"),
+            "{reply}"
+        );
+        assert!(!reply.to_string().contains("nothing was signalled"));
+        // The job known before the scan is still stopped.
+        assert_eq!(table.signals(), [(4312, Signal::SIGTERM)], "{incomplete:?}");
+        assert_eq!(shown(&jobs)["state"], "stopping");
+    }
+}
+
+#[test]
+fn a_temporary_scan_failure_does_not_end_job_supervision() {
+    let table = Table::with(vec![leader()]);
+    let (directory, jobs) = jobs_with(&record(), &table);
+    let folder = directory.path().join("jobs");
+    Incomplete::Unlistable.apply(&folder);
+    let outcome = jobs.worker_outcome(Ok(jobs.watch_once(None)));
+    let census = jobs.census().unwrap();
+    Incomplete::Unlistable.restore(&folder);
+    assert!(outcome.is_ok(), "{outcome:?}");
+    assert!(census.incomplete, "{census:?}");
+    assert!(!jobs.unavailable.load(Ordering::SeqCst));
+
+    jobs.worker_outcome(Ok(jobs.watch_once(None))).unwrap();
+    assert_eq!(
+        json!(jobs.census().unwrap()),
+        json!({"running": 1, "launching": 0, "unresolved": 0})
+    );
+    assert_eq!(shown(&jobs)["state"], "running");
+    assert!(table.signals().is_empty());
+}
+
+#[test]
+fn a_truncated_scan_does_not_abandon_a_previously_known_job() {
+    for incomplete in INCOMPLETE {
+        let table = Table::with(vec![leader()]);
+        let mut due = record();
+        due.ends_at = 0;
+        let (directory, jobs) = jobs_with(&due, &table);
+        let folder = directory.path().join("jobs");
+        incomplete.apply(&folder);
+        jobs.watch_once(None).unwrap();
+        let stopped = jobs.stop(&due.id, &due.expected().unwrap(), Duration::ZERO);
+        incomplete.restore(&folder);
+        assert_eq!(table.signals(), [(4312, Signal::SIGTERM)], "{incomplete:?}");
+        assert_eq!(
+            stopped["alreadyStopping"], true,
+            "{incomplete:?}: {stopped}"
+        );
+        let job = shown(&jobs);
+        assert_eq!(job["state"], "stopping", "{incomplete:?}: {job}");
+        assert_eq!(job["signal"], "SIGTERM");
+    }
+}
+
+#[test]
+fn retention_does_not_delete_records_using_an_incomplete_inventory() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    let mut written = Vec::new();
+    for number in 0..65 {
+        let mut ended = record();
+        ended.id = JobId::parse(&format!("{number:012x}")).unwrap();
+        ended.state = JobState::Ended;
+        ended.ended = Some(Ended {
+            how: How::Exited,
+            at: 5,
+            signal: None,
+            exit_code: None,
+            exit_signal: None,
+            left: Vec::new(),
+        });
+        store.write(&ended).unwrap();
+        written.push(ended.id);
+    }
+    let folder = store.directory().to_owned();
+    Incomplete::Bounded.apply(&folder);
+    store.prune(u64::MAX);
+    Incomplete::Bounded.restore(&folder);
+    for id in &written {
+        assert!(store.holds(id), "{id} was removed");
+    }
+    store.prune(u64::MAX);
+    assert!(written.iter().all(|id| !store.holds(id)));
+}
+
 #[test]
 fn an_identity_refusal_followed_by_a_stop_never_signals() {
     // The PID's group is another's now: its leader moved to a group whose
@@ -724,6 +910,38 @@ fn a_record_whose_group_is_not_its_leaders_is_refused_on_load() {
     jobs.stop_all(StopReason::Person);
     jobs.watch_once(Some(How::Person)).unwrap();
     assert!(table.signals().is_empty());
+}
+
+#[test]
+fn an_invalid_stopping_record_remains_unknown_and_is_never_acknowledged_as_stopping() {
+    let mut invalid = record();
+    invalid.state = JobState::Stopping;
+    invalid.ends_at = 0;
+    let table = Table::with(vec![leader(), process(4313, later(1), 4312, 4312)]);
+    let (folder, jobs) = jobs_with(&invalid, &table);
+    std::fs::write(folder.path().join(format!("jobs/{ID}.log")), b"output\n").unwrap();
+    let before = raw_job_files(folder.path());
+
+    let job = shown(&jobs);
+    assert_eq!(job["state"], "unknown", "{job}");
+    assert_eq!(job["error"], UNREADABLE);
+    for forced in [None, Some(How::Person), None, Some(How::OnConsole), None] {
+        jobs.watch_once(forced).unwrap();
+    }
+    assert_eq!(
+        json!(jobs.census().unwrap()),
+        json!({"running": 0, "launching": 0, "unresolved": 1})
+    );
+    let stopped = jobs.stop(&record().id, &record().expected().unwrap(), Duration::ZERO);
+    assert_eq!(stopped["ok"], false, "{stopped}");
+    assert_eq!(stopped["reason"], "unknown");
+    assert!(stopped.get("alreadyStopping").is_none(), "{stopped}");
+    let all = jobs.stop_all(StopReason::Person);
+    assert_eq!(all["stopping"], 0, "{all}");
+    assert_eq!(all["unresolved"], json!([{"id": ID}]));
+    jobs.watch_once(None).unwrap();
+    assert!(table.signals().is_empty(), "{:?}", table.signals());
+    assert_eq!(raw_job_files(folder.path()), before);
 }
 
 #[test]
@@ -1402,6 +1620,153 @@ async fn an_unwritable_launch_record_does_not_disable_supervision() {
     assert!(jobs.state().unwrap().children.is_empty());
     assert_eq!(jobs.census().unwrap().running, 1);
     assert_eq!(jobs.show(Some(&record().id))["ok"], true);
+    assert!(table.signals().is_empty());
+}
+
+/// Jobs whose launcher is `script`, with a start of `/usr/bin/true` for it.
+fn launching(script: &str) -> (tempfile::TempDir, Arc<Jobs>, Arc<Table>, JobStart) {
+    use std::os::unix::fs::PermissionsExt;
+    let table = Table::with(vec![leader()]);
+    let (folder, mut jobs) = jobs_with(&record(), &table);
+    let launcher = folder.path().join("launcher");
+    std::fs::write(&launcher, script).unwrap();
+    std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o700)).unwrap();
+    jobs.launcher = launcher;
+    let start = JobStart {
+        argv: vec!["/usr/bin/true".into()],
+        lifetime: Duration::from_secs(60),
+        name: None,
+        task: None,
+        session: None,
+    };
+    (folder, Arc::new(jobs), table, start)
+}
+
+/// A launcher that reads its go and ends before it makes a session of its own.
+const ENDS_BEFORE_SETSID: &str = "#!/bin/sh\nread -r -t 20 go\n";
+
+#[tokio::test]
+async fn a_launcher_whose_wait_fails_remains_owned_and_unconfirmed() {
+    let (folder, jobs, table, start) = launching(ENDS_BEFORE_SETSID);
+    let prepared = jobs.prepare(&start).unwrap();
+    let id = prepared.record.id.clone();
+    let log = folder.path().join(format!("jobs/{id}.log"));
+    *jobs.wait_fault.lock().unwrap() = Some(launch::WaitFault::Fails);
+    let reply = jobs.launch(prepared, &start).await;
+    assert_eq!(reply["uncertain"], true, "{reply}");
+    assert_eq!(reply["reason"], "unconfirmed", "{reply}");
+    assert_eq!(reply["job"]["id"], id.as_str());
+    let mut child = {
+        let mut state = jobs.state().unwrap();
+        assert!(matches!(state.store.read(&id), Some(Found::Record(_))));
+        state
+            .presession
+            .remove(&id)
+            .expect("the launcher stays owned")
+    };
+    assert!(log.exists());
+    assert!(table.signals().is_empty());
+    child.wait().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_launcher_is_retained_when_cleanup_times_out_after_its_record_write_fails() {
+    let (folder, jobs, table, start) = launching(ENDS_BEFORE_SETSID);
+    let prepared = jobs.prepare(&start).unwrap();
+    let id = prepared.record.id.clone();
+    let path = folder.path().join(format!("jobs/{id}.json"));
+    let log = folder.path().join(format!("jobs/{id}.log"));
+    std::fs::create_dir(path.with_extension("json.partial")).unwrap();
+    *jobs.wait_fault.lock().unwrap() = Some(launch::WaitFault::Hangs);
+    // Waiting never ends, so only the reap limit ends it; paused time lets
+    // that limit pass once nothing else is left to do.
+    tokio::time::pause();
+    let reply = jobs.launch(prepared, &start).await;
+    tokio::time::resume();
+    assert_eq!(reply["uncertain"], true, "{reply}");
+    assert_eq!(reply["reason"], "unconfirmed", "{reply}");
+    let mut child = {
+        let mut state = jobs.state().unwrap();
+        let Some(Found::Record(kept)) = state.store.read(&id) else {
+            panic!("the launcher's record was lost");
+        };
+        let child = state
+            .presession
+            .remove(&id)
+            .expect("the launcher stays owned");
+        assert_eq!(kept.pid, child.id().map(|pid| i32::try_from(pid).unwrap()));
+        child
+    };
+    assert_eq!(reply["job"]["pid"], json!(child.id()));
+    assert!(log.exists());
+    assert!(table.signals().is_empty());
+    tokio::time::timeout(Duration::from_secs(10), child.wait())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_launcher_kept_before_its_own_session_is_reaped_once_it_exits_and_never_signalled() {
+    for unrecorded in [false, true] {
+        let (folder, jobs, table, start) = launching(ENDS_BEFORE_SETSID);
+        let prepared = jobs.prepare(&start).unwrap();
+        let id = prepared.record.id.clone();
+        if unrecorded {
+            let path = folder.path().join(format!("jobs/{id}.json"));
+            std::fs::create_dir(path.with_extension("json.partial")).unwrap();
+        }
+        *jobs.wait_fault.lock().unwrap() = Some(launch::WaitFault::Fails);
+        let reply = jobs.launch(prepared, &start).await;
+        jobs.state().unwrap().launching.remove(&id);
+        assert_eq!(reply["uncertain"], true, "{reply}");
+        let pid = i32::try_from(reply["job"]["pid"].as_i64().unwrap()).unwrap();
+        let started: Start = serde_json::from_value(reply["job"]["start"].clone()).unwrap();
+
+        // Ended, or killed by its cleanup, it is left unreaped; wait until
+        // the kernel shows it so. Outer watchdog only.
+        let until = Instant::now() + Duration::from_secs(10);
+        while !atlas_core::process::info(pid)
+            .unwrap()
+            .is_some_and(|info| info.zombie)
+        {
+            assert!(Instant::now() < until, "the launcher never exited");
+            std::thread::yield_now();
+        }
+        // As the kernel sees it: it never left the daemon's process group.
+        let mut exited = process(pid, started, 9999, 1);
+        exited.zombie = true;
+        table.processes.lock().unwrap().push(exited);
+
+        jobs.watch_once(None).unwrap();
+        jobs.stop_all(StopReason::Person);
+        jobs.watch_once(None).unwrap();
+        let job = jobs.show(Some(&id))["job"].clone();
+        assert_eq!(job["state"], "ended", "unrecorded {unrecorded}: {job}");
+        assert_eq!(jobs.census().unwrap().running, 1, "only the fixture's job");
+        assert!(
+            atlas_core::process::info(pid)
+                .unwrap()
+                .is_none_or(|info| info.instance.start != started),
+            "the launcher was reaped"
+        );
+        // Only the fixture's own job is stopped; nothing reaches the launcher
+        // or the group it was started in.
+        assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
+    }
+}
+
+#[tokio::test]
+async fn a_launcher_is_forgotten_only_after_waiting_returns_its_exit_status() {
+    let (folder, jobs, table, start) = launching(ENDS_BEFORE_SETSID);
+    let prepared = jobs.prepare(&start).unwrap();
+    let id = prepared.record.id.clone();
+    let reply = jobs.launch(prepared, &start).await;
+    assert_eq!(reply["code"], "spawn-failed", "{reply}");
+    assert_eq!(reply["uncertain"], false, "{reply}");
+    assert!(!folder.path().join(format!("jobs/{id}.json")).exists());
+    assert!(!folder.path().join(format!("jobs/{id}.log")).exists());
+    assert!(jobs.state().unwrap().children.is_empty());
     assert!(table.signals().is_empty());
 }
 

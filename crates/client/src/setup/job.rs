@@ -1,6 +1,6 @@
 //! The helper's background job as its controller installs, replaces and
 //! restarts it, each action run by a worker inside the helper login.
-use super::{account::problem, executor::setup_transaction_held, reported_pid};
+use super::{account::problem, reported_pid};
 use crate::{client::Client, setup};
 use atlas_core::{
     account::{Account, account_with_uid},
@@ -121,22 +121,63 @@ pub fn install_job(
     Err(error)
 }
 
-/// Prepare and install under one claim, including rollback dispatches.
+/// [`as_helper`], owning what it needs to run on a worker of its own.
+fn helper_runner(
+    executable: &'static Path,
+    helper: &Account,
+    expected: &Identity,
+) -> impl Fn(&Request) -> Result<Value> + Send + 'static {
+    let (helper, expected) = (helper.clone(), expected.clone());
+    move |request| as_helper(executable, &helper, request, &expected)
+}
+
+/// Run `transaction` on a blocking worker of its own, which a caller that
+/// stops waiting leaves running to its end. A worker that ends without an
+/// answer leaves what it did unknown.
+async fn on_worker<T: Send + 'static>(
+    transaction: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    tokio::task::spawn_blocking(transaction)
+        .await
+        .map_err(|cause| {
+            problem("Setting up the helper stopped before it finished")
+                .with_source(cause)
+                .uncertain()
+        })?
+}
+
+/// Prepare and install under one claim, including rollback dispatches, on
+/// a worker that holds exclusion until all of it is done. The claim is
+/// settled, still under exclusion, only once its success is heard here: a
+/// caller that stops waiting leaves it pending.
 async fn prepare_and_install(
     client: &Client,
     controller_name: &str,
     agent: Agent,
     logs: &Path,
-    run: impl Fn(&Request) -> Result<Value>,
+    run: impl Fn(&Request) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
-    let _ownership = client.service_change(true).await?;
-    setup_transaction_held(&client.controller, || {
-        run(&Request::Prepare {
-            uid: agent.uid,
-            controller: controller_name.to_owned(),
-        })?;
-        install_job(run, agent, logs)
+    let ownership = client.service_change(true).await?;
+    let controller = client.controller.clone();
+    let (controller_name, logs) = (controller_name.to_owned(), logs.to_path_buf());
+    let (_ownership, pending, installed) = on_worker(move || {
+        let pending = controller.quarantine()?;
+        let installed = {
+            // Executor claims bind to the thread that dispatches them.
+            let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+            run(&Request::Prepare {
+                uid: agent.uid,
+                controller: controller_name,
+            })
+            .and_then(|_| install_job(run, agent, &logs))
+        };
+        Ok((ownership, pending, installed))
     })
+    .await?;
+
+    let installed = installed?;
+    client.controller.clear_if(&pending)?;
+    Ok(installed)
 }
 
 /// Restart the helper daemon (launchd starts a fresh process) and wait for
@@ -204,28 +245,49 @@ async fn new_daemon_answers(client: &Client, before: &Value) -> bool {
     }
 }
 
+/// [`new_daemon_answers`] from a blocking worker, on a runtime of its own:
+/// the look goes on while the runtime that started the worker ends, which
+/// waits for it. A runtime that cannot be made sees no new daemon.
+fn new_daemon_answers_on_worker(client: &Client, before: &Value) -> bool {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .is_ok_and(|runtime| runtime.block_on(new_daemon_answers(client, before)))
+}
+
 /// Replace the helper's background job an earlier Atlas wrote with this
 /// version's, from outside the daemon it runs (through sudo, as installing
 /// it does): the earlier definition is kept as a backup, and comes back if
 /// the new one cannot go in. Pending until a new daemon answers, like a
-/// restart.
+/// restart. The replacement and the look for the new daemon run on a worker
+/// that holds exclusion and the claim until both are done, even when nobody
+/// waits for it any more; the claim is settled, still under exclusion, only
+/// once its success is heard here, so a caller that stops waiting leaves it
+/// pending.
 async fn replace_job(
     client: &Client,
     helper: &Account,
     agent: Agent,
     layout: &Layout,
-    run: impl Fn(&Request) -> Result<Value>,
+    run: impl Fn(&Request) -> Result<Value> + Send + 'static,
 ) -> Result<()> {
-    let _exclusion = client.service_change(true).await?;
+    let exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
-    let pending = client.controller.quarantine()?;
+    let (controller, looking) = (client.controller.clone(), client.clone());
+    let logs = layout.logs();
+    let (_exclusion, pending, answered) = on_worker(move || {
+        let pending = controller.quarantine()?;
+        {
+            // Executor claims bind to the thread that dispatches them.
+            let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
+            install_job(run, agent, &logs).map_err(Error::uncertain)?;
+        }
+        let answered = new_daemon_answers_on_worker(&looking, &before);
+        Ok((exclusion, pending, answered))
+    })
+    .await?;
 
-    {
-        let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
-        install_job(run, agent, &layout.logs()).map_err(Error::uncertain)?;
-    }
-
-    if !new_daemon_answers(client, &before).await {
+    if !answered {
         return Err(problem(format!(
             "The helper's background job was replaced but the helper did not start again. Its \
              log is {} in {}'s account; run atlas init again after checking it.",
@@ -268,9 +330,13 @@ pub async fn refresh_helper(
         progress(setup::Progress::Waiting(
             "Replacing the helper's background job…",
         ))?;
-        replace_job(client, helper, agent, &layout, |request| {
-            as_helper(executable, helper, request, expected)
-        })
+        replace_job(
+            client,
+            helper,
+            agent,
+            &layout,
+            helper_runner(executable, helper, expected),
+        )
         .await?;
         progress(setup::Progress::Done(
             "Helper job",
@@ -309,9 +375,13 @@ pub async fn prepare_helper(
     let executable = Path::new(app_bundle::EXECUTABLE);
     let controller = this_account()?;
     let (agent, layout) = helper_agent(helper, executable)?;
-    prepare_and_install(client, &controller.name, agent, &layout.logs(), |request| {
-        as_helper(executable, helper, request, expected)
-    })
+    prepare_and_install(
+        client,
+        &controller.name,
+        agent,
+        &layout.logs(),
+        helper_runner(executable, helper, expected),
+    )
     .await?;
     Ok(layout.logs().join(format!("{LABEL}.log")))
 }

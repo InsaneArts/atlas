@@ -31,6 +31,7 @@ fn window(number: i64, x: f64) -> Window {
         title: None,
         layer: 0,
         alpha: 1.0,
+        system: None,
         bounds: Bounds {
             x,
             y: 20.0,
