@@ -1,6 +1,7 @@
 //! One traversal's reads: each attribute, count and array of children asked
-//! of an element, bounded by the traversal's deadline, and the record of
-//! what failed, what was cut and why the traversal is incomplete.
+//! of an element, each request bounded by what is left of the traversal's
+//! deadline, and the record of what failed, what was cut and why the
+//! traversal is incomplete.
 use super::{
     INCOMPLETE, absent,
     batch::{BATCH, Batch, Source},
@@ -10,7 +11,10 @@ use super::{
 use atlas_core::screen::{elements::Stop, geometry::Bounds};
 use objc2_application_services::{AXError, AXUIElement, AXValue};
 use objc2_core_foundation::{CFArray, CFBoolean, CFIndex, CFNumber, CFRetained, CFString, CFType};
-use std::{collections::BTreeSet, time::Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 /// Attributes a selector matches on; an element whose selector attribute
 /// fails to read (other than being absent) may be an unseen match.
@@ -22,16 +26,43 @@ pub(super) const SELECTORS: [&str; 5] = [
     "AXValue",
 ];
 
+/// Attributes that tell one element from another; a value tells only a
+/// static text.
+pub(super) const IDENTIFYING: [&str; 6] = [
+    "AXRole",
+    "AXSubrole",
+    "AXTitle",
+    "AXDescription",
+    "AXIdentifier",
+    "AXValue",
+];
+
+/// `attribute` as one of [`IDENTIFYING`], when it is one.
+fn identifying(attribute: &str) -> Option<&'static str> {
+    IDENTIFYING.into_iter().find(|name| *name == attribute)
+}
+
+/// The longest one request may wait for an answer.
+const REQUEST: Duration = Duration::from_secs(1);
+
+/// The shortest timeout a request is given: none would mean the process's
+/// own, which other reads set.
+const LEAST: Duration = Duration::from_millis(10);
+
 /// One traversal: its deadline, whether anything made it incomplete and
 /// why, the selector attributes the current element failed to read or
-/// reported only in part, and how often each attribute returned each AX
-/// error.
+/// reported only in part, the identifying attributes it read without
+/// proving them (failed, malformed, cut or not asked) and those whose
+/// getter failed as AppKit's does for a name it lacks, and how often each
+/// attribute returned each AX error.
 pub(super) struct Scan {
     pub(super) deadline: Instant,
     pub(super) incomplete: bool,
     pub(super) stops: BTreeSet<Stop>,
     pub(super) unreadable: Vec<String>,
     pub(super) truncated: Vec<String>,
+    pub(super) unproven: Vec<&'static str>,
+    pub(super) refused: Vec<&'static str>,
     pub(super) errors: std::collections::BTreeMap<String, usize>,
     /// The last AX error any read returned.
     pub(super) last_error: Option<AXError>,
@@ -47,6 +78,8 @@ impl Scan {
             stops: BTreeSet::new(),
             unreadable: Vec::new(),
             truncated: Vec::new(),
+            unproven: Vec::new(),
+            refused: Vec::new(),
             errors: Default::default(),
             last_error: None,
             names: CFArray::from_retained_objects(&BATCH.map(CFString::from_static_str)),
@@ -61,6 +94,25 @@ impl Scan {
             self.stop(Stop::Time);
         }
         open
+    }
+
+    /// Bound the next request to `element` by what is left of the scan, at
+    /// most [`REQUEST`]. The timeout is the element's own, so a scan never
+    /// changes the one the rest of the process waits by.
+    pub(super) fn bound(&self, element: &AXUIElement) {
+        let left = self.deadline.saturating_duration_since(Instant::now());
+        // A timeout that fails to set leaves the process's own, which only
+        // changes how long the request may wait; the read is then judged as
+        // any other.
+        let _ = ffi::set_timeout(element, left.clamp(LEAST, REQUEST));
+    }
+
+    /// `attribute` was read without proving what it is, when it is one that
+    /// tells an element from another.
+    pub(super) fn doubt(&mut self, attribute: &str) {
+        if let Some(name) = identifying(attribute) {
+            self.unproven.push(name);
+        }
     }
 
     /// The scan is incomplete, for this reason.
@@ -78,6 +130,13 @@ impl Scan {
         self.last_error = Some(status);
         let key = format!("{attribute}:{}", status.0);
         *self.errors.entry(key).or_default() += 1;
+        // A failed getter answers the same each time it is asked, so it is
+        // kept as what was read; any other failure proves nothing.
+        if getter_failed(status, attribute) {
+            self.refused.extend(identifying(attribute));
+        } else if !absent(status) {
+            self.doubt(attribute);
+        }
 
         if INCOMPLETE.contains(&status) {
             self.stop(Stop::Unread);
@@ -101,10 +160,12 @@ impl Scan {
             Source::Batch(batch) => return self.take(batch, attribute),
         };
         if !self.open() {
+            self.doubt(attribute);
             return None;
         }
 
         let name = CFString::from_static_str(attribute);
+        self.bound(element);
         match ffi::copy(element, &name) {
             Ok(value) => value,
             Err(status) => {
@@ -124,6 +185,7 @@ impl Scan {
                 None
             }
             None => {
+                self.doubt(attribute);
                 self.stop(Stop::Unread);
                 None
             }
@@ -136,9 +198,10 @@ impl Scan {
     /// attribute at a time instead.
     pub(super) fn batch(&mut self, element: &AXUIElement) -> Option<Batch> {
         if !self.open() {
-            return Some(Batch::unread());
+            return Some(self.unread());
         }
 
+        self.bound(element);
         match ffi::copy_many(element, &self.names) {
             Ok(values) => self.received(AXError::Success, values.as_deref()),
             Err(status) => self.received(status, None),
@@ -171,7 +234,16 @@ impl Scan {
 
         self.failed(AXError::Failure, "AXAttributes");
         self.stop(Stop::Unread);
-        Some(Batch::unread())
+        Some(self.unread())
+    }
+
+    /// A batch that holds nothing of its element, whose identifying
+    /// attributes are then unproven rather than absent.
+    fn unread(&mut self) -> Batch {
+        for attribute in BATCH {
+            self.doubt(attribute);
+        }
+        Batch::unread()
     }
 
     /// Whether `batch` came back stalled, so nothing more is asked of its
@@ -194,11 +266,16 @@ impl Scan {
         self.bounded(text, name)
     }
 
-    /// Keep bounded text, noting the attribute when it was cut.
+    /// Keep bounded text, noting the attribute when it was cut; a value
+    /// that was no text is unproven.
     fn bounded(&mut self, text: Option<(String, bool)>, name: &str) -> Option<String> {
-        let (text, truncated) = text?;
+        let Some((text, truncated)) = text else {
+            self.doubt(name);
+            return None;
+        };
         if truncated {
             self.truncated.push(name.to_owned());
+            self.doubt(name);
         }
 
         Some(text)
@@ -220,10 +297,11 @@ impl Scan {
         role: Option<&str>,
         subrole: Option<&str>,
     ) -> Option<String> {
-        if self.stalled(batch)
-            || role.is_none()
-            || [role, subrole].contains(&Some("AXSecureTextField"))
-        {
+        if self.stalled(batch) {
+            self.doubt("AXValue");
+            return None;
+        }
+        if role.is_none() || [role, subrole].contains(&Some("AXSecureTextField")) {
             return None;
         }
 
@@ -231,10 +309,14 @@ impl Scan {
             match self.prefix(element, characters) {
                 Ok(text) => {
                     self.truncated.push("AXValue".to_owned());
+                    self.doubt("AXValue");
                     return Some(text);
                 }
                 // Asking again would wait as long for the same answer.
-                Err(Some(status)) if INCOMPLETE.contains(&status) => return None,
+                Err(Some(status)) if INCOMPLETE.contains(&status) => {
+                    self.doubt("AXValue");
+                    return None;
+                }
                 Err(_) => {}
             }
         }
@@ -242,14 +324,20 @@ impl Scan {
         let value = self.attribute(Source::Element(element), "AXValue")?;
         if let Some(text) = value.downcast_ref::<CFString>() {
             let text = bounded_string(text);
-            self.bounded(text, "AXValue")
-        } else if let Some(number) = value.downcast_ref::<CFNumber>() {
+            return self.bounded(text, "AXValue");
+        }
+        let rendered = if let Some(number) = value.downcast_ref::<CFNumber>() {
             number.as_f64().map(|number| number.to_string())
         } else {
             value
                 .downcast_ref::<CFBoolean>()
                 .map(|flag| flag.as_bool().to_string())
+        };
+        // A value there but not rendered is not an absent one.
+        if rendered.is_none() {
+            self.doubt("AXValue");
         }
+        rendered
     }
 
     /// The start of a text `characters` units long, cut at the limit; an
@@ -266,6 +354,7 @@ impl Scan {
 
         let parameter = ffi::range(prefix_range(characters)).ok_or(None)?;
         let name = CFString::from_static_str("AXStringForRange");
+        self.bound(element);
         let value = match ffi::copy_for(element, &name, &parameter) {
             Ok(value) => value.ok_or(None)?,
             Err(status) => {
@@ -320,6 +409,7 @@ impl Scan {
             self.stop(Stop::Count);
         }
 
+        self.bound(element);
         let values = match ffi::copy_values(element, &name, wanted)
             .and_then(|values| values.ok_or(AXError::Success))
         {
@@ -377,6 +467,7 @@ impl Scan {
         }
 
         let name = CFString::from_static_str(attribute);
+        self.bound(element);
         match ffi::count(element, &name) {
             Ok(count) => count,
             Err(status) => {

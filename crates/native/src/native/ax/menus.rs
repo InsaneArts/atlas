@@ -35,6 +35,7 @@ impl Scan {
                 bounds.x + bounds.width / 2.0,
                 bounds.y + bounds.height * fraction,
             );
+            self.bound(app);
             let leaf = match ffi::element_at(app, x as f32, y as f32) {
                 Ok(Some(leaf)) => leaf,
                 Ok(None) => continue,

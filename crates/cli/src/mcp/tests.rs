@@ -888,6 +888,8 @@ fn personal_permission_is_decided_before_action_field_validation() {
         json!({"type":"click","x":1,"y":2}),
         json!({"type":"drag","fromX":1,"fromY":2,"toX":3,"toY":4}),
         json!({"type":"wait","ms":0}),
+        json!({"type":"press","ref":"8123abc.12"}),
+        json!({"type":"set-value","ref":"8123abc.12","value":"x"}),
         json!({"type":"future"}),
         json!({"type":null}),
         json!({}),

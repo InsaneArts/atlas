@@ -36,6 +36,22 @@ const CONTROL_ROLES: [&str; 4] = [
 pub(crate) const FIELD_ROLES: [&str; 3] = ["AXTextField", "AXSearchField", "AXComboBox"];
 /// Verbs worded as their operation is.
 const PLAIN_VERBS: [&str; 2] = ["run", "screenshot"];
+/// Each action on an element by its verb, with what it did and what could
+/// not be done. The element is never named: it is known only by its ref.
+const ELEMENT_VERBS: [(&str, &str, &str); 8] = [
+    ("press", "pressed a control", "press a control"),
+    ("set-value", "set a value", "set a value"),
+    ("check", "checked a box", "check a box"),
+    ("uncheck", "unchecked a box", "uncheck a box"),
+    ("pick", "picked an option", "pick an option"),
+    ("expand", "expanded an element", "expand an element"),
+    ("collapse", "collapsed an element", "collapse an element"),
+    (
+        "scroll-into-view",
+        "scrolled an element into view",
+        "scroll an element into view",
+    ),
+];
 /// Modifier names as `atlas key` takes them, in the order macOS menus show
 /// them, with their symbols and whether they make a shortcut: ⌥, fn and
 /// shift chords type characters too.
@@ -409,15 +425,19 @@ pub fn says(row: &Row) -> String {
             }
             _ => worded("collected no files", "collect files"),
         },
-        // Verbs worded as their operation is, and rows that say only that
-        // (from older builds, raw commands, or verbs this build lacks).
-        verb => {
-            let plain = verb.filter(|verb| PLAIN_VERBS.contains(verb));
-            operation(
-                plain.or(row.operation.as_ref().map(|op| op.as_str())),
-                row.action_count,
-            )
-        }
+        // Actions on elements, verbs worded as their operation is, and rows
+        // that say only that (from older builds, raw commands, or verbs this
+        // build lacks).
+        verb => match ELEMENT_VERBS.iter().find(|(name, ..)| Some(*name) == verb) {
+            Some(&(_, done, failed)) => worded(&within(done), &within(failed)),
+            None => {
+                let plain = verb.filter(|verb| PLAIN_VERBS.contains(verb));
+                operation(
+                    plain.or(row.operation.as_ref().map(|op| op.as_str())),
+                    row.action_count,
+                )
+            }
+        },
     };
 
     if row.worked() {

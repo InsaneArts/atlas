@@ -4,6 +4,7 @@
 //! a vanished request or reply cannot acknowledge an unknown outcome.
 use super::{
     accessibility_trusted,
+    ax::Looks,
     events::Engine,
     lease::{Gate, Grant, Who, busy},
     session_info,
@@ -31,7 +32,7 @@ mod batch;
 mod operations;
 mod request;
 
-use batch::{Failure, Perform, run};
+use batch::{Done, Failure, Perform, run};
 use operations::{
     Cancellation, ConnectionPhase, Operations, combine_cleanup, connection_outcome,
     drain_and_release, finish, on_engine, reset, worker_failed,
@@ -43,22 +44,27 @@ use request::Request;
 const MAX_REQUEST: usize = 64 * 1024;
 
 /// What this service can do beyond plain input, as its hello lists it:
-/// authenticated shutdown, the person's Stop, and checking an agent's
-/// target app, with the Dock covering where it takes clicks, and the window
-/// and field it names.
-const CAPABILITIES: [&str; 6] = [
+/// authenticated shutdown, the person's Stop, checking an agent's target
+/// app, with the Dock covering where it takes clicks, and the window and
+/// field it names, reading an app's elements as looks a click can name, and
+/// acting on an element of a look through Accessibility.
+const CAPABILITIES: [&str; 8] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,
     atlas_core::session::FOCUS_DOCK,
     atlas_core::session::FOCUS_WINDOW,
     atlas_core::session::FOCUS_FIELD,
+    atlas_core::session::LOOKS,
+    atlas_core::session::ELEMENT_ACTIONS,
 ];
 
 struct Service {
     engine: Arc<Mutex<Engine>>,
     operations: Operations,
     gate: Arc<Gate>,
+    /// Shared with the engine, which finds referenced elements in them.
+    looks: Arc<Looks>,
     /// Shared with recovery's engine work, which rebinds both together.
     epoch: Arc<RwLock<InputEpoch>>,
     /// SHA-256 of the executable this process started from. Hashed once at
@@ -134,7 +140,9 @@ impl Service {
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         // Stop, release, recovery and shutdown keep working after session or
-        // permission loss, so only control and its uses need both intact.
+        // permission loss, so only control and its uses need both intact. A
+        // look proves its own session and goes on during a Stop or the
+        // person's control: it sends nothing.
         match &request {
             Request::Renew { .. }
             | Request::Unknown { .. }
@@ -144,7 +152,8 @@ impl Service {
             | Request::Shutdown { .. }
             | Request::Hold { .. }
             | Request::Release { .. }
-            | Request::Reset { .. } => {}
+            | Request::Reset { .. }
+            | Request::Elements { .. } => {}
         }
 
         match request {
@@ -163,7 +172,43 @@ impl Service {
                 expect,
                 app,
             } => self.input(owner, epoch, actions, expect, app, phase).await,
+            Request::Elements { epoch, expect } => self.look(epoch, expect).await,
         }
+    }
+
+    /// One look at the elements of the app `expect` names, in the session
+    /// `expected` names as the session proves itself now, whatever epoch
+    /// input is pinned to; kept so that a reference names one of its
+    /// objects alone. It grants nothing: a click finds its element again
+    /// under its own control and checks. Missing Accessibility is the read's
+    /// own failure, as for any other reader.
+    async fn look(
+        &self,
+        expected: Result<InputEpoch>,
+        expect: Result<Option<Expect>>,
+    ) -> Result<Value> {
+        let epoch = proven(expected?)?;
+        let expect =
+            expect?.ok_or_else(|| Error::new(Code::Input, "A look names the app it reads"))?;
+        let read = tokio::task::spawn_blocking(move || super::ax::read(&expect))
+            .await
+            .map_err(|cause| {
+                Error::new(Code::Elements, "The accessibility read did not finish")
+                    .with_source(cause)
+            })??;
+
+        // A session or display that changed while the app was read keeps
+        // nothing of it.
+        let epoch = proven(epoch)?;
+        let (look, snapshot) = self.looks.keep(epoch, read, std::time::Instant::now())?;
+        Ok(json!({
+            "ok": true,
+            "look": look.to_string(),
+            "elements": snapshot.elements,
+            "truncated": snapshot.incomplete,
+            "reasons": snapshot.stops,
+            "errors": snapshot.errors,
+        }))
     }
 
     async fn hello(&self) -> Result<Value> {
@@ -358,19 +403,20 @@ impl Service {
         )?;
         let count = actions.len();
         let expect = expect?;
-        agent_target(&self.gate, expect.as_ref())?;
+        agent_target(&self.gate, expect.as_ref(), &actions)?;
         phase.send_replace(ConnectionPhase::Mutation("input"));
         let mut cancellation = Cancellation {
             gate: self.gate.clone(),
             owner: Some(owner),
         };
-        let (field, dock_pressed) = match self.execute(grant, actions, expect.clone()).await? {
+        let (done, dock_pressed) = match self.execute(grant, actions, expect.clone()).await? {
             Ok(done) => done,
             Err(failure) => return Ok(failure.reply()),
         };
 
+        let acted = done.acted.as_ref();
         let landed = if report_app {
-            landed(dock_pressed).await
+            landed(dock_pressed, acted.map(|acted| acted.instance.pid)).await
         } else {
             None
         };
@@ -378,7 +424,7 @@ impl Service {
 
         let mut reply = json!({
             "ok": true,
-            "performed": count,
+            "performed": done.performed(count),
             "app": app,
             "bundleId": bundle_id,
         });
@@ -388,8 +434,13 @@ impl Service {
         }
         // The role of the field it named, so an agent's activity may name
         // the field by the name it gave: never the field's own text.
-        if let Some(role) = field {
+        if let Some(role) = done.field {
             reply["field"] = json!({ "role": role });
+        }
+        // How an action on an element went, never what it set.
+        if let Some(acted) = acted {
+            reply["mechanism"] = json!("accessibility");
+            reply["verification"] = json!(acted.verification);
         }
 
         cancellation.owner = None;
@@ -399,8 +450,8 @@ impl Service {
     /// Run a batch as registered work, which owns the engine through its
     /// last effect: a request that vanishes meanwhile cannot end it early.
     /// The batch runs on a blocking thread, its pauses on this runtime.
-    /// Once done, the role of the field it named and whether it pressed the
-    /// Dock; an action that failed gives its failure instead.
+    /// Once done, what it came to and whether it pressed the Dock; an
+    /// action that failed gives its failure instead.
     async fn execute(
         &self,
         grant: Grant,
@@ -423,7 +474,7 @@ impl Service {
                     engine.dock_pressed = false;
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
                     engine.target = None;
-                    Ok::<_, Error>(result.map(|field| (field, engine.dock_pressed)))
+                    Ok::<_, Error>(result.map(|done| (done, engine.dock_pressed)))
                 })
             }))
             .await?;
@@ -435,24 +486,37 @@ impl Service {
 }
 
 /// What a batch came to: see [`Service::execute`].
-type Performed = std::result::Result<(Option<&'static str>, bool), Box<Failure>>;
+type Performed = std::result::Result<(Done, bool), Box<Failure>>;
 
-/// The recipient for the agent's activity log: Dock after AXPress, otherwise
-/// the owner of the frontmost ordinary window and its bundle identifier, read
-/// once the engine is free.
-async fn landed(dock_pressed: bool) -> Option<(String, Option<String>)> {
+/// The recipient for the agent's activity log: Dock after AXPress, the app
+/// an action on an element acted in (process `acted`), otherwise the owner
+/// of the frontmost ordinary window; with its bundle identifier, read once
+/// the engine is free.
+async fn landed(dock_pressed: bool, acted: Option<i32>) -> Option<(String, Option<String>)> {
     if dock_pressed {
         return Some(("Dock".to_owned(), Some("com.apple.dock".to_owned())));
     }
 
-    tokio::task::spawn_blocking(|| {
+    tokio::task::spawn_blocking(move || {
         let windows = super::windows::windows().ok()?;
-        let window = windows.into_iter().find(|window| window.layer == 0)?;
+        let window = windows.into_iter().find(|window| {
+            window.layer == 0 && acted.is_none_or(|pid| window.pid == i64::from(pid))
+        })?;
         Some((window.owner?, super::apps::bundle_id(window.pid)))
     })
     .await
     .ok()
     .flatten()
+}
+
+/// `expected`, when this process's hidden session proves it is the one
+/// now: the session, display and process it names.
+fn proven(expected: InputEpoch) -> Result<InputEpoch> {
+    let current = InputEpoch::from_proof(&session_info()?, std::process::id())?;
+    if current != expected {
+        return Err(Error::session_changed());
+    }
+    Ok(current)
 }
 
 fn hold(
@@ -493,8 +557,11 @@ fn hold(
     Ok(json!({ "ok": true, "held": on, "kept": kept.is_ok() }))
 }
 
-fn agent_target(gate: &Gate, expect: Option<&Expect>) -> Result<()> {
-    if expect.is_some() && gate.holder()? == Some(Holder::Person) {
+/// Refuse the person's input that names an agent's target: an expectation,
+/// or a referenced element, which brings its own.
+fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Result<()> {
+    let named = expect.is_some() || actions.iter().any(|action| action.reference().is_some());
+    if named && gate.holder()? == Some(Holder::Person) {
         return Err(Error::new(
             Code::Input,
             "The person's input cannot name an agent target",
@@ -557,6 +624,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         build: build.flatten(),
         executable,
         stopping: tokio::sync::Notify::new(),
+        looks: engine.looks.clone(),
         epoch: Arc::new(RwLock::new(engine.epoch.clone())),
         engine: Arc::new(Mutex::new(engine)),
         operations: Operations::default(),
@@ -731,7 +799,7 @@ async fn handle(
     };
 
     let (initial, owner, shutdown) = match &request {
-        Request::Hello => (ConnectionPhase::Read, None, false),
+        Request::Hello | Request::Elements { .. } => (ConnectionPhase::Read, None, false),
         Request::Shutdown { .. } => (ConnectionPhase::Refusal, None, true),
         Request::Input { owner, .. } => (ConnectionPhase::Refusal, Some(owner.clone()), false),
         Request::Hold { .. }

@@ -45,6 +45,17 @@ unsafe fn copied<T: objc2_core_foundation::Type>(
     Ok(NonNull::new(slot.cast_mut()).map(|value| unsafe { CFRetained::from_raw(value) }))
 }
 
+/// An element a look keeps, carried between the service's worker threads.
+#[derive(Clone)]
+pub(super) struct Kept(pub(super) CFRetained<AXUIElement>);
+
+// SAFETY: an AXUIElement is a CoreFoundation reference to an object in
+// another process: its retain and release are thread-safe, and comparing
+// two is a pure CoreFoundation call. A kept element is only ever compared
+// with others; no Accessibility request is made of it and nothing on it is
+// set, so no state of it is shared between threads.
+unsafe impl Send for Kept {}
+
 /// The element of the application `pid`; None when there is none.
 pub(super) fn application(pid: libc::pid_t) -> Option<CFRetained<AXUIElement>> {
     // SAFETY: a plain constructor returning an owned element or null.
@@ -79,9 +90,18 @@ pub(super) fn settable(element: &AXUIElement, name: &CFString) -> Result<bool, A
 
 /// Request a typed boolean attribute change.
 pub(super) fn set_flag(element: &AXUIElement, name: &CFString, value: bool) -> AXError {
-    // SAFETY: both references are live; the value is a CFBoolean, never an
-    // unchecked cast of another CoreFoundation type.
-    unsafe { element.set_attribute_value(name, CFBoolean::new(value).as_ref()) }
+    set(element, name, CFBoolean::new(value))
+}
+
+/// Request that attribute `name` take `value`, which callers make of the
+/// type the attribute holds: a boolean flag, or the text or number its
+/// value was read as.
+pub(super) fn set(element: &AXUIElement, name: &CFString, value: &CFType) -> AXError {
+    // SAFETY: the element, name and value are live CoreFoundation objects
+    // for the length of the call, and the value is a whole CoreFoundation
+    // object of the type the caller read the attribute as, never an
+    // unchecked cast; no reference escapes the call.
+    unsafe { element.set_attribute_value(name, value) }
 }
 
 /// Copy supported action names. Each member is checked before use.

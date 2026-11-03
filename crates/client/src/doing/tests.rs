@@ -68,6 +68,34 @@ fn each_verb_says_what_it_did_and_where_or_what_it_could_not_do() {
     assert_eq!(said(&Doing::new("close")).0, "closed the apps");
 }
 
+/// An action on an element says what kind of thing it did, in the app it
+/// names, and never names the element.
+#[test]
+fn each_action_on_an_element_says_what_it_did_without_naming_it() {
+    let pair = |done: &str, failed: &str| (done.to_owned(), failed.to_owned());
+    assert_eq!(
+        said(&Doing::new("press").app(Some("TextEdit"))),
+        pair(
+            "pressed a control in TextEdit",
+            "couldn't press a control in TextEdit"
+        )
+    );
+    assert_eq!(
+        said(&Doing::new("set-value")),
+        pair("set a value", "couldn't set a value")
+    );
+    for (verb, done) in [
+        ("check", "checked a box"),
+        ("uncheck", "unchecked a box"),
+        ("pick", "picked an option"),
+        ("expand", "expanded an element"),
+        ("collapse", "collapsed an element"),
+        ("scroll-into-view", "scrolled an element into view"),
+    ] {
+        assert_eq!(said(&Doing::new(verb)).0, done);
+    }
+}
+
 #[test]
 fn a_command_under_way_says_what_it_is_doing() {
     let started = |doing: &Doing| {

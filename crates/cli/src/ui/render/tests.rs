@@ -275,6 +275,24 @@ fn a_failed_action_says_how_far_it_got() {
 }
 
 #[test]
+fn an_action_on_an_element_says_whether_it_reads_as_asked() {
+    let shown = |verification: &str| {
+        show(
+            View::Action("Checked".into()),
+            json!({"ok": true, "performed": 1, "mechanism": "accessibility",
+                   "verification": verification}),
+        )
+        .out
+    };
+    assert_eq!(shown("matched"), "✓ Checked; it reads as asked");
+    assert_eq!(
+        shown("mismatch"),
+        "✓ Checked, but it does not read as asked"
+    );
+    assert_eq!(shown("not-checked"), "✓ Checked");
+}
+
+#[test]
 fn agents_are_a_table_with_a_way_to_connect() {
     let shown = show(
         View::Agents,
@@ -452,6 +470,16 @@ fn the_elements_table_shows_each_click_point() {
         full.out
     );
     assert!(!full.out.contains("388, 51"));
+}
+
+#[test]
+fn a_kept_look_is_named_beside_how_many_elements_it_holds() {
+    let kept = show(
+        View::Elements,
+        json!({"ok": true, "pid": 9, "scanned": 5, "matching": 0, "more": 0,
+               "scanIncomplete": false, "elements": [], "look": "8123abc"}),
+    );
+    assert_eq!(kept.out, "Process 9 · 0 of 5 elements match · look 8123abc");
 }
 
 #[test]

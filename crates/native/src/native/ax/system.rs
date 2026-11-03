@@ -13,14 +13,21 @@ use std::time::{Duration, Instant};
 /// The system-wide attribute naming the application with keyboard focus.
 const FOCUSED_APPLICATION: &str = "AXFocusedApplication";
 
+/// Held from setting the process's messaging timeout to the read it
+/// bounds. Apart from the cancellation gate: nothing that cancels waits
+/// for it.
+static SYSTEM_WIDE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// The process of the application with keyboard focus in this login, as
 /// Accessibility reports it; None when no application has it. Waits at most
-/// `timeout`. This sets the calling process's messaging timeout, which the
-/// input service uses for nothing else.
+/// `timeout`. This sets the calling process's messaging timeout, which
+/// nothing else sets: element reads bound each element they ask on its own.
+/// One such read runs at a time, so none waits by another's timeout.
 pub(in crate::native) fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     let unreadable = || Error::new(Code::Native, "The focused app could not be read");
     let failed = |call, status| unreadable().with_source(Asked { call, status });
 
+    let _alone = SYSTEM_WIDE.lock().map_err(|_| unreadable())?;
     let system = ffi::system_wide().ok_or_else(unreadable)?;
     // The system-wide element sets this process's global messaging timeout,
     // which covers the read below. A read without it could wait on an

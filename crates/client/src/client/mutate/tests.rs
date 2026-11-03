@@ -52,6 +52,37 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
     );
 }
 
+/// A reply to an action on an element proves it only by saying how it went:
+/// one without a verification may come from a service that did not act.
+#[test]
+fn an_element_action_is_confirmed_only_with_its_verification() {
+    let actions = json!([{"type": "check", "ref": "8123abc.12"}]);
+    let input = || Mutation::Input {
+        actions: Batch::decode(&actions).unwrap(),
+        owner: "owner",
+        epoch: epoch(),
+        app: false,
+        expect: None,
+    };
+    input()
+        .validate(&json!({"ok": true, "performed": 1, "mechanism": "accessibility", "verification": "matched"}))
+        .unwrap();
+    // An element already as asked was left as it was: nothing was sent.
+    input()
+        .validate(&json!({"ok": true, "performed": 0, "mechanism": "accessibility", "verification": "matched"}))
+        .unwrap();
+    for reply in [
+        json!({"ok": true, "performed": 0, "mechanism": "accessibility", "verification": "mismatch"}),
+        json!({"ok": true, "performed": 0, "mechanism": "accessibility", "verification": "not-checked"}),
+        json!({"ok": true, "performed": 1}),
+        json!({"ok": true, "performed": 1, "mechanism": "accessibility"}),
+        json!({"ok": true, "performed": 1, "mechanism": "accessibility", "verification": "done"}),
+        json!({"ok": true, "performed": 1, "mechanism": "events", "verification": "matched"}),
+    ] {
+        assert!(input().validate(&reply).unwrap_err().uncertain, "{reply}");
+    }
+}
+
 /// The client's own transport reads this daemon's replies.
 #[tokio::test]
 async fn the_client_transport_understands_the_daemon() {

@@ -39,8 +39,14 @@ pub(super) fn action(done: &str, value: &Value) -> Rendered {
         (Some(role), None) => format!("{done} the {}", super::role_word(role)),
         _ => done.to_owned(),
     };
+    // An action on an element says whether it reads as asked now.
+    let read = match value["verification"].as_str() {
+        Some("matched") => "; it reads as asked",
+        Some("mismatch") => ", but it does not read as asked",
+        _ => "",
+    };
 
-    Rendered::out(format!("{} {done}", style::ok()))
+    Rendered::out(format!("{} {done}{read}", style::ok()))
 }
 
 pub(super) fn typed(value: &Value) -> Rendered {

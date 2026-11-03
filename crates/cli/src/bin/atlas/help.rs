@@ -58,7 +58,16 @@ const GROUPS: &[(&str, &[Entry])] = &[
                 "click",
                 &[
                     "atlas click --app TextEdit --name Save",
+                    "atlas click --app TextEdit --ref 8123abc.12",
                     "atlas click 1200 880",
+                ],
+            ),
+            (
+                "element",
+                &[
+                    "atlas element press --ref 8123abc.12",
+                    "atlas element set-value --ref 8123abc.4 --value \"hello\"",
+                    "atlas element pick --ref 8123abc.7 --option 8123abc.9",
                 ],
             ),
             ("type", &["atlas type \"hello\""]),

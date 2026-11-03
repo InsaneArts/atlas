@@ -75,6 +75,24 @@ struct ActivityActionTests {
     #expect(ActivityAction(entry) == kind)
   }
 
+  @Test(
+    "an action on an element reads as the pointer, typing or scrolling it replaces, never as keys",
+    arguments: [
+      ("press", "pressed a control in TextEdit", ActivityAction.pointer),
+      ("check", "checked a box", .pointer),
+      ("uncheck", "unchecked a box", .pointer),
+      ("pick", "picked an option", .pointer),
+      ("expand", "expanded an element", .pointer),
+      ("collapse", "collapsed an element", .pointer),
+      ("set-value", "set a value", .typing),
+      ("scroll-into-view", "scrolled an element into view", .scroll),
+    ]
+  )
+  func kindOfElementAction(verb: String, says: String, kind: ActivityAction) {
+    let entry = ActivityFixtures.row(id: "1", says: says, operation: "input", verb: verb)
+    #expect(ActivityAction(entry) == kind)
+  }
+
   @Test("a verb this app does not know reads by the row's words, and a screenshot by its operation")
   func unknownVerbReadsByWords() {
     let later = ActivityFixtures.row(id: "1", says: "pressed ⌘S", operation: "input", verb: "someday")

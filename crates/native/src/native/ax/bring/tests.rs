@@ -520,6 +520,23 @@ fn a_sheet_blocks_named_and_app_only_input_before_any_write() {
     }
 }
 
+/// An action done through Accessibility is admitted as input is, with
+/// nothing written: a sheet in its window's way refuses it.
+#[test]
+fn an_element_action_is_admitted_as_input_is_without_any_write() {
+    let mut fake = Fake::new();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    admitted_by(&mut fake, &named(), deadline).unwrap();
+    assert!(fake.writes.is_empty());
+
+    for expect in [named(), Expect::new(812).unwrap()] {
+        let mut fake = Fake::new();
+        fake.sheet(3, WINDOW);
+        reason(admitted_by(&mut fake, &expect, deadline), "sheet");
+        assert!(fake.writes.is_empty());
+    }
+}
+
 #[test]
 fn a_separate_modal_window_blocks_a_document_but_an_ordinary_window_does_not() {
     let mut fake = Fake::new();
