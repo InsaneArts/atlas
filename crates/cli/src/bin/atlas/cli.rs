@@ -520,7 +520,7 @@ pub(super) struct Menubar {
     pub(super) render: Option<PathBuf>,
     /// Instead, turn "Open at Login" on or off, or report it.
     #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
-    pub(super) login: Option<LoginArg>,
+    pub(super) login: Option<atlas_cli::menubar::Login>,
 }
 
 #[derive(clap::Args)]
@@ -1164,23 +1164,6 @@ pub(super) fn control_wait_given(
             variable,
         ),
         (None, None) => Ok(CONTROL_WAIT),
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-pub(super) enum LoginArg {
-    On,
-    Off,
-    Status,
-}
-
-impl LoginArg {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::On => "on",
-            Self::Off => "off",
-            Self::Status => "status",
-        }
     }
 }
 

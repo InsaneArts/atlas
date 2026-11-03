@@ -481,8 +481,8 @@ pub(crate) fn is_atlas(pid: i32) -> bool {
 }
 
 /// What to do with "Open at Login".
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Login {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Login {
     On,
     Off,
     Status,
@@ -524,7 +524,11 @@ pub fn login(state: &str) -> Result<serde_json::Value> {
 
 /// Apply `login`; only the app (as part of Atlas.app) can register its
 /// login agent.
-pub(crate) fn set_login(login: Login) -> Result<serde_json::Value> {
+///
+/// # Errors
+///
+/// Returns failures inspecting or changing Atlas's login item.
+pub fn set_login(login: Login) -> Result<serde_json::Value> {
     let output = std::process::Command::new(app_program()?)
         .args(["--login", login.as_str()])
         .stdin(Stdio::null())

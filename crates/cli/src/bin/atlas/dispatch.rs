@@ -687,7 +687,7 @@ async fn menu_bar(
     args: cli::Menubar,
 ) -> Result<Value> {
     if let Some(login) = args.login {
-        return menubar::login(login.as_str());
+        return menubar::set_login(login);
     }
 
     let client = client()?;

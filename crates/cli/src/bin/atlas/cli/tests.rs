@@ -407,6 +407,22 @@ fn the_menu_bar_serves_or_renders() {
 
     assert_eq!((port, render), (8765, Some(PathBuf::from("out"))));
     assert!(parse(&["menubar", "--port", "9000"]).is_ok());
+
+    use atlas_cli::menubar::Login;
+    for (state, expected) in [
+        ("on", Login::On),
+        ("off", Login::Off),
+        ("status", Login::Status),
+    ] {
+        let Ok(Cli {
+            command: Some(Command::Menubar(Menubar { login, .. })),
+            ..
+        }) = parse(&["menubar", "--login", state])
+        else {
+            panic!("menubar --login {state} did not parse");
+        };
+        assert_eq!(login, Some(expected));
+    }
 }
 
 #[test]
