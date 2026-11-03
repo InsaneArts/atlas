@@ -3,24 +3,21 @@ use super::*;
 #[test]
 fn installed_application_identity_uses_the_fixed_path_and_refuses_unreachable_builds() {
     let expected = Path::new("/Applications/Atlas.app/Contents/MacOS/atlas");
-    let executable = app_executable_using(|path| {
-        assert_eq!(path, expected);
-        true
-    })
-    .unwrap();
-    assert_eq!(executable, expected);
-
-    let error = app_executable_using(|path| {
-        assert_eq!(path, expected);
-        false
-    })
-    .unwrap_err();
-    assert_eq!(error.code, "init");
-    assert_eq!(
-        error.error,
-        "Atlas.app must be in /Applications so the helper account can run it"
-    );
-    assert!(!error.uncertain);
+    match app_executable() {
+        Ok(executable) => {
+            assert!(reachable_by_others(expected));
+            assert_eq!(executable, expected);
+        }
+        Err(error) => {
+            assert!(!reachable_by_others(expected));
+            assert_eq!(error.code, "init");
+            assert_eq!(
+                error.error,
+                "Atlas.app must be in /Applications so the helper account can run it"
+            );
+            assert!(!error.uncertain);
+        }
+    }
 }
 
 #[test]

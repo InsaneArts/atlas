@@ -101,12 +101,8 @@ pub const EXECUTABLE: &str = "/Applications/Atlas.app/Contents/MacOS/atlas";
 ///
 /// Returns an error when Atlas.app is not where the helper account can run it.
 pub fn app_executable() -> Result<PathBuf> {
-    app_executable_using(reachable_by_others)
-}
-
-pub(crate) fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Result<PathBuf> {
     let executable = PathBuf::from(EXECUTABLE);
-    if !reachable(&executable) {
+    if !reachable_by_others(&executable) {
         return Err(Error::new(
             Code::Init,
             "Atlas.app must be in /Applications so the helper account can run it",
@@ -123,22 +119,7 @@ pub(crate) fn app_executable_using(reachable: impl FnOnce(&Path) -> bool) -> Res
 /// Returns an error when Atlas.app is not installed there or its developer did
 /// not sign it.
 pub fn signed_executable() -> Result<PathBuf> {
-    signed_executable_using(app_executable()?, developer_id)
-}
-
-pub(crate) fn signed_executable_using(
-    executable: PathBuf,
-    developer_id: impl FnOnce(&Path) -> bool,
-) -> Result<PathBuf> {
-    // Installation location for the shared app. The approved executor
-    // independently protects and verifies its own copy before using it.
-    if !executable.starts_with("/Applications") {
-        return Err(Error::new(
-            Code::Onboarding,
-            "Atlas.app must be in Applications to set up the helper. Move it there, then open it again.",
-        ));
-    }
-
+    let executable = app_executable()?;
     if !developer_id(&executable) {
         return Err(Error::new(
             Code::Onboarding,
