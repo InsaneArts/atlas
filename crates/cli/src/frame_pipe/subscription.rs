@@ -1,12 +1,12 @@
 //! One observer's delivery flow: at most one credit, one picture in flight
 //! and one acknowledged base, never a queue of pictures. A credit becomes a
-//! delivery, the client decodes it, and only its commit makes it the base
-//! that input may name. Every step names its credit and picture exactly;
-//! the same acknowledgement again is answered without effect, and any other
+//! delivery, the client decodes it, and only its commit, in time, makes it
+//! the base that input may name. Every step names its credit and picture
+//! exactly; the same request again is answered without effect, and any other
 //! for a credit already settled ends the pair.
 use atlas_core::frame_pipe::{
     diagnostics::Reason,
-    model::{Positive, Ref},
+    model::{DropReason, Positive, Ref, ResyncReason},
 };
 use std::{
     collections::VecDeque,
@@ -25,8 +25,8 @@ const REMEMBERED: usize = 64;
 pub(crate) enum Ack {
     Decoded(Ref),
     Commit(Ref),
-    Drop,
-    Resync,
+    Drop(DropReason, Option<Ref>),
+    Resync(ResyncReason),
 }
 
 /// Whether a step took effect, or repeated one that already had.
@@ -36,20 +36,28 @@ pub(crate) enum Step {
     Repeat,
 }
 
-#[derive(Debug)]
-enum Stage {
-    Waiting,
-    Sending(Ref),
-    Delivered { reference: Ref, at: Instant },
-    Decoded { reference: Ref, at: Instant },
-}
-
+/// The credit outstanding and how far its delivery got.
 #[derive(Debug)]
 struct Delivery {
     credit: Positive,
     granted: Instant,
-    stage: Stage,
+    /// The picture sent for it, once one was selected.
+    sent: Option<Ref>,
+    /// When the frame lane finished writing it.
+    delivered: Option<Instant>,
+    decoded: bool,
 }
+
+impl Delivery {
+    /// Whether the picture was delivered and left unsettled past its life.
+    fn overdue(&self, now: Instant) -> bool {
+        self.delivered
+            .is_some_and(|delivered| now - delivered >= COMMIT_LIFE)
+    }
+}
+
+/// One acknowledgement remembered: its request, credit and content.
+type Remembered = (u64, Positive, Ack);
 
 /// One observer's subscription.
 #[derive(Debug, Default)]
@@ -58,7 +66,7 @@ pub(crate) struct Subscription {
     last_credit: u64,
     delivery: Option<Delivery>,
     base: Option<Ref>,
-    acknowledged: VecDeque<(Positive, Ack)>,
+    acknowledged: VecDeque<Remembered>,
 }
 
 impl Subscription {
@@ -96,33 +104,30 @@ impl Subscription {
         self.delivery = Some(Delivery {
             credit,
             granted: now,
-            stage: Stage::Waiting,
+            sent: None,
+            delivered: None,
+            decoded: false,
         });
         Ok(())
     }
 
     /// The credit to serve with `reference`, when one waits unexpired.
     pub(crate) fn select(&mut self, reference: Ref, now: Instant) -> Option<Positive> {
-        let delivery = self.delivery.as_mut()?;
-        if !matches!(delivery.stage, Stage::Waiting) || now - delivery.granted >= CREDIT_LIFE {
-            return None;
-        }
-        delivery.stage = Stage::Sending(reference);
+        let delivery = self
+            .delivery
+            .as_mut()
+            .filter(|delivery| delivery.sent.is_none() && now - delivery.granted < CREDIT_LIFE)?;
+        delivery.sent = Some(reference);
         Some(delivery.credit)
     }
 
-    /// The picture for `credit` was fully written at `now`.
+    /// The picture for `credit` was fully written at `now`; its commit life
+    /// starts here.
     pub(crate) fn delivered(&mut self, credit: Positive, now: Instant) {
-        if let Some(delivery) = self
-            .delivery
-            .as_mut()
-            .filter(|delivery| delivery.credit == credit)
-            && let Stage::Sending(reference) = &delivery.stage
-        {
-            delivery.stage = Stage::Delivered {
-                reference: reference.clone(),
-                at: now,
-            };
+        if let Some(delivery) = self.delivery.as_mut().filter(|delivery| {
+            delivery.credit == credit && delivery.sent.is_some() && delivery.delivered.is_none()
+        }) {
+            delivery.delivered = Some(now);
         }
     }
 
@@ -137,17 +142,15 @@ impl Subscription {
         let Some(delivery) = &self.delivery else {
             return Ok(None);
         };
-        match delivery.stage {
-            Stage::Waiting if now - delivery.granted >= CREDIT_LIFE => {
-                let credit = delivery.credit;
-                self.delivery = None;
-                Ok(Some(credit))
-            }
-            Stage::Delivered { at, .. } | Stage::Decoded { at, .. } if now - at >= COMMIT_LIFE => {
-                Err(Reason::ClientStale)
-            }
-            _ => Ok(None),
+        if delivery.overdue(now) {
+            return Err(Reason::ClientStale);
         }
+        if delivery.sent.is_none() && now - delivery.granted >= CREDIT_LIFE {
+            let credit = delivery.credit;
+            self.delivery = None;
+            return Ok(Some(credit));
+        }
+        Ok(None)
     }
 
     /// Retire the outstanding credit without an acknowledgement, for an
@@ -163,71 +166,66 @@ impl Subscription {
         named
     }
 
-    /// Apply the client's `ack` for `credit` at `now`.
+    /// Apply the client's `ack` for `credit`, made as request `request`, at
+    /// `now`.
     ///
     /// # Errors
     ///
-    /// `WrongBase` for an acknowledgement that names another credit or
-    /// picture, or conflicts with one already given, and `InvalidSchema`
-    /// for one out of order. Either ends the pair.
+    /// `ClientStale` for one that came after the delivery's commit life,
+    /// `WrongBase` for one that names another credit or picture, or
+    /// conflicts with one already given, and `InvalidSchema` for one out of
+    /// order. Each ends the pair.
     pub(crate) fn acknowledge(
         &mut self,
+        request: u64,
         credit: Positive,
         ack: Ack,
         now: Instant,
     ) -> Result<Step, Reason> {
-        if self.acknowledged.contains(&(credit, ack.clone())) {
+        let remembered = (request, credit, ack);
+        if self.acknowledged.contains(&remembered) {
             return Ok(Step::Repeat);
         }
+        let (_, _, ack) = &remembered;
         let delivery = self
             .delivery
             .as_mut()
             .filter(|delivery| delivery.credit == credit)
             .ok_or(Reason::WrongBase)?;
-        let sent = match &delivery.stage {
-            Stage::Waiting => return Err(Reason::InvalidSchema),
-            Stage::Sending(reference)
-            | Stage::Delivered { reference, .. }
-            | Stage::Decoded { reference, .. } => reference,
-        };
-        match (&ack, &delivery.stage) {
+        if delivery.overdue(now) {
+            return Err(Reason::ClientStale);
+        }
+        let sent = delivery.sent.as_ref().ok_or(Reason::InvalidSchema)?;
+        let settles = match ack {
+            Ack::Decoded(named) | Ack::Commit(named) if named != sent => {
+                return Err(Reason::WrongBase);
+            }
+            Ack::Drop(_, Some(named)) if named != sent => return Err(Reason::WrongBase),
             // The frame lane's end and the control lane's Decoded race:
             // either may arrive first.
-            (Ack::Decoded(named), Stage::Sending(_) | Stage::Delivered { .. }) => {
-                if named != sent {
-                    return Err(Reason::WrongBase);
-                }
-                let at = match delivery.stage {
-                    Stage::Delivered { at, .. } => at,
-                    _ => now,
-                };
-                delivery.stage = Stage::Decoded {
-                    reference: named.clone(),
-                    at,
-                };
-                self.remember(credit, ack);
-                return Ok(Step::Done);
+            Ack::Decoded(_) if !delivery.decoded => {
+                delivery.decoded = true;
+                false
             }
-            (Ack::Commit(named), Stage::Decoded { .. }) => {
-                if named != sent {
-                    return Err(Reason::WrongBase);
-                }
+            Ack::Commit(named) if delivery.decoded => {
                 self.base = Some(named.clone());
+                true
             }
-            (Ack::Drop, _) => {}
-            (Ack::Resync, _) => self.base = None,
+            Ack::Drop(..) => true,
+            Ack::Resync(_) => {
+                self.base = None;
+                true
+            }
             _ => return Err(Reason::InvalidSchema),
+        };
+        if settles {
+            self.delivery = None;
         }
-        self.delivery = None;
-        self.remember(credit, ack);
-        Ok(Step::Done)
-    }
-
-    fn remember(&mut self, credit: Positive, ack: Ack) {
         if self.acknowledged.len() == REMEMBERED {
             self.acknowledged.pop_front();
         }
-        self.acknowledged.push_back((credit, ack));
+        self.acknowledged.push_back(remembered);
+        Ok(Step::Done)
     }
 }
 

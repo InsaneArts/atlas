@@ -2,6 +2,7 @@ import Foundation
 
 /// Metadata as the pipe accepts it: one bounded JSON object, read in a lexical pass before any Foundation decoding, so
 /// duplicate keys, escaped duplicates, invalid escapes and lone surrogates are refused rather than silently merged.
+/// Keys are compared by their exact decoded UTF-8 bytes, never by Unicode equivalence.
 struct FrameJSONValidator {
   /// The bytes read.
   private let bytes: [UInt8]
@@ -18,15 +19,15 @@ struct FrameJSONValidator {
   /// bounds, with no key twice in any object, however it is escaped, and nothing after it.
   ///
   /// - Parameter data: The metadata.
-  /// - Returns: Each top-level key, decoded, with its value's kind.
+  /// - Returns: Each top-level key's decoded UTF-8 bytes, with its value's kind.
   /// - Throws: ``FramePipeError/oversized`` past a bound, else ``FramePipeError/invalid``.
-  static func validate(_ data: Data) throws(FramePipeError) -> [String: FrameJSONKind] {
+  static func validate(_ data: Data) throws(FramePipeError) -> [[UInt8]: FrameJSONKind] {
     guard data.count <= FramePipeLimits.metadata else { throw .oversized }
     guard String(data: data, encoding: .utf8) != nil else { throw .invalid }
     var validator = Self(Array(data))
     validator.space()
     guard validator.peek() == UInt8(ascii: "{") else { throw .invalid }
-    var top: [String: FrameJSONKind] = [:]
+    var top: [[UInt8]: FrameJSONKind] = [:]
     _ = try validator.object(depth: 1, top: &top)
     validator.space()
     guard validator.at == validator.bytes.count else { throw .invalid }
@@ -54,7 +55,7 @@ struct FrameJSONValidator {
   }
 
   private mutating func value(depth: Int) throws(FramePipeError) -> FrameJSONKind {
-    var nested: [String: FrameJSONKind] = [:]
+    var nested: [[UInt8]: FrameJSONKind] = [:]
     guard let byte = peek() else { throw .invalid }
     switch byte {
     case UInt8(ascii: "{"): return try object(depth: depth + 1, top: &nested)
@@ -71,12 +72,12 @@ struct FrameJSONValidator {
   }
 
   /// An object; its keys and their values' kinds go to `top`, which only the outermost object keeps.
-  private mutating func object(depth: Int, top: inout [String: FrameJSONKind]) throws(FramePipeError)
+  private mutating func object(depth: Int, top: inout [[UInt8]: FrameJSONKind]) throws(FramePipeError)
     -> FrameJSONKind
   {
     guard depth <= FramePipeLimits.depth else { throw .oversized }
     try expect("{")
-    var seen: Set<String> = []
+    var seen: Set<[UInt8]> = []
     space()
     if peek() == UInt8(ascii: "}") {
       at += 1
@@ -173,16 +174,16 @@ struct FrameJSONValidator {
     }
   }
 
-  /// A string, decoded, refused past `limit` decoded UTF-8 bytes.
-  private mutating func string(limit: Int) throws(FramePipeError) -> String {
+  /// A string's decoded UTF-8 bytes, refused past `limit` of them.
+  private mutating func string(limit: Int) throws(FramePipeError) -> [UInt8] {
     try expect("\"")
     var decoded: [UInt8] = []
     while true {
       let byte = try bump()
       switch byte {
       case UInt8(ascii: "\""):
-        guard let text = String(bytes: decoded, encoding: .utf8) else { throw .invalid }
-        return text
+        guard String(bytes: decoded, encoding: .utf8) != nil else { throw .invalid }
+        return decoded
       case UInt8(ascii: "\\"):
         decoded.append(contentsOf: try escape())
       case 0..<0x20:

@@ -264,7 +264,7 @@ fn prefix(bytes: &[u8; PREFIX], lane: Lane) -> Result<Head, Refusal> {
 }
 
 /// What the decoder has read.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub enum Item {
     /// A packet's head and its whole metadata; its payload, if any, follows
     /// in pieces.
@@ -274,15 +274,27 @@ pub enum Item {
     Payload(Vec<u8>),
 }
 
-#[derive(Debug)]
 enum Place {
     Prefix { bytes: [u8; PREFIX], filled: usize },
     Metadata { head: Head, bytes: Vec<u8> },
     Payload { left: u64 },
 }
 
+/// Metadata may carry credentials, so only lengths are shown.
+impl std::fmt::Debug for Item {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Packet(head, metadata) => write!(
+                formatter,
+                "Packet({head:?}, {} metadata bytes)",
+                metadata.len()
+            ),
+            Self::Payload(piece) => write!(formatter, "Payload({} bytes)", piece.len()),
+        }
+    }
+}
+
 /// One lane's incremental decoder.
-#[derive(Debug)]
 pub struct Decoder {
     lane: Lane,
     place: Place,

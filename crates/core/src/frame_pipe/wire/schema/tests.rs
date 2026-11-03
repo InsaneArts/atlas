@@ -19,12 +19,17 @@ fn ordinary_metadata_passes() {
 fn duplicate_keys_are_refused_however_they_are_spelled() {
     for text in [
         r#"{"a": 1, "a": 2}"#,
-        r#"{"a": 1, "a": 2}"#,
-        r#"{"é": 1, "é": 2}"#,
+        r#"{"a": 1, "\u0061": 2}"#,
+        r#"{"\u00e9": 1, "é": 2}"#,
         r#"{"x": {"a": 1, "a": 2}}"#,
+        r#"{"x": {"\u0061": 1, "a": 2}}"#,
     ] {
         assert_eq!(refused(text), Refusal::Invalid, "{text}");
     }
+    assert!(
+        guard("{\"\u{e9}\": 1, \"e\u{301}\": 2}".as_bytes()).is_ok(),
+        "keys are compared by their bytes, not by Unicode equivalence"
+    );
     assert!(
         guard(br#"{"a": {"a": 1}, "b": {"a": 2}}"#).is_ok(),
         "one key in each object"
@@ -48,7 +53,7 @@ fn malformed_text_and_escapes_are_refused() {
         r#"{"a": "\x"}"#,
         r#"{"a": "\ud800"}"#,
         r#"{"a": "\udc00"}"#,
-        r#"{"a": "\ud800A"}"#,
+        r#"{"a": "\ud800\u0041"}"#,
         "{\"a\": \"raw\u{1}control\"}",
         r#"{} {}"#,
         r#"{} x"#,

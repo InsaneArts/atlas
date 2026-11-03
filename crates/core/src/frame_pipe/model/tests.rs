@@ -211,3 +211,55 @@ fn openings_speak_this_protocol_and_keep_the_pair_tokens_fixed_life() {
         );
     }
 }
+
+#[test]
+fn delta_rectangles_must_be_inside_ordered_apart_and_exactly_paid_for() {
+    let record = |x: u32, y: u32, w: u32, h: u32| {
+        [x, y, w, h]
+            .iter()
+            .flat_map(|n| n.to_be_bytes())
+            .collect::<Vec<u8>>()
+    };
+    // A 4×4 picture is 48 bytes: two one-pixel rectangles take 38.
+    let two = [record(0, 0, 1, 1), record(1, 0, 1, 1)].concat();
+    assert_eq!(rectangles(&two, 4, 4, 32 + 6).unwrap().len(), 2);
+    for (records, payload) in [
+        (two.clone(), 32 + 5),
+        ([record(1, 0, 1, 1), record(0, 0, 1, 1)].concat(), 38),
+        ([record(0, 0, 2, 1), record(1, 0, 1, 1)].concat(), 32 + 9),
+        (record(3, 1, 2, 1), 16 + 6),
+        (record(0, 0, 0, 1), 16),
+        (record(u32::MAX, 0, 2, 1), 16 + 6),
+        (record(0, 0, 4, 3), 16 + 36),
+        (Vec::new(), 0),
+        (two[..17].to_vec(), 17 + 6),
+        (record(0, 0, 1, 1).repeat(257), 257 * 19),
+    ] {
+        assert_eq!(
+            rectangles(&records, 4, 4, payload),
+            Err(Refusal::Invalid),
+            "{payload}"
+        );
+    }
+    assert_eq!(
+        rectangles(&record(0, 0, 1, 1), 4097, 1, 19),
+        Err(Refusal::Invalid)
+    );
+}
+
+#[test]
+fn integers_take_their_whole_range_and_nothing_past_it() {
+    let mut largest = reference();
+    largest["sourceSequence"] = serde_json::json!(u64::MAX);
+    assert_eq!(
+        decode::<Ref>(&bytes(&largest))
+            .unwrap()
+            .source_sequence
+            .get(),
+        u64::MAX
+    );
+    let text = String::from_utf8(bytes(&largest))
+        .unwrap()
+        .replace(&u64::MAX.to_string(), "18446744073709551616");
+    assert_eq!(decode::<Ref>(text.as_bytes()), Err(Refusal::Invalid));
+}

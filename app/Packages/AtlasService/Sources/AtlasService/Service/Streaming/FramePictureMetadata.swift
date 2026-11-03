@@ -1,47 +1,47 @@
 import Foundation
 
 /// What every picture packet says of itself, with exactly its keys and their shapes.
-public struct FramePictureMetadata: Sendable, Equatable, Decodable {
+struct FramePictureMetadata: Sendable, Equatable, Decodable {
   /// The broker instance that sent it.
-  public var serviceInstance: String
+  let serviceInstance: String
   /// The observer it was sent to.
-  public var observerID: String
+  let observerID: String
   /// The observer's generation.
-  public var observerGeneration: UInt64
+  let observerGeneration: UInt64
   /// The source stream's generation.
-  public var streamGeneration: UInt64
+  let streamGeneration: UInt64
   /// The capture geometry's generation.
-  public var geometryGeneration: UInt64
+  let geometryGeneration: UInt64
   /// The credit it serves.
-  public var creditID: UInt64
+  let creditID: UInt64
   /// The source acquisition it shows.
-  public var sourceSequence: UInt64
+  let sourceSequence: UInt64
   /// Its image's sequence.
-  public var imageSequence: UInt64
+  let imageSequence: UInt64
   /// The image a delta applies to; zero for a full picture.
-  public var baseImageSequence: UInt64
+  let baseImageSequence: UInt64
   /// Its 256-bit random key.
-  public var frameKey: String
+  let frameKey: String
   /// The client's view generation it was made for.
-  public var viewGeneration: UInt64
+  let viewGeneration: UInt64
   /// The last input revision completed before it.
-  public var inputRevision: UInt64
+  let inputRevision: UInt64
   /// Its width, in pixels.
-  public var width: UInt32
+  let width: UInt32
   /// Its height, in pixels.
-  public var height: UInt32
+  let height: UInt32
   /// The bytes of one row: three a pixel.
-  public var rowStride: UInt32
+  let rowStride: UInt32
   /// The helper's display width, in points.
-  public var displayWidth: Double
+  let displayWidth: Double
   /// The helper's display height, in points.
-  public var displayHeight: Double
+  let displayHeight: Double
   /// The helper's backing scale.
-  public var displayScale: Double
+  let displayScale: Double
   /// Its age when the header was written, in nanoseconds.
-  public var ageAtHeaderNs: UInt64
+  let ageAtHeaderNs: UInt64
   /// The rectangles a delta carries; zero otherwise.
-  public var rectangleCount: UInt32
+  let rectangleCount: UInt32
 
   /// The keys whose values are plain decimal integers.
   private static let integers: Set<String> = [
@@ -59,13 +59,15 @@ public struct FramePictureMetadata: Sendable, Equatable, Decodable {
   /// - Parameter data: The packet's metadata.
   /// - Throws: ``FramePipeError`` for metadata the validator refuses, a key missing or unknown, or a value outside its
   ///   shape.
-  public init(validating data: Data) throws(FramePipeError) {
-    let kinds = try FrameJSONValidator.validate(data)
+  init(validating data: Data) throws(FramePipeError) {
+    let found = try FrameJSONValidator.validate(data)
+    let kinds = { (key: String) in found[Array(key.utf8)] }
+    let keys = Self.integers.union(Self.numbers).union(Self.identifiers)
     guard
-      Set(kinds.keys) == Self.integers.union(Self.numbers).union(Self.identifiers),
-      Self.integers.allSatisfy({ kinds[$0] == .integer }),
-      Self.numbers.allSatisfy({ kinds[$0] == .integer || kinds[$0] == .number }),
-      Self.identifiers.allSatisfy({ kinds[$0] == .string }),
+      Set(found.keys) == Set(keys.map { Array($0.utf8) }),
+      Self.integers.allSatisfy({ kinds($0) == .integer }),
+      Self.numbers.allSatisfy({ kinds($0) == .integer || kinds($0) == .number }),
+      Self.identifiers.allSatisfy({ kinds($0) == .string }),
       let decoded = try? JSONDecoder().decode(Self.self, from: data),
       decoded.isShaped
     else { throw .invalid }
@@ -73,7 +75,7 @@ public struct FramePictureMetadata: Sendable, Equatable, Decodable {
   }
 
   /// The full picture's bytes.
-  public var pictureBytes: UInt64 {
+  var pictureBytes: UInt64 {
     UInt64(width) * UInt64(height) * 3
   }
 
@@ -85,7 +87,7 @@ public struct FramePictureMetadata: Sendable, Equatable, Decodable {
   ///   - kind: The packet's kind.
   ///   - payloadLength: The packet's payload length.
   /// - Throws: ``FramePipeError/invalid`` for a metadata and length that disagree.
-  public func check(kind: FramePacketKind, payloadLength: UInt64) throws(FramePipeError) {
+  func check(kind: FramePacketKind, payloadLength: UInt64) throws(FramePipeError) {
     let fits =
       switch kind {
       case .fullFrame:

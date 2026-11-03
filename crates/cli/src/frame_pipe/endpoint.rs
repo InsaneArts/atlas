@@ -7,6 +7,7 @@ use atlas_core::{
     context::context,
     error::{Code, Error, Result},
     files::{LockFile, LockOpen, open_lock_file},
+    name::hex,
 };
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
@@ -38,8 +39,7 @@ pub(crate) fn owner_key(controller: u32, helper: u32) -> [u8; 32] {
 
 /// The broker's folder under `base`.
 fn folder(base: &Path, controller: u32, key: &[u8; 32]) -> PathBuf {
-    let prefix: String = key[..8].iter().map(|byte| format!("{byte:02x}")).collect();
-    base.join(format!("atlas-fp.{controller}.{prefix}"))
+    base.join(format!("atlas-fp.{controller}.{}", hex(&key[..8])))
 }
 
 /// The sockets clients connect to.
@@ -150,12 +150,7 @@ fn owner_lock(path: &Path, controller: u32) -> Result<LockFile> {
 /// controller and helper own: only part of the key names the folder.
 fn claim(lock: &LockFile, folder: &Path, key: &[u8; 32], helper: u32) -> Result<()> {
     use std::io::{Read, Seek, Write};
-    let owner = format!(
-        "{} {helper}\n",
-        key.iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
+    let owner = format!("{} {helper}\n", hex(key));
     let mut file = &lock.0;
     let mut found = String::new();
     file.take(256)
@@ -264,6 +259,17 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
         endpoint.bound.push((socket.clone(), owned));
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
             .map_err(context("Set the mode of", &socket))?;
+        // Only this account can change the folder; still, publish only the
+        // very socket bound, private, in the very folder checked.
+        let private = fs::symlink_metadata(&socket).is_ok_and(|metadata| {
+            metadata.file_type().is_socket()
+                && metadata.uid() == controller
+                && metadata.mode() & 0o777 == 0o600
+                && (metadata.dev(), metadata.ino()) == owned
+        });
+        if !private || identity(&endpoint.folder) != Some(place) {
+            return Err(unsafe_folder(&socket, "stay the private socket bound"));
+        }
         listeners.push(listener);
     }
     let mut listeners = listeners.into_iter();

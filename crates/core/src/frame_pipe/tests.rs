@@ -49,6 +49,36 @@ fn packets(lane: Lane, bytes: &[u8], step: usize) -> Result<Vec<Packet>, Refusal
     Ok(found)
 }
 
+/// Checks that `bytes` read in two pieces, cut anywhere, decode to `whole`.
+fn every_cut(lane: Lane, bytes: &[u8], whole: &[Packet], name: &str) {
+    for cut in 1..bytes.len() {
+        let mut decoder = Decoder::new(lane);
+        let mut found: Vec<Packet> = Vec::new();
+        for piece in [&bytes[..cut], &bytes[cut..]] {
+            let mut input = piece;
+            while let Some(item) = decoder.next(&mut input).unwrap() {
+                match item {
+                    Item::Packet(head, metadata) => found.push(Packet {
+                        kind: head.kind,
+                        request: head.request,
+                        metadata,
+                        payload: Vec::new(),
+                    }),
+                    Item::Payload(piece) => found.last_mut().unwrap().payload.extend(piece),
+                }
+            }
+        }
+        decoder.end().unwrap();
+        let shape = |packets: &[Packet]| -> Vec<(Kind, u64, Vec<u8>, Vec<u8>)> {
+            packets
+                .iter()
+                .map(|p| (p.kind, p.request, p.metadata.clone(), p.payload.clone()))
+                .collect()
+        };
+        assert_eq!(shape(&found), shape(whole), "{name} cut at {cut}");
+    }
+}
+
 /// The packet's metadata decoded as its kind's type, back as JSON.
 fn typed(packet: &Packet) -> Value {
     let value = match packet.kind {
@@ -87,7 +117,12 @@ fn apply(base: &[u8], rectangles: &[Rectangle], pixels: &[u8], width: u32) -> Ve
 fn every_golden_vector_decodes_as_its_manifest_says_at_every_split() {
     let manifest: Vec<Value> =
         serde_json::from_slice(&std::fs::read(fixtures().join("manifest.json")).unwrap()).unwrap();
-    let full = unhex(manifest[0]["packets"][0]["payload"].as_str().unwrap());
+    let full_vector = manifest
+        .iter()
+        .find(|vector| vector["file"] == "full-4x4.bin")
+        .unwrap();
+    assert_eq!(full_vector["packets"][0]["kind"], Kind::FullFrame.code());
+    let full = unhex(full_vector["packets"][0]["payload"].as_str().unwrap());
     assert_eq!(manifest.len(), 10);
     for vector in manifest {
         let name = vector["file"].as_str().unwrap();
@@ -118,6 +153,9 @@ fn every_golden_vector_decodes_as_its_manifest_says_at_every_split() {
                 }
                 _ => {
                     let decoded = decoded.unwrap();
+                    if step == 1 {
+                        every_cut(lane, &bytes, &decoded, name);
+                    }
                     let expected = vector["packets"].as_array().unwrap();
                     assert_eq!(decoded.len(), expected.len(), "{name}");
                     for (packet, expected) in decoded.iter().zip(expected) {
@@ -180,6 +218,22 @@ fn a_frame_and_its_length_must_agree_before_any_payload_is_reserved() {
     };
     assert!(delta.check(Kind::DeltaFrame, 17).is_ok());
     assert!(delta.check(Kind::DeltaFrame, 47).is_ok());
+    for marked in [
+        FrameMetadata {
+            base_image_sequence: 1,
+            ..frame.clone()
+        },
+        FrameMetadata {
+            rectangle_count: 1,
+            ..frame.clone()
+        },
+    ] {
+        assert_eq!(
+            marked.check(Kind::FullFrame, 48),
+            Err(Refusal::Invalid),
+            "a full picture names no base or rectangles"
+        );
+    }
     for (kind, payload) in [
         (Kind::FullFrame, 47),
         (Kind::FullFrame, 49),
@@ -193,39 +247,4 @@ fn a_frame_and_its_length_must_agree_before_any_payload_is_reserved() {
             "{kind:?} {payload}"
         );
     }
-}
-
-#[test]
-fn delta_rectangles_must_be_inside_ordered_apart_and_exactly_paid_for() {
-    let record = |x: u32, y: u32, w: u32, h: u32| {
-        [x, y, w, h]
-            .iter()
-            .flat_map(|n| n.to_be_bytes())
-            .collect::<Vec<u8>>()
-    };
-    // A 4×4 picture is 48 bytes: two one-pixel rectangles take 38.
-    let two = [record(0, 0, 1, 1), record(1, 0, 1, 1)].concat();
-    assert_eq!(rectangles(&two, 4, 4, 32 + 6).unwrap().len(), 2);
-    for (records, payload) in [
-        (two.clone(), 32 + 5),
-        ([record(1, 0, 1, 1), record(0, 0, 1, 1)].concat(), 38),
-        ([record(0, 0, 2, 1), record(1, 0, 1, 1)].concat(), 32 + 9),
-        (record(3, 1, 2, 1), 16 + 6),
-        (record(0, 0, 0, 1), 16),
-        (record(u32::MAX, 0, 2, 1), 16 + 6),
-        (record(0, 0, 4, 3), 16 + 36),
-        (Vec::new(), 0),
-        (two[..17].to_vec(), 17 + 6),
-        (record(0, 0, 1, 1).repeat(257), 257 * 19),
-    ] {
-        assert_eq!(
-            rectangles(&records, 4, 4, payload),
-            Err(Refusal::Invalid),
-            "{payload}"
-        );
-    }
-    assert_eq!(
-        rectangles(&record(0, 0, 1, 1), 4097, 1, 19),
-        Err(Refusal::Invalid)
-    );
 }

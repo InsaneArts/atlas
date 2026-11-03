@@ -35,13 +35,14 @@ public actor FrameStorageBudget {
     guard !overflow, total <= limit, held.count < allocations else { throw .budgetExhausted }
     last += 1
     held[last] = bytes
-    return FrameStorageReservation(id: last, bytes: bytes)
+    return FrameStorageReservation(budget: ObjectIdentifier(self), id: last, bytes: bytes)
   }
 
-  /// Returns `reservation`'s bytes; releasing it again does nothing.
+  /// Returns `reservation`'s bytes; releasing it again, or here when another budget holds it, does nothing.
   ///
   /// - Parameter reservation: The reservation.
   public func release(_ reservation: FrameStorageReservation) {
+    guard reservation.budget == ObjectIdentifier(self) else { return }
     held[reservation.id] = nil
   }
 }

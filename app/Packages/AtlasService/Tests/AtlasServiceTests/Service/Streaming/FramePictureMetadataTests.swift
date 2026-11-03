@@ -43,6 +43,17 @@ struct FramePictureMetadataTests {
         try FramePictureMetadata(validating: Self.metadata([key: value]))
       }
     }
+    let largest = try FramePictureMetadata(validating: Self.metadata(["inputRevision": UInt64.max]))
+    #expect(largest.inputRevision == UInt64.max)
+    let text = try #require(String(data: Self.metadata(["inputRevision": 7]), encoding: .utf8))
+    for (from, to) in [
+      (#""inputRevision":7"#, #""inputRevision":18446744073709551616"#),
+      (#""frameKey""#, "\"frame\u{212A}ey\""),
+    ] {
+      #expect(throws: FramePipeError.invalid, "\(to)") {
+        try FramePictureMetadata(validating: Data(text.replacingOccurrences(of: from, with: to).utf8))
+      }
+    }
     let spelled = try #require(String(data: Self.metadata(), encoding: .utf8))
       .replacingOccurrences(of: #""creditID":1"#, with: #""creditID":1.0"#)
     #expect(throws: FramePipeError.invalid, "an integer in plain syntax only") {
@@ -56,6 +67,12 @@ struct FramePictureMetadataTests {
     try full.check(kind: .fullFrame, payloadLength: 24)
     #expect(throws: FramePipeError.invalid) { try full.check(kind: .fullFrame, payloadLength: 23) }
     #expect(throws: FramePipeError.invalid) { try full.check(kind: .credit, payloadLength: 24) }
+    for changes: [String: Any] in [["baseImageSequence": 1], ["rectangleCount": 1]] {
+      let marked = try FramePictureMetadata(validating: Self.metadata(changes))
+      #expect(throws: FramePipeError.invalid, "a full picture names no base or rectangles") {
+        try marked.check(kind: .fullFrame, payloadLength: 24)
+      }
+    }
     let delta = try FramePictureMetadata(
       validating: Self.metadata(["baseImageSequence": 1, "imageSequence": 2, "rectangleCount": 1])
     )

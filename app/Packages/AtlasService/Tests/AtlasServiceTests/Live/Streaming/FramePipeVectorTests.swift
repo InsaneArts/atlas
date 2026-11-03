@@ -9,8 +9,10 @@ struct FramePipeVectorTests {
   func everyVector() throws {
     let manifest = try FramePipeFixture.manifest()
     #expect(manifest.count == 10)
-    let first = try #require((manifest.first?["packets"] as? [[String: Any]])?.first?["payload"] as? String)
-    let full = FramePipeFixture.unhex(first)
+    let fullVector = try #require(manifest.first { $0["file"] as? String == "full-4x4.bin" })
+    let fullPacket = try #require((fullVector["packets"] as? [[String: Any]])?.first)
+    #expect(fullPacket["kind"] as? Int == Int(FramePacketKind.fullFrame.rawValue))
+    let full = FramePipeFixture.unhex(try #require(fullPacket["payload"] as? String))
     for vector in manifest {
       let name = try #require(vector["file"] as? String)
       let bytes = try Data(contentsOf: FramePipeFixture.folder().appending(path: name))
@@ -36,8 +38,33 @@ struct FramePipeVectorTests {
           for (packet, expected) in zip(packets, expected) {
             try Self.check(packet, against: expected, full: full, name: name)
           }
+          if step == 1 {
+            try Self.everyCut(bytes, lane: lane, matches: packets, name: name)
+          }
         }
       }
+    }
+  }
+
+  /// Checks that `bytes` read in two pieces, cut anywhere, decode to `packets`.
+  private static func everyCut(_ bytes: Data, lane: FramePipeLane, matches packets: [DecodedFramePacket], name: String)
+    throws
+  {
+    for cut in 1..<bytes.count {
+      var codec = FramePacketCodec(lane: lane)
+      var found: [DecodedFramePacket] = []
+      for var input in [bytes.prefix(cut), bytes.dropFirst(cut)] {
+        while let item = try codec.next(&input) {
+          switch item {
+          case .packet(let header, let metadata): found.append(DecodedFramePacket(header: header, metadata: metadata))
+          case .payload(let piece): found[found.count - 1].payload.append(piece)
+          }
+        }
+      }
+      try codec.end()
+      #expect(found.map(\.header) == packets.map(\.header), "\(name) cut at \(cut)")
+      #expect(found.map(\.metadata) == packets.map(\.metadata), "\(name) cut at \(cut)")
+      #expect(found.map(\.payload) == packets.map(\.payload), "\(name) cut at \(cut)")
     }
   }
 

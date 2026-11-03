@@ -3,7 +3,10 @@ use std::{os::unix::fs::symlink, process::Command};
 
 /// Give `path` an ACL entry that grants nothing its owner lacks.
 fn add_acl(path: &Path) {
-    let user = std::env::var("USER").unwrap();
+    let user = nix::unistd::User::from_uid(nix::unistd::getuid())
+        .unwrap()
+        .unwrap()
+        .name;
     assert!(
         Command::new("/bin/chmod")
             .args(["+a", &format!("user:{user} allow readattr")])
@@ -169,8 +172,7 @@ async fn a_folder_another_owner_claimed_or_a_loose_lock_file_is_refused() {
 async fn a_lock_or_left_socket_with_an_acl_is_refused_and_kept() {
     let base = base();
     let (listeners, endpoint) = bind_in(base.path(), me(), 7006).await.unwrap();
-    let (folder, lock, control) = (
-        endpoint.folder.clone(),
+    let (lock, control) = (
         endpoint.folder.join("owner.lock"),
         endpoint.socket("c.sock"),
     );
@@ -191,11 +193,44 @@ async fn a_lock_or_left_socket_with_an_acl_is_refused_and_kept() {
         bind_in(base.path(), me(), 7006).await.err().unwrap().code,
         Code::Identity
     );
+    assert!(bind_in(base.path(), me(), 7008).await.is_ok());
+
+    // A folder of its own, so only its ACL is wrong.
+    let (listeners, endpoint) = bind_in(base.path(), me(), 7009).await.unwrap();
+    let folder = endpoint.folder.clone();
+    drop((listeners, endpoint));
     add_acl(&folder);
     assert_eq!(
-        bind_in(base.path(), me(), 7006).await.err().unwrap().code,
+        bind_in(base.path(), me(), 7009).await.err().unwrap().code,
         Code::Identity
     );
+    assert!(!folder.join("c.sock").exists());
+}
+
+#[tokio::test]
+async fn a_lock_or_socket_that_is_a_link_is_refused_and_its_target_untouched() {
+    let base = base();
+    let target = base.path().join("target");
+    fs::write(&target, "kept").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let (listeners, endpoint) = bind_in(base.path(), me(), 7010).await.unwrap();
+    let lock = endpoint.folder.join("owner.lock");
+    drop((listeners, endpoint));
+    fs::remove_file(&lock).unwrap();
+    symlink(&target, &lock).unwrap();
+    assert!(bind_in(base.path(), me(), 7010).await.is_err());
+
+    let (listeners, endpoint) = bind_in(base.path(), me(), 7011).await.unwrap();
+    let control = endpoint.socket("c.sock");
+    drop((listeners, endpoint));
+    symlink(&target, &control).unwrap();
+    assert_eq!(
+        bind_in(base.path(), me(), 7011).await.err().unwrap().code,
+        Code::Identity
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), "kept");
+    assert_eq!(fs::metadata(&target).unwrap().mode() & 0o777, 0o644);
 }
 
 #[tokio::test]

@@ -76,15 +76,13 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
 /// (256 bits).
 macro_rules! hex {
     ($($name:ident = $digits:literal;)+) => {$(
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+        #[derive(Clone, PartialEq, Eq, Hash, Serialize)]
         pub struct $name(String);
 
         impl $name {
             /// The identifier `text` spells, if it has exactly the shape.
             pub fn parse(text: &str) -> Option<Self> {
-                (text.len() == $digits
-                    && text.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
-                .then(|| Self(text.to_owned()))
+                crate::name::lower_hex(text, $digits).then(|| Self(text.to_owned()))
             }
 
             /// A new random identifier.
@@ -109,6 +107,19 @@ macro_rules! hex {
 hex! {
     Hex32 = 32;
     Hex64 = 64;
+}
+
+impl std::fmt::Debug for Hex32 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Hex32({})", self.0)
+    }
+}
+
+/// Tokens and capabilities are 256-bit secrets: never shown.
+impl std::fmt::Debug for Hex64 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Hex64(redacted)")
+    }
 }
 
 /// A whole number above zero.
@@ -314,6 +325,27 @@ pub enum WireCode {
     Transport,
     Uncertain,
     Usage,
+}
+
+/// Why a client set a delivery aside, keeping its acknowledged base.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DropReason {
+    Stale,
+    Hidden,
+    ConversionFailed,
+    Cancelled,
+    WrongBase,
+    ViewChanged,
+}
+
+/// Why a client set a delivery aside and forgot its base.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResyncReason {
+    WrongBase,
+    WrongGeometry,
+    DecodeCancelled,
 }
 
 /// What an error ends.

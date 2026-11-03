@@ -15,7 +15,22 @@ struct FrameStorageBudgetTests {
     await budget.release(first)
     await budget.release(first)
     #expect(await budget.reserved == 40, "a second release does nothing")
-    await #expect(throws: FramePipeError.budgetExhausted) { try await budget.reserve(bytes: UInt64.max) }
+    await #expect(throws: FramePipeError.budgetExhausted, "the sum would overflow") {
+      try await budget.reserve(bytes: UInt64.max)
+    }
+  }
+
+  @Test("a reservation is released only by the budget that holds it")
+  func foreignRelease() async throws {
+    let window = FrameStorageBudget(limit: 100, allocations: 3)
+    let other = FrameStorageBudget(limit: 100, allocations: 3)
+    let held = try await window.reserve(bytes: 60)
+    let foreign = try await other.reserve(bytes: 10)
+    #expect(held.id == foreign.id, "both are their budget's first")
+    await window.release(foreign)
+    #expect(await window.reserved == 60)
+    await other.release(held)
+    #expect(await other.reserved == 10)
   }
 
   @Test("the allocation count is bounded whatever the bytes")

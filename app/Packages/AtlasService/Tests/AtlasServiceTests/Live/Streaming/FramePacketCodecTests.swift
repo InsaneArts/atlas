@@ -96,6 +96,7 @@ struct FramePacketCodecTests {
     #expect(Self.refusal(Self.prefix(metadata: UInt32.max)) == .oversized)
     #expect(Self.refusal(Self.prefix(payload: 1) + body) == .invalid, "a control packet carries no payload")
     #expect(Self.refusal(Self.prefix(kind: 11, payload: FramePipeLimits.payload + 1), lane: .frame) == .oversized)
+    #expect(Self.refusal(Self.prefix(kind: 11, payload: UInt64.max), lane: .frame) == .oversized)
     #expect(Self.refusal(Self.prefix(kind: 11, payload: 0) + body, lane: .frame) == .invalid)
     #expect(Self.refusal(Self.prefix(request: 0) + body) == .invalid, "a credit answers a request")
     #expect(Self.refusal(Self.prefix(kind: 37, request: 3) + body) == .invalid, "a state change answers none")

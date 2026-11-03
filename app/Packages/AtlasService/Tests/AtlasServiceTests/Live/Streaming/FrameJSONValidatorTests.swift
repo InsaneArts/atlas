@@ -6,7 +6,7 @@ import Testing
 @Suite("Frame metadata validator")
 struct FrameJSONValidatorTests {
   /// What validating `text` gives: its top-level kinds, or its refusal.
-  private static func validate(_ text: String) -> Result<[String: FrameJSONKind], FramePipeError> {
+  private static func validate(_ text: String) -> Result<[[UInt8]: FrameJSONKind], FramePipeError> {
     Result { () throws(FramePipeError) in try FrameJSONValidator.validate(Data(text.utf8)) }
   }
 
@@ -16,35 +16,39 @@ struct FrameJSONValidatorTests {
       #"{"a":1,"b":-1,"c":1.0,"d":1e2,"e":"x","f":true,"g":null,"h":{},"i":[1,{"j":2}]}"#
     )
     .get()
-    #expect(kinds["a"] == .integer)
-    #expect(kinds["b"] == .number)
-    #expect(kinds["c"] == .number)
-    #expect(kinds["d"] == .number)
-    #expect(kinds["e"] == .string)
-    #expect(kinds["f"] == .bool)
-    #expect(kinds["g"] == .null)
-    #expect(kinds["h"] == .object)
-    #expect(kinds["i"] == .array)
-    #expect(kinds["j"] == nil, "nested keys are not top-level")
+    #expect(kinds[Array("a".utf8)] == .integer)
+    #expect(kinds[Array("b".utf8)] == .number)
+    #expect(kinds[Array("c".utf8)] == .number)
+    #expect(kinds[Array("d".utf8)] == .number)
+    #expect(kinds[Array("e".utf8)] == .string)
+    #expect(kinds[Array("f".utf8)] == .bool)
+    #expect(kinds[Array("g".utf8)] == .null)
+    #expect(kinds[Array("h".utf8)] == .object)
+    #expect(kinds[Array("i".utf8)] == .array)
+    #expect(kinds[Array("j".utf8)] == nil, "nested keys are not top-level")
   }
 
   @Test("a key twice in one object is refused however it is escaped")
   func duplicates() {
     #expect(Self.validate(#"{"a":1,"a":2}"#) == .failure(.invalid))
-    #expect(Self.validate(#"{"a":1,"a":2}"#) == .failure(.invalid))
+    #expect(Self.validate(#"{"a":1,"\u0061":2}"#) == .failure(.invalid))
     #expect(Self.validate(#"{"x":{"a":1,"a":2}}"#) == .failure(.invalid))
+    #expect(Self.validate(#"{"x":{"\u0061":1,"a":2}}"#) == .failure(.invalid))
+    #expect(Self.validate(#"{"\u00e9":1,"é":2}"#) == .failure(.invalid))
+    let distinct = try? Self.validate("{\"\u{E9}\":1,\"e\u{301}\":2}").get()
+    #expect(distinct?.count == 2, "keys are compared by their bytes, not by Unicode equivalence")
     #expect((try? Self.validate(#"{"a":{"a":1}}"#).get()) != nil, "the same key in another object is fine")
   }
 
   @Test("invalid text, escapes and surrogates are refused")
   func invalidText() {
     for text in [
-      #"{"a":"\x"}"#, #"{"a":"\ud800"}"#, #"{"a":"\udc00"}"#, #"{"a":"\ud800A"}"#, "{\"a\":\"\u{1}\"}",
+      #"{"a":"\x"}"#, #"{"a":"\ud800"}"#, #"{"a":"\udc00"}"#, #"{"a":"\ud800\u0041"}"#, "{\"a\":\"\u{1}\"}",
       #"{"a":01}"#, #"{"a":1.}"#, #"{"a":-}"#, #"{"a":tru}"#, #"{"a":1}x"#, #"{"a":1,}"#, "[1]", "\"a\"", "",
     ] {
       #expect(Self.validate(text) == .failure(.invalid), "\(text)")
     }
-    #expect(Self.validate(#"{"a":"😀"}"#).map { $0["a"] } == .success(.string))
+    #expect(Self.validate(#"{"a":"\ud83d\ude00"}"#).map { $0[Array("a".utf8)] } == .success(.string))
     #expect(throws: FramePipeError.invalid) { try FrameJSONValidator.validate(Data([0x7B, 0xFF, 0x7D])) }
   }
 

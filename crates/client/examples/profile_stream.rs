@@ -6,7 +6,7 @@
 use atlas_client::client::{Client, live::LiveStream};
 use atlas_core::{
     config::{self, Config},
-    frame_pipe::diagnostics::Ring,
+    frame_pipe::diagnostics::{Outcome, Ring},
     protocol::CaptureBackend,
 };
 use serde_json::json;
@@ -52,15 +52,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .copied()
     };
     let records = ring.page(0, 15);
-    let failed: Vec<_> = (0..)
-        .map_while(|cursor| {
-            let page = ring.page(cursor * 15, 15);
-            (!page.records.is_empty()).then_some(page.records)
-        })
-        .flatten()
-        .filter(|record| record.outcome != atlas_core::frame_pipe::diagnostics::Outcome::Accepted)
-        .map(|record| json!({"stage": record.stage, "reason": record.reason, "outcome": record.outcome}))
-        .collect();
+    let mut failed = Vec::new();
+    let mut cursor = 0;
+    loop {
+        let page = ring.page(cursor, 15);
+        if page.records.is_empty() {
+            break;
+        }
+        cursor = page.next_cursor;
+        failed.extend(
+            page.records
+                .iter()
+                .filter(|record| record.outcome != Outcome::Accepted)
+                .map(|record| json!({"stage": record.stage, "reason": record.reason, "outcome": record.outcome})),
+        );
+    }
     let stopping = Instant::now();
     let stopped = stream.stop(&client).await;
     println!(

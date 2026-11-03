@@ -5,6 +5,7 @@ fn a_reservation_is_all_or_nothing_and_returns_when_its_last_owner_drops() {
     let budget = Budget::new(100);
     let first = budget.reserve(60).unwrap();
     assert!(budget.reserve(41).is_none(), "nothing is partly held");
+    assert!(budget.reserve(u64::MAX).is_none(), "the sum would overflow");
     assert_eq!(budget.reserved(), 60);
     let shared = std::sync::Arc::new(budget.reserve(40).unwrap());
     let copy = shared.clone();
@@ -14,7 +15,6 @@ fn a_reservation_is_all_or_nothing_and_returns_when_its_last_owner_drops() {
     drop(copy);
     drop(first);
     assert_eq!(budget.reserved(), 0);
-    assert!(budget.reserve(u64::MAX).is_none(), "no overflow");
 }
 
 #[test]

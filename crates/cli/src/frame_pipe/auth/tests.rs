@@ -15,6 +15,37 @@ fn other() -> Peer {
     }
 }
 
+#[test]
+fn the_contract_limits_are_the_documented_ones() {
+    assert_eq!(PAIRING, Duration::from_secs(2));
+    assert_eq!(OBSERVERS_MAX, 4);
+}
+
+#[test]
+fn a_frame_lane_must_come_from_the_same_account_and_process_start() {
+    let mut gate = gate();
+    let now = Instant::now();
+    let mine = me();
+    let restarted = Peer {
+        instance: Instance::new(mine.instance.pid, [mine.instance.start[0] + 1, 0]),
+        ..mine
+    };
+    let elsewhere = Peer {
+        uid: mine.uid + 1,
+        ..mine
+    };
+    for peer in [restarted, elsewhere] {
+        let welcome = gate
+            .hello(me(), &hello(&gate, vec![Right::Observe]), now)
+            .unwrap();
+        assert_eq!(
+            gate.attach(peer, &attach(&welcome), now).err(),
+            Some(Reason::WrongPeer),
+            "{peer:?}"
+        );
+    }
+}
+
 fn gate() -> Gate {
     Gate::new(
         Hex32::random(),
