@@ -727,6 +727,38 @@ fn a_record_whose_group_is_not_its_leaders_is_refused_on_load() {
 }
 
 #[test]
+fn an_invalid_stopping_record_remains_unknown_and_is_never_acknowledged_as_stopping() {
+    let mut invalid = record();
+    invalid.state = JobState::Stopping;
+    invalid.ends_at = 0;
+    let table = Table::with(vec![leader(), process(4313, later(1), 4312, 4312)]);
+    let (folder, jobs) = jobs_with(&invalid, &table);
+    std::fs::write(folder.path().join(format!("jobs/{ID}.log")), b"output\n").unwrap();
+    let before = raw_job_files(folder.path());
+
+    let job = shown(&jobs);
+    assert_eq!(job["state"], "unknown", "{job}");
+    assert_eq!(job["error"], UNREADABLE);
+    for forced in [None, Some(How::Person), None, Some(How::OnConsole), None] {
+        jobs.watch_once(forced).unwrap();
+    }
+    assert_eq!(
+        json!(jobs.census().unwrap()),
+        json!({"running": 0, "launching": 0, "unresolved": 1})
+    );
+    let stopped = jobs.stop(&record().id, &record().expected().unwrap(), Duration::ZERO);
+    assert_eq!(stopped["ok"], false, "{stopped}");
+    assert_eq!(stopped["reason"], "unknown");
+    assert!(stopped.get("alreadyStopping").is_none(), "{stopped}");
+    let all = jobs.stop_all(StopReason::Person);
+    assert_eq!(all["stopping"], 0, "{all}");
+    assert_eq!(all["unresolved"], json!([{"id": ID}]));
+    jobs.watch_once(None).unwrap();
+    assert!(table.signals().is_empty(), "{:?}", table.signals());
+    assert_eq!(raw_job_files(folder.path()), before);
+}
+
+#[test]
 fn a_failed_process_query_ends_nothing_and_is_tried_again() {
     let table = Table::with(vec![leader()]);
     let mut due = record();
