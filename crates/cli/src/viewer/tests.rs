@@ -1493,9 +1493,14 @@ async fn activity_json_never_carries_typed_text() {
         "text": "hunter2", "argv": ["rm", "secret-argument"], "x": 123.5, "y": 456.25,
         "title": "Secret plans", "elapsedMs": 4.0,
     });
+    let key = json!({
+        "at": at.to_string(), "operation": "input", "ok": true, "verb": "key",
+        "app": "TextEdit", "bundleId": "com.apple.TextEdit", "label": "⇧⌘Z Page Up",
+        "actionCount": 2, "actor": "agent", "command": "c1", "text": "hunter2",
+    });
     std::fs::write(
         output.join(atlas_client::activity_log::FILE),
-        format!("{row}\n"),
+        format!("{key}\n{row}\n"),
     )
     .unwrap();
 
@@ -1544,13 +1549,23 @@ async fn activity_json_never_carries_typed_text() {
             "startedAt",
             "uncertain",
             "verb"
-        ]
+        ],
+        "a field added here is added on purpose"
     );
     assert_eq!(listed["says"], "typed in TextEdit");
     assert_eq!(listed["count"], 2);
     assert_eq!(listed["ageSeconds"], 3);
     assert_eq!(listed["session"], Value::Null);
     assert_eq!(reply["sessions"], json!({}));
+    let pressed = &reply["activity"][1];
+    assert_eq!(pressed["app"], "TextEdit");
+    assert_eq!(pressed["bundleId"], "com.apple.TextEdit");
+    assert_eq!(pressed["label"], "⇧⌘Z Page Up");
+    assert_eq!(
+        pressed["logicalId"], "c1",
+        "a command's steps share its token"
+    );
+    assert_eq!(pressed["keys"], json!([["⇧", "⌘", "Z"], ["Page Up"]]));
 
     // A row of an agent's host session names it, and nothing more.
     let session =
@@ -1757,56 +1772,6 @@ fn apps_name_their_bundle_id_whether_hidden_when_launched_and_their_windows_orde
         [json!(1)],
         "behind Probe's front window"
     );
-}
-
-#[test]
-fn an_activity_row_as_the_app_lists_it_holds_exactly_these_fields() {
-    let dir = tempfile::tempdir().unwrap();
-    let line = r#"{"at":"90000000000","operation":"input","ok":true,"verb":"key","app":"TextEdit","bundleId":"com.apple.TextEdit","label":"⇧⌘Z Page Up","actionCount":2,"actor":"agent","command":"c1","text":"hunter2"}"#;
-    std::fs::write(
-        dir.path().join(atlas_client::activity_log::FILE),
-        format!("{line}\n"),
-    )
-    .unwrap();
-    let rows = atlas_client::activity_log::recent(dir.path(), 5);
-    let shown = activity_row(&rows[0], 100_000_000_000);
-    let keys = shown.as_object().unwrap().keys().collect::<Vec<_>>();
-    assert_eq!(
-        keys,
-        [
-            "actor",
-            "ageSeconds",
-            "app",
-            "bundleId",
-            "capture",
-            "count",
-            "id",
-            "keys",
-            "label",
-            "logicalId",
-            "nothingSent",
-            "ok",
-            "operation",
-            "partial",
-            "reason",
-            "says",
-            "session",
-            "started",
-            "startedAt",
-            "uncertain",
-            "verb"
-        ],
-        "a field added here is added on purpose"
-    );
-    assert_eq!(shown["app"], "TextEdit");
-    assert_eq!(shown["bundleId"], "com.apple.TextEdit");
-    assert_eq!(shown["label"], "⇧⌘Z Page Up");
-    assert_eq!(
-        shown["logicalId"], "c1",
-        "a command's steps share its token"
-    );
-    assert_eq!(shown["keys"], json!([["⇧", "⌘", "Z"], ["Page Up"]]));
-    assert!(!shown.to_string().contains("hunter2"));
 }
 
 #[tokio::test]
