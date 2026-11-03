@@ -20,6 +20,7 @@ pub(super) fn server(dir: &std::path::Path) -> Server {
 
 async fn ask(server: &Server, method: &str, params: Value) -> Value {
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params});
+    server.prepare(&request);
     let mut reply = server.answer(&request).await.unwrap();
     reply.delivered();
     reply.value
@@ -107,6 +108,48 @@ async fn cursor_imported_connections_require_private_authority_without_a_launche
             names(&ask(&server, "tools/list", json!({})).await),
             ["atlas_status", "show_screen", "screen_frame"]
         );
+    }
+}
+
+#[tokio::test]
+async fn an_older_initialize_answer_cannot_restore_capabilities_removed_by_newer_negotiation() {
+    let apps = json!({"extensions": {UI_EXTENSION: {"mimeTypes": [APP_MIME]}}});
+    let initialize = |id: i64, capabilities: &Value| {
+        json!({"jsonrpc":"2.0","id":id,"method":"initialize","params":{
+            "clientInfo":{"name":"cursor-agent"},
+            "capabilities":capabilities
+        }})
+    };
+    for (older, newer, views) in [(apps.clone(), json!({}), false), (json!({}), apps, true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Arc::new(server(dir.path()));
+        let (older, newer) = (initialize(1, &older), initialize(2, &newer));
+        // Transport ingestion prepares each in read order.
+        server.prepare(&older);
+        server.prepare(&newer);
+
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let late = tokio::spawn({
+            let server = server.clone();
+            async move {
+                released.await.unwrap();
+                server.answer(&older).await.unwrap()
+            }
+        });
+        server.answer(&newer).await.unwrap();
+        release.send(()).unwrap();
+        let older = late.await.unwrap();
+        assert_eq!(older.value["id"], 1);
+
+        assert_eq!(server.draws_views(), views);
+        assert!(server.app_views.get().is_some(), "Cursor stays restricted");
+        let listed = names(&ask(&server, "tools/list", json!({})).await);
+        assert_eq!(listed.contains(&"take_control".to_owned()), views);
+        if !views {
+            assert_eq!(listed, ["atlas_status", "show_screen", "screen_frame"]);
+            let refused = ask(&server, "tools/call", json!({"name":"take_control"})).await;
+            assert_eq!(refused["error"]["code"], -32602);
+        }
     }
 }
 

@@ -302,9 +302,9 @@ impl Server {
         self.views.store(views, Ordering::Relaxed);
     }
 
-    /// The answer to one message; none for a notification.
+    /// The answer to one message; none for a notification. Its negotiation
+    /// was already applied by `prepare`, in read order.
     async fn answer(&self, message: &Value) -> Option<guarded::Reply> {
-        self.prepare(message);
         let id = message.get("id")?;
         let params = &message["params"];
 
