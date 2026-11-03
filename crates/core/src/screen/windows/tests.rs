@@ -449,9 +449,8 @@ fn a_window_only_named_as_notification_centers_covers_what_is_under_it() {
         top_at(&listed, 200.0, 200.0, &undocked()).map(|window| window.number),
         Some(1)
     );
-    assert_eq!(
-        ground_at(&listed, 700.0, 600.0, &undocked()),
-        Ground::Unread(&listed[0]),
+    assert!(
+        !clear_at(&listed, 700.0, 600.0, &undocked()),
         "what it shows is not known"
     );
 }
@@ -475,11 +474,6 @@ fn banner_and_widget_regions_block_points_while_proven_empty_regions_pass_throug
     let featured = notification_center(5, WIDGET_LAYER, (8.0, 218.0, 360.0, 180.0));
     let listed = [banner, overlay, app, month, featured];
     let screen = undocked();
-    let number = |ground: Ground<'_>| match ground {
-        Ground::Covered(window) => Some(window.number),
-        Ground::Clear => None,
-        other => panic!("{other:?}"),
-    };
 
     assert_eq!(listed[0].surface(&display()), Some(Surface::Notification));
     assert_eq!(listed[1].surface(&display()), Some(Surface::Overlay));
@@ -496,8 +490,8 @@ fn banner_and_widget_regions_block_points_while_proven_empty_regions_pass_throug
         (190.0, 100.0, "beside a widget", None),
     ] {
         assert_eq!(
-            number(ground_at(&listed, x, y, &screen)),
-            expected,
+            clear_at(&listed, x, y, &screen),
+            expected.is_none(),
             "{what}"
         );
         assert_eq!(
@@ -507,15 +501,18 @@ fn banner_and_widget_regions_block_points_while_proven_empty_regions_pass_throug
         );
     }
     assert!(unobstructed(&listed, 3, 400.0, 400.0, &screen));
-    assert_eq!(ground_at(&listed, 1000.0, 400.0, &screen), Ground::Outside);
-    assert_eq!(ground_at(&listed, -1.0, 400.0, &screen), Ground::Outside);
+    for (x, y) in [(1000.0, 400.0), (-1.0, 400.0), (500.0, 800.0)] {
+        assert!(!clear_at(&[], x, y, &screen), "{x},{y}: off the display");
+    }
+    assert!(
+        clear_at(&[], 999.0, 799.0, &screen),
+        "the display's last point"
+    );
 
     let mut faint = window(6, 750.0, 650.0, 100.0, 100.0);
     faint.alpha = 0.0;
-    let with_faint = [faint];
-    assert_eq!(
-        number(ground_at(&with_faint, 800.0, 700.0, &screen)),
-        Some(6),
+    assert!(
+        !clear_at(&[faint], 800.0, 700.0, &screen),
         "a window that shows nothing is still not the desktop"
     );
 
@@ -523,11 +520,14 @@ fn banner_and_widget_regions_block_points_while_proven_empty_regions_pass_throug
     dock.layer = 20;
     dock.owner = Some("Dock".into());
     let docks = [dock];
-    assert_eq!(number(ground_at(&docks, 300.0, 770.0, &docked())), Some(7));
-    assert_eq!(ground_at(&docks, 300.0, 600.0, &docked()), Ground::Clear);
-    assert_eq!(
-        ground_at(&docks, 300.0, 600.0, &Screen::new(display(), Dock::Unread)),
-        Ground::Unread(&docks[0])
+    assert!(!clear_at(&docks, 300.0, 770.0, &docked()), "a Dock icon");
+    assert!(
+        clear_at(&docks, 300.0, 600.0, &docked()),
+        "beside the icons"
+    );
+    assert!(
+        !clear_at(&docks, 300.0, 600.0, &Screen::new(display(), Dock::Unread)),
+        "a Dock not read"
     );
 }
 

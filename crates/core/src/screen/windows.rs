@@ -390,36 +390,15 @@ pub fn reaches(windows: &[Window], pid: i64, x: f64, y: f64, screen: &Screen) ->
         .any(|window| window.pid == pid && unobstructed(windows, window.number, x, y, screen))
 }
 
-/// What a pointer event at a point meets once past every window that lets
-/// it through.
-#[derive(Debug, PartialEq)]
-pub enum Ground<'a> {
-    /// The empty desktop: inside the display, with no listed window there.
-    Clear,
-    /// Outside the display.
-    Outside,
-    /// This window, a widget among them, covers the point.
-    Covered(&'a Window),
-    /// What this window shows at the point is not known (see
-    /// [`Screen::unread`]).
-    Unread(&'a Window),
-}
-
-/// What is at the point, front to back through `windows`: the frontmost
-/// window there, however faint, that does not let the point through, or the
-/// empty desktop when there is none.
-pub fn ground_at<'a>(windows: &'a [Window], x: f64, y: f64, screen: &Screen) -> Ground<'a> {
-    if !screen.display.contains(x, y) {
-        return Ground::Outside;
-    }
-    match windows
-        .iter()
-        .find(|window| window.bounds.contains(x, y) && !screen.passes(window, x, y))
-    {
-        None => Ground::Clear,
-        Some(window) if screen.unread(window) => Ground::Unread(window),
-        Some(window) => Ground::Covered(window),
-    }
+/// Whether the point is on the empty desktop: inside the display, with no
+/// listed window there, however faint, but those that let it through. A
+/// widget, the Dock where it takes clicks or could not be read, and a window
+/// only named as Notification Center's all keep it from being clear.
+pub fn clear_at(windows: &[Window], x: f64, y: f64, screen: &Screen) -> bool {
+    screen.display.contains(x, y)
+        && !windows
+            .iter()
+            .any(|window| window.bounds.contains(x, y) && !screen.passes(window, x, y))
 }
 
 /// A whole point inside `target` that is [`unobstructed`], preferring points

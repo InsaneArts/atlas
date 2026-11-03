@@ -13,7 +13,7 @@ use atlas_core::{
     screen::{
         elements::Element,
         select::{ElementFilter, shown_name},
-        windows::{self, Bounds, Dock, Ground, Listed, Screen, Surface, Window},
+        windows::{self, Bounds, Dock, Listed, Screen, Surface, Window},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -847,9 +847,8 @@ fn point(
 
 /// A drag drops where [`point`] lets a pointer action land, or, when it
 /// holds the left button and moves the app's own window by its title bar,
-/// on the clear desktop:
-/// inside the display with nothing listed there (see
-/// [`windows::ground_at`]). The move is proven in this very check, from the
+/// on the clear desktop: inside the display with nothing listed there (see
+/// [`windows::clear_at`]). The move is proven in this very check, from the
 /// window on top at the press point and Accessibility finding that window's
 /// title bar there; a widget, the Dock, another window or what could not be
 /// read still refuses.
@@ -869,7 +868,7 @@ fn dropped(
     };
     let screen = Screen::new(display.clone(), look.dock());
     let listed = look.windows().map_err(unreadable_from)?;
-    if windows::ground_at(listed, to.0, to.1, &screen) != Ground::Clear {
+    if !windows::clear_at(listed, to.0, to.1, &screen) {
         return Err(refusal);
     }
     let source = windows::top_at(listed, from.0, from.1, &screen)
