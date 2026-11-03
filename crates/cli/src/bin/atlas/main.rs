@@ -399,8 +399,10 @@ fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
 
         // An agent tool Atlas started in its own process group does not see
         // the terminal's Ctrl-C: stop it too, before saying stopped. No tool
-        // starts after this, and the command stops at its next step.
-        atlas_agents::stop_running();
+        // starts after this, and the command stops at its next step. Stopping
+        // waits for the tools to be reaped, so it runs off the runtime; a
+        // failed join still exits, as the process is ending either way.
+        let _ = tokio::task::spawn_blocking(atlas_agents::stop_running).await;
 
         if let Some(message) = said {
             let _ = console::Term::stderr().show_cursor();
