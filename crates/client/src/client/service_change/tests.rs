@@ -1245,10 +1245,6 @@ async fn checking_jobs_has_a_deadline_and_does_not_treat_a_blocked_read_as_idle(
         .unwrap_err();
     assert_eq!(error.code, Code::Busy);
     assert!(error.error.contains("may still be running"));
-    client
-        .require_jobs_idle(async { Err(Error::new(Code::Daemon, crate::jobs::OLDER)) })
-        .await
-        .unwrap();
 }
 
 #[tokio::test]

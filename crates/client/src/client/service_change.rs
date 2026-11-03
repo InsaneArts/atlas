@@ -91,10 +91,6 @@ impl Client {
     ) -> Result<()> {
         let jobs = match tokio::time::timeout(JOB_CHECK, read).await {
             Ok(Ok(jobs)) => jobs,
-            // A daemon from before background jobs cannot have any.
-            Ok(Err(error)) if error.code == Code::Daemon && error.error == crate::jobs::OLDER => {
-                return Ok(());
-            }
             Ok(Err(error)) => {
                 return Err(busy(format!(
                     "Atlas could not check background jobs: {}",

@@ -90,7 +90,7 @@ fn malformed_job_lists_are_not_reported_as_no_running_jobs() {
         shown_from(&json!({"ok": false, "code": "bad-request"}))
             .unwrap_err()
             .code,
-        Code::Daemon
+        Code::BadRequest
     );
 }
 
@@ -558,7 +558,7 @@ fn stopping_every_job_says_how_many_and_which_are_left() {
 }
 
 #[tokio::test]
-async fn a_jobs_log_is_read_without_control_and_an_older_helper_says_so() {
+async fn a_jobs_log_is_read_without_control_and_a_refusal_keeps_its_code() {
     let dir = tempfile::tempdir().unwrap();
     let client = client_in(dir.path());
     let _held = client.controller.acquire(false).unwrap();
@@ -578,8 +578,7 @@ async fn a_jobs_log_is_read_without_control_and_an_older_helper_says_so() {
 
     let other = JobId::parse("000000000000").unwrap();
     let error = log(&client, &other, 8, None).await.unwrap_err();
-    assert_eq!(error.code, "daemon");
-    assert!(error.error.contains("run atlas restart"));
+    assert_eq!(error.code, "bad-request");
 }
 
 #[tokio::test]

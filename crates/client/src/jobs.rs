@@ -32,7 +32,7 @@ use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
 
 /// What an older helper daemon is told it cannot do.
-pub(crate) const OLDER: &str = "The helper is running an older Atlas that cannot keep background jobs; run atlas restart, then try again";
+const OLDER: &str = "The helper is running an older Atlas that cannot keep background jobs; run atlas restart, then try again";
 /// How often a stop looks at the job while it waits for it to end.
 const POLL: Duration = Duration::from_millis(200);
 /// How long a stop waits beyond its grace for the job to end.
@@ -671,8 +671,7 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
     let request = json!({"op": "job", "action": "stop-all", "reason": reason});
     let reply = match client.transport.call(&request).await {
         Ok(reply) if reply["ok"] == true => reply,
-        // A daemon from before jobs, or none running, keeps none.
-        Ok(reply) if reply["code"] == "bad-request" => return Everyone::default(),
+        // A helper with no daemon running keeps none.
         Err(error) if error.code == Code::Io && !client.transport.path.exists() => {
             return Everyone::default();
         }
@@ -709,7 +708,7 @@ pub async fn stop_every(client: &Client, reason: StopReason) -> Everyone {
     }
 }
 
-/// Single-job reads keep transport failures certain and recognize older daemons
+/// Single-job reads keep transport failures certain and refusals whole
 /// before decoding their operation-specific replies.
 async fn read_one(client: &Client, request: &Value) -> Result<Value> {
     let reply = client
@@ -717,20 +716,10 @@ async fn read_one(client: &Client, request: &Value) -> Result<Value> {
         .call(request)
         .await
         .map_err(Error::certain)?;
-    if reply["ok"] == true && reply["code"] != "bad-request" {
+    if reply["ok"] == true {
         Ok(reply)
     } else {
-        Err(read_refused(&reply))
-    }
-}
-
-/// Why the helper answered a read with `reply`: a request a daemon from
-/// before jobs does not know, or its refusal.
-fn read_refused(reply: &Value) -> Error {
-    if reply["code"] == "bad-request" {
-        Error::new(Code::Daemon, OLDER)
-    } else {
-        refused(reply)
+        Err(refused(&reply))
     }
 }
 
@@ -751,12 +740,7 @@ pub(crate) async fn of_session(
     session: &Key,
     task: Option<&Key>,
 ) -> Result<Vec<JobView>> {
-    let jobs = match shown_all(client).await {
-        Ok(jobs) => jobs,
-        // A daemon from before jobs keeps none.
-        Err(error) if error.code == Code::Daemon && error.error == OLDER => Vec::new(),
-        Err(error) => return Err(error),
-    };
+    let jobs = shown_all(client).await?;
     Ok(jobs
         .iter()
         .filter_map(Shown::job)
@@ -787,7 +771,7 @@ pub(crate) async fn shown_all(client: &Client) -> Result<Vec<Shown>> {
 
 fn shown_from(reply: &Value) -> Result<Vec<Shown>> {
     if reply["ok"] != true {
-        return Err(read_refused(reply));
+        return Err(refused(reply));
     }
     match JobReply::deserialize(reply) {
         Ok(JobReply::Show(Showing::Every { jobs })) => Ok(jobs),
