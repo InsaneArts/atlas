@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 use std::{path::PathBuf, sync::Arc, time::SystemTime};
 use tokio::{net::UnixListener, sync::watch};
 
+pub mod child;
+
 /// A screenshot of the made-up display.
 pub fn synthetic(display: u32, _: Option<CGRect>, _: Option<u32>) -> Result<capture::Shot> {
     assert_eq!(display, 7);

@@ -4,15 +4,14 @@
 //! every process it made.
 #![cfg(target_os = "macos")]
 
-#[path = "jobs/child.rs"]
-mod child;
-
 use atlas_core::{
     process,
     protocol::{Expected, How, JobId, JobStart, JobView, StopReason},
 };
-use atlas_daemon::daemon::job::Jobs;
-use child::{Child, Processes};
+use atlas_daemon::{
+    daemon::job::Jobs,
+    test_support::child::{Child, JOBS, Processes},
+};
 use nix::unistd::Pid;
 use serde_json::Value;
 use std::{
@@ -133,7 +132,7 @@ fn show_job(jobs: &Jobs, id: &JobId) -> Value {
 async fn a_started_job_keeps_running_after_its_request_ends() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let mut child = Child::new();
+    let mut child = Child::new(JOBS);
     let job = ready(&jobs, &mut child, "quiet").await;
     assert_eq!(job["state"], "running");
     assert_eq!(job["name"], "perl");
@@ -179,7 +178,7 @@ async fn a_launch_that_cannot_exec_is_refused_and_leaves_nothing_running() {
 async fn stopping_ends_the_whole_group_and_reports_what_left_it() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let mut child = Child::new();
+    let mut child = Child::new(JOBS);
     let job = ready(&jobs, &mut child, "escape").await;
     let id = id_of(&job);
     let pgid = pid_of(&job);
@@ -241,7 +240,7 @@ async fn stopping_ends_the_whole_group_and_reports_what_left_it() {
 async fn a_job_that_ignores_term_is_killed_after_its_grace() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let mut child = Child::new();
+    let mut child = Child::new(JOBS);
     let job = ready(&jobs, &mut child, "ignore").await;
     let id = id_of(&job);
     // Supervise before expiry, then explicitly expire this owned record's
@@ -342,7 +341,7 @@ async fn a_job_outlives_its_supervisor_and_is_adopted_again() {
 async fn the_leaders_status_is_kept_until_its_group_ends() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let mut child = Child::new();
+    let mut child = Child::new(JOBS);
     let job = ready(&jobs, &mut child, "group").await;
     let id = id_of(&job);
     let descendant = child.message("descendant").await;
@@ -405,7 +404,7 @@ async fn a_job_log_past_its_limit_starts_again() {
         )
         .unwrap(),
     );
-    let mut child = Child::new();
+    let mut child = Child::new(JOBS);
     let job = ready(&jobs, &mut child, "log").await;
     child.message("output").await;
     let id = id_of(&job);
@@ -481,7 +480,7 @@ async fn a_record_that_cannot_be_read_is_shown_and_never_acted_on() {
 async fn a_stop_the_client_leaves_is_finished_by_the_daemon() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let mut child = Child::new();
+    let mut child = Child::new(JOBS);
     let job = ready(&jobs, &mut child, "ignore").await;
     let id = id_of(&job);
     // The client asks, hears TERM was sent, and goes away.

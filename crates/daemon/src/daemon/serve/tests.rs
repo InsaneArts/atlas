@@ -1,5 +1,5 @@
 use super::*;
-use crate::daemon::run::tests::child::Processes;
+use crate::test_support::child::Processes;
 use crate::test_support::{session, synthetic};
 use atlas_core::protocol::{Crop, JobRequest, Region};
 use atlas_core::screen::windows::{Bounds, Dock, Window};

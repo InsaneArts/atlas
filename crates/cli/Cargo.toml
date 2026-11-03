@@ -44,6 +44,7 @@ atlas-agents = { workspace = true, features = ["test-support"] }
 atlas-client = { workspace = true, features = ["test-support"] }
 atlas-control = { workspace = true, features = ["test-support"] }
 atlas-core = { workspace = true, features = ["test-support"] }
+atlas-daemon = { workspace = true, features = ["test-support"] }
 atlas-native = { workspace = true, features = ["test-support"] }
 nix = { workspace = true, features = ["fs", "poll"] }
 rand = { workspace = true, features = ["thread_rng"] }

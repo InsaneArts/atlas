@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Errno qw(EINTR);
 
-my ($events_path, $leader_path, $descendant_path, $mode) = @ARGV;
+my ($events_path, $leader_path, $descendant_path, undef, $mode) = @ARGV;
 open(my $events, '+<', $events_path) or die $!;
 open(my $leader, '+<', $leader_path) or die $!;
 open(my $descendant, '+<', $descendant_path) or die $!;

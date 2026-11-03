@@ -1,6 +1,5 @@
 use super::*;
-pub(in crate::daemon) mod child;
-use child::{Child, Processes};
+use crate::test_support::child::{Child, Processes, RUN};
 use tokio::sync::mpsc;
 
 #[test]
@@ -127,7 +126,7 @@ async fn each_stop_cause_preserves_its_reply_and_escalation() {
         (Some(Cancel::Stopping), true),
         (Some(Cancel::OnConsole), true),
     ] {
-        let mut child = Child::new();
+        let mut child = Child::new(RUN);
         let argv = child.argv("stubborn");
         let (sender, mut receiver) = mpsc::channel(EVENTS);
         let observer = sender.clone();
@@ -230,7 +229,7 @@ async fn each_stop_cause_preserves_its_reply_and_escalation() {
 
 #[tokio::test]
 async fn a_full_output_queue_is_not_a_cancelled_command() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let argv = child.argv("output");
     let (sender, mut receiver) = mpsc::channel(1);
     let observer = sender.clone();
@@ -342,7 +341,7 @@ async fn a_command_streams_merged_output_then_its_exit() {
 
 #[tokio::test]
 async fn a_timeout_ends_the_whole_group_with_sigterm() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let (events, reply) = time_out(&mut child, "term", EVENTS).await;
 
     assert_eq!(reply["timedOut"], true);
@@ -362,7 +361,7 @@ async fn a_timeout_ends_the_whole_group_with_sigterm() {
 /// The leader dies on SIGTERM; a descendant that ignores it is killed too.
 #[tokio::test]
 async fn a_timeout_kills_descendants_that_ignore_sigterm() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let (events, reply) = time_out(&mut child, "group", EVENTS).await;
     assert_eq!(reply["timedOut"], true);
     let group = events[0]["pid"].as_i64().unwrap();
@@ -374,7 +373,7 @@ async fn a_timeout_kills_descendants_that_ignore_sigterm() {
 
 #[tokio::test]
 async fn a_child_exit_does_not_imply_its_pipe_closed() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let argv = child.argv("pipe");
     let (sender, mut receiver) = mpsc::channel(EVENTS);
     let observer = sender.clone();
@@ -434,7 +433,7 @@ async fn a_child_exit_does_not_imply_its_pipe_closed() {
 #[tokio::test]
 async fn cancellation_after_exit_leaves_the_descendant_running() {
     for reason in [Cancel::Left, Cancel::Stopping, Cancel::OnConsole] {
-        let mut child = Child::new();
+        let mut child = Child::new(RUN);
         let argv = child.argv("pipe");
         let (sender, mut receiver) = mpsc::channel(EVENTS);
         let observer = sender.clone();
@@ -490,7 +489,7 @@ async fn cancellation_after_exit_leaves_the_descendant_running() {
 async fn a_wait_failure_keeps_the_outcome_uncertain_and_the_descendant_alive() {
     use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let argv = child.argv("pipe");
     let (sender, mut receiver) = mpsc::channel(EVENTS);
     let observer = sender.clone();
@@ -552,7 +551,7 @@ async fn a_wait_failure_keeps_the_outcome_uncertain_and_the_descendant_alive() {
 /// A client that stops reading cannot stall supervision or the timeout.
 #[tokio::test]
 async fn a_client_that_never_reads_cannot_stall_the_timeout() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let (_, reply) = time_out(&mut child, "flood", 1).await;
 
     assert_eq!(
@@ -563,7 +562,7 @@ async fn a_client_that_never_reads_cannot_stall_the_timeout() {
 
 #[tokio::test]
 async fn a_departed_receiver_leaves_no_owned_group_running() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let argv = child.argv("flood");
     let (sender, mut receiver) = mpsc::channel(1);
     let observer = sender.clone();
@@ -598,7 +597,7 @@ async fn a_departed_receiver_leaves_no_owned_group_running() {
 
 #[tokio::test]
 async fn a_readiness_timeout_leaves_no_foreground_child_running() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let argv = child.argv("unready");
     let (sender, mut receiver) = mpsc::channel(1);
     let observer = sender.clone();
@@ -635,7 +634,7 @@ async fn a_readiness_timeout_leaves_no_foreground_child_running() {
 /// Cancelling ends a command that prints nothing, and its descendants.
 #[tokio::test]
 async fn cancelling_ends_a_quiet_command_and_its_group() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let (sender, mut receiver) = mpsc::channel(EVENTS);
     let observer = sender.clone();
     let argv = child.argv("group");
@@ -670,7 +669,7 @@ async fn cancelling_ends_a_quiet_command_and_its_group() {
 /// unknown.
 #[tokio::test]
 async fn a_stopping_daemon_leaves_the_outcome_unknown() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let (sender, mut receiver) = mpsc::channel(EVENTS);
     let observer = sender.clone();
     let argv = child.argv("quiet");
@@ -741,7 +740,7 @@ async fn an_exhausted_event_budget_drops_output_without_reporting_a_disconnect()
 /// output that cannot be delivered is reported as truncated.
 #[tokio::test]
 async fn the_last_output_reaches_a_slow_client_or_is_reported() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let argv = child.argv("output");
     // One slot: `started` fills it until the controller permits reads.
     let (sender, mut receiver) = mpsc::channel(1);
@@ -781,7 +780,7 @@ async fn the_last_output_reaches_a_slow_client_or_is_reported() {
     assert_eq!(output(&events), "onetwo");
     assert_eq!(reply.get("outputTruncated"), None);
 
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let argv = child.argv("output");
     let (sender, mut never) = mpsc::channel(1);
     let observer = sender.clone();
@@ -952,7 +951,7 @@ async fn a_relative_program_starts_at_home() {
 /// unknown.
 #[tokio::test]
 async fn coming_on_screen_stops_the_command() {
-    let mut child = Child::new();
+    let mut child = Child::new(RUN);
     let (sender, mut receiver) = mpsc::channel(EVENTS);
     let observer = sender.clone();
     let argv = child.argv("quiet");

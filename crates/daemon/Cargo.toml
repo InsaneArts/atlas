@@ -9,7 +9,7 @@ repository.workspace = true
 
 [features]
 # Helpers and hooks for the tests of crates above; never in a shipped build.
-test-support = []
+test-support = ["dep:tempfile"]
 
 [dependencies]
 atlas-core.workspace = true
@@ -20,6 +20,7 @@ nix = { workspace = true, features = ["fs", "process", "signal", "user"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
+tempfile = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 
 [dev-dependencies]
