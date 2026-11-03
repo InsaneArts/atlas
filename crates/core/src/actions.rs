@@ -611,6 +611,8 @@ const _: () = assert!(TYPE_MS * TEXT_MAX as u32 <= BATCH_MS);
 const KEY_MS: u32 = 10;
 /// [`RESOLVE`], spent twice by a referenced click.
 const RESOLVE_MS: u32 = 500;
+// The longest referenced click fits one batch.
+const _: () = assert!(2 * RESOLVE_MS + 5 * CLICK_MS <= BATCH_MS);
 
 /// # Errors
 ///

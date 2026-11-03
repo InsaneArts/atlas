@@ -219,7 +219,7 @@ fn input_refusals_stay_on_their_own_field_and_refuse_the_whole_batch() {
             batch(r#"{"type":"unknown"}"#),
             "actions",
             "invalid-json",
-            "unknown variant `unknown`, expected one of `pointer`, `move`, `click`, `drag`, `scroll`, `type`, `key`, `wait`".into(),
+            "unknown variant `unknown`, expected one of `pointer`, `move`, `click`, `drag`, `scroll`, `type`, `key`, `wait`, `reference`".into(),
         ),
         (
             batch(r#"{"type":"click","x":10,"y":20,"button":"invalid"}"#),
@@ -1892,7 +1892,7 @@ impl Perform for Stand {
             .ok_or_else(|| stale("That look is no longer kept"))
     }
 
-    async fn confirm(&mut self, _: &Resolved) -> Result<()> {
+    async fn confirm(&mut self, _: Resolved) -> Result<()> {
         self.assert_locked();
         let index = self.logged("confirm");
         self.log.push(format!("confirm {index}"));
@@ -2676,7 +2676,7 @@ impl Perform for Blocked {
     async fn resolve(&mut self, _: Reference) -> Result<Resolved> {
         Err(stale("No look is kept here"))
     }
-    async fn confirm(&mut self, _: &Resolved) -> Result<()> {
+    async fn confirm(&mut self, _: Resolved) -> Result<()> {
         Err(stale("No look is kept here"))
     }
     async fn perform(&mut self, _: Action) -> Result<()> {

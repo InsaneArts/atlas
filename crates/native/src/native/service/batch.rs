@@ -41,7 +41,7 @@ pub(super) trait Perform {
     async fn resolve(&mut self, reference: Reference) -> Result<Resolved>;
     /// Refuse unless the element `resolved` names is still the one to click,
     /// once its app was brought forward, asking nothing to move or focus.
-    async fn confirm(&mut self, resolved: &Resolved) -> Result<()>;
+    async fn confirm(&mut self, resolved: Resolved) -> Result<()>;
     /// Carry out one action through posted events or a Dock AXPress.
     async fn perform(&mut self, action: Action) -> Result<()>;
     /// Events posted or AX presses acknowledged so far.
@@ -121,9 +121,8 @@ impl Perform for Engine {
 
     /// Read on a blocking thread under the same guards as a check, as
     /// [`Perform::resolve`] is.
-    async fn confirm(&mut self, resolved: &Resolved) -> Result<()> {
+    async fn confirm(&mut self, resolved: Resolved) -> Result<()> {
         self.check()?;
-        let resolved = resolved.clone();
         let epoch = self.epoch.clone();
         let guard = self.preparation_guard();
         checked_preparation(
@@ -284,10 +283,11 @@ async fn step(
         count,
         modifiers,
     };
-    let role = require_within(engine, &resolved.expect, click.target(), budget, prepare).await?;
-    engine.confirm(&resolved).await?;
+    let expect = resolved.expect.clone();
+    let role = require_within(engine, &expect, click.target(), budget, prepare).await?;
+    engine.confirm(resolved).await?;
     // Whatever came in front meanwhile is seen by a check that only reads.
-    require_within(engine, &resolved.expect, click.target(), budget, false).await?;
+    require_within(engine, &expect, click.target(), budget, false).await?;
     engine.perform(click).await?;
     Ok(role)
 }

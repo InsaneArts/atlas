@@ -365,7 +365,6 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
     ));
     assert_eq!(decoded.actions()[0].target(), Target::Nothing);
     assert!(!Kind::Reference.personal());
-    assert!(2 * RESOLVE_MS + 5 * CLICK_MS <= BATCH_MS);
 
     for (action, problem) in [
         (
