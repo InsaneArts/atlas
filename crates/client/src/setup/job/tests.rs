@@ -303,31 +303,47 @@ fn answered_client(directory: &Path) -> (Client, atlas_control::Controller) {
     (client, controller)
 }
 
-/// A daemon listening at `socket`, bound before anything asks it.
-fn listening(socket: &Path) -> tokio::net::UnixListener {
-    tokio::net::UnixListener::bind(socket).unwrap()
-}
-
-/// A daemon that tells `asked` of each request, and answers it with the
-/// next of `answers` once the test gives one.
-async fn stand_in(
-    listener: tokio::net::UnixListener,
-    asked: std::sync::mpsc::Sender<()>,
-    mut answers: tokio::sync::mpsc::UnboundedReceiver<Value>,
+/// A daemon at `socket`, served from a thread of its own so that it
+/// outlasts any request, and bound before this returns. It tells the
+/// returned receiver of each request, and answers it with the next value
+/// the returned sender gives.
+fn stand_in(
+    socket: &Path,
+) -> (
+    std::sync::mpsc::Receiver<()>,
+    tokio::sync::mpsc::UnboundedSender<Value>,
 ) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    loop {
-        let (peer, _) = listener.accept().await.unwrap();
-        let mut peer = BufReader::new(peer);
-        let mut line = String::new();
-        peer.read_line(&mut line).await.unwrap();
-        asked.send(()).unwrap();
-        let reply = answers.recv().await.unwrap();
-        peer.get_mut()
-            .write_all(format!("{reply}\n").as_bytes())
-            .await
+    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let (asked, asks) = std::sync::mpsc::channel();
+    let (answer, mut answers) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
-    }
+        runtime.block_on(async move {
+            let listener = tokio::net::UnixListener::from_std(listener).unwrap();
+            loop {
+                let (peer, _) = listener.accept().await.unwrap();
+                let mut peer = BufReader::new(peer);
+                let mut line = String::new();
+                peer.read_line(&mut line).await.unwrap();
+                if asked.send(()).is_err() {
+                    return;
+                }
+                let Some(reply) = answers.recv().await else {
+                    return;
+                };
+                peer.get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+    });
+    (asks, answer)
 }
 
 /// The stand-in's answer when daemon process `pid` runs.
@@ -440,18 +456,12 @@ fn only_a_new_daemon_answering_clears_a_replacement() {
     drop(controller.quarantine().unwrap());
     let other = controller.pending().unwrap();
     let (helper, agent, layout) = test_agent(directory.path());
-    let socket = client.transport.path.clone();
-    let (asked, asks) = std::sync::mpsc::channel();
-    let (answer, answers) = tokio::sync::mpsc::unbounded_channel();
+    let (asks, answer) = stand_in(&client.transport.path);
     let requester = Requester::start(move || async move {
-        let listener = listening(&socket);
-        let replaced = replace_job(&client, &helper, agent, &layout, |_| {
+        replace_job(&client, &helper, agent, &layout, |_| {
             Ok(json!({"ok": true}))
-        });
-        tokio::select! {
-            replaced = replaced => replaced,
-            () = stand_in(listener, asked, answers) => unreachable!(),
-        }
+        })
+        .await
     });
 
     asks.recv_timeout(WATCHDOG).unwrap();
@@ -520,7 +530,8 @@ fn a_helper_installation_is_settled_only_for_a_requester_that_hears_it_succeed()
 }
 
 #[test]
-fn a_replacement_abandoned_while_installing_or_awaiting_its_daemon_stays_pending() {
+fn a_replacement_abandoned_while_installing_or_awaiting_its_daemon_keeps_control_until_its_daemon_answers()
+ {
     use crate::test_support::{Requester, WATCHDOG};
     for during in ["installation", "readiness"] {
         let directory = tempfile::tempdir().unwrap();
@@ -535,16 +546,13 @@ fn a_replacement_abandoned_while_installing_or_awaiting_its_daemon_stays_pending
             "none"
         };
         let run = held_at(held, true, &actions, entered, released);
-        let socket = client.transport.path.clone();
-        let (asked, asks) = std::sync::mpsc::channel();
-        let (answer, answers) = tokio::sync::mpsc::unbounded_channel();
+        let (asks, answer) = stand_in(&client.transport.path);
         let requester = Requester::start(move || async move {
-            let listener = listening(&socket);
-            tokio::select! {
-                replaced = replace_job(&client, &helper, agent, &layout, run) => replaced,
-                () = stand_in(listener, asked, answers) => unreachable!(),
-            }
+            replace_job(&client, &helper, agent, &layout, run).await
         });
+        let owned = |controller: &atlas_control::Controller| {
+            excluded(controller) && controller.unresolved().unwrap().is_empty()
+        };
 
         asks.recv_timeout(WATCHDOG).unwrap();
         answer.send(daemon(100)).unwrap();
@@ -559,19 +567,32 @@ fn a_replacement_abandoned_while_installing_or_awaiting_its_daemon_stays_pending
             let _ = release.send(());
         }
         assert!(responsive, "{during}: the runtime waited");
-        assert!(excluded(&controller), "{during}: another controller got in");
+        assert!(owned(&controller), "{during}: another controller got in");
         assert_eq!(controller.pending().unwrap().len(), 1, "{during}");
-        assert!(controller.unresolved().unwrap().is_empty(), "{during}");
 
         requester.abandon();
+        assert!(
+            owned(&controller),
+            "{during}: control ended with the request"
+        );
         if during == "installation" {
-            assert!(excluded(&controller), "control ended with the request");
-            assert!(controller.unresolved().unwrap().is_empty(), "claim let go");
             release.send(()).unwrap();
+            asks.recv_timeout(WATCHDOG)
+                .expect("the new daemon was never looked for");
+            assert!(owned(&controller), "control ended before readiness");
         }
+        // The same daemon still answering is no new one: control stays.
+        answer.send(daemon(100)).unwrap();
+        asks.recv_timeout(WATCHDOG).unwrap();
+        assert!(
+            owned(&controller),
+            "{during}: control ended before readiness"
+        );
+
+        answer.send(daemon(200)).unwrap();
         assert!(
             needs_recovery(&controller),
-            "{during}: a replacement no new daemon confirmed was settled"
+            "{during}: a replacement nobody heard of was settled"
         );
         assert_eq!(
             *actions.lock().unwrap(),

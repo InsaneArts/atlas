@@ -245,13 +245,25 @@ async fn new_daemon_answers(client: &Client, before: &Value) -> bool {
     }
 }
 
+/// [`new_daemon_answers`] from a blocking worker, on a runtime of its own:
+/// the look goes on while the runtime that started the worker ends, which
+/// waits for it. A runtime that cannot be made sees no new daemon.
+fn new_daemon_answers_on_worker(client: &Client, before: &Value) -> bool {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .is_ok_and(|runtime| runtime.block_on(new_daemon_answers(client, before)))
+}
+
 /// Replace the helper's background job an earlier Atlas wrote with this
 /// version's, from outside the daemon it runs (through sudo, as installing
 /// it does): the earlier definition is kept as a backup, and comes back if
 /// the new one cannot go in. Pending until a new daemon answers, like a
-/// restart. The replacement runs on a worker that holds exclusion and the
-/// claim until it is done, and exclusion is held on until the new daemon is
-/// checked; a caller that stops waiting leaves it pending.
+/// restart. The replacement and the look for the new daemon run on a worker
+/// that holds exclusion and the claim until both are done, even when nobody
+/// waits for it any more; the claim is settled, still under exclusion, only
+/// once its success is heard here, so a caller that stops waiting leaves it
+/// pending.
 async fn replace_job(
     client: &Client,
     helper: &Account,
@@ -261,20 +273,21 @@ async fn replace_job(
 ) -> Result<()> {
     let exclusion = client.service_change(true).await?;
     let before = client.status().await["daemon"]["pid"].clone();
-    let controller = client.controller.clone();
+    let (controller, looking) = (client.controller.clone(), client.clone());
     let logs = layout.logs();
-    let (_exclusion, pending) = on_worker(move || {
+    let (_exclusion, pending, answered) = on_worker(move || {
         let pending = controller.quarantine()?;
         {
             // Executor claims bind to the thread that dispatches them.
             let _executors = atlas_control::ExecutorClaims::new(std::slice::from_ref(&pending))?;
             install_job(run, agent, &logs).map_err(Error::uncertain)?;
         }
-        Ok((exclusion, pending))
+        let answered = new_daemon_answers_on_worker(&looking, &before);
+        Ok((exclusion, pending, answered))
     })
     .await?;
 
-    if !new_daemon_answers(client, &before).await {
+    if !answered {
         return Err(problem(format!(
             "The helper's background job was replaced but the helper did not start again. Its \
              log is {} in {}'s account; run atlas init again after checking it.",
