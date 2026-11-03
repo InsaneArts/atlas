@@ -424,7 +424,7 @@ impl Service {
 
         let mut reply = json!({
             "ok": true,
-            "performed": count,
+            "performed": done.performed(count),
             "app": app,
             "bundleId": bundle_id,
         });

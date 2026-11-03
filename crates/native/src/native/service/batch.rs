@@ -230,6 +230,14 @@ pub(super) struct Done {
     pub(super) acted: Option<Acted>,
 }
 
+impl Done {
+    /// How many of the batch's `count` actions were sent: all but an action
+    /// on an element that already read as asked, for which nothing was.
+    pub(super) fn performed(&self, count: usize) -> usize {
+        count - usize::from(self.acted.is_some_and(|acted| !acted.changed))
+    }
+}
+
 /// Carry out `actions` in order on `engine`, which the caller holds
 /// locked, each checked against `expect` just before it starts: a key
 /// after the batch's first against the app alone, since an earlier key

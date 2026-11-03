@@ -2464,6 +2464,7 @@ async fn an_element_action_is_carried_out_with_no_focus_check_and_no_event() {
             .await
             .unwrap()
     };
+    assert_eq!(done.performed(2), 2, "both were sent");
     assert_eq!(done.acted.unwrap().verification, Verification::Matched);
 
     let stand = stand.lock().await;
@@ -2496,6 +2497,7 @@ async fn an_element_already_as_asked_is_matched_with_nothing_sent() {
     let done = super::run(&mut *engine, &gate, vec![pressed()], None)
         .await
         .unwrap();
+    assert_eq!(done.performed(1), 0, "nothing was sent");
     let acted = done.acted.unwrap();
     assert_eq!(acted.verification, Verification::Matched);
     assert!(!acted.changed);
