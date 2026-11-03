@@ -57,13 +57,13 @@ fn a_non_utf8_host_path_panics_during_candidate_assembly() {
 
 #[tokio::test]
 async fn a_short_or_long_probe_result_is_refused_before_association() {
-    for (probe, line) in [(Probe::Paths, "-frx\n"), (Probe::Variables, "defined\n")] {
+    for (script, line) in [(PATH_PROBE, "-frx\n"), (ENV_PROBE, "defined\n")] {
         for count in [1, 3] {
             let directory = tempfile::tempdir().unwrap();
             let (client, helper) = Helper::client(directory.path(), UID);
             let args = ["first".into(), "second".into()];
             let error = helper
-                .serve(probe.run(&client, &args), |_| {
+                .serve(probe(&client, script, &args), |_| {
                     Some(completed(&line.repeat(count)))
                 })
                 .await
@@ -181,8 +181,8 @@ fn association_refuses_short_and_long_batches_without_changing_candidates() {
 async fn empty_probe_arguments_make_no_request() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());
-    for probe in [Probe::Paths, Probe::Variables] {
-        assert!(probe.run(&client, &[]).await.unwrap().is_empty());
+    for script in [PATH_PROBE, ENV_PROBE] {
+        assert!(probe(&client, script, &[]).await.unwrap().is_empty());
     }
 }
 

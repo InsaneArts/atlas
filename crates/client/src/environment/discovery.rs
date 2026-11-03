@@ -15,6 +15,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+/// Whether each path is a file or folder the helper can read, write or run.
 /// Every path is a separate positional argument. No selected name, path or
 /// environment value is interpreted as shell syntax or emitted by this probe.
 const PATH_PROBE: &str = r#"
@@ -28,6 +29,7 @@ for item do
     printf '%s\n' "-$flags"
 done
 "#;
+/// Whether each variable is defined in the helper's inherited environment.
 const ENV_PROBE: &str = r#"
 for item do
     if /usr/bin/printenv "$item" >/dev/null 2>&1; then
@@ -38,61 +40,38 @@ for item do
 done
 "#;
 
-/// The two fixed scripts discovery runs in the helper. Both only test paths
-/// or look up variable names, so they take no control and leave nothing
-/// pending when their reply is lost.
-#[derive(Clone, Copy)]
-enum Probe {
-    /// Whether each path is a file or folder the helper can read, write or run.
-    Paths,
-    /// Whether each variable is defined in the helper's inherited environment.
-    Variables,
-}
-
-impl Probe {
-    fn script(self) -> &'static str {
-        match self {
-            Probe::Paths => PATH_PROBE,
-            Probe::Variables => ENV_PROBE,
-        }
+/// Run `script`, [`PATH_PROBE`] or [`ENV_PROBE`], over `args` in the
+/// helper: one output line per argument. Both only test paths or look up
+/// variable names, so they take no control and leave nothing pending when
+/// their reply is lost.
+async fn probe(client: &Client, script: &str, args: &[String]) -> Result<Vec<String>> {
+    if args.is_empty() {
+        return Ok(Vec::new());
     }
 
-    /// Run this probe over `args` in the helper: one output line per
-    /// argument.
-    async fn run(self, client: &Client, args: &[String]) -> Result<Vec<String>> {
-        if args.is_empty() {
-            return Ok(Vec::new());
-        }
+    let mut argv = vec!["/bin/sh".into(), "-c".into(), script.into(), "sh".into()];
+    argv.extend_from_slice(args);
 
-        let mut argv = vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            self.script().into(),
-            "sh".into(),
-        ];
-        argv.extend_from_slice(args);
-
-        let reply = client.run(argv, Run::inspect().within(RUN_TIMEOUT)).await?;
-        if reply["exitCode"] != 0 || reply["timedOut"] == true || !reply["signal"].is_null() {
-            return Err(problem("Helper discovery did not complete"));
-        }
-
-        let output = run_output(&reply, 16384).map_err(|error| match error {
-            OutputError::Malformed => invalid(),
-            OutputError::Oversized => problem("Discovery output exceeded its limit"),
-        })?;
-
-        let lines = String::from_utf8(output)
-            .map_err(|_| invalid())?
-            .lines()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        if lines.len() != args.len() {
-            return Err(incomplete());
-        }
-
-        Ok(lines)
+    let reply = client.run(argv, Run::inspect().within(RUN_TIMEOUT)).await?;
+    if reply["exitCode"] != 0 || reply["timedOut"] == true || !reply["signal"].is_null() {
+        return Err(problem("Helper discovery did not complete"));
     }
+
+    let output = run_output(&reply, 16384).map_err(|error| match error {
+        OutputError::Malformed => invalid(),
+        OutputError::Oversized => problem("Discovery output exceeded its limit"),
+    })?;
+
+    let lines = String::from_utf8(output)
+        .map_err(|_| invalid())?
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if lines.len() != args.len() {
+        return Err(incomplete());
+    }
+
+    Ok(lines)
 }
 
 /// The most of each kind one inspection may select.
@@ -452,15 +431,14 @@ pub(crate) async fn inspect(
         .chain(references)
         .map(|p| p.to_str().map(str::to_owned).ok_or_else(invalid))
         .collect::<Result<Vec<_>>>()?;
-    let observed = Probe::Paths
-        .run(client, &args)
+    let observed = probe(client, PATH_PROBE, &args)
         .await?
         .iter()
         .map(|s| Access::from_flags(s))
         .collect::<Result<Vec<_>>>()?;
     let references = associate(&mut selections, references, observed)?;
 
-    let defined = Probe::Variables.run(client, environment).await?;
+    let defined = probe(client, ENV_PROBE, environment).await?;
     if defined.iter().any(|s| s != "defined" && s != "undefined") {
         return Err(invalid());
     }
@@ -472,7 +450,7 @@ pub(crate) async fn inspect(
         ));
     }
 
-    // Probe::run has checked exact cardinality before any association.
+    // The probe has checked exact cardinality before any association.
     let environment = environment
         .iter()
         .zip(defined)
