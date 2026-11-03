@@ -401,6 +401,10 @@ pub const FOCUS_FIELD: &str = "focus-field";
 /// each look, so a click can name one element of it by reference.
 pub const LOOKS: &str = "looks";
 
+/// The input-service capability that acts on an element of a look through
+/// Accessibility alone, and says whether it reads as asked afterwards.
+pub const ELEMENT_ACTIONS: &str = "element-actions";
+
 /// Whether an input service's hello lists `name` among its capabilities.
 pub fn has_capability(native: &Value, name: &str) -> bool {
     capability_names(native)

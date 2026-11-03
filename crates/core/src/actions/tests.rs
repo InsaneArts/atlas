@@ -394,7 +394,7 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
     ] {
         assert_eq!(
             check(&later).unwrap_err().error,
-            "Action 2 was refused and nothing was sent: a referenced click comes first in its batch"
+            "Action 2 was refused and nothing was sent: an action on a ref comes first in its batch"
         );
     }
     let slow = serde_json::json!([
@@ -415,5 +415,137 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
         serde_json::json!([{"type": "reference", "ref": "8123abc.1", "x": 1}]),
     ] {
         assert_eq!(check(&malformed).unwrap_err().code, Code::InvalidJson);
+    }
+}
+
+/// Each action on a referenced element has a wire word of its own, names
+/// no point, is never the person's to send, comes first in its batch and
+/// is charged the whole time it may take.
+#[test]
+fn an_action_on_an_element_is_typed_by_its_word_and_checked_with_its_whole_batch() {
+    use serde_json::json;
+    let display = Display {
+        width: 100.0,
+        height: 100.0,
+        scale: 1.0,
+    };
+    let check = |batch: &Value| Batch::decode(batch).and_then(|batch| batch.check(&display));
+    let one = |action: Value| -> ElementAction {
+        let batch = json!([action]);
+        check(&batch).unwrap();
+        let decoded = Batch::decode(&batch).unwrap();
+        let [action] = decoded.actions() else {
+            panic!("one action")
+        };
+        assert_eq!(action.target(), Target::Nothing);
+        let (reference, done) = action.element_action().unwrap();
+        assert_eq!(Some(reference), action.reference());
+        assert_eq!(reference.to_string(), "8123abc12");
+        done
+    };
+
+    let option = Reference::parse("8123abc14").unwrap();
+    for (action, done) in [
+        (
+            json!({"type": "press", "ref": "8123abc12"}),
+            ElementAction::Press,
+        ),
+        (
+            json!({"type": "set-value", "ref": "8123abc12", "value": ""}),
+            ElementAction::SetValue(String::new()),
+        ),
+        (
+            json!({"type": "check", "ref": "8123abc12"}),
+            ElementAction::Check(true),
+        ),
+        (
+            json!({"type": "uncheck", "ref": "8123abc12"}),
+            ElementAction::Check(false),
+        ),
+        (
+            json!({"type": "pick", "ref": "8123abc12", "option": "8123abc14"}),
+            ElementAction::Pick(option),
+        ),
+        (
+            json!({"type": "expand", "ref": "8123abc12"}),
+            ElementAction::Expand(true),
+        ),
+        (
+            json!({"type": "collapse", "ref": "8123abc12"}),
+            ElementAction::Expand(false),
+        ),
+        (
+            json!({"type": "scroll-into-view", "ref": "8123abc12"}),
+            ElementAction::ScrollIntoView,
+        ),
+    ] {
+        let kind = || Kind::deserialize(&action).unwrap();
+        assert!(!kind().personal(), "{action}");
+        assert_eq!(kind().remembered_point(&action), None);
+        assert_eq!(one(action.clone()), done);
+    }
+    let click = json!([{"type": "reference", "ref": "8123abc12"}]);
+    assert!(
+        Batch::decode(&click).unwrap().actions()[0]
+            .element_action()
+            .is_none()
+    );
+    assert!(ACT_MS + 4 * KEY_MS <= BATCH_MS);
+
+    for (action, problem) in [
+        (
+            json!({"type": "set-value", "ref": "8123abc12", "value": "a".repeat(VALUE_MAX + 1)}),
+            "a value is at most 4096 characters",
+        ),
+        (
+            json!({"type": "pick", "ref": "8123abc12", "option": "8123abd14"}),
+            "an option is another element of its control's listing",
+        ),
+        (
+            json!({"type": "pick", "ref": "8123abc12", "option": "8123abc12"}),
+            "an option is another element of its control's listing",
+        ),
+    ] {
+        assert_eq!(
+            check(&json!([action])).unwrap_err().error,
+            format!("Action 1 was refused and nothing was sent: {problem}")
+        );
+    }
+    assert_eq!(
+        check(&json!([{"type": "key", "key": "tab"}, {"type": "check", "ref": "8123abc12"}]))
+            .unwrap_err()
+            .error,
+        "Action 2 was refused and nothing was sent: an action on a ref comes first in its batch"
+    );
+    check(&json!([{"type": "check", "ref": "8123abc12"}, {"type": "key", "key": "tab"}])).unwrap();
+
+    for malformed in [
+        json!([{"type": "press", "ref": "Save"}]),
+        json!([{"type": "press"}]),
+        json!([{"type": "press", "ref": "8123abc12", "value": "x"}]),
+        json!([{"type": "set-value", "ref": "8123abc12"}]),
+        json!([{"type": "pick", "ref": "8123abc12"}]),
+        json!([{"type": "setvalue", "ref": "8123abc12", "value": "x"}]),
+    ] {
+        assert_eq!(
+            check(&malformed).unwrap_err().code,
+            Code::InvalidJson,
+            "{malformed}"
+        );
+    }
+}
+
+#[test]
+fn a_verification_is_one_of_three_words() {
+    for (verification, word) in [
+        (Verification::Matched, "matched"),
+        (Verification::Mismatch, "mismatch"),
+        (Verification::NotChecked, "not-checked"),
+    ] {
+        assert_eq!(serde_json::to_value(verification).unwrap(), word);
+        assert_eq!(
+            Verification::deserialize(Value::from(word)).unwrap(),
+            verification
+        );
     }
 }

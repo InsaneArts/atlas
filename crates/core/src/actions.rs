@@ -1,7 +1,8 @@
 //! The input actions a batch may hold, the app a batch may be for, and the
 //! bounds every batch is checked against before anything is sent:
 //! coordinates on the display, known keys and modifiers, and a total that
-//! finishes within two seconds.
+//! finishes within two seconds. An action on a referenced element is done
+//! through Accessibility alone, and its reply says whether it reads as asked.
 use crate::{
     error::{Code, Error, Result},
     screen::elements::Reference,
@@ -16,13 +17,13 @@ use std::time::Duration;
 macro_rules! actions {
     ($($kind:ident { $($(#[$attr:meta])* $field:ident: $ty:ty),* $(,)? } => $personal:expr),* $(,)?) => {
         #[derive(Debug, Deserialize)]
-        #[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+        #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
         pub enum Action {
             $($kind { $($(#[$attr])* $field: $ty),* }),*
         }
 
         #[derive(Deserialize)]
-        #[serde(tag = "type", rename_all = "lowercase")]
+        #[serde(tag = "type", rename_all = "kebab-case")]
         pub enum Kind { $($kind),* }
 
         impl Kind {
@@ -99,6 +100,68 @@ actions! {
         #[serde(default)]
         modifiers: Vec<String>,
     } => false,
+    // The actions done to a referenced element through Accessibility.
+    Press {
+        #[serde(rename = "ref")]
+        reference: Reference,
+    } => false,
+    SetValue {
+        #[serde(rename = "ref")]
+        reference: Reference,
+        value: String,
+    } => false,
+    Check {
+        #[serde(rename = "ref")]
+        reference: Reference,
+    } => false,
+    Uncheck {
+        #[serde(rename = "ref")]
+        reference: Reference,
+    } => false,
+    Pick {
+        #[serde(rename = "ref")]
+        reference: Reference,
+        option: Reference,
+    } => false,
+    Expand {
+        #[serde(rename = "ref")]
+        reference: Reference,
+    } => false,
+    Collapse {
+        #[serde(rename = "ref")]
+        reference: Reference,
+    } => false,
+    ScrollIntoView {
+        #[serde(rename = "ref")]
+        reference: Reference,
+    } => false,
+}
+
+/// What an action does to a referenced element through Accessibility: no
+/// pointer or key event, and no request for focus. A state is asked for,
+/// never toggled: an element already in it is left as it is.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ElementAction {
+    Press,
+    /// Set its value to this text, or to the number it reads as.
+    SetValue(String),
+    /// Leave it checked, or unchecked.
+    Check(bool),
+    /// Select this element of it: one of its options.
+    Pick(Reference),
+    /// Leave it expanded, or collapsed.
+    Expand(bool),
+    ScrollIntoView,
+}
+
+/// Whether an element reads back as an action on it asked: `not-checked`
+/// when nothing it reports can tell, as after a press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Verification {
+    Matched,
+    Mismatch,
+    NotChecked,
 }
 
 /// The destination an action must reach before it can send input.
@@ -139,9 +202,67 @@ impl Action {
             },
             // A reference names no point until the input service finds its
             // element again; it is then checked as the click it becomes, and
-            // one never found again is never posted.
-            Self::Wait { .. } | Self::Reference { .. } => Target::Nothing,
+            // one never found again is never posted. An action done through
+            // Accessibility sends no event and needs no focus.
+            Self::Wait { .. }
+            | Self::Reference { .. }
+            | Self::Press { .. }
+            | Self::SetValue { .. }
+            | Self::Check { .. }
+            | Self::Uncheck { .. }
+            | Self::Pick { .. }
+            | Self::Expand { .. }
+            | Self::Collapse { .. }
+            | Self::ScrollIntoView { .. } => Target::Nothing,
         }
+    }
+
+    /// The element it names by reference, when it names one.
+    pub fn reference(&self) -> Option<Reference> {
+        match self {
+            Self::Reference { reference, .. }
+            | Self::Press { reference }
+            | Self::SetValue { reference, .. }
+            | Self::Check { reference }
+            | Self::Uncheck { reference }
+            | Self::Pick { reference, .. }
+            | Self::Expand { reference }
+            | Self::Collapse { reference }
+            | Self::ScrollIntoView { reference } => Some(*reference),
+            Self::Pointer { .. }
+            | Self::Move { .. }
+            | Self::Click { .. }
+            | Self::Drag { .. }
+            | Self::Scroll { .. }
+            | Self::Type { .. }
+            | Self::Key { .. }
+            | Self::Wait { .. } => None,
+        }
+    }
+
+    /// The element it acts on through Accessibility and what it does to
+    /// it; None for an action that sends events.
+    pub fn element_action(&self) -> Option<(Reference, ElementAction)> {
+        let action = match self {
+            Self::Press { .. } => ElementAction::Press,
+            Self::SetValue { value, .. } => ElementAction::SetValue(value.clone()),
+            Self::Check { .. } => ElementAction::Check(true),
+            Self::Uncheck { .. } => ElementAction::Check(false),
+            Self::Pick { option, .. } => ElementAction::Pick(*option),
+            Self::Expand { .. } => ElementAction::Expand(true),
+            Self::Collapse { .. } => ElementAction::Expand(false),
+            Self::ScrollIntoView { .. } => ElementAction::ScrollIntoView,
+            Self::Pointer { .. }
+            | Self::Move { .. }
+            | Self::Click { .. }
+            | Self::Drag { .. }
+            | Self::Scroll { .. }
+            | Self::Type { .. }
+            | Self::Key { .. }
+            | Self::Wait { .. }
+            | Self::Reference { .. } => return None,
+        };
+        Some((self.reference()?, action))
     }
 }
 
@@ -152,7 +273,19 @@ impl Kind {
         let (x, y) = match self {
             Self::Click | Self::Scroll | Self::Move => ("x", "y"),
             Self::Drag => ("fromX", "fromY"),
-            Self::Pointer | Self::Type | Self::Key | Self::Wait | Self::Reference => return None,
+            Self::Pointer
+            | Self::Type
+            | Self::Key
+            | Self::Wait
+            | Self::Reference
+            | Self::Press
+            | Self::SetValue
+            | Self::Check
+            | Self::Uncheck
+            | Self::Pick
+            | Self::Expand
+            | Self::Collapse
+            | Self::ScrollIntoView => return None,
         };
         Some((wire[x].as_f64()?, wire[y].as_f64()?))
     }
@@ -591,6 +724,12 @@ pub const SCROLL_SETTLE: Duration = Duration::from_millis(50);
 /// element again: once before its app is brought forward, and once more
 /// just before its click.
 pub const RESOLVE: Duration = Duration::from_millis(RESOLVE_MS as u64);
+/// The longest one action on a referenced element through Accessibility
+/// takes in all: finding it again twice, reading what it supports and its
+/// state, the action itself and reading it back.
+pub const ACT: Duration = Duration::from_millis(ACT_MS as u64);
+/// The most characters a value set on an element holds.
+pub const VALUE_MAX: usize = 4096;
 
 /// The batch budget and each action's share of it, in milliseconds. Each
 /// share covers the engine's pauses for that action plus posting time.
@@ -613,6 +752,8 @@ const KEY_MS: u32 = 10;
 const RESOLVE_MS: u32 = 500;
 // The longest referenced click fits one batch.
 const _: () = assert!(2 * RESOLVE_MS + 5 * CLICK_MS <= BATCH_MS);
+/// [`ACT`].
+const ACT_MS: u32 = 1000;
 
 /// # Errors
 ///
@@ -629,8 +770,8 @@ pub fn check(actions: &[Action], display: &Display) -> Result<()> {
         // A reference found stale after earlier actions were sent would be
         // refused too late to send nothing, so it comes first.
         let problem = problem.or(unless(
-            index == 0 || !matches!(action, Action::Reference { .. }),
-            "a referenced click comes first in its batch",
+            index == 0 || action.reference().is_none(),
+            "an action on a ref comes first in its batch",
         ));
 
         if let Some(problem) = problem {
@@ -750,6 +891,26 @@ impl Action {
                 clicks(*count, modifiers),
                 2 * RESOLVE_MS + u32::from(*count) * CLICK_MS,
             ),
+            Self::SetValue { value, .. } => (
+                unless(
+                    value.chars().count() <= VALUE_MAX,
+                    "a value is at most 4096 characters",
+                ),
+                ACT_MS,
+            ),
+            Self::Pick { reference, option } => (
+                unless(
+                    option.look == reference.look && option.index != reference.index,
+                    "an option is another element of its control's listing",
+                ),
+                ACT_MS,
+            ),
+            Self::Press { .. }
+            | Self::Check { .. }
+            | Self::Uncheck { .. }
+            | Self::Expand { .. }
+            | Self::Collapse { .. }
+            | Self::ScrollIntoView { .. } => (None, ACT_MS),
         }
     }
 }
