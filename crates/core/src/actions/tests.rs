@@ -355,25 +355,25 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
     let check =
         |batch: &serde_json::Value| Batch::decode(batch).and_then(|batch| batch.check(&display));
 
-    let one = serde_json::json!([{"type": "reference", "ref": "kfpaq12", "count": 2}]);
+    let one = serde_json::json!([{"type": "reference", "ref": "8123c12", "count": 2}]);
     check(&one).unwrap();
     let decoded = Batch::decode(&one).unwrap();
     assert!(matches!(
         decoded.actions(),
         [Action::Reference { reference, button: Button::Left, count: 2, modifiers }]
-            if reference.to_string() == "kfpaq12" && modifiers.is_empty()
+            if reference.to_string() == "8123c12" && modifiers.is_empty()
     ));
     assert_eq!(decoded.actions()[0].target(), Target::Nothing);
     assert!(!Kind::Reference.personal());
-    assert!(RESOLVE_MS + 5 * CLICK_MS <= BATCH_MS);
+    assert!(2 * RESOLVE_MS + 5 * CLICK_MS <= BATCH_MS);
 
     for (action, problem) in [
         (
-            serde_json::json!({"type": "reference", "ref": "kfpaq12", "count": 0}),
+            serde_json::json!({"type": "reference", "ref": "8123c12", "count": 0}),
             "a click is 1 to 5 clicks",
         ),
         (
-            serde_json::json!({"type": "reference", "ref": "kfpaq12", "modifiers": ["hyper"]}),
+            serde_json::json!({"type": "reference", "ref": "8123c12", "modifiers": ["hyper"]}),
             "a modifier is one of cmd, ctrl, alt, shift and fn",
         ),
     ] {
@@ -385,12 +385,12 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
 
     for later in [
         serde_json::json!([
-            {"type": "reference", "ref": "kfpaq12"},
-            {"type": "reference", "ref": "kfpaq13"},
+            {"type": "reference", "ref": "8123c12"},
+            {"type": "reference", "ref": "8123c13"},
         ]),
         serde_json::json!([
             {"type": "key", "key": "return"},
-            {"type": "reference", "ref": "kfpaq12"},
+            {"type": "reference", "ref": "8123c12"},
         ]),
     ] {
         assert_eq!(
@@ -399,7 +399,7 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
         );
     }
     let slow = serde_json::json!([
-        {"type": "reference", "ref": "kfpaq12"},
+        {"type": "reference", "ref": "8123c12"},
         {"type": "wait", "ms": 250},
         {"type": "wait", "ms": 250},
         {"type": "wait", "ms": 250},
@@ -411,9 +411,9 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
     );
 
     for malformed in [
-        serde_json::json!([{"type": "reference", "ref": "kfpaq012"}]),
+        serde_json::json!([{"type": "reference", "ref": "8123c012"}]),
         serde_json::json!([{"type": "reference"}]),
-        serde_json::json!([{"type": "reference", "ref": "kfpaq1", "x": 1}]),
+        serde_json::json!([{"type": "reference", "ref": "8123c1", "x": 1}]),
     ] {
         assert_eq!(check(&malformed).unwrap_err().code, Code::InvalidJson);
     }

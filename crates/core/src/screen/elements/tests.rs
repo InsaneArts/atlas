@@ -1,42 +1,49 @@
 use super::*;
 
 #[test]
-fn every_look_name_is_five_letters_that_read_back_as_the_same_look() {
-    for number in [
-        0,
-        1,
-        25,
-        26,
-        675,
-        104_729,
-        LOOK_NAMES - 1,
-        LOOK_NAMES,
-        u64::MAX,
+fn every_look_is_its_service_and_count_and_reads_back_as_the_same_look() {
+    for (sequence, written) in [
+        (0, "8123a"),
+        (25, "8123z"),
+        (26, "8123aa"),
+        (701, "8123zz"),
+        (702, "8123aaa"),
+        (u64::MAX, "8123gkgwbylwrxtlpp"),
     ] {
-        let look = Look::new(number);
-        let name = look.to_string();
-        assert_eq!(name.len(), 5, "{name}");
-        assert!(name.bytes().all(|byte| byte.is_ascii_lowercase()), "{name}");
-        assert_eq!(Look::parse(&name), Some(look), "{name}");
+        let look = Look {
+            service: 8123,
+            sequence,
+        };
+        assert_eq!(look.to_string(), written);
+        assert_eq!(Look::parse(written), Some(look), "{written}");
     }
-    assert_eq!(Look::new(0).to_string(), "aaaaa");
-    assert_eq!(Look::new(LOOK_NAMES - 1).to_string(), "zzzzz");
-    assert_eq!(Look::new(LOOK_NAMES), Look::new(0));
+    let last = Look {
+        service: 8123,
+        sequence: u64::MAX,
+    };
+    assert_eq!(last.after(), None, "the count never comes around again");
+    assert_eq!(Look::parse("8123a").unwrap().after(), Look::parse("8123b"));
 }
 
 #[test]
 fn a_reference_is_its_look_and_index_written_exactly_one_way() {
-    let reference = Reference::parse("kfpaq12").unwrap();
-    assert_eq!(reference.look, Look::parse("kfpaq").unwrap());
+    let reference = Reference::parse("8123c12").unwrap();
+    assert_eq!(
+        reference.look,
+        Look {
+            service: 8123,
+            sequence: 2
+        }
+    );
     assert_eq!(reference.index, 12);
-    assert_eq!(reference.to_string(), "kfpaq12");
-    assert_eq!(Reference::parse("kfpaq0").unwrap().index, 0);
+    assert_eq!(reference.to_string(), "8123c12");
+    assert_eq!(Reference::parse("8123c0").unwrap().index, 0);
     assert_eq!(
         serde_json::to_value(reference).unwrap(),
-        serde_json::json!("kfpaq12")
+        serde_json::json!("8123c12")
     );
     assert_eq!(
-        serde_json::from_value::<Reference>(serde_json::json!("kfpaq12")).unwrap(),
+        serde_json::from_value::<Reference>(serde_json::json!("8123c12")).unwrap(),
         reference
     );
 }
@@ -45,24 +52,28 @@ fn a_reference_is_its_look_and_index_written_exactly_one_way() {
 fn anything_but_a_listed_reference_is_no_reference() {
     for text in [
         "",
-        "kfpaq",
-        "kfp12",
-        "kfpaqa12",
-        "KFPAQ12",
-        "kfpaq012",
-        "kfpaq+1",
-        "kfpaq-1",
-        "kfpaq1.5",
-        "kfpaq 1",
-        " kfpaq1",
-        "kfpaq.e4",
+        "8123c",
+        "c12",
+        "0c12",
+        "08123c12",
+        "8123C12",
+        "8123c012",
+        "8123c+1",
+        "+8123c1",
+        "8123c1.5",
+        "8123c 1",
+        " 8123c1",
+        "8123c.e4",
+        "8123c1a2",
         "é123",
-        "kfpaq99999999999999999999999",
+        "8123c99999999999999999999999",
+        "99999999999c1",
+        "8123zzzzzzzzzzzzzzzzzzzz1",
     ] {
         assert_eq!(Reference::parse(text), None, "{text:?}");
     }
     for value in [
-        serde_json::json!("kfpaq"),
+        serde_json::json!("8123c"),
         serde_json::json!(12),
         serde_json::json!(null),
     ] {

@@ -588,7 +588,8 @@ pub const TYPE_GAP: Duration = Duration::from_millis(2);
 /// The pause between moving the pointer to a point and scrolling there.
 pub const SCROLL_SETTLE: Duration = Duration::from_millis(50);
 /// The longest the input service reads an app to find a referenced
-/// element again.
+/// element again: once before its app is brought forward, and once more
+/// just before its click.
 pub const RESOLVE: Duration = Duration::from_millis(RESOLVE_MS as u64);
 
 /// The batch budget and each action's share of it, in milliseconds. Each
@@ -608,8 +609,8 @@ const TYPE_MS: u32 = 7;
 // The longest text one action types fits one batch.
 const _: () = assert!(TYPE_MS * TEXT_MAX as u32 <= BATCH_MS);
 const KEY_MS: u32 = 10;
-/// [`RESOLVE`]: finding a referenced element again before its click.
-const RESOLVE_MS: u32 = 1000;
+/// [`RESOLVE`], spent twice by a referenced click.
+const RESOLVE_MS: u32 = 500;
 
 /// # Errors
 ///
@@ -745,7 +746,7 @@ impl Action {
                 count, modifiers, ..
             } => (
                 clicks(*count, modifiers),
-                RESOLVE_MS + u32::from(*count) * CLICK_MS,
+                2 * RESOLVE_MS + u32::from(*count) * CLICK_MS,
             ),
         }
     }

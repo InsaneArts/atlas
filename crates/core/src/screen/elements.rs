@@ -154,51 +154,72 @@ pub fn why(stops: impl IntoIterator<Item = Stop>) -> Option<String> {
     }
 }
 
-/// How many letters name a look.
-const LOOK_LETTERS: usize = 5;
-
-/// How many looks there are names for.
-pub const LOOK_NAMES: u64 = 26u64.pow(LOOK_LETTERS as u32);
-
-/// The name of one look the input service keeps: five lowercase letters.
+/// One look the input service keeps: the service process that took it, and
+/// which of that process's looks it is, counted from 0 and never reused.
+/// Written as the process ID followed by the count in letters (`a` to `z`,
+/// then `aa`), such as `8123c`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Look(u32);
+pub struct Look {
+    pub service: u32,
+    pub sequence: u64,
+}
 
 impl Look {
-    /// The `number`th name, counted around the names there are.
-    pub fn new(number: u64) -> Self {
-        Self(u32::try_from(number % LOOK_NAMES).unwrap_or_default())
+    /// The look `word` names, if it is written exactly as a listing writes it.
+    pub fn parse(word: &str) -> Option<Self> {
+        let (service, letters) = word.split_at(word.find(|c: char| !c.is_ascii_digit())?);
+        let sequence = (!letters.is_empty() && letters.bytes().all(|b| b.is_ascii_lowercase()))
+            .then(|| {
+                letters.bytes().try_fold(0u64, |number, byte| {
+                    number
+                        .checked_mul(26)?
+                        .checked_add(u64::from(byte - b'a') + 1)
+                })
+            })
+            .flatten()?;
+        Some(Self {
+            service: decimal(service).filter(|service| *service > 0)?,
+            sequence: sequence - 1,
+        })
     }
 
-    /// The look `word` names, if it is a look's name.
-    pub fn parse(word: &str) -> Option<Self> {
-        (word.len() == LOOK_LETTERS && word.bytes().all(|byte| byte.is_ascii_lowercase())).then(
-            || {
-                Self(
-                    word.bytes()
-                        .fold(0, |number, byte| number * 26 + u32::from(byte - b'a')),
-                )
-            },
-        )
+    /// The look after this one in the same service; none once they run out.
+    pub fn after(self) -> Option<Self> {
+        Some(Self {
+            sequence: self.sequence.checked_add(1)?,
+            ..self
+        })
     }
 }
 
 impl fmt::Display for Look {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut letters = [b'a'; LOOK_LETTERS];
-        let mut number = self.0;
-        for letter in letters.iter_mut().rev() {
-            *letter = b'a' + (number % 26) as u8;
+        let mut letters = Vec::new();
+        let mut number = u128::from(self.sequence) + 1;
+        while number > 0 {
+            number -= 1;
+            letters.push(char::from(b'a' + (number % 26) as u8));
             number /= 26;
         }
+        write!(f, "{}", self.service)?;
         letters
             .iter()
-            .try_for_each(|letter| fmt::Write::write_char(f, char::from(*letter)))
+            .rev()
+            .try_for_each(|letter| fmt::Write::write_char(f, *letter))
     }
 }
 
+/// A number written in decimal digits as a listing writes one: no sign, no
+/// leading zero.
+fn decimal<T: std::str::FromStr>(digits: &str) -> Option<T> {
+    let written = !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'));
+    written.then(|| digits.parse().ok()).flatten()
+}
+
 /// One element of one look, as `atlas elements` names it: the look's name
-/// followed by the element's index in it, such as `kfpaq12`.
+/// followed by the element's index in it, such as `8123c12`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Reference {
     pub look: Look,
@@ -208,13 +229,12 @@ pub struct Reference {
 impl Reference {
     /// The reference `text` is, if it is one exactly as a listing gives it.
     pub fn parse(text: &str) -> Option<Self> {
-        let (look, index) = text.split_at_checked(LOOK_LETTERS)?;
-        let digits = !index.is_empty()
-            && index.bytes().all(|byte| byte.is_ascii_digit())
-            && (index == "0" || !index.starts_with('0'));
+        let letters = text.find(|c: char| !c.is_ascii_digit())?;
+        let index = letters + text[letters..].find(|c: char| c.is_ascii_digit())?;
+        let (look, index) = text.split_at(index);
         Some(Self {
             look: Look::parse(look)?,
-            index: digits.then(|| index.parse().ok()).flatten()?,
+            index: decimal(index)?,
         })
     }
 }
