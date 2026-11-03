@@ -223,7 +223,7 @@ fn input_refusals_stay_on_their_own_field_and_refuse_the_whole_batch() {
             batch(r#"{"type":"unknown"}"#),
             "actions",
             "invalid-json",
-            "unknown variant `unknown`, expected one of `pointer`, `move`, `click`, `drag`, `scroll`, `type`, `key`, `wait`, `reference`".into(),
+            "unknown variant `unknown`, expected one of `pointer`, `move`, `click`, `drag`, `scroll`, `type`, `key`, `wait`, `reference`, `press`, `set-value`, `check`, `uncheck`, `pick`, `expand`, `collapse`, `scroll-into-view`".into(),
         ),
         (
             batch(r#"{"type":"click","x":10,"y":20,"button":"invalid"}"#),
@@ -1922,7 +1922,7 @@ impl Perform for Stand {
         let index = self.logged("act");
         self.log.push(format!("act {index}"));
         self.acted.push((reference, action, window));
-        match self.acts.clone() {
+        match self.acts {
             None => Err(stale("That look is no longer kept")),
             Some(Err(code)) => {
                 Err(Error::new(code, "The app did not acknowledge the action").uncertain())

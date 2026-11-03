@@ -23,10 +23,10 @@ mod system;
 mod text;
 mod tree;
 
+pub(super) use actions::{Acted, act_on};
 #[cfg(test)]
 pub(crate) use atlas_core::screen::elements::{Element, Limits};
 pub(crate) use atlas_core::screen::geometry::Bounds;
-pub(super) use actions::{Acted, act_on};
 pub(super) use bring::{bring, check_application, described, target_application, title_bar};
 pub(super) use ffi::act;
 pub(super) use keyboard::{
