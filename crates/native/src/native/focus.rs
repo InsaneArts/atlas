@@ -7,7 +7,7 @@
 use super::ax::{self, Asked, Focused, Judged, Keyboard, Status, Unread, Within};
 use crate::native::windows as native_windows;
 use atlas_core::{
-    actions::Expect,
+    actions::{Button, Expect},
     error::{Code, Error, Result},
     process::Start,
     screen::{
@@ -421,9 +421,9 @@ fn require(
         Need::Point(x, y) | Need::Pointer(x, y) => active(expect, look)
             .and_then(|()| point(expect, (x, y), Spot::At, display, look))
             .map(|()| None),
-        Need::Drag { from, to } => active(expect, look)
+        Need::Drag { from, to, button } => active(expect, look)
             .and_then(|()| point(expect, from, Spot::At, display, look))
-            .and_then(|()| dropped(expect, from, to, display, look))
+            .and_then(|()| dropped(expect, (from, to), button, display, look))
             .map(|()| None),
     };
     let unread = outcome
@@ -846,7 +846,8 @@ fn point(
 }
 
 /// A drag drops where [`point`] lets a pointer action land, or, when it
-/// moves the app's own window by its title bar, on the clear desktop:
+/// holds the left button and moves the app's own window by its title bar,
+/// on the clear desktop:
 /// inside the display with nothing listed there (see
 /// [`windows::ground_at`]). The move is proven in this very check, from the
 /// window on top at the press point and Accessibility finding that window's
@@ -854,13 +855,15 @@ fn point(
 /// read still refuses.
 fn dropped(
     expect: &Expect,
-    from: (f64, f64),
-    to: (f64, f64),
+    (from, to): ((f64, f64), (f64, f64)),
+    button: Button,
     display: &Bounds,
     look: &mut impl Look,
 ) -> Result<()> {
     let refusal = match point(expect, to, Spot::Drop, display, look) {
         Ok(()) => return Ok(()),
+        // Only the left button moves a window by its title bar.
+        Err(refusal) if button != Button::Left => return Err(refusal),
         Err(refusal) if Reason::of(&refusal) == Some(Reason::Point) => refusal,
         Err(refusal) => return Err(refusal),
     };

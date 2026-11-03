@@ -1737,6 +1737,7 @@ fn pointer_needs() -> [Need; 2] {
         Need::Drag {
             from: (30.0, 60.0),
             to: (40.0, 70.0),
+            button: atlas_core::actions::Button::Left,
         },
     ]
 }
@@ -1823,6 +1824,7 @@ fn a_point_three_pixels_outside_the_named_document_refuses_before_readiness_or_w
         Need::Drag {
             from: (701.0, 310.0),
             to: (300.0, 310.0),
+            button: atlas_core::actions::Button::Left,
         },
     ] {
         let mut fake = Fake::new();
@@ -2167,6 +2169,7 @@ fn a_focused_sheet_blocks_pointer_and_drag_preparation_in_an_inactive_app() {
         Need::Drag {
             from: (20.0, 260.0),
             to: (60.0, 80.0),
+            button: atlas_core::actions::Button::Left,
         },
     ] {
         for expect in [named(), Expect::new(812).unwrap()] {

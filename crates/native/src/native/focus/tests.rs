@@ -247,6 +247,7 @@ fn remembered_targeting_uses_the_same_point_as_focus_admission() {
             Need::Drag {
                 from: (10.0, 20.0),
                 to: (30.0, 40.0),
+                button: atlas_core::actions::Button::Left,
             },
             true,
         ),
@@ -455,6 +456,7 @@ fn a_desktop_widget_is_named_as_what_covers_the_point() {
     let drag = Need::Drag {
         from: (150.0, 150.0),
         to: (50.0, 50.0),
+        button: atlas_core::actions::Button::Left,
     };
     let error = require(&expect(), drag, &display(), &mut look(), later()).unwrap_err();
     assert!(
@@ -547,6 +549,7 @@ fn a_drag_is_refused_when_it_would_drop_on_the_dock() {
     let drag = |to| Need::Drag {
         from: (300.0, 650.0),
         to,
+        button: atlas_core::actions::Button::Left,
     };
     assert!(docked_need(APP, &icons(), drag((400.0, 700.0))).is_ok());
 
@@ -570,6 +573,7 @@ fn a_drag_is_refused_when_it_would_drop_on_the_dock() {
     let from_icon = Need::Drag {
         from: (300.0, 770.0),
         to: (400.0, 700.0),
+        button: atlas_core::actions::Button::Left,
     };
     assert_eq!(
         refusal(docked_need(APP, &icons(), from_icon))["found"]["app"],
@@ -596,7 +600,8 @@ fn each_action_needs_what_it_touches_first() {
         need(json!({"type": "drag", "fromX": 5, "fromY": 6, "toX": 7, "toY": 8})),
         Need::Drag {
             from: (5.0, 6.0),
-            to: (7.0, 8.0)
+            to: (7.0, 8.0),
+            button: atlas_core::actions::Button::Left,
         },
         "a drag needs its start and its drop"
     );
@@ -1066,6 +1071,7 @@ fn pointer_preparation_accepts_an_exposed_point_beside_an_overlapping_floating_p
         Need::Drag {
             from: (120.0, 120.0),
             to: (130.0, 130.0),
+            button: atlas_core::actions::Button::Left,
         },
     ] {
         let panel = Window {
@@ -1090,6 +1096,7 @@ fn pointer_verification_accepts_an_active_app_without_reading_window_focus() {
             Need::Drag {
                 from: (120.0, 120.0),
                 to: (130.0, 130.0),
+                button: atlas_core::actions::Button::Left,
             },
         ] {
             let mut look = Seen::focused(focused).showing(vec![document()]);
@@ -1110,6 +1117,7 @@ fn pointer_preparation_refuses_a_point_covered_by_a_same_app_floating_panel() {
         Need::Drag {
             from: (200.0, 200.0),
             to: (120.0, 120.0),
+            button: atlas_core::actions::Button::Left,
         },
     ] {
         let panel = Window {
@@ -1750,7 +1758,11 @@ fn a_drag_is_checked_at_its_press_point_only() {
     let drag = |from, to| {
         require(
             &in_document(),
-            Need::Drag { from, to },
+            Need::Drag {
+                from,
+                to,
+                button: atlas_core::actions::Button::Left,
+            },
             &display(),
             &mut Seen::focused(Some(APP)).showing(listed.clone()),
             later(),
@@ -1788,6 +1800,7 @@ fn moving(to: (f64, f64)) -> Need {
     Need::Drag {
         from: (300.0, 110.0),
         to,
+        button: atlas_core::actions::Button::Left,
     }
 }
 
@@ -1844,6 +1857,7 @@ fn a_drag_onto_the_desktop_without_proof_of_a_title_bar_move_is_refused() {
     let on_the_menu_bar = Need::Drag {
         from: (300.0, 10.0),
         to: (800.0, 600.0),
+        button: atlas_core::actions::Button::Left,
     };
     let mut listed = desktop();
     listed.insert(0, menu_bar());
@@ -1965,6 +1979,26 @@ fn each_check_proves_the_move_again() {
         "the window's title is no longer under the press point"
     );
     assert_eq!(look.title_reads, 2);
+}
+
+#[test]
+fn only_a_left_button_title_bar_drag_may_drop_on_the_desktop() {
+    for (button, moves) in [("left", true), ("right", false), ("middle", false)] {
+        let action: Action = serde_json::from_value(json!({
+            "type": "drag",
+            "fromX": 300,
+            "fromY": 110,
+            "toX": 800,
+            "toY": 600,
+            "button": button,
+        }))
+        .unwrap();
+        let (outcome, _) = moved_with(Ok(Some(4120)), action.target(), desktop());
+        assert_eq!(outcome.is_ok(), moves, "{button}: {outcome:?}");
+        if !moves {
+            assert_eq!(refusal(outcome)["reason"], "point", "{button}");
+        }
+    }
 }
 
 #[test]
