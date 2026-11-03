@@ -84,39 +84,44 @@ fn a_described_window_is_the_one_its_frame_kind_and_title_leave() {
     let panel = placed(6, 3, Some("Fonts"), 1.0);
     let faint = placed(7, 3, None, 0.0);
     let listed = [panel.clone(), document.clone()];
-    let at = |listed: &[Window], title, kind| described(listed, 8, &frame(), title, kind);
+    let floating = Some("AXFloatingWindow");
+    let at = |listed: &[Window], title, subrole| described(listed, 8, &frame(), title, subrole);
 
-    assert_eq!(at(&listed, None, Kind::Floating), Listed::One(6));
+    assert_eq!(at(&listed, None, floating), Listed::One(6));
     assert_eq!(
-        at(&listed, None, Kind::Other),
+        at(&listed, None, None),
         Listed::Several,
         "a document window may be raised above the ordinary layer"
     );
-    assert_eq!(at(&listed, Some("Fonts"), Kind::Other), Listed::One(6));
+    assert_eq!(at(&listed, Some("Fonts"), None), Listed::One(6));
     assert_eq!(
-        at(&[faint, document.clone()], None, Kind::Other),
+        at(&[faint, document.clone()], None, None),
         Listed::Several,
         "a faint window at the same place still counts"
     );
     assert_eq!(
-        at(std::slice::from_ref(&document), None, Kind::Floating),
+        at(std::slice::from_ref(&document), None, floating),
         Listed::Missing
     );
-    assert_eq!(at(&[document], None, Kind::Other), Listed::One(5));
-    assert_eq!(
-        described(&listed, 9, &frame(), None, Kind::Other),
-        Listed::Missing
-    );
+    assert_eq!(at(&[document], None, None), Listed::One(5));
+    assert_eq!(described(&listed, 9, &frame(), None, None), Listed::Missing);
 }
 
 #[test]
-fn kinds_follow_the_subrole_and_rule_out_layers() {
-    assert_eq!(Kind::of(Some("AXStandardWindow")), Kind::Other);
-    assert_eq!(Kind::of(Some("AXDialog")), Kind::Other);
-    assert_eq!(Kind::of(Some("AXFloatingWindow")), Kind::Floating);
-    assert_eq!(Kind::of(None), Kind::Other);
-    assert!(!Kind::Floating.admits(0) && Kind::Floating.admits(3));
-    assert!(Kind::Other.admits(0) && Kind::Other.admits(101));
+fn only_a_floating_subrole_rules_out_the_ordinary_layer() {
+    let ordinary = [placed(5, 0, None, 1.0)];
+    let raised = [placed(6, 3, None, 1.0)];
+    let high = [placed(7, 101, None, 1.0)];
+    let at = |listed: &[Window], subrole| described(listed, 8, &frame(), None, subrole);
+
+    for subrole in [None, Some("AXStandardWindow"), Some("AXDialog")] {
+        assert_eq!(at(&ordinary, subrole), Listed::One(5), "{subrole:?}");
+        assert_eq!(at(&high, subrole), Listed::One(7), "{subrole:?}");
+    }
+    for subrole in [Some("AXFloatingWindow"), Some("AXSystemFloatingWindow")] {
+        assert_eq!(at(&ordinary, subrole), Listed::Missing, "{subrole:?}");
+        assert_eq!(at(&raised, subrole), Listed::One(6), "{subrole:?}");
+    }
 }
 
 fn window(number: i64, x: f64, y: f64, width: f64, height: f64) -> Window {

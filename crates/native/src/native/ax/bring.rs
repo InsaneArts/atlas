@@ -16,7 +16,7 @@ use atlas_core::{
         elements::Element,
         geometry::Bounds,
         select::{ElementFilter, NameMatch},
-        windows::{self, Kind, Listed, Window},
+        windows::{self, Listed, Window},
     },
 };
 use objc2_application_services::AXError;
@@ -240,7 +240,7 @@ pub(in crate::native) fn described(
         pid,
         frame,
         window.title.as_deref(),
-        Kind::of(window.subrole.as_deref()),
+        window.subrole.as_deref(),
     )
 }
 

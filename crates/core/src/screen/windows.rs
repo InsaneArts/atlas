@@ -121,36 +121,6 @@ impl Window {
     }
 }
 
-/// What kind of window Accessibility says a window is, by its subrole,
-/// which tells at which layers the window list can show it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Kind {
-    /// A floating panel, never at the ordinary layer.
-    Floating,
-    /// A document window, a dialog, a sheet or anything else: at the
-    /// ordinary layer, or above it where its app raised it, so no layer is
-    /// ruled out.
-    Other,
-}
-
-impl Kind {
-    /// The kind a window's subrole names.
-    pub fn of(subrole: Option<&str>) -> Self {
-        match subrole {
-            Some("AXFloatingWindow" | "AXSystemFloatingWindow") => Self::Floating,
-            _ => Self::Other,
-        }
-    }
-
-    /// Whether a window of this kind can be listed at `layer`.
-    fn admits(self, layer: i64) -> bool {
-        match self {
-            Self::Floating => layer != 0,
-            Self::Other => true,
-        }
-    }
-}
-
 /// Which listed window a window Accessibility describes is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Listed {
@@ -175,18 +145,22 @@ fn framed<'a>(
 }
 
 /// The one listed window a window Accessibility describes is: of every
-/// window of process `pid` at its `frame` (see [`framed`]), those whose
-/// layer its `kind` admits and whose title, when both are known, holds the
-/// other's (Chrome adds its own name to what Accessibility reports).
+/// window of process `pid` at its `frame` (see [`framed`]), those at a
+/// layer its `subrole` allows and whose title, when both are known, holds
+/// the other's (Chrome adds its own name to what Accessibility reports). A
+/// floating panel is never at the ordinary layer; any other window, a
+/// document, dialog or sheet, may be raised above it, so no layer is ruled
+/// out.
 pub fn described(
     windows: &[Window],
     pid: i64,
     frame: &Bounds,
     title: Option<&str>,
-    kind: Kind,
+    subrole: Option<&str>,
 ) -> Listed {
+    let floating = matches!(subrole, Some("AXFloatingWindow" | "AXSystemFloatingWindow"));
     let mut matching = framed(windows, pid, frame).filter(|window| {
-        kind.admits(window.layer)
+        !(floating && window.layer == 0)
             && match (window.title.as_deref(), title) {
                 (Some(listed), Some(title)) => title.contains(listed) || listed.contains(title),
                 _ => true,

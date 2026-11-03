@@ -390,7 +390,7 @@ pub(super) fn sheet_window(
 ) -> Option<Bounds> {
     match (role, frame) {
         (Some("AXSheet"), Some(frame)) => {
-            match windows::described(listed, pid, frame, None, windows::Kind::Other) {
+            match windows::described(listed, pid, frame, None, None) {
                 windows::Listed::One(_) => Some(frame.clone()),
                 windows::Listed::Several => None,
                 windows::Listed::Missing => {
