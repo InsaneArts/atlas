@@ -3109,6 +3109,9 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::cell::RefCell;
 
+    // Made once, before any operation is timed: a process's first PNG
+    // starts macOS's image framework, which can take seconds.
+    let png = STANDARD.encode(atlas_native::native::capture::sample_png(10, 10));
     for named in [false, true] {
         for command in 0..4 {
             for change in 0..10 {
@@ -3133,7 +3136,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                 }, |request| {
                     if request["op"] == "screenshot" {
                         let mut reply = json!({
-                            "ok": true, "png": STANDARD.encode(atlas_native::native::capture::sample_png(10, 10)),
+                            "ok": true, "png": png,
                             "width": 10, "height": 10,
                         });
                         if request["pid"] == 812 {
