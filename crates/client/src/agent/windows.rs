@@ -1,11 +1,20 @@
 //! The helper's on-screen windows: which ones a command is about, read
 //! through its daemon, listed, and waited for until one appears or
 //! none is left.
-use crate::client::{Client, WINDOW_LOOKUP};
+use super::{
+    elements::{Scanned, app_elements_within, compact},
+    target::{Absent, Target, target_expect},
+};
+use crate::client::{Client, WINDOW_LOOKUP, require_looks};
 use atlas_core::{
     error::{Code, Error, Result},
     name::same_text,
-    screen::windows::Window,
+    screen::{
+        geometry::Bounds,
+        select::ElementFilter,
+        wait::{Judged, State, Why, judge},
+        windows::Window,
+    },
 };
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
@@ -131,6 +140,177 @@ pub async fn wait(
 
         tokio::time::sleep((deadline - observed).min(Duration::from_millis(250))).await;
     }
+}
+
+/// How long a wait rests between two looks.
+const POLL: Duration = Duration::from_millis(250);
+
+/// The longest one scan of a wait may take.
+const SCAN: Duration = Duration::from_secs(5);
+
+/// Look at the target app's elements until what `filter` picks shows
+/// `state`, as [`judge`] tells it. The timeout is a deadline for starting a
+/// look, and a zero timeout means one. Each scan is stopped after what is
+/// left of the deadline, at least half a second; finding the app and the
+/// confirming look keep their own few seconds, so the last look may end a
+/// little after the deadline, and counts. Each look reads the app through the
+/// helper's daemon and keeps nothing; once one shows the state, the input
+/// service looks once more and keeps that look, which must show it too, so
+/// the reply names an element by a ref the agent can act on at once. An
+/// app that shows no window yet has nothing to match; one that quit has
+/// nothing left of what `gone` waits for.
+///
+/// # Errors
+///
+/// Refuses a wait with neither `--name` nor `--role`, and returns identity,
+/// target and accessibility-read failures. A timeout is a `wait-failed`
+/// reply saying what the last look saw. Waiting sends nothing.
+pub async fn wait_for_element(
+    client: &Client,
+    target: &Target,
+    filter: &ElementFilter,
+    state: &State,
+    timeout: Duration,
+) -> Result<Value> {
+    if filter.name.is_none() && filter.role.is_none() {
+        return Err(Error::new(
+            Code::Usage,
+            "Wait for an element by --name, --role or both",
+        ));
+    }
+
+    let started = Instant::now();
+    let deadline = started
+        .checked_add(timeout)
+        .ok_or_else(|| Error::new(Code::Usage, "That --timeout is too long to wait"))?;
+
+    loop {
+        // Each scan gets what is left of the deadline (at least half a
+        // second, at most the five a scan usually has); a zero timeout is one
+        // whole observation.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let budget = if timeout.is_zero() {
+            SCAN
+        } else {
+            remaining.clamp(Duration::from_millis(500), SCAN)
+        };
+        let why = match observe(client, target, filter, state, budget).await? {
+            Observed::Met(found) => {
+                let mut said = json!({
+                    "ok": true,
+                    "waitedMs": atlas_core::time::ms(started.elapsed()),
+                    "state": state.word(),
+                    "matched": true,
+                });
+                if let Some((look, element)) = found {
+                    said["look"] = json!(look);
+                    said["element"] = element;
+                }
+                return Ok(said);
+            }
+            Observed::Unmet(why) => why,
+        };
+
+        let observed = Instant::now();
+        if timeout.is_zero() || observed >= deadline {
+            return Ok(json!(
+                Error::new(
+                    Code::WaitFailed,
+                    format!("{}: {}", state.missed(), why.says())
+                )
+                .with("timedOut", json!(true))
+                .with("state", json!(state.word()))
+                .with("last", json!({"why": why, "says": why.says()}))
+            ));
+        }
+
+        tokio::time::sleep((deadline - observed).min(POLL)).await;
+    }
+}
+
+/// What one look, confirmed by a kept one when it shows the state, saw.
+enum Observed {
+    /// The state holds; the kept look and the element it is about, when
+    /// the state names one.
+    Met(Option<(String, Value)>),
+    Unmet(Why),
+}
+
+/// One look at the target app's elements for `state`.
+async fn observe(
+    client: &Client,
+    target: &Target,
+    filter: &ElementFilter,
+    state: &State,
+    budget: Duration,
+) -> Result<Observed> {
+    let verified = client.verify().await?;
+    let display = &verified.session().epoch.display;
+    let display = Bounds::display(display.width, display.height);
+    let expect = match target_expect(client, &verified, target).await {
+        Ok(expect) => expect,
+        // An app that shows no window, or no longer runs, has none of its
+        // elements on screen.
+        Err(error) if Absent::of(&error) => {
+            return Ok(match state {
+                State::Gone => Observed::Met(None),
+                _ => Observed::Unmet(Why::None),
+            });
+        }
+        Err(error) => return Err(error),
+    };
+
+    // A scan its budget stopped saw only part of the app, if anything.
+    let Some(scanned) = app_elements_within(client, &verified, expect.pid(), budget).await? else {
+        return Ok(Observed::Unmet(Why::Incomplete));
+    };
+    let index = match judged(&scanned, filter, state, &display) {
+        Judged::Met(index) => index,
+        Judged::Unmet(why) => return Ok(Observed::Unmet(why)),
+    };
+    if index.is_none() {
+        return Ok(Observed::Met(None));
+    }
+
+    // The kept look is the one the reply is about: it must show the state.
+    require_looks(&verified)?;
+    let kept = client
+        .look(&verified, async {
+            Scanned::from_reply(client.look_at(&verified, &expect).await?)
+        })
+        .await?;
+    let Some(look) = kept.look else {
+        return Err(Error::new(
+            Code::Elements,
+            "The input service named no look",
+        ));
+    };
+    match judged(&kept, filter, state, &display) {
+        Judged::Met(Some(index)) => {
+            let element = kept
+                .elements
+                .iter()
+                .find(|element| element.index == index)
+                .map(|element| {
+                    let mut listed = compact(element, &mut Vec::new());
+                    if let Some(listed) = listed.as_object_mut() {
+                        listed.remove("window");
+                    }
+                    listed
+                });
+            Ok(Observed::Met(
+                element.map(|element| (look.to_string(), element)),
+            ))
+        }
+        Judged::Met(None) => Ok(Observed::Met(None)),
+        Judged::Unmet(why) => Ok(Observed::Unmet(why)),
+    }
+}
+
+/// [`judge`] on `scanned`, whose coverage is unknown unless its reply said.
+fn judged(scanned: &Scanned, filter: &ElementFilter, state: &State, display: &Bounds) -> Judged {
+    let incomplete = scanned.incomplete || !scanned.coverage_told;
+    judge(&scanned.elements, incomplete, filter, state, display)
 }
 
 /// How long one look at the window list may take with `remaining` left to

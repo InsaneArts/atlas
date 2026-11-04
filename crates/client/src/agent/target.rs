@@ -138,7 +138,8 @@ pub(super) async fn target_among(
                 format!(
                     "No app in the helper has the process ID {pid}; run atlas apps to see them"
                 ),
-            ));
+            )
+            .with_source(Absent));
         }
         Target::Name(name) => name,
     };
@@ -156,7 +157,31 @@ pub(super) async fn target_among(
                 "No window of {name} is on screen: open one in it, or run atlas wait --app {name}"
             )
         },
-    ))
+    )
+    .with_source(Absent))
+}
+
+/// The private cause of a refusal to find an app because it is not
+/// running or shows no window: of its windows, nothing is on screen.
+#[derive(Debug)]
+pub(super) struct Absent;
+
+impl std::fmt::Display for Absent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the app shows nothing on screen")
+    }
+}
+
+impl std::error::Error for Absent {}
+
+impl Absent {
+    /// Whether `error` refused because the app shows nothing on screen.
+    pub(super) fn of(error: &Error) -> bool {
+        error
+            .source
+            .as_deref()
+            .is_some_and(|source| source.is::<Self>())
+    }
 }
 
 /// Whether an `apps` row is the app called `name`: by the name it shows,

@@ -18,7 +18,7 @@ use atlas_core::{
             Element, Look, Reference, Stop, click_point, drawn, element_check, stale, telling, why,
         },
         geometry::Bounds,
-        select::{ElementFilter, NameMatch, closeness, names, shown_name},
+        select::{self, Choice, ElementFilter, closeness, names, shown_name},
     },
     transport::run_output,
 };
@@ -41,6 +41,8 @@ pub(super) struct Scanned {
     pub(super) look: Option<Look>,
     pub(super) elements: Vec<Element>,
     pub(super) incomplete: bool,
+    /// Whether the reply said, as a flag, if the scan was complete.
+    pub(super) coverage_told: bool,
     /// Why it is incomplete, each reason once.
     pub(super) reasons: Vec<Stop>,
     /// Accessibility failures other than a missing attribute, by count.
@@ -91,10 +93,12 @@ impl Scanned {
         errors.sort_by(|(a, first), (b, second)| second.cmp(first).then_with(|| a.cmp(b)));
         errors.truncate(SCAN_ERRORS);
 
+        let coverage = value["truncated"].as_bool();
         Ok(Self {
             look,
             elements,
-            incomplete: value["truncated"] == true,
+            incomplete: coverage == Some(true),
+            coverage_told: coverage.is_some(),
             reasons,
             errors: errors.into_iter().collect(),
         })
@@ -150,12 +154,40 @@ pub(super) const WITHHELD_NEXT: &str = "Ask the person to unlock the Mac: apps h
 
 /// The accessibility elements of process `pid`, scanned in the helper
 /// `verified` describes, which the caller verified just before.
-async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<Scanned> {
+pub(super) async fn app_elements(
+    client: &Client,
+    verified: &Verified,
+    pid: i64,
+) -> Result<Scanned> {
+    scanned(&probe(client, Run::inspect().pinned(verified), pid).await?)
+}
+
+/// [`app_elements`], the helper stopping the scan after `timeout`; None
+/// when it did, before the scan said anything.
+pub(super) async fn app_elements_within(
+    client: &Client,
+    verified: &Verified,
+    pid: i64,
+    timeout: std::time::Duration,
+) -> Result<Option<Scanned>> {
+    let reply = probe(client, Run::inspect().within(timeout).pinned(verified), pid).await?;
+    if reply["timedOut"] == true {
+        return Ok(None);
+    }
+    scanned(&reply).map(Some)
+}
+
+/// Run the daemon's probe over process `pid` as `run` says.
+async fn probe(client: &Client, run: Run<'_>, pid: i64) -> Result<Value> {
     let probe = client.config.identity_probe.to_string_lossy().into_owned();
     let argv = vec![probe, "elements-info".into(), pid.to_string()];
-    let reply = client.run(argv, Run::inspect().pinned(verified)).await?;
+    client.run(argv, run).await
+}
+
+/// The scan a probe's run `reply` printed.
+fn scanned(reply: &Value) -> Result<Scanned> {
     let missing = || Error::new(Code::Elements, "The accessibility probe returned no result");
-    let bytes = run_output(&reply, 8 << 20).map_err(|cause| missing().with_source(cause))?;
+    let bytes = run_output(reply, 8 << 20).map_err(|cause| missing().with_source(cause))?;
     let value = serde_json::from_slice(&bytes).map_err(|cause| missing().with_source(cause))?;
 
     Scanned::from_reply(value)
@@ -421,7 +453,7 @@ pub(super) fn listing(
     }
 
     if filter.name.is_some() && matching.is_empty() {
-        let candidates = candidates(&in_play(&scanned.elements), &[], filter);
+        let candidates = candidates(&select::in_play(&scanned.elements), &[], filter);
         if !candidates.is_empty() {
             listed["candidates"] = json!(candidates);
         }
@@ -447,7 +479,7 @@ fn plain_group(element: &Element) -> bool {
 
 /// An element as the default listing names it, with its window's place in
 /// `windows` (added when new).
-fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Bounds>) -> Value {
+pub(super) fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Bounds>) -> Value {
     let mut listed = element_identity(element);
     listed["index"] = json!(element.index);
     if let Some(value) = element
@@ -505,49 +537,16 @@ fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Bounds>) -> Value {
 /// or several match, or when another element whose name could not be read
 /// might match too.
 pub(super) fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Result<&'a Element> {
-    let elements = in_play(elements);
-    let matches: Vec<(&Element, NameMatch)> = elements
-        .iter()
-        .filter_map(|element| Some((*element, filter.match_of(element)?)))
-        .collect();
-    let best = matches.iter().map(|(_, kind)| *kind).max();
-    let matching: Vec<&Element> = matches
-        .iter()
-        .filter(|(element, kind)| Some(*kind) == best && element.frame.as_ref().is_some_and(drawn))
-        .map(|(element, _)| *element)
-        .collect();
-
-    // A menu bar title gives way to a window element of the same name
-    // (a Help button beside a Help menu); --role AXMenuBarItem asks for it.
-    let in_windows: Vec<&Element> = matching
-        .iter()
-        .copied()
-        .filter(|element| element.role.as_deref() != Some("AXMenuBarItem"))
-        .collect();
-    let matching = if filter.role.is_none() && in_windows.len() == 1 {
-        in_windows
-    } else {
-        matching
+    let element = match select::choose(elements, filter) {
+        Choice::One(element) => element,
+        Choice::NotOne { in_play, matching } => return Err(not_one(&in_play, &matching, filter)),
+        Choice::Doubtful(_) => {
+            return Err(Error::new(
+                Code::Elements,
+                "Another element's name could not be read whole, so this match may not be unique",
+            ));
+        }
     };
-
-    let [element] = matching.as_slice() else {
-        return Err(not_one(&elements, &matching, filter));
-    };
-
-    // An element whose selector attributes could not be read may be a
-    // second, unseen match, unless it is collapsed and could never be chosen.
-    let doubtful = elements.iter().any(|other| {
-        other.index != element.index
-            && (!other.unreadable.is_empty() || !other.truncated.is_empty())
-            && other.frame.as_ref().is_none_or(drawn)
-            && filter.might_match(other)
-    });
-    if doubtful {
-        return Err(Error::new(
-            Code::Elements,
-            "Another element's name could not be read whole, so this match may not be unique",
-        ));
-    }
 
     if element.enabled == Some(false) {
         return Err(Error::new(
@@ -594,16 +593,6 @@ fn not_one(elements: &[&Element], matching: &[&Element], filter: &ElementFilter)
     } else {
         error.with("candidates", json!(candidates))
     }
-}
-
-/// The elements a name is judged against: while a menu is open, only its
-/// items (a click outside it just closes the menu).
-fn in_play(elements: &[Element]) -> Vec<&Element> {
-    let menu_open = elements.iter().any(|element| element.menu);
-    elements
-        .iter()
-        .filter(|element| element.menu || !menu_open)
-        .collect()
 }
 
 /// Up to five elements a refused name may have meant, each with its role,

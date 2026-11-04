@@ -1353,6 +1353,7 @@ fn scanned(elements: Vec<Element>) -> Scanned {
         look: None,
         elements,
         incomplete: false,
+        coverage_told: true,
         reasons: Vec::new(),
         errors: BTreeMap::new(),
     }
@@ -3519,4 +3520,476 @@ async fn app_targets_keep_valid_process_identities_and_refuse_absent_or_malforme
             }
         }
     }
+}
+
+/// A Save button as a scan reports it: enabled unless `enabled` says not.
+fn save_button(enabled: bool) -> Value {
+    json!({"index": 7, "depth": 2, "role": "AXButton", "title": "Save", "enabled": enabled,
+        "window": {"x": 0, "y": 0, "width": 100, "height": 100},
+        "frame": {"x": 10, "y": 10, "width": 60, "height": 20}})
+}
+
+/// TextEdit as `textedit_reads` stands in for it, its probe scans showing
+/// `probed` and its kept look `kept`; the looks asked for are counted.
+fn waiting_reads(
+    probed: Value,
+    kept: Value,
+    looks: &mut usize,
+) -> impl FnMut(&Value) -> Option<Value> {
+    use crate::test_support::completed;
+    move |request: &Value| {
+        if request["op"] == "elements" {
+            *looks += 1;
+            return Some(
+                json!({"ok": true, "look": "8123abc", "elements": kept.clone(),
+                "truncated": false}),
+            );
+        }
+        if request["argv"][1] == "elements-info" {
+            return Some(completed(
+                &json!({"ok": true, "elements": probed.clone(), "truncated": false}).to_string(),
+            ));
+        }
+        textedit_reads(request)
+    }
+}
+
+fn save() -> ElementFilter {
+    ElementFilter {
+        role: Some("AXButton".into()),
+        name: Some("Save".into()),
+    }
+}
+
+#[tokio::test]
+async fn a_met_wait_names_the_element_by_the_look_the_input_service_kept() {
+    use crate::test_support::Helper;
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[LOOKS]);
+    let mut looks = 0;
+    let reply = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Name("TextEdit".into()),
+                &save(),
+                &State::Enabled,
+                Duration::ZERO,
+            ),
+            waiting_reads(
+                json!([save_button(true)]),
+                json!([save_button(true)]),
+                &mut looks,
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["state"], "enabled");
+    assert_eq!(reply["matched"], true);
+    assert_eq!(reply["look"], "8123abc");
+    assert_eq!(reply["element"]["index"], 7);
+    assert_eq!(reply["element"]["name"], "Save");
+    assert!(reply["element"].get("window").is_none());
+    assert_eq!(looks, 1, "only the confirming look is kept");
+}
+
+#[tokio::test]
+async fn a_wait_that_times_out_says_what_its_last_look_saw() {
+    use crate::test_support::Helper;
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    for (probed, kept, why) in [
+        (json!([save_button(false)]), json!([]), "disabled"),
+        (json!([]), json!([]), "none"),
+        (
+            json!([save_button(true)]),
+            json!([save_button(false)]),
+            "disabled",
+        ),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let helper = helper.serving_input(&client, &[LOOKS]);
+        let mut looks = 0;
+        let reply = helper
+            .serve(
+                wait_for_element(
+                    &client,
+                    &Target::Pid(812),
+                    &save(),
+                    &State::Enabled,
+                    Duration::ZERO,
+                ),
+                waiting_reads(probed.clone(), kept.clone(), &mut looks),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert_eq!(reply["code"], "wait-failed");
+        assert_eq!(reply["timedOut"], true);
+        assert_eq!(reply["state"], "enabled");
+        assert_eq!(reply["last"]["why"], why, "{probed} then {kept}");
+        assert_eq!(
+            reply["error"],
+            format!(
+                "The element was not enabled in time: {}",
+                reply["last"]["says"].as_str().unwrap()
+            )
+        );
+        assert_eq!(
+            looks,
+            usize::from(kept != json!([])),
+            "a look is kept only to confirm a state the probe saw"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_gone_wait_keeps_no_look_and_holds_once_the_app_shows_no_window() {
+    use crate::test_support::Helper;
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[LOOKS]);
+    let mut looks = 0;
+    let reply = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Pid(812),
+                &save(),
+                &State::Gone,
+                Duration::ZERO,
+            ),
+            waiting_reads(json!([]), json!([]), &mut looks),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(reply.get("look").is_none() && reply.get("element").is_none());
+    assert_eq!(looks, 0);
+
+    for (state, ok) in [(State::Gone, true), (State::Exists, false)] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let reply = helper
+            .serve(
+                wait_for_element(
+                    &client,
+                    &Target::Name("Calculator".into()),
+                    &save(),
+                    &state,
+                    Duration::ZERO,
+                ),
+                textedit_reads,
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply["ok"], ok, "{state:?}: {reply}");
+    }
+}
+
+#[tokio::test]
+async fn an_element_wait_needs_a_name_or_a_role() {
+    use crate::test_support::Helper;
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let error = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Pid(812),
+                &ElementFilter::default(),
+                &State::Exists,
+                Duration::ZERO,
+            ),
+            |_| panic!("nothing is read"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Usage);
+}
+
+#[tokio::test]
+async fn only_an_app_that_shows_nothing_counts_as_gone_and_other_target_failures_end_the_wait() {
+    use crate::test_support::Helper;
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let error = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Name("TextEdit".into()),
+                &save(),
+                &State::Gone,
+                Duration::ZERO,
+            ),
+            |request| {
+                if request["op"] == "windows" {
+                    let window = |number: i64, pid: i64| {
+                        json!({"number": number, "pid": pid, "owner": "TextEdit", "title": null,
+                            "layer": 0, "alpha": 1.0,
+                            "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
+                    };
+                    return Some(json!({"ok": true,
+                        "starts": {"812": [123, 456], "813": [124, 456]},
+                        "windows": [window(5, 812), window(6, 813)]}));
+                }
+                textedit_reads(request)
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.error.contains("Several TextEdit processes"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn a_met_state_is_never_replied_without_a_kept_look_to_confirm_it() {
+    use crate::test_support::Helper;
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[FOCUS_APP]);
+    let mut looks = 0;
+    let error = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Pid(812),
+                &save(),
+                &State::Enabled,
+                Duration::ZERO,
+            ),
+            waiting_reads(json!([save_button(true)]), json!([]), &mut looks),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.code,
+        Code::Startup,
+        "an input service that keeps no looks"
+    );
+    assert_eq!(looks, 0);
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[LOOKS]);
+    let probed = json!({"ok": true, "elements": [save_button(true)], "truncated": false});
+    let error = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Pid(812),
+                &save(),
+                &State::Enabled,
+                Duration::ZERO,
+            ),
+            |request| {
+                if request["op"] == "elements" {
+                    return Some(json!({"ok": true, "elements": [], "truncated": false}));
+                }
+                if request["argv"][1] == "elements-info" {
+                    return Some(crate::test_support::completed(&probed.to_string()));
+                }
+                textedit_reads(request)
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Elements);
+    assert!(error.error.contains("named no look"), "{error}");
+}
+
+#[tokio::test]
+async fn a_scan_that_does_not_say_whether_it_was_complete_never_proves_an_element_gone() {
+    use crate::test_support::{Helper, completed};
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    for truncated in [json!("true"), json!(null), json!(0)] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let probed = json!({"ok": true, "elements": [], "truncated": truncated});
+        let reply = helper
+            .serve(
+                wait_for_element(
+                    &client,
+                    &Target::Pid(812),
+                    &save(),
+                    &State::Gone,
+                    Duration::ZERO,
+                ),
+                |request| {
+                    if request["argv"][1] == "elements-info" {
+                        return Some(completed(&probed.to_string()));
+                    }
+                    textedit_reads(request)
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply["ok"], false, "{truncated}");
+        assert_eq!(reply["last"]["why"], "incomplete", "{truncated}");
+    }
+}
+
+#[tokio::test]
+async fn a_wait_looks_again_until_its_state_holds_in_a_kept_look() {
+    use crate::test_support::{Helper, completed};
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let helper = helper.serving_input(&client, &[LOOKS]);
+    // The probe sees nothing, then the button; the first kept look sees it
+    // disabled, the second enabled.
+    let mut probes = 0;
+    let mut looks = 0;
+    let reply = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Pid(812),
+                &save(),
+                &State::Enabled,
+                Duration::from_secs(10),
+            ),
+            |request| {
+                if request["op"] == "elements" {
+                    looks += 1;
+                    let kept = if looks == 1 {
+                        save_button(false)
+                    } else {
+                        save_button(true)
+                    };
+                    return Some(json!({"ok": true, "look": "8123abc", "elements": [kept],
+                        "truncated": false}));
+                }
+                if request["argv"][1] == "elements-info" {
+                    probes += 1;
+                    let seen = if probes == 1 {
+                        json!([])
+                    } else {
+                        json!([save_button(true)])
+                    };
+                    return Some(completed(
+                        &json!({"ok": true, "elements": seen, "truncated": false}).to_string(),
+                    ));
+                }
+                textedit_reads(request)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!((probes, looks), (3, 2));
+    assert_eq!(reply["element"]["index"], 7);
+}
+
+#[tokio::test]
+async fn each_scan_of_a_wait_is_stopped_by_what_is_left_of_its_deadline() {
+    use crate::test_support::{Helper, completed};
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    for (timeout, longest) in [
+        (Duration::ZERO, 5_000),
+        (Duration::from_millis(800), 800),
+        (Duration::from_secs(2), 2_000),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let mut asked = Vec::new();
+        let reply = helper
+            .serve(
+                wait_for_element(&client, &Target::Pid(812), &save(), &State::Gone, timeout),
+                |request| {
+                    if request["argv"][1] == "elements-info" {
+                        asked.push(request["timeoutMs"].as_u64().unwrap());
+                        return Some(completed(
+                            &json!({"ok": true, "elements": [save_button(true)],
+                                "truncated": false})
+                            .to_string(),
+                        ));
+                    }
+                    textedit_reads(request)
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(reply["timedOut"], true);
+        assert!(!asked.is_empty());
+        assert!(
+            asked.iter().all(|ms| (500..=longest).contains(ms)),
+            "{timeout:?}: {asked:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_scan_its_budget_stopped_keeps_the_wait_going_as_an_incomplete_look() {
+    use crate::test_support::Helper;
+    use atlas_core::{screen::wait::State, test_support::UID};
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let reply = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Pid(812),
+                &save(),
+                &State::Gone,
+                Duration::ZERO,
+            ),
+            |request| {
+                if request["argv"][1] == "elements-info" {
+                    return Some(json!({"ok": true, "exitCode": null, "timedOut": true,
+                        "signal": "SIGKILL", "events": []}));
+                }
+                textedit_reads(request)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["code"], "wait-failed", "{reply}");
+    assert_eq!(reply["timedOut"], true);
+    assert_eq!(reply["last"]["why"], "incomplete");
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let error = helper
+        .serve(
+            wait_for_element(
+                &client,
+                &Target::Pid(812),
+                &save(),
+                &State::Gone,
+                Duration::ZERO,
+            ),
+            |request| {
+                if request["argv"][1] == "elements-info" {
+                    return Some(crate::test_support::completed("not json"));
+                }
+                textedit_reads(request)
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.code,
+        Code::Elements,
+        "a scan that failed still ends the wait"
+    );
 }
