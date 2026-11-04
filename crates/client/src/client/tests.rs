@@ -3625,14 +3625,15 @@ fn recording_refuses_non_files_without_waiting_for_a_reader() {
 
             // The synchronous open cannot be interrupted by a Tokio timeout.
             // Confine it to a child we always reap, even on the old blocking path.
-            let mut child = atlas_core::test_support::rerun(
-                "client::tests::recording_refuses_non_files_without_waiting_for_a_reader",
+            let mut child = atlas_core::spawn::spawn(
+                atlas_core::test_support::rerun(
+                    "client::tests::recording_refuses_non_files_without_waiting_for_a_reader",
+                )
+                .env(WORKER, dir.path())
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null()),
             )
-            .env(WORKER, dir.path())
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
             .unwrap();
             let deadline = Instant::now() + Duration::from_secs(2);
             let success = loop {

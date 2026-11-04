@@ -444,19 +444,21 @@ fn attributes_macos_adds_on_first_launch_do_not_count_as_changes() {
             destination.clone(),
             destination.join("Contents/MacOS/Probe"),
         ] {
-            let written = Command::new("/usr/bin/xattr")
-                .args(["-w", name, value])
-                .arg(&path)
-                .status()
-                .unwrap();
+            let written = atlas_core::spawn::status(
+                Command::new("/usr/bin/xattr")
+                    .args(["-w", name, value])
+                    .arg(&path),
+            )
+            .unwrap();
             assert!(written.success());
         }
     }
-    let touched = Command::new("/usr/bin/touch")
-        .arg(&destination)
-        .arg(destination.join("Contents"))
-        .status()
-        .unwrap();
+    let touched = atlas_core::spawn::status(
+        Command::new("/usr/bin/touch")
+            .arg(&destination)
+            .arg(destination.join("Contents")),
+    )
+    .unwrap();
     assert!(touched.success());
 
     let print = print_path(&destination, Some("Probe"), Limits::default()).unwrap();

@@ -495,7 +495,7 @@ impl Strayed {
         // A group of the test's own for the tool to move into.
         let mut anchor = Command::new("/bin/sleep");
         anchor.arg("30").process_group(0);
-        let anchor = anchor.spawn().unwrap();
+        let anchor = atlas_core::spawn::spawn(&mut anchor).unwrap();
         let elsewhere = nix::unistd::Pid::from_raw(i32::try_from(anchor.id()).unwrap());
 
         let mut command = Command::new("/usr/bin/perl");

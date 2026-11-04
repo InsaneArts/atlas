@@ -88,12 +88,13 @@ pub(super) struct Worker {
 
 impl Worker {
     fn spawn(command: &mut Command) -> Result<Self> {
-        let mut child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
+        let mut child = atlas_core::spawn::spawn_async(
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true),
+        )?;
         let input = child.stdin.take().ok_or_else(invalid)?;
         let output = BufReader::new(child.stdout.take().ok_or_else(invalid)?);
         Ok(Self {

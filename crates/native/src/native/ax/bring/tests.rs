@@ -2613,10 +2613,8 @@ fn a_sheet_that_moves_or_closes_during_button_preparation_prevents_the_click() {
 #[test]
 fn the_live_backend_resolves_a_process_launched_after_it_was_created() {
     let mut backend = Live;
-    let mut child = std::process::Command::new("/bin/sleep")
-        .arg("1")
-        .spawn()
-        .unwrap();
+    let mut child =
+        atlas_core::spawn::spawn(std::process::Command::new("/bin/sleep").arg("1")).unwrap();
     let pid = i64::from(child.id());
     let app = backend.app(pid);
     let _ = child.kill();

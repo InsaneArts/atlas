@@ -34,7 +34,7 @@ const PATIENCE: Duration = Duration::from_secs(30 * 60);
 /// A command that must succeed and talks to the person itself (sudo and
 /// sysadminctl ask for passwords in their own words).
 fn attended(program: &str, args: &[&str], why: &str) -> Result<()> {
-    let status = Command::new(program).args(args).status()?;
+    let status = atlas_core::spawn::status(Command::new(program).args(args))?;
     status
         .success()
         .then_some(())

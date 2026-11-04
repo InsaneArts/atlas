@@ -144,11 +144,12 @@ fn a_privileged_executor_test_caller() {
                 let (ours, theirs) = UnixStream::pair().unwrap();
                 let input: OwnedFd = theirs.try_clone().unwrap().into();
                 let output: OwnedFd = theirs.into();
-                let mut child = command
-                    .stdin(Stdio::from(input))
-                    .stdout(Stdio::from(output))
-                    .spawn()
-                    .unwrap();
+                let mut child = atlas_core::spawn::spawn(
+                    command
+                        .stdin(Stdio::from(input))
+                        .stdout(Stdio::from(output)),
+                )
+                .unwrap();
                 let deadline = if mode == "timeout" {
                     Instant::now()
                 } else {
@@ -362,11 +363,12 @@ fn run_steps(dir: &Path, tools: &[(&str, &str)], arguments: &[&str]) -> String {
 }
 
 fn run_script(script: &str, arguments: &[&str]) -> String {
-    let run = Command::new("/usr/bin/env")
-        .args(["-i", "/bin/zsh", "-p", "-f", "-c", script, "zsh"])
-        .args(arguments)
-        .output()
-        .unwrap();
+    let run = atlas_core::spawn::output(
+        Command::new("/usr/bin/env")
+            .args(["-i", "/bin/zsh", "-p", "-f", "-c", script, "zsh"])
+            .args(arguments),
+    )
+    .unwrap();
     String::from_utf8_lossy(&run.stdout).into_owned()
 }
 
@@ -1358,21 +1360,21 @@ fn readying_asks_the_helper_for_its_first_login_as_setup_helper_reads_it() {
 #[test]
 fn the_steps_are_valid_zsh_and_stop_without_an_administrator() {
     let script = [BECOME_ROOT, &steps()].concat();
-    let check = Command::new("/bin/zsh")
-        .args(["-n", "-f", "-c", &script])
-        .output()
-        .unwrap();
+    let check =
+        atlas_core::spawn::output(Command::new("/bin/zsh").args(["-n", "-f", "-c", &script]))
+            .unwrap();
     assert!(
         check.status.success(),
         "{}",
         String::from_utf8_lossy(&check.stderr)
     );
 
-    let run = Command::new("/usr/bin/env")
-        .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
-        .args(["choose", "nobody", "/nowhere", "501"])
-        .output()
-        .unwrap();
+    let run = atlas_core::spawn::output(
+        Command::new("/usr/bin/env")
+            .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
+            .args(["choose", "nobody", "/nowhere", "501"]),
+    )
+    .unwrap();
     assert_eq!(
         outcome(&String::from_utf8_lossy(&run.stdout)),
         Err(Refusal::Failed(
@@ -1530,20 +1532,21 @@ fi
             ),
         ],
     );
-    let mut child = Command::new("/usr/bin/env")
-        .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
-        .args([
-            "choose",
-            "opie",
-            source.join("atlas").to_str().unwrap(),
-            "502",
-            GUID,
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = atlas_core::spawn::spawn(
+        Command::new("/usr/bin/env")
+            .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
+            .args([
+                "choose",
+                "opie",
+                source.join("atlas").to_str().unwrap(),
+                "502",
+                GUID,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
     let mut reply = BufReader::new(child.stdout.take().unwrap());
     let mut staged = String::new();
     reply.read_line(&mut staged).unwrap();
@@ -1771,13 +1774,14 @@ fn a_creation_that_fails_silently_reports_sysadminctls_real_status() {
     }
 
     let (ours, theirs) = UnixStream::pair().unwrap();
-    let mut child = Command::new("/usr/bin/env")
-        .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
-        .args(["create", "opie", EXECUTABLE, "502", "Opie", ""])
-        .stdin(std::os::fd::OwnedFd::from(theirs.try_clone().unwrap()))
-        .stdout(std::os::fd::OwnedFd::from(theirs))
-        .spawn()
-        .unwrap();
+    let mut child = atlas_core::spawn::spawn(
+        Command::new("/usr/bin/env")
+            .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
+            .args(["create", "opie", EXECUTABLE, "502", "Opie", ""])
+            .stdin(std::os::fd::OwnedFd::from(theirs.try_clone().unwrap()))
+            .stdout(std::os::fd::OwnedFd::from(theirs)),
+    )
+    .unwrap();
     let (_, text) = converse(ours, Some(b"secret"));
     child.wait().unwrap();
 
@@ -1824,13 +1828,14 @@ read -rs "password?User password:"; print -rn -- $password > password; touch mad
     let full = "Atlas $x * helper";
 
     let (ours, theirs) = UnixStream::pair().unwrap();
-    let mut child = Command::new("/usr/bin/env")
-        .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
-        .args(["create", "opie", EXECUTABLE, "502", full, &picture])
-        .stdin(std::os::fd::OwnedFd::from(theirs.try_clone().unwrap()))
-        .stdout(std::os::fd::OwnedFd::from(theirs))
-        .spawn()
-        .unwrap();
+    let mut child = atlas_core::spawn::spawn(
+        Command::new("/usr/bin/env")
+            .args(["-i", "/bin/zsh", "-p", "-f", "-c", &script, "zsh"])
+            .args(["create", "opie", EXECUTABLE, "502", full, &picture])
+            .stdin(std::os::fd::OwnedFd::from(theirs.try_clone().unwrap()))
+            .stdout(std::os::fd::OwnedFd::from(theirs)),
+    )
+    .unwrap();
     let (finished, text) = converse(ours, Some(b"se cret$1"));
     child.wait().unwrap();
     let text = text.unwrap();

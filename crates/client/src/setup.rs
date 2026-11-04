@@ -179,17 +179,17 @@ fn parse_disabled(text: &str, service: &str) -> Option<bool> {
 }
 
 fn screen_sharing() -> Value {
-    let disabled = Command::new("/bin/launchctl")
-        .args(["print-disabled", "system"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| {
-            parse_disabled(
-                &String::from_utf8_lossy(&output.stdout),
-                "com.apple.screensharing",
-            )
-        });
+    let disabled = atlas_core::spawn::output(
+        Command::new("/bin/launchctl").args(["print-disabled", "system"]),
+    )
+    .ok()
+    .filter(|output| output.status.success())
+    .and_then(|output| {
+        parse_disabled(
+            &String::from_utf8_lossy(&output.stdout),
+            "com.apple.screensharing",
+        )
+    });
 
     json!({
         "service": match disabled {

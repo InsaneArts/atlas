@@ -1,0 +1,12 @@
+# Every child process and pipe goes through atlas_core::spawn, which makes
+# them one at a time: on macOS a new pipe is made close-on-exec only after it
+# exists, so a child another thread starts in between inherits it.
+disallowed-methods = [
+    { path = "std::process::Command::spawn", reason = "use atlas_core::spawn::spawn" },
+    { path = "std::process::Command::output", reason = "use atlas_core::spawn::output, or spawn and wait_with_output" },
+    { path = "std::process::Command::status", reason = "use atlas_core::spawn::status" },
+    { path = "std::io::pipe", reason = "use atlas_core::spawn::pipe" },
+    { path = "tokio::process::Command::spawn", reason = "use atlas_core::spawn::spawn_async" },
+    { path = "tokio::process::Command::output", reason = "use atlas_core::spawn::output_async" },
+    { path = "tokio::process::Command::status", reason = "use atlas_core::spawn::status_async" },
+]

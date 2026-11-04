@@ -419,10 +419,8 @@ async fn a_job_log_past_its_limit_starts_again() {
 async fn nothing_but_its_own_group_is_ever_signalled() {
     let folder = tempfile::tempdir().unwrap();
     let jobs = jobs_in(folder.path());
-    let mut sibling = std::process::Command::new("/bin/sleep")
-        .arg("30")
-        .spawn()
-        .unwrap();
+    let mut sibling =
+        atlas_core::spawn::spawn(std::process::Command::new("/bin/sleep").arg("30")).unwrap();
     let _sibling = Processes::new(
         process::info(sibling.id() as i32)
             .unwrap()

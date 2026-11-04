@@ -101,7 +101,7 @@ async fn update_using(
     if allow_disrupt {
         finish.arg("--allow-disrupt");
     }
-    let output = finish.arg("--config").arg(config).output()?;
+    let output = atlas_core::spawn::output(finish.arg("--config").arg(config))?;
     let (moved, finished) = helper_moved(&output);
     report["ok"] = json!(moved);
     report["helper"] = finished;
@@ -118,18 +118,19 @@ async fn update_using(
         if let Some(port) = port {
             spinner.set("Restarting the menu bar…");
 
-            let restarted = std::process::Command::new(&executable)
-                .arg("menubar")
-                .arg("--port")
-                .arg(port.to_string())
-                .arg("--config")
-                .arg(config)
-                .env("ATLAS_JSON", "1")
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_ok_and(|status| status.success());
+            let restarted = atlas_core::spawn::status(
+                std::process::Command::new(&executable)
+                    .arg("menubar")
+                    .arg("--port")
+                    .arg(port.to_string())
+                    .arg("--config")
+                    .arg(config)
+                    .env("ATLAS_JSON", "1")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null()),
+            )
+            .is_ok_and(|status| status.success());
             report["menubarRestarted"] = json!(restarted);
         }
     } else {
@@ -243,7 +244,7 @@ async fn update_finish_using(
         if allow_disrupt {
             command.arg("--allow-disrupt");
         }
-        command.arg("--json").arg("--config").arg(config).output()
+        atlas_core::spawn::output(command.arg("--json").arg("--config").arg(config))
     })? {
         Ok(done) => done,
         Err(failed) => return Ok(failed),

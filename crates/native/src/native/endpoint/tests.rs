@@ -100,11 +100,12 @@ async fn a_directory_whose_acl_grants_writes_is_refused() {
     fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
 
     let user = std::env::var("USER").unwrap();
-    let granted = std::process::Command::new("/bin/chmod")
-        .args(["+a", &format!("user:{user} allow add_file")])
-        .arg(&run)
-        .status()
-        .unwrap();
+    let granted = atlas_core::spawn::status(
+        std::process::Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{user} allow add_file")])
+            .arg(&run),
+    )
+    .unwrap();
     assert!(granted.success());
 
     let uid = nix::unistd::getuid().as_raw();
@@ -143,11 +144,12 @@ async fn a_private_directory_keeps_setups_policy() {
 
     fs::set_permissions(&run, fs::Permissions::from_mode(0o700)).unwrap();
     let user = std::env::var("USER").unwrap();
-    std::process::Command::new("/bin/chmod")
-        .args(["+a", &format!("user:{user} allow list")])
-        .arg(&run)
-        .status()
-        .unwrap();
+    atlas_core::spawn::status(
+        std::process::Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{user} allow list")])
+            .arg(&run),
+    )
+    .unwrap();
 
     let extra = bind(&run.join("s.sock"), uid, "test", private).await;
     assert_eq!(extra.err().unwrap().code, "identity");

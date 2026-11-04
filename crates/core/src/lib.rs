@@ -30,6 +30,7 @@ pub mod record_folder;
 pub mod screen;
 pub mod session;
 pub mod single_flight;
+pub mod spawn;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod time;

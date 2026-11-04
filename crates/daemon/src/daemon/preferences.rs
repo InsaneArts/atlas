@@ -20,12 +20,13 @@ pub(super) fn type_exactly() {
         "NSAutomaticInlinePredictionEnabled",
         "WebAutomaticSpellingCorrectionEnabled",
     ] {
-        let _ = Command::new("/usr/bin/defaults")
-            .args(["write", "-g", key, "-bool", "false"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let _ = atlas_core::spawn::status(
+            Command::new("/usr/bin/defaults")
+                .args(["write", "-g", key, "-bool", "false"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        );
     }
 }
 

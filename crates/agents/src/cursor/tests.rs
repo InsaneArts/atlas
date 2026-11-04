@@ -20,14 +20,15 @@ fn cursor_guards_mcp_person_actions_and_keeps_hook_arguments_separate() {
             "--json\nagents\ncursor-hook\nbefore-shell\n",
         ),
     ] {
-        let result = Command::new("/bin/sh")
-            .arg(&launcher)
-            .arg(event)
-            .env_clear()
-            .env("PATH", directory.path())
-            .env("HOME", directory.path())
-            .output()
-            .unwrap();
+        let result = atlas_core::spawn::output(
+            Command::new("/bin/sh")
+                .arg(&launcher)
+                .arg(event)
+                .env_clear()
+                .env("PATH", directory.path())
+                .env("HOME", directory.path()),
+        )
+        .unwrap();
         assert!(result.status.success(), "{event}");
         assert_eq!(result.stdout, expected.as_bytes(), "{event}");
         assert!(result.stderr.is_empty(), "{event}");

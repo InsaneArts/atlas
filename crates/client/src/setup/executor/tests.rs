@@ -16,13 +16,14 @@ fn quiet_commands_hide_log_lines_and_keep_their_outcome() {
         let script = "printf '%s' \"$1\" >&2; printf '%s' \"$2\" >&2; \
                           read -r -t 10 permit && test \"$permit\" = continue || exit 9; \
                           printf '\\n' >&2; printf '%s' \"$3\"; exit \"$4\"";
-        let child = Command::new("/bin/sh")
-            .args(["-c", script, "quiet-fixture", LOG, PROMPT, OUTPUT, &status])
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let child = atlas_core::spawn::spawn(
+            Command::new("/bin/sh")
+                .args(["-c", script, "quiet-fixture", LOG, PROMPT, OUTPUT, &status])
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .unwrap();
         message("quiet command started");
         let result = quietly_attended(child, "it failed");
         if status == "0" {

@@ -119,11 +119,12 @@ fn root() -> PathBuf {
 fn exec(program: &str, args: &[&str]) -> Result<()> {
     println!("+ {program} {}", args.join(" "));
 
-    let status = Command::new(program)
-        .env_remove("MACOSX_DEPLOYMENT_TARGET")
-        .args(args)
-        .status()
-        .map_err(|error| format!("{program}: {error}"))?;
+    let status = atlas_core::spawn::status(
+        Command::new(program)
+            .env_remove("MACOSX_DEPLOYMENT_TARGET")
+            .args(args),
+    )
+    .map_err(|error| format!("{program}: {error}"))?;
 
     status
         .success()
@@ -132,9 +133,7 @@ fn exec(program: &str, args: &[&str]) -> Result<()> {
 }
 
 fn output(program: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new(program)
-        .args(args)
-        .output()
+    let output = atlas_core::spawn::output(Command::new(program).args(args))
         .map_err(|error| format!("{program}: {error}"))?;
     if !output.status.success() {
         return Err(format!(

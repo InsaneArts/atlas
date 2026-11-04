@@ -111,9 +111,7 @@ pub(crate) fn window_open(home: &Path) -> bool {
         return false;
     }
 
-    Command::new("/bin/ps")
-        .args(["-o", "comm=", "-p", &pid.to_string()])
-        .output()
+    atlas_core::spawn::output(Command::new("/bin/ps").args(["-o", "comm=", "-p", &pid.to_string()]))
         .is_ok_and(|output| {
             Path::new(String::from_utf8_lossy(&output.stdout).trim()).file_name()
                 == Some(std::ffi::OsStr::new(atlas_core::app_bundle::APP_EXECUTABLE))

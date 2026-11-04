@@ -236,7 +236,7 @@ impl Fixture {
 
     pub fn spawn(directory: &Path, command: &mut Command) -> io::Result<Self> {
         let listener = UnixListener::bind(directory.join("executor.sock"))?;
-        let caller = command.spawn()?;
+        let caller = atlas_core::spawn::spawn(command)?;
         Ok(Self {
             caller,
             requester: None,
@@ -247,12 +247,11 @@ impl Fixture {
     }
 
     pub fn request(&mut self, command: &mut Command) -> io::Result<()> {
-        self.requester = Some(
+        self.requester = Some(atlas_core::spawn::spawn(
             command
                 .stdin(Stdio::from(self.caller.stdout.take().unwrap()))
-                .stdout(Stdio::from(self.caller.stdin.take().unwrap()))
-                .spawn()?,
-        );
+                .stdout(Stdio::from(self.caller.stdin.take().unwrap())),
+        )?);
         Ok(())
     }
 

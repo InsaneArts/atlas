@@ -104,9 +104,9 @@ const NO_SUCH_DOMAIN: i32 = 125;
 /// domain" and "no domain for this user" (the helper is signed out, or
 /// never signed in) statuses mean absent.
 pub(super) fn job(layout: &Layout, label: &str) -> Result<Job> {
-    let output = Command::new("/bin/launchctl")
-        .args(["print", &format!("{}/{label}", layout.domain())])
-        .output()?;
+    let output = atlas_core::spawn::output(
+        Command::new("/bin/launchctl").args(["print", &format!("{}/{label}", layout.domain())]),
+    )?;
     match output.status.code() {
         Some(0) => parse_job(&String::from_utf8_lossy(&output.stdout)),
         // When the helper is signed out its desktop domain does not exist,
@@ -128,10 +128,11 @@ pub fn job_pid(layout: &Layout, label: &str) -> Option<u32> {
 }
 
 pub(super) fn launchctl(operation: &str, arguments: &[&str]) -> Result<()> {
-    let output = Command::new("/bin/launchctl")
-        .arg(operation)
-        .args(arguments)
-        .output()?;
+    let output = atlas_core::spawn::output(
+        Command::new("/bin/launchctl")
+            .arg(operation)
+            .args(arguments),
+    )?;
     if output.status.success() {
         Ok(())
     } else {

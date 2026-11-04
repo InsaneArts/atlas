@@ -185,7 +185,7 @@ fn start(tools: &'static Registry, command: &mut Command) -> Result<Tool> {
         return Err(problem("Atlas is stopping"));
     }
 
-    let child = command.spawn()?;
+    let child = atlas_core::spawn::spawn(command)?;
     let group = i32::try_from(child.id()).ok();
     if let Some(group) = group {
         list.groups.push(group);

@@ -14,12 +14,13 @@ pub struct TestChild {
 
 impl TestChild {
     pub fn spawn(command: &mut Command) -> Self {
-        let mut process = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
+        let mut process = crate::spawn::spawn(
+            command
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .unwrap();
         let stdout = process.stdout.take().unwrap();
         let (send, messages) = mpsc::channel();
         std::thread::spawn(move || {

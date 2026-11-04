@@ -76,11 +76,12 @@ pub fn isolated(test: &str) -> bool {
     if std::env::var("ATLAS_ISOLATED_TEST").as_deref() == Ok(test) {
         return true;
     }
-    let output = rerun(test)
-        .arg("--nocapture")
-        .env("ATLAS_ISOLATED_TEST", test)
-        .output()
-        .unwrap();
+    let output = crate::spawn::output(
+        rerun(test)
+            .arg("--nocapture")
+            .env("ATLAS_ISOLATED_TEST", test),
+    )
+    .unwrap();
     assert!(
         output.status.success(),
         "{test} failed: {}\n{}",
@@ -101,12 +102,13 @@ pub fn in_timezone(test: &str, timezone: &str) -> bool {
         assert_eq!(std::env::var("TZ").unwrap(), timezone);
         return true;
     }
-    let output = rerun(test)
-        .arg("--nocapture")
-        .env("ATLAS_TIME_ZONE_TEST", test)
-        .env("TZ", timezone)
-        .output()
-        .unwrap();
+    let output = crate::spawn::output(
+        rerun(test)
+            .arg("--nocapture")
+            .env("ATLAS_TIME_ZONE_TEST", test)
+            .env("TZ", timezone),
+    )
+    .unwrap();
     assert!(
         output.status.success(),
         "{test} failed: {}\n{}",

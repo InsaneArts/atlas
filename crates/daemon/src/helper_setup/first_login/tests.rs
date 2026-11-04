@@ -15,17 +15,15 @@ fn lint(text: &str) -> Value {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("x.plist");
     fs::write(&path, text).unwrap();
-    let lint = Command::new("/usr/bin/plutil")
-        .arg("-lint")
-        .arg(&path)
-        .output()
-        .unwrap();
+    let lint =
+        atlas_core::spawn::output(Command::new("/usr/bin/plutil").arg("-lint").arg(&path)).unwrap();
     assert!(lint.status.success(), "{text}");
-    let json = Command::new("/usr/bin/plutil")
-        .args(["-convert", "json", "-o", "-"])
-        .arg(&path)
-        .output()
-        .unwrap();
+    let json = atlas_core::spawn::output(
+        Command::new("/usr/bin/plutil")
+            .args(["-convert", "json", "-o", "-"])
+            .arg(&path),
+    )
+    .unwrap();
     serde_json::from_slice(&json.stdout).unwrap()
 }
 
@@ -98,11 +96,12 @@ fn a_staged_worker_records_the_installed_opener_and_passes_the_allow_identity_ch
             .join("atlas-approved.test/Atlas.app/Contents/MacOS/atlas");
         fs::create_dir_all(worker.parent().unwrap()).unwrap();
         fs::copy(std::env::current_exe().unwrap(), &worker).unwrap();
-        let output = Command::new(worker)
-            .args(["--exact", TEST, "--nocapture"])
-            .env(DIRECTORY, dir.path())
-            .output()
-            .unwrap();
+        let output = atlas_core::spawn::output(
+            Command::new(worker)
+                .args(["--exact", TEST, "--nocapture"])
+                .env(DIRECTORY, dir.path()),
+        )
+        .unwrap();
         assert!(
             output.status.success(),
             "{}\n{}",
@@ -270,15 +269,16 @@ fn writable_acls_on_the_home_and_each_login_folder_are_refused() {
         let folder = layout.home.join(relative);
         fs::create_dir_all(&folder).unwrap();
         assert!(
-            Command::new("/bin/chmod")
-                .args([
-                    "+a",
-                    &format!("user:{user} allow add_file,add_subdirectory")
-                ])
-                .arg(&folder)
-                .status()
-                .unwrap()
-                .success()
+            atlas_core::spawn::status(
+                Command::new("/bin/chmod")
+                    .args([
+                        "+a",
+                        &format!("user:{user} allow add_file,add_subdirectory")
+                    ])
+                    .arg(&folder)
+            )
+            .unwrap()
+            .success()
         );
         assert!(ready(&layout, true, Some(program), MACOS).is_err());
         assert!(!layout.agent_plist(OPENER).exists());
@@ -291,17 +291,18 @@ fn a_new_login_folder_with_an_inherited_writable_acl_is_refused() {
     let (_dir, layout) = layout();
     let user = std::env::var("USER").unwrap();
     assert!(
-        Command::new("/bin/chmod")
-            .args([
-                "+a",
-                &format!(
-                    "user:{user} allow add_file,add_subdirectory,directory_inherit,only_inherit"
-                ),
-            ])
-            .arg(&layout.home)
-            .status()
-            .unwrap()
-            .success()
+        atlas_core::spawn::status(
+            Command::new("/bin/chmod")
+                .args([
+                    "+a",
+                    &format!(
+                        "user:{user} allow add_file,add_subdirectory,directory_inherit,only_inherit"
+                    ),
+                ])
+                .arg(&layout.home)
+        )
+        .unwrap()
+        .success()
     );
     // The home itself is rejected conservatively, even for inherit-only
     // entries. A child created under it must also be rejected on its own.
