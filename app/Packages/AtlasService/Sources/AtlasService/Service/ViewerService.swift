@@ -17,6 +17,12 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the capture failed or its display size is unknown.
   func frame() async throws -> Frame
 
+  /// How to pair with the frame service, when the viewer runs one.
+  ///
+  /// - Returns: The descriptor, or nil when there is none.
+  /// - Throws: When the viewer could not be asked.
+  func framePipe() async throws -> FramePipeDescriptor?
+
   /// Asks for mouse and keyboard control over the picture this viewer shows.
   ///
   /// - Parameter frame: The id of the picture the person acts on.

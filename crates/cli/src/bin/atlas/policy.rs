@@ -195,12 +195,14 @@ impl Policy {
             Command::Mcp(_) | Command::Watch { .. } => Self::local(View::Quiet),
             Command::Menubar(menubar) if menubar.login.is_some() => Self::local(View::Login),
             Command::Menubar(_) => Self::local(View::Menubar),
+            Command::Monitor { terminal: true, .. } => Self::local(View::Quiet),
             Command::Monitor { .. } => Self::local(View::Monitor),
             Command::HelperServe(_)
             | Command::JobLaunch { .. }
             | Command::InputService(_)
             | Command::EnvironmentWorker { .. }
             | Command::SessionInfo
+            | Command::SessionProofServe
             | Command::PermissionsInfo
             | Command::ElementsInfo { .. }
             | Command::SetupHelper(_)

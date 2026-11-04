@@ -4013,3 +4013,146 @@ fn preparation_fits_before_the_client_reply_timeout() {
         std::time::Duration::from_secs(5)
     );
 }
+
+#[test]
+fn independent_proofs_require_the_exact_current_challenge_before_session_validation() {
+    let proof = json!({"ok":true,"uid":502,"parentPID":123,"onConsole":false});
+    let reply = json!({"ok":true,"challenge":"fresh","proof":proof});
+    assert_eq!(Client::challenged_proof(&reply, "fresh").unwrap(), proof);
+    for bad in [
+        json!({"ok":true,"challenge":"old","proof":proof}),
+        json!({"ok":true,"proof":proof}),
+        json!({"ok":false,"challenge":"fresh","proof":proof}),
+        json!({"ok":true,"challenge":"fresh","proof":"not a proof"}),
+    ] {
+        assert_eq!(
+            Client::challenged_proof(&bad, "fresh").unwrap_err().code,
+            Code::Identity
+        );
+    }
+}
+
+#[tokio::test]
+async fn independent_proofs_use_fresh_challenges_and_older_helpers_keep_the_original_probe() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+    let listener = UnixListener::bind(&client.transport.path).unwrap();
+    let source = json!({"ok":true,"uid":502,"parentPID":123,"read":true});
+    let proof = source.clone();
+    let server = tokio::spawn(async move {
+        let mut nonces = Vec::new();
+        for round in 0..3 {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            let mut line = String::new();
+            socket.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let reply = if round < 2 {
+                assert_eq!(request["op"], "session-proof");
+                let nonce = request["challenge"].as_str().unwrap().to_owned();
+                assert!(atlas_core::protocol::valid_challenge(&nonce));
+                nonces.push(nonce.clone());
+                json!({"ok":true,"challenge":nonce,"proof":proof})
+            } else {
+                assert_eq!(request["op"], "run");
+                assert_eq!(request["argv"][1], "session-info");
+                crate::test_support::completed(&proof.to_string())
+            };
+            socket
+                .get_mut()
+                .write_all(format!("{reply}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        assert_ne!(
+            nonces[0], nonces[1],
+            "each proof needs its own unpredictable challenge"
+        );
+    });
+    let capability = json!({"capabilities":[atlas_core::protocol::SESSION_PROOF]});
+    for daemon in [&capability, &capability, &json!({"capabilities":[]})] {
+        assert_eq!(client.session_proof(daemon).await.unwrap(), source);
+    }
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn identity_reads_input_and_challenged_proof_together_but_waits_for_both() {
+    for mismatch in [false, true] {
+        let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = crate::test_support::client(directory.path());
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
+        std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+        let daemon = UnixListener::bind(&client.transport.path).unwrap();
+        let input = UnixListener::bind(&client.config.input_socket).unwrap();
+        let mut status = verified_status(&[]);
+        status["daemon"]["capabilities"] = json!([atlas_core::protocol::SESSION_PROOF]);
+        let mut caller = Box::pin(client.identity());
+        let mut hello = dispatched(&mut caller, &daemon, "hello").await;
+        answer(&mut hello, status.clone()).await;
+
+        // Neither service replies until both requests have arrived. Sequential
+        // probing would deadlock here; there is no timing-based speed assertion.
+        let mut input_hello = dispatched(&mut caller, &input, "hello").await;
+        let (mut proof, request) = received(&mut caller, &daemon, "session-proof").await;
+        let mut native = status["sessionProof"].clone();
+        if mismatch {
+            native["displayID"] = json!(8);
+        }
+        answer(
+            &mut proof,
+            json!({"ok":true,"challenge":request["challenge"],"proof":native}),
+        )
+        .await;
+        tokio::select! {
+            premature = &mut caller => panic!("identity returned without input: {premature:?}"),
+            _ = tokio::task::yield_now() => {},
+        }
+        answer(&mut input_hello, status["inputService"].clone()).await;
+        let result = caller.await;
+        if mismatch {
+            let session = result.unwrap();
+            assert_eq!(session.epoch.display_id, 8);
+            assert!(
+                !session.input,
+                "mismatched input proof cannot authorize input"
+            );
+        } else {
+            let session = result.unwrap();
+            assert_eq!(session.epoch.display_id, 7);
+            assert!(session.input);
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_unverified_daemon_never_starts_either_independent_read() {
+    for (uid, on_console) in [(7002, false), (7001, true)] {
+        let directory = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+        let mut client = crate::test_support::client(directory.path());
+        client.transport.peer_uid = nix::unistd::getuid().as_raw();
+        client.input_peer_uid = Some(nix::unistd::getuid().as_raw());
+        std::fs::create_dir_all(client.transport.path.parent().unwrap()).unwrap();
+        let daemon = UnixListener::bind(&client.transport.path).unwrap();
+        let input = UnixListener::bind(&client.config.input_socket).unwrap();
+        let mut status = verified_status(&[]);
+        status["user"]["uid"] = json!(uid);
+        status["session"]["onConsole"] = json!(on_console);
+        status["daemon"]["capabilities"] = json!([atlas_core::protocol::SESSION_PROOF]);
+        let mut caller = Box::pin(client.identity());
+        let mut hello = dispatched(&mut caller, &daemon, "hello").await;
+        answer(&mut hello, status).await;
+        assert!(caller.await.is_err());
+        for listener in [&daemon, &input] {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(10), listener.accept())
+                    .await
+                    .is_err(),
+                "no native probe may be sent before the daemon gate passes"
+            );
+        }
+    }
+}

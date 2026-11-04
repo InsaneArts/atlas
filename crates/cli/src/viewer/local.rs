@@ -86,6 +86,14 @@ pub(crate) fn fetch(url: &str, route: &str, deadline: Duration, limit: usize) ->
     Ok(served(url, route, deadline, limit)?.body)
 }
 
+/// The description of the frame service the local viewer at `url` runs,
+/// when it runs one for `helper`'s account.
+pub(crate) fn frame_service(url: &str, helper: u32) -> Option<serde_json::Value> {
+    let body = fetch(url, "pipe.json", Duration::from_secs(2), 16 * 1024).ok()?;
+    let descriptor: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    (descriptor["helperUID"].as_u64() == Some(u64::from(helper))).then_some(descriptor)
+}
+
 /// A GET from the local viewer at `url`. Anything but a 200 is refused.
 fn served(url: &str, route: &str, deadline: Duration, limit: usize) -> Result<Reply> {
     let reply = exchange(url, "GET", route, None, deadline, limit)?;
@@ -98,6 +106,11 @@ fn served(url: &str, route: &str, deadline: Duration, limit: usize) -> Result<Re
 /// it by and the display's size in points, which input is given in.
 pub(crate) struct SharedFrame {
     pub(crate) png: Vec<u8>,
+    /// A live frame's packed RGB pixels, in place of a PNG.
+    pub(crate) rgb: Option<std::sync::Arc<atlas_core::buffer::Buffer>>,
+    /// A live frame's size in pixels.
+    pub(crate) pixels: (u32, u32),
+    pub(crate) metrics: Option<atlas_client::client::live::Metrics>,
     pub(crate) key: String,
     pub(crate) display: (f64, f64),
 }
@@ -111,6 +124,9 @@ pub(crate) fn fetch_frame(url: &str, deadline: Duration, limit: usize) -> Result
 
     Ok(SharedFrame {
         png: reply.body,
+        rgb: None,
+        pixels: (0, 0),
+        metrics: None,
         key: named("x-frame-id").ok_or_else(unanswered)?,
         display: (
             points("x-display-width").ok_or_else(unanswered)?,
@@ -166,6 +182,7 @@ pub(super) fn exchange(
     };
 
     let mut stream = std::net::TcpStream::connect_timeout(&address, left()?).map_err(io)?;
+    stream.set_nodelay(true).map_err(io)?;
     stream.set_write_timeout(Some(left()?)).map_err(io)?;
     let mut head =
         format!("{method} {path}{route} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n");
@@ -178,11 +195,13 @@ pub(super) fn exchange(
     }
 
     head.push_str("\r\n");
-    stream.write_all(head.as_bytes()).map_err(io)?;
-
+    // One write: a separate small body can wait behind Nagle and delayed
+    // ACKs even on the loopback interface.
+    let mut request = head.into_bytes();
     if let Some(body) = body {
-        stream.write_all(body).map_err(io)?;
+        request.extend_from_slice(body);
     }
+    stream.write_all(&request).map_err(io)?;
 
     let mut reply = Vec::new();
     let mut chunk = [0u8; 4096];

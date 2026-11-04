@@ -76,13 +76,24 @@ const ACTION_NOUNS = {
   run: 'A command',
 };
 
-/** How often to ask for a new screen, in milliseconds; null not at all. */
-function interval(state, { hidden = false, picture = 'live', ours = false } = {}) {
+/** The pause between reads of a streamed screen while it changes or the
+ * person controls it: as soon as each answer is drawn. */
+const STREAM_GAP = 100;
+
+/** How often to ask for a new screen, in milliseconds; null not at all. A
+ * screen streamed from the menu bar costs the helper little, so it is asked
+ * for far more often. */
+function interval(
+  state,
+  { hidden = false, picture = 'live', ours = false, streaming = false } = {},
+) {
   if (hidden) return null;
-  if (ours) return 400;
+  if (ours) return streaming ? STREAM_GAP : 400;
   if (picture === 'paused') return 4000;
   if (picture === 'slow') return 5000;
-  return state === 'working' || state === 'control' ? 1000 : 4000;
+  const busy = state === 'working' || state === 'control';
+  if (streaming) return busy ? STREAM_GAP : 1000;
+  return busy ? 1000 : 4000;
 }
 
 /** An age, as the captions say it: "just now", "6 s ago", "3 min ago". */
@@ -299,6 +310,7 @@ function merge(current, result) {
   if (typeof structured.canResume === 'boolean') next.canResume = structured.canResume;
   if (typeof structured.canControl === 'boolean') next.canControl = structured.canControl;
   if (typeof structured.control === 'boolean') next.ours = structured.control;
+  if (typeof structured.streaming === 'boolean') next.streaming = structured.streaming;
   if (next.ours && !current.ours) next.displayed = null;
   // A paused picture stays, except while the person controls the helper.
   const paused = current.picture === 'paused' && current.frame && !next.ours;
@@ -923,6 +935,7 @@ if (typeof document !== 'undefined') {
       hidden: document.hidden || superseded,
       picture: model.picture,
       ours: model.ours,
+      streaming: model.streaming,
     });
     if (wait !== null) timer = setTimeout(poll, wait);
   };

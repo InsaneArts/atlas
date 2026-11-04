@@ -1637,15 +1637,27 @@ Global options:
 ## atlas monitor
 
 ```text
-Watch and control the helper in Atlas's viewer window.
+Watch and control the helper in Atlas's viewer or a terminal pane.
 
-Starts the menu bar first when it is not running.
+The native viewer starts the menu bar when needed. --terminal uses its own uncached viewer and requires a terminal with Kitty graphics. Terminal mode uses installed settings by default, including from a checkout; --config or ATLAS_CONFIG selects another helper explicitly.
 
 Usage: atlas monitor [OPTIONS]
 
 Options:
+      --terminal
+          Draw the helper inside this terminal using Kitty graphics
+
+      --read-only
+          Observe only; never offer keyboard or mouse control
+
+      --max-dimension <PIXELS>
+          Override automatic Retina-aware capture sizing (320–4096 pixels)
+
+      --capture-backend <BACKEND>
+          Capture with cg (default) or experimental sck; requires the updated signed helper
+
       --port <PORT>
-          Local port for the viewer
+          Local port for the native viewer
           
           [default: 8765]
 
@@ -1664,6 +1676,8 @@ Global options:
 
 Examples:
   atlas monitor
+  atlas monitor --terminal
+  atlas monitor --terminal --read-only
   atlas monitor --port 8800
 ```
 

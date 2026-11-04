@@ -47,6 +47,25 @@ fn a_frame_is_a_jpeg_within_the_budget_named_by_its_content() {
 }
 
 #[test]
+fn raw_pixels_make_the_same_kind_of_frame_and_short_ones_are_refused() {
+    let (width, height, stride) = (1600, 900, 1600 * 3 + 16);
+    let rgb = vec![90; stride * height];
+    let shown = frame_rgb(&rgb, (width, height, stride)).unwrap();
+    assert_eq!(shown["mimeType"], "image/jpeg");
+    assert_eq!(
+        (shown["width"].clone(), shown["height"].clone()),
+        (json!(1024), json!(576))
+    );
+    assert_eq!(
+        frame_rgb(&rgb, (width, height, stride)).unwrap()["id"],
+        shown["id"]
+    );
+    assert!(frame_rgb(&rgb[..stride * (height - 1)], (width, height, stride)).is_err());
+    assert!(frame_rgb(&rgb, (width, height, width)).is_err());
+    assert!(frame_rgb(&rgb, (0, height, stride)).is_err());
+}
+
+#[test]
 fn apps_list_front_to_back_with_their_windows_and_bundles() {
     let apps = json!([
         {"name": "Finder", "pid": 1, "policy": "regular", "executable": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"},

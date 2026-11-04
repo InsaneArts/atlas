@@ -25,13 +25,16 @@ axum = { workspace = true, features = ["http1", "json", "tokio"] }
 base64.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 console.workspace = true
+crossterm = { workspace = true, features = ["events"] }
 dialoguer.workspace = true
+flate2 = { workspace = true, features = ["rust_backend"] }
 fs2.workspace = true
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+image = { workspace = true, features = ["png"] }
 indicatif = { workspace = true, features = ["unicode-width"] }
 libc.workspace = true
-nix = { workspace = true, features = ["process", "signal", "term", "user"] }
+nix = { workspace = true, features = ["poll", "process", "signal", "term", "user"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true

@@ -29,22 +29,31 @@ atlas-native = { path = "crates/native" }
 
 axum = { version = "0.8", default-features = false }
 base64 = "0.22"
+block2 = "0.6"
 clap = "4.6"
 console = "0.16"
+crossterm = { version = "0.29", default-features = false }
 dialoguer = { version = "0.12", default-features = false }
+dispatch2 = "0.3"
+flate2 = { version = "1", default-features = false }
 fs2 = "0.4"
 hyper = "1"
 hyper-util = "0.1"
+image = { version = "0.25", default-features = false }
 indicatif = { version = "0.18", default-features = false }
 libc = "0.2"
+memmap2 = "0.9"
 nix = "0.31"
 objc2 = "0.6.5"
 objc2-app-kit = { version = "0.3.2", default-features = false }
 objc2-application-services = { version = "0.3.2", default-features = false }
 objc2-core-foundation = { version = "0.3.2", default-features = false }
 objc2-core-graphics = { version = "0.3.2", default-features = false }
+objc2-core-media = { version = "0.3.2", default-features = false }
+objc2-core-video = { version = "0.3.2", default-features = false }
 objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-image-io = { version = "0.3.2", default-features = false }
+objc2-screen-capture-kit = { version = "0.3.2", default-features = false }
 objc2-security = { version = "0.3.2", default-features = false }
 oslog = { version = "0.2", default-features = false }
 rand = { version = "0.9", default-features = false }

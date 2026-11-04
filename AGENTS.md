@@ -1,7 +1,8 @@
 # Working on Atlas
 
 - Use the Rust workspace under crates/ and the fmt, clippy and test checks
-  listed below. No Python runtime and no TUI.
+  listed below. No Python runtime. The Kitty graphics terminal viewer is the
+  only exception to the no-TUI rule.
 - unsafe code is denied in every crate. Prefer safe crates (nix, objc2 bindings);
   FFI that has none lives in a module or function marked
   allow(unsafe_code) with its reason, and every unsafe block has a SAFETY note.

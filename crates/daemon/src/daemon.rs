@@ -14,6 +14,7 @@ pub mod facts;
 pub mod job;
 #[cfg(target_os = "macos")]
 mod preferences;
+pub mod proof;
 #[cfg(target_os = "macos")]
 pub(crate) mod read;
 mod run;

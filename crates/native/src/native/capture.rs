@@ -13,13 +13,21 @@ use objc2_core_foundation::{
     CFData, CFDictionary, CFMutableData, CFNumber, CFRetained, CFString, CGPoint, CGRect, CGSize,
 };
 use objc2_core_graphics::{
-    CGBitmapContextCreate, CGBitmapContextCreateImage, CGColorSpace, CGContext, CGDisplayBounds,
-    CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGInterpolationQuality,
-    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
+    CGBitmapContextCreate, CGBitmapContextCreateImage, CGBitmapInfo, CGColorRenderingIntent,
+    CGColorSpace, CGContext, CGDataProvider, CGDisplayBounds, CGImage, CGImageAlphaInfo,
+    CGImageByteOrderInfo, CGInterpolationQuality, CGPreflightScreenCaptureAccess,
+    CGRequestScreenCaptureAccess,
 };
 use objc2_image_io::{
     CGImageDestination, CGImageSource, kCGImageDestinationLossyCompressionQuality,
 };
+
+mod raw;
+pub mod source;
+mod stream;
+
+pub use raw::RawShot;
+pub use stream::{stop_display_stream, stream_diagnostics, stream_display_rgb};
 
 /// premultipliedFirst | byteOrder32Little: the native BGRA layout.
 const BGRA: u32 = CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0;
@@ -173,7 +181,58 @@ pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)>
     let source = unsafe { CGImageSource::with_data(&data, None) }.ok_or_else(failed)?;
     // SAFETY: a live source; index 0 is its one image, and no options.
     let image = unsafe { source.image_at_index(0, None) }.ok_or_else(failed)?;
+    jpeg_of(image, limit, quality)
+}
 
+/// Packed 8-bit sRGB pixels, `width`×`height` with rows `stride` bytes
+/// apart, as a JPEG the way [`jpeg`] makes one.
+///
+/// # Errors
+///
+/// Returns an error when the pixels don't fill the size given or can't be
+/// encoded.
+pub fn jpeg_rgb(
+    rgb: &[u8],
+    (width, height, stride): (usize, usize, usize),
+    limit: u32,
+    quality: f64,
+) -> Result<(Vec<u8>, u32, u32)> {
+    let failed = || Error::new(Code::Capture, "The screen could not be read");
+    let row = width.checked_mul(3).ok_or_else(failed)?;
+    let filled = height
+        .checked_sub(1)
+        .and_then(|rows| rows.checked_mul(stride))
+        .and_then(|start| start.checked_add(row));
+    if row == 0 || stride < row || filled.is_none_or(|filled| filled > rgb.len()) {
+        return Err(failed());
+    }
+    let data = CFData::from_bytes(rgb);
+    let provider = CGDataProvider::with_cf_data(Some(&data)).ok_or_else(failed)?;
+    let space = srgb().ok_or_else(failed)?;
+    // SAFETY: the provider holds every row of 8-bit RGB the size and stride
+    // describe, checked above, and no decode array is given.
+    let image = unsafe {
+        CGImage::new(
+            width,
+            height,
+            8,
+            24,
+            stride,
+            Some(&space),
+            CGBitmapInfo(CGImageAlphaInfo::None.0),
+            Some(&provider),
+            std::ptr::null(),
+            false,
+            CGColorRenderingIntent::RenderingIntentDefault,
+        )
+    }
+    .ok_or_else(failed)?;
+    jpeg_of(image, limit, quality)
+}
+
+/// `image` as a JPEG of `quality`, at most `limit` pixels on its longest
+/// side, with its size.
+fn jpeg_of(image: CFRetained<CGImage>, limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)> {
     let (image, target_width, target_height) = resized(image, Some(limit))?;
 
     // SAFETY: ImageIO's own key, a static string it exports.
@@ -269,6 +328,32 @@ fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
 /// Returns an error when Screen Recording is not allowed or the display can't
 /// be captured.
 pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
+    let (image, scale) = display_image(display, area)?;
+    let (image, target_width, target_height) = resized(image, limit)?;
+
+    Ok(Shot {
+        png: png(&image)?,
+        width: size(target_width)?,
+        height: size(target_height)?,
+        scale,
+    })
+}
+
+/// The checked whole display as packed sRGB pixels, without image encoding.
+/// Session and display-epoch checks belong to the caller, around each capture.
+///
+/// # Errors
+///
+/// Returns an error when Screen Recording is not allowed or the display can't
+/// be captured or read.
+pub fn main_display_rgb(display: u32, limit: Option<u32>) -> Result<RawShot> {
+    let (image, scale) = display_image(display, None)?;
+    raw::from_image(&image, limit, scale)
+}
+
+/// The one synchronous, consent-gated source of encoded and raw captures:
+/// the image, and the display's backing pixels per point.
+fn display_image(display: u32, area: Option<CGRect>) -> Result<(CFRetained<CGImage>, f64)> {
     if !permitted() {
         return Err(Error::new(
             Code::Permission,
@@ -310,14 +395,7 @@ pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> R
         1.0
     };
 
-    let (image, target_width, target_height) = resized(image, limit)?;
-
-    Ok(Shot {
-        png: png(&image)?,
-        width: size(target_width)?,
-        height: size(target_height)?,
-        scale,
-    })
+    Ok((image, scale))
 }
 
 #[cfg(test)]

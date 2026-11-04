@@ -92,13 +92,14 @@ struct Entry {
 impl Entry {
     /// A new context for a view of `root`.
     fn new(root: &Server, used: Instant) -> Self {
-        let child = Server::new(
+        let mut child = Server::new(
             root.client.clone(),
             root.config.clone(),
             root.port,
             root.read_only,
             root.host_session.clone(),
         );
+        child.stream = root.stream.clone();
         child.views.store(true, Ordering::Relaxed);
         Self {
             token: atlas_core::files::token(),

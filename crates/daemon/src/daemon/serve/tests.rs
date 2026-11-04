@@ -553,6 +553,7 @@ async fn the_helpers_own_processes_may_only_say_hello() {
     for request in [
         r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
         r#"{"op":"windows"}"#,
+        r#"{"op":"session-proof","challenge":"fresh"}"#,
         r#"{"op":"screenshot"}"#,
         r#"{"op":"apps"}"#,
         r#"{"op":"restart"}"#,
@@ -687,6 +688,7 @@ async fn nothing_acts_while_the_helper_is_on_screen() {
     for request in [
         r#"{"op":"run","argv":["/bin/echo","hi"]}"#,
         r#"{"op":"windows"}"#,
+        r#"{"op":"session-proof","challenge":"fresh"}"#,
         r#"{"op":"screenshot"}"#,
         r#"{"op":"screenshot","pid":200}"#,
         r#"{"op":"screenshot","region":{"x":0,"y":0,"width":10,"height":10}}"#,
@@ -862,7 +864,7 @@ async fn replies_keep_their_shapes() {
     );
     assert_eq!(
         keys(&hello["daemon"]),
-        ["capabilities", "pid", "protocol", "version"]
+        ["capabilities", "pid", "protocol", "resources", "version"]
     );
     assert_eq!(keys(&hello["display"]), ["height", "scale", "width"]);
     assert_eq!(keys(&hello["user"]), ["home", "name", "uid"]);
@@ -984,7 +986,7 @@ async fn anonymous_captures_skip_routing_but_app_crops_still_read_the_dock() {
         DOCKS.store(0, Ordering::SeqCst);
         let reply = tokio::time::timeout(
             Duration::from_secs(5),
-            screenshot(&daemon.screen, None, false, crop),
+            screenshot(&daemon.screen, daemon.source.clone(), None, false, crop),
         )
         .await
         .unwrap();
@@ -1378,7 +1380,16 @@ async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_inc
     assert_eq!(hello["ok"], true, "{hello}");
     assert_eq!(
         hello["daemon"]["capabilities"],
-        json!(["session-pin", "read", "jobs"])
+        json!([
+            "session-pin",
+            "read",
+            "rgb-stream-v1",
+            "rgb-stream-4096",
+            "session-proof-v1",
+            "capture-sck-experimental",
+            "rgb-stream-stop-v1",
+            "jobs"
+        ])
     );
     assert_eq!(
         hello["daemon"]["jobs"],
@@ -1432,7 +1443,16 @@ fn a_blocked_hello_lookup_leaves_other_daemon_requests_responsive() {
     assert_eq!(hello["op"], "hello");
     assert_eq!(
         hello["daemon"]["capabilities"],
-        json!(["session-pin", "read", "jobs"])
+        json!([
+            "session-pin",
+            "read",
+            "rgb-stream-v1",
+            "rgb-stream-4096",
+            "session-proof-v1",
+            "capture-sck-experimental",
+            "rgb-stream-stop-v1",
+            "jobs"
+        ])
     );
     assert_eq!(
         hello["daemon"]["jobs"],
@@ -1445,7 +1465,15 @@ async fn the_daemon_offers_jobs_and_reads() {
     let hello = &exchange(daemon(false), r#"{"op":"hello"}"#).await[0];
     assert_eq!(
         hello["daemon"]["capabilities"],
-        json!(["session-pin", "read"]),
+        json!([
+            "session-pin",
+            "read",
+            "rgb-stream-v1",
+            "rgb-stream-4096",
+            "session-proof-v1",
+            "capture-sck-experimental",
+            "rgb-stream-stop-v1",
+        ]),
         "no jobs without their folder"
     );
     let refused = &exchange(daemon(false), r#"{"op":"job","action":"show"}"#).await[0];
@@ -1455,7 +1483,16 @@ async fn the_daemon_offers_jobs_and_reads() {
     let hello = &exchange(daemon.clone(), r#"{"op":"hello"}"#).await[0];
     assert_eq!(
         hello["daemon"]["capabilities"],
-        json!(["session-pin", "read", "jobs"])
+        json!([
+            "session-pin",
+            "read",
+            "rgb-stream-v1",
+            "rgb-stream-4096",
+            "session-proof-v1",
+            "capture-sck-experimental",
+            "rgb-stream-stop-v1",
+            "jobs"
+        ])
     );
     assert_eq!(
         hello["daemon"]["jobs"],
@@ -1576,4 +1613,31 @@ async fn parts_waiting_to_be_delivered_are_dropped_once_the_session_changes() {
         "only the part before the change: {lines}"
     );
     assert_eq!(cut.unwrap()["code"], "session-changed");
+}
+
+#[tokio::test]
+async fn no_screenshot_is_taken_while_a_live_source_is_quarantined() {
+    use atlas_native::native::capture::source::Source;
+    let mut daemon = Daemon::new(
+        "Aqua".into(),
+        |_, _, _| -> Result<capture::Shot> { panic!("no capture while quarantined") },
+        || false,
+        session,
+    );
+    daemon.screen.windows = fake_windows;
+    daemon.screen.dock = |_| Dock::Icons(Vec::new());
+    daemon.source = Arc::new(Source::new(|| {
+        Err(Error::new(
+            Code::Capture,
+            "Native stream stop is still pending",
+        ))
+    }));
+    let owner = daemon
+        .source
+        .admit(atlas_core::protocol::CaptureBackend::ScreenCaptureKit)
+        .unwrap();
+    assert!(daemon.source.stop(owner, None).is_err());
+    let reply = &exchange(Arc::new(daemon), r#"{"op":"screenshot"}"#).await[0];
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["code"], "busy");
 }

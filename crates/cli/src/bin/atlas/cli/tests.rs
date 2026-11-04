@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn terminal_monitor_is_explicit_and_read_only_requires_the_terminal() {
+    assert!(matches!(
+        parse(&["monitor"]).unwrap().command,
+        Some(Command::Monitor {
+            terminal: false,
+            read_only: false,
+            ..
+        })
+    ));
+    assert!(matches!(
+        parse(&["monitor", "--terminal", "--read-only"])
+            .unwrap()
+            .command,
+        Some(Command::Monitor {
+            terminal: true,
+            read_only: true,
+            ..
+        })
+    ));
+    assert!(parse(&["monitor", "--read-only"]).is_err());
+    assert!(parse(&["monitor", "--terminal", "--json"]).is_err());
+    assert!(parse(&["monitor", "--terminal", "--port", "8765"]).is_err());
+    assert!(parse(&["monitor", "--max-dimension", "640"]).is_err());
+    assert!(parse(&["monitor", "--terminal", "--max-dimension", "319"]).is_err());
+    assert!(parse(&["monitor", "--terminal", "--max-dimension", "4097"]).is_err());
+    assert!(parse(&["monitor", "--terminal", "--max-dimension", "4096"]).is_ok());
+    assert!(parse(&["monitor", "--terminal", "--capture-backend", "sck"]).is_ok());
+    assert!(parse(&["monitor", "--capture-backend", "sck"]).is_err());
+    assert!(parse(&["monitor", "--terminal", "--capture-backend", "unknown"]).is_err());
+    assert!(matches!(
+        parse(&["monitor", "--terminal", "--max-dimension", "640"])
+            .unwrap()
+            .command,
+        Some(Command::Monitor {
+            max_dimension: Some(640),
+            ..
+        })
+    ));
+}
+
+#[test]
 fn allowing_disruption_is_separate_from_reinstalling_an_older_release() {
     let cli = parse(&["update", "--force"]).unwrap();
     assert!(!cli.allow_disrupt);

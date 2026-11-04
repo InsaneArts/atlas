@@ -69,6 +69,19 @@ pub fn session_info() -> Result<Value> {
     ))
 }
 
+/// launchd's session type for this process (`launchctl managername`).
+#[cfg(target_os = "macos")]
+pub fn manager_name() -> String {
+    std::process::Command::new("/bin/launchctl")
+        .arg("managername")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "Unknown".into())
+}
+
 /// Whether this process may use Accessibility (macOS has let the person
 /// allow it for Atlas).
 #[cfg(target_os = "macos")]
@@ -103,6 +116,8 @@ mod journal;
 mod lease;
 #[cfg(target_os = "macos")]
 pub mod processes;
+#[cfg(target_os = "macos")]
+pub mod resources;
 #[cfg(target_os = "macos")]
 pub mod service;
 #[cfg(target_os = "macos")]

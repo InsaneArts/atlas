@@ -13,10 +13,14 @@ use serde_json::{Map, Value, json};
 /// Real display capture in the daemon, synthetic pixels in contract tests.
 pub(super) type Capture = fn(u32, Option<CGRect>, Option<u32>) -> Result<capture::Shot>;
 
+/// Real raw display capture in the daemon, synthetic pixels in stream tests.
+pub(super) type RawCapture = fn(u32, Option<u32>) -> Result<capture::RawShot>;
+
 /// Observations from this helper login, shared by capture and window reads.
 #[derive(Clone, Copy)]
 pub(super) struct Screen {
     pub(super) capture: Capture,
+    pub(super) raw_capture: RawCapture,
     pub(super) windows: fn() -> Result<Vec<Window>>,
     pub(super) bundle_id: fn(i64) -> Option<String>,
     pub(super) dock: fn(&[Window]) -> Dock,
@@ -102,8 +106,12 @@ fn crop_keys(
     keys
 }
 
+/// A screenshot as its reply, taken through `source`: never while a live
+/// source's stop is unconfirmed, and with no change of the live source
+/// between that check and the capture.
 pub(super) async fn screenshot(
     screen: &Screen,
+    source: std::sync::Arc<capture::source::Source>,
     max_dimension: Option<u32>,
     per_point: bool,
     crop: Option<Crop>,
@@ -120,61 +128,9 @@ pub(super) async fn screenshot(
     }
     .policy();
     let taken = tokio::task::spawn_blocking(move || {
-        let validate = || screen.guard(&epoch, policy);
-        validate()?;
-
-        // One read of the window list serves the crop and the report of
-        // windows off the display.
-        let windows = (screen.windows)();
-        // The main display's corner is the origin of global points, so a
-        // window's bounds are points of this display.
-        let display = Region {
-            x: 0,
-            y: 0,
-            width: epoch.width.round() as i32,
-            height: epoch.height.round() as i32,
-        };
-        let (area, app) = match crop {
-            None => (None, None),
-            Some(Crop::Region(asked)) => {
-                let area = crop::clamp(asked, &display).ok_or_else(|| {
-                    failure(Code::BadRequest, "\"region\" lies outside the display")
-                })?;
-                (Some(area), None)
-            }
-            Some(Crop::App { pid }) => {
-                let on_screen = windows
-                    .as_ref()
-                    .map_err(|_| failure(Code::Windows, "The window list is unavailable"))?;
-                let dock = (screen.dock)(on_screen);
-                let found = crop::app(on_screen, pid, &display, &dock).ok_or_else(|| {
-                    failure(
-                        Code::NoWindow,
-                        format!(
-                            "Process {pid} has no window on screen; open one, or take a full screenshot"
-                        ),
-                    )
-                })?;
-                (Some(found.region), Some((pid, found)))
-            }
-        };
-
-        let limit = if per_point {
-            let (width, height) = area.map_or((epoch.width, epoch.height), |area| {
-                (f64::from(area.width), f64::from(area.height))
-            });
-            capture::per_point(max_dimension, width.max(height))
-        } else {
-            max_dimension
-        };
-        let shot =
-            (screen.capture)(epoch.display_id as u32, area.map(rect), limit).map_err(refused)?;
-        let off_display = off_display_windows(windows.as_deref().unwrap_or_default());
-
-        let cropped = area.map(|area| crop_keys(area, app, screen.bundle_id));
-        validate()?;
-
-        Ok((shot, off_display, cropped))
+        source
+            .one_shot(|| take(screen, &epoch, policy, max_dimension, per_point, crop))
+            .unwrap_or_else(|error| Err(refused(error)))
     })
     .await;
     match taken {
@@ -195,4 +151,73 @@ pub(super) async fn screenshot(
         Ok(Err(refusal)) => refusal,
         Err(_) => failure(Code::Capture, "The capture failed"),
     }
+}
+
+/// What a screenshot takes, checked before and after: the shot, the windows
+/// off the display, and a crop's reply keys.
+type Taken = (capture::Shot, Vec<Value>, Option<Map<String, Value>>);
+
+/// Take the screenshot, with the console, session and display checked
+/// before and after.
+fn take(
+    screen: Screen,
+    epoch: &InputEpoch,
+    policy: Policy,
+    max_dimension: Option<u32>,
+    per_point: bool,
+    crop: Option<Crop>,
+) -> std::result::Result<Taken, Value> {
+    let validate = || screen.guard(epoch, policy);
+    validate()?;
+
+    // One read of the window list serves the crop and the report of
+    // windows off the display.
+    let windows = (screen.windows)();
+    // The main display's corner is the origin of global points, so a
+    // window's bounds are points of this display.
+    let display = Region {
+        x: 0,
+        y: 0,
+        width: epoch.width.round() as i32,
+        height: epoch.height.round() as i32,
+    };
+    let (area, app) = match crop {
+        None => (None, None),
+        Some(Crop::Region(asked)) => {
+            let area = crop::clamp(asked, &display)
+                .ok_or_else(|| failure(Code::BadRequest, "\"region\" lies outside the display"))?;
+            (Some(area), None)
+        }
+        Some(Crop::App { pid }) => {
+            let on_screen = windows
+                .as_ref()
+                .map_err(|_| failure(Code::Windows, "The window list is unavailable"))?;
+            let dock = (screen.dock)(on_screen);
+            let found = crop::app(on_screen, pid, &display, &dock).ok_or_else(|| {
+                failure(
+                    Code::NoWindow,
+                    format!(
+                        "Process {pid} has no window on screen; open one, or take a full screenshot"
+                    ),
+                )
+            })?;
+            (Some(found.region), Some((pid, found)))
+        }
+    };
+
+    let limit = if per_point {
+        let (width, height) = area.map_or((epoch.width, epoch.height), |area| {
+            (f64::from(area.width), f64::from(area.height))
+        });
+        capture::per_point(max_dimension, width.max(height))
+    } else {
+        max_dimension
+    };
+    let shot = (screen.capture)(epoch.display_id as u32, area.map(rect), limit).map_err(refused)?;
+    let off_display = off_display_windows(windows.as_deref().unwrap_or_default());
+
+    let cropped = area.map(|area| crop_keys(area, app, screen.bundle_id));
+    validate()?;
+
+    Ok((shot, off_display, cropped))
 }

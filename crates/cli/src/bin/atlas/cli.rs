@@ -69,6 +69,9 @@ pub(super) enum Command {
     },
     #[command(hide = true)]
     SessionInfo,
+    /// Fresh session proofs for the helper daemon, one per line it sends.
+    #[command(hide = true)]
+    SessionProofServe,
     /// This process's permissions as macOS grants them now (the helper's
     /// daemon asks a fresh process: its own Screen Recording reading only
     /// changes when it restarts).
@@ -116,12 +119,27 @@ pub(super) enum Command {
     Install,
     /// Start (or reset) the helper's input service.
     StartInput,
-    /// Watch and control the helper in Atlas's viewer window.
+    /// Watch and control the helper in Atlas's viewer or a terminal pane.
     ///
-    /// Starts the menu bar first when it is not running.
+    /// The native viewer starts the menu bar when needed. --terminal uses
+    /// its own uncached viewer and requires a terminal with Kitty graphics.
+    /// Terminal mode uses installed settings by default, including from a
+    /// checkout; --config or ATLAS_CONFIG selects another helper explicitly.
     Monitor {
-        /// Local port for the viewer.
-        #[arg(long, default_value_t = 8765)]
+        /// Draw the helper inside this terminal using Kitty graphics.
+        #[arg(long, conflicts_with = "json")]
+        terminal: bool,
+        /// Observe only; never offer keyboard or mouse control.
+        #[arg(long, requires = "terminal")]
+        read_only: bool,
+        /// Override automatic Retina-aware capture sizing (320–4096 pixels).
+        #[arg(long, requires = "terminal", value_name = "PIXELS", value_parser = clap::value_parser!(u32).range(320..=4096))]
+        max_dimension: Option<u32>,
+        /// Capture with cg (default) or experimental sck; requires the updated signed helper.
+        #[arg(long, requires = "terminal", value_name = "BACKEND", value_parser = ["cg", "sck"], hide_possible_values = true)]
+        capture_backend: Option<String>,
+        /// Local port for the native viewer.
+        #[arg(long, default_value_t = 8765, conflicts_with = "terminal")]
         port: u16,
     },
     /// Stop agents in the helper until the person resumes them.

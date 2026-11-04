@@ -1,10 +1,9 @@
 //! Changes the person makes in the helper through the viewer: taking,
 //! renewing and ending control under a lease, input sent under it, and
 //! recovery and cleanup, which wait until no control is held.
-use super::{LEASE_SECONDS, Viewer, unpoisoned};
+use super::{LEASE_SECONDS, Viewer, frames::Observation, unpoisoned};
 use atlas_client::client::Client;
 use atlas_control::ActionPermit;
-use atlas_core::screen::frame::Frame;
 use atlas_core::{
     error::{Code, Error, Result},
     session::Epoch,
@@ -265,7 +264,7 @@ impl Viewer {
 
     /// The frame kept under `key`, when `owner` holds control of the session
     /// it shows.
-    async fn controlled_frame(&self, owner: &str, key: &str) -> Result<Arc<Frame>> {
+    async fn controlled_frame(&self, owner: &str, key: &str) -> Result<Arc<Observation>> {
         self.lease.lock().await.require(owner)?;
         let frame = self.observed(key).await?;
         if self.lease_epoch.lock().await.as_ref() != Some(&frame.epoch) {

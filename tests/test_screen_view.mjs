@@ -30,6 +30,23 @@ test('the screen is asked for often while someone acts or has control, and rarel
   );
 });
 
+test('a screen streamed from the menu bar is asked for as soon as each answer is drawn', () => {
+  const streaming = true;
+  assert.equal(view.interval('working', { streaming }), 100);
+  assert.equal(view.interval('control', { streaming }), 100);
+  assert.equal(view.interval('idle', { streaming, ours: true }), 100);
+  assert.equal(view.interval('idle', { streaming }), 1000, 'still quicker when nothing happens');
+  assert.equal(view.interval('working', { streaming, picture: 'paused' }), 4000);
+  assert.equal(view.interval('working', { streaming, hidden: true }), null);
+});
+
+test('a screen answer says whether it was streamed, and other answers leave that alone', () => {
+  const streamed = view.merge({}, { structuredContent: { streaming: true } });
+  assert.equal(streamed.streaming, true);
+  assert.equal(view.merge(streamed, { structuredContent: {} }).streaming, true);
+  assert.equal(view.merge(streamed, { structuredContent: { streaming: false } }).streaming, false);
+});
+
 test('each state offers its one action, and Give Back while the person has control here', () => {
   assert.equal(view.action('working').tool, 'stop_agent');
   assert.equal(view.action('idle').tool, 'stop_agent');

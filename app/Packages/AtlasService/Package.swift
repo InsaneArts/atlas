@@ -30,6 +30,7 @@ let package = Package(
     .testTarget(
       name: "AtlasServiceTests",
       dependencies: ["AtlasService", "AtlasServiceTesting"],
+      resources: [.copy("Fixtures/FramePipe")],
       swiftSettings: strict
     ),
   ],

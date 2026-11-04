@@ -150,7 +150,15 @@ const GROUPS: &[(&str, &[Entry])] = &[
         "Take over or recover",
         &[
             ("switch", &[]),
-            ("monitor", &["atlas monitor", "atlas monitor --port 8800"]),
+            (
+                "monitor",
+                &[
+                    "atlas monitor",
+                    "atlas monitor --terminal",
+                    "atlas monitor --terminal --read-only",
+                    "atlas monitor --port 8800",
+                ],
+            ),
             ("restart", &[]),
             ("logout", &["atlas logout", "atlas logout --force"]),
             ("start-input", &[]),

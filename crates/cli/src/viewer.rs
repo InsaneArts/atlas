@@ -10,14 +10,16 @@ mod local;
 mod origins;
 mod reads;
 mod settings;
+mod terminal;
 
 pub(crate) use app::{launched_url, open_viewer};
 pub use app::{monitor, render_menubar, serve};
 pub(crate) use control::LeaseRefusal;
 pub(crate) use local::{
-    SharedFrame, address, answering, fetch, fetch_frame, local, post_local, process, recorded,
-    recorded_port, running,
+    SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, post_local, process,
+    read_record, recorded, recorded_port, running,
 };
+pub(crate) use terminal::{TerminalFrames, TerminalService};
 
 use crate::menubar::Line;
 use atlas_client::{client::Client, helper_info};
@@ -27,7 +29,7 @@ use atlas_core::{
     session::Epoch,
 };
 use serde_json::Value;
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard, Semaphore};
 
 /// How long control lasts without a renewal; the app is told the same.
@@ -63,6 +65,16 @@ struct Viewer {
     /// more begin.
     closed: RwLock<bool>,
     frames: Mutex<frames::Frames>,
+    /// Pictures an observer of the frame service committed, kept as what
+    /// input needs of them, under their frame keys.
+    committed: std::sync::Mutex<std::collections::VecDeque<(String, Arc<frames::Observation>)>>,
+    /// The frame service this viewer runs, when it runs one: what a client
+    /// needs to pair with it. A bearer secret, like the URL.
+    pipe: std::sync::Mutex<Option<Value>>,
+    /// The widest picture a capture asks for, in pixels.
+    frame_width: u32,
+    /// How recent the last frame must be to stand in for a capture.
+    frame_reuse: Duration,
     capture: std::sync::Mutex<Option<frames::Capture>>,
     requests: Semaphore,
     urgent: Semaphore,

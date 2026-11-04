@@ -28,6 +28,7 @@ use unicode_segmentation::UnicodeSegmentation;
 mod dock;
 #[cfg(test)]
 pub(super) mod tap;
+mod text;
 
 /// The only place events go: the helper login's own session event tap, never
 /// the global HID tap.
@@ -731,9 +732,11 @@ impl Engine {
                 self.post(event, 0, self.position)?;
             }
             Action::Type { text } => {
+                let plan = text::Plan::current(CGEventSource::keyboard_type(self.source.get()));
                 for character in text.graphemes(true) {
                     let units: Vec<u16> = character.encode_utf16().collect();
-                    self.key(0, 0, Some(&units))?;
+                    let (code, flags) = plan.key(&units);
+                    self.key(code, flags, Some(&units))?;
                     self.delay(TYPE_GAP).await?;
                 }
             }

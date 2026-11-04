@@ -1,7 +1,11 @@
 //! The viewer's HTTP server on the loopback interface: connections within
 //! their limits, each request only from the viewer's own origin and private
 //! address, routed once and answered in a task of its own.
-use super::{LEASE_SECONDS, LeaseRefusal, SERVICE, Viewer, frames::Frames};
+use super::{
+    LEASE_SECONDS, LeaseRefusal, SERVICE, Viewer,
+    frames::{FRAME_REUSE, FRAME_WIDTH, Frames},
+    unpoisoned,
+};
 use crate::menubar::Line;
 use atlas_client::{client::Client, helper_info};
 use atlas_control::Lease;
@@ -82,6 +86,10 @@ pub(super) fn configured(
         input_recording: Mutex::new(()),
         closed: RwLock::new(false),
         frames: Mutex::new(Frames::default()),
+        committed: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        pipe: std::sync::Mutex::new(None),
+        frame_width: FRAME_WIDTH,
+        frame_reuse: FRAME_REUSE,
         capture: std::sync::Mutex::new(None),
         requests: Semaphore::new(CONCURRENT_REQUESTS),
         urgent: Semaphore::new(URGENT_REQUESTS),
@@ -149,6 +157,10 @@ fn serve_connection(
     viewer: &Arc<Viewer>,
     mut closed: watch::Receiver<()>,
 ) {
+    // Small input requests must not wait behind Nagle and delayed ACKs.
+    if stream.set_nodelay(true).is_err() {
+        return;
+    }
     let (named, mut naming) = watch::channel(false);
     let service = hyper::service::service_fn({
         let viewer = viewer.clone();
@@ -290,6 +302,8 @@ routes! {
         Screenshots => "screenshots.json",
         Screenshot => "screenshot.png",
         Frame => "frame.png",
+        // How to pair with the frame service, when this viewer runs one.
+        Pipe => "pipe.json",
     }
     POST {
         Recover => "recover",
@@ -493,6 +507,13 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>) -> Respon
         },
         Read::Screenshots => read_reply(viewer.screenshots().await),
         Read::Screenshot => viewer.screenshot(query).await,
+        Read::Pipe => match unpoisoned(&viewer.pipe).clone() {
+            Some(descriptor) => json_response(200, descriptor),
+            None => json_response(
+                404,
+                json!({"ok": false, "code": "not-offered", "error": "This viewer runs no frame service"}),
+            ),
+        },
         Read::Frame => match viewer.frame().await {
             Ok((key, frame)) => frame_reply(key, &frame),
             Err(error) => {

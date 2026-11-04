@@ -82,6 +82,8 @@ You can choose **Live**, **Every 5 Seconds** or **Paused** for the picture. Paus
 
 Some agent hosts can show Atlas inside the conversation. That is a different viewing route from the native window; see [Agent connections](agents.md) for host support.
 
+To watch inside a Rex terminal pane, use `atlas monitor --terminal`. The [terminal viewer guide](terminal-viewer.md) covers requirements, splitting a pane and keyboard controls.
+
 ## Take control or stop agents
 
 Choose **Take Control** in the viewer to use your mouse and keyboard in the helper. Atlas waits for control to become available before accepting your input. While you hold control, agents cannot send competing input. Choose **Give Back**, or press **Control-Shift-Esc**, when you are done.

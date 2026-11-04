@@ -64,6 +64,10 @@ pub async fn serve(
     let (lines, receiver) = tokio::sync::mpsc::unbounded_channel();
     *unpoisoned(&viewer.app) = Some(lines);
 
+    // The frame service lives as long as this viewer and follows its helper.
+    // Without it the app reads pictures over this viewer's address as before.
+    let (pipe_stop, pipe) = keep_pipe(viewer.clone());
+
     // The record names a viewer with an app; none is left when the app
     // does not start.
     let mut app = App::launch(&program, &viewer.url, receiver).await?;
@@ -104,6 +108,8 @@ pub async fn serve(
     expiry.abort();
     viewer.close().await;
     let _ = viewer.release(None).await;
+    let _ = pipe_stop.send(());
+    let _ = pipe.await;
 
     // The record goes with this viewer, unless another has replaced it.
     if let Some((path, _)) = unpoisoned(&viewer.record).take() {
@@ -113,26 +119,102 @@ pub async fn serve(
     Ok(Value::Null)
 }
 
+/// Keep a frame service for the helper `viewer` serves now, until told to
+/// stop: when its settings name another helper, the old service ends, its
+/// committed pictures are forgotten and a new one starts. A service that
+/// cannot start is tried again each second.
+fn keep_pipe(
+    viewer: Arc<Viewer>,
+) -> (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        let mut running: Option<(Arc<Client>, crate::frame_pipe::service::Service)> = None;
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = &mut stopped => break,
+                _ = tick.tick() => {}
+            }
+            let client = viewer.client();
+            let same = |serving: &Arc<Client>| {
+                serving.transport.peer_uid == client.transport.peer_uid
+                    && serving.transport.path == client.transport.path
+            };
+            if running.as_ref().is_some_and(|(serving, _)| same(serving)) {
+                continue;
+            }
+            if let Some((_, old)) = running.take() {
+                unpoisoned(&viewer.pipe).take();
+                // Stopped first, so no late commit of the old helper's
+                // pictures is kept after they are forgotten.
+                old.stop().await;
+                viewer.forget_committed();
+            }
+            running = start_pipe(&viewer, client.clone())
+                .await
+                .map(|service| (client, service));
+        }
+        unpoisoned(&viewer.pipe).take();
+        if let Some((_, service)) = running {
+            service.stop().await;
+        }
+    });
+    (stop, task)
+}
+
+/// Start the frame service for `client`'s helper, its committed pictures
+/// kept for input, and offer it on `viewer`'s address; none when it cannot
+/// start, as when another service already serves this helper.
+async fn start_pipe(
+    viewer: &Arc<Viewer>,
+    client: Arc<Client>,
+) -> Option<crate::frame_pipe::service::Service> {
+    let held = Arc::downgrade(viewer);
+    let witness: crate::frame_pipe::broker::Witness = Arc::new(move |key, epoch, at| {
+        if let Some(viewer) = held.upgrade() {
+            viewer.remember_committed(key, epoch, at);
+        }
+    });
+    let service = crate::frame_pipe::service::start(client, viewer.frame_width, witness)
+        .await
+        .ok()?;
+    *unpoisoned(&viewer.pipe) = Some(service.descriptor().clone());
+    Some(service)
+}
+
+impl Viewer {
+    /// End control whose lease ran out. False once shutdown began, whose own
+    /// release ends control instead.
+    pub(super) async fn end_expired(&self) -> bool {
+        // Ending expired control is a change like any other.
+        let Some(_changing) = self.changing().await else {
+            return false;
+        };
+
+        let expired = {
+            let mut lease = self.lease.lock().await;
+            lease.expire();
+            lease.expired()
+        };
+        if expired {
+            let _ = self.release(None).await;
+        }
+        true
+    }
+}
+
 /// End control whose lease ran out, in a task of its own, until shutdown
 /// begins.
 fn expire_control(viewer: Arc<Viewer>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(100)).await;
-
-            // Ending expired control is a change like any other; once
-            // shutdown began, its own release ends control.
-            let Some(_changing) = viewer.changing().await else {
+            if !viewer.end_expired().await {
                 break;
-            };
-
-            let expired = {
-                let mut lease = viewer.lease.lock().await;
-                lease.expire();
-                lease.expired()
-            };
-            if expired {
-                let _ = viewer.release(None).await;
             }
         }
     })

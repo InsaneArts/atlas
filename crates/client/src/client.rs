@@ -7,6 +7,7 @@ mod apps;
 mod capture;
 mod input;
 mod install;
+pub mod live;
 mod mutate;
 mod record;
 mod run;
@@ -34,7 +35,7 @@ use atlas_control::Controller;
 use atlas_core::{
     config::Config,
     error::{Code, Error, Result},
-    protocol::{SESSION_PIN, SessionPin},
+    protocol::{SESSION_PIN, SESSION_PROOF, SessionPin},
     session::{Observation, Session},
     transport::{Transport, run_output},
 };
@@ -200,21 +201,33 @@ impl Client {
             return Ok(hello);
         }
 
-        hello["inputService"] = self
-            .input_transport()
-            .call(&json!({ "op": "hello" }))
-            .await
-            .unwrap_or_else(|error| json!(error));
+        // Independent reads after the daemon's UID and off-console gate, joined
+        // before returning: every identity still needs a new input report and
+        // a new challenged proof, whose epochs require_hidden compares.
+        // Neither result authorizes anything on its own.
+        let input = self.input_transport();
+        let request = json!({ "op": "hello" });
+        let (input, proof) =
+            tokio::join!(input.call(&request), self.session_proof(&hello["daemon"]));
+        hello["inputService"] = input.unwrap_or_else(|error| json!(error));
         hello["installedBuild"] = json!(self.installed_build());
-        hello["sessionProof"] = self
-            .session_proof()
-            .await
-            .unwrap_or_else(|error| json!(error));
+        hello["sessionProof"] = proof.unwrap_or_else(|error| json!(error));
 
         Ok(hello)
     }
 
-    async fn session_proof(&self) -> Result<Value> {
+    /// A fresh proof of the helper's session from a process of its own: the
+    /// daemon's persistent proof worker when it has one, else a new run of
+    /// the shared Atlas command.
+    async fn session_proof(&self, daemon: &Value) -> Result<Value> {
+        if atlas_core::session::has_capability(daemon, SESSION_PROOF) {
+            let challenge = atlas_core::files::token();
+            let reply = self
+                .transport
+                .call(&json!({"op": "session-proof", "challenge": challenge}))
+                .await?;
+            return Self::challenged_proof(&reply, &challenge);
+        }
         let request = json!({
             "op": "run",
             "argv": [self.config.identity_probe, "session-info"],
@@ -236,6 +249,20 @@ impl Client {
             .map_err(|_| Error::new(Code::Identity, "Malformed or oversized identity output"))?;
 
         Ok(serde_json::from_slice(&output)?)
+    }
+
+    /// The proof in `reply`, only when it answers `challenge`.
+    fn challenged_proof(reply: &Value, challenge: &str) -> Result<Value> {
+        if reply["ok"] != true
+            || reply["challenge"].as_str() != Some(challenge)
+            || !reply["proof"].is_object()
+        {
+            return Err(Error::new(
+                Code::Identity,
+                "The independent session proof did not match its challenge",
+            ));
+        }
+        Ok(reply["proof"].clone())
     }
 
     /// What the helper's status says now.

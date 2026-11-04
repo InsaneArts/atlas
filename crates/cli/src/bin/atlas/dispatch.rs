@@ -260,6 +260,9 @@ async fn carry_out(
         Command::EnvironmentWorker { packet, apply } => environment::worker(&packet, apply),
         Command::AgentGuide(args) => Ok(guide(&args)),
         Command::SessionInfo => atlas_native::native::session_info(),
+        Command::SessionProofServe => {
+            unreachable!("main serves independent proofs before dispatch")
+        }
         Command::PermissionsInfo => Ok(atlas_daemon::daemon::facts::permissions_now()),
         Command::ElementsInfo { pid } => elements_info(pid),
         // Main runs the helper daemon on its own thread and becomes a job
@@ -297,7 +300,25 @@ async fn carry_out(
         Command::Stop => client()?.hold(true).await,
         Command::Resume => client()?.hold(false).await,
         Command::Mcp(args) => mcp(config, client()?, args).await,
-        Command::Monitor { port } => viewer::monitor(config, port, client()?.output_dir()?).await,
+        Command::Monitor {
+            terminal: true,
+            read_only,
+            max_dimension,
+            capture_backend,
+            ..
+        } => {
+            let backend = if capture_backend.as_deref() == Some("sck") {
+                atlas_core::protocol::CaptureBackend::ScreenCaptureKit
+            } else {
+                atlas_core::protocol::CaptureBackend::CoreGraphics
+            };
+            atlas_cli::terminal::monitor(client()?, config, read_only, max_dimension, backend)
+                .await?;
+            Ok(Value::Null)
+        }
+        Command::Monitor { port, .. } => {
+            viewer::monitor(config, port, client()?.output_dir()?).await
+        }
         Command::Screenshot(args) => screenshot(&client()?, args).await,
         Command::Apps { all } => Ok(atlas_client::app_selection::listed(
             client()?.apps().await?,

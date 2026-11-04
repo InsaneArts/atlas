@@ -74,7 +74,7 @@ impl Viewer {
             *unpoisoned(&self.settings_text) = Some(text);
         }
 
-        self.frames.lock().await.items.clear();
+        self.frames.lock().await.clear();
         *unpoisoned(&self.input_started) = None;
     }
 

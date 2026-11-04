@@ -54,6 +54,8 @@ final class ViewerReadingLoop {
   @ObservationIgnored private(set) var ticking: Task<Void, Never>?
   /// Waits ``Motion/Duration/appearDelay`` for a picture before the waiting stage rings its mark.
   @ObservationIgnored private var waiting: Task<Void, Never>?
+  /// Streams pictures from the frame service while watching, when the app can reach one.
+  @ObservationIgnored private let pump: ViewerFramePump?
 
   /// Creates a loop that has read nothing yet, at the person's saved rate.
   ///
@@ -67,6 +69,9 @@ final class ViewerReadingLoop {
     uptime = dependencies.uptime
     clock = dependencies.clock
     pictures = dependencies.pictures
+    pump = dependencies.framePipe.map {
+      ViewerFramePump(service: dependencies.service, connector: $0, clock: dependencies.clock)
+    }
     rate = ViewerPictureRate(rawValue: preferences.loadRate()) ?? .live
   }
 
@@ -91,6 +96,22 @@ final class ViewerReadingLoop {
     }
     tick(on)
     if on && viewer?.session.paused != true { awaitPicture() } else { stopAwaiting() }
+    if on {
+      pump?.start(
+        paused: { [weak self] in self?.viewer?.session.paused ?? true },
+        pause: { [weak self] in
+          // Live, or controlling, streams at the service's pace; a slower rate waits between pictures.
+          guard let self, rate != .live, viewer?.holdingControl != true else { return .zero }
+          return .seconds(rate.seconds)
+        },
+        show: { [weak self] frame, decoded in
+          guard let self else { return }
+          show(frame, decoded: decoded, ready: reading.status.ready)
+        }
+      )
+    } else {
+      pump?.stop()
+    }
   }
 
   /// Read again now, or right after the reading under way.
@@ -137,7 +158,9 @@ final class ViewerReadingLoop {
     let readingNumber = statusReading
     let current = { [unowned self] in watching && number == generation && readingNumber == statusReading }
     let paused = viewer?.session.paused == true
-    let needsEarlyFrame = !paused && reading.frame == nil
+    // While the frame service streams pictures, a reading reads the status alone.
+    let streaming = pump?.streaming == true
+    let needsEarlyFrame = !paused && reading.frame == nil && !streaming
     // With no picture yet, the first one is asked for alongside the
     // status, so the window shows the helper at once.
     async let early = needsEarlyFrame ? (try? await service.frame()) : nil
@@ -150,16 +173,18 @@ final class ViewerReadingLoop {
         return
       }
       if let reason = reply.unobservable?.word { throw ServiceError(reason) }
+      if streaming { return }
       let next: Frame
       if let early = await early {
         next = early
       } else {
         next = try await service.frame()
       }
-      guard current() else { return }
+      guard current(), pump?.streaming != true else { return }
       // Decoded once: the view draws its pixels, and input is mapped through its size.
       let decoded = await decode(next)
-      guard current() else { return }
+      // The frame service may have taken over meanwhile: its pictures win.
+      guard current(), pump?.streaming != true else { return }
       guard let decoded else { throw ServiceError.unknownScreenSize }
       show(next, decoded: decoded, ready: reply.ready)
     } catch is StatusRefused {
@@ -250,8 +275,10 @@ final class ViewerReadingLoop {
   ///   - decoded: Its picture and size, decoded once.
   ///   - ready: Whether the status read with it says the helper takes input.
   func show(_ frame: Frame, decoded: DesktopPicture.Decoded, ready: Bool) {
+    // A change between the viewer's pictures and the frame service's is a change of transport, not of helper:
+    // their revisions are compared only with their own kind.
     if let viewer, viewer.holdingControl || viewer.control.acquiring, let shown = reading.frame,
-      shown.revision != frame.revision
+      shown.revision.hasPrefix("pipe:") == frame.revision.hasPrefix("pipe:"), shown.revision != frame.revision
     {
       viewer.control.releaseControl(ViewerWords.helperChanged)
     }
