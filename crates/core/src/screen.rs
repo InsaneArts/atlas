@@ -3,4 +3,5 @@ pub mod frame;
 pub mod geometry;
 pub mod png;
 pub mod select;
+pub mod wait;
 pub mod windows;

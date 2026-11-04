@@ -18,7 +18,7 @@ pub use launch::open;
 pub use quit::close;
 pub(crate) use quit::{QUIT_WAIT, Quitting, quit_until};
 pub use target::Target;
-pub use windows::{WindowFilter, list, wait};
+pub use windows::{WindowFilter, list, wait, wait_for_element};
 
 #[cfg(test)]
 mod tests;

@@ -2,7 +2,10 @@
 //! elements --name` matches them: shared by the commands that list and click
 //! elements and by the helper's check of the focused field. A name that
 //! picks out nothing is judged by how close it comes to the names there are.
-use crate::{name::same_text, screen::elements::Element};
+use crate::{
+    name::same_text,
+    screen::elements::{Element, drawn},
+};
 
 /// Which accessibility elements a command is about.
 #[derive(Debug, Default, Clone)]
@@ -121,6 +124,83 @@ impl ElementFilter {
 
         self.compare(element, &unknown).is_some()
     }
+}
+
+/// Which one element a name or role picks out of a scan, as a named click
+/// picks it.
+#[derive(Debug)]
+pub enum Choice<'a> {
+    /// The one drawn element that matches best.
+    One(&'a Element),
+    /// Not exactly one: the elements in play and those of them that match
+    /// best and are drawn.
+    NotOne {
+        in_play: Vec<&'a Element>,
+        matching: Vec<&'a Element>,
+    },
+    /// One matches, but another whose name could not be read whole might
+    /// match too.
+    Doubtful(&'a Element),
+}
+
+/// The element `filter` picks out of `elements`: of those in play (only an
+/// open menu's items while one is open), the drawn ones matching best; a
+/// menu bar title gives way to one window element of the same name unless
+/// a role is asked for. One is chosen only when no other drawn element
+/// whose name could not be read whole might match as well.
+pub fn choose<'a>(elements: &'a [Element], filter: &ElementFilter) -> Choice<'a> {
+    let in_play = in_play(elements);
+    let matches: Vec<(&Element, NameMatch)> = in_play
+        .iter()
+        .filter_map(|element| Some((*element, filter.match_of(element)?)))
+        .collect();
+    let best = matches.iter().map(|(_, kind)| *kind).max();
+    let matching: Vec<&Element> = matches
+        .iter()
+        .filter(|(element, kind)| Some(*kind) == best && element.frame.as_ref().is_some_and(drawn))
+        .map(|(element, _)| *element)
+        .collect();
+
+    // A menu bar title gives way to a window element of the same name
+    // (a Help button beside a Help menu); --role AXMenuBarItem asks for it.
+    let in_windows: Vec<&Element> = matching
+        .iter()
+        .copied()
+        .filter(|element| element.role.as_deref() != Some("AXMenuBarItem"))
+        .collect();
+    let matching = if filter.role.is_none() && in_windows.len() == 1 {
+        in_windows
+    } else {
+        matching
+    };
+
+    let [element] = matching.as_slice() else {
+        return Choice::NotOne { in_play, matching };
+    };
+
+    // An element whose selector attributes could not be read may be a
+    // second, unseen match, unless it is collapsed and could never be chosen.
+    let doubtful = in_play.iter().any(|other| {
+        other.index != element.index
+            && (!other.unreadable.is_empty() || !other.truncated.is_empty())
+            && other.frame.as_ref().is_none_or(drawn)
+            && filter.might_match(other)
+    });
+    if doubtful {
+        Choice::Doubtful(element)
+    } else {
+        Choice::One(element)
+    }
+}
+
+/// The elements a name is judged against: while a menu is open, only its
+/// items (a click outside it just closes the menu).
+pub fn in_play(elements: &[Element]) -> Vec<&Element> {
+    let menu_open = elements.iter().any(|element| element.menu);
+    elements
+        .iter()
+        .filter(|element| element.menu || !menu_open)
+        .collect()
 }
 
 /// The text of a plain label (SwiftUI and AppKit put it in the value of a

@@ -556,6 +556,39 @@ fn waits_name_the_window_or_its_closing() {
 }
 
 #[test]
+fn element_waits_say_what_the_element_is_now_and_its_ref() {
+    let enabled = show(
+        View::Wait { gone: false },
+        json!({"ok": true, "waitedMs": 312, "state": "enabled", "matched": true,
+               "look": "8123abc", "element": {"index": 7, "role": "AXButton", "name": "Save"}}),
+    );
+    assert_eq!(enabled.out, "✓ Save is enabled after 312 ms  ref 8123abc.7");
+
+    let gone = show(
+        View::Wait { gone: true },
+        json!({"ok": true, "waitedMs": 5, "state": "gone", "matched": true}),
+    );
+    assert_eq!(gone.out, "✓ The element is gone after 5 ms");
+
+    let there = show(
+        View::Wait { gone: false },
+        json!({"ok": true, "waitedMs": 5, "state": "exists", "matched": true}),
+    );
+    assert_eq!(there.out, "✓ The element is there after 5 ms");
+
+    let late = show(
+        View::Wait { gone: false },
+        json!({"ok": false, "code": "wait-failed", "timedOut": true, "state": "enabled",
+               "error": "The element was not enabled in time: the element was disabled",
+               "uncertain": false}),
+    );
+    assert!(
+        late.err
+            .starts_with("✗ The element was not enabled in time: the element was disabled")
+    );
+}
+
+#[test]
 fn typing_that_stops_part_way_says_so() {
     let shown = show(
         View::Type,
