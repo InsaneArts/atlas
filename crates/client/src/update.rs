@@ -18,9 +18,9 @@ use std::{
     process::Command,
 };
 
-/// Where the website serves releases: one directory per version, and
-/// `latest/` for the newest.
-const RELEASES: &str = "https://atlas.insanearts.io/releases";
+/// Where GitHub serves releases: each under its `vX.Y.Z` tag, and
+/// `latest/download` for the newest.
+const RELEASES: &str = "https://github.com/InsaneArts/atlas/releases";
 
 const NO_RELEASE: &str =
     "Atlas has no public release yet. Check https://atlas.insanearts.io for news.";
@@ -31,26 +31,33 @@ const NO_RELEASE: &str =
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Source {
     base: String,
-    /// The website's newest release, which may not be published yet.
+    /// GitHub's newest release, which may not be published yet.
     latest: bool,
 }
 
 impl Source {
-    /// The mirror in `ATLAS_DOWNLOAD_BASE`, else the website's release
-    /// `tag`, or its newest.
+    /// The mirror in `ATLAS_DOWNLOAD_BASE`, else GitHub's release `tag`
+    /// (`0.2.0` or `v0.2.0`), or its newest.
     pub fn from_env(tag: Option<String>) -> Self {
         match std::env::var("ATLAS_DOWNLOAD_BASE") {
             Ok(base) if !base.is_empty() => Self {
                 base: base.trim_end_matches('/').to_owned(),
                 latest: false,
             },
-            _ => Self::website(tag.as_deref()),
+            _ => Self::github(tag.as_deref()),
         }
     }
 
-    fn website(tag: Option<&str>) -> Self {
+    fn github(tag: Option<&str>) -> Self {
+        let base = match tag {
+            Some(tag) => format!(
+                "{RELEASES}/download/v{}",
+                tag.strip_prefix('v').unwrap_or(tag)
+            ),
+            None => format!("{RELEASES}/latest/download"),
+        };
         Self {
-            base: format!("{RELEASES}/{}", tag.unwrap_or("latest")),
+            base,
             latest: tag.is_none(),
         }
     }
@@ -163,7 +170,7 @@ fn curl(url: &str, output: &Path) -> Result<()> {
     }))
 }
 
-/// A newest release the website does not have yet is not published, not a
+/// A newest release GitHub does not have yet is not published, not a
 /// failed download.
 fn unpublished(error: Error, latest: bool) -> Error {
     if latest && error.error.contains("returned error: 404") {

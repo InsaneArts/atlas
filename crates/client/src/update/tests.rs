@@ -562,21 +562,23 @@ fn an_app_must_be_the_version_its_archive_is_named_for() {
 }
 
 #[test]
-fn releases_come_from_the_website() {
+fn releases_come_from_github() {
     assert_eq!(
-        Source::website(None),
+        Source::github(None),
         Source {
-            base: "https://atlas.insanearts.io/releases/latest".into(),
+            base: "https://github.com/InsaneArts/atlas/releases/latest/download".into(),
             latest: true,
         }
     );
-    assert_eq!(
-        Source::website(Some("0.2.0")),
-        Source {
-            base: "https://atlas.insanearts.io/releases/0.2.0".into(),
-            latest: false,
-        }
-    );
+    for tag in ["0.2.0", "v0.2.0"] {
+        assert_eq!(
+            Source::github(Some(tag)),
+            Source {
+                base: "https://github.com/InsaneArts/atlas/releases/download/v0.2.0".into(),
+                latest: false,
+            }
+        );
+    }
     assert!(
         atlas_core::app_bundle::INSTALL_COMMAND.contains("https://atlas.insanearts.io/install.sh")
     );

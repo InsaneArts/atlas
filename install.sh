@@ -8,9 +8,8 @@
 # account can run it too) and links the `atlas` command into ~/.local/bin.
 # An Atlas that is already set up updates itself instead, with atlas update.
 #
-# Releases are served from https://atlas.insanearts.io/releases/<version>/,
-# each a directory holding SHA256SUMS and the Atlas-<version>-macos.zip it
-# names; latest/ is the newest.
+# Releases are GitHub releases of InsaneArts/atlas, each tagged v<version>
+# and holding SHA256SUMS and the Atlas-<version>-macos.zip it names.
 #
 # Environment:
 #   ATLAS_VERSION              release to install (default: latest)
@@ -95,7 +94,14 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-base=${ATLAS_DOWNLOAD_BASE:-$SITE/releases/${ATLAS_VERSION:-latest}}
+releases="https://github.com/InsaneArts/atlas/releases"
+if [ -n "${ATLAS_DOWNLOAD_BASE:-}" ]; then
+	base=$ATLAS_DOWNLOAD_BASE
+elif [ -n "${ATLAS_VERSION:-}" ]; then
+	base="$releases/download/v${ATLAS_VERSION#v}"
+else
+	base="$releases/latest/download"
+fi
 base=${base%/}
 # Over https, from a file:// folder, or over plain http from this Mac only
 # (127.0.0.1 or localhost, as a local rehearsal serves releases); atlas
