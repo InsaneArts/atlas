@@ -33,6 +33,11 @@ expr "$version" : '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$' >/dev/null ||
 tag="v$version"
 cd "$(dirname "$0")/.."
 
+# The toolchain rust-toolchain.toml pins, with both Mac targets, ahead of any
+# other cargo on PATH (Homebrew's ignores the pin and has no x86_64 library).
+command -v rustup >/dev/null || fail "rustup is required for the pinned toolchain"
+PATH="$(dirname "$(rustup which cargo)"):$PATH"
+
 step "Preflight"
 [ "$(git rev-parse --abbrev-ref HEAD)" = main ] || fail "release from main"
 [ -z "$(git status --porcelain)" ] || fail "commit or stash your changes first"
