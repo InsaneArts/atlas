@@ -1,15 +1,16 @@
 //! Input to the helper through its input service: a batch validated in
 //! the verified session and sent under a grant of input, checked against
-//! the app it is for when asked, and the native requests behind it that
-//! take, release and reset that grant.
-use super::{Actor, Client, Mutation, service::require_accessibility};
+//! the app it is for when asked, the native requests behind it that take,
+//! release and reset that grant, and the looks at an app's elements it
+//! keeps for referenced clicks.
+use super::{Actor, Client, Mutation, Verified, service::require_accessibility};
 use atlas_control::{Beside, Ownership, SharedLease};
 use atlas_core::{
     actions::{self, Expect},
     error::{Code, Error, Holder, Result},
     session::{
-        Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, NativeObservation, Observation,
-        Session,
+        ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
+        NativeObservation, Observation, Session,
     },
     transport::Transport,
 };
@@ -20,6 +21,22 @@ use std::time::{Duration, Instant};
 /// while holding it: the grant's own life, and a second to spare.
 const GRANT_OUTLIVES: Duration =
     atlas_core::session::GRANT_TTL.saturating_add(Duration::from_secs(1));
+
+/// The longest a look may take, as long as the probe was given: the scan's
+/// own four seconds, each request within them, and the reply.
+const LOOK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Refuse unless the input service that answered `verified` reads and
+/// keeps looks; nothing is asked of one that does not.
+pub(crate) fn require_looks(verified: &Verified) -> Result<()> {
+    if verified.input_offers(LOOKS) {
+        return Ok(());
+    }
+    Err(Error::new(
+        Code::Startup,
+        "The helper's input service cannot read elements: run atlas start-input, then try again",
+    ))
+}
 
 /// What the helper is asked to expect of an agent's batch, given what its
 /// input service `native` says it can check. An input service that answered
@@ -80,6 +97,40 @@ impl Client {
             timeout: Duration::from_secs(5),
             peer_uid,
         }
+    }
+
+    /// One look at the elements of the app `expect` names, read and kept
+    /// by the input service of the session `verified` describes, which the
+    /// caller verified just before. Its reply names the look. A read sends
+    /// nothing, so its failure is never uncertain.
+    pub(crate) async fn look_at(&self, verified: &Verified, expect: &Expect) -> Result<Value> {
+        require_looks(verified)?;
+        let request = json!({
+            "op": "elements",
+            "epoch": verified.session().epoch.input_epoch(),
+            "expect": expect,
+        });
+        let mut transport = self.input_transport();
+        transport.timeout = LOOK_TIMEOUT;
+        let connection = transport.connect().await.map_err(Error::certain)?;
+        // Once asked, a read with no answer in time is the one the probe
+        // gave none for.
+        let reply = async { connection.dispatch(&request).await?.finish().await }
+            .await
+            .map_err(|cause| {
+                Error::new(Code::Elements, "The accessibility probe returned no result")
+                    .with_source(cause)
+            })?;
+        if reply["ok"] != true {
+            // As the probe's failures read: a refusal of the session keeps
+            // its code, and the read's own failure is the elements'.
+            let code = match Code::of_reply(&reply, Code::Elements) {
+                code @ (Code::SessionChanged | Code::Identity | Code::Busy) => code,
+                _ => Code::Elements,
+            };
+            return Err(Error::refused(code, &reply, "The accessibility probe failed").certain());
+        }
+        Ok(reply)
     }
 
     /// # Errors
@@ -298,12 +349,30 @@ impl Client {
             self.repin(session).await?
         };
 
-        // The service whose capability was read is the one that checks.
-        if expect.is_some() && session.epoch.input_pid != input_pid {
+        // The service whose capability was read is the one that checks, and
+        // the one that acts on elements.
+        let replaced = session.epoch.input_pid != input_pid;
+        if expect.is_some() && replaced {
             return Err(Error::session_changed());
         }
 
         let actions = actions?;
+        if actions
+            .actions()
+            .iter()
+            .any(|action| action.element_action().is_some())
+        {
+            if !observation.native.has_capability(ELEMENT_ACTIONS) {
+                return Err(Error::new(
+                    Code::Startup,
+                    "The helper's input service cannot act on elements: run atlas start-input, \
+                     then try again",
+                ));
+            }
+            if replaced {
+                return Err(Error::session_changed());
+            }
+        }
         actions.check(&session.epoch.display)?;
 
         self.input_in_session(actions, expected, lease, expect, &session)

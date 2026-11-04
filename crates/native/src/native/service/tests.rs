@@ -3,10 +3,17 @@ use super::{
     admitted, hold, read_request,
 };
 use crate::native::{
+    ax::{Acted, Resolved},
     events::tap::{Posted, Seen, Tap},
     focus::Need,
 };
-use atlas_core::{error::Code, session::Display};
+use atlas_core::{
+    actions::{ElementAction, Verification},
+    error::Code,
+    process::Instance,
+    screen::elements::{LOOK_AGAIN, Reference, stale},
+    session::Display,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -15,7 +22,8 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
 
-/// [`super::run`], a failure as the reply it sends.
+/// [`super::run`], the role of the field it named, a failure as the reply
+/// it sends.
 async fn run(
     engine: &mut impl Perform,
     gate: &Gate,
@@ -24,6 +32,7 @@ async fn run(
 ) -> std::result::Result<Option<&'static str>, Value> {
     super::run(engine, gate, actions, expect)
         .await
+        .map(|done| done.field)
         .map_err(|failure| failure.reply())
 }
 
@@ -36,8 +45,10 @@ fn service(marker: &std::path::Path) -> super::Service {
         height: 1.0,
         process_id: std::process::id(),
     };
+    let engine = super::Engine::idle(epoch.clone());
     super::Service {
-        engine: Arc::new(Mutex::new(super::Engine::idle(epoch.clone()))),
+        looks: engine.looks.clone(),
+        engine: Arc::new(Mutex::new(engine)),
         operations: super::Operations::default(),
         gate: Arc::new(Gate::default()),
         epoch: Arc::new(super::RwLock::new(epoch)),
@@ -212,7 +223,7 @@ fn input_refusals_stay_on_their_own_field_and_refuse_the_whole_batch() {
             batch(r#"{"type":"unknown"}"#),
             "actions",
             "invalid-json",
-            "unknown variant `unknown`, expected one of `pointer`, `move`, `click`, `drag`, `scroll`, `type`, `key`, `wait`".into(),
+            "unknown variant `unknown`, expected one of `pointer`, `move`, `click`, `drag`, `scroll`, `type`, `key`, `wait`, `reference`, `press`, `set-value`, `check`, `uncheck`, `pick`, `expand`, `collapse`, `scroll-into-view`".into(),
         ),
         (
             batch(r#"{"type":"click","x":10,"y":20,"button":"invalid"}"#),
@@ -1783,6 +1794,16 @@ struct Stand {
     posted: u64,
     releases: usize,
     release_fails: bool,
+    /// What a referenced element is found as; none when its look is gone.
+    found: Option<Resolved>,
+    /// Whether the element changes once its app is brought forward.
+    moves: bool,
+    /// Where each click it carried out landed.
+    clicked: Vec<(f64, f64)>,
+    /// What an action on an element comes to; a stale refusal when none.
+    acts: Option<std::result::Result<Acted, Code>>,
+    /// Each action on an element it carried out, and the window named.
+    acted: Vec<(Reference, ElementAction, Option<i64>)>,
     lock: Weak<Mutex<Stand>>,
 }
 
@@ -1804,6 +1825,11 @@ impl Stand {
                 posted: 0,
                 releases: 0,
                 release_fails: false,
+                found: None,
+                moves: false,
+                clicked: Vec::new(),
+                acts: None,
+                acted: Vec::new(),
                 lock: lock.clone(),
             })
         })
@@ -1867,10 +1893,54 @@ impl Perform for Stand {
             .map(|_| self.roles.get(index).copied().unwrap_or("AXTextField")))
     }
 
-    async fn perform(&mut self, _: Action) -> Result<()> {
+    async fn resolve(&mut self, _: Reference) -> Result<Resolved> {
+        self.assert_locked();
+        let index = self.logged("resolve");
+        self.log.push(format!("resolve {index}"));
+        self.found
+            .clone()
+            .ok_or_else(|| stale("That look is no longer kept"))
+    }
+
+    async fn confirm(&mut self, _: Resolved) -> Result<()> {
+        self.assert_locked();
+        let index = self.logged("confirm");
+        self.log.push(format!("confirm {index}"));
+        if self.moves {
+            return Err(stale("The element moved while its app was brought forward"));
+        }
+        Ok(())
+    }
+
+    async fn act(
+        &mut self,
+        reference: Reference,
+        action: ElementAction,
+        window: Option<i64>,
+    ) -> Result<Acted> {
+        self.assert_locked();
+        let index = self.logged("act");
+        self.log.push(format!("act {index}"));
+        self.acted.push((reference, action, window));
+        match self.acts {
+            None => Err(stale("That look is no longer kept")),
+            Some(Err(code)) => {
+                Err(Error::new(code, "The app did not acknowledge the action").uncertain())
+            }
+            Some(Ok(acted)) => {
+                self.posted += u64::from(acted.changed);
+                Ok(acted)
+            }
+        }
+    }
+
+    async fn perform(&mut self, action: Action) -> Result<()> {
         self.assert_locked();
         let index = self.logged("post");
         self.log.push(format!("post {index}"));
+        if let Action::Click { x, y, .. } = action {
+            self.clicked.push((x, y));
+        }
         if self.script.get(index) == Some(&Step::UnacknowledgedPress) {
             return Err(
                 Error::new(Code::Uncertain, "The Dock did not acknowledge the press").uncertain(),
@@ -2225,6 +2295,308 @@ async fn input_without_an_expectation_is_never_checked() {
     assert_eq!(stand.lock().await.log, ["post 0", "post 1"]);
 }
 
+fn referenced() -> Action {
+    serde_json::from_value(json!({"type": "reference", "ref": "8123abc.12"})).unwrap()
+}
+
+#[tokio::test]
+async fn a_stale_reference_is_refused_before_any_check_or_post() {
+    for expect in [None, app()] {
+        let stand = Stand::locked(&[Step::Post]);
+        let gate = Arc::new(Gate::default());
+        let outcome = {
+            let mut engine = stand.lock().await;
+            run(&mut *engine, &gate, vec![referenced()], expect.as_ref()).await
+        };
+        let reply = outcome.unwrap_err();
+        assert_eq!(reply["code"], "elements");
+        assert_eq!(reply["next"], LOOK_AGAIN);
+        assert_eq!(reply["performed"], 0);
+        assert_eq!(reply["partial"], false);
+        assert_eq!(reply["uncertain"], false);
+
+        let stand = stand.lock().await;
+        assert_eq!(stand.log, ["resolve 0"], "no focus preparation");
+        assert!(stand.asked.is_empty());
+        assert_eq!(stand.posted, 0);
+        assert_eq!(stand.releases, 1);
+    }
+}
+
+/// A referenced click is checked against the window its element was found
+/// in, not the batch's own expectation, and lands where the element is now.
+#[tokio::test]
+async fn a_found_reference_is_checked_against_its_own_window_and_clicked_where_it_is() {
+    let found = Expect::new(812).unwrap().in_window(42).unwrap();
+    for expect in [None, app()] {
+        let stand = Stand::locked(&[Step::Post, Step::Post]);
+        stand.lock().await.found = Some(Resolved::at(30.0, 40.0, found.clone()));
+        let gate = Arc::new(Gate::default());
+        let actions = vec![referenced(), keys(1).remove(0)];
+        let outcome = {
+            let mut engine = stand.lock().await;
+            run(&mut *engine, &gate, actions, expect.as_ref()).await
+        };
+        assert!(outcome.is_ok());
+
+        let stand = stand.lock().await;
+        assert_eq!(stand.clicked, [(30.0, 40.0)]);
+        assert_eq!(stand.preparations.first(), Some(&true));
+        assert_eq!(stand.asked.first(), Some(&found));
+        let checked = if expect.is_some() {
+            vec![
+                "resolve 0",
+                "check 0",
+                "confirm 0",
+                "check 1",
+                "post 0",
+                "check 2",
+                "post 1",
+            ]
+        } else {
+            vec![
+                "resolve 0",
+                "check 0",
+                "confirm 0",
+                "check 1",
+                "post 0",
+                "post 1",
+            ]
+        };
+        assert_eq!(stand.log, checked);
+        assert_eq!(
+            stand.preparations[..2],
+            [true, false],
+            "prepared once, then only read again"
+        );
+        assert_eq!(stand.asked[..2], [found.clone(), found.clone()]);
+    }
+}
+
+/// An element that changes once its app is brought forward is refused
+/// after that preparation, before anything is posted.
+#[tokio::test]
+async fn a_reference_that_moves_while_its_app_is_brought_forward_is_never_clicked() {
+    let stand = Stand::locked(&[Step::Post]);
+    {
+        let mut stand = stand.lock().await;
+        stand.found = Some(Resolved::at(
+            30.0,
+            40.0,
+            Expect::new(812).unwrap().in_window(42).unwrap(),
+        ));
+        stand.moves = true;
+    }
+    let gate = Arc::new(Gate::default());
+    let outcome = {
+        let mut engine = stand.lock().await;
+        run(&mut *engine, &gate, vec![referenced()], None).await
+    };
+    let reply = outcome.unwrap_err();
+    assert_eq!(reply["code"], "elements");
+    assert_eq!(reply["next"], LOOK_AGAIN);
+    assert_eq!(reply["performed"], 0);
+    assert_eq!(reply["uncertain"], false);
+    let stand = stand.lock().await;
+    assert_eq!(stand.log, ["resolve 0", "check 0", "confirm 0"]);
+    assert_eq!(stand.preparations, [true], "prepared once, never again");
+    assert_eq!(stand.posted, 0);
+}
+
+/// A batch that names a window clicks a referenced element only in it,
+/// refusing one found in another before any check or post.
+#[tokio::test]
+async fn a_reference_found_outside_the_window_named_is_refused() {
+    let stand = Stand::locked(&[Step::Post]);
+    stand.lock().await.found = Some(Resolved::at(
+        30.0,
+        40.0,
+        Expect::new(812).unwrap().in_window(43).unwrap(),
+    ));
+    let named = Expect::new(812).unwrap().in_window(42).unwrap();
+    let gate = Arc::new(Gate::default());
+    let outcome = {
+        let mut engine = stand.lock().await;
+        run(&mut *engine, &gate, vec![referenced()], Some(&named)).await
+    };
+    let reply = outcome.unwrap_err();
+    assert_eq!(reply["code"], "elements");
+    assert_eq!(reply["performed"], 0);
+    assert_eq!(reply["uncertain"], false);
+    let stand = stand.lock().await;
+    assert_eq!(stand.log, ["resolve 0"]);
+    assert_eq!(stand.posted, 0);
+}
+
+#[test]
+fn the_input_service_offers_looks_a_click_can_name() {
+    assert!(CAPABILITIES.contains(&atlas_core::session::LOOKS));
+    assert_eq!(atlas_core::session::LOOKS, "looks");
+}
+
+#[test]
+fn the_input_service_offers_actions_on_the_elements_of_a_look() {
+    assert!(CAPABILITIES.contains(&atlas_core::session::ELEMENT_ACTIONS));
+    assert_eq!(atlas_core::session::ELEMENT_ACTIONS, "element-actions");
+}
+
+fn pressed() -> Action {
+    serde_json::from_value(json!({"type": "press", "ref": "8123abc.12"})).unwrap()
+}
+
+/// An action on an element asks for no focus and posts no event: its own
+/// Accessibility request carries it out, in the window the batch names,
+/// and the actions after it are checked as ever.
+#[tokio::test]
+async fn an_element_action_is_carried_out_with_no_focus_check_and_no_event() {
+    let named = Expect::new(812).unwrap().in_window(42).unwrap();
+    let stand = Stand::locked(&[Step::Post]);
+    stand.lock().await.acts = Some(Ok(Acted {
+        verification: Verification::Matched,
+        instance: Instance::new(812, [1, 0]),
+        changed: true,
+    }));
+    let gate = Arc::new(Gate::default());
+    let done = {
+        let mut engine = stand.lock().await;
+        let actions = vec![pressed(), keys(1).remove(0)];
+        super::run(&mut *engine, &gate, actions, Some(&named))
+            .await
+            .unwrap()
+    };
+    assert_eq!(done.performed(2), 2, "both were sent");
+    assert_eq!(done.acted.unwrap().verification, Verification::Matched);
+
+    let stand = stand.lock().await;
+    assert_eq!(stand.log, ["act 0", "check 0", "post 0"]);
+    assert_eq!(
+        stand.acted,
+        [(
+            Reference::parse("8123abc.12").unwrap(),
+            ElementAction::Press,
+            Some(42)
+        )]
+    );
+    assert_eq!(stand.asked.len(), 1, "only the key is checked");
+    assert!(stand.clicked.is_empty());
+    assert_eq!(stand.posted, 2);
+}
+
+/// An element already as asked is left: the reply says so, and nothing
+/// counts as sent.
+#[tokio::test]
+async fn an_element_already_as_asked_is_matched_with_nothing_sent() {
+    let stand = Stand::locked(&[]);
+    stand.lock().await.acts = Some(Ok(Acted {
+        verification: Verification::Matched,
+        instance: Instance::new(812, [1, 0]),
+        changed: false,
+    }));
+    let gate = Arc::new(Gate::default());
+    let mut engine = stand.lock().await;
+    let done = super::run(&mut *engine, &gate, vec![pressed()], None)
+        .await
+        .unwrap();
+    assert_eq!(done.performed(1), 0, "nothing was sent");
+    let acted = done.acted.unwrap();
+    assert_eq!(acted.verification, Verification::Matched);
+    assert!(!acted.changed);
+    assert_eq!(engine.posted, 0);
+}
+
+/// A refusal before the request that acts sent nothing; a request the app
+/// did not acknowledge may have been carried out, so its outcome is unknown.
+#[tokio::test]
+async fn an_element_action_refused_first_is_certain_and_one_unacknowledged_is_not() {
+    for (acts, code, uncertain) in [
+        (None, "elements", false),
+        (Some(Err(Code::Uncertain)), "uncertain", true),
+    ] {
+        let stand = Stand::locked(&[]);
+        stand.lock().await.acts = acts;
+        let gate = Arc::new(Gate::default());
+        let reply = {
+            let mut engine = stand.lock().await;
+            run(&mut *engine, &gate, vec![pressed()], app().as_ref())
+                .await
+                .unwrap_err()
+        };
+        assert_eq!(reply["code"], code);
+        assert_eq!(reply["performed"], 0);
+        assert_eq!(reply["partial"], false);
+        assert_eq!(reply["uncertain"], uncertain);
+
+        let stand = stand.lock().await;
+        assert_eq!(stand.log, ["act 0"]);
+        assert!(stand.asked.is_empty());
+        assert_eq!(stand.posted, 0);
+        assert_eq!(stand.releases, 1);
+    }
+}
+
+#[test]
+fn a_look_request_keeps_its_epoch_and_app_refusals_for_their_guards() {
+    let epoch =
+        r#"{"uid":501,"securitySessionId":1,"displayId":2,"width":800,"height":600,"processId":1}"#;
+    let body =
+        format!(r#"{{"op":"elements","epoch":{epoch},"expect":{{"pid":812,"start":[123,456]}}}}"#);
+    let Ok(Request::Elements {
+        epoch: Ok(_),
+        expect: Ok(Some(expect)),
+    }) = Request::decode(body.as_bytes())
+    else {
+        panic!("expected a typed look");
+    };
+    assert_eq!(expect.pid(), 812);
+
+    for body in [
+        r#"{"op":"elements","epoch":null,"expect":{"pid":812}}"#.to_owned(),
+        format!(r#"{{"op":"elements","epoch":{epoch},"expect":{{"pid":812,"other":1}}}}"#),
+        format!(r#"{{"op":"elements","epoch":{epoch}}}"#),
+    ] {
+        assert!(
+            matches!(
+                Request::decode(body.as_bytes()),
+                Ok(Request::Elements { epoch: Err(_), .. }
+                    | Request::Elements {
+                        expect: Err(_) | Ok(None),
+                        ..
+                    })
+            ),
+            "{body}"
+        );
+    }
+}
+
+/// A look reads nothing for an epoch this session does not prove now, even
+/// while agents are stopped, and that refusal changes nothing.
+#[tokio::test]
+async fn a_look_for_another_epoch_is_refused_before_anything_is_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = service(&directory.path().join("stopped"));
+    service.gate.hold(true).unwrap();
+    let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let mut stale = json!(service.epoch().unwrap());
+    stale["displayId"] = json!(9);
+    let request = Request::Elements {
+        epoch: Ok(atlas_core::session::InputEpoch::deserialize(stale).unwrap()),
+        expect: Ok(Some(Expect::new(812).unwrap())),
+    };
+    let error = service.dispatch(request, &phase).await.unwrap_err();
+    // A test runs in no hidden session, or in one whose epoch is another.
+    assert!(
+        matches!(error.code, Code::SessionChanged | Code::Identity),
+        "{}",
+        error.error
+    );
+    assert!(!error.uncertain);
+    assert!(matches!(
+        *observed.borrow(),
+        super::ConnectionPhase::Refusal
+    ));
+    assert_eq!(service.engine.lock().await.posted, 0);
+}
+
 #[test]
 fn the_input_service_offers_the_target_check() {
     assert!(CAPABILITIES.contains(&atlas_core::session::FOCUS_APP));
@@ -2380,13 +2752,20 @@ fn the_persons_input_cannot_name_an_agent_target() {
     let owner = "a".repeat(48);
     let _grant = gate.acquire(&owner, super::Who::Person).unwrap();
     let expect = Expect::new(812).unwrap();
-    let error = super::agent_target(&gate, Some(&expect)).unwrap_err();
+    let error = super::agent_target(&gate, Some(&expect), &[]).unwrap_err();
     assert_eq!(error.code, Code::Input);
     assert_eq!(
         error.error,
         "The person's input cannot name an agent target"
     );
-    super::agent_target(&gate, None).unwrap();
+    for action in [referenced(), pressed()] {
+        let error = super::agent_target(&gate, None, &[action]).unwrap_err();
+        assert_eq!(
+            error.error,
+            "The person's input cannot name an agent target"
+        );
+    }
+    super::agent_target(&gate, None, &keys(1)).unwrap();
 }
 
 struct Blocked {
@@ -2398,14 +2777,10 @@ struct Blocked {
     releases: usize,
 }
 
-impl Perform for Blocked {
-    async fn require(
-        &mut self,
-        _: &Expect,
-        _: Need,
-        _: Duration,
-        _: bool,
-    ) -> Result<Option<&'static str>> {
+impl Blocked {
+    /// A blocking request that writes once, waits on the barrier, and writes
+    /// again only while its grant still holds.
+    async fn block(&mut self) -> Result<()> {
         let grant = self.grant.clone();
         let writes = self.writes.clone();
         let started = self.started.take().unwrap();
@@ -2419,7 +2794,7 @@ impl Perform for Blocked {
                 resume.recv_timeout(Duration::from_secs(3)).unwrap();
                 drop(grant.authorize()?);
                 writes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(None)
+                Ok(())
             },
             || {
                 drop(final_grant.authorize()?);
@@ -2427,6 +2802,33 @@ impl Perform for Blocked {
             },
         )
         .await
+    }
+}
+
+impl Perform for Blocked {
+    async fn require(
+        &mut self,
+        _: &Expect,
+        _: Need,
+        _: Duration,
+        _: bool,
+    ) -> Result<Option<&'static str>> {
+        self.block().await.map(|()| None)
+    }
+    async fn resolve(&mut self, _: Reference) -> Result<Resolved> {
+        Err(stale("No look is kept here"))
+    }
+    async fn confirm(&mut self, _: Resolved) -> Result<()> {
+        Err(stale("No look is kept here"))
+    }
+    async fn act(&mut self, _: Reference, _: ElementAction, _: Option<i64>) -> Result<Acted> {
+        self.block().await?;
+        self.posted += 1;
+        Ok(Acted {
+            verification: Verification::NotChecked,
+            instance: Instance::new(812, [1, 0]),
+            changed: true,
+        })
     }
     async fn perform(&mut self, _: Action) -> Result<()> {
         self.posted += 1;
@@ -2454,6 +2856,11 @@ enum Ending {
 /// A blocked write uses the real grant and operation registry. The
 /// request owns no execution guard once the operation has started.
 async fn blocked_operation(ending: Ending) {
+    blocked_while(ending, keys(1)).await;
+}
+
+/// [`blocked_operation`], blocked in carrying out `actions`.
+async fn blocked_while(ending: Ending, actions: Vec<Action>) {
     let shutdown = matches!(ending, Ending::Term);
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
@@ -2484,7 +2891,7 @@ async fn blocked_operation(ending: Ending) {
             };
             let mut engine = engine.lock_owned().await;
             let outcome = operations
-                .start(async move { run(&mut *engine, &gate, keys(1), app().as_ref()).await })
+                .start(async move { run(&mut *engine, &gate, actions, app().as_ref()).await })
                 .await
                 .unwrap();
             let reply = outcome.await.unwrap();
@@ -3207,6 +3614,16 @@ async fn cancelling_during_preparation_keeps_the_observed_cancellation_reply() {
     blocked_operation(Ending::Cancel).await;
 }
 
+/// Stop and the person's Take Control end an agent's ownership while its
+/// action on an element waits on Accessibility, which stays registered
+/// until it returns; aborting the request or shutting down waits for it.
+#[tokio::test]
+async fn an_element_action_blocked_in_accessibility_never_holds_up_stop_or_cancel() {
+    for ending in [Ending::Stop, Ending::Cancel, Ending::Abort, Ending::Term] {
+        blocked_while(ending, vec![pressed()]).await;
+    }
+}
+
 #[tokio::test]
 async fn all_text_parts_spend_the_same_focus_budget() {
     let stand = Stand::locked(&[]);
@@ -3289,6 +3706,7 @@ fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc
     let epoch = display_epoch();
     let engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
     Arc::new(super::Service {
+        looks: engine.looks.clone(),
         engine: Arc::new(Mutex::new(engine)),
         operations: super::Operations::default(),
         gate,

@@ -5,20 +5,25 @@
 //! hanging the probe; depth, count, children fetched and string lengths are
 //! capped before anything is copied, and a long text is read only from its
 //! start. An element's attributes are asked for in one request. A scan that
-//! hit a limit or a communication failure reports itself incomplete.
+//! hit a limit or a communication failure reports itself incomplete. The
+//! input service keeps each look's objects so a reference names one of
+//! them alone, and acts on one through Accessibility alone.
 use atlas_core::screen::elements::ABSENT;
 use objc2_application_services::AXError;
 
+mod actions;
 mod batch;
 mod bring;
 mod ffi;
 mod keyboard;
 mod menus;
+mod references;
 mod scan;
 mod system;
 mod text;
 mod tree;
 
+pub(super) use actions::{Acted, act_on};
 #[cfg(test)]
 pub(crate) use atlas_core::screen::elements::{Element, Limits};
 pub(crate) use atlas_core::screen::geometry::Bounds;
@@ -27,6 +32,7 @@ pub(super) use ffi::act;
 pub(super) use keyboard::{
     Asked, Focused, Judged, Keyboard, Status, Unread, Within, frontmost, keyboard, remaining,
 };
+pub(super) use references::{Looks, Resolved, confirm, read, resolve};
 pub(super) use system::dock_item;
 pub(super) use system::focused_pid;
 pub use system::{DOCK_TIMEOUT, dock};

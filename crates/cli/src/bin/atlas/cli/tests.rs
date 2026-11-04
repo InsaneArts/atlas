@@ -586,6 +586,104 @@ fn the_wait_flag_is_global_and_hidden() {
     assert!(!help.contains("--wait"), "{help}");
 }
 
+/// Each action on an element is the one batch action of its word, its
+/// value or option given only to the action that takes one.
+#[test]
+fn an_element_action_becomes_its_one_input_action() {
+    let action = |args: &[&str]| match parse(args) {
+        Ok(Cli {
+            command: Some(Command::Element(element)),
+            ..
+        }) => element.as_input().map_err(|error| error.code),
+        other => panic!("{args:?}: {:?}", other.err()),
+    };
+
+    for verb in [
+        "press",
+        "check",
+        "uncheck",
+        "expand",
+        "collapse",
+        "scroll-into-view",
+    ] {
+        assert_eq!(
+            action(&["element", verb, "--ref", "8123abc.12", "--app", "A"]).unwrap(),
+            serde_json::json!({"type": verb, "ref": "8123abc.12"})
+        );
+    }
+    assert_eq!(
+        action(&[
+            "element",
+            "set-value",
+            "--ref",
+            "8123abc.12",
+            "--value",
+            "-3"
+        ])
+        .unwrap(),
+        serde_json::json!({"type": "set-value", "ref": "8123abc.12", "value": "-3"})
+    );
+    assert_eq!(
+        action(&[
+            "element",
+            "pick",
+            "--ref",
+            "8123abc.12",
+            "--option",
+            "8123abc.14"
+        ])
+        .unwrap(),
+        serde_json::json!({"type": "pick", "ref": "8123abc.12", "option": "8123abc.14"})
+    );
+    for misplaced in [
+        &["element", "press", "--ref", "8123abc.12", "--value", "x"][..],
+        &[
+            "element",
+            "check",
+            "--ref",
+            "8123abc.12",
+            "--option",
+            "8123abc.14",
+        ],
+        &[
+            "element",
+            "set-value",
+            "--ref",
+            "1a",
+            "--value",
+            "x",
+            "--option",
+            "1b",
+        ],
+    ] {
+        assert_eq!(
+            action(misplaced).unwrap_err(),
+            atlas_core::error::Code::Usage,
+            "{misplaced:?}"
+        );
+    }
+
+    for refused in [
+        &["element", "press"][..],
+        &["element", "toggle", "--ref", "8123abc.12"],
+        &["element", "set-value", "--ref", "8123abc.12"],
+        &["element", "pick", "--ref", "8123abc.12"],
+        &[
+            "element",
+            "press",
+            "--ref",
+            "8123abc.12",
+            "--app",
+            "A",
+            "--pid",
+            "1",
+        ],
+        &["element", "press", "--ref", "8123abc.12", "--window", "4"],
+    ] {
+        assert!(parse(refused).is_err(), "{refused:?}");
+    }
+}
+
 #[test]
 fn an_environment_command_takes_the_same_time_limit_as_run() {
     let given = |args: &[&str]| match parse(args) {

@@ -82,6 +82,14 @@ impl Policy {
                     .app(click.target.app.as_deref())
                     .label(click.name.as_deref()),
             ),
+            Command::Element(element) => {
+                let (verb, done) = element.action.words();
+                Self::work(
+                    Change,
+                    View::Action(done.into()),
+                    Doing::new(verb).app(element.target.app.as_deref()),
+                )
+            }
             Command::Move { x, y } => Self::work(
                 Change,
                 View::Action(format!("Moved the pointer to {}", at(*x, *y))),

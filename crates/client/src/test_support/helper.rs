@@ -1,5 +1,5 @@
 //! A stand-in for the helper's daemon, answering a test client's socket as a
-//! verified hidden helper would.
+//! verified hidden helper would, and for its input service when asked to.
 use crate::client::Client;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -38,6 +38,10 @@ pub fn completed(output: &str) -> Value {
 /// every other run through the test.
 pub struct Helper {
     listener: UnixListener,
+    /// The input service's socket, when it stands in for that too, and
+    /// what that service says it can do.
+    input: Option<UnixListener>,
+    capabilities: Vec<String>,
     uid: u32,
     /// How many identity proofs name the first session before the rest
     /// name another, as after the helper logged in again.
@@ -64,6 +68,8 @@ impl Helper {
 
         let helper = Self {
             listener: UnixListener::bind(&client.transport.path).unwrap(),
+            input: None,
+            capabilities: Vec::new(),
             uid,
             moves_after: None,
             proofs: AtomicUsize::new(0),
@@ -111,6 +117,15 @@ impl Helper {
         self
     }
 
+    /// This helper with an input service on `client`'s input socket, which
+    /// says hello with `capabilities` and hands every other request to the
+    /// test as the daemon's are.
+    pub fn serving_input(mut self, client: &Client, capabilities: &[&str]) -> Self {
+        self.input = Some(UnixListener::bind(&client.config.input_socket).unwrap());
+        self.capabilities = capabilities.iter().map(|&name| name.to_owned()).collect();
+        self
+    }
+
     /// The session this helper is in now: the one its proofs name next.
     fn session(&self) -> u64 {
         let given = self.proofs.load(Ordering::Relaxed);
@@ -141,7 +156,13 @@ impl Helper {
     ) -> T {
         let helper = async {
             loop {
-                let (peer, _) = self.listener.accept().await.unwrap();
+                let (peer, input) = match &self.input {
+                    Some(input) => tokio::select! {
+                        accepted = self.listener.accept() => (accepted.unwrap().0, false),
+                        accepted = input.accept() => (accepted.unwrap().0, true),
+                    },
+                    None => (self.listener.accept().await.unwrap().0, false),
+                };
                 let mut peer = BufReader::new(peer);
                 let mut line = String::new();
                 peer.read_line(&mut line).await.unwrap();
@@ -150,6 +171,8 @@ impl Helper {
 
                 let reply = if self.unavailable_after.is_some_and(|limit| requests > limit) {
                     None
+                } else if request["op"] == "hello" && input {
+                    Some(self.input_hello())
                 } else if request["op"] == "hello" {
                     Some(self.hello())
                 } else if request["argv"][1] == "session-info" {
@@ -196,12 +219,23 @@ impl Helper {
 
     /// The identity probe's answer, the `count`th this helper gave.
     fn proof(&self, count: usize) -> Value {
+        completed(&self.session_proof(count).to_string())
+    }
+
+    /// The session the `count`th identity proof names.
+    fn session_proof(&self, count: usize) -> Value {
         let moved = self.moves_after.is_some_and(|proofs| count > proofs);
         let session = if moved { SESSION + 1 } else { SESSION };
-        let proof = json!({"ok": true, "uid": self.uid, "hasGraphicAccess": true,
+        json!({"ok": true, "uid": self.uid, "hasGraphicAccess": true,
             "parentPID": 123, "onConsole": false, "securitySessionID": session,
-            "displayID": 7, "width": 100, "height": 100});
+            "displayID": 7, "width": 100, "height": 100})
+    }
 
-        completed(&proof.to_string())
+    /// The input service's hello: ready in the session the next proof names.
+    fn input_hello(&self) -> Value {
+        let next = self.proofs.load(Ordering::Relaxed) + 1;
+        json!({"ok": true, "protocolVersion": 1, "pid": 456, "ready": true,
+            "accessibility": true, "session": self.session_proof(next),
+            "capabilities": self.capabilities})
     }
 }

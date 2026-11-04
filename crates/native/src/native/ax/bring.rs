@@ -1020,6 +1020,18 @@ fn prepare<A: Backend>(
     Ok(target)
 }
 
+/// Refuse unless the app `expect` names admits input to the window it
+/// names, read before `deadline` as a focus request is admitted before its
+/// first write: no modal window, sheet or system dialog in the way.
+/// Nothing is written.
+pub(in crate::native) fn admitted(expect: &Expect, deadline: Instant) -> Result<()> {
+    admitted_by(Live, expect, deadline)
+}
+
+fn admitted_by<A: Backend>(ask: A, expect: &Expect, deadline: Instant) -> Result<()> {
+    Target::resolve(ask, expect, Need::Nothing, deadline)?.admit(expect)
+}
+
 pub(in crate::native) fn bring(
     expect: &Expect,
     need: Need,

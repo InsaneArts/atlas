@@ -77,6 +77,13 @@ requests! { value =>
         expect: Expect::from_request(&value["expect"]),
         app: value["app"] == true,
     },
+    "elements" Elements {
+        epoch: Result<InputEpoch>,
+        expect: Result<Option<Expect>>,
+    } = Self::Elements {
+        epoch: epoch(value),
+        expect: Expect::from_request(&value["expect"]),
+    },
 }
 
 impl Request {

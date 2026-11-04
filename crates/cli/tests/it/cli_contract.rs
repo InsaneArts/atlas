@@ -250,6 +250,57 @@ fn invalid_arguments_report_one_json_error_before_execution() {
     );
 }
 
+/// An action on an element needs its ref, an action Atlas knows, and the
+/// value or option its action takes: anything less is a usage error
+/// before anything is read.
+#[test]
+fn an_element_action_without_what_it_takes_is_a_usage_error() {
+    let fixture = Fixture::new();
+    for (args, named) in [
+        (vec!["element", "press"], "--ref"),
+        (vec!["element", "toggle", "--ref", "8123abc.12"], "toggle"),
+        (
+            vec!["element", "set-value", "--ref", "8123abc.12"],
+            "--value",
+        ),
+        (vec!["element", "pick", "--ref", "8123abc.12"], "--option"),
+    ] {
+        let output = fixture.missing(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "usage", "{args:?}");
+        assert!(
+            error["error"].as_str().unwrap().contains(named),
+            "{args:?}: {}",
+            error["error"]
+        );
+    }
+}
+
+/// A reference names its element by itself: given with a point, a name or
+/// a role, the click is a usage error before anything is read.
+#[test]
+fn a_click_by_reference_takes_no_point_name_or_role() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["click", "--ref", "8123abc.12", "10", "20"],
+        vec!["click", "--ref", "8123abc.12", "--name", "Save"],
+        vec!["click", "--ref", "8123abc.12", "--role", "AXButton"],
+        vec!["click", "--ref", "8123abc.12", "--window", "4", "10", "20"],
+    ] {
+        let output = fixture.missing(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "usage", "{args:?}");
+        assert!(
+            error["error"].as_str().unwrap().contains("--ref"),
+            "{args:?}"
+        );
+    }
+}
+
 /// Only a command that waits for control reads `ATLAS_WAIT`: a bad value
 /// is a usage error there, before anything runs, and is ignored by every
 /// other command; `--wait` takes its place.

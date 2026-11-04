@@ -1,26 +1,30 @@
-//! Accessibility elements of an app's windows: scanned in the helper,
-//! listed compactly or in full, and clicked by name or role only when
+//! Accessibility elements of an app's windows: looked at by the helper's
+//! input service, which keeps each look, listed compactly or in full under
+//! the look's name, and clicked or acted on through Accessibility by that
+//! look and an element's index, or clicked by name or role only when
 //! exactly one visible element matches. Screenshots find their app the
 //! same way.
 use super::{
     input::click,
     target::{Target, target_expect},
 };
-use crate::client::{Client, Run, Verified, WINDOW_LOOKUP};
+use crate::client::{Client, Run, Verified, WINDOW_LOOKUP, require_looks};
 use atlas_core::{
-    actions::{Button, Expect},
+    actions::{Action, Batch, Button},
     error::{Code, Error, Result},
     protocol::{Crop, Region},
     screen::{
-        elements::{Element, Stop, telling, why},
+        elements::{
+            Element, Look, Reference, Stop, click_point, drawn, element_check, stale, telling, why,
+        },
         geometry::Bounds,
         select::{ElementFilter, NameMatch, closeness, names, shown_name},
-        windows::{MENU_LAYER, Window, owning_window},
     },
     transport::run_output,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 /// Most accessibility failures a scan's diagnostics name.
 const SCAN_ERRORS: usize = 8;
@@ -31,8 +35,10 @@ const SCAN_ERROR_KEY: usize = 64;
 /// Most elements a refused name lists as what it may have meant.
 const CANDIDATES: usize = 5;
 
-/// One scan of an app, as the probe reported it.
+/// One scan of an app, as the probe or the input service reported it.
 pub(super) struct Scanned {
+    /// The look the input service keeps it as; none from the probe.
+    pub(super) look: Option<Look>,
     pub(super) elements: Vec<Element>,
     pub(super) incomplete: bool,
     /// Why it is incomplete, each reason once.
@@ -42,8 +48,9 @@ pub(super) struct Scanned {
 }
 
 impl Scanned {
-    /// The probe's reply, read. An older probe names no reasons.
-    pub(super) fn from_probe(mut value: Value) -> Result<Self> {
+    /// The probe's or the input service's reply, read. An older probe
+    /// names no reasons, and the probe no look.
+    pub(super) fn from_reply(mut value: Value) -> Result<Self> {
         if value["ok"] != true {
             return Err(Error::new(
                 Code::Elements,
@@ -54,6 +61,12 @@ impl Scanned {
             ));
         }
 
+        let look = match &value["look"] {
+            Value::Null => None,
+            look => Some(look.as_str().and_then(Look::parse).ok_or_else(|| {
+                Error::new(Code::Elements, "The input service named a malformed look")
+            })?),
+        };
         let elements = serde_json::from_value(value["elements"].take()).map_err(|cause| {
             Error::new(Code::Elements, "Malformed accessibility elements").with_source(cause)
         })?;
@@ -79,6 +92,7 @@ impl Scanned {
         errors.truncate(SCAN_ERRORS);
 
         Ok(Self {
+            look,
             elements,
             incomplete: value["truncated"] == true,
             reasons,
@@ -144,16 +158,19 @@ async fn app_elements(client: &Client, verified: &Verified, pid: i64) -> Result<
     let bytes = run_output(&reply, 8 << 20).map_err(|cause| missing().with_source(cause))?;
     let value = serde_json::from_slice(&bytes).map_err(|cause| missing().with_source(cause))?;
 
-    Scanned::from_probe(value)
+    Scanned::from_reply(value)
 }
 
 /// Accessibility elements of the target app's windows that match `filter`,
-/// at most `max` of them, listed compactly unless `full`.
+/// at most `max` of them, listed compactly unless `full`, under the name of
+/// the look a click names one by, with its index. The helper's input
+/// service reads them and keeps the look; listing them grants nothing.
 ///
 /// # Errors
 ///
-/// Returns identity, target-resolution, transport or accessibility-read failures. An
-/// incomplete window observation cannot establish remembered routing evidence.
+/// Returns identity, target-resolution, transport or accessibility-read failures, and
+/// refuses an input service that cannot keep looks. An incomplete window observation
+/// cannot establish remembered routing evidence.
 pub async fn elements(
     client: &Client,
     target: &Target,
@@ -162,12 +179,124 @@ pub async fn elements(
     full: bool,
 ) -> Result<Value> {
     let verified = client.verify().await?;
-    let pid = target_expect(client, &verified, target).await?.pid();
+    let expect = target_expect(client, &verified, target).await?;
     let scanned = client
-        .look(&verified, app_elements(client, &verified, pid))
+        .look(&verified, async {
+            let scanned = Scanned::from_reply(client.look_at(&verified, &expect).await?)?;
+            match scanned.look {
+                Some(_) => Ok(scanned),
+                None => Err(Error::new(
+                    Code::Elements,
+                    "The input service named no look",
+                )),
+            }
+        })
         .await?;
 
-    Ok(listing(pid, &scanned, filter, max, full))
+    Ok(listing(expect.pid(), &scanned, filter, max, full))
+}
+
+/// Click the element `reference` names, as the look that listed it saw it.
+/// The input service finds that very object again before anything is
+/// checked or sent, then clicks it where it is now under every check a
+/// named click has. With `target`, the look must be of that app.
+///
+/// # Errors
+///
+/// Refuses a malformed reference, and one whose look is gone or of another
+/// app or display, or whose element changed or is disabled, with nothing
+/// sent and the advice to look again. Identity, ownership, focus and
+/// delivery errors propagate; an uncertain outcome must be recovered before
+/// another mutation.
+pub async fn click_reference(
+    client: &Client,
+    target: Option<&Target>,
+    reference: &str,
+    which: Button,
+    count: u8,
+    modifiers: &[String],
+) -> Result<Value> {
+    let action = json!({
+        "type": "reference",
+        "ref": reference,
+        "button": which,
+        "count": count,
+        "modifiers": modifiers,
+    });
+    referenced(client, target, &action).await
+}
+
+/// Do `action` to the element its `ref` names through Accessibility alone,
+/// one action as `atlas input` takes it (`{"type": "press", "ref": …}`).
+/// The input service finds that very object again and proves it twice,
+/// the second time just before the one request that acts; no pointer or
+/// key event is sent and nothing is asked to take focus. With `target`,
+/// the look must be of that app. The reply says only how many actions were
+/// performed, how, and whether the element reads as asked afterwards.
+///
+/// # Errors
+///
+/// Refuses, with nothing sent, a malformed ref, one whose look is gone or
+/// of another app or display, an element that changed, is disabled, does
+/// not support the action or is a password field given a value, and an
+/// input service that cannot act on elements. Identity and ownership
+/// errors propagate; an action the app did not acknowledge is uncertain and
+/// must be recovered, never repeated.
+pub async fn element(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
+    // An action that does not decode is refused as its batch is, below.
+    if Action::deserialize(action).is_ok_and(|action| action.element_action().is_none()) {
+        return Err(Error::new(
+            Code::Input,
+            "Only an action on an element is done this way; nothing was sent",
+        ));
+    }
+    let reply = referenced(client, target, action).await?;
+    if reply["ok"] != true {
+        return Ok(reply);
+    }
+    let mut said = json!({
+        "ok": true,
+        "performed": reply["performed"],
+        "mechanism": reply["mechanism"],
+        "verification": reply["verification"],
+    });
+    if let Some(warnings) = reply.get("warnings") {
+        said["warnings"] = warnings.clone();
+    }
+    Ok(said)
+}
+
+/// Send `action`, which names an element by the `LOOK.INDEX` in its `ref`
+/// (and for a pick, its `option`), as a batch of its own under one ownership and the
+/// epoch verified first. A ref that is not one is refused before anything
+/// is asked of the helper.
+async fn referenced(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
+    let malformed = ["ref", "option"].iter().any(|key| {
+        action
+            .get(key)
+            .is_some_and(|text| text.as_str().and_then(Reference::parse).is_none())
+    });
+    if malformed {
+        return Err(stale("That is not a ref from atlas elements").with("performed", json!(0)));
+    }
+
+    let ownership = client.controller.acquire_beside_commands()?;
+    let verified = client.verify().await?;
+    require_looks(&verified)?;
+    let check = match target {
+        Some(target) => Some(target_expect(client, &verified, target).await?),
+        None => None,
+    };
+
+    let actions = json!([action]);
+    client
+        .input_owned(
+            &ownership,
+            Batch::decode(&actions),
+            Some((&verified.session().epoch, Instant::now())),
+            check,
+        )
+        .await
 }
 
 /// Save a screenshot of the whole display, of `target`'s windows, or of
@@ -229,8 +358,9 @@ pub async fn screenshot(
 
 /// The elements of one scan that match `filter`, as `elements` lists them:
 /// each by its role, name, value, click point and size, its window listed
-/// once, or with every attribute the scan read when `full`. A name that
-/// matches nothing lists the closest names.
+/// once, or with every attribute the scan read when `full`, under the
+/// look's name when the scan is a kept look. A name that matches nothing
+/// lists the closest names.
 pub(super) fn listing(
     pid: i64,
     scanned: &Scanned,
@@ -256,6 +386,9 @@ pub(super) fn listing(
         "matching": matching.len(),
         "more": matching.len() - shown.len(),
     });
+    if let Some(look) = scanned.look {
+        listed["look"] = json!(look.to_string());
+    }
 
     if full {
         listed["elements"] = json!(shown);
@@ -363,21 +496,6 @@ fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Bounds>) -> Value {
     }
 
     listed
-}
-
-/// The menu bar where it shows the point, which is the Window Server's
-/// window rather than the app's.
-pub(super) fn menu_bar_window(windows: &[Window], x: f64, y: f64) -> Option<i64> {
-    windows
-        .iter()
-        .find(|window| window.is_menu_bar() && window.alpha > 0.0 && window.bounds.contains(x, y))
-        .map(|window| window.number)
-}
-
-/// Whether a frame has any area to click: a collapsed element is not on
-/// screen, whatever lies under its point.
-fn drawn(frame: &Bounds) -> bool {
-    frame.width > 0.0 && frame.height > 0.0
 }
 
 /// The one element a click by name or role is for. While a menu is open
@@ -592,64 +710,14 @@ pub async fn click_element(
     let mut result = client
         .input_owned(
             &ownership,
-            atlas_core::actions::Batch::decode(&actions),
-            Some((&verified.session().epoch, std::time::Instant::now())),
+            Batch::decode(&actions),
+            Some((&verified.session().epoch, Instant::now())),
             Some(check),
         )
         .await?;
     result["element"] = clicked(element, (x, y));
 
     Ok(result)
-}
-
-/// The exact target selected by the scan, before native preparation.
-pub(super) fn element_check(
-    element: &Element,
-    windows: &[Window],
-    expect: Expect,
-    (x, y): (f64, f64),
-) -> Result<Expect> {
-    let pid = expect.pid();
-    if element.role.as_deref() == Some("AXMenuBarItem") {
-        menu_bar_window(windows, x, y)
-            .ok_or_else(|| Error::new(Code::Elements, "The menu bar is no longer on screen"))?;
-        return Ok(expect);
-    }
-
-    let number = element
-        .window
-        .as_ref()
-        .and_then(|frame| owning_window(windows, pid, frame))
-        .ok_or_else(|| {
-            Error::new(
-                Code::Elements,
-                "The element's window could not be selected uniquely",
-            )
-        })?;
-    if element.menu
-        || windows
-            .iter()
-            .any(|window| window.number == number && window.layer == MENU_LAYER)
-    {
-        Ok(expect)
-    } else {
-        expect.in_window(number)
-    }
-}
-
-/// Where a click on an element lands: the middle of its frame, or for a
-/// checkbox or radio button with a label beside it (a frame much wider than
-/// tall) the middle of its box, at the leading end of a frame that may also
-/// span a long empty stretch after a short label. A tab drawn as a radio
-/// button is clicked in its middle.
-pub(super) fn click_point(role: Option<&str>, frame: &Bounds) -> (f64, f64) {
-    match role {
-        Some("AXCheckBox" | "AXRadioButton") if frame.width > 2.0 * frame.height => (
-            (frame.x + frame.height / 2.0).round(),
-            (frame.y + frame.height / 2.0).round(),
-        ),
-        _ => frame.center(),
-    }
 }
 
 /// Where a click on `element` lands, when it has a frame.

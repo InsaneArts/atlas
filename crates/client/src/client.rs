@@ -22,6 +22,7 @@ mod windows;
 pub use apps::{AppList, AppRow};
 #[cfg(test)]
 pub(crate) use capture::prune_captures;
+pub(crate) use input::require_looks;
 pub(crate) use mutate::{Mutation, unconfirmed};
 pub(crate) use record::NOT_RECORDED;
 pub use record::PersonInput;
@@ -59,6 +60,12 @@ impl Verified {
     /// The session as it was verified.
     pub(crate) fn session(&self) -> &Session {
         &self.session
+    }
+
+    /// Whether the input service that answered this verification offers
+    /// `capability`.
+    pub(crate) fn input_offers(&self, capability: &str) -> bool {
+        self.observation.native.has_capability(capability)
     }
 
     /// What a read carries to be served only in this session. A daemon that

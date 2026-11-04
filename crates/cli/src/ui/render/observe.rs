@@ -435,6 +435,10 @@ pub(super) fn elements(value: &Value) -> String {
             value["pid"]
         )
     }];
+    // A reference to one of them is this look and its number: LOOK.N.
+    if let (Some(look), Some(header)) = (value["look"].as_str(), lines.first_mut()) {
+        header.push_str(&format!(" · look {}", text::printable(look)));
+    }
 
     if !elements.is_empty() {
         let rows: Vec<Vec<String>> = elements
