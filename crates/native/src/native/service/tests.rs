@@ -22,6 +22,14 @@ use std::{
 };
 use tokio::{io::AsyncWriteExt, net::UnixStream, sync::Mutex};
 
+/// How long a test's lease lasts: past any delay in running a test on a
+/// loaded machine, so only what a test does can end it.
+const LASTING: Duration = Duration::from_secs(60 * 60);
+
+/// How long a test waits on work that should finish at once before it
+/// calls it stuck: far past any delay in running a test on a loaded machine.
+const WATCHDOG: Duration = Duration::from_secs(60);
+
 /// [`super::run`], the role of the field it named, a failure as the reply
 /// it sends.
 async fn run(
@@ -337,7 +345,10 @@ async fn input_availability_still_precedes_deferred_field_refusals() {
     let directory = tempfile::tempdir().unwrap();
     let service = service(&directory.path().join("stopped"));
     let owner = "a".repeat(48);
-    let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     service.operations.set_failed(true);
     for fields in [
         r#""actions":null"#,
@@ -464,7 +475,7 @@ fn an_absent_person_flag_remains_an_agent() -> std::result::Result<(), Box<dyn s
         assert_eq!(who, expected);
         let gate = Arc::new(Gate::default());
         gate.hold(true)?;
-        let grant = gate.acquire(&owner, who);
+        let grant = gate.acquire_lasting(&owner, who, LASTING);
         if who == super::Who::Agent {
             assert_eq!(
                 grant.err().ok_or("expected stopped grant")?.code,
@@ -584,7 +595,10 @@ async fn typed_acquire_and_reset_still_require_fresh_authority() {
     let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
     let epoch = service.epoch().unwrap();
     for who in [super::Who::Agent, super::Who::Person] {
-        let grant = service.gate.acquire(&"a".repeat(48), who).unwrap();
+        let grant = service
+            .gate
+            .acquire_lasting(&"a".repeat(48), who, LASTING)
+            .unwrap();
         for member in [
             "uid",
             "securitySessionId",
@@ -630,7 +644,7 @@ async fn an_acquire_cannot_pass_cleanup_still_in_progress() {
     for who in [super::Who::Agent, super::Who::Person] {
         let operations = super::Operations::default();
         let gate = Arc::new(Gate::default());
-        let old = gate.acquire(&"a".repeat(48), who).unwrap();
+        let old = gate.acquire_lasting(&"a".repeat(48), who, LASTING).unwrap();
         let stand = Stand::locked(&[]);
         let engine = stand.clone().lock_owned().await;
         let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
@@ -648,7 +662,7 @@ async fn an_acquire_cannot_pass_cleanup_still_in_progress() {
             let mut engine = stand.lock().await;
             operations.check()?;
             engine.release()?;
-            gate.acquire(&"b".repeat(48), who)
+            gate.acquire_lasting(&"b".repeat(48), who, LASTING)
         };
         tokio::pin!(cleanup, acquire);
         std::future::poll_fn(|cx| {
@@ -804,7 +818,10 @@ async fn malformed_acquire_and_reset_fields_leave_ownership_and_recovery_unchang
         for failed in [false, true] {
             let marker = directory.path().join("stopped");
             let service = service(&marker);
-            let grant = service.gate.acquire(&"a".repeat(48), who).unwrap();
+            let grant = service
+                .gate
+                .acquire_lasting(&"a".repeat(48), who, LASTING)
+                .unwrap();
             let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
             let running = service.operations.start(barrier).await.unwrap();
             service.operations.set_failed(failed);
@@ -921,7 +938,9 @@ async fn lifecycle_members_preserve_last_value_refusals_and_effects()
             let reference = self::service(&reference_marker);
             let actual = self::service(&marker);
             for (instance, path) in [(&reference, &reference_marker), (&actual, &marker)] {
-                instance.gate.acquire(&"a".repeat(48), super::Who::Person)?;
+                instance
+                    .gate
+                    .acquire_lasting(&"a".repeat(48), super::Who::Person, LASTING)?;
                 instance.gate.hold(stopped)?;
                 if stopped {
                     std::fs::write(path, b"stop")?;
@@ -987,7 +1006,12 @@ async fn array_shaped_lifecycle_requests_are_refused_without_effects() {
             let directory = tempfile::tempdir().unwrap();
             let marker = directory.path().join("stopped");
             let service = service(&marker);
-            let grant = owned.then(|| service.gate.acquire(&owner, super::Who::Person).unwrap());
+            let grant = owned.then(|| {
+                service
+                    .gate
+                    .acquire_lasting(&owner, super::Who::Person, LASTING)
+                    .unwrap()
+            });
             service.gate.hold(stopped).unwrap();
             if stopped {
                 std::fs::write(&marker, b"stop").unwrap();
@@ -1035,7 +1059,7 @@ async fn lifecycle_fields_keep_their_operation_specific_refusals() {
     let (phase, observed) = super::watch::channel(super::ConnectionPhase::Refusal);
     let grant = service
         .gate
-        .acquire(&"a".repeat(48), super::Who::Agent)
+        .acquire_lasting(&"a".repeat(48), super::Who::Agent, LASTING)
         .unwrap();
     for fields in [
         "",
@@ -1118,7 +1142,10 @@ async fn stop_and_release_remain_available_when_ordinary_permission_checks_fail(
         "the synthetic session is never authorized"
     );
     let owner = "a".repeat(48);
-    let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
 
     let request = Request::decode(br#"{"op":"hold","on":true}"#).unwrap();
     assert_eq!(
@@ -1135,7 +1162,10 @@ async fn stop_and_release_remain_available_when_ordinary_permission_checks_fail(
 
     let request = Request::decode(br#"{"op":"hold","on":false}"#).unwrap();
     service.dispatch(request, &phase).await.unwrap();
-    let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let request =
         Request::decode(format!(r#"{{"op":"release","owner":"{owner}"}}"#).as_bytes()).unwrap();
     assert_eq!(
@@ -1184,7 +1214,7 @@ async fn shutdown_rechecks_ownership_after_draining() {
     .await;
     let grant = service
         .gate
-        .acquire(&"a".repeat(48), super::Who::Agent)
+        .acquire_lasting(&"a".repeat(48), super::Who::Agent, LASTING)
         .unwrap();
     resume.send(()).unwrap();
     let error = dispatch.await.unwrap_err();
@@ -1206,7 +1236,10 @@ async fn release_cancels_ownership_before_waiting_for_the_engine() {
     let service = service(&directory.path().join("stopped"));
     let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
     let owner = "a".repeat(48);
-    let grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let engine = service.engine.lock().await;
     let request = Request::Release { owner };
     let dispatch = service.dispatch(request, &phase);
@@ -1225,7 +1258,7 @@ async fn release_cancels_ownership_before_waiting_for_the_engine() {
     );
     service
         .gate
-        .acquire(&"b".repeat(48), super::Who::Agent)
+        .acquire_lasting(&"b".repeat(48), super::Who::Agent, LASTING)
         .unwrap();
 }
 
@@ -1361,11 +1394,8 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
     let operations = super::Operations::default();
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    // The current controller's lease outlasts any delay in running the test,
-    // so only a refusal could end it.
-    let lasting = Duration::from_secs(60 * 60);
     let grant = gate
-        .acquire_lasting(&owner, super::Who::Agent, lasting)
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
         .unwrap();
     for operation in ["release", "renew", "input"] {
         let (mut client, mut server) = UnixStream::pair().unwrap();
@@ -1410,7 +1440,7 @@ async fn an_abandoned_ownership_refusal_keeps_the_current_controller_healthy() {
         operations.check().unwrap();
         assert!(gate.active().unwrap());
         drop(grant.authorize().unwrap());
-        gate.renew_lasting(&owner, lasting).unwrap();
+        gate.renew_lasting(&owner, LASTING).unwrap();
     }
     operations.drain().await.unwrap();
 }
@@ -1455,7 +1485,9 @@ async fn a_lost_mutation_reply_keeps_recovery_pending() {
     let operations = Arc::new(super::Operations::default());
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let engine = Stand::locked(&[]);
     let mut tasks = super::JoinSet::new();
     let (mut client, mut server) = UnixStream::pair().unwrap();
@@ -1524,10 +1556,12 @@ async fn a_lost_mutation_reply_keeps_recovery_pending() {
 async fn reset_settles_completed_connections_without_hiding_later_failures() {
     for late in [false, true] {
         for panic in [false, true] {
-            tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::time::timeout(WATCHDOG, async {
                 let operations = Arc::new(super::Operations::default());
                 let gate = Arc::new(Gate::default());
-                let old_grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+                let old_grant = gate
+                    .acquire_lasting(&"a".repeat(48), super::Who::Agent, LASTING)
+                    .unwrap();
                 let engine = Stand::locked(&[]);
                 let (client, mut server) = UnixStream::pair().unwrap();
                 let (effect, effected) = tokio::sync::oneshot::channel();
@@ -1589,7 +1623,9 @@ async fn reset_settles_completed_connections_without_hiding_later_failures() {
                 assert_eq!(operations.check().is_err(), late);
                 assert!(operations.connections.lock().unwrap().is_empty());
                 if !late {
-                    let grant = gate.acquire(&"b".repeat(48), super::Who::Agent).unwrap();
+                    let grant = gate
+                        .acquire_lasting(&"b".repeat(48), super::Who::Agent, LASTING)
+                        .unwrap();
                     operations
                         .start(async move {
                             drop(grant.authorize().unwrap());
@@ -1617,7 +1653,9 @@ async fn shutdown_classifies_cancelled_handlers_and_joins_owned_work() {
     for lost_reply in [false, true] {
         let operations = super::Operations::default();
         let gate = Arc::new(Gate::default());
-        let _grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+        let _grant = gate
+            .acquire_lasting(&"a".repeat(48), super::Who::Agent, LASTING)
+            .unwrap();
         let engine = Stand::locked(&[]);
         let held = engine.clone().lock_owned().await;
         let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
@@ -1664,15 +1702,18 @@ async fn shutdown_classifies_cancelled_handlers_and_joins_owned_work() {
         })
         .await;
         assert!(!gate.active().unwrap());
-        assert!(gate.acquire(&"b".repeat(48), super::Who::Agent).is_err());
+        assert!(
+            gate.acquire_lasting(&"b".repeat(48), super::Who::Agent, LASTING)
+                .is_err()
+        );
         assert!(engine.try_lock().is_err());
         resume.send(()).unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(5), cleanup)
+        let result = tokio::time::timeout(WATCHDOG, cleanup)
             .await
             .expect("shutdown did not cancel handlers and drain work");
         assert_eq!(result.is_err(), lost_reply);
         assert_eq!(operations.check().is_err(), lost_reply);
-        tokio::time::timeout(Duration::from_secs(5), work)
+        tokio::time::timeout(WATCHDOG, work)
             .await
             .expect("registered work did not report its outcome")
             .unwrap();
@@ -2062,7 +2103,7 @@ async fn an_unreadable_first_check_posts_nothing_and_is_not_uncertain() {
         let stand = Stand::locked(&[Step::Unreadable]);
         let gate = Arc::new(Gate::default());
         let grant = gate
-            .acquire(&atlas_core::files::token(), super::Who::Agent)
+            .acquire_lasting(&atlas_core::files::token(), super::Who::Agent, LASTING)
             .unwrap();
         assert!(gate.active().unwrap());
 
@@ -2091,7 +2132,7 @@ async fn an_unreadable_later_check_does_not_repeat_earlier_input() {
     let stand = Stand::locked(&[Step::Post, Step::Unreadable]);
     let gate = Arc::new(Gate::default());
     let grant = gate
-        .acquire(&atlas_core::files::token(), super::Who::Agent)
+        .acquire_lasting(&atlas_core::files::token(), super::Who::Agent, LASTING)
         .unwrap();
     assert!(gate.active().unwrap());
 
@@ -2750,7 +2791,9 @@ async fn held_input_and_waits_never_prepare_a_target() {
 fn the_persons_input_cannot_name_an_agent_target() {
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    let _grant = gate.acquire(&owner, super::Who::Person).unwrap();
+    let _grant = gate
+        .acquire_lasting(&owner, super::Who::Person, LASTING)
+        .unwrap();
     let expect = Expect::new(812).unwrap();
     let error = super::agent_target(&gate, Some(&expect), &[]).unwrap_err();
     assert_eq!(error.code, Code::Input);
@@ -2864,7 +2907,9 @@ async fn blocked_while(ending: Ending, actions: Vec<Action>) {
     let shutdown = matches!(ending, Ending::Term);
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let operations = Arc::new(super::Operations::default());
     let (started, entered) = tokio::sync::oneshot::channel();
     let (resume, barrier) = std::sync::mpsc::channel();
@@ -2952,7 +2997,8 @@ async fn blocked_while(ending: Ending, actions: Vec<Action>) {
             } else {
                 super::Who::Agent
             };
-            gate.acquire(&"b".repeat(48), who).map(drop)
+            gate.acquire_lasting(&"b".repeat(48), who, LASTING)
+                .map(drop)
         };
         tokio::pin!(competing);
         assert!(
@@ -3001,7 +3047,9 @@ async fn aborting_a_request_after_registration_keeps_its_work_until_cleanup() {
     let operations = super::Operations::default();
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let stand = Stand::locked(&[]);
     let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
     {
@@ -3052,7 +3100,9 @@ async fn term_shutdown_drains_preparation_before_returning() {
 async fn repeated_input_under_one_retained_lease_keeps_the_operation_registry_bounded() {
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let operations = super::Operations::default();
     let engine = Stand::locked(&[]);
     for _ in 0..1000 {
@@ -3287,7 +3337,9 @@ async fn a_gate_failure_does_not_hide_a_drain_failure() {
         .unwrap();
     assert!(outcome.await.is_err());
     let gate = Arc::new(Gate::default());
-    let grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+    let grant = gate
+        .acquire_lasting(&"a".repeat(48), super::Who::Agent, LASTING)
+        .unwrap();
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = grant.authorize().unwrap();
@@ -3370,7 +3422,9 @@ async fn a_successful_reset_recovers_named_and_unnamed_input_after_a_join_failur
     let operations = super::Operations::default();
     let gate = Arc::new(Gate::default());
     let owner = "a".repeat(48);
-    let old_grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+    let old_grant = gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let stand = Stand::locked(&[]);
     stand.lock().await.held = true;
     let outcome = operations
@@ -3394,7 +3448,9 @@ async fn a_successful_reset_recovers_named_and_unnamed_input_after_a_join_failur
     assert!(!stand.lock().await.held);
     assert_eq!(stand.lock().await.releases, 1);
 
-    let grant = gate.acquire(&owner, super::Who::Agent).unwrap();
+    let grant = gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let named = Expect::new(812)
         .unwrap()
         .in_window(42)
@@ -3428,7 +3484,9 @@ async fn a_successful_reset_recovers_named_and_unnamed_input_after_a_join_failur
 async fn reset_joins_registered_work_before_cleanup_and_clearing_failure() {
     let operations = super::Operations::default();
     let gate = Arc::new(Gate::default());
-    let _grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+    let _grant = gate
+        .acquire_lasting(&"a".repeat(48), super::Who::Agent, LASTING)
+        .unwrap();
     let stand = Stand::locked(&[]);
     let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
     let running = operations.start(barrier).await.unwrap();
@@ -3464,7 +3522,9 @@ async fn cancelling_reset_before_drain_or_rebind_keeps_recovery_pending() {
     for before_rebind in [false, true] {
         let operations = super::Operations::default();
         let gate = Arc::new(Gate::default());
-        let _grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+        let _grant = gate
+            .acquire_lasting(&"a".repeat(48), super::Who::Agent, LASTING)
+            .unwrap();
         let stand = Stand::locked(&[]);
         let (resume, barrier) = tokio::sync::oneshot::channel::<()>();
         let mut resume = Some(resume);
@@ -3511,7 +3571,9 @@ async fn cancelling_reset_before_drain_or_rebind_keeps_recovery_pending() {
 async fn a_failed_reset_cleanup_keeps_input_uncertain_until_a_successful_reset() {
     let operations = super::Operations::default();
     let gate = Arc::new(Gate::default());
-    let _grant = gate.acquire(&"a".repeat(48), super::Who::Agent).unwrap();
+    let _grant = gate
+        .acquire_lasting(&"a".repeat(48), super::Who::Agent, LASTING)
+        .unwrap();
     let stand = Stand::locked(&[]);
     {
         let mut engine = stand.lock().await;
@@ -3752,7 +3814,7 @@ impl Hold {
             let opened = watched.opened.lock().unwrap();
             let (mut opened, _) = watched
                 .changed
-                .wait_timeout_while(opened, Duration::from_secs(5), |opened| opened.is_none())
+                .wait_timeout_while(opened, WATCHDOG, |opened| opened.is_none())
                 .unwrap();
             if opened.is_none() {
                 *opened = Some(Opener::Watchdog);
@@ -3820,7 +3882,10 @@ async fn a_blocked_journal_leaves_cancellation_and_the_service_loop_responsive()
     let (tap, seen, entered) = blocking_tap(armed, hold.clone());
     let service = tapped_service(directory.path(), tap, Arc::default());
     let owner = "a".repeat(48);
-    service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let input = tokio::spawn({
         let service = service.clone();
         let owner = owner.clone();
@@ -3900,7 +3965,10 @@ async fn an_event_is_posted_only_after_its_conservative_held_state_is_durable() 
     let directory = tempfile::tempdir().unwrap();
     let (tap, seen) = Tap::new();
     let service = tapped_service(directory.path(), tap, Arc::default());
-    service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
     let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
     let reply = service
         .input(
@@ -3969,7 +4037,10 @@ async fn an_event_is_posted_only_after_its_conservative_held_state_is_durable() 
             Ok(())
         }));
         let service = tapped_service(directory.path(), tap, gate);
-        service.gate.acquire(&owner, super::Who::Agent).unwrap();
+        service
+            .gate
+            .acquire_lasting(&owner, super::Who::Agent, LASTING)
+            .unwrap();
         let reply = service
             .input(
                 owner.clone(),
