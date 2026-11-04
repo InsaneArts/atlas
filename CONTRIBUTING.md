@@ -48,6 +48,11 @@ Developer ID signing identity that satisfies Atlas's identity checks; replace
 notarytool keychain profile for notarization. A successful local
 compile is not evidence that the packaged helper passes macOS consent checks.
 
+Maintainers release with `scripts/release.sh X.Y.Z` from a clean `main`. It sets
+the version, runs the checks, builds and notarizes with `cargo xtask dist`, tags
+`vX.Y.Z` and publishes the archive and `SHA256SUMS` as a GitHub release, where
+`install.sh` and `atlas update` download it.
+
 ## Where things live
 
 | Path             | What it holds                                                            |
