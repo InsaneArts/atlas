@@ -10,11 +10,12 @@ fn spawn(fixture: &mut Child, mode: &str) -> std::process::Child {
     use std::os::unix::process::CommandExt;
 
     let argv = fixture.argv(mode);
-    let child = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .process_group(0)
-        .spawn()
-        .unwrap();
+    let child = atlas_core::spawn::spawn(
+        std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .process_group(0),
+    )
+    .unwrap();
     let instance = process::info(child.id() as i32).unwrap().unwrap().instance;
     fixture.owned.0.push(instance);
     child

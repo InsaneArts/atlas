@@ -10,12 +10,13 @@ fn entries_text_and_clear_round_trip() {
     let user = std::env::var("USER").unwrap();
 
     assert!(
-        Command::new("/bin/chmod")
-            .args(["+a", &format!("user:{user} allow write")])
-            .arg(&path)
-            .status()
-            .unwrap()
-            .success()
+        crate::spawn::status(
+            Command::new("/bin/chmod")
+                .args(["+a", &format!("user:{user} allow write")])
+                .arg(&path)
+        )
+        .unwrap()
+        .success()
     );
 
     let acl = Acl::of_path(&path).unwrap().unwrap();

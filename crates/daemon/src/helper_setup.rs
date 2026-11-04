@@ -497,9 +497,9 @@ fn execute(request: Request, layout: &Layout) -> Result<Value> {
 /// Start the managed job launchd has not started on its own.
 fn kickstart(layout: &Layout, uid: u32) -> Result<Value> {
     layout.check()?;
-    let output = Command::new("/bin/launchctl")
-        .args(["kickstart", &format!("gui/{uid}/{LABEL}")])
-        .output()?;
+    let output = atlas_core::spawn::output(
+        Command::new("/bin/launchctl").args(["kickstart", &format!("gui/{uid}/{LABEL}")]),
+    )?;
     if !output.status.success() {
         return Err(
             problem("The helper job did not start; reopen Atlas in the helper").uncertain(),
@@ -622,10 +622,11 @@ fn prepare(layout: &Layout, controller: &str) -> Result<Value> {
 
         if *shared && !granted {
             layout.check()?;
-            let status = Command::new("/bin/chmod")
-                .args(["+a", &format!("user:{controller} allow search")])
-                .arg(path)
-                .status()?;
+            let status = atlas_core::spawn::status(
+                Command::new("/bin/chmod")
+                    .args(["+a", &format!("user:{controller} allow search")])
+                    .arg(path),
+            )?;
             if !status.success() {
                 return Err(problem(format!(
                     "Could not grant {controller} search access to {}",

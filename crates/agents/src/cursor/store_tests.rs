@@ -221,14 +221,13 @@ fn cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host() {
     }
     // Keep HOME and process-wide discovery isolated without changing this
     // parallel test runner's environment or invoking any installed host.
-    let result = atlas_core::test_support::rerun("cursor::store::tests::cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host")
+    let result = atlas_core::spawn::output(atlas_core::test_support::rerun("cursor::store::tests::cursor_refresh_and_default_removal_include_an_owned_copy_without_the_host")
         .env_clear()
         .env(CHILD, "1")
         .env("HOME", fixture._directory.path())
         .env("TMPDIR", fixture._directory.path())
         .env("PATH", &bin)
-        .env("SHELL", "/usr/bin/false")
-        .output()
+        .env("SHELL", "/usr/bin/false"))
         .unwrap();
     assert!(
         result.status.success(),

@@ -86,12 +86,13 @@ pub(super) fn signal(pairing: &Pairing) -> Result<Value> {
 }
 
 fn signal_using(command: &mut Command) -> Result<Value> {
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()?;
+    let mut child = atlas_core::spawn::spawn(
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .process_group(0),
+    )?;
     let output = child
         .stdout
         .take()

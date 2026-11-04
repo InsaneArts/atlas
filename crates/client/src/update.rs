@@ -79,11 +79,12 @@ pub fn exact_version(text: &str) -> Option<Vec<u64>> {
 }
 
 fn bundle_version(app: &Path) -> Option<String> {
-    let output = Command::new("/usr/libexec/PlistBuddy")
-        .args(["-c", "Print :CFBundleShortVersionString"])
-        .arg(app.join("Contents/Info.plist"))
-        .output()
-        .ok()?;
+    let output = atlas_core::spawn::output(
+        Command::new("/usr/libexec/PlistBuddy")
+            .args(["-c", "Print :CFBundleShortVersionString"])
+            .arg(app.join("Contents/Info.plist")),
+    )
+    .ok()?;
 
     output
         .status
@@ -151,14 +152,15 @@ fn protocol(url: &str) -> Result<&'static str> {
 fn curl(url: &str, output: &Path) -> Result<()> {
     let protocols = protocol(url)?;
 
-    let finished = Command::new("/usr/bin/curl")
-        .args(["-fsSL", "--proto", protocols, "--proto-redir", "=https"])
-        .args(["--connect-timeout", CONNECT_TIMEOUT])
-        .args(["--max-time", DOWNLOAD_TIMEOUT])
-        .arg("-o")
-        .arg(output)
-        .arg(url)
-        .output()?;
+    let finished = atlas_core::spawn::output(
+        Command::new("/usr/bin/curl")
+            .args(["-fsSL", "--proto", protocols, "--proto-redir", "=https"])
+            .args(["--connect-timeout", CONNECT_TIMEOUT])
+            .args(["--max-time", DOWNLOAD_TIMEOUT])
+            .arg("-o")
+            .arg(output)
+            .arg(url),
+    )?;
     if finished.status.success() {
         return Ok(());
     }
@@ -181,7 +183,7 @@ fn unpublished(error: Error, latest: bool) -> Error {
 }
 
 fn check(command: &mut Command, why: &str) -> Result<()> {
-    let output = command.output()?;
+    let output = atlas_core::spawn::output(command)?;
     if output.status.success() {
         return Ok(());
     }

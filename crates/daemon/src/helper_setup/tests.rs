@@ -315,18 +315,16 @@ fn plist_is_valid_and_escapes_text() {
     fs::write(&path, &text).unwrap();
     assert_eq!(file(&path).unwrap(), File::Regular(text_sha256(&text)));
 
-    let lint = Command::new("/usr/bin/plutil")
-        .arg("-lint")
-        .arg(&path)
-        .output()
-        .unwrap();
+    let lint =
+        atlas_core::spawn::output(Command::new("/usr/bin/plutil").arg("-lint").arg(&path)).unwrap();
     assert!(lint.status.success());
 
-    let json = Command::new("/usr/bin/plutil")
-        .args(["-convert", "json", "-o", "-"])
-        .arg(&path)
-        .output()
-        .unwrap();
+    let json = atlas_core::spawn::output(
+        Command::new("/usr/bin/plutil")
+            .args(["-convert", "json", "-o", "-"])
+            .arg(&path),
+    )
+    .unwrap();
     let parsed: Value = serde_json::from_slice(&json.stdout).unwrap();
     assert_eq!(parsed["Label"], LABEL);
     assert_eq!(
@@ -619,11 +617,12 @@ fn prepare_creates_repairs_and_refuses_foreign_access() {
     );
 
     let user = std::env::var("USER").unwrap();
-    Command::new("/bin/chmod")
-        .args(["+a", &format!("user:{user} allow list")])
-        .arg(layout.logs())
-        .status()
-        .unwrap();
+    atlas_core::spawn::status(
+        Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{user} allow list")])
+            .arg(layout.logs()),
+    )
+    .unwrap();
     fs::set_permissions(&capture, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(prepare(&layout, "root").is_err());
     assert_eq!(

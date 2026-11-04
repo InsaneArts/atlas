@@ -97,7 +97,8 @@ fn a_privileged_executor_is_identified_and_keeps_recovery_excluded() {
 
 #[test]
 fn an_exited_executor_has_no_start_identity() {
-    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let mut child =
+        atlas_core::spawn::spawn(&mut std::process::Command::new("/usr/bin/true")).unwrap();
     let pid = child.id() as i32;
     assert!(child.wait().unwrap().success());
     assert!(executor_start(pid).is_err());
@@ -243,7 +244,8 @@ fn unreadable_executor_records_do_not_release_a_live_process() {
 
 #[test]
 fn an_exited_executor_releases_its_claim_when_its_identity_is_unavailable() {
-    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let mut child =
+        atlas_core::spawn::spawn(&mut std::process::Command::new("/usr/bin/true")).unwrap();
     let pid = child.id() as i32;
     assert!(child.wait().unwrap().success());
     let mut file = tempfile::tempfile().unwrap();
@@ -268,7 +270,8 @@ fn a_partial_executor_record_does_not_block_recovery_after_its_executor_and_boot
     let pending = controller.quarantine().unwrap();
     let generation = pending.to_string();
     let live = pending.live.clone();
-    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let mut child =
+        atlas_core::spawn::spawn(&mut std::process::Command::new("/usr/bin/true")).unwrap();
     let pid = child.id() as i32;
     assert!(child.wait().unwrap().success());
     let record = serde_json::to_vec(&Executor {
@@ -308,7 +311,8 @@ fn interrupted_claim_cleanup_leaves_recovery_unblocked_despite_a_malformed_recor
     let generation = pending.to_string();
     let live = pending.live.clone();
     let sidecar = live.with_extension("executor.live");
-    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let mut child =
+        atlas_core::spawn::spawn(&mut std::process::Command::new("/usr/bin/true")).unwrap();
     let pid = child.id() as i32;
     assert!(child.wait().unwrap().success());
     let record = serde_json::to_vec(&Executor {

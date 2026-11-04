@@ -34,10 +34,8 @@ fn thread_cpu_seconds() -> f64 {
 
 fn rss_bytes() -> Option<u64> {
     let pid = std::process::id().to_string();
-    let output = Command::new("/bin/ps")
-        .args(["-o", "rss=", "-p", &pid])
-        .output()
-        .ok()?;
+    let output =
+        atlas_core::spawn::output(Command::new("/bin/ps").args(["-o", "rss=", "-p", &pid])).ok()?;
     if !output.status.success() {
         return None;
     }

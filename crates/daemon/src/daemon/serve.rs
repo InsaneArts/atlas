@@ -585,11 +585,12 @@ async fn write<W: AsyncWrite + Unpin>(stream: &mut W, reply: &Value) -> Result<(
 /// it up (asking to save). loginwindow answers at once; only its error is a
 /// refusal. A request that never got an answer may still be carried out.
 async fn ask_to_log_out() -> Value {
-    let asked = tokio::process::Command::new("/usr/bin/osascript")
-        .args(["-e", "tell application \"loginwindow\" to «event aevtrlgo»"])
-        .stdin(std::process::Stdio::null())
-        .kill_on_drop(true)
-        .output();
+    let asked = atlas_core::spawn::output_async(
+        tokio::process::Command::new("/usr/bin/osascript")
+            .args(["-e", "tell application \"loginwindow\" to «event aevtrlgo»"])
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true),
+    );
 
     let unanswered = |why: &str| {
         interrupted(
@@ -618,11 +619,12 @@ async fn ask_to_log_out() -> Value {
 /// the session, so how it went is only logged.
 fn force_log_out() {
     let uid = nix::unistd::getuid().as_raw();
-    let started = std::process::Command::new("/bin/launchctl")
-        .args(["bootout", &format!("gui/{uid}")])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .spawn();
+    let started = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/launchctl")
+            .args(["bootout", &format!("gui/{uid}")])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null()),
+    );
     match started {
         Ok(mut child) => {
             std::thread::spawn(move || {

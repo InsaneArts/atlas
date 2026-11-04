@@ -57,15 +57,17 @@ async fn a_shared_terminal_follows_a_restarted_menu_bar() {
         address: address.clone(),
     };
     frames.next().await.unwrap();
-    std::process::Command::new("pkill")
-        .args(["-TERM", "-f", "atlas menubar --serve"])
-        .status()
-        .unwrap();
+    atlas_core::spawn::status(std::process::Command::new("pkill").args([
+        "-TERM",
+        "-f",
+        "atlas menubar --serve",
+    ]))
+    .unwrap();
     tokio::time::sleep(Duration::from_secs(3)).await;
-    std::process::Command::new("/Applications/Atlas.app/Contents/MacOS/atlas")
-        .arg("menubar")
-        .status()
-        .unwrap();
+    atlas_core::spawn::status(
+        std::process::Command::new("/Applications/Atlas.app/Contents/MacOS/atlas").arg("menubar"),
+    )
+    .unwrap();
     let began = std::time::Instant::now();
     let frame = loop {
         match frames.next().await {

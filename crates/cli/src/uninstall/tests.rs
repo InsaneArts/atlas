@@ -57,14 +57,14 @@ fn an_opener_removal_test_caller() {
 fn input_shutdown_stays_pending_when_its_caller_dies_after_dispatch() {
     use std::{process::Stdio, time::Duration};
     let directory = tempfile::tempdir().unwrap();
-    let mut caller =
+    let mut caller = atlas_core::spawn::spawn(
         atlas_core::test_support::rerun("uninstall::tests::an_input_shutdown_test_caller")
             .arg("--nocapture")
             .env("ATLAS_MUTATION_TEST_DIRECTORY", directory.path())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
     for _ in 0..500 {
         if directory.path().join("dispatched").exists() || caller.try_wait().unwrap().is_some() {
             break;

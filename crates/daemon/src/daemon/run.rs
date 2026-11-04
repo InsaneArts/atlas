@@ -413,7 +413,7 @@ async fn spawn(argv: &[String], home: Option<&Path>) -> Result<Spawned, Value> {
 
     let (executable, path) = program(name, home)?;
     let (reader, writer) =
-        std::io::pipe().map_err(|error| failure(Code::SpawnFailed, error.to_string()))?;
+        atlas_core::spawn::pipe().map_err(|error| failure(Code::SpawnFailed, error.to_string()))?;
 
     let unstarted = |error: std::io::Error| failure(Code::SpawnFailed, format!("{name}: {error}"));
     let errors = writer.try_clone().map_err(unstarted)?;
@@ -427,7 +427,7 @@ async fn spawn(argv: &[String], home: Option<&Path>) -> Result<Spawned, Value> {
         .process_group(0)
         .kill_on_drop(false);
     in_helper(&mut command, &path, home);
-    let spawned = command.spawn();
+    let spawned = atlas_core::spawn::spawn_async(&mut command);
     // The command keeps this process's copies of the pipe's write end.
     drop(command);
     let mut child = spawned.map_err(unstarted)?;

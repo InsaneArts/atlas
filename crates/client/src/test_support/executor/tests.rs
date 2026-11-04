@@ -107,15 +107,16 @@ fn a_fixture_reaps_its_direct_worker_before_confirming_completion() {
     channel.set_write_timeout(Some(LIMIT)).unwrap();
     let input: OwnedFd = worker.try_clone().unwrap().into();
     let output: OwnedFd = worker.into();
-    let caller = Command::new("/bin/sh")
-        .args([
-            "-c",
-            "IFS= read -r message && [ \"$message\" = continue ] && printf 'exited\\n'",
-        ])
-        .stdin(Stdio::from(input))
-        .stdout(Stdio::from(output))
-        .spawn()
-        .unwrap();
+    let caller = atlas_core::spawn::spawn(
+        Command::new("/bin/sh")
+            .args([
+                "-c",
+                "IFS= read -r message && [ \"$message\" = continue ] && printf 'exited\\n'",
+            ])
+            .stdin(Stdio::from(input))
+            .stdout(Stdio::from(output)),
+    )
+    .unwrap();
     let pid = caller.id() as i32;
     let identity = Instance::new(pid, atlas_core::process::start(pid).unwrap());
     let mut fixture = Fixture {
@@ -144,7 +145,7 @@ fn a_fixture_reaps_its_direct_worker_before_confirming_completion() {
 fn a_child_exiting_during_watch_registration_is_still_reaped() -> io::Result<()> {
     for _ in 0..256 {
         let mut fixture = Fixture {
-            caller: Command::new("/usr/bin/true").spawn()?,
+            caller: atlas_core::spawn::spawn(&mut Command::new("/usr/bin/true"))?,
             requester: None,
             listener: None,
             channel: None,
@@ -162,11 +163,12 @@ fn a_child_exiting_during_watch_registration_is_still_reaped() -> io::Result<()>
 
 #[test]
 fn an_exit_watch_requires_the_owned_process_to_end_and_be_reaped() {
-    let caller = Command::new("/bin/cat")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .spawn()
-        .unwrap();
+    let caller = atlas_core::spawn::spawn(
+        Command::new("/bin/cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null()),
+    )
+    .unwrap();
     let mut fixture = Fixture {
         caller,
         requester: None,

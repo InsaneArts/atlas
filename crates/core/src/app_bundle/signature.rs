@@ -38,11 +38,8 @@ fn parse_signature(text: &str) -> Signature {
 }
 
 pub fn signature(path: &Path) -> Option<Signature> {
-    let output = Command::new("/usr/bin/codesign")
-        .arg("-dvvv")
-        .arg(path)
-        .output()
-        .ok()?;
+    let output =
+        crate::spawn::output(Command::new("/usr/bin/codesign").arg("-dvvv").arg(path)).ok()?;
 
     output
         .status
@@ -71,12 +68,13 @@ pub fn requirement_for(identifier: &str) -> String {
 }
 
 fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
-    Command::new("/usr/bin/codesign")
-        .args(["--verify", "--strict", "-R"])
-        .arg(format!("={}", requirement_for(identifier)))
-        .arg(target)
-        .output()
-        .is_ok_and(|output| output.status.success())
+    crate::spawn::output(
+        Command::new("/usr/bin/codesign")
+            .args(["--verify", "--strict", "-R"])
+            .arg(format!("={}", requirement_for(identifier)))
+            .arg(target),
+    )
+    .is_ok_and(|output| output.status.success())
 }
 
 /// Whether the file at `path` is Atlas signed by its Developer ID.

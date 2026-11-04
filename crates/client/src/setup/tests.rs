@@ -35,18 +35,19 @@ fn the_dispatcher_removes_first_login_copies_on_success_and_failure() {
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
             script = script.replace(tool, path.to_str().unwrap());
         }
-        let output = Command::new("/bin/zsh")
-            .args(["-f", "-c", &script, "zsh", "7001", "helper", guid, "plain"])
-            .arg(source.join("atlas"))
-            .args([
-                r#"{"action":"first-login","uid":7001,"opener":true}"#,
-                "{}",
-                "--logged-out",
-            ])
-            .env("failure", failure)
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        let output = atlas_core::spawn::output(
+            Command::new("/bin/zsh")
+                .args(["-f", "-c", &script, "zsh", "7001", "helper", guid, "plain"])
+                .arg(source.join("atlas"))
+                .args([
+                    r#"{"action":"first-login","uid":7001,"opener":true}"#,
+                    "{}",
+                    "--logged-out",
+                ])
+                .env("failure", failure)
+                .current_dir(dir.path()),
+        )
+        .unwrap();
         assert_eq!(
             output.status.success(),
             failure == "none",
@@ -133,24 +134,25 @@ fn the_privileged_dispatcher_checks_identity_before_entering_a_session() {
                 script = script.replace(tool, path.to_str().unwrap());
             }
             let encoded = serde_json::to_string(&identity).unwrap();
-            let output = Command::new("/bin/zsh")
-                .args([
-                    "-f",
-                    "-c",
-                    &script,
-                    "zsh",
-                    "7001",
-                    "helper",
-                    &identity.generated_uid,
-                    "login",
-                    "/unused-atlas",
-                    &serde_json::to_string(&request).unwrap(),
-                    &encoded,
-                    "--",
-                ])
-                .current_dir(dir.path())
-                .output()
-                .unwrap();
+            let output = atlas_core::spawn::output(
+                Command::new("/bin/zsh")
+                    .args([
+                        "-f",
+                        "-c",
+                        &script,
+                        "zsh",
+                        "7001",
+                        "helper",
+                        &identity.generated_uid,
+                        "login",
+                        "/unused-atlas",
+                        &serde_json::to_string(&request).unwrap(),
+                        &encoded,
+                        "--",
+                    ])
+                    .current_dir(dir.path()),
+            )
+            .unwrap();
             assert_eq!(
                 output.status.success(),
                 !replaced,

@@ -795,13 +795,14 @@ async fn the_launcher_sends_its_private_url_only_through_stdin() {
         let mut command = Command::from(atlas_core::test_support::rerun(test));
         let output = tokio::time::timeout(
             Duration::from_secs(30),
-            command
-                .env("ATLAS_LAUNCHER_TEST", test)
-                .env("XPC_SERVICE_NAME", LOGIN_JOB)
-                .env("ATLAS_CLI", "inherited-cli")
-                .env("ATLAS_CONFIG", "inherited-config")
-                .kill_on_drop(true)
-                .output(),
+            atlas_core::spawn::output_async(
+                command
+                    .env("ATLAS_LAUNCHER_TEST", test)
+                    .env("XPC_SERVICE_NAME", LOGIN_JOB)
+                    .env("ATLAS_CLI", "inherited-cli")
+                    .env("ATLAS_CONFIG", "inherited-config")
+                    .kill_on_drop(true),
+            ),
         )
         .await
         .unwrap()

@@ -154,7 +154,7 @@ impl Jobs {
         let program = &start.argv[0];
         let mut command = self.command(start, &prepared);
         let (record, lifetime) = (prepared.record, prepared.lifetime);
-        let mut child = match command.spawn() {
+        let mut child = match atlas_core::spawn::spawn_async(&mut command) {
             Ok(child) => child,
             Err(error) => {
                 if let Err(error) = self.forget(&record.id).await {

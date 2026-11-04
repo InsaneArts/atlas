@@ -126,12 +126,13 @@ fn a_host_exit_is_seen_without_a_record_write() {
     use std::process::{Command, Stdio};
 
     let mut child = HostChild(
-        Command::new("/bin/sh")
-            .args(["-c", "printf 'ready\\n'; read -r continuation"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap(),
+        atlas_core::spawn::spawn(
+            Command::new("/bin/sh")
+                .args(["-c", "printf 'ready\\n'; read -r continuation"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped()),
+        )
+        .unwrap(),
     );
     let stdout = child.0.stdout.take().unwrap();
     let ready = std::thread::scope(|scope| {

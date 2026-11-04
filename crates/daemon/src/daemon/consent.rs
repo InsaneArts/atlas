@@ -389,12 +389,13 @@ async fn screen_recording_now() -> bool {
         return false;
     };
 
-    let run = tokio::process::Command::new(executable)
-        .arg("permissions-info")
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .output();
+    let run = atlas_core::spawn::output_async(
+        tokio::process::Command::new(executable)
+            .arg("permissions-info")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true),
+    );
     match tokio::time::timeout(Duration::from_secs(5), run).await {
         Ok(Ok(output)) => serde_json::from_slice::<Value>(&output.stdout)
             .is_ok_and(|reply| reply["screenCapture"] == true),
@@ -512,7 +513,8 @@ fn notice(title: &str, message: &str, switch_back: Option<&str>) {
 
     // Its own process group: restarting this daemon (to pick up Screen
     // Recording) must not close the notice the person is reading.
-    let shown = silent(Command::new(app).process_group(0).args(arguments)).spawn();
+    let shown =
+        atlas_core::spawn::spawn(silent(Command::new(app).process_group(0).args(arguments)));
     if let Ok(mut child) = shown {
         if let Some(pid) = login {
             let _ = std::fs::write(notice_record(&home), pid.to_string());
@@ -528,12 +530,13 @@ fn notice(title: &str, message: &str, switch_back: Option<&str>) {
 /// (asked of `ps`, off the runtime).
 async fn setting_up() -> bool {
     let uid = nix::unistd::getuid().as_raw().to_string();
-    let listed = tokio::process::Command::new("/bin/ps")
-        .args(["-axo", "uid=,comm="])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .await;
+    let listed = atlas_core::spawn::output_async(
+        tokio::process::Command::new("/bin/ps")
+            .args(["-axo", "uid=,comm="])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .await;
 
     listed.is_ok_and(|output| {
         String::from_utf8_lossy(&output.stdout).lines().any(|line| {
@@ -554,7 +557,7 @@ fn open_settings(page: &str) {
     command.arg(format!(
         "x-apple.systempreferences:com.apple.preference.security?{page}"
     ));
-    let _ = silent(&mut command).status();
+    let _ = atlas_core::spawn::status(silent(&mut command));
 }
 
 #[cfg(test)]

@@ -28,10 +28,8 @@ fn this_process_is_described_with_its_parent_and_start() {
 fn a_suspended_process_is_seen_as_stopped_until_continued() {
     use nix::sys::signal::{Signal, kill};
 
-    let mut child = std::process::Command::new("/bin/sleep")
-        .arg("30")
-        .spawn()
-        .unwrap();
+    let mut child =
+        crate::spawn::spawn(std::process::Command::new("/bin/sleep").arg("30")).unwrap();
     let pid = i32::try_from(child.id()).unwrap();
     let process = super::process(pid).unwrap().instance;
     let seen = |want: State| {

@@ -65,7 +65,10 @@ impl Fixture {
         command.args(args);
         command.envs(variables.iter().copied());
 
-        let output = command.output().unwrap();
+        let output =
+            atlas_core::spawn::spawn(command.stdout(Stdio::piped()).stderr(Stdio::piped()))
+                .and_then(std::process::Child::wait_with_output)
+                .unwrap();
         assert_eq!(
             self.files(),
             before,
@@ -502,14 +505,15 @@ fn pipelined_cursor_initialization_guards_an_imported_plain_mcp_connection() {
         "helper_uid = 60001\nsocket_path = \"absent.sock\"\nidentity_probe = \"absent\"\ninput_socket = \"input.sock\"\noutput_dir = \"out\"\n",
     )
     .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_atlas"))
-        .args(["--config", config.to_str().unwrap(), "mcp"])
-        .env("HOME", fixture.directory.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = atlas_core::spawn::spawn(
+        Command::new(env!("CARGO_BIN_EXE_atlas"))
+            .args(["--config", config.to_str().unwrap(), "mcp"])
+            .env("HOME", fixture.directory.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .unwrap();
     let mut input = child.stdin.take().unwrap();
     let messages = [
         json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"cursor-vscode","version":"1.0.0"},"capabilities":{"extensions":{"io.modelcontextprotocol/ui":{}}}}}),

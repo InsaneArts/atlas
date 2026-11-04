@@ -19,10 +19,7 @@ fn this_process_reads_as_the_kernel_reports_it() {
 
 #[test]
 fn a_process_is_known_by_its_start_time_not_its_pid_alone() {
-    let mut child = std::process::Command::new("/bin/sleep")
-        .arg("5")
-        .spawn()
-        .unwrap();
+    let mut child = crate::spawn::spawn(std::process::Command::new("/bin/sleep").arg("5")).unwrap();
     let pid = child.id() as i32;
     let known = info(pid).unwrap().unwrap();
     assert_eq!(known.instance.start, start(pid).unwrap());
@@ -37,7 +34,7 @@ fn a_process_is_known_by_its_start_time_not_its_pid_alone() {
 
 #[test]
 fn an_unreaped_child_is_read_as_a_zombie_with_its_start_time() {
-    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let mut child = crate::spawn::spawn(&mut std::process::Command::new("/usr/bin/true")).unwrap();
     let pid = child.id() as i32;
     let started = start(pid).unwrap();
     let mut zombie = None;
@@ -60,7 +57,7 @@ fn another_accounts_process_is_read_and_a_reaped_one_is_absent() {
     assert_eq!((launchd.uid, launchd.ruid), (0, 0));
     assert!(!launchd.owned_by(nix::unistd::getuid().as_raw()));
 
-    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let mut child = crate::spawn::spawn(&mut std::process::Command::new("/usr/bin/true")).unwrap();
     let pid = child.id() as i32;
     child.wait().unwrap();
     assert_eq!(info(pid).unwrap(), None);
@@ -69,11 +66,12 @@ fn another_accounts_process_is_read_and_a_reaped_one_is_absent() {
 
 #[test]
 fn a_process_group_lists_only_its_members() {
-    let mut leader = std::process::Command::new("/bin/sh")
-        .args(["-c", "sleep 5 & sleep 5 & wait"])
-        .process_group(0)
-        .spawn()
-        .unwrap();
+    let mut leader = crate::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 5 & sleep 5 & wait"])
+            .process_group(0),
+    )
+    .unwrap();
     let pgid = leader.id() as i32;
     let mut members = Vec::new();
     for _ in 0..200 {
@@ -142,7 +140,7 @@ fn only_this_accounts_live_processes_are_described() {
         "the kernel's"
     );
 
-    let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let mut child = crate::spawn::spawn(&mut std::process::Command::new("/usr/bin/true")).unwrap();
     let pid = child.id() as i32;
     let exited = Instance::new(pid, start(pid).unwrap());
     let mut zombie = false;
@@ -167,10 +165,8 @@ fn only_this_accounts_live_processes_are_described() {
 fn a_suspended_process_reads_as_stopped() {
     use nix::sys::signal::{Signal, kill};
 
-    let mut child = std::process::Command::new("/bin/sleep")
-        .arg("30")
-        .spawn()
-        .unwrap();
+    let mut child =
+        crate::spawn::spawn(std::process::Command::new("/bin/sleep").arg("30")).unwrap();
     let pid = child.id() as i32;
     kill(nix::unistd::Pid::from_raw(pid), Signal::SIGSTOP).unwrap();
     let started = std::time::Instant::now();

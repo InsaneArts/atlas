@@ -52,10 +52,7 @@ pub fn start_executor(
     command: &mut Command,
 ) -> Result<(std::process::Child, nix::unistd::Pid), Refusal> {
     let failed = |error: std::io::Error| Refusal::Failed(error.to_string());
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
+    let mut child = atlas_core::spawn::spawn(command.stdin(Stdio::piped()).stdout(Stdio::piped()))
         .map_err(failed)?;
     let mut output = child.stdout.take().expect("piped executor output");
     let mut input = child.stdin.take().expect("piped executor input");
@@ -793,7 +790,7 @@ impl AdministratorRights {
     /// Authorization uses the operating system's normal consent flow.
     pub fn request(&mut self) -> AtlasResult<()> {
         self.request_with(
-            || Ok(Command::new("/usr/bin/sudo").arg("-v").status()?.success()),
+            || Ok(atlas_core::spawn::status(Command::new("/usr/bin/sudo").arg("-v"))?.success()),
             || {
                 // A refresh that fails leaves sudo to ask again when it is next needed.
                 let _ = atlas_core::bounded::output(
@@ -850,9 +847,7 @@ impl Drop for AdministratorRights {
 
 /// Check cached rights without prompting after a long first-login wait.
 pub fn administrator_rights_current() -> bool {
-    Command::new("/usr/bin/sudo")
-        .args(["-n", "-v"])
-        .output()
+    atlas_core::spawn::output(Command::new("/usr/bin/sudo").args(["-n", "-v"]))
         .is_ok_and(|output| output.status.success())
 }
 

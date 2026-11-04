@@ -13,12 +13,13 @@ fn add_acl(path: &Path) {
         .unwrap()
         .name;
     assert!(
-        Command::new("/bin/chmod")
-            .args(["+a", &format!("user:{user} allow readattr")])
-            .arg(path)
-            .status()
-            .unwrap()
-            .success()
+        atlas_core::spawn::status(
+            Command::new("/bin/chmod")
+                .args(["+a", &format!("user:{user} allow readattr")])
+                .arg(path)
+        )
+        .unwrap()
+        .success()
     );
 }
 

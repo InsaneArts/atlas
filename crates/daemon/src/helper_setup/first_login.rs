@@ -156,7 +156,7 @@ fn opener_plist(program: &Path) -> String {
 /// macOS's version and build, as Setup Assistant records them.
 fn macos() -> Result<(String, String)> {
     let read = |flag: &str| -> Result<String> {
-        let output = Command::new("/usr/bin/sw_vers").arg(flag).output()?;
+        let output = atlas_core::spawn::output(Command::new("/usr/bin/sw_vers").arg(flag))?;
         let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         if !output.status.success() || text.is_empty() {
             return Err(problem(format!("sw_vers {flag} gave no answer")));
@@ -487,10 +487,8 @@ pub fn open_at_login() -> Result<()> {
     std::thread::sleep(Duration::from_secs(2));
     let app = atlas_core::app_bundle::installed_app()?;
     mark("opener.open");
-    let status = Command::new("/usr/bin/open")
-        .args(["-n", "-a"])
-        .arg(&app)
-        .status()?;
+    let status =
+        atlas_core::spawn::status(Command::new("/usr/bin/open").args(["-n", "-a"]).arg(&app))?;
     if !status.success() {
         return Err(problem(format!("{} could not be opened", app.display())));
     }

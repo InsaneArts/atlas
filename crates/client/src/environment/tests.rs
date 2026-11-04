@@ -303,15 +303,16 @@ async fn a_worker_killed_after_replacing_a_file_stays_pending_until_recovery() {
             } else if worker {
                 assert_eq!(client.controller.acquire(true).unwrap_err().code, "busy");
                 assert!(!client.controller.pending().unwrap().is_empty());
-                let output = Command::from(atlas_core::test_support::rerun(TEST))
-                    .arg("--nocapture")
-                    .env(
-                        "ATLAS_ENVIRONMENT_TEST_PACKET",
-                        request["argv"][2].as_str().unwrap(),
-                    )
-                    .output()
-                    .await
-                    .unwrap();
+                let output = atlas_core::spawn::output_async(
+                    Command::from(atlas_core::test_support::rerun(TEST))
+                        .arg("--nocapture")
+                        .env(
+                            "ATLAS_ENVIRONMENT_TEST_PACKET",
+                            request["argv"][2].as_str().unwrap(),
+                        ),
+                )
+                .await
+                .unwrap();
                 assert_eq!(output.status.signal(), Some(libc::SIGKILL));
                 assert_eq!(fs::read(sandbox.home.join("file")).unwrap(), b"replacement");
                 json!({"ok": true, "exitCode": null, "signal": "SIGKILL",
@@ -1247,12 +1248,13 @@ fn an_existing_acl_is_refused_without_removing_its_entries() {
     atomic_write(&path, b"owned test data", 0o600).unwrap();
 
     assert!(
-        std::process::Command::new("/bin/chmod")
-            .args(["+a", "everyone allow read"])
-            .arg(&path)
-            .status()
-            .unwrap()
-            .success()
+        atlas_core::spawn::status(
+            std::process::Command::new("/bin/chmod")
+                .args(["+a", "everyone allow read"])
+                .arg(&path)
+        )
+        .unwrap()
+        .success()
     );
     assert!(has_acl(&path).unwrap());
     assert!(snapshot(&path).is_err());
@@ -2469,12 +2471,13 @@ fn an_inherited_folder_acl_is_cleared() {
     fs::create_dir(&folder).unwrap();
 
     assert!(
-        std::process::Command::new("/bin/chmod")
-            .args(["+a", "everyone allow read"])
-            .arg(&folder)
-            .status()
-            .unwrap()
-            .success()
+        atlas_core::spawn::status(
+            std::process::Command::new("/bin/chmod")
+                .args(["+a", "everyone allow read"])
+                .arg(&folder)
+        )
+        .unwrap()
+        .success()
     );
     assert!(has_acl(&folder).unwrap());
     remove_inherited_acl(&folder).unwrap();

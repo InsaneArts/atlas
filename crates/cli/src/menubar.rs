@@ -159,7 +159,7 @@ impl Startup {
         if let Some(test) = &mut self.test {
             command = test.command.take().unwrap();
         }
-        self.child = Some(
+        self.child = Some(atlas_core::spawn::spawn(
             command
                 .arg("menubar")
                 .arg("--serve")
@@ -170,9 +170,8 @@ impl Startup {
                 .env("ATLAS_JSON", "1")
                 .stdin(Stdio::null())
                 .stdout(log.try_clone()?)
-                .stderr(log)
-                .spawn()?,
-        );
+                .stderr(log),
+        )?);
         let pid = self.child.as_ref().map(std::process::Child::id);
         let timeout = Duration::from_secs(20);
         #[cfg(test)]
@@ -678,11 +677,14 @@ fn atlas_executable(pid: i32) -> std::io::Result<bool> {
         .file_name()
         .ok_or_else(|| std::io::Error::other("this executable has no name"))?;
 
-    let output = std::process::Command::new("/bin/ps")
-        .args(["-o", "comm=", "-p", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()?;
+    let output = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .and_then(std::process::Child::wait_with_output)?;
     if !output.status.success() {
         return Err(std::io::Error::other("ps could not describe the process"));
     }
@@ -739,10 +741,14 @@ pub fn login(state: &str) -> Result<serde_json::Value> {
 ///
 /// Returns failures inspecting or changing Atlas's login item.
 pub fn set_login(login: Login) -> Result<serde_json::Value> {
-    let output = std::process::Command::new(app_program()?)
-        .args(["--login", login.as_str()])
-        .stdin(Stdio::null())
-        .output()?;
+    let output = atlas_core::spawn::spawn(
+        std::process::Command::new(app_program()?)
+            .args(["--login", login.as_str()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .and_then(std::process::Child::wait_with_output)?;
     let reply: serde_json::Value = serde_json::from_slice(&output.stdout)
         .map_err(|_| Error::new(Code::Menubar, "The menu bar did not report its login item"))?;
 
@@ -826,12 +832,12 @@ fn development() -> Result<PathBuf> {
     }
 
     let swift = |args: &[&str]| {
-        std::process::Command::new("/usr/bin/swift")
-            .args(args)
-            .arg("--package-path")
-            .arg(&package)
-            .stdin(Stdio::null())
-            .output()
+        atlas_core::spawn::output(
+            std::process::Command::new("/usr/bin/swift")
+                .args(args)
+                .arg("--package-path")
+                .arg(&package),
+        )
             .map_err(|_| {
                 Error::new(
                     Code::Menubar,
@@ -864,15 +870,16 @@ fn development() -> Result<PathBuf> {
 /// runs is never the login agent ([`started_at_login`]).
 async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, ChildStdin)> {
     let cli = std::env::current_exe().and_then(fs::canonicalize)?;
-    let mut child = Command::new(&program.executable)
-        .args(args)
-        .env_remove("XPC_SERVICE_NAME")
-        .env("ATLAS_CLI", cli)
-        .env("ATLAS_CONFIG", &program.config)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()?;
+    let mut child = atlas_core::spawn::spawn_async(
+        Command::new(&program.executable)
+            .args(args)
+            .env_remove("XPC_SERVICE_NAME")
+            .env("ATLAS_CLI", cli)
+            .env("ATLAS_CONFIG", &program.config)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .kill_on_drop(true),
+    )?;
 
     let mut stdin = child
         .stdin

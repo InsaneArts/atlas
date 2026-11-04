@@ -61,12 +61,13 @@ pub(crate) fn output_with_limit(
     cap: usize,
 ) -> io::Result<Output> {
     let deadline = Instant::now() + limit;
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()?;
+    let mut child = crate::spawn::spawn(
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0),
+    )?;
     #[cfg(test)]
     faults::spawned(child.id());
     let mut stdout = Pipe::new(child.stdout.take().map(OwnedFd::from));

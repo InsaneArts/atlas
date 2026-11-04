@@ -59,11 +59,12 @@ fn grant_search(directory: &Path, controller: u32) -> Result<()> {
     let name = atlas_core::account::account_with_uid(controller)?
         .ok_or_else(|| Error::new(Code::Identity, "The controller account does not exist"))?
         .name;
-    let granted = std::process::Command::new("/bin/chmod")
-        .args(["+a", &format!("user:{name} allow search")])
-        .arg(directory)
-        .status()
-        .map_err(context("Grant search access to", directory))?;
+    let granted = atlas_core::spawn::status(
+        std::process::Command::new("/bin/chmod")
+            .args(["+a", &format!("user:{name} allow search")])
+            .arg(directory),
+    )
+    .map_err(context("Grant search access to", directory))?;
     if !granted.success() {
         return Err(Error::new(
             Code::Identity,

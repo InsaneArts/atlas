@@ -61,14 +61,15 @@ struct Fixture {
 
 impl Fixture {
     fn ready(script: &str) -> Self {
-        let mut child = Command::new("/bin/sh")
-            .args(["-c", script])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn()
-            .unwrap();
+        let mut child = crate::spawn::spawn(
+            Command::new("/bin/sh")
+                .args(["-c", script])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .process_group(0),
+        )
+        .unwrap();
         let mut stderr = child.stderr.take().unwrap();
         let mut ready = [0];
         stderr.read_exact(&mut ready).unwrap();
@@ -314,7 +315,7 @@ fn ended(bytes: &[u8]) -> Pipe {
 
 /// A pipe holding `bytes` whose writer stays open while it is kept.
 fn open(bytes: &[u8]) -> (Pipe, io::PipeWriter) {
-    let (reader, mut writer) = io::pipe().unwrap();
+    let (reader, mut writer) = crate::spawn::pipe().unwrap();
     writer.write_all(bytes).unwrap();
     let pipe = Pipe::new(Some(OwnedFd::from(reader)));
     pipe.configure().unwrap();
