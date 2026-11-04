@@ -53,6 +53,8 @@ pub struct Helper {
     /// Whether it refuses a read meant for another session, as a current
     /// daemon does; an older one cannot be told the session.
     pins: bool,
+    /// Whether it crops one window or an app's part of a region.
+    parts: bool,
 }
 
 impl Helper {
@@ -76,6 +78,7 @@ impl Helper {
             requests: AtomicUsize::new(0),
             unavailable_after: None,
             pins: true,
+            parts: true,
         };
 
         (client, helper)
@@ -114,6 +117,13 @@ impl Helper {
     /// which session a read is for.
     pub fn older(mut self) -> Self {
         self.pins = false;
+        self
+    }
+
+    /// This helper as a daemon that pins reads to their session but cannot
+    /// crop one window or an app's part of a region.
+    pub fn without_parts(mut self) -> Self {
+        self.parts = false;
         self
     }
 
@@ -206,10 +216,13 @@ impl Helper {
     }
 
     fn hello(&self) -> Value {
-        let capabilities: &[&str] = if self.pins {
-            &[atlas_core::protocol::SESSION_PIN]
-        } else {
-            &[]
+        let capabilities: &[&str] = match (self.pins, self.parts) {
+            (true, true) => &[
+                atlas_core::protocol::SESSION_PIN,
+                atlas_core::protocol::APP_PARTS,
+            ],
+            (true, false) => &[atlas_core::protocol::SESSION_PIN],
+            (false, _) => &[],
         };
         json!({"ok": true, "user": {"uid": self.uid, "home": HOME},
             "daemon": {"pid": 123, "capabilities": capabilities},

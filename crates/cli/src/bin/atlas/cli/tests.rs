@@ -335,7 +335,7 @@ fn keyboard_and_pointer_commands_take_an_app() {
 }
 
 #[test]
-fn screenshots_take_an_app_or_a_region_never_both() {
+fn screenshots_take_an_app_a_region_both_or_one_window() {
     let given = |args: &[&str]| match parse(args) {
         Ok(Cli {
             command:
@@ -375,13 +375,22 @@ fn screenshots_take_an_app_or_a_region_never_both() {
         Ok((None, None, Some(region(1, 2, 4, 5)), None))
     );
 
+    assert_eq!(
+        given(&["screenshot", "--app", "A", "--region", "0,0,10,10"]),
+        Ok((Some("A".into()), None, Some(region(0, 0, 10, 10)), None)),
+        "the region where it shows the app's windows"
+    );
+    match parse(&["screenshot", "--app", "A", "--window", "7"]) {
+        Ok(Cli {
+            command: Some(Command::Screenshot(Screenshot { window, .. })),
+            ..
+        }) => assert_eq!(window, Some(7)),
+        _ => panic!("a window is one of the app's"),
+    }
+
     for (args, says) in [
         (
-            &["screenshot", "--app", "A", "--region", "0,0,10,10"][..],
-            "cannot be used with",
-        ),
-        (
-            &["screenshot", "--pid", "1", "--region", "0,0,10,10"],
+            &["screenshot", "--window", "7", "--region", "0,0,10,10"][..],
             "cannot be used with",
         ),
         (

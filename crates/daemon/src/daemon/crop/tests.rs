@@ -26,7 +26,7 @@ fn the_dock_is_overlapping_where_it_takes_clicks() {
         }])
     };
 
-    let over = app(&windows, 7, &DISPLAY, &icons(200.0)).unwrap();
+    let over = app(&windows, 7, None, &DISPLAY, &icons(200.0)).unwrap();
     let parts: Vec<_> = over
         .overlapping
         .iter()
@@ -41,11 +41,11 @@ fn the_dock_is_overlapping_where_it_takes_clicks() {
         height: 60.0
     }));
 
-    let aside = app(&windows, 7, &DISPLAY, &icons(650.0)).unwrap();
+    let aside = app(&windows, 7, None, &DISPLAY, &icons(650.0)).unwrap();
     assert!(aside.overlapping.is_empty(), "{:?}", aside.overlapping);
 
     for unknown in [Dock::Other, Dock::Unread] {
-        let all = app(&windows, 7, &DISPLAY, &unknown).unwrap();
+        let all = app(&windows, 7, None, &DISPLAY, &unknown).unwrap();
         assert_eq!(all.overlapping.len(), 1, "{unknown:?}");
         assert_eq!(all.overlapping[0].bounds, windows[0].bounds);
     }
@@ -92,7 +92,7 @@ fn an_apps_crop_is_its_windows_with_a_margin() {
         window(7, 0, 300.0, 200.0, 400.0, 300.0),
         window(8, 0, 0.0, 0.0, 1000.0, 800.0),
     ];
-    let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
+    let crop = app(&windows, 7, None, &DISPLAY, &NO_DOCK).unwrap();
 
     assert_eq!(crop.region, region(92, 92, 616, 416));
     assert_eq!(crop.name.as_deref(), Some("App 7"));
@@ -106,7 +106,7 @@ fn sheets_panels_and_open_menus_belong_to_the_apps_crop() {
             window(7, layer, x, y, 100.0, 100.0),
             window(7, 0, 200.0, 200.0, 200.0, 200.0),
         ];
-        let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
+        let crop = app(&windows, 7, None, &DISPLAY, &NO_DOCK).unwrap();
         let shown = bounds(&crop.region);
 
         assert!(shown.covers(&windows[0].bounds), "layer {layer}");
@@ -118,7 +118,7 @@ fn sheets_panels_and_open_menus_belong_to_the_apps_crop() {
         window(7, 101, 210.0, 24.0, 180.0, 400.0),
         window(7, 0, 200.0, 200.0, 200.0, 100.0),
     ];
-    let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
+    let crop = app(&windows, 7, None, &DISPLAY, &NO_DOCK).unwrap();
     assert_eq!(
         crop.region,
         region(192, 16, 216, 416),
@@ -129,7 +129,7 @@ fn sheets_panels_and_open_menus_belong_to_the_apps_crop() {
 #[test]
 fn a_crop_never_leaves_the_display() {
     let windows = [window(7, 0, -200.0, 700.0, 500.0, 300.0)];
-    let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
+    let crop = app(&windows, 7, None, &DISPLAY, &NO_DOCK).unwrap();
 
     assert_eq!(crop.region, region(0, 692, 308, 108));
 }
@@ -137,7 +137,7 @@ fn a_crop_never_leaves_the_display() {
 #[test]
 fn fractional_bounds_widen_to_whole_points() {
     let windows = [window(7, 0, 100.5, 100.25, 200.25, 100.5)];
-    let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
+    let crop = app(&windows, 7, None, &DISPLAY, &NO_DOCK).unwrap();
 
     assert_eq!(crop.region, region(92, 92, 217, 117));
 }
@@ -149,11 +149,11 @@ fn status_items_in_the_menu_bar_stay_out_of_the_crop() {
         menu_bar(),
         window(7, 0, 100.0, 100.0, 200.0, 200.0),
     ];
-    let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
+    let crop = app(&windows, 7, None, &DISPLAY, &NO_DOCK).unwrap();
 
     assert_eq!(crop.region, region(92, 92, 216, 216));
     assert_eq!(
-        app(&windows[..2], 7, &DISPLAY, &NO_DOCK),
+        app(&windows[..2], 7, None, &DISPLAY, &NO_DOCK),
         None,
         "only a status item"
     );
@@ -169,7 +169,7 @@ fn invisible_and_off_display_windows_stay_out() {
         window(7, 0, 500.0, 500.0, 0.5, 40.0),
         window(7, 0, 100.0, 100.0, 200.0, 200.0),
     ];
-    let crop = app(&windows, 7, &DISPLAY, &NO_DOCK).unwrap();
+    let crop = app(&windows, 7, None, &DISPLAY, &NO_DOCK).unwrap();
 
     assert_eq!(crop.region, region(92, 92, 216, 216));
 }
@@ -179,9 +179,15 @@ fn an_app_with_no_window_on_screen_has_no_crop() {
     let off = window(7, 0, 1200.0, 900.0, 300.0, 300.0);
     let others = window(8, 0, 100.0, 100.0, 300.0, 300.0);
 
-    assert_eq!(app(&[], 7, &DISPLAY, &NO_DOCK), None);
-    assert_eq!(app(&[off, others.clone()], 7, &DISPLAY, &NO_DOCK), None);
-    assert_eq!(app(&[menu_bar(), others], 7, &DISPLAY, &NO_DOCK), None);
+    assert_eq!(app(&[], 7, None, &DISPLAY, &NO_DOCK), None);
+    assert_eq!(
+        app(&[off, others.clone()], 7, None, &DISPLAY, &NO_DOCK),
+        None
+    );
+    assert_eq!(
+        app(&[menu_bar(), others], 7, None, &DISPLAY, &NO_DOCK),
+        None
+    );
 }
 
 #[test]
@@ -212,7 +218,7 @@ fn windows_of_others_in_front_are_reported_as_overlapping() {
         window(8, 0, 150.0, 150.0, 100.0, 100.0),
     ];
     let owners = |windows: &[Window]| -> Vec<String> {
-        app(windows, 7, &DISPLAY, &NO_DOCK)
+        app(windows, 7, None, &DISPLAY, &NO_DOCK)
             .unwrap()
             .overlapping
             .iter()
@@ -246,4 +252,78 @@ fn a_region_is_cut_to_the_display_or_refused_outside_it() {
     );
     assert_eq!(clamp(region(5000, 5000, 10, 10), &DISPLAY), None);
     assert_eq!(clamp(region(1000, 0, 10, 10), &DISPLAY), None, "an edge");
+}
+
+/// Two windows of app 7 apart, and app 5's window in front over the second.
+fn apart() -> Vec<Window> {
+    let mut first = window(7, 0, 100.0, 100.0, 200.0, 150.0);
+    first.number = 71;
+    let mut second = window(7, 0, 600.0, 100.0, 200.0, 150.0);
+    second.number = 72;
+    vec![window(5, 3, 650.0, 120.0, 50.0, 50.0), first, second]
+}
+
+#[test]
+fn one_window_of_an_app_is_cropped_alone_with_what_covers_it() {
+    let windows = apart();
+    let first = app(&windows, 7, Some(Part::Window(71)), &DISPLAY, &NO_DOCK).unwrap();
+    assert_eq!(
+        first.region,
+        region(92, 92, 216, 166),
+        "its own frame and margin"
+    );
+    assert!(first.overlapping.is_empty());
+
+    let second = app(&windows, 7, Some(Part::Window(72)), &DISPLAY, &NO_DOCK).unwrap();
+    assert_eq!(second.region, region(592, 92, 216, 166));
+    assert_eq!(second.overlapping.len(), 1, "app 5's window covers it");
+
+    assert_eq!(
+        app(&windows, 7, Some(Part::Window(99)), &DISPLAY, &NO_DOCK),
+        None
+    );
+    assert_eq!(
+        app(&windows, 5, Some(Part::Window(71)), &DISPLAY, &NO_DOCK),
+        None,
+        "another app's window number is not the app's"
+    );
+}
+
+#[test]
+fn an_apps_part_of_a_region_is_where_its_crop_lies_inside_it() {
+    let windows = apart();
+    let within = |x, y, width, height| Some(Part::Within(region(x, y, width, height)));
+    let left = app(&windows, 7, within(0, 0, 400, 800), &DISPLAY, &NO_DOCK).unwrap();
+    assert_eq!(
+        left.region,
+        region(92, 92, 216, 166),
+        "only the window inside it"
+    );
+    assert!(left.overlapping.is_empty());
+
+    let part = app(&windows, 7, within(150, 150, 100, 50), &DISPLAY, &NO_DOCK).unwrap();
+    assert_eq!(part.region, region(150, 150, 100, 50), "cut to the region");
+
+    assert_eq!(
+        app(&windows, 7, within(350, 300, 100, 100), &DISPLAY, &NO_DOCK),
+        None,
+        "a region between its windows shows none of them"
+    );
+}
+
+#[test]
+fn a_window_asked_for_alone_names_the_apps_own_windows_in_front_of_it() {
+    let mut front = window(7, 0, 150.0, 150.0, 100.0, 100.0);
+    front.number = 73;
+    let mut asked = window(7, 0, 100.0, 100.0, 200.0, 150.0);
+    asked.number = 71;
+    let windows = [front, asked];
+    let alone = app(&windows, 7, Some(Part::Window(71)), &DISPLAY, &NO_DOCK).unwrap();
+    assert_eq!(alone.overlapping.len(), 1);
+    assert_eq!(alone.overlapping[0].number, 73);
+    let whole = app(&windows, 7, None, &DISPLAY, &NO_DOCK).unwrap();
+    assert!(
+        whole.overlapping.is_empty(),
+        "the whole app's own windows cover nothing of it"
+    );
 }

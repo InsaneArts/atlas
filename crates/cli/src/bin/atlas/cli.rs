@@ -280,9 +280,9 @@ pub(super) enum Command {
     Scroll(Scroll),
     /// Type text.
     ///
-    /// The text is typed as given: a real newline or tab in it (in a shell,
-    /// $'one\ntwo') or on standard input arrives as a line break or tab,
-    /// while the two characters \n are typed as they are. Long text is typed
+    /// The text is typed as given: a real newline or tab in it (a line break
+    /// inside the quotes, or on standard input) arrives as a line break or
+    /// tab, while the two characters \n are typed as they are. Long text is typed
     /// in parts without breaking characters, and Atlas keeps control until the
     /// last part, so no other input lands in between. With --app or --pid,
     /// bring the app forward; --window selects a particular document and
@@ -560,15 +560,19 @@ pub(super) struct Screenshot {
     #[command(flatten)]
     pub(super) target: AppTarget,
     /// Only this part of the display: X,Y,W,H in display points, widened to
-    /// whole points.
+    /// whole points. With --app or --pid, it must show one of the app's
+    /// windows.
     #[arg(
         long,
         value_name = "X,Y,W,H",
         allow_hyphen_values = true,
-        value_parser = region,
-        conflicts_with_all = ["app", "pid"]
+        value_parser = region
     )]
     pub(super) region: Option<Region>,
+    /// Only window N, by its number from atlas windows (or a listing's
+    /// windows).
+    #[arg(long, value_name = "N", conflicts_with = "region")]
+    pub(super) window: Option<i64>,
     /// Shrink the longer side to at most this many pixels; 0 keeps the
     /// full size. Without it: at most 1456 and one pixel per display point.
     #[arg(long, value_parser = clap::value_parser!(u32).range(0..=8192))]
@@ -622,6 +626,10 @@ pub(super) struct Elements {
     /// Only elements with this exact title, label text, description or identifier.
     #[arg(long)]
     pub(super) name: Option<String>,
+    /// Only elements of window N, by its number from atlas windows (or a
+    /// listing's windows).
+    #[arg(long, value_name = "N")]
+    pub(super) window: Option<i64>,
     /// Show at most this many elements.
     #[arg(long, default_value_t = 50)]
     pub(super) max: usize,

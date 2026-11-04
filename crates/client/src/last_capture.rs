@@ -13,7 +13,7 @@ use atlas_core::{
     error::{Code, Error, Result},
     files::{Durability, LockOpen, open_lock_file, write_atomic, write_private},
     host::Key,
-    protocol::{Crop, Region},
+    protocol::{Crop, Part, Region},
     record_folder::{RecordFolder, Records},
     screen::{
         frame::{Frame, Size},
@@ -154,6 +154,17 @@ pub(crate) fn key(size: Size, crop: Option<&Crop>) -> String {
     let target = match crop {
         None => "screen".to_owned(),
         Some(Crop::App { pid }) => format!("app:{pid}"),
+        Some(Crop::Part {
+            pid,
+            part: Part::Window(number),
+        }) => format!("app:{pid}:window:{number}"),
+        Some(Crop::Part {
+            pid,
+            part: Part::Within(region),
+        }) => format!(
+            "app:{pid}:within:{},{},{},{}",
+            region.x, region.y, region.width, region.height
+        ),
         Some(Crop::Region(region)) => format!(
             "region:{},{},{},{}",
             region.x, region.y, region.width, region.height

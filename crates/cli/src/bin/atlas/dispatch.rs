@@ -442,6 +442,7 @@ async fn screenshot(client: &Client, args: cli::Screenshot) -> Result<Value> {
         client,
         args.target.target().as_ref(),
         args.region,
+        args.window,
         screenshot_size(args.max_dimension),
         args.new_file,
     )
@@ -505,7 +506,7 @@ async fn elements(client: &Client, args: cli::Elements) -> Result<Value> {
         role: args.role,
         name: args.name,
     };
-    agent::elements(client, &target, &filter, args.max, args.full).await
+    agent::elements(client, &target, &filter, args.window, args.max, args.full).await
 }
 
 async fn drag(client: &Client, args: cli::Drag) -> Result<Value> {

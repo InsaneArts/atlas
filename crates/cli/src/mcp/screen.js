@@ -9,6 +9,7 @@
 
 /** Where a tool result carries a picture: the screen, or a screenshot. */
 const FRAME_META = 'atlas/frame';
+const STATUS_META = 'atlas/status';
 /** How often the person's control is kept, in milliseconds: well inside
  * the ten seconds it lasts, so a closed view lets go soon. */
 const KEEP_EVERY = 3000;
@@ -303,9 +304,11 @@ function merge(current, result) {
   const next = { ...current };
   const structured = (result && result.structuredContent) || {};
   const frame = result && result._meta && result._meta[FRAME_META];
-  if (structured.status) {
-    next.status = structured.status;
-    next.self = known(structured.status.self) ? structured.status.self : null;
+  // The whole status is in `_meta`; an older server put it beside the facts.
+  const status = (result && result._meta && result._meta[STATUS_META]) || structured.status;
+  if (status) {
+    next.status = status;
+    next.self = known(status.self) ? status.self : null;
   }
   if (typeof structured.canResume === 'boolean') next.canResume = structured.canResume;
   if (typeof structured.canControl === 'boolean') next.canControl = structured.canControl;

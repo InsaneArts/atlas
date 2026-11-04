@@ -1,6 +1,6 @@
 use super::control::{ACTIONS, LEASE, LeaseRequest, checked};
 use super::presentation::{only_title_and_size, own_session, said, summary};
-use super::resources::{APP_MIME, FRAME_META, SCREEN, SCREEN_SCRIPT, VERSIONS};
+use super::resources::{APP_MIME, FRAME_META, SCREEN, SCREEN_SCRIPT, STATUS_META, VERSIONS};
 use super::*;
 use atlas_client::{client::AppList, helper_info::open_apps};
 use atlas_core::host::Key;
@@ -760,7 +760,20 @@ fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
         "Atlas: Working. Clicked Save in TextEdit. Recent: clicked Save in TextEdit; opened TextEdit."
     );
     assert_eq!(result["structuredContent"]["status"]["state"], "working");
-    assert_eq!(result.get("_meta"), None, "no screen for the model");
+    assert!(
+        result["structuredContent"]["status"]
+            .get("activity")
+            .is_none(),
+        "the model is not given the history it already has in the text"
+    );
+    assert_eq!(
+        result["_meta"][STATUS_META], status,
+        "the view gets it whole"
+    );
+    assert!(
+        result["_meta"].get(FRAME_META).is_none(),
+        "no screen for the model"
+    );
 }
 
 #[test]
@@ -810,7 +823,11 @@ fn a_running_command_keeps_its_ellipsis_through_the_status_summary() {
         reply["content"][0]["text"],
         "Atlas: Working. Running a command… Recent: running a command…"
     );
-    assert_eq!(reply["structuredContent"]["status"], status);
+    assert_eq!(reply["_meta"][STATUS_META], status);
+    assert_eq!(
+        reply["structuredContent"]["status"]["headline"],
+        "Running a command…"
+    );
 }
 
 #[tokio::test]

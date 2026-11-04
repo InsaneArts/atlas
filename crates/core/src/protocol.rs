@@ -99,7 +99,25 @@ pub enum Crop {
         pid: i64,
     },
     Region(Region),
+    /// One part of this process's crop, as the windows are when it is taken.
+    Part {
+        pid: i64,
+        part: Part,
+    },
 }
+
+/// Which part of an app's crop a screenshot shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// Only its window with this number.
+    Window(i64),
+    /// Only where its crop lies within this region.
+    Within(Region),
+}
+
+/// The daemon capability to capture one window of an app, or its part of a
+/// region, as its hello lists it.
+pub const APP_PARTS: &str = "app-parts";
 
 /// The daemon capability to refuse a request meant for another session of
 /// the helper, as its hello lists it.
@@ -686,28 +704,60 @@ fn pin(request: &Value) -> Result<Option<SessionPin>, Value> {
     })
 }
 
-/// A screenshot request's `pid` or `region`, at most one of them.
+/// A screenshot request's `pid` or `region`, at most one of them; with
+/// `pid`, at most one of `window` and `within`.
 fn crop(request: &Value) -> Result<Option<Crop>, Value> {
-    match (&request["pid"], &request["region"]) {
-        (Value::Null, Value::Null) => Ok(None),
-        (pid, Value::Null) => pid
-            .as_i64()
+    let pid = |pid: &Value| {
+        pid.as_i64()
             .filter(|pid| (1..=i64::from(i32::MAX)).contains(pid))
-            .map(|pid| Some(Crop::App { pid }))
-            .ok_or_else(|| bad("\"pid\" must be a process ID")),
-        (Value::Null, region) => {
-            let side = |key: &str| region.get(key).and_then(Value::as_i64);
-            side("x")
-                .zip(side("y"))
-                .zip(side("width").zip(side("height")))
-                .and_then(|((x, y), (width, height))| Region::new(x, y, width, height))
-                .map(|region| Some(Crop::Region(region)))
-                .ok_or_else(|| {
-                    bad("\"region\" must be whole points: x and y -16384–16384, width and height 1–16384")
-                })
-        }
-        _ => Err(bad("give \"pid\" or \"region\", not both")),
+            .ok_or_else(|| bad("\"pid\" must be a process ID"))
+    };
+    if !request["pid"].is_null() && !request["region"].is_null() {
+        return Err(bad("give \"pid\" or \"region\", not both"));
     }
+    match (
+        &request["pid"],
+        &request["region"],
+        &request["window"],
+        &request["within"],
+    ) {
+        (Value::Null, Value::Null, Value::Null, Value::Null) => Ok(None),
+        (asked, Value::Null, Value::Null, Value::Null) => Ok(Some(Crop::App { pid: pid(asked)? })),
+        (asked, Value::Null, window, Value::Null) if !asked.is_null() => {
+            let number = window
+                .as_i64()
+                .filter(|number| *number >= 1)
+                .ok_or_else(|| bad("\"window\" must be a window number"))?;
+            Ok(Some(Crop::Part {
+                pid: pid(asked)?,
+                part: Part::Window(number),
+            }))
+        }
+        (asked, Value::Null, Value::Null, within) if !asked.is_null() => Ok(Some(Crop::Part {
+            pid: pid(asked)?,
+            part: Part::Within(region_of(within, "within")?),
+        })),
+        (Value::Null, region, Value::Null, Value::Null) => {
+            Ok(Some(Crop::Region(region_of(region, "region")?)))
+        }
+        _ => Err(bad(
+            "give \"window\" or \"within\" with \"pid\" alone, not both",
+        )),
+    }
+}
+
+/// The region `value` names, as the request's `key`.
+fn region_of(value: &Value, key: &str) -> Result<Region, Value> {
+    let side = |name: &str| value.get(name).and_then(Value::as_i64);
+    side("x")
+        .zip(side("y"))
+        .zip(side("width").zip(side("height")))
+        .and_then(|((x, y), (width, height))| Region::new(x, y, width, height))
+        .ok_or_else(|| {
+            bad(format!(
+                "\"{key}\" must be whole points: x and y -16384–16384, width and height 1–16384"
+            ))
+        })
 }
 
 #[cfg(test)]

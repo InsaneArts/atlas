@@ -28,7 +28,7 @@ pub(crate) use record::NOT_RECORDED;
 pub use record::PersonInput;
 pub(crate) use run::{Finished, Run};
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
-pub(crate) use windows::WINDOW_LOOKUP;
+pub(crate) use windows::{Seen, WINDOW_LOOKUP};
 
 use crate::{doing::Doing, host_session::HostSession, task::Task};
 use atlas_control::Controller;

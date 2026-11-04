@@ -188,12 +188,16 @@ fn take(
                 .ok_or_else(|| failure(Code::BadRequest, "\"region\" lies outside the display"))?;
             (Some(area), None)
         }
-        Some(Crop::App { pid }) => {
+        Some(Crop::App { pid } | Crop::Part { pid, .. }) => {
+            let part = match crop {
+                Some(Crop::Part { part, .. }) => Some(part),
+                _ => None,
+            };
             let on_screen = windows
                 .as_ref()
                 .map_err(|_| failure(Code::Windows, "The window list is unavailable"))?;
             let dock = (screen.dock)(on_screen);
-            let found = crop::app(on_screen, pid, &display, &dock).ok_or_else(|| {
+            let found = crop::app(on_screen, pid, part, &display, &dock).ok_or_else(|| {
                 failure(
                     Code::NoWindow,
                     format!(

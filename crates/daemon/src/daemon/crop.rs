@@ -1,7 +1,7 @@
 //! What part of the display a cropped screenshot shows: an app's windows
 //! with a small margin, or a region cut to the display.
 use atlas_core::{
-    protocol::Region,
+    protocol::{Part, Region},
     screen::windows::{Bounds, Dock, MENU_BAR_LAYER, Window},
 };
 
@@ -58,11 +58,17 @@ pub(super) fn clamp(region: Region, display: &Region) -> Option<Region> {
     })
 }
 
-/// The crop showing every on-screen window of `pid`, and the windows of
-/// others in front of them inside it, the parts of the Dock that take
-/// clicks among them; None when it has no window on screen. `windows` is
-/// front to back, in display points.
-pub(super) fn app(windows: &[Window], pid: i64, display: &Region, dock: &Dock) -> Option<AppCrop> {
+/// The crop showing every on-screen window of `pid`, or only the `part` of
+/// it asked for, and the windows of others in front of them inside it, the
+/// parts of the Dock that take clicks among them; None when nothing of the
+/// app is there. `windows` is front to back, in display points.
+pub(super) fn app(
+    windows: &[Window],
+    pid: i64,
+    part: Option<Part>,
+    display: &Region,
+    dock: &Dock,
+) -> Option<AppCrop> {
     let screen = bounds(display);
     let strips: Vec<&Bounds> = windows
         .iter()
@@ -87,6 +93,11 @@ pub(super) fn app(windows: &[Window], pid: i64, display: &Region, dock: &Dock) -
                 && window.bounds.height >= 1.0
                 && !in_menu_bar(window)
                 && window.bounds.intersects(&screen)
+                && match part {
+                    Some(Part::Window(number)) => window.number == number,
+                    Some(Part::Within(within)) => window.bounds.intersects(&bounds(&within)),
+                    None => true,
+                }
         })
         .collect();
     let ((_, front), (back, _)) = (included.first()?, included.last()?);
@@ -114,13 +125,22 @@ pub(super) fn app(windows: &[Window], pid: i64, display: &Region, dock: &Dock) -
         width: (right - left) as i32,
         height: (bottom - top) as i32,
     };
+    let region = match part {
+        Some(Part::Within(within)) => clamp(region, &within)?,
+        Some(Part::Window(_)) | None => region,
+    };
     let area = bounds(&region);
     let overlay = |window: &Window| window.passes_through(&screen);
     let in_front = || {
         // `back` came from enumerating this slice.
-        windows[..*back]
-            .iter()
-            .filter(|window| window.pid != pid && window.alpha > 0.0)
+        // A window asked for alone is covered by the app's other windows too.
+        windows[..*back].iter().filter(|window| {
+            let other = match part {
+                Some(Part::Window(number)) => window.number != number,
+                Some(Part::Within(_)) | None => window.pid != pid,
+            };
+            other && window.alpha > 0.0
+        })
     };
     let mut overlapping: Vec<Window> = in_front()
         .filter(|window| {

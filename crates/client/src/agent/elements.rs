@@ -8,17 +8,18 @@ use super::{
     input::click,
     target::{Target, target_expect},
 };
-use crate::client::{Client, Run, Verified, WINDOW_LOOKUP, require_looks};
+use crate::client::{Client, Run, Seen, Verified, WINDOW_LOOKUP, require_looks};
 use atlas_core::{
     actions::{Action, Batch, Button},
     error::{Code, Error, Result},
-    protocol::{Crop, Region},
+    protocol::{Crop, Part, Region},
     screen::{
         elements::{
             Element, Look, Reference, Stop, click_point, drawn, element_check, stale, telling, why,
         },
         geometry::Bounds,
         select::{self, Choice, ElementFilter, closeness, names, shown_name},
+        windows::Window,
     },
     transport::run_output,
 };
@@ -142,6 +143,47 @@ impl Scanned {
         error.with("next", json!(next))
     }
 
+    /// This scan with only the elements of on-screen window `number`, one of
+    /// app `pid`'s; the scan's other facts stay as they were.
+    pub(super) fn in_window(mut self, shown: &[Window], pid: i64, number: i64) -> Result<Self> {
+        if !shown
+            .iter()
+            .any(|window| window.number == number && window.pid == pid)
+        {
+            return Err(Error::new(
+                Code::NoWindow,
+                format!(
+                    "No window {number} of that app is on screen: --window takes a number from \
+                     atlas windows or a listing's windows"
+                ),
+            ));
+        }
+        // Each element is told by its own window frame: one that could be
+        // window `number` or another of the app's cannot be told apart.
+        let doubtful = self.elements.iter().any(|element| {
+            element.window.as_ref().is_some_and(|frame| {
+                let there = at_frame(shown, pid, frame);
+                there.len() > 1 && there.contains(&number)
+            })
+        });
+        if doubtful {
+            return Err(Error::new(
+                Code::Elements,
+                format!(
+                    "Another window of the app has window {number}'s frame, so its elements \
+                     cannot be told apart: move one of them, or list them all"
+                ),
+            ));
+        }
+        self.elements.retain(|element| {
+            element
+                .window
+                .as_ref()
+                .is_some_and(|frame| at_frame(shown, pid, frame) == [number])
+        });
+        Ok(self)
+    }
+
     /// Whether the app handed back itself in place of its windows.
     fn withheld(&self) -> bool {
         self.reasons.contains(&Stop::Withheld)
@@ -195,25 +237,29 @@ fn scanned(reply: &Value) -> Result<Scanned> {
 
 /// Accessibility elements of the target app's windows that match `filter`,
 /// at most `max` of them, listed compactly unless `full`, under the name of
-/// the look a click names one by, with its index. The helper's input
-/// service reads them and keeps the look; listing them grants nothing.
+/// the look a click names one by, with its index; only those of window
+/// number `window` when given. Each listed window carries its number when
+/// the window list tells it. The helper's input service reads them and
+/// keeps the look; listing them grants nothing.
 ///
 /// # Errors
 ///
-/// Returns identity, target-resolution, transport or accessibility-read failures, and
-/// refuses an input service that cannot keep looks. An incomplete window observation
-/// cannot establish remembered routing evidence.
+/// Returns identity, target-resolution, transport or accessibility-read failures,
+/// refuses a window number that is not one of the app's on screen, and refuses an
+/// input service that cannot keep looks. An incomplete window observation cannot
+/// establish remembered routing evidence.
 pub async fn elements(
     client: &Client,
     target: &Target,
     filter: &ElementFilter,
+    window: Option<i64>,
     max: usize,
     full: bool,
 ) -> Result<Value> {
     let verified = client.verify().await?;
     let expect = target_expect(client, &verified, target).await?;
-    let scanned = client
-        .look(&verified, async {
+    let (scanned, seen) = client
+        .look_seeing(&verified, window.is_some(), async {
             let scanned = Scanned::from_reply(client.look_at(&verified, &expect).await?)?;
             match scanned.look {
                 Some(_) => Ok(scanned),
@@ -225,7 +271,48 @@ pub async fn elements(
         })
         .await?;
 
-    Ok(listing(expect.pid(), &scanned, filter, max, full))
+    let pid = expect.pid();
+    let shown = match seen {
+        Seen::Stayed(shown) => Some(shown),
+        Seen::Moved | Seen::Unread => None,
+    };
+    let scanned = match (window, &shown) {
+        (Some(number), Some(shown)) => scanned.in_window(shown, pid, number)?,
+        (Some(_), None) => {
+            return Err(Error::new(
+                Code::Elements,
+                "The app's windows moved while it was read, so its elements cannot be told by \
+                 window: look again",
+            ));
+        }
+        (None, _) => scanned,
+    };
+    Ok(listing_in(
+        pid,
+        &scanned,
+        filter,
+        max,
+        full,
+        shown.as_deref(),
+    ))
+}
+
+/// The numbers of every window of app `pid` at `frame`, at any layer.
+fn at_frame(shown: &[Window], pid: i64, frame: &Bounds) -> Vec<i64> {
+    shown
+        .iter()
+        .filter(|window| window.pid == pid && window.bounds.matches(frame))
+        .map(|window| window.number)
+        .collect()
+}
+
+/// The number of the one window of app `pid` at `frame`, at any layer;
+/// none when no window, or more than one, is there.
+fn alone_at(shown: &[Window], pid: i64, frame: &Bounds) -> Option<i64> {
+    match at_frame(shown, pid, frame).as_slice() {
+        [number] => Some(*number),
+        _ => None,
+    }
 }
 
 /// Click the element `reference` names, as the look that listed it saw it.
@@ -331,36 +418,66 @@ async fn referenced(client: &Client, target: Option<&Target>, action: &Value) ->
         .await
 }
 
-/// Save a screenshot of the whole display, of `target`'s windows, or of
-/// `region`, or name the earlier file when nothing changed (unless
-/// `new_file`). The app is found as `elements` finds it.
+/// Save a screenshot of the whole display, of `target`'s windows, of
+/// `region`, of window number `window` alone, or of `target`'s part of
+/// `region`; or name the earlier file when nothing changed (unless
+/// `new_file`). The app is found as `elements` finds it; a window or an
+/// app's part of a region is cropped by the helper as its windows are when
+/// it captures, naming what covers it.
 ///
 /// # Errors
 ///
-/// Rejects conflicting target and region choices, unavailable targets, invalid geometry,
-/// and capture or local-file failures. A read failure does not imply that input was sent.
+/// Rejects a window number that is not on screen (or not the app's), a
+/// region that shows none of the app's windows, an older helper that
+/// cannot crop a part, unavailable targets, invalid geometry, and capture
+/// or local-file failures. A read failure does not imply that input was
+/// sent.
 pub async fn screenshot(
     client: &Client,
     target: Option<&Target>,
     region: Option<Region>,
+    window: Option<i64>,
     size: crate::client::Size,
     new_file: bool,
 ) -> Result<Value> {
     // An app is found in the helper verified first, and captured only if
     // the helper is still that one: its pid means nothing in another.
-    let (crop, verified) = match (target, region) {
-        (Some(_), Some(_)) => {
-            return Err(Error::new(
-                Code::Usage,
-                "Give an app or a region to capture, not both",
-            ));
+    let verified = match (target, window) {
+        (None, None) => None,
+        _ => Some(client.verify().await?),
+    };
+    let pid = match (target, &verified) {
+        (Some(target), Some(verified)) => {
+            Some(target_expect(client, verified, target).await?.pid())
         }
-        (Some(target), None) => {
-            let verified = client.verify().await?;
-            let pid = target_expect(client, &verified, target).await?.pid();
-            (Some(Crop::App { pid }), Some(verified))
+        _ => None,
+    };
+    let crop = match (pid, region, window) {
+        (None, region, None) => region.map(Crop::Region),
+        (Some(pid), None, None) => Some(Crop::App { pid }),
+        (Some(pid), Some(within), None) => Some(Crop::Part {
+            pid,
+            part: Part::Within(within),
+        }),
+        (pid, _, Some(number)) => {
+            // A window named alone is its owner's.
+            let pid = match (pid, &verified) {
+                (Some(pid), _) => pid,
+                (None, Some(verified)) => client
+                    .windows_in(Some(verified), false, WINDOW_LOOKUP)
+                    .await?
+                    .windows
+                    .iter()
+                    .find(|shown| shown.number == number)
+                    .map(|shown| shown.pid)
+                    .ok_or_else(|| no_window(number))?,
+                (None, None) => return Err(no_window(number)),
+            };
+            Some(Crop::Part {
+                pid,
+                part: Part::Window(number),
+            })
         }
-        (None, region) => (region.map(Crop::Region), None),
     };
 
     let captured = match &verified {
@@ -376,8 +493,13 @@ pub async fn screenshot(
         }
         None => client.capture(size, crop.as_ref(), new_file).await,
     };
-    captured.map_err(|error| match target {
-        Some(Target::Name(name)) if error.code == Code::NoWindow => Error::new(
+    captured.map_err(|error| match (target, window, region) {
+        (_, Some(number), _) if error.code == Code::NoWindow => no_window(number),
+        (Some(Target::Name(name)), None, Some(_)) if error.code == Code::NoWindow => Error::new(
+            Code::NoWindow,
+            format!("That region shows none of {name}'s windows: check them with atlas windows"),
+        ),
+        (Some(Target::Name(name)), None, None) if error.code == Code::NoWindow => Error::new(
             Code::NoWindow,
             format!(
                 "{name} has no window on screen: open one, or take a full screenshot to see \
@@ -388,17 +510,43 @@ pub async fn screenshot(
     })
 }
 
+/// The refusal of window `number`, which is not on screen.
+fn no_window(number: i64) -> Error {
+    Error::new(
+        Code::NoWindow,
+        format!(
+            "No window {number} of that app is on screen: --window takes a number from atlas \
+             windows or a listing's windows"
+        ),
+    )
+}
+
 /// The elements of one scan that match `filter`, as `elements` lists them:
 /// each by its role, name, value, click point and size, its window listed
 /// once, or with every attribute the scan read when `full`, under the
 /// look's name when the scan is a kept look. A name that matches nothing
 /// lists the closest names.
+#[cfg(test)]
 pub(super) fn listing(
     pid: i64,
     scanned: &Scanned,
     filter: &ElementFilter,
     max: usize,
     full: bool,
+) -> Value {
+    listing_in(pid, scanned, filter, max, full, None)
+}
+
+/// [`listing`], each listed window named by its number when the windows
+/// `on_screen` have exactly one of app `pid`'s at its frame, told by the
+/// very frame the scan gave it.
+pub(super) fn listing_in(
+    pid: i64,
+    scanned: &Scanned,
+    filter: &ElementFilter,
+    max: usize,
+    full: bool,
+    on_screen: Option<&[Window]>,
 ) -> Value {
     let matching: Vec<&Element> = scanned
         .elements
@@ -430,15 +578,38 @@ pub(super) fn listing(
             .iter()
             .map(|element| compact(element, &mut windows))
             .collect();
+        // A listed window is named by number only when every element listed
+        // in it is told, by its own frame, to be in that one window.
+        // Each element is in the first listed window its frame matches, as
+        // `compact` placed it.
+        let numbers: Vec<Option<i64>> = (0..windows.len())
+            .map(|entry| {
+                let on_screen = on_screen?;
+                let mut told = shown
+                    .iter()
+                    .filter_map(|element| element.window.as_ref())
+                    .filter(|frame| {
+                        windows.iter().position(|seen| seen.matches(frame)) == Some(entry)
+                    })
+                    .map(|frame| alone_at(on_screen, pid, frame));
+                let first = told.next()??;
+                told.all(|number| number == Some(first)).then_some(first)
+            })
+            .collect();
         listed["windows"] = windows
             .iter()
-            .map(|frame| {
-                json!({
+            .zip(numbers)
+            .map(|(frame, number)| {
+                let mut listed = json!({
                     "x": whole(frame.x),
                     "y": whole(frame.y),
                     "width": whole(frame.width),
                     "height": whole(frame.height),
-                })
+                });
+                if let Some(number) = number {
+                    listed["number"] = json!(number);
+                }
+                listed
             })
             .collect();
     }

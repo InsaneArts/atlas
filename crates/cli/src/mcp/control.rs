@@ -182,7 +182,7 @@ impl Server {
         add_points(&mut result, frame.display);
         let mut picture = self.frame_of(frame.png).await?;
         picture["key"] = json!(frame.key);
-        result["_meta"] = json!({ FRAME_META: picture });
+        result["_meta"][FRAME_META] = picture;
         Ok(result)
     }
 

@@ -6,7 +6,7 @@ use super::{Client, record::recorded_code};
 use crate::last_capture;
 use atlas_core::{
     error::{Code, Error, Result},
-    protocol::{Crop, Region},
+    protocol::{APP_PARTS, Crop, Part, Region},
     screen::{
         frame::{Frame, Size},
         png::png_dimensions,
@@ -96,9 +96,22 @@ pub(super) fn cropped(
             }
             (Value::Null, Value::Null)
         }
-        Crop::App { pid } => {
+        Crop::App { pid } | Crop::Part { pid, .. } => {
             if reply["app"]["pid"].as_i64() != Some(*pid) || !reply["overlapping"].is_array() {
                 return Err(malformed("a crop of another app"));
+            }
+            if let Crop::Part {
+                part: Part::Within(within),
+                ..
+            } = crop
+            {
+                let inside = left >= i64::from(within.x)
+                    && top >= i64::from(within.y)
+                    && right <= i64::from(within.x) + i64::from(within.width)
+                    && bottom <= i64::from(within.y) + i64::from(within.height);
+                if !inside {
+                    return Err(malformed("a crop outside the region asked for"));
+                }
             }
             (reply["app"].clone(), reply["overlapping"].clone())
         }
@@ -210,6 +223,20 @@ impl Client {
         match crop {
             None => {}
             Some(Crop::App { pid }) => request["pid"] = json!(pid),
+            Some(Crop::Part { pid, part }) => {
+                if !verified.observation.has_capability(APP_PARTS) {
+                    return Err(Error::new(
+                        Code::Daemon,
+                        "The helper is running an older Atlas that cannot capture one window or \
+                         an app's part of a region; run atlas restart, then try again",
+                    ));
+                }
+                request["pid"] = json!(pid);
+                match part {
+                    Part::Window(number) => request["window"] = json!(number),
+                    Part::Within(within) => request["within"] = json!(within),
+                }
+            }
             Some(Crop::Region(region)) => {
                 let display = &before.epoch.display;
                 if !meets(region, display) {

@@ -8,6 +8,10 @@ pub(super) const UI_EXTENSION: &str = "io.modelcontextprotocol/ui";
 /// Where a result carries the helper's screen for the view.
 pub(super) const FRAME_META: &str = "atlas/frame";
 
+/// Where a status result keeps its whole status for the view: activity and
+/// sessions included, which the model has no use for.
+pub(super) const STATUS_META: &str = "atlas/status";
+
 /// The view's address and its MCP Apps type.
 pub(super) const SCREEN_URI: &str = "ui://atlas/screen.html";
 

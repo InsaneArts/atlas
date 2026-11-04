@@ -115,7 +115,7 @@ impl Server {
             if let Some((key, _)) = shared {
                 frame["key"] = json!(key);
             }
-            result["_meta"] = json!({ FRAME_META: frame });
+            result["_meta"][FRAME_META] = frame;
         }
         Ok(result)
     }
@@ -235,7 +235,7 @@ impl Server {
         })??;
 
         let mut result = tool_result("A screenshot from the helper.", json!({"name": name}));
-        result["_meta"] = json!({ FRAME_META: image });
+        result["_meta"][FRAME_META] = image;
         Ok(result)
     }
 }
