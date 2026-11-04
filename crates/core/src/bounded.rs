@@ -191,18 +191,30 @@ fn drain(
     deadline: Instant,
     cap: usize,
 ) -> io::Result<()> {
-    let mut next_observation = Instant::now();
+    drain_by(child, stdout, stderr, deadline, cap, Instant::now)
+}
+
+/// [`drain`], telling the time by `clock`.
+fn drain_by(
+    child: &Child,
+    stdout: &mut Pipe,
+    stderr: &mut Pipe,
+    deadline: Instant,
+    cap: usize,
+    mut clock: impl FnMut() -> Instant,
+) -> io::Result<()> {
+    let mut next_observation = clock();
     let mut exited = None;
     let mut stderr_deadline = None;
     loop {
-        let now = Instant::now();
+        let now = clock();
         if exited.is_none() && now >= next_observation {
             if observe_exit(child)? {
                 exited = Some(now);
             } else if now >= deadline {
                 return Err(late());
             }
-            next_observation = Instant::now() + POLL;
+            next_observation = clock() + POLL;
         }
         let delay = if let Some(ended) = exited {
             if stdout.fd.is_none() && stderr.fd.is_none() {
@@ -216,7 +228,9 @@ fn drain(
                 *stderr_deadline.get_or_insert(now + DRAIN)
             };
             if now >= until {
-                return Err(late());
+                // What the pipes already hold when the window ends came in
+                // time, however late this thread was to look.
+                return settled(stdout, stderr, cap);
             }
             until.saturating_duration_since(now).min(POLL)
         } else {
@@ -227,6 +241,29 @@ fn drain(
         wait(stdout, stderr, delay)?;
         stdout.read(cap)?;
         stderr.read(cap)?;
+    }
+}
+
+/// The most chunks each pipe gives in [`settled`]: more than a pipe
+/// buffers, so a writer that keeps writing cannot hold the read open.
+const SETTLING_READS: usize = 128;
+
+/// Read what both pipes hold without waiting, ending well once both are
+/// at their end and late otherwise.
+fn settled(stdout: &mut Pipe, stderr: &mut Pipe, cap: usize) -> io::Result<()> {
+    for pipe in [&mut *stdout, &mut *stderr] {
+        for _ in 0..SETTLING_READS {
+            let held = pipe.bytes.len();
+            pipe.read(cap)?;
+            if pipe.fd.is_none() || pipe.bytes.len() == held {
+                break;
+            }
+        }
+    }
+    if stdout.fd.is_none() && stderr.fd.is_none() {
+        Ok(())
+    } else {
+        Err(late())
     }
 }
 
