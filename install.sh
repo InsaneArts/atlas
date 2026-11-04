@@ -22,7 +22,7 @@ set -eu
 
 SITE="https://atlas.insanearts.io"
 IDENTIFIER="com.insanearts.atlas"
-TEAM="A474HM679A"
+TEAM="539293JFA3"
 REQUIREMENT="anchor apple generic and identifier \"$IDENTIFIER\" and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = \"$TEAM\""
 
 say() { printf '%s\n' "$*"; }

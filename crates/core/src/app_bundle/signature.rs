@@ -54,7 +54,7 @@ pub fn signature(path: &Path) -> Option<Signature> {
 pub const IDENTIFIER: &str = "com.insanearts.atlas";
 
 /// The Developer ID team that signs Atlas; consent follows it.
-const TEAM: &str = "A474HM679A";
+const TEAM: &str = "539293JFA3";
 
 /// The identifier the app's executable inside Atlas.app is signed as.
 pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
