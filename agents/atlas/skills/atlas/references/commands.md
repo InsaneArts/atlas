@@ -1016,13 +1016,34 @@ Usage: atlas wait [OPTIONS]
 
 Options:
       --app <APP>
-          A window of this app
+          A window of this app, or with --name or --role, an element of it
 
       --title <TITLE>
           A window whose title contains this
 
       --gone
-          Wait for the window to close instead
+          Wait for the window (or element) to close or go instead
+
+      --name <NAME>
+          An element with this exact title, label text, description or identifier
+
+      --role <ROLE>
+          An element with this accessibility role, for example AXButton
+
+      --state <STATE>
+          What the element must be: there (the default), gone, enabled or visible
+
+          Possible values:
+          - exists:  At least one element matches
+          - gone:    No element matches any more
+          - enabled: The one element matching says it is enabled
+          - visible: The one element matching is on screen
+
+      --value <TEXT>
+          Wait instead for the element to hold exactly this value
+
+      --pid <PID>
+          Exact process ID of the app, for apps with several processes
 
       --timeout <TIMEOUT>
           Seconds, at most 86400 (a day)
@@ -1030,7 +1051,7 @@ Options:
           [default: 10]
 
   -h, --help
-          Print help
+          Print help (see a summary with '-h')
 
 Global options:
       --json

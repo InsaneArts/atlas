@@ -572,6 +572,9 @@ async fn close(client: &Client, app: Option<&str>) -> Result<Value> {
 }
 
 async fn wait(client: &Client, args: cli::Wait) -> Result<Value> {
+    if args.name.is_some() || args.role.is_some() {
+        return wait_for_element(client, args).await;
+    }
     let filter = agent::WindowFilter {
         app: args.app,
         title: args.title,
@@ -581,6 +584,42 @@ async fn wait(client: &Client, args: cli::Wait) -> Result<Value> {
         client,
         &filter,
         args.gone,
+        Duration::from_secs(args.timeout),
+    )
+    .await
+}
+
+/// `atlas wait` with --name or --role: an element of the app, by the state asked for.
+async fn wait_for_element(client: &Client, args: cli::Wait) -> Result<Value> {
+    use atlas_core::screen::wait::State;
+
+    let target = cli::AppTarget {
+        app: args.app,
+        pid: args.pid,
+    }
+    .target()
+    .ok_or_else(|| {
+        Error::new(
+            Code::Usage,
+            "Wait for an element of an app: add --app or --pid",
+        )
+    })?;
+    let state = match (args.value, args.state, args.gone) {
+        (Some(value), ..) => State::Value(value),
+        (None, Some(cli::ElementState::Gone), _) | (None, None, true) => State::Gone,
+        (None, Some(cli::ElementState::Exists), _) | (None, None, false) => State::Exists,
+        (None, Some(cli::ElementState::Enabled), _) => State::Enabled,
+        (None, Some(cli::ElementState::Visible), _) => State::Visible,
+    };
+    let filter = atlas_core::screen::select::ElementFilter {
+        role: args.role,
+        name: args.name,
+    };
+    agent::wait_for_element(
+        client,
+        &target,
+        &filter,
+        &state,
         Duration::from_secs(args.timeout),
     )
     .await

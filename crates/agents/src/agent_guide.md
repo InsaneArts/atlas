@@ -86,7 +86,7 @@ After each action:
    `verification: matched` proves it did: skip step 2.
 2. Read apps and web pages by name first: `atlas elements --app A --name X`
    for text, a control, its value and state; `atlas wait --app A` (or `--title T`,
-   `--gone`) for a window.
+   `--gone`) for a window, `--name X --state S` for an element.
 3. To check what's visible, take a crop:
    `atlas screenshot --app A` or `--region X,Y,W,H`. Take a full
    `atlas screenshot` only when a crop's `overlapping` names a window in front.

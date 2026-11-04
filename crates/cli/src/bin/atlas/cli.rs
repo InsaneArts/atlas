@@ -835,19 +835,53 @@ pub(super) struct Cleanup {
 }
 
 #[derive(clap::Args)]
+#[command(group = clap::ArgGroup::new("element").args(["name", "role"]).multiple(true))]
 pub(super) struct Wait {
-    /// A window of this app.
+    /// A window of this app, or with --name or --role, an element of it.
     #[arg(long)]
     pub(super) app: Option<String>,
     /// A window whose title contains this.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "element")]
     pub(super) title: Option<String>,
-    /// Wait for the window to close instead.
-    #[arg(long)]
+    /// Wait for the window (or element) to close or go instead.
+    #[arg(long, conflicts_with = "state")]
     pub(super) gone: bool,
+    /// An element with this exact title, label text, description or identifier.
+    #[arg(long)]
+    pub(super) name: Option<String>,
+    /// An element with this accessibility role, for example AXButton.
+    #[arg(long)]
+    pub(super) role: Option<String>,
+    /// What the element must be: there (the default), gone, enabled or visible.
+    #[arg(long, value_enum, requires = "element")]
+    pub(super) state: Option<ElementState>,
+    /// Wait instead for the element to hold exactly this value.
+    #[arg(
+        long,
+        value_name = "TEXT",
+        allow_hyphen_values = true,
+        requires = "element",
+        conflicts_with_all = ["state", "gone"]
+    )]
+    pub(super) value: Option<String>,
+    /// Exact process ID of the app, for apps with several processes.
+    #[arg(long, requires = "element", conflicts_with = "app")]
+    pub(super) pid: Option<i32>,
     /// Seconds, at most 86400 (a day).
     #[arg(long, default_value_t = 10, value_parser = whole(0, WAIT_MAX_SECONDS, "seconds"))]
     pub(super) timeout: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(super) enum ElementState {
+    /// At least one element matches.
+    Exists,
+    /// No element matches any more.
+    Gone,
+    /// The one element matching says it is enabled.
+    Enabled,
+    /// The one element matching is on screen.
+    Visible,
 }
 
 #[derive(clap::Args)]

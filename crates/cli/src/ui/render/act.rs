@@ -163,6 +163,9 @@ pub(super) fn wait(value: &Value, gone: bool) -> String {
         .map(|ms| format!(" after {}", text::duration(ms)))
         .unwrap_or_default();
 
+    if let Some(state) = value["state"].as_str() {
+        return element_wait(value, state, &after);
+    }
     if gone {
         return format!("{} The window closed{after}", style::ok());
     }
@@ -179,6 +182,32 @@ pub(super) fn wait(value: &Value, gone: bool) -> String {
         .unwrap_or_else(|| "The window".to_owned());
 
     format!("{} {name} appeared{after}", style::ok())
+}
+
+/// An element wait that held: what the element is now, and the ref to act
+/// on it by.
+fn element_wait(value: &Value, state: &str, after: &str) -> String {
+    let element = &value["element"];
+    let name = element["name"]
+        .as_str()
+        .or_else(|| element["role"].as_str())
+        .map_or_else(
+            || "The element".to_owned(),
+            |name| text::printable(name).into_owned(),
+        );
+    let is = match state {
+        "gone" => return format!("{} The element is gone{after}", style::ok()),
+        "exists" => "is there",
+        "enabled" => "is enabled",
+        "visible" => "is on screen",
+        "value" => "holds the value",
+        _ => "is as asked",
+    };
+    let reference = match (value["look"].as_str(), element["index"].as_u64()) {
+        (Some(look), Some(index)) => format!("  {}", style::dim(format!("ref {look}.{index}"))),
+        _ => String::new(),
+    };
+    format!("{} {name} {is}{after}{reference}", style::ok())
 }
 
 pub(super) fn restart(value: &Value) -> String {

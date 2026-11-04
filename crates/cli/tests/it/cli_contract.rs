@@ -278,6 +278,61 @@ fn an_element_action_without_what_it_takes_is_a_usage_error() {
     }
 }
 
+/// An element wait takes what picks the element and its state together:
+/// a window's title, a state or value with nothing to pick, a value beside
+/// a state, or two ways to say gone, are usage errors before anything is read.
+#[test]
+fn an_element_wait_without_what_it_takes_is_a_usage_error() {
+    let fixture = Fixture::new();
+    for (args, named) in [
+        (
+            vec![
+                "wait", "--app", "TextEdit", "--title", "Untitled", "--name", "Save",
+            ],
+            "--title",
+        ),
+        (
+            vec!["wait", "--app", "TextEdit", "--state", "enabled"],
+            "--name or --role",
+        ),
+        (
+            vec!["wait", "--app", "TextEdit", "--value", "ready"],
+            "--name or --role",
+        ),
+        (
+            vec![
+                "wait", "--app", "TextEdit", "--name", "Name", "--state", "enabled", "--value",
+                "ready",
+            ],
+            "--value",
+        ),
+        (vec!["wait", "--pid", "812"], "--name or --role"),
+        (
+            vec![
+                "wait", "--app", "TextEdit", "--pid", "812", "--name", "Save",
+            ],
+            "--pid",
+        ),
+        (
+            vec![
+                "wait", "--app", "TextEdit", "--name", "Save", "--gone", "--state", "gone",
+            ],
+            "--gone",
+        ),
+    ] {
+        let output = fixture.missing(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(output.stdout.is_empty(), "{args:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "usage", "{args:?}");
+        assert!(
+            error["error"].as_str().unwrap().contains(named),
+            "{args:?}: {}",
+            error["error"]
+        );
+    }
+}
+
 /// A reference names its element by itself: given with a point, a name or
 /// a role, the click is a usage error before anything is read.
 #[test]

@@ -190,7 +190,9 @@ impl Policy {
             Command::Elements(_) => Self::read(View::Elements),
             Command::Stop => Self::read(View::Action("Stopped the agent".into())),
             Command::Resume => Self::read(View::Action("Resumed the agent".into())),
-            Command::Wait(wait) => Self::read(View::Wait { gone: wait.gone }),
+            Command::Wait(wait) => Self::read(View::Wait {
+                gone: wait.gone || wait.state == Some(cli::ElementState::Gone),
+            }),
             Command::AgentGuide(_) => Self::read(View::Generic),
             Command::Mcp(_) | Command::Watch { .. } => Self::local(View::Quiet),
             Command::Menubar(menubar) if menubar.login.is_some() => Self::local(View::Login),
