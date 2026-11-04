@@ -135,6 +135,8 @@ public struct FramePacketCodec: Sendable {
 
   /// `value`'s bytes, most significant first.
   private static func bigEndian<T: FixedWidthInteger>(_ value: T) -> [UInt8] {
-    (0..<(T.bitWidth / 8)).reversed().map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) }
+    (0..<(T.bitWidth / 8))
+      .reversed()
+      .map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) }
   }
 }

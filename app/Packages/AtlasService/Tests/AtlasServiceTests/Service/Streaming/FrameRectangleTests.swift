@@ -9,7 +9,11 @@ struct FrameRectangleTests {
   private static func records(_ rectangles: [[UInt32]]) -> Data {
     Data(
       rectangles.flatMap {
-        $0.flatMap { value in (0..<4).reversed().map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) } }
+        $0.flatMap { value in
+          (0..<4)
+            .reversed()
+            .map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) }
+        }
       }
     )
   }
@@ -25,7 +29,8 @@ struct FrameRectangleTests {
 
   @Test("rectangles inside the picture, in order and apart, are read with their pixels")
   func ordered() throws {
-    let found = try Self.read([[0, 0, 1, 1], [2, 1, 2, 1]]).get()
+    let found = try Self.read([[0, 0, 1, 1], [2, 1, 2, 1]])
+      .get()
     #expect(found.map(\.bytes) == [3, 6])
     #expect(
       Self.read([[0, 0, 1, 1], [2, 0, 2, 1], [0, 3, 4, 1]]) == .failure(.invalid),
@@ -42,7 +47,8 @@ struct FrameRectangleTests {
       #expect(Self.read(rectangles) == .failure(.invalid), "\(rectangles)")
     }
     #expect(Self.read([[0, 0, 1, 1]], extra: 1) == .failure(.invalid), "pixels past the rectangles")
-    let many = (0..<257).map { [UInt32($0 % 4), UInt32($0 / 4), 1, 1] }
+    let many = (0..<257)
+      .map { [UInt32($0 % 4), UInt32($0 / 4), 1, 1] }
     #expect(
       (try? FrameRectangle.records(Self.records(many), width: 4_096, height: 4_096, payloadLength: 257 * 19)) == nil
     )

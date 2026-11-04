@@ -35,7 +35,8 @@ struct FrameJSONValidatorTests {
     #expect(Self.validate(#"{"x":{"a":1,"a":2}}"#) == .failure(.invalid))
     #expect(Self.validate(#"{"x":{"\u0061":1,"a":2}}"#) == .failure(.invalid))
     #expect(Self.validate(#"{"\u00e9":1,"é":2}"#) == .failure(.invalid))
-    let distinct = try? Self.validate("{\"\u{E9}\":1,\"e\u{301}\":2}").get()
+    let distinct = try? Self.validate("{\"\u{E9}\":1,\"e\u{301}\":2}")
+      .get()
     #expect(distinct?.count == 2, "keys are compared by their bytes, not by Unicode equivalence")
     #expect((try? Self.validate(#"{"a":{"a":1}}"#).get()) != nil, "the same key in another object is fine")
   }
@@ -62,7 +63,9 @@ struct FrameJSONValidatorTests {
       String(repeating: #"{"a":"#, count: FramePipeLimits.depth + 1) + "1"
       + String(repeating: "}", count: FramePipeLimits.depth + 1)
     #expect(Self.validate(deeper) == .failure(.oversized))
-    let many = (0...FramePipeLimits.keys).map { #""k\#($0)":0"# }.joined(separator: ",")
+    let many = (0...FramePipeLimits.keys)
+      .map { #""k\#($0)":0"# }
+      .joined(separator: ",")
     #expect(Self.validate("{\(many)}") == .failure(.oversized))
     let key = String(repeating: "k", count: FramePipeLimits.key + 1)
     #expect(Self.validate(#"{"\#(key)":0}"#) == .failure(.oversized))

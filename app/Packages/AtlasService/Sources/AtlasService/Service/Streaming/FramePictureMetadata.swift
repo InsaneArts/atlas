@@ -62,7 +62,9 @@ struct FramePictureMetadata: Sendable, Equatable, Decodable {
   init(validating data: Data) throws(FramePipeError) {
     let found = try FrameJSONValidator.validate(data)
     let kinds = { (key: String) in found[Array(key.utf8)] }
-    let keys = Self.integers.union(Self.numbers).union(Self.identifiers)
+    let keys = Self.integers
+      .union(Self.numbers)
+      .union(Self.identifiers)
     guard
       Set(found.keys) == Set(keys.map { Array($0.utf8) }),
       Self.integers.allSatisfy({ kinds($0) == .integer }),
@@ -93,7 +95,7 @@ struct FramePictureMetadata: Sendable, Equatable, Decodable {
       case .fullFrame:
         baseImageSequence == 0 && rectangleCount == 0 && payloadLength == pictureBytes
       case .deltaFrame:
-        (1...FramePipeLimits.rectangles).contains(rectangleCount) && baseImageSequence > 0
+        (1...FramePipeLimits.rectangles) ~= rectangleCount && baseImageSequence > 0
           && payloadLength > UInt64(FramePipeLimits.rectangleRecord) * UInt64(rectangleCount)
           && payloadLength < pictureBytes
       case .unchangedFrame:
@@ -120,6 +122,6 @@ struct FramePictureMetadata: Sendable, Equatable, Decodable {
 
   /// Whether `text` is exactly `digits` lowercase hex digits.
   private static func isHex(_ text: String, digits: Int) -> Bool {
-    text.utf8.count == digits && text.utf8.allSatisfy { (0x30...0x39).contains($0) || (0x61...0x66).contains($0) }
+    text.utf8.count == digits && text.utf8.allSatisfy { (0x30...0x39) ~= $0 || (0x61...0x66) ~= $0 }
   }
 }

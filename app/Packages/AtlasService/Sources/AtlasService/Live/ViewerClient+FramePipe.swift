@@ -10,7 +10,8 @@ extension ViewerClient {
     switch (response as? HTTPURLResponse)?.statusCode {
     case 200:
       do {
-        return try JSONDecoder().decode(FramePipeDescriptor.self, from: data)
+        return try JSONDecoder()
+          .decode(FramePipeDescriptor.self, from: data)
       } catch {
         throw ServiceError("The frame service's description is unreadable")
       }

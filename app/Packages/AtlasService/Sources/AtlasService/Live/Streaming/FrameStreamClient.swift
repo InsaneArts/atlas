@@ -336,6 +336,8 @@ public actor FrameStreamClient {
   /// `digits` random lowercase hex digits.
   private static func randomHex(_ digits: Int) -> String {
     var generator = SystemRandomNumberGenerator()
-    return (0..<digits).map { _ in String(Int.random(in: 0..<16, using: &generator), radix: 16) }.joined()
+    return (0..<digits)
+      .map { _ in String(Int.random(in: 0..<16, using: &generator), radix: 16) }
+      .joined()
   }
 }

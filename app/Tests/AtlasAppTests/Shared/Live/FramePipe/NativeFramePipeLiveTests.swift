@@ -16,7 +16,8 @@ struct NativeFramePipeLiveTests {
     let url = try #require(object?["url"] as? String)
     let service = try #require(ViewerClient(url))
     let descriptor = try #require(try await service.framePipe())
-    let lanes = try await NativeFramePipeConnector().connect(descriptor)
+    let lanes = try await NativeFramePipeConnector()
+      .connect(descriptor)
     let client = FrameStreamClient(descriptor: descriptor, control: lanes.control, frame: lanes.frame)
     try await client.open(longest: ViewerFramePump.longest)
     let began = ContinuousClock.now

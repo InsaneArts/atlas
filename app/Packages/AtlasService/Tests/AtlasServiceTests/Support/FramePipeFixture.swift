@@ -7,7 +7,8 @@ import Testing
 enum FramePipeFixture {
   /// The vectors' folder.
   static func folder() throws -> URL {
-    try #require(Bundle.module.url(forResource: "FramePipe", withExtension: nil)).appending(path: "v1")
+    try #require(Bundle.module.url(forResource: "FramePipe", withExtension: nil))
+      .appending(path: "v1")
   }
 
   /// The manifest: one entry a vector.

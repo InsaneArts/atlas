@@ -122,7 +122,7 @@ actor ScriptedFramePipeBroker {
     case .lateAcceptance:
       sequence += 1
       picture(credit: credit, request: request)
-      try? await Task.sleep(for: .milliseconds(20))
+      await frame?.drained()
       reply(.creditAccepted, request, ["creditID": credit])
       return
     case .interleaved:
@@ -188,10 +188,10 @@ actor ScriptedFramePipeBroker {
       let head = try? FramePacketCodec.encode(kind: .fullFrame, request: request, metadata: body, payloadLength: 24)
     else { return }
     guard split else {
-      frame?.sink.yield(head + pixels)
+      frame?.send(head + pixels)
       return
     }
-    frame?.sink.yield(head + pixels.prefix(10))
+    frame?.send(head + pixels.prefix(10))
     reply(
       .state,
       0,
@@ -201,8 +201,8 @@ actor ScriptedFramePipeBroker {
       ]
     )
     Task { [frame] in
-      try? await Task.sleep(for: .milliseconds(20))
-      frame?.sink.yield(pixels.dropFirst(10))
+      await frame?.drained()
+      frame?.send(pixels.dropFirst(10))
     }
   }
 
@@ -215,6 +215,7 @@ actor ScriptedFramePipeBroker {
     guard let body = try? JSONSerialization.data(withJSONObject: metadata),
       let bytes = try? FramePacketCodec.encode(kind: kind, request: request, metadata: body, payloadLength: 0)
     else { return }
-    (lane ?? control)?.sink.yield(bytes)
+    let answering = lane ?? control
+    answering?.send(bytes)
   }
 }

@@ -55,6 +55,11 @@ nonisolated final class NativeSocketLane: FramePipeTransport {
     return lane
   }
 
+  /// The next bytes, at most `limit`, read on the reading queue; empty once the service closed its end.
+  ///
+  /// - Parameter limit: The most bytes to read.
+  /// - Returns: The bytes read.
+  /// - Throws: The socket's `POSIXError` when the read failed.
   func read(upTo limit: Int) async throws -> Data {
     try await withCheckedThrowingContinuation { continuation in
       reading.async { [self] in
@@ -70,6 +75,10 @@ nonisolated final class NativeSocketLane: FramePipeTransport {
     }
   }
 
+  /// Writes all of `data` on the writing queue, as many writes as the socket takes.
+  ///
+  /// - Parameter data: The bytes.
+  /// - Throws: The socket's `POSIXError` when a write failed or sent nothing.
   func write(_ data: Data) async throws {
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
       writing.async { [self] in
@@ -89,6 +98,7 @@ nonisolated final class NativeSocketLane: FramePipeTransport {
     }
   }
 
+  /// Shuts the socket down both ways, so a read under way returns at once and nothing more is sent.
   func close() {
     Darwin.shutdown(socket, SHUT_RDWR)
   }
