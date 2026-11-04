@@ -19,8 +19,11 @@ struct CardScrollSelectionTests {
       let offset = list.contentView.bounds.minY
       return offset > .zero && offset > end - Spacing.l && offset <= end
     }
+    func position() -> String {
+      "offset \(list.contentView.bounds.minY) of \(document.frame.height - list.contentView.bounds.height)"
+    }
     host.show(CardScrollTests.stepped(selected))
-    try await Self.render(host, until: isRevealed)
+    try await Self.render(host, "the first selection was not revealed", position, until: isRevealed)
 
     var cleared = selected
     var shots = try #require({ if case .screenshots(let shots) = cleared.pane { shots } else { nil } }())
@@ -31,13 +34,18 @@ struct CardScrollSelectionTests {
     }
     cleared.pane = .screenshots(shots)
     host.show(cleared)
-    try await Self.render(host, until: isRevealed)
+    try await Self.render(host, "deselection moved the list", position, until: isRevealed)
     list.contentView.scroll(to: .zero)
     list.reflectScrolledClipView(list.contentView)
-    try await Self.render(host) { list.contentView.bounds.minY == 0 }
+    try await Self.render(host, "the list did not scroll to its top", position) {
+      list.contentView.bounds.minY == 0
+    }
+    // AppKit's offset changes at once; SwiftUI learns of the scroll in its next passes. Until it has, it still
+    // takes the list to stand at the tile, and a reveal asked for then can be dropped as already done.
+    await Self.settle(host)
 
     host.show(CardScrollTests.stepped(selected))
-    try await Self.render(host, until: isRevealed)
+    try await Self.render(host, "the reselected tile was not revealed", position, until: isRevealed)
   }
 
   @Test("clearing the selection before its placement lands cancels the placement")
@@ -84,13 +92,27 @@ struct CardScrollSelectionTests {
     #expect(held.executions == 1, "the uncancelled placement executes on release")
   }
 
-  private static func render(_ host: ViewerHost, until done: () -> Bool) async throws {
+  /// Renders until `done`, failing with `failure` and where the list stands if the ceiling passes first.
+  private static func render(
+    _ host: ViewerHost,
+    _ failure: String,
+    _ position: () -> String,
+    until done: () -> Bool
+  ) async throws {
     let deadline = ContinuousClock.now
       .advanced(by: Ceiling.work)
     repeat {
       host.render()
       await afterQueuedWork()
     } while !done() && ContinuousClock.now < deadline
-    try #require(done(), "the list never reached the expected scroll position")
+    try #require(done(), "\(failure): \(position())")
+  }
+
+  /// A few rendering passes with the main actor's queued work between them, so SwiftUI has seen what AppKit did.
+  private static func settle(_ host: ViewerHost) async {
+    for _ in 0..<6 {
+      await afterQueuedWork()
+      host.render()
+    }
   }
 }
