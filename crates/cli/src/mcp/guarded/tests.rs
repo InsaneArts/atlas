@@ -132,7 +132,15 @@ async fn guarded_cli_and_read_only_sessions_never_offer_mutations() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect::<Vec<_>>();
-    assert_eq!(names, ["atlas_status", "show_screen", "screen_frame"]);
+    assert_eq!(
+        names,
+        [
+            "atlas_status",
+            "show_screen",
+            "take_screenshot",
+            "screen_frame"
+        ]
+    );
     root.views.store(true, Ordering::SeqCst);
     root.read_only = true;
     for tool in root.tools().as_array().unwrap() {

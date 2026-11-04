@@ -419,7 +419,7 @@ pub(super) fn windows(value: &Value) -> String {
     )
 }
 
-pub(super) fn elements(value: &Value) -> String {
+pub(super) fn elements(value: &Value, values: bool) -> String {
     let elements: Vec<&Value> = items(&value["elements"]).collect();
     let matching = value["matching"].as_u64().unwrap_or(elements.len() as u64);
     let scanned = value["scanned"].as_u64().unwrap_or(matching);
@@ -441,13 +441,19 @@ pub(super) fn elements(value: &Value) -> String {
     }
 
     if !elements.is_empty() {
+        // A listing of values places no element: it says their state instead.
+        let placed = !values;
         let rows: Vec<Vec<String>> = elements
             .iter()
             .map(|element| {
                 let name = super::element_name(element).unwrap_or("");
-                let at = match listed_point(element) {
-                    Some((x, y)) => format!("{}, {}", text::number(x), text::number(y)),
-                    None => String::new(),
+                let last = if placed {
+                    match listed_point(element) {
+                        Some((x, y)) => format!("{}, {}", text::number(x), text::number(y)),
+                        None => String::new(),
+                    }
+                } else {
+                    state(element)
                 };
 
                 vec![
@@ -458,13 +464,14 @@ pub(super) fn elements(value: &Value) -> String {
                         &text::printable(element["value"].as_str().unwrap_or("")),
                         24,
                     ),
-                    at,
+                    last,
                 ]
             })
             .collect();
 
+        let last = if placed { "AT" } else { "STATE" };
         lines.push(String::new());
-        lines.push(table::render(&["#", "ROLE", "NAME", "VALUE", "AT"], &rows));
+        lines.push(table::render(&["#", "ROLE", "NAME", "VALUE", last], &rows));
     }
 
     let more = value["more"]
@@ -475,6 +482,13 @@ pub(super) fn elements(value: &Value) -> String {
             "Showing {} of {matching}; --max shows more.",
             elements.len()
         )));
+    }
+
+    let unmatched: Vec<String> = strings(&value["unmatched"])
+        .map(|name| text::printable(name).into_owned())
+        .collect();
+    if !unmatched.is_empty() {
+        lines.push(format!("Nothing is named {}.", unmatched.join(", ")));
     }
 
     let candidates = super::candidate_lines(&value["candidates"]);
@@ -494,6 +508,20 @@ pub(super) fn elements(value: &Value) -> String {
     }
 
     lines.join("\n")
+}
+
+/// What a listed element's flags say of it, in words: disabled, focused,
+/// selected, in a menu, and the mark a menu item shows.
+fn state(element: &Value) -> String {
+    let mut said: Vec<String> = ["disabled", "focused", "selected", "menu"]
+        .into_iter()
+        .filter(|flag| element[*flag] == true)
+        .map(|flag| if flag == "menu" { "in a menu" } else { flag }.to_owned())
+        .collect();
+    if let Some(mark) = element["mark"].as_str() {
+        said.push(format!("marked {}", text::printable(mark)));
+    }
+    said.join(", ")
 }
 
 /// Where a listed element is: its click point (`at`), or the middle of its

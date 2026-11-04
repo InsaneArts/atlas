@@ -1382,6 +1382,7 @@ async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_inc
         hello["daemon"]["capabilities"],
         json!([
             "session-pin",
+            "app-parts",
             "read",
             "rgb-stream-v1",
             "rgb-stream-4096",
@@ -1445,6 +1446,7 @@ fn a_blocked_hello_lookup_leaves_other_daemon_requests_responsive() {
         hello["daemon"]["capabilities"],
         json!([
             "session-pin",
+            "app-parts",
             "read",
             "rgb-stream-v1",
             "rgb-stream-4096",
@@ -1467,6 +1469,7 @@ async fn the_daemon_offers_jobs_and_reads() {
         hello["daemon"]["capabilities"],
         json!([
             "session-pin",
+            "app-parts",
             "read",
             "rgb-stream-v1",
             "rgb-stream-4096",
@@ -1485,6 +1488,7 @@ async fn the_daemon_offers_jobs_and_reads() {
         hello["daemon"]["capabilities"],
         json!([
             "session-pin",
+            "app-parts",
             "read",
             "rgb-stream-v1",
             "rgb-stream-4096",

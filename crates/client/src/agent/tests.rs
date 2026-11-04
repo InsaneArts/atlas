@@ -139,7 +139,7 @@ async fn finding_an_app_verifies_the_helper_once() {
         let before = helper.proofs();
         let listed = helper
             .serve(
-                elements(&client, &target, &ElementFilter::default(), 10, false),
+                elements(&client, &target, &Asked::every(10)),
                 textedit_reads,
             )
             .await
@@ -162,13 +162,7 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
     let helper = helper.serving_input(&client, &[FOCUS_APP]);
     let error = helper
         .serve(
-            elements(
-                &client,
-                &Target::Pid(812),
-                &ElementFilter::default(),
-                10,
-                false,
-            ),
+            elements(&client, &Target::Pid(812), &Asked::every(10)),
             |request| {
                 assert_ne!(request["op"], "elements", "no look is asked for");
                 textedit_reads(request)
@@ -204,13 +198,7 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
         let helper = helper.serving_input(&client, &[LOOKS]);
         let error = helper
             .serve(
-                elements(
-                    &client,
-                    &Target::Pid(812),
-                    &ElementFilter::default(),
-                    10,
-                    false,
-                ),
+                elements(&client, &Target::Pid(812), &Asked::every(10)),
                 |request| {
                     if request["op"] == "elements" {
                         assert_eq!(request["epoch"]["processId"], 456);
@@ -241,10 +229,9 @@ async fn a_daemon_that_cannot_pin_a_read_is_refused() {
     let helper = helper.older();
     let target = Target::Name("TextEdit".into());
     let error = helper
-        .serve(
-            elements(&client, &target, &ElementFilter::default(), 10, false),
-            |request| panic!("nothing is read: {request}"),
-        )
+        .serve(elements(&client, &target, &Asked::every(10)), |request| {
+            panic!("nothing is read: {request}")
+        })
         .await
         .unwrap_err();
     assert_eq!(error.code, Code::Daemon);
@@ -267,6 +254,7 @@ async fn an_app_is_captured_only_in_the_session_it_was_found_in() {
             screenshot(
                 &client,
                 Some(&Target::Name("TextEdit".into())),
+                None,
                 None,
                 crate::client::Size::Standard,
                 false,
@@ -306,7 +294,7 @@ async fn a_helper_that_changes_after_it_is_verified_is_refused() {
         let (_listing, client, helper) = helpers();
         let listed = helper
             .serve(
-                elements(&client, &target, &filter, 10, false),
+                elements(&client, &target, &asked_for(&filter)),
                 textedit_reads,
             )
             .await;
@@ -1179,6 +1167,15 @@ fn shown(index: usize, role: &str, title: Option<&str>, description: Option<&str
     });
 
     element
+}
+
+/// A listing request for the elements `filter` is for.
+fn asked_for(filter: &ElementFilter) -> Asked {
+    Asked {
+        role: filter.role.clone(),
+        names: filter.name.iter().cloned().collect(),
+        ..Asked::every(10)
+    }
 }
 
 fn named(name: &str) -> ElementFilter {
@@ -3112,6 +3109,9 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
     use base64::{Engine, engine::general_purpose::STANDARD};
     use std::cell::RefCell;
 
+    // Made once, before any operation is timed: a process's first PNG
+    // starts macOS's image framework, which can take seconds.
+    let png = STANDARD.encode(atlas_native::native::capture::sample_png(10, 10));
     for named in [false, true] {
         for command in 0..4 {
             for change in 0..10 {
@@ -3129,14 +3129,14 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                 let reply = helper.serve(async {
                     match command {
                         0 => client.capture(Size::Full, Some(&Crop::App { pid: 812 }), false).await,
-                        1 => elements(&client, &Target::Pid(812), &ElementFilter::default(), 10, false).await,
+                        1 => elements(&client, &Target::Pid(812), &Asked::every(10)).await,
                         2 => list(&client, &WindowFilter::default()).await.map(|windows| json!({"ok": true, "windows": windows})),
                         _ => client.capture(Size::Full, None, false).await,
                     }
                 }, |request| {
                     if request["op"] == "screenshot" {
                         let mut reply = json!({
-                            "ok": true, "png": STANDARD.encode(atlas_native::native::capture::sample_png(10, 10)),
+                            "ok": true, "png": png,
                             "width": 10, "height": 10,
                         });
                         if request["pid"] == 812 {
@@ -3419,9 +3419,14 @@ async fn representative_element_reads_keep_their_helper_request_counts() {
                 elements(
                     &client,
                     &Target::Name("TextEdit".into()),
-                    &ElementFilter::default(),
-                    fixture["max"].as_u64().unwrap() as usize,
-                    fixture["full"] == true,
+                    &Asked {
+                        form: if fixture["full"] == true {
+                            Form::Full
+                        } else {
+                            Form::Compact
+                        },
+                        ..Asked::every(fixture["max"].as_u64().unwrap() as usize)
+                    },
                 ),
                 |request| {
                     operations.push(request["op"].as_str().unwrap().to_owned());
@@ -3992,4 +3997,401 @@ async fn a_scan_its_budget_stopped_keeps_the_wait_going_as_an_incomplete_look() 
         Code::Elements,
         "a scan that failed still ends the wait"
     );
+}
+
+/// The screenshot TextEdit's stand-in captures: the request it was asked
+/// for, refused so that nothing more is needed of the stand-in.
+fn captured_asking(asked: &mut Vec<Value>) -> impl FnMut(&Value) -> Option<Value> {
+    move |request: &Value| {
+        if request["op"] == "screenshot" {
+            asked.push(request.clone());
+            return Some(json!({"ok": false, "code": "capture", "error": "not in this test"}));
+        }
+        textedit_reads(request)
+    }
+}
+
+#[tokio::test]
+async fn an_apps_part_of_a_region_is_asked_of_the_helper_and_one_showing_none_is_refused() {
+    use crate::test_support::Helper;
+    use atlas_core::{protocol::Region, test_support::UID};
+
+    let asked = Region::from_points(50.0, 50.0, 200.0, 200.0).unwrap();
+    for shows in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let mut requests = Vec::new();
+        let outcome = helper
+            .serve(
+                screenshot(
+                    &client,
+                    Some(&Target::Name("TextEdit".into())),
+                    Some(asked),
+                    None,
+                    crate::client::Size::Standard,
+                    false,
+                ),
+                |request| {
+                    if request["op"] == "screenshot" {
+                        requests.push(request.clone());
+                        return Some(if shows {
+                            json!({"ok": false, "code": "capture", "error": "not in this test"})
+                        } else {
+                            json!({"ok": false, "code": "no-window",
+                                "error": "Process 812 has no window on screen"})
+                        });
+                    }
+                    textedit_reads(request)
+                },
+            )
+            .await;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["pid"], 812);
+        assert_eq!(
+            requests[0]["within"],
+            json!(asked),
+            "the helper cuts it as it captures"
+        );
+        assert!(requests[0].get("region").is_none());
+        let error = outcome.unwrap_err();
+        if !shows {
+            assert_eq!(error.code, Code::NoWindow);
+            assert!(
+                error.error.contains("shows none of TextEdit's windows"),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn one_window_is_asked_of_the_helper_by_its_number_and_its_owner() {
+    use crate::test_support::Helper;
+    use atlas_core::test_support::UID;
+
+    for target in [Some(Target::Name("TextEdit".into())), None] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let mut requests = Vec::new();
+        let outcome = helper
+            .serve(
+                screenshot(
+                    &client,
+                    target.as_ref(),
+                    None,
+                    Some(5),
+                    crate::client::Size::Standard,
+                    false,
+                ),
+                captured_asking(&mut requests),
+            )
+            .await;
+        assert!(outcome.is_err(), "the stand-in refuses the capture itself");
+        assert_eq!(requests.len(), 1, "{target:?}");
+        assert_eq!(
+            (requests[0]["pid"].clone(), requests[0]["window"].clone()),
+            (json!(812), json!(5))
+        );
+    }
+
+    // A window no app shows is refused before any capture.
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let mut requests = Vec::new();
+    let error = helper
+        .serve(
+            screenshot(
+                &client,
+                None,
+                None,
+                Some(9),
+                crate::client::Size::Standard,
+                false,
+            ),
+            captured_asking(&mut requests),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::NoWindow);
+    assert!(error.error.contains("atlas windows"), "{error}");
+    assert!(requests.is_empty());
+}
+
+/// TextEdit's stand-in with two buttons in its one window.
+fn two_buttons(request: &Value) -> Option<Value> {
+    if request["op"] == "elements" {
+        let button = |index: usize, name: &str| {
+            json!({"index": index, "depth": 2, "role": "AXButton", "title": name,
+                "window": {"x": 0, "y": 0, "width": 100, "height": 100},
+                "frame": {"x": 10, "y": 10, "width": 30, "height": 20}})
+        };
+        return Some(json!({"ok": true, "look": "8123abc",
+            "elements": [button(1, "Save"), button(2, "Cancel")], "truncated": false}));
+    }
+    textedit_reads(request)
+}
+
+#[tokio::test]
+async fn a_listing_names_its_windows_by_number_and_lists_only_the_window_asked_for() {
+    use crate::{
+        host_session::{Host, HostSession},
+        test_support::Helper,
+    };
+    use atlas_core::test_support::UID;
+
+    for window in [None, Some(5), Some(9)] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+        let helper = helper.serving_input(&client, &[LOOKS]);
+        let listed = helper
+            .serve(
+                elements(
+                    &client,
+                    &Target::Name("TextEdit".into()),
+                    &Asked {
+                        window,
+                        ..Asked::every(50)
+                    },
+                ),
+                two_buttons,
+            )
+            .await;
+        match window {
+            Some(9) => assert_eq!(listed.unwrap_err().code, Code::NoWindow),
+            _ => {
+                let listed = listed.unwrap();
+                assert_eq!(listed["windows"][0]["number"], 5, "{listed}");
+                assert_eq!(listed["matching"], 2);
+            }
+        }
+    }
+}
+
+/// TextEdit with windows 5 and 6 at these bounds and a button in each.
+fn two_windows(first: (f64, f64), second: (f64, f64)) -> impl Fn(&Value) -> Option<Value> {
+    move |request: &Value| {
+        let frame = |(x, y): (f64, f64)| json!({"x": x, "y": y, "width": 100, "height": 100});
+        if request["op"] == "windows" {
+            let window = |number: i64, at: (f64, f64)| {
+                json!({"number": number, "pid": 812, "owner": "TextEdit", "title": null,
+                    "layer": 0, "alpha": 1.0, "bounds": frame(at)})
+            };
+            return Some(json!({"ok": true, "starts": {"812": [123, 456]},
+                "windows": [window(5, first), window(6, second)]}));
+        }
+        if request["op"] == "elements" {
+            let button = |index: usize, at: (f64, f64)| {
+                json!({"index": index, "depth": 2, "role": "AXButton", "title": "OK",
+                    "window": frame(at),
+                    "frame": {"x": at.0 + 10.0, "y": at.1 + 10.0, "width": 30, "height": 20}})
+            };
+            return Some(json!({"ok": true, "look": "8123abc",
+                "elements": [button(1, first), button(2, second)], "truncated": false}));
+        }
+        textedit_reads(request)
+    }
+}
+
+#[tokio::test]
+async fn a_window_lists_only_its_own_elements_and_one_sharing_its_frame_is_refused() {
+    use crate::{
+        host_session::{Host, HostSession},
+        test_support::Helper,
+    };
+    use atlas_core::test_support::UID;
+
+    for (second, apart) in [((300.0, 0.0), true), ((0.0, 0.0), false)] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+        let helper = helper.serving_input(&client, &[LOOKS]);
+        let listed = helper
+            .serve(
+                elements(
+                    &client,
+                    &Target::Pid(812),
+                    &Asked {
+                        window: Some(6),
+                        ..Asked::every(50)
+                    },
+                ),
+                two_windows((0.0, 0.0), second),
+            )
+            .await;
+        if apart {
+            let listed = listed.unwrap();
+            assert_eq!(listed["matching"], 1, "{listed}");
+            assert_eq!(listed["elements"][0]["index"], 2);
+            assert_eq!(listed["windows"][0]["number"], 6);
+        } else {
+            let error = listed.unwrap_err();
+            assert_eq!(error.code, Code::Elements);
+            assert!(error.error.contains("cannot be told apart"), "{error}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn windows_that_move_during_a_scan_or_share_a_frame_on_another_layer_are_not_told_apart() {
+    use crate::{
+        host_session::{Host, HostSession},
+        test_support::Helper,
+    };
+    use atlas_core::test_support::UID;
+
+    // The two windows swap places between the reads either side of the
+    // scan; or a panel of the app's sits on window 5's frame.
+    for case in ["swap", "panel"] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = Helper::client(directory.path(), UID);
+        client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+        let helper = helper.serving_input(&client, &[LOOKS]);
+        let listed = helper
+            .serve(
+                elements(
+                    &client,
+                    &Target::Pid(812),
+                    &Asked {
+                        window: Some(5),
+                        ..Asked::every(50)
+                    },
+                ),
+                |request| {
+                    if request["op"] == "windows" {
+                        let window = |number: i64, x: f64, layer: i64| {
+                            json!({"number": number, "pid": 812, "owner": "TextEdit",
+                                "title": null, "layer": layer, "alpha": 1.0,
+                                "bounds": {"x": x, "y": 0, "width": 100, "height": 100}})
+                        };
+                        let before = request["dock"] == true;
+                        let windows = match (case, before) {
+                            ("swap", true) => vec![window(5, 0.0, 0), window(6, 300.0, 0)],
+                            ("swap", false) => vec![window(5, 300.0, 0), window(6, 0.0, 0)],
+                            _ => vec![window(6, 0.0, 3), window(5, 0.0, 0)],
+                        };
+                        return Some(json!({"ok": true, "starts": {"812": [123, 456]},
+                            "windows": windows}));
+                    }
+                    two_windows((0.0, 0.0), (300.0, 0.0))(request)
+                },
+            )
+            .await;
+        let error = listed.unwrap_err();
+        assert_eq!(error.code, Code::Elements, "{case}");
+        let said = if case == "swap" {
+            "moved while it was read"
+        } else {
+            "cannot be told apart"
+        };
+        assert!(error.error.contains(said), "{case}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn an_older_helper_is_never_asked_for_a_part_it_cannot_crop() {
+    use crate::test_support::Helper;
+    use atlas_core::{protocol::Region, test_support::UID};
+
+    for (region, window) in [
+        (Region::from_points(0.0, 0.0, 50.0, 50.0), None),
+        (None, Some(5)),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let helper = helper.without_parts();
+        let mut requests = Vec::new();
+        let error = helper
+            .serve(
+                screenshot(
+                    &client,
+                    Some(&Target::Name("TextEdit".into())),
+                    region,
+                    window,
+                    crate::client::Size::Standard,
+                    false,
+                ),
+                captured_asking(&mut requests),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Daemon, "{error}");
+        assert!(error.error.contains("cannot capture one window"), "{error}");
+        assert!(requests.is_empty(), "nothing is captured");
+    }
+}
+
+#[test]
+fn a_listed_window_is_numbered_by_the_very_frame_the_scan_gave_it() {
+    let frame = |x: f64| Bounds {
+        x,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+    };
+    let shown = [5, 6].map(|number| Window {
+        bounds: frame(if number == 5 { 99.4 } else { 101.4 }),
+        ..window(number, 812, "Editor", 0)
+    });
+    // Both frames round to 100: only the second, of window 6, is listed.
+    let button = |index: usize, name: &str, x: f64| Element {
+        index,
+        role: Some("AXButton".into()),
+        title: Some(name.into()),
+        window: Some(frame(x)),
+        frame: Some(frame(x + 10.0)),
+        ..Element::default()
+    };
+    let scan = scanned(vec![button(1, "Open", 99.51), button(2, "Save", 100.49)]);
+    let listed = listing_in(812, &scan, &asked_for(&named("Save")), Some(&shown));
+    assert_eq!(listed["windows"][0]["x"], 100, "shown rounded");
+    assert_eq!(listed["windows"][0]["number"], 6);
+    let both = listing_in(812, &scan, &Asked::every(50), Some(&shown));
+    assert_eq!(
+        both["windows"].as_array().unwrap().len(),
+        1,
+        "listed as one window"
+    );
+    assert!(
+        both["windows"][0].get("number").is_none(),
+        "its elements are in windows 5 and 6, so it names neither"
+    );
+    let unnumbered = listing(812, &scan, &named("Save"), 50, false);
+    assert!(unnumbered["windows"][0].get("number").is_none());
+}
+
+#[test]
+fn a_window_filter_refuses_an_element_whose_frame_could_be_another_window() {
+    let frame = |x: f64| Bounds {
+        x,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+    };
+    for panel_layer in [3, 0] {
+        let mut panel = window(6, 812, "Editor", panel_layer);
+        panel.bounds = frame(101.5);
+        let mut ordinary = window(5, 812, "Editor", 0);
+        ordinary.bounds = frame(100.0);
+        let shown = [ordinary, panel];
+        let element = |index: usize, x: f64| Element {
+            index,
+            role: Some("AXButton".into()),
+            title: Some("OK".into()),
+            window: Some(frame(x)),
+            frame: Some(frame(x + 10.0)),
+            ..Element::default()
+        };
+        // 100.75 is within a point of both windows.
+        let Err(error) =
+            scanned(vec![element(1, 100.0), element(2, 100.75)]).in_window(&shown, 812, 5)
+        else {
+            panic!("an element that could be window 6 is refused");
+        };
+        assert_eq!(error.code, Code::Elements, "panel at layer {panel_layer}");
+        let kept = scanned(vec![element(1, 100.0), element(2, 102.5)])
+            .in_window(&shown, 812, 5)
+            .unwrap();
+        assert_eq!(kept.elements.len(), 1, "only window 5's own element");
+    }
 }

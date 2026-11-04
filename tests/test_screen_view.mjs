@@ -1779,3 +1779,19 @@ test('a theme in the host context marks the page, and none clears the mark', asy
   await page.receive({ method: 'ui/notifications/host-context-changed', params: { theme: null } });
   assert.equal(page.node('html').dataset.theme, undefined);
 });
+
+test('the view takes the whole status from _meta, and from beside the facts from an older server', () => {
+  const whole = {
+    state: 'working',
+    label: 'Working',
+    activity: [{ actor: 'agent', says: 'opened TextEdit' }],
+  };
+  const brief = { state: 'working', label: 'Working' };
+  const now = view.merge(
+    {},
+    { structuredContent: { status: brief }, _meta: { 'atlas/status': whole } },
+  );
+  same(now.status, whole, 'the history the model is not given still reaches the view');
+  const older = view.merge({}, { structuredContent: { status: whole } });
+  same(older.status, whole);
+});

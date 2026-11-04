@@ -18,6 +18,17 @@ pub struct ElementFilter {
     pub name: Option<String>,
 }
 
+/// Whether role `own` is the role `asked` for: the same, whatever its
+/// case, or the same once `asked` is given the `AX` its name leaves out
+/// (`checkbox` for `AXCheckBox`).
+fn same_role(own: &str, asked: &str) -> bool {
+    own.eq_ignore_ascii_case(asked)
+        || own
+            .get(..2)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("AX"))
+            && own[2..].eq_ignore_ascii_case(asked)
+}
+
 /// How an element's name matched a `--name`: only as the first part of a
 /// label that joins several, or whole. A whole match is the better one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -48,7 +59,7 @@ impl ElementFilter {
                 || element
                     .role
                     .as_deref()
-                    .is_some_and(|own| own.eq_ignore_ascii_case(role))
+                    .is_some_and(|own| same_role(own, role))
         });
         if !role {
             return None;
@@ -308,3 +319,6 @@ fn edits(a: &str, b: &str) -> usize {
 
     row[b.len()]
 }
+
+#[cfg(test)]
+mod tests;

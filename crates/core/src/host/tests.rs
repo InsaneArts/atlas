@@ -400,3 +400,28 @@ fn a_session_works_in_its_projects_folder_by_name_only() {
         assert_eq!(project_folder(Path::new(&home)), None);
     }
 }
+
+#[test]
+fn every_variable_that_tells_a_session_or_task_is_named_once() {
+    let named: Vec<&str> = Host::session_variables().collect();
+    for variable in [
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_PID",
+        "CODEX_SESSION_ID",
+        "CODEX_THREAD_ID",
+        "ATLAS_OPENCODE_SESSION",
+        "ATLAS_OPENCODE_PID",
+        "PI_SESSION_ID",
+        "ATLAS_PI_PID",
+        "ATLAS_CURSOR_SESSION",
+        "ATLAS_SESSION",
+        "ATLAS_TASK",
+    ] {
+        assert_eq!(
+            named.iter().filter(|name| **name == variable).count(),
+            1,
+            "{variable}"
+        );
+    }
+    assert_eq!(named.len(), 11);
+}

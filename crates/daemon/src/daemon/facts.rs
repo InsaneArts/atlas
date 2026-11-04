@@ -85,12 +85,13 @@ pub(super) use atlas_native::native::manager_name;
 /// (`jobs`).
 pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
     use atlas_core::protocol::{
-        JOBS, READ, RGB_STREAM, RGB_STREAM_HIGH_RES, RGB_STREAM_STOP, SCK_EXPERIMENTAL,
+        APP_PARTS, JOBS, READ, RGB_STREAM, RGB_STREAM_HIGH_RES, RGB_STREAM_STOP, SCK_EXPERIMENTAL,
         SESSION_PIN, SESSION_PROOF,
     };
 
     let mut capabilities = vec![
         SESSION_PIN,
+        APP_PARTS,
         READ,
         RGB_STREAM,
         RGB_STREAM_HIGH_RES,

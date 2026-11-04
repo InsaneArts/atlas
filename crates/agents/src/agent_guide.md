@@ -19,13 +19,11 @@ and type while the person uses their desktop. If `atlas` is missing or
 
 ## Reading output
 
-Commands print compact JSON when their output is not a terminal (add
-`--json` if you see plain text) and exit non-zero on failure; then read both
-stdout and stderr. A failure has a `code`, an `error` and a short `next`;
-where this guide says more about a code, follow it.
-
-Chain steps with `&&`, never `;`, `|| true` or `>/dev/null`: those hide
-failures and `uncertain` replies. Wait with `atlas wait`, not `sleep`.
+Commands print compact JSON when their output is not a terminal and exit
+non-zero on failure; then read both stdout and stderr. A failure has a
+`code`, an `error` and a short `next`. Chain steps with `&&`, never `;`, `|| true` or
+`>/dev/null`: those hide failures and `uncertain` replies. Wait with
+`atlas wait`, not `sleep`.
 
 ## Start
 
@@ -39,13 +37,12 @@ sibling subagents, put `ATLAS_TASK=NAME` on every command too, cleanup
 included.
 
 What `windows` lists was open before you: leave it. Touch only windows you
-opened, and never run `atlas close --all`: it quits every app. Do not start
-with a screenshot.
+opened, and never run `atlas close --all`: it quits every app.
 
 Where your host shows Atlas's view (Claude and Codex apps, Cursor), call
-`show_screen` once before visible work, unasked; elsewhere `atlas monitor`
-opens it. When the person asks to watch or take control, open it and leave
-the helper alone. Never call Stop, Resume, Take Control or Give Back.
+`show_screen` once before visible work; elsewhere `atlas monitor` opens it.
+When the person asks to watch or take control, open it and leave the helper
+alone. Never call Stop, Resume, Take Control or Give Back.
 
 ## Work
 
@@ -55,43 +52,46 @@ in, read Give the app what it needs.
 Open with `atlas open --app NAME [FILE|URL]` or `atlas open /path/App.app`,
 then `atlas wait --app NAME`. A listed app control (not a web page's) takes
 `atlas element press --ref LOOK.INDEX` (its `look` and `index`; or `check`,
-`expand`, their opposites, `set-value --value T`, `pick`): no pointer or focus.
-Else click it by `atlas click --app A --ref LOOK.INDEX` or
-`--name LABEL [--role ROLE]`, which lists `candidates` unless one matches.
-Otherwise use
+`expand`, their opposites, `set-value --value T`, `pick`). Else
+`atlas click --app A --ref LOOK.INDEX` or `--name LABEL [--role ROLE]`,
 `atlas click --app A X Y`, `atlas type --app A "text"`,
-`atlas key --app A cmd+a` or `atlas scroll --app A X Y --dy -3` (and
-`drag`): nothing is sent while another app would get it.
-Untargeted points use the top window from your last look.
-`--app` bypasses this memory; in a shared app, add `--window N`:
-`atlas click --app A --window N X Y`.
+`atlas key --app A cmd+a`, `scroll`, `drag`: nothing is sent while another
+app would get it. Untargeted points use the
+top window from your last look. `--app` bypasses this memory;
+in a shared app, add `--window N`: `atlas click --app A --window N X Y`.
 
-`atlas run -- PROGRAM ARGS` runs a command as the helper (result:
-`exitCode`). Use `--timeout` up to 600, not `&`, and never send keys or clicks
-from it (`osascript`, `cliclick`). For a server that must keep running,
-use `atlas job start -- PROGRAM ARGS`.
+Finish in few turns:
 
-Without a qualified native panel flow, cancel Save/Open and use `run` to
-create files or `open` to open them; use Chrome/Firefox for web pages. Do not
-retry a blank page or inert confirmation. First read Limits for files and
-drag-and-drop.
+- Chain known steps with `&&`, each written out in full, no shell
+  variables: a whole form, a save and its check.
+- For several lines, put real line breaks inside the quotes; never `$'…'`.
+- Prove a step by reading it back: `verification: matched`, or
+  `atlas elements --app A --values --name X --name Y` for values and
+  state. Between steps, screenshot only what text cannot show; end with
+  one as evidence.
+- Screenshot with Atlas's `take_screenshot` tool where your host has it;
+  else read its `path`, never collect it.
+- Check results where the app shows them; check a file only when the
+  task needs it saved.
+
+Read apps and web pages by name: `atlas elements --app A --name X` for text,
+a control, its value and state (`--page`: a web page alone);
+`atlas wait --app A` (or `--title T`, `--gone`) for a window,
+`--name X --state S` for an element. To see what
+shows, crop: `atlas screenshot --app A`, `--window N` or `--region X,Y,W,H`;
+a full `atlas screenshot` only when a crop's `overlapping` names a window in
+front. Never reopen a screenshot you read or one marked `unchanged: true`.
+`ok` means delivered, not that the app reacted.
+
+`atlas run -- PROGRAM ARGS` runs a command as the helper (`--timeout` up to
+600, never `&`, never keys or clicks via `osascript` or `cliclick`); a server
+that must keep running takes `atlas job start -- PROGRAM ARGS`. Cancel
+Save/Open panels: make files with `run`, open them with `open`. Use
+Chrome/Firefox for web pages. First read Limits for files and drag-and-drop.
 
 A command that changes the helper waits its turn, up to 30 s (`--wait`).
 Keep each shell call under your shell tool's limit, and never end your turn
 with an Atlas command still running (see Limits).
-
-After each action:
-
-1. Read the reply. `ok` means delivered, not that the app reacted;
-   `verification: matched` proves it did: skip step 2.
-2. Read apps and web pages by name first: `atlas elements --app A --name X`
-   for text, a control, its value and state; `atlas wait --app A` (or `--title T`,
-   `--gone`) for a window, `--name X --state S` for an element.
-3. To check what's visible, take a crop:
-   `atlas screenshot --app A` or `--region X,Y,W,H`. Take a full
-   `atlas screenshot` only when a crop's `overlapping` names a window in front.
-
-Never reopen a screenshot you read or one marked `unchanged: true`.
 
 ## When something goes wrong
 
@@ -109,37 +109,32 @@ Never reopen a screenshot you read or one marked `unchanged: true`.
   only what was not. `unread: withheld` often means the screen is locked:
   ask the person to unlock it.
 - `stopped`: the person stopped agents. Stop at once, say what you were
-  doing, and ask what to do; recover an uncertain reply only once they
-  resume.
-- `on-console`: the helper is on screen. Ask the person to switch back;
-  do not retry until they have.
+  doing and ask; recover an uncertain reply only once they resume.
+- `on-console`: the helper is on screen; ask the person to switch back.
 - `blocked`: your sandbox keeps your shell from the helper. Run Atlas
   outside it; never run `atlas init` for this.
-- `session-changed`, `stale-frame` or `lease-lost`: the helper changed.
-  Look again before acting.
-- `cancelled`: the person stopped your input (`partial: true`: some landed).
-  Look, then ask before retrying.
+- `session-changed`, `stale-frame` or `lease-lost`: look again first.
+- `cancelled`: the person stopped your input; look, then ask.
 - Anything else: read `error` and `next`, then the error reference.
 
 ## Clean up
 
-Always, also after a failure or an early stop. If you lost track,
-`atlas activity` lists what this session did.
+Always, also after a failure; `atlas activity` lists what you did.
 
 1. Save what you need (`atlas key --app A --window N cmd+s`), then
-   `atlas close --app A` for each app you opened. It quits at once, without
-   asking to save. In Finder, or an app with windows you did not open, close
-   only yours: `atlas key --app A --window N cmd+w`.
+   `atlas close --app A` for each app you opened: it quits without asking
+   to save. In Finder, or an app with windows you did not open, close only
+   yours: `atlas key --app A --window N cmd+w`.
 2. `atlas collect FILE` what you will report. `atlas cleanup` shows what
    else this session left (with `ATLAS_TASK`, that task's alone): check it,
    then `atlas cleanup --apply` stops its jobs, rolls back its copies and
    moves its installs aside.
-3. Delete files you made with `atlas run -- /bin/rm FILE...`, on its own.
+3. Delete files you made: `atlas run -- /bin/rm FILE...`, on its own.
 
 Never close or discard what you did not open: another agent's apps,
 someone's unsaved work. If it is in your way, tell the person.
 
 ## Report
 
-Say what you checked and how, with the screenshot paths as evidence, and
-what you could not check and why (see Limits).
+Say briefly what you did and how you checked it, with the screenshot paths
+as evidence, and what you could not check and why (see Limits).

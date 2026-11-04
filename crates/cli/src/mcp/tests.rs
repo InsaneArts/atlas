@@ -1,6 +1,6 @@
 use super::control::{ACTIONS, LEASE, LeaseRequest, checked};
 use super::presentation::{only_title_and_size, own_session, said, summary};
-use super::resources::{APP_MIME, FRAME_META, SCREEN, SCREEN_SCRIPT, VERSIONS};
+use super::resources::{APP_MIME, FRAME_META, SCREEN, SCREEN_SCRIPT, STATUS_META, VERSIONS};
 use super::*;
 use atlas_client::{client::AppList, helper_info::open_apps};
 use atlas_core::host::Key;
@@ -106,7 +106,12 @@ async fn cursor_imported_connections_require_private_authority_without_a_launche
         assert!(server.app_views.get().is_some());
         assert_eq!(
             names(&ask(&server, "tools/list", json!({})).await),
-            ["atlas_status", "show_screen", "screen_frame"]
+            [
+                "atlas_status",
+                "show_screen",
+                "take_screenshot",
+                "screen_frame"
+            ]
         );
     }
 }
@@ -146,7 +151,15 @@ async fn an_older_initialize_answer_cannot_restore_capabilities_removed_by_newer
         let listed = names(&ask(&server, "tools/list", json!({})).await);
         assert_eq!(listed.contains(&"take_control".to_owned()), views);
         if !views {
-            assert_eq!(listed, ["atlas_status", "show_screen", "screen_frame"]);
+            assert_eq!(
+                listed,
+                [
+                    "atlas_status",
+                    "show_screen",
+                    "take_screenshot",
+                    "screen_frame"
+                ]
+            );
             let refused = ask(&server, "tools/call", json!({"name":"take_control"})).await;
             assert_eq!(refused["error"]["code"], -32602);
         }
@@ -246,6 +259,7 @@ async fn a_read_only_server_offers_only_what_looks() {
         [
             "atlas_status",
             "show_screen",
+            "take_screenshot",
             "screen_frame",
             "activity",
             "helper_apps",
@@ -760,7 +774,20 @@ fn a_status_reads_in_a_line_for_the_model_and_whole_for_the_view() {
         "Atlas: Working. Clicked Save in TextEdit. Recent: clicked Save in TextEdit; opened TextEdit."
     );
     assert_eq!(result["structuredContent"]["status"]["state"], "working");
-    assert_eq!(result.get("_meta"), None, "no screen for the model");
+    assert!(
+        result["structuredContent"]["status"]
+            .get("activity")
+            .is_none(),
+        "the model is not given the history it already has in the text"
+    );
+    assert_eq!(
+        result["_meta"][STATUS_META], status,
+        "the view gets it whole"
+    );
+    assert!(
+        result["_meta"].get(FRAME_META).is_none(),
+        "no screen for the model"
+    );
 }
 
 #[test]
@@ -810,7 +837,11 @@ fn a_running_command_keeps_its_ellipsis_through_the_status_summary() {
         reply["content"][0]["text"],
         "Atlas: Working. Running a command… Recent: running a command…"
     );
-    assert_eq!(reply["structuredContent"]["status"], status);
+    assert_eq!(reply["_meta"][STATUS_META], status);
+    assert_eq!(
+        reply["structuredContent"]["status"]["headline"],
+        "Running a command…"
+    );
 }
 
 #[tokio::test]
@@ -1549,9 +1580,10 @@ pub(super) const VIEW_ONLY: [&str; 11] = [
     "log_out_helper",
 ];
 /// The tools that only look, all a read-only server offers.
-pub(super) const LOOKING: [&str; 7] = [
+pub(super) const LOOKING: [&str; 8] = [
     "atlas_status",
     "show_screen",
+    "take_screenshot",
     "screen_frame",
     "activity",
     "helper_apps",

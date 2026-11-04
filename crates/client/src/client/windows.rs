@@ -3,13 +3,24 @@ use super::{Client, Verified};
 use crate::last_capture;
 use atlas_core::{
     error::{Code, Error, Result},
-    screen::windows::{Bounds, Shown, from_reply, hit_windows, same_routing},
+    screen::windows::{Bounds, Shown, Window, from_reply, hit_windows, same_routing},
     transport::refusal,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
 
 /// Bound an ordinary window observation, including both sides of a remembered look.
+/// What the window list said of a look.
+#[derive(Debug)]
+pub(crate) enum Seen {
+    /// The windows on screen, which stayed put through it.
+    Stayed(Vec<Window>),
+    /// The windows moved or changed while it ran.
+    Moved,
+    /// No window list was read for it.
+    Unread,
+}
+
 pub(crate) const WINDOW_LOOKUP: Duration = Duration::from_secs(5);
 
 fn window_list(reply: Value) -> Result<Shown> {
@@ -55,17 +66,36 @@ impl Client {
         verified: &Verified,
         look: impl std::future::Future<Output = Result<T>>,
     ) -> Result<T> {
-        if self.host_session.is_none() {
-            return look.await;
+        self.look_seeing(verified, false, look)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    /// [`Client::look`], with what the window list says of it: the windows
+    /// on screen when they stayed put through the look. A look outside a host
+    /// session reads no window list unless `need`ed.
+    pub(crate) async fn look_seeing<T>(
+        &self,
+        verified: &Verified,
+        need: bool,
+        look: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<(T, Seen)> {
+        if self.host_session.is_none() && !need {
+            return Ok((look.await?, Seen::Unread));
         }
         let before = self.windows_in(Some(verified), true, WINDOW_LOOKUP).await?;
         let result = look.await?;
         let after = self
             .windows_in(Some(verified), false, WINDOW_LOOKUP)
             .await?;
-        let unchanged = same_routing(&before.windows, &after.windows).then_some(&before);
-        self.remember_look(verified, unchanged)?;
-        Ok(result)
+        let unchanged = same_routing(&before.windows, &after.windows);
+        self.remember_look(verified, unchanged.then_some(&before))?;
+        let seen = if unchanged {
+            Seen::Stayed(after.windows)
+        } else {
+            Seen::Moved
+        };
+        Ok((result, seen))
     }
 
     /// Remember what this host session last saw: `snapshot`, or that the

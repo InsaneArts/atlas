@@ -157,8 +157,8 @@ pub(super) fn summary(status: &Value, named: &BTreeMap<Key, String>, own: Option
     })
 }
 
-/// A tool result for `status`: its words for the model, its facts for the
-/// view.
+/// A tool result for `status`: its words and the facts it acts on for the
+/// model, and the whole status, history included, for the view in `_meta`.
 pub(super) fn said(status: &Value) -> Value {
     let label = status["label"].as_str().unwrap_or("Not ready");
     let headline = status["headline"].as_str().unwrap_or_default();
@@ -176,7 +176,19 @@ pub(super) fn said(status: &Value) -> Value {
         text.push_str(&format!(" Recent: {}", sentence(&earlier.join("; "))));
     }
 
-    tool_result(&text, json!({"status": status}))
+    let brief = json!({
+        "state": status["state"],
+        "label": status["label"],
+        "headline": status["headline"],
+        "reason": status["reason"],
+        "pending": status["pending"],
+        "commands": status["commands"],
+        "holder": status["holder"],
+        "self": status["self"],
+    });
+    let mut result = tool_result(&text, json!({"status": brief}));
+    result["_meta"] = json!({ super::resources::STATUS_META: status });
+    result
 }
 
 /// `text` ended as a sentence: with a full stop, unless it already ends

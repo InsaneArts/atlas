@@ -3,13 +3,24 @@
 //! launchd still holds a finished job for the app or the app is known only
 //! by the task's own install.
 use crate::{
-    client::{Client, Finished},
+    client::{AppList, AppRow, Client, Finished},
     handoff, task,
 };
 use atlas_control::Ownership;
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc, time::Instant};
+
+/// Browsers that open the URLs given after `--new-window` in a window of
+/// their own when they are already running, by bundle ID: two agents' pages
+/// then never share a window.
+const OWN_WINDOW_BROWSERS: [&str; 5] = [
+    "com.google.Chrome",
+    "com.google.Chrome.canary",
+    "org.chromium.Chromium",
+    "com.brave.Browser",
+    "com.microsoft.edgemac",
+];
 
 /// How much of what `open` and its cleanup print is read.
 const OUTPUT: usize = 4096;
@@ -59,18 +70,35 @@ pub(super) async fn open_in(
 
     let handed = handoff::hand_over(client, &ownership, wanted(app, targets), running).await?;
     let copied = handed.copied;
+    // Web pages for a browser already running get a window of their own:
+    // the app as the helper opens it, by its name or the path handed over.
+    let own_window = app.is_some()
+        && !targets.is_empty()
+        && targets.iter().all(|target| web_page(target))
+        && handed
+            .paths
+            .first()
+            .and_then(|app| running_app(&listed, app))
+            .and_then(AppRow::bundle_id)
+            .is_some_and(|bundle| OWN_WINDOW_BROWSERS.contains(&bundle));
     let mut given = handed.paths.into_iter();
 
     // Where the app's name or path is in `argv`, for a launch tried again
     // from the task's own install.
     let mut named_at = None;
+    if own_window {
+        argv.push("-n".to_owned());
+    }
     if app.is_some() {
         argv.push("-a".to_owned());
         named_at = Some(argv.len());
         argv.push(given.next().unwrap_or_default());
     }
 
-    if !targets.is_empty() {
+    if own_window {
+        argv.extend(["--args".to_owned(), "--new-window".to_owned()]);
+        argv.extend(given);
+    } else if !targets.is_empty() {
         argv.push("--".to_owned());
         argv.extend(given);
     }
@@ -139,6 +167,34 @@ fn open_argv(environment: &[String]) -> Result<Vec<String>> {
     }
 
     Ok(argv)
+}
+
+/// The one app running in the helper that `app` names: by its name, or,
+/// for a path, the app whose executable is inside that bundle. Several
+/// processes of it must agree on its bundle.
+fn running_app<'a>(listed: &'a AppList, app: &str) -> Option<&'a AppRow> {
+    if !app.contains('/') {
+        return super::target::named_app(listed, app);
+    }
+
+    let inside = Path::new(app).join("Contents/MacOS");
+    let mut running = listed.rows().iter().filter(|row| {
+        row.executable()
+            .is_some_and(|executable| Path::new(executable).starts_with(&inside))
+    });
+    let first = running.next()?;
+    running
+        .all(|row| row.bundle_id() == first.bundle_id())
+        .then_some(first)
+}
+
+/// Whether `target` is a web page's address.
+fn web_page(target: &str) -> bool {
+    ["http://", "https://"].iter().any(|scheme| {
+        target
+            .get(..scheme.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+    })
 }
 
 /// What `open` hands over to the helper: the app first, then each file or

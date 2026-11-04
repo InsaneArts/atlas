@@ -442,6 +442,7 @@ async fn screenshot(client: &Client, args: cli::Screenshot) -> Result<Value> {
         client,
         args.target.target().as_ref(),
         args.region,
+        args.window,
         screenshot_size(args.max_dimension),
         args.new_file,
     )
@@ -501,11 +502,20 @@ async fn elements(client: &Client, args: cli::Elements) -> Result<Value> {
         .target
         .target()
         .ok_or_else(|| Error::new(Code::Usage, "Select the app with --app or --pid"))?;
-    let filter = atlas_core::screen::select::ElementFilter {
-        role: args.role,
-        name: args.name,
+    let form = match (args.values, args.full) {
+        (true, _) => agent::Form::Values,
+        (false, true) => agent::Form::Full,
+        (false, false) => agent::Form::Compact,
     };
-    agent::elements(client, &target, &filter, args.max, args.full).await
+    let asked = agent::Asked {
+        role: args.role,
+        names: args.name,
+        window: args.window,
+        page: args.page,
+        max: args.max,
+        form,
+    };
+    agent::elements(client, &target, &asked).await
 }
 
 async fn drag(client: &Client, args: cli::Drag) -> Result<Value> {

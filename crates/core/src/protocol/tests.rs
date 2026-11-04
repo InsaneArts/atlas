@@ -612,3 +612,55 @@ fn a_drain_query_names_one_generation_with_a_fresh_query_id() {
         assert!(parse(bad.to_string().as_bytes()).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn screenshots_parse_one_window_or_an_apps_part_of_a_region_only_with_the_app() {
+    let shot = |crop| {
+        Ok(Request::Screenshot {
+            max_dimension: None,
+            per_point: false,
+            crop: Some(crop),
+        })
+    };
+    assert_eq!(
+        parse(br#"{"op":"screenshot","pid":7,"window":31}"#),
+        shot(Crop::Part {
+            pid: 7,
+            part: Part::Window(31)
+        })
+    );
+    assert_eq!(
+        parse(br#"{"op":"screenshot","pid":7,"within":{"x":0,"y":10,"width":20,"height":30}}"#),
+        shot(Crop::Part {
+            pid: 7,
+            part: Part::Within(Region {
+                x: 0,
+                y: 10,
+                width: 20,
+                height: 30
+            })
+        })
+    );
+    for (request, says) in [
+        (r#"{"op":"screenshot","window":31}"#, "with \"pid\" alone"),
+        (
+            r#"{"op":"screenshot","pid":7,"window":31,"within":{"x":0,"y":0,"width":1,"height":1}}"#,
+            "with \"pid\" alone",
+        ),
+        (
+            r#"{"op":"screenshot","region":{"x":0,"y":0,"width":1,"height":1},"within":{"x":0,"y":0,"width":1,"height":1}}"#,
+            "with \"pid\" alone",
+        ),
+        (
+            r#"{"op":"screenshot","pid":7,"window":0}"#,
+            "\"window\" must be a window number",
+        ),
+        (
+            r#"{"op":"screenshot","pid":7,"within":{"x":0}}"#,
+            "\"within\" must be whole points",
+        ),
+    ] {
+        let error = refused(request)["error"].as_str().unwrap().to_owned();
+        assert!(error.contains(says), "{request}: {error}");
+    }
+}
