@@ -58,6 +58,7 @@ step "Checks"
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+npm ci --silent
 npm run format:check
 npm test
 node scripts/check-swift.mjs
