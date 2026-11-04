@@ -35,7 +35,7 @@ objc2.workspace = true
 objc2-app-kit = { workspace = true, features = ["std", "NSImage", "NSRunningApplication", "NSWorkspace", "libc"] }
 objc2-application-services = { workspace = true, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue", "libc"] }
 objc2-core-foundation = { workspace = true, features = ["std", "block2", "CFArray", "CFCGTypes", "CFData", "CFDictionary", "CFError", "CFNotificationCenter", "CFNumber", "CFRunLoop", "CFString", "CFURL"] }
-objc2-core-graphics = { workspace = true, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
+objc2-core-graphics = { workspace = true, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
 objc2-core-media = { workspace = true, features = ["std", "CMFormatDescription", "CMSampleBuffer", "CMSync", "CMTime", "objc2-core-video"] }
 objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVBuffer", "CVPixelBuffer", "CVImageBuffer", "CVReturn"] }
 objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSError", "NSObject", "NSString"] }

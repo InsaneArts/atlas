@@ -35,6 +35,7 @@ mod guarded;
 mod presentation;
 mod reads;
 mod resources;
+mod stream;
 use control::{Held, Seen, release};
 use presentation::tool_result;
 use resources::{
@@ -76,6 +77,9 @@ struct Server {
     shared: Mutex<Option<Seen>>,
     /// The person's control taken from the view.
     held: Mutex<Option<Held>>,
+    /// The views' observer of the menu bar's frame service, which a guarded
+    /// view's context shares with the root that reaps it.
+    stream: Arc<Mutex<stream::Stream>>,
     /// App icons made.
     icons: Icons,
     /// The host session the server's environment names, read once: the
@@ -119,6 +123,7 @@ pub async fn serve(
         let read = tokio::select! {
             read = next_with_maintenance(&mut input, &mut sweeping, || {
                 while answering.try_join_next().is_some() {}
+                server.rest_stream();
                 if let Some(registry) = server.app_views.get() {
                     let registry = registry.clone();
                     answering.spawn(async move { registry.sweep(false).await; });
@@ -272,6 +277,7 @@ impl Server {
             framed: Mutex::new(None),
             shared: Mutex::new(None),
             held: Mutex::new(None),
+            stream: Arc::default(),
             icons: Icons::default(),
             host_session,
         }

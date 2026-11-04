@@ -86,6 +86,14 @@ pub(crate) fn fetch(url: &str, route: &str, deadline: Duration, limit: usize) ->
     Ok(served(url, route, deadline, limit)?.body)
 }
 
+/// The description of the frame service the local viewer at `url` runs,
+/// when it runs one for `helper`'s account.
+pub(crate) fn frame_service(url: &str, helper: u32) -> Option<serde_json::Value> {
+    let body = fetch(url, "pipe.json", Duration::from_secs(2), 16 * 1024).ok()?;
+    let descriptor: serde_json::Value = serde_json::from_slice(&body).ok()?;
+    (descriptor["helperUID"].as_u64() == Some(u64::from(helper))).then_some(descriptor)
+}
+
 /// A GET from the local viewer at `url`. Anything but a 200 is refused.
 fn served(url: &str, route: &str, deadline: Duration, limit: usize) -> Result<Reply> {
     let reply = exchange(url, "GET", route, None, deadline, limit)?;

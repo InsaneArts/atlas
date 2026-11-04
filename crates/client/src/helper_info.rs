@@ -90,9 +90,25 @@ impl Icons {
 ///
 /// Returns an error when the PNG can't be read or no JPEG fits the budget.
 pub fn frame(png: &[u8]) -> Result<Value> {
-    let mut encoded = jpeg(png, FRAME)?;
+    framed(|size| jpeg(png, size))
+}
+
+/// Packed 8-bit RGB pixels, `width`×`height` with rows `stride` bytes
+/// apart, as the frame the view shows, the way [`frame`] makes one.
+///
+/// # Errors
+///
+/// Returns an error when the pixels can't be read or no JPEG fits the
+/// budget.
+pub fn frame_rgb(rgb: &[u8], pixels: (usize, usize, usize)) -> Result<Value> {
+    framed(|size| jpeg_rgb(rgb, pixels, size))
+}
+
+/// The frame `encode` makes at the first size whose JPEG fits the budget.
+fn framed(encode: impl Fn((u32, f64)) -> Result<(Vec<u8>, u32, u32)>) -> Result<Value> {
+    let mut encoded = encode(FRAME)?;
     if base64_length(encoded.0.len()) > FRAME_BUDGET {
-        encoded = jpeg(png, FRAME_SMALL)?;
+        encoded = encode(FRAME_SMALL)?;
     }
 
     if base64_length(encoded.0.len()) > FRAME_BUDGET {
@@ -349,6 +365,20 @@ pub fn jpeg(png: &[u8], (limit, quality): (u32, f64)) -> Result<(Vec<u8>, u32, u
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn jpeg(_png: &[u8], _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
+    Err(Error::new(Code::Platform, "Atlas runs on macOS only"))
+}
+
+#[cfg(target_os = "macos")]
+fn jpeg_rgb(
+    rgb: &[u8],
+    pixels: (usize, usize, usize),
+    (limit, quality): (u32, f64),
+) -> Result<(Vec<u8>, u32, u32)> {
+    atlas_native::native::capture::jpeg_rgb(rgb, pixels, limit, quality)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn jpeg_rgb(_: &[u8], _: (usize, usize, usize), _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
     Err(Error::new(Code::Platform, "Atlas runs on macOS only"))
 }
 

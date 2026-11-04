@@ -1,6 +1,6 @@
 # The frame pipe
 
-Atlas.app's viewer window and the terminal viewer show the hidden helper through one shared stream of pictures, the frame pipe. The menu bar runs it beside its viewer service, so it lives as long as the menu bar does.
+Atlas.app's viewer window, the terminal viewer and the screen view agent apps draw from `show_screen` show the hidden helper through one shared stream of pictures, the frame pipe. The menu bar runs it beside its viewer service, so it lives as long as the menu bar does.
 
 ## What it does
 
@@ -10,6 +10,10 @@ Atlas.app's viewer window and the terminal viewer show the hidden helper through
 - **Committed pictures name input.** A viewer acknowledges each picture it shows. Only those can be named by Take Control and input, which go through the menu bar viewer's guarded routes with the same leases, frame keys and session checks as before.
 
 When the frame service is unavailable, the app reads pictures over the viewer's address as before, and tries the pipe again after a pause. Agents' screenshots and the menu bar panel keep their own reads.
+
+## The agent apps' screen view
+
+The view the Claude and Codex apps draw from `show_screen` runs inside the app and reaches Atlas only through tool calls, so it can't hold the pipe itself. Its `atlas mcp` server does: each `screen_frame` call takes the newest picture from the frame service and sends it as a JPEG, and the view asks again as soon as it has drawn one (about 7 fresh pictures a second while an agent works or you have control, and one a second otherwise, against one a second at most before). The server lets go of the service ten seconds after the view stops asking. Without the menu bar's frame service, the view reads the viewer's pictures as before.
 
 ## Private by construction
 

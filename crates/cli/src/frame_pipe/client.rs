@@ -1,6 +1,7 @@
-//! A native observer of the frame service, as the terminal runs it: both
-//! lanes checked to be served by the descriptor's process and this account,
-//! one picture per credit, and each committed before input may name it.
+//! A native observer of the frame service, as the terminal and `atlas mcp`
+//! run it: both lanes checked to be served by the descriptor's process and
+//! this account, one picture per credit, and each committed before input
+//! may name it.
 use atlas_core::{
     buffer::Buffer,
     error::{Code, Error, Result},
@@ -22,6 +23,12 @@ use std::{path::Path, time::Duration};
 /// How long one picture may take, credit to pixels, before the observer
 /// gives up: the source failing, or the service gone quiet.
 const PICTURE_DEADLINE: Duration = Duration::from_secs(3);
+/// The detail native observers ask the menu bar's service for: the most its
+/// viewer reads.
+pub(crate) const LONGEST: u32 = 1600;
+/// How many pictures in a row may arrive too late to commit before the
+/// service counts as failing.
+const STALE_IN_A_ROW: u32 = 5;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
@@ -325,6 +332,26 @@ impl PipeClient {
                 }
             }
         }
+    }
+
+    /// The next picture committed, so input may name it. One set aside as
+    /// too old by its commit is skipped for the next, a few times; more in a
+    /// row is a picture gap.
+    ///
+    /// # Errors
+    ///
+    /// Returns what [`Self::next`] and [`Self::commit`] do, and a gap.
+    pub(crate) async fn committed(&mut self) -> Result<Picture> {
+        for _ in 0..STALE_IN_A_ROW {
+            let picture = self.next().await?;
+            if self.commit(&picture.metadata).await? {
+                return Ok(picture);
+            }
+        }
+        Err(Error::new(
+            Code::StaleFrame,
+            "The frame service's pictures arrive too late to use",
+        ))
     }
 
     /// Commit `metadata`'s picture: decoded and selected, so input may name

@@ -75,19 +75,30 @@ impl Server {
     /// The status with the helper's newest screen, unless it is still the
     /// one the view has (`since`), from a recent status read. The screen
     /// goes in the result's `_meta`, which the view reads and the model
-    /// does not.
+    /// does not; `streaming` says it came from the menu bar's frame
+    /// service, which the view may read as often as it likes.
     pub(super) async fn screen(&self, since: Option<&str>) -> Result<Value> {
         let status = self.recent_status().await?;
-        let output = self.client.output_dir()?.to_path_buf();
-        let screen = crate::watch::screen(&self.client, &output, self.port).await;
-        let shared = screen.as_ref().and_then(|screen| screen.shared.clone());
+        let (frame, shared, streaming) = match self.streamed().await {
+            Some(streamed) => (
+                Some(streamed.frame),
+                Some((streamed.key, streamed.display)),
+                true,
+            ),
+            None => {
+                let output = self.client.output_dir()?.to_path_buf();
+                let screen = crate::watch::screen(&self.client, &output, self.port).await;
+                let shared = screen.as_ref().and_then(|screen| screen.shared.clone());
+                let frame = match screen {
+                    Some(screen) => self.frame_of(screen.png).await.ok(),
+                    None => None,
+                };
+                (frame, shared, false)
+            }
+        };
         if let Some((key, _)) = &shared {
             self.saw_frame(key.clone()).await;
         }
-        let frame = match screen {
-            Some(screen) => self.frame_of(screen.png).await.ok(),
-            None => None,
-        };
 
         let unchanged = frame
             .as_ref()
@@ -95,6 +106,7 @@ impl Server {
         let mut result = said(&status);
         result["structuredContent"]["unchanged"] = json!(unchanged);
         result["structuredContent"]["screen"] = json!(frame.is_some());
+        result["structuredContent"]["streaming"] = json!(streaming);
         if let Some((_, display)) = &shared {
             add_points(&mut result, *display);
         }
