@@ -326,6 +326,26 @@ fn a_tooltip_beside_a_real_window_does_not_block_input() {
 }
 
 #[test]
+fn finders_desktop_listed_beside_its_window_does_not_block_input() {
+    for entries in [vec![3, WINDOW], vec![WINDOW, 3]] {
+        for expect in [named(), Expect::new(812).unwrap()] {
+            let mut fake = Fake::new();
+            fake.lists.insert((APP, "AXWindows"), entries.clone());
+            fake.answers
+                .insert((3, "AXRole"), Answer::Text("AXScrollArea".into()));
+            fake.on_ask = Some(|_, element, attribute| {
+                if element == 3 {
+                    assert_eq!(attribute, "AXRole", "the desktop's icons are never read");
+                }
+            });
+            fake.run(&expect).unwrap();
+            assert!(fake.writes.contains(&(APP, Write::Flag("AXFrontmost"))));
+            assert!(fake.writes.iter().all(|(element, _)| *element != 3));
+        }
+    }
+}
+
+#[test]
 fn a_tooltip_alone_does_not_count_as_a_window() {
     let mut fake = Fake::new();
     fake.window(3);

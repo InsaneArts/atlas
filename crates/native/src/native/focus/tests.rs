@@ -68,6 +68,17 @@ struct Seen {
     keyboard_reads: usize,
     title_reads: usize,
     app_focused: bool,
+    /// Why the app's own focus read fails when it does.
+    app_unread: Option<Unread>,
+    app_reads: usize,
+    /// Whose menu bar shows: none found unless a test sets it.
+    menu: Option<Result<Option<i64>>>,
+    menu_reads: usize,
+    /// Whether each app focus read was for keys.
+    app_for_keys: Vec<bool>,
+    /// The window list a refresh reads, as windows moved meanwhile.
+    later: Option<Vec<Window>>,
+    refreshes: usize,
 }
 
 impl Seen {
@@ -99,8 +110,22 @@ impl Look for Seen {
         self.clock.unwrap_or_else(Instant::now)
     }
 
-    fn app_focused(&mut self, _: i64) -> Result<bool> {
-        Ok(self.app_focused)
+    fn app_focused(&mut self, _: i64, keys: bool) -> Result<bool> {
+        self.app_reads += 1;
+        self.app_for_keys.push(keys);
+        match self.app_unread {
+            Some(why) => Err(why.error()),
+            None => Ok(self.app_focused),
+        }
+    }
+
+    fn menu_bar_owner(&mut self) -> Result<Option<i64>> {
+        self.menu_reads += 1;
+        match &self.menu {
+            Some(Ok(owner)) => Ok(*owner),
+            Some(Err(_)) => Err(Error::new(Code::Native, "unreadable")),
+            None => Ok(None),
+        }
     }
 
     fn focused(&mut self) -> Result<Option<i64>> {
@@ -127,6 +152,13 @@ impl Look for Seen {
         self.keyboard
             .clone()
             .ok_or_else(|| Error::new(Code::Native, "unreadable"))
+    }
+
+    fn refresh_windows(&mut self) {
+        self.refreshes += 1;
+        if let Some(later) = self.later.take() {
+            self.windows = Some(later);
+        }
     }
 
     fn windows(&mut self) -> Result<&[Window]> {
@@ -674,6 +706,164 @@ fn a_focus_that_cannot_be_read_refuses() {
     assert_eq!(refusal(point_with(&mut no_focus, 200.0, 10.0)), unreadable);
 }
 
+/// A helper whose system-wide focus read ends with `status`, showing the
+/// app's document, a window of another app beside it and the menu bar,
+/// the app's own.
+fn system_focus_failing(status: objc2_application_services::AXError) -> Seen {
+    let other = window(OTHER, "Notes", 0, (600.0, 100.0, 300.0, 300.0));
+    let mut look = Seen::default().showing(vec![menu_bar(), document(), other]);
+    look.status = Some(status);
+    look.menu = Some(Ok(Some(APP)));
+    look
+}
+
+#[test]
+fn a_system_focus_read_that_cannot_complete_admits_a_click_for_the_app_owning_the_menu_bar() {
+    let mut look = system_focus_failing(objc2_application_services::AXError::CannotComplete);
+    look.app_focused = true;
+    assert!(point_with(&mut look, 200.0, 200.0).is_ok());
+    assert_eq!((look.menu_reads, look.app_reads), (1, 1));
+    let error = keys_with(&mut look).unwrap_err();
+    assert_eq!(error.details["reason"], "unreadable");
+    assert!(
+        causes(&error).contains("status -25204"),
+        "keys are never admitted by the menu bar while Accessibility cannot tell"
+    );
+    assert_eq!((look.menu_reads, look.app_reads), (1, 1));
+    assert_eq!(
+        refusal(point_with(&mut look, 700.0, 200.0))["reason"],
+        "point",
+        "the menu bar never lets a click land in another app's window"
+    );
+}
+
+#[test]
+fn another_apps_menu_bar_refuses_by_naming_that_app() {
+    for named_none in [false, true] {
+        let mut look = system_focus_failing(objc2_application_services::AXError::CannotComplete);
+        if named_none {
+            look.focused = Some(Ok(None));
+        }
+        look.app_focused = true;
+        look.menu = Some(Ok(Some(OTHER)));
+        assert_eq!(
+            refusal(point_with(&mut look, 200.0, 200.0)),
+            json!({"reason": "app", "found": {"app": "Notes", "pid": OTHER}})
+        );
+        assert_eq!(
+            look.app_reads, 0,
+            "an app's own claim never outweighs the menu bar"
+        );
+    }
+}
+
+#[test]
+fn a_menu_bar_that_cannot_be_told_keeps_the_refusal() {
+    for menu in [Ok(None), Err(())] {
+        let mut look = system_focus_failing(objc2_application_services::AXError::CannotComplete);
+        look.app_focused = true;
+        look.menu = Some(menu.map_err(|()| Error::new(Code::Native, "unreadable")));
+        let error = point_with(&mut look, 200.0, 200.0).unwrap_err();
+        assert_eq!(error.details["reason"], "unreadable");
+        assert!(causes(&error).contains("status -25204"));
+        assert_eq!(look.app_reads, 0);
+
+        look.status = None;
+        look.focused = Some(Ok(None));
+        assert_eq!(
+            refusal(keys_with(&mut look))["reason"],
+            "app",
+            "no app named and no menu bar told is no app with keyboard focus"
+        );
+    }
+}
+
+#[test]
+fn a_window_raised_while_the_menu_bar_is_read_still_refuses_the_pointer_action() {
+    let cover = window(OTHER, "Notes", 0, (100.0, 100.0, 400.0, 300.0));
+    for named_none in [false, true] {
+        for need in [
+            Need::Point(200.0, 200.0),
+            Need::Pointer(200.0, 200.0),
+            Need::Drag {
+                from: (200.0, 200.0),
+                to: (250.0, 250.0),
+                button: atlas_core::actions::Button::Left,
+            },
+        ] {
+            let mut look =
+                system_focus_failing(objc2_application_services::AXError::CannotComplete);
+            if named_none {
+                look.focused = Some(Ok(None));
+            }
+            look.app_focused = true;
+            look.later = Some(vec![menu_bar(), cover.clone(), document()]);
+            let error = require(&expect(), need, &display(), &mut look, later()).unwrap_err();
+            assert_eq!(error.details["reason"], "point", "{need:?}");
+            assert_eq!(look.refreshes, 1);
+        }
+    }
+}
+
+#[test]
+fn keys_ask_the_app_for_its_strict_proof_and_pointer_actions_for_the_desktop_one() {
+    let mut look = system_focus_failing(objc2_application_services::AXError::CannotComplete);
+    look.focused = Some(Ok(None));
+    look.app_focused = true;
+    assert!(keys_with(&mut look).is_ok());
+    assert!(point_with(&mut look, 200.0, 200.0).is_ok());
+    assert_eq!(look.app_for_keys, [true, false]);
+}
+
+#[test]
+fn a_system_focus_read_that_cannot_complete_still_refuses_an_app_without_proof() {
+    for unread in [None, Some(Unread::Slow), Some(Unread::Malformed)] {
+        let mut look = system_focus_failing(objc2_application_services::AXError::CannotComplete);
+        look.app_unread = unread;
+        let error = point_with(&mut look, 200.0, 200.0).unwrap_err();
+        assert_eq!(error.details["reason"], "unreadable");
+        let said = causes(&error);
+        assert!(said.contains("status -25204"), "{said}");
+        assert_eq!(look.app_reads, 1);
+    }
+}
+
+#[test]
+fn any_other_system_focus_failure_never_asks_the_app() {
+    for status in [
+        objc2_application_services::AXError::APIDisabled,
+        objc2_application_services::AXError::Failure,
+    ] {
+        let mut look = system_focus_failing(status);
+        look.app_focused = true;
+        assert_eq!(refusal(keys_with(&mut look))["reason"], "unreadable");
+        assert_eq!(
+            refusal(point_with(&mut look, 200.0, 200.0))["reason"],
+            "unreadable"
+        );
+        assert_eq!((look.menu_reads, look.app_reads), (0, 0));
+    }
+}
+
+#[test]
+fn a_named_window_is_still_judged_after_the_app_is_admitted_by_the_menu_bar() {
+    let desktop = Keyboard {
+        window: Some(element("AXScrollArea", (0.0, 0.0, 1000.0, 800.0))),
+        ..typing(field("Email"))
+    };
+    let mut look = system_focus_failing(objc2_application_services::AXError::CannotComplete)
+        .typing_in(desktop);
+    look.status = None;
+    look.focused = Some(Ok(None));
+    look.app_focused = true;
+    assert_eq!(
+        refusal(expecting(&in_document(), &mut look))["reason"],
+        "unreadable",
+        "a desktop in place of the focused window never passes as the named one"
+    );
+    assert_eq!(look.keyboard_reads, 1);
+}
+
 /// Every cause behind `error`, as each says itself, innermost last.
 fn causes(error: &Error) -> String {
     let mut said = Vec::new();
@@ -1121,6 +1311,7 @@ fn pointer_verification_accepts_an_active_app_without_reading_window_focus() {
         ] {
             let mut look = Seen::focused(focused).showing(vec![document()]);
             look.app_focused = true;
+            look.menu = Some(Ok(Some(APP)));
             assert_eq!(
                 require(&in_document(), need, &display(), &mut look, later()).unwrap(),
                 None
@@ -2033,10 +2224,12 @@ fn read_only_verification_leaves_wrong_and_absent_focus_in_place() {
 }
 
 #[test]
-fn absent_system_focus_accepts_direct_app_proof_and_still_checks_the_window_and_field() {
+fn absent_system_focus_accepts_the_menu_bar_owner_with_its_own_proof_and_still_checks_the_window_and_field()
+ {
     let mut look = inside_with(typing(field("Email")), vec![document()]);
     look.focused = Some(Ok(None));
     look.app_focused = true;
+    look.menu = Some(Ok(Some(APP)));
     assert!(expecting(&in_document().in_field("Email").unwrap(), &mut look).is_ok());
     assert_eq!(
         refusal(expecting(

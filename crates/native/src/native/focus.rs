@@ -16,6 +16,7 @@ use atlas_core::{
         windows::{self, Bounds, Dock, Listed, Screen, Surface, Window},
     },
 };
+use objc2_application_services::AXError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
@@ -23,6 +24,10 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant},
 };
+
+/// How far into the menu bar its owner is read: inside the first menu,
+/// which is always the active app's.
+const MENU_INSET: f64 = 20.0;
 
 /// The longest one destination check may take before input is posted.
 pub(super) const CHECK_BUDGET: Duration = Duration::from_millis(500);
@@ -240,8 +245,14 @@ trait Look {
 
     /// The process with keyboard focus; None when no app has it.
     fn focused(&mut self) -> Result<Option<i64>>;
-    /// Direct app evidence when the system-wide focus attribute is absent.
-    fn app_focused(&mut self, pid: i64) -> Result<bool>;
+    /// Direct app evidence when the system-wide focus attribute is absent;
+    /// for `keys`, without the desktop allowance a pointer action has.
+    fn app_focused(&mut self, pid: i64, keys: bool) -> Result<bool>;
+    /// Forget the window list read so far, so what follows reads it again.
+    fn refresh_windows(&mut self);
+    /// The process whose menu bar shows, read where the listed menu bar
+    /// begins; None when no menu bar item is found there.
+    fn menu_bar_owner(&mut self) -> Result<Option<i64>>;
     /// Where keyboard focus is inside process `pid`, as far as what is
     /// `judged` needs.
     fn keyboard(&mut self, pid: i64, judged: Judged) -> Result<Keyboard>;
@@ -288,9 +299,28 @@ impl Look for Live {
         ax::focused_pid(left.min(FOCUS_TIMEOUT))
     }
 
-    fn app_focused(&mut self, pid: i64) -> Result<bool> {
+    fn app_focused(&mut self, pid: i64, keys: bool) -> Result<bool> {
         let left = self.left()?;
-        ax::frontmost(pid, left.min(FOCUS_TIMEOUT))
+        ax::frontmost(pid, left.min(FOCUS_TIMEOUT), !keys)
+    }
+
+    fn refresh_windows(&mut self) {
+        self.windows = None;
+        self.dock = None;
+    }
+
+    /// Read just inside the start of the first menu bar the window list
+    /// shows, where the active app's first menu is.
+    fn menu_bar_owner(&mut self) -> Result<Option<i64>> {
+        let Some(bar) = self.windows()?.iter().find(|window| window.is_menu_bar()) else {
+            return Ok(None);
+        };
+        let point = (
+            bar.bounds.x + MENU_INSET.min(bar.bounds.width / 2.0),
+            bar.bounds.y + bar.bounds.height / 2.0,
+        );
+        let left = self.left()?;
+        ax::menu_bar_owner(point, Instant::now() + left.min(FOCUS_TIMEOUT))
     }
 
     /// Read from the app element of the process judged to have focus, so
@@ -417,11 +447,11 @@ fn require(
     let started = look.now();
     let outcome = match need {
         Need::Nothing => return Ok(None),
-        Need::Keys => active(expect, look).and_then(|()| inside(expect, look)),
-        Need::Point(x, y) | Need::Pointer(x, y) => active(expect, look)
+        Need::Keys => active(expect, true, look).and_then(|()| inside(expect, look)),
+        Need::Point(x, y) | Need::Pointer(x, y) => active(expect, false, look)
             .and_then(|()| point(expect, (x, y), Spot::At, display, look))
             .map(|()| None),
-        Need::Drag { from, to, button } => active(expect, look)
+        Need::Drag { from, to, button } => active(expect, false, look)
             .and_then(|()| point(expect, from, Spot::At, display, look))
             .and_then(|()| dropped(expect, (from, to), button, display, look))
             .map(|()| None),
@@ -535,6 +565,12 @@ fn request(error: &Error) -> (Option<&'static str>, Option<i32>) {
     (None, None)
 }
 
+/// Whether the request behind `error` could not complete, rather than
+/// being refused or answering wrongly.
+fn incomplete(error: &Error) -> bool {
+    request(error).1 == Some(AXError::CannotComplete.0)
+}
+
 /// The shortest time between two probes noted in the log.
 const PROBE_GAP: Duration = Duration::from_secs(5);
 
@@ -602,10 +638,34 @@ fn note(error: &Error) {
 }
 
 /// Prove the target app is active, independently of its window focus.
-fn active(expect: &Expect, look: &mut impl Look) -> Result<()> {
-    let focused = look.focused().map_err(unreadable_from)?;
-    if focused.is_none() && look.app_focused(expect.pid()).map_err(unread_by)? {
-        return Ok(());
+/// When Accessibility names no app with keyboard focus, or for a pointer
+/// action its read could not complete, as it can while apps still answer
+/// their own reads, the app whose menu bar shows stands in: the target
+/// must own it and prove itself frontmost, for keys strictly (see
+/// [`Look::app_focused`]). A pointer action is then judged by the window
+/// under it, read afresh; keys after a read that could not complete are
+/// not admitted, since nothing in reach then proves which window takes them. Any other failure, or proof
+/// short of that, refuses as the system-wide read did, and a menu bar of
+/// another app's names it.
+fn active(expect: &Expect, keys: bool, look: &mut impl Look) -> Result<()> {
+    let focused = match look.focused() {
+        Ok(focused) => focused,
+        Err(error) if incomplete(&error) && !keys => {
+            let proven =
+                in_front(expect, look)? && look.app_focused(expect.pid(), keys).unwrap_or(false);
+            return if proven {
+                stood_in(look)
+            } else {
+                Err(unreadable_from(error))
+            };
+        }
+        Err(error) => return Err(unreadable_from(error)),
+    };
+    if focused.is_none()
+        && in_front(expect, look)?
+        && look.app_focused(expect.pid(), keys).map_err(unread_by)?
+    {
+        return stood_in(look);
     }
     let Some(pid) = focused else {
         return Err(refused_because(Reason::App, "No app has keyboard focus"));
@@ -613,13 +673,35 @@ fn active(expect: &Expect, look: &mut impl Look) -> Result<()> {
     if pid == expect.pid() {
         return Ok(());
     }
+    Err(elsewhere(pid, look))
+}
 
+/// Admit the app proven by the menu bar and its own reads. Windows may
+/// have moved during those reads, so the checks that follow see a window
+/// list read after them.
+fn stood_in(look: &mut impl Look) -> Result<()> {
+    look.refresh_windows();
+    Ok(())
+}
+
+/// Whether the menu bar that shows is the target app's: false when that
+/// cannot be told, and the refusal naming the app when it is another's.
+fn in_front(expect: &Expect, look: &mut impl Look) -> Result<bool> {
+    match look.menu_bar_owner() {
+        Ok(Some(pid)) if pid == expect.pid() => Ok(true),
+        Ok(Some(pid)) => Err(elsewhere(pid, look)),
+        Ok(None) | Err(_) => Ok(false),
+    }
+}
+
+/// The refusal for app `pid` having keyboard focus in place of the target.
+fn elsewhere(pid: i64, look: &mut impl Look) -> Error {
     let found = Found::named(pid, look.windows().unwrap_or_default());
     let fact = match &found.app {
         Some(name) => format!("{name} has keyboard focus, not the app this was for"),
         None => "Another app has keyboard focus".to_owned(),
     };
-    Err(refused_with(Reason::App, fact, found))
+    refused_with(Reason::App, fact, found)
 }
 
 /// With the app in focus, the window and the field it names, judged from

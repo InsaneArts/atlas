@@ -34,8 +34,8 @@ pub(super) use keyboard::{
 };
 pub(super) use references::{Looks, Resolved, confirm, read, resolve};
 pub(super) use system::dock_item;
-pub(super) use system::focused_pid;
 pub use system::{DOCK_TIMEOUT, dock};
+pub(super) use system::{focused_pid, menu_bar_owner};
 pub use tree::elements;
 
 /// AX errors meaning the element could not be read at all: the request could

@@ -545,8 +545,11 @@ pub(in crate::native) fn keyboard(pid: i64, timeout: Duration, judged: Judged) -
 }
 
 /// Some apps omit the system-wide focused application. Their own frontmost
-/// flag and an owned focus reference must both be present to substitute.
-pub(in crate::native) fn frontmost(pid: i64, timeout: Duration) -> Result<bool> {
+/// flag and an owned focus reference must both be present to substitute;
+/// with `desktop`, for a pointer action, the reference may be an owned
+/// focused element beside a focused window that is no window (see
+/// [`app_focus`]).
+pub(in crate::native) fn frontmost(pid: i64, timeout: Duration, desktop: bool) -> Result<bool> {
     let deadline = Instant::now() + timeout;
     let app = app_element(pid)?;
     app_focus(
@@ -556,6 +559,7 @@ pub(in crate::native) fn frontmost(pid: i64, timeout: Duration) -> Result<bool> 
         },
         &app,
         pid,
+        desktop,
     )
 }
 
@@ -564,10 +568,21 @@ fn app_element(pid: i64) -> Result<CFRetained<AXUIElement>> {
     ffi::application(pid).ok_or_else(|| Unread::Failed.error())
 }
 
-fn app_focus<A: Ask>(reader: &mut Reader<A>, app: &A::Element, pid: i64) -> Result<bool> {
+/// Whether app `pid` says it is frontmost and holds a focus reference of
+/// its own. A focused window that is no window, as Finder's desktop is
+/// while none of its windows is key, is malformed unless `desktop` allows
+/// it; then it proves nothing alone, and only an owned focused element
+/// does. That proves the app active, not which window takes the keys.
+fn app_focus<A: Ask>(
+    reader: &mut Reader<A>,
+    app: &A::Element,
+    pid: i64,
+    desktop: bool,
+) -> Result<bool> {
     if reader.ask.owner(app) != Some(pid) || reader.flag(app, "AXFrontmost")? != Some(true) {
         return Ok(false);
     }
+    let mut unwindowed = false;
     for attribute in ["AXFocusedWindow", "AXFocusedUIElement"] {
         if let Some(element) = reader.reference(app, attribute)? {
             if reader.ask.owner(&element) != Some(pid) {
@@ -577,10 +592,17 @@ fn app_focus<A: Ask>(reader: &mut Reader<A>, app: &A::Element, pid: i64) -> Resu
                 Some("AXApplication") => return Err(Unread::Withheld.error()),
                 Some("AXWindow" | "AXSheet") => {}
                 Some(_) if attribute == "AXFocusedUIElement" => {}
-                _ => return Err(Unread::Malformed.error()),
+                Some(_) if desktop => {
+                    unwindowed = true;
+                    continue;
+                }
+                Some(_) | None => return Err(Unread::Malformed.error()),
             }
             return Ok(true);
         }
+    }
+    if unwindowed {
+        return Err(Unread::Malformed.error());
     }
     Ok(false)
 }

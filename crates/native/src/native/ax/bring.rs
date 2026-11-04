@@ -371,7 +371,12 @@ impl<A: Backend> Reader<A> {
         let mut refs = Vec::new();
         for element in self.list(app, "AXWindows", WINDOWS)? {
             self.owned(&element, pid)?;
-            if self.text(&element, "AXRole")?.as_deref() == Some("AXHelpTag") {
+            // A tooltip, or the desktop Finder lists among its windows as a
+            // scroll area, is no window input could be for.
+            if matches!(
+                self.text(&element, "AXRole")?.as_deref(),
+                Some("AXHelpTag" | "AXScrollArea")
+            ) {
                 continue;
             }
             refs.push(WindowRef {

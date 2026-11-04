@@ -53,6 +53,50 @@ pub(in crate::native) fn focused_pid(timeout: Duration) -> Result<Option<i64>> {
     }
 }
 
+/// The process whose menu bar shows at `point`, the active app's, as
+/// Accessibility finds it there; None when what is there is no menu bar
+/// item. Asks nothing past `deadline`, each request bounded by the time
+/// then left, and like [`focused_pid`] sets the calling process's messaging
+/// timeout, one such read at a time.
+pub(in crate::native) fn menu_bar_owner(
+    (x, y): (f64, f64),
+    deadline: Instant,
+) -> Result<Option<i64>> {
+    let unreadable = || Error::new(Code::Native, "The menu bar could not be read");
+    let failed = |call, status| unreadable().with_source(Asked { call, status });
+
+    let _alone = SYSTEM_WIDE.lock().map_err(|_| unreadable())?;
+    let system = ffi::system_wide().ok_or_else(unreadable)?;
+    let bounded = ffi::set_timeout(&system, super::remaining(deadline, Instant::now())?);
+    if bounded != AXError::Success {
+        return Err(failed("AXUIElementSetMessagingTimeout", bounded));
+    }
+    // Points on screen are whole numbers well inside f32's exact range.
+    let item = match ffi::element_at(&system, x as f32, y as f32) {
+        Ok(Some(item)) => item,
+        Ok(None) | Err(AXError::NoValue) => return Ok(None),
+        Err(status) => return Err(failed("AXUIElementCopyElementAtPosition", status)),
+    };
+    // The item's own timeout bounds its role read by exactly what is left.
+    let bounded = ffi::set_timeout(&item, super::remaining(deadline, Instant::now())?);
+    if bounded != AXError::Success {
+        return Err(failed("AXUIElementSetMessagingTimeout", bounded));
+    }
+    let role = match ffi::copy(&item, &CFString::from_static_str("AXRole")) {
+        Ok(role) => role.and_then(|role| role.downcast_ref::<CFString>().map(ToString::to_string)),
+        Err(status) => return Err(failed("AXRole", status)),
+    };
+    super::remaining(deadline, Instant::now())?;
+    if !matches!(role.as_deref(), Some("AXMenuBarItem" | "AXMenuBar")) {
+        return Ok(None);
+    }
+    match ffi::owner(&item) {
+        Ok(pid) if pid > 0 => Ok(Some(pid.into())),
+        Ok(_) => Err(unreadable()),
+        Err(status) => Err(failed("AXUIElementGetPid", status)),
+    }
+}
+
 /// The longest a read of where the Dock takes clicks may take.
 pub const DOCK_TIMEOUT: Duration = Duration::from_millis(250);
 
