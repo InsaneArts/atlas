@@ -53,8 +53,16 @@ pub fn signature(path: &Path) -> Option<Signature> {
 /// The bundle identifier the helper daemon must be signed as.
 pub const IDENTIFIER: &str = "com.insanearts.atlas";
 
-/// The Developer ID team that signs Atlas; consent follows it.
-const TEAM: &str = "539293JFA3";
+/// The Developer ID team that signs and notarizes Atlas's releases.
+const RELEASE_TEAM: &str = "539293JFA3";
+
+/// The team this build trusts; consent follows it. A build made with
+/// `ATLAS_LOCAL_TEAM` set trusts that team instead, to test on a Mac without
+/// the release identity; scripts/release.sh refuses to release one.
+const TEAM: &str = match option_env!("ATLAS_LOCAL_TEAM") {
+    Some(team) => team,
+    None => RELEASE_TEAM,
+};
 
 /// The identifier the app's executable inside Atlas.app is signed as.
 pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";

@@ -26,6 +26,9 @@ fail() {
 	exit 1
 }
 
+# A build that trusts a local team is for testing only.
+[ -z "${ATLAS_LOCAL_TEAM:-}" ] || fail "unset ATLAS_LOCAL_TEAM: it is for local test builds"
+
 version=${1:-}
 [ $# -eq 1 ] || fail "usage: scripts/release.sh X.Y.Z"
 expr "$version" : '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$' >/dev/null ||

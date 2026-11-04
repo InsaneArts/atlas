@@ -15,7 +15,7 @@ fn the_installer_checks_the_same_requirement() {
         .replace("$TEAM", TEAM);
     assert_eq!(expanded, requirement_for(IDENTIFIER));
     assert!(script.contains(&format!("IDENTIFIER=\"{IDENTIFIER}\"")));
-    assert!(script.contains(&format!("TEAM=\"{TEAM}\"")));
+    assert!(script.contains(&format!("TEAM=\"{RELEASE_TEAM}\"")));
 }
 
 /// Only Atlas signed by its own Developer ID team passes, as a file
