@@ -108,8 +108,18 @@ impl Fixture {
         );
     }
 
+    /// Stop the group and reap the leader. macOS will not signal a group
+    /// whose one member is its exited, unreaped leader, so a leader that
+    /// ended first leaves that refusal with the leader itself reaped.
     fn stop(&mut self) {
-        stop(&mut self.child).unwrap();
+        match stop(&mut self.child) {
+            Ok(()) => {}
+            Err(cleanup)
+                if cleanup.child.is_none()
+                    && cleanup.group.as_ref().and_then(io::Error::raw_os_error)
+                        == Some(libc::EPERM) => {}
+            Err(cleanup) => panic!("the group was not stopped: {cleanup:?}"),
+        }
         self.reaped = true;
     }
 
@@ -288,6 +298,107 @@ fn both_streams_are_drained_without_deadlock() {
         assert!(fixture.stderr.bytes.capacity() <= 262144);
         fixture.assert_reaped();
     });
+}
+
+/// A stream that has all of `bytes` and then its end, read without
+/// waiting. A file, not a pipe: another test's child can inherit a new
+/// pipe's writer before it is marked to close on exec, and hold it open.
+fn ended(bytes: &[u8]) -> Pipe {
+    let mut file = tempfile::tempfile().unwrap();
+    file.write_all(bytes).unwrap();
+    std::io::Seek::rewind(&mut file).unwrap();
+    let stream = Pipe::new(Some(OwnedFd::from(file)));
+    stream.configure().unwrap();
+    stream
+}
+
+/// A pipe holding `bytes` whose writer stays open while it is kept.
+fn open(bytes: &[u8]) -> (Pipe, io::PipeWriter) {
+    let (reader, mut writer) = io::pipe().unwrap();
+    writer.write_all(bytes).unwrap();
+    let pipe = Pipe::new(Some(OwnedFd::from(reader)));
+    pipe.configure().unwrap();
+    (pipe, writer)
+}
+
+#[test]
+fn a_drain_that_looks_again_only_after_its_window_ended_still_takes_complete_output() {
+    watched(|| {
+        let mut fixture = Fixture::ready("printf r >&2; read gate");
+        fixture.proceed();
+        // Waits on the child's exit itself; the watchdog bounds it.
+        while !observe_exit(&fixture.child).unwrap() {
+            thread::yield_now();
+        }
+        // The output is complete before the drain starts: more than one
+        // read's chunk, then the end. Files, since another test's child
+        // can hold a new pipe's writer open (see `ended`).
+        let (mut stdout, mut stderr) = (ended(&[0; 12_000]), ended(b""));
+        // The exit is seen at the first look and one chunk read; every
+        // later look is past the window, as for a thread descheduled then.
+        let started = Instant::now();
+        let mut looks = 0;
+        let clock = || {
+            looks += 1;
+            if looks <= 2 {
+                started
+            } else {
+                started + super::DRAIN + Duration::from_millis(1)
+            }
+        };
+        super::drain_by(
+            &fixture.child,
+            &mut stdout,
+            &mut stderr,
+            started + WATCHDOG,
+            usize::MAX,
+            clock,
+        )
+        .unwrap();
+        assert_eq!(stdout.bytes, vec![0; 12_000]);
+        fixture.assert_reaped();
+    });
+}
+
+#[test]
+fn output_already_complete_when_the_drain_window_ends_is_still_accepted() {
+    let (mut stdout, mut stderr) = (ended(&[7; 40_000]), ended(b"warning"));
+    super::settled(&mut stdout, &mut stderr, usize::MAX).unwrap();
+    assert_eq!(stdout.bytes, vec![7; 40_000]);
+    assert_eq!(stderr.bytes, b"warning");
+    assert!(stdout.fd.is_none() && stderr.fd.is_none());
+}
+
+#[test]
+fn a_stream_still_open_when_the_drain_window_ends_is_late() {
+    let (mut stdout, _writer) = open(b"done");
+    let error = super::settled(&mut stdout, &mut ended(b""), usize::MAX).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TimedOut);
+    assert_eq!(stdout.bytes, b"done");
+
+    let (mut stderr, _writer) = open(b"");
+    let mut stdout = ended(b"done");
+    let error = super::settled(&mut stdout, &mut stderr, usize::MAX).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::TimedOut);
+    assert_eq!(stdout.bytes, b"done");
+}
+
+#[test]
+fn a_writer_that_keeps_writing_cannot_hold_the_last_read_open() {
+    watched(|| {
+        let mut fixture = Fixture::ready("printf r >&2; read gate; exec /usr/bin/yes");
+        fixture.proceed();
+        let error =
+            super::settled(&mut fixture.stdout, &mut fixture.stderr, usize::MAX).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::TimedOut);
+        assert!(fixture.stdout.bytes.len() <= super::SETTLING_READS * 8192);
+    });
+}
+
+#[test]
+fn the_last_read_still_refuses_output_over_the_byte_cap() {
+    let error = super::settled(&mut ended(&[1; 64]), &mut ended(b""), 16).unwrap_err();
+    assert_eq!(error.kind(), ErrorKind::InvalidData);
 }
 
 #[test]

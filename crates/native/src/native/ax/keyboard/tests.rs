@@ -409,7 +409,8 @@ fn direct_app_focus_requires_both_frontmost_and_an_owned_focus_reference() {
                     deadline
                 },
                 &APP,
-                812
+                812,
+                false,
             )
             .unwrap()
         );
@@ -421,7 +422,8 @@ fn direct_app_focus_requires_both_frontmost_and_an_owned_focus_reference() {
                     deadline
                 },
                 &APP,
-                812
+                812,
+                false,
             )
             .is_err()
         );
@@ -439,7 +441,8 @@ fn direct_app_focus_requires_both_frontmost_and_an_owned_focus_reference() {
                     deadline
                 },
                 &APP,
-                812
+                812,
+                false,
             )
             .unwrap()
         );
@@ -454,11 +457,70 @@ fn direct_app_focus_requires_both_frontmost_and_an_owned_focus_reference() {
                 deadline
             },
             &APP,
-            812
+            812,
+            false,
         )
         .is_err()
     );
 }
+/// Whether `fake` proves it is frontmost, as the direct check reads it
+/// for a pointer action.
+fn proves_focus(fake: &mut Fake) -> Result<bool> {
+    proves_focus_for(fake, true)
+}
+
+fn proves_focus_for(fake: &mut Fake, desktop: bool) -> Result<bool> {
+    let deadline = fake.started + budget();
+    app_focus(
+        &mut Reader {
+            ask: fake,
+            deadline,
+        },
+        &APP,
+        812,
+        desktop,
+    )
+}
+
+#[test]
+fn a_desktop_in_place_of_the_focused_window_proves_focus_only_by_an_owned_focused_element() {
+    let desktop = || {
+        let mut fake = Fake::app();
+        fake.set(APP, "AXFrontmost", Answer::Flag(true));
+        fake.set(WINDOW, "AXRole", Answer::Text("AXScrollArea".to_owned()));
+        fake.set(APP, "AXFocusedUIElement", Answer::Element(GROUP));
+        fake
+    };
+    assert!(proves_focus(&mut desktop()).unwrap());
+    assert_eq!(
+        proves_focus_for(&mut desktop(), false).unwrap_err().details["unread"],
+        "malformed",
+        "keys keep the strict proof: a desktop is no focused window for them"
+    );
+
+    let mut alone = desktop();
+    alone.set(APP, "AXFocusedUIElement", Answer::Absent);
+    assert_eq!(
+        proves_focus(&mut alone).unwrap_err().details["unread"],
+        "malformed"
+    );
+
+    let mut foreign = desktop();
+    foreign.owners.insert(GROUP, 999);
+    assert!(proves_focus(&mut foreign).is_err());
+
+    let mut itself = desktop();
+    itself.set(GROUP, "AXRole", Answer::Text("AXApplication".to_owned()));
+    assert_eq!(
+        proves_focus(&mut itself).unwrap_err().details["unread"],
+        "withheld"
+    );
+
+    let mut background = desktop();
+    background.set(APP, "AXFrontmost", Answer::Flag(false));
+    assert!(!proves_focus(&mut background).unwrap());
+}
+
 #[test]
 fn a_focused_element_proves_its_window_when_the_app_omits_the_window_attribute() {
     let mut fake = Fake::app();
