@@ -623,16 +623,23 @@ pub(super) struct Elements {
     /// Only elements with this accessibility role, for example AXButton.
     #[arg(long)]
     pub(super) role: Option<String>,
-    /// Only elements with this exact title, label text, description or identifier.
+    /// Only elements with this exact title, label text, description or
+    /// identifier; repeat it for elements with any of several names.
     #[arg(long)]
-    pub(super) name: Option<String>,
+    pub(super) name: Vec<String>,
     /// Only elements of window N, by its number from atlas windows (or a
     /// listing's windows).
     #[arg(long, value_name = "N")]
     pub(super) window: Option<i64>,
+    /// Only what a web page shows, without the browser's own controls.
+    #[arg(long)]
+    pub(super) page: bool,
     /// Show at most this many elements.
     #[arg(long, default_value_t = 50)]
     pub(super) max: usize,
+    /// Show only each element's role, name, value and state.
+    #[arg(long, conflicts_with = "full")]
+    pub(super) values: bool,
     /// Show every attribute the scan read, as it read it.
     #[arg(long)]
     pub(super) full: bool,

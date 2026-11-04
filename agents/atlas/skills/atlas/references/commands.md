@@ -394,15 +394,21 @@ Options:
           Only elements with this accessibility role, for example AXButton
 
       --name <NAME>
-          Only elements with this exact title, label text, description or identifier
+          Only elements with this exact title, label text, description or identifier; repeat it for elements with any of several names
 
       --window <N>
           Only elements of window N, by its number from atlas windows (or a listing's windows)
+
+      --page
+          Only what a web page shows, without the browser's own controls
 
       --max <MAX>
           Show at most this many elements
           
           [default: 50]
+
+      --values
+          Show only each element's role, name, value and state
 
       --full
           Show every attribute the scan read, as it read it

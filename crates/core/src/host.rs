@@ -40,6 +40,17 @@ macro_rules! hosts {
         const SOURCES: &[(Host, &[&str])] = &[$((Host::$host, &[$($source),*])),*];
 
         impl Host {
+            /// Every environment variable a host session or task is told by:
+            /// each host's session sources and process hint, a named session
+            /// and a task. A child without them is no session's.
+            pub fn session_variables() -> impl Iterator<Item = &'static str> {
+                SOURCES
+                    .iter()
+                    .flat_map(|(_, names)| names.iter().copied())
+                    .chain([$(Self::$host),*].into_iter().filter_map(Self::pid_hint))
+                    .chain(["ATLAS_SESSION", "ATLAS_TASK"])
+            }
+
             fn pid_hint(self) -> Option<&'static str> {
                 match self { $(Self::$host => $hint),* }
             }

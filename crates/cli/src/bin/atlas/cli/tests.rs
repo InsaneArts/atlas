@@ -721,3 +721,40 @@ fn an_environment_command_takes_the_same_time_limit_as_run() {
         None
     );
 }
+
+#[test]
+fn elements_take_several_names_a_page_and_values_or_everything() {
+    let given = |args: &[&str]| match parse(args) {
+        Ok(Cli {
+            command:
+                Some(Command::Elements(Elements {
+                    name,
+                    page,
+                    values,
+                    full,
+                    ..
+                })),
+            ..
+        }) => Ok((name, page, values, full)),
+        Err(error) => Err(error.kind()),
+        _ => Err(clap::error::ErrorKind::InvalidSubcommand),
+    };
+    let names = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect();
+
+    assert_eq!(
+        given(&["elements", "--app", "A"]),
+        Ok((names(&[]), false, false, false))
+    );
+    assert_eq!(
+        given(&["elements", "--app", "A", "--name", "One", "--name", "Two"]),
+        Ok((names(&["One", "Two"]), false, false, false))
+    );
+    assert_eq!(
+        given(&["elements", "--app", "A", "--page", "--values"]),
+        Ok((names(&[]), true, true, false))
+    );
+    assert_eq!(
+        given(&["elements", "--app", "A", "--values", "--full"]),
+        Err(clap::error::ErrorKind::ArgumentConflict)
+    );
+}

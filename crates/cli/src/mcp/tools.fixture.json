@@ -47,6 +47,30 @@
     "title": "Atlas"
   },
   {
+    "annotations": {
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Take a screenshot in the helper and see it, as atlas screenshot takes one: an app's windows (app), one of its windows (app and window, a number from atlas windows) or a region X,Y,W,H of the display (region, with or without app). Read-only.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "app": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "window": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "take_screenshot",
+    "title": "Take screenshot"
+  },
+  {
     "_meta": {
       "openai/visibility": "private",
       "openai/widgetAccessible": true,

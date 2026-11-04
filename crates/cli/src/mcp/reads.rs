@@ -11,10 +11,18 @@ use atlas_client::{
     helper_info::{ICONS, capture_time, captures, frame, open_apps, read_capture, thumbnail},
     host_session::{names::names, store::Store},
 };
-use atlas_core::error::{Code, Error, Result};
+use atlas_core::{
+    error::{Code, Error, Result},
+    transport::refusal,
+};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    process::Stdio,
+    time::{Duration, Instant},
+};
 
 /// How long a status read serves the view's frames: each read asks the
 /// helper to prove its session, so frames once a second share one.
@@ -22,6 +30,8 @@ const STATUS_REUSE: Duration = Duration::from_secs(2);
 /// The most activity rows and screenshots listed.
 const ACTIVITY: usize = 100;
 const SHOTS: usize = 30;
+/// Longest a screenshot taken for the model may take, from its start.
+const TAKING: Duration = Duration::from_secs(120);
 
 impl Server {
     /// The helper's status as the view and the model read it.
@@ -217,6 +227,79 @@ impl Server {
         ))
     }
 
+    /// A screenshot the model takes in the helper, with the image itself:
+    /// `atlas screenshot` takes it, so its guards and its record are the
+    /// command's own. It runs as no session's: one server may serve several
+    /// chats, so the session its environment names may not be the caller's,
+    /// and a session's screenshot sets where its untargeted input goes. The
+    /// image comes back even when the command says it is unchanged: the last
+    /// screenshot of that part may have been another session's.
+    pub(super) async fn take_screenshot(&self, arguments: &Value) -> Result<Value> {
+        let argv = screenshot_argv(arguments)?;
+        let program = std::env::current_exe().map_err(|error| {
+            Error::new(Code::Capture, "Atlas could not find itself").with_source(error)
+        })?;
+        let mut command = tokio::process::Command::new(program);
+        command
+            .arg("--json")
+            .arg("--config")
+            .arg(&self.config)
+            .args(argv)
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
+        for variable in atlas_core::host::Host::session_variables() {
+            command.env_remove(variable);
+        }
+        let output = tokio::time::timeout(TAKING, atlas_core::spawn::output_async(&mut command))
+            .await
+            .map_err(|_| Error::new(Code::Capture, "The screenshot took too long"))?
+            .map_err(|error| {
+                Error::new(Code::Capture, "The screenshot did not start").with_source(error)
+            })?;
+        // A command says what it did on its output, and why it failed on its
+        // errors.
+        let said = if output.status.success() {
+            &output.stdout
+        } else {
+            &output.stderr
+        };
+        let reply: Value = serde_json::from_slice(said).map_err(|error| {
+            Error::new(
+                Code::Capture,
+                "The screenshot said nothing Atlas could read",
+            )
+            .with_source(error)
+        })?;
+        if reply["ok"] != true {
+            let refused = refusal(&reply);
+            return Err(match reply["next"].as_str() {
+                Some(next) => refused.with("next", json!(next)),
+                None => refused,
+            });
+        }
+
+        let text = reply.to_string();
+        // Read where the command saved it, which its own configuration
+        // chose: by its name alone, as a screenshot is read anywhere.
+        let path = reply["path"].as_str().map(Path::new);
+        let (output, name) = path
+            .and_then(|path| Some((path.parent()?, path.file_name()?.to_str()?)))
+            .map(|(output, name)| (output.to_path_buf(), name.to_owned()))
+            .ok_or_else(|| Error::new(Code::Capture, "The screenshot named no file"))?;
+        let png = tokio::task::spawn_blocking(move || read_capture(&output, &name))
+            .await
+            .map_err(|error| {
+                Error::new(Code::Capture, "The screenshot could not be read").with_source(error)
+            })??;
+
+        let mut result = tool_result(&text, reply);
+        result["content"]
+            .as_array_mut()
+            .ok_or_else(|| Error::new(Code::Capture, "The screenshot could not be said"))?
+            .push(json!({"type": "image", "data": STANDARD.encode(png), "mimeType": "image/png"}));
+        Ok(result)
+    }
+
     /// One screenshot an agent took, as a thumbnail or `full`.
     pub(super) async fn screenshot(&self, name: &str, full: bool) -> Result<Value> {
         if capture_time(name).is_none() {
@@ -239,3 +322,47 @@ impl Server {
         Ok(result)
     }
 }
+
+/// The `atlas screenshot` command line for a `take_screenshot` call's
+/// `arguments`: an object of `app`, `window` and `region`, each optional.
+fn screenshot_argv(arguments: &Value) -> Result<Vec<String>> {
+    let bad = |said: &str| Error::new(Code::BadRequest, said);
+    let given = match arguments {
+        Value::Null => return Ok(vec!["screenshot".to_owned()]),
+        Value::Object(given) => given,
+        _ => {
+            return Err(bad(
+                "take_screenshot takes an object of app, window and region",
+            ));
+        }
+    };
+    // A view's authority, which a read does not need, is no argument of it.
+    if let Some(other) = given
+        .keys()
+        .find(|key| !["app", "window", "region", super::guarded::ARGUMENT].contains(&key.as_str()))
+    {
+        return Err(bad(&format!("take_screenshot takes no {other}")));
+    }
+
+    let mut argv = vec!["screenshot".to_owned()];
+    for (key, flag) in [("app", "--app"), ("region", "--region")] {
+        match given.get(key) {
+            None => {}
+            Some(Value::String(text)) => argv.push(format!("{flag}={text}")),
+            Some(_) => return Err(bad(&format!("{key} is a string"))),
+        }
+    }
+    match given.get("window") {
+        None => {}
+        Some(window) => {
+            let number = window
+                .as_i64()
+                .ok_or_else(|| bad("window is a window's number"))?;
+            argv.push(format!("--window={number}"));
+        }
+    }
+    Ok(argv)
+}
+
+#[cfg(test)]
+mod tests;

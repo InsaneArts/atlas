@@ -106,7 +106,12 @@ async fn cursor_imported_connections_require_private_authority_without_a_launche
         assert!(server.app_views.get().is_some());
         assert_eq!(
             names(&ask(&server, "tools/list", json!({})).await),
-            ["atlas_status", "show_screen", "screen_frame"]
+            [
+                "atlas_status",
+                "show_screen",
+                "take_screenshot",
+                "screen_frame"
+            ]
         );
     }
 }
@@ -146,7 +151,15 @@ async fn an_older_initialize_answer_cannot_restore_capabilities_removed_by_newer
         let listed = names(&ask(&server, "tools/list", json!({})).await);
         assert_eq!(listed.contains(&"take_control".to_owned()), views);
         if !views {
-            assert_eq!(listed, ["atlas_status", "show_screen", "screen_frame"]);
+            assert_eq!(
+                listed,
+                [
+                    "atlas_status",
+                    "show_screen",
+                    "take_screenshot",
+                    "screen_frame"
+                ]
+            );
             let refused = ask(&server, "tools/call", json!({"name":"take_control"})).await;
             assert_eq!(refused["error"]["code"], -32602);
         }
@@ -246,6 +259,7 @@ async fn a_read_only_server_offers_only_what_looks() {
         [
             "atlas_status",
             "show_screen",
+            "take_screenshot",
             "screen_frame",
             "activity",
             "helper_apps",
@@ -1566,9 +1580,10 @@ pub(super) const VIEW_ONLY: [&str; 11] = [
     "log_out_helper",
 ];
 /// The tools that only look, all a read-only server offers.
-pub(super) const LOOKING: [&str; 7] = [
+pub(super) const LOOKING: [&str; 8] = [
     "atlas_status",
     "show_screen",
+    "take_screenshot",
     "screen_frame",
     "activity",
     "helper_apps",

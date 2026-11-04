@@ -349,6 +349,7 @@ impl Server {
     async fn run(&self, tool: Tool, arguments: &Value) -> Result<Value> {
         match tool {
             Tool::Status | Tool::ShowScreen => self.status_result().await,
+            Tool::TakeScreenshot => self.take_screenshot(arguments).await,
             Tool::ScreenFrame => self.screen(arguments["since"].as_str()).await,
             Tool::StopAgent => self.set_stopped(true).await,
             Tool::ResumeAgent => self.set_stopped(false).await,

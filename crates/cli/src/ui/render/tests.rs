@@ -427,7 +427,7 @@ fn config_names_the_settings_file() {
 #[test]
 fn elements_say_how_many_match_and_what_is_missing() {
     let all = show(
-        View::Elements,
+        View::Elements { values: false },
         json!({"ok": true, "pid": 9, "scanned": 2, "matching": 2, "more": 1,
                "scanIncomplete": true, "windows": [],
                "elements": [{"index": 0, "role": "AXButton", "name": "save",
@@ -439,7 +439,7 @@ fn elements_say_how_many_match_and_what_is_missing() {
     assert!(all.out.contains("The scan stopped early, so some"));
 
     let some = show(
-        View::Elements,
+        View::Elements { values: false },
         json!({"ok": true, "pid": 9, "scanned": 5, "matching": 0, "more": 0,
                "scanIncomplete": false, "elements": []}),
     );
@@ -449,7 +449,7 @@ fn elements_say_how_many_match_and_what_is_missing() {
 #[test]
 fn the_elements_table_shows_each_click_point() {
     let compact = show(
-        View::Elements,
+        View::Elements { values: false },
         json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
                "scanIncomplete": false, "windows": [],
                "elements": [{"index": 3, "role": "AXCheckBox", "name": "Bold",
@@ -458,7 +458,7 @@ fn the_elements_table_shows_each_click_point() {
     assert!(compact.out.contains("400, 62"), "{}", compact.out);
 
     let full = show(
-        View::Elements,
+        View::Elements { values: false },
         json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
                "scanIncomplete": false,
                "elements": [{"index": 3, "depth": 2, "role": "AXCheckBox", "title": "Bold",
@@ -475,7 +475,7 @@ fn the_elements_table_shows_each_click_point() {
 #[test]
 fn a_kept_look_is_named_beside_how_many_elements_it_holds() {
     let kept = show(
-        View::Elements,
+        View::Elements { values: false },
         json!({"ok": true, "pid": 9, "scanned": 5, "matching": 0, "more": 0,
                "scanIncomplete": false, "elements": [], "look": "8123abc"}),
     );
@@ -485,7 +485,7 @@ fn a_kept_look_is_named_beside_how_many_elements_it_holds() {
 #[test]
 fn a_scan_that_stopped_early_says_why() {
     let shown = show(
-        View::Elements,
+        View::Elements { values: false },
         json!({"ok": true, "pid": 9, "scanned": 0, "matching": 0, "more": 0,
                "scanIncomplete": true, "scan": {"reasons": ["count", "time"]},
                "elements": []}),
@@ -516,7 +516,7 @@ fn a_refused_name_lists_what_it_may_have_meant() {
     assert!(!shown.contains('\u{1b}'), "names are made safe: {shown}");
 
     let listed = show(
-        View::Elements,
+        View::Elements { values: false },
         json!({"ok": true, "pid": 9, "scanned": 4, "matching": 0, "more": 0,
                "scanIncomplete": false, "elements": [],
                "candidates": [{"role": "AXMenuBarItem", "name": "Format", "at": [356, 11]}]}),
@@ -1427,4 +1427,53 @@ fn a_doctor_warns_about_panels_and_webkit_once_in_each_format() {
             }
         }
     }
+}
+
+#[test]
+fn a_listing_of_values_says_each_elements_state_and_which_names_matched_nothing() {
+    let shown = show(
+        View::Elements { values: true },
+        json!({"ok": true, "pid": 9, "scanned": 5, "matching": 2, "more": 0,
+        "scanIncomplete": false, "look": "8123abc", "unmatched": ["Nope"],
+        "elements": [
+            {"index": 3, "role": "AXTextField", "name": "Project", "value": "Atlas",
+             "focused": true},
+            {"index": 4, "role": "AXButton", "name": "Submit", "disabled": true},
+            {"index": 5, "role": "AXMenuItem", "name": "Bold", "menu": true, "mark": "✓"},
+        ]}),
+    );
+    assert!(shown.out.contains("in a menu, marked ✓"), "{}", shown.out);
+
+    assert!(
+        shown.out.lines().any(|line| line
+            .split_whitespace()
+            .eq(["#", "ROLE", "NAME", "VALUE", "STATE"])),
+        "{}",
+        shown.out
+    );
+    assert!(shown.out.contains("focused"), "{}", shown.out);
+    assert!(shown.out.contains("disabled"), "{}", shown.out);
+    assert!(
+        shown.out.contains("Nothing is named Nope."),
+        "{}",
+        shown.out
+    );
+}
+
+#[test]
+fn a_listing_of_elements_without_frames_keeps_its_place_column() {
+    let shown = show(
+        View::Elements { values: false },
+        json!({"ok": true, "pid": 9, "scanned": 1, "matching": 1, "more": 0,
+        "scanIncomplete": false,
+        "elements": [{"index": 3, "role": "AXGroup", "name": "Unseen", "focused": true}]}),
+    );
+
+    assert!(
+        shown.out.lines().any(|line| line
+            .split_whitespace()
+            .eq(["#", "ROLE", "NAME", "VALUE", "AT"])),
+        "{}",
+        shown.out
+    );
 }

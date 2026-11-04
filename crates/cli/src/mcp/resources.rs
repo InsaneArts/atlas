@@ -135,6 +135,7 @@ macro_rules! tools {
 tools! { none;
     Status => ("atlas_status", "Atlas status", "What is happening in Atlas's hidden helper now: whether an agent is working there, whether the person stopped agents, and the last actions. Read-only.", Any, Read, none, Public),
     ShowScreen => ("show_screen", "Atlas", "Show the person the helper's screen live, with what the agent is doing and a Stop button. Call it once when visible work in the helper starts. Read-only.", Any, Read, none, Screen),
+    TakeScreenshot => ("take_screenshot", "Take screenshot", "Take a screenshot in the helper and see it, as atlas screenshot takes one: an app's windows (app), one of its windows (app and window, a number from atlas windows) or a region X,Y,W,H of the display (region, with or without app). Read-only.", Any, Read, json!({"type": "object", "properties": {"app": {"type": "string"}, "window": {"type": "integer"}, "region": {"type": "string"}}, "additionalProperties": false}), Public),
     ScreenFrame => ("screen_frame", "Helper screen", "The helper's newest screen and status, unless the screen is still the one named by since.", Any, Read, json!({"type": "object", "properties": {"since": {"type": "string"}}, "additionalProperties": false}), App),
     StopAgent => ("stop_agent", "Stop Agent", "Stop agents in the helper until the person resumes them.", Any, Change, none, App),
     ResumeAgent => ("resume_agent", "Resume Agent", "Let agents act in the helper again.", Views, Change, none, App),

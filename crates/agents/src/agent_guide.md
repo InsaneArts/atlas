@@ -53,28 +53,31 @@ Open with `atlas open --app NAME [FILE|URL]` or `atlas open /path/App.app`,
 then `atlas wait --app NAME`. A listed app control (not a web page's) takes
 `atlas element press --ref LOOK.INDEX` (its `look` and `index`; or `check`,
 `expand`, their opposites, `set-value --value T`, `pick`). Else
-`atlas click --app A --ref LOOK.INDEX` or `--name LABEL [--role ROLE]` (it
-lists `candidates` unless one matches), `atlas click --app A X Y`,
-`atlas type --app A "text"`, `atlas key --app A cmd+a`, `scroll`, `drag`:
-nothing is sent while another app would get it. Untargeted points use the
+`atlas click --app A --ref LOOK.INDEX` or `--name LABEL [--role ROLE]`,
+`atlas click --app A X Y`, `atlas type --app A "text"`,
+`atlas key --app A cmd+a`, `scroll`, `drag`: nothing is sent while another
+app would get it. Untargeted points use the
 top window from your last look. `--app` bypasses this memory;
 in a shared app, add `--window N`: `atlas click --app A --window N X Y`.
 
 Finish in few turns:
 
-- Chain known steps in one call with `&&`, each written out in full, no
-  shell variables: a whole form, a save and its check.
+- Chain known steps with `&&`, each written out in full, no shell
+  variables: a whole form, a save and its check.
 - For several lines, put real line breaks inside the quotes; never `$'…'`.
 - Prove a step by reading it back: `verification: matched`, or
-  `atlas elements --app A --name X` for a value or state. Between steps,
-  screenshot only what text cannot show; end with one as evidence.
-- A screenshot's `path` is on this Mac: read it, never collect it.
+  `atlas elements --app A --values --name X --name Y` for values and
+  state. Between steps, screenshot only what text cannot show; end with
+  one as evidence.
+- Screenshot with Atlas's `take_screenshot` tool where your host has it;
+  else read its `path`, never collect it.
 - Check results where the app shows them; check a file only when the
   task needs it saved.
 
 Read apps and web pages by name: `atlas elements --app A --name X` for text,
-a control, its value and state; `atlas wait --app A` (or `--title T`,
-`--gone`) for a window, `--name X --state S` for an element. To see what
+a control, its value and state (`--page`: a web page alone);
+`atlas wait --app A` (or `--title T`, `--gone`) for a window,
+`--name X --state S` for an element. To see what
 shows, crop: `atlas screenshot --app A`, `--window N` or `--region X,Y,W,H`;
 a full `atlas screenshot` only when a crop's `overlapping` names a window in
 front. Never reopen a screenshot you read or one marked `unchanged: true`.
@@ -134,5 +137,4 @@ someone's unsaved work. If it is in your way, tell the person.
 ## Report
 
 Say briefly what you did and how you checked it, with the screenshot paths
-as evidence, and what you could not check and why (see Limits). Leave out
-what stayed as it was.
+as evidence, and what you could not check and why (see Limits).

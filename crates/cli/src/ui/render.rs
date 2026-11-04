@@ -26,7 +26,10 @@ pub enum View {
     Capture,
     Apps,
     Windows,
-    Elements,
+    /// A listing of elements; of their values and state alone when `values`.
+    Elements {
+        values: bool,
+    },
     Readiness,
     /// An input action, said as done: "Clicked at 10, 20".
     Action(String),
@@ -109,7 +112,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::Capture => checked(value, observe::capture),
         View::Apps => checked(value, observe::apps),
         View::Windows => checked(value, observe::windows),
-        View::Elements => checked(value, observe::elements),
+        View::Elements { values } => checked(value, |value| observe::elements(value, *values)),
         View::Readiness => Rendered::out(observe::readiness(value)),
         View::Action(done) => act::action(done, value),
         View::Type => act::typed(value),

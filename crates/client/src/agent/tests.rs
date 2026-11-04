@@ -139,7 +139,7 @@ async fn finding_an_app_verifies_the_helper_once() {
         let before = helper.proofs();
         let listed = helper
             .serve(
-                elements(&client, &target, &ElementFilter::default(), None, 10, false),
+                elements(&client, &target, &Asked::every(10)),
                 textedit_reads,
             )
             .await
@@ -162,14 +162,7 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
     let helper = helper.serving_input(&client, &[FOCUS_APP]);
     let error = helper
         .serve(
-            elements(
-                &client,
-                &Target::Pid(812),
-                &ElementFilter::default(),
-                None,
-                10,
-                false,
-            ),
+            elements(&client, &Target::Pid(812), &Asked::every(10)),
             |request| {
                 assert_ne!(request["op"], "elements", "no look is asked for");
                 textedit_reads(request)
@@ -205,14 +198,7 @@ async fn a_look_is_asked_of_an_input_service_that_keeps_looks() {
         let helper = helper.serving_input(&client, &[LOOKS]);
         let error = helper
             .serve(
-                elements(
-                    &client,
-                    &Target::Pid(812),
-                    &ElementFilter::default(),
-                    None,
-                    10,
-                    false,
-                ),
+                elements(&client, &Target::Pid(812), &Asked::every(10)),
                 |request| {
                     if request["op"] == "elements" {
                         assert_eq!(request["epoch"]["processId"], 456);
@@ -243,10 +229,9 @@ async fn a_daemon_that_cannot_pin_a_read_is_refused() {
     let helper = helper.older();
     let target = Target::Name("TextEdit".into());
     let error = helper
-        .serve(
-            elements(&client, &target, &ElementFilter::default(), None, 10, false),
-            |request| panic!("nothing is read: {request}"),
-        )
+        .serve(elements(&client, &target, &Asked::every(10)), |request| {
+            panic!("nothing is read: {request}")
+        })
         .await
         .unwrap_err();
     assert_eq!(error.code, Code::Daemon);
@@ -309,7 +294,7 @@ async fn a_helper_that_changes_after_it_is_verified_is_refused() {
         let (_listing, client, helper) = helpers();
         let listed = helper
             .serve(
-                elements(&client, &target, &filter, None, 10, false),
+                elements(&client, &target, &asked_for(&filter)),
                 textedit_reads,
             )
             .await;
@@ -1182,6 +1167,15 @@ fn shown(index: usize, role: &str, title: Option<&str>, description: Option<&str
     });
 
     element
+}
+
+/// A listing request for the elements `filter` is for.
+fn asked_for(filter: &ElementFilter) -> Asked {
+    Asked {
+        role: filter.role.clone(),
+        names: filter.name.iter().cloned().collect(),
+        ..Asked::every(10)
+    }
 }
 
 fn named(name: &str) -> ElementFilter {
@@ -3132,7 +3126,7 @@ async fn pictures_compare_two_readings_and_window_lists_remember_their_own_readi
                 let reply = helper.serve(async {
                     match command {
                         0 => client.capture(Size::Full, Some(&Crop::App { pid: 812 }), false).await,
-                        1 => elements(&client, &Target::Pid(812), &ElementFilter::default(), None, 10, false).await,
+                        1 => elements(&client, &Target::Pid(812), &Asked::every(10)).await,
                         2 => list(&client, &WindowFilter::default()).await.map(|windows| json!({"ok": true, "windows": windows})),
                         _ => client.capture(Size::Full, None, false).await,
                     }
@@ -3422,10 +3416,14 @@ async fn representative_element_reads_keep_their_helper_request_counts() {
                 elements(
                     &client,
                     &Target::Name("TextEdit".into()),
-                    &ElementFilter::default(),
-                    None,
-                    fixture["max"].as_u64().unwrap() as usize,
-                    fixture["full"] == true,
+                    &Asked {
+                        form: if fixture["full"] == true {
+                            Form::Full
+                        } else {
+                            Form::Compact
+                        },
+                        ..Asked::every(fixture["max"].as_u64().unwrap() as usize)
+                    },
                 ),
                 |request| {
                     operations.push(request["op"].as_str().unwrap().to_owned());
@@ -4148,10 +4146,10 @@ async fn a_listing_names_its_windows_by_number_and_lists_only_the_window_asked_f
                 elements(
                     &client,
                     &Target::Name("TextEdit".into()),
-                    &ElementFilter::default(),
-                    window,
-                    50,
-                    false,
+                    &Asked {
+                        window,
+                        ..Asked::every(50)
+                    },
                 ),
                 two_buttons,
             )
@@ -4210,10 +4208,10 @@ async fn a_window_lists_only_its_own_elements_and_one_sharing_its_frame_is_refus
                 elements(
                     &client,
                     &Target::Pid(812),
-                    &ElementFilter::default(),
-                    Some(6),
-                    50,
-                    false,
+                    &Asked {
+                        window: Some(6),
+                        ..Asked::every(50)
+                    },
                 ),
                 two_windows((0.0, 0.0), second),
             )
@@ -4251,10 +4249,10 @@ async fn windows_that_move_during_a_scan_or_share_a_frame_on_another_layer_are_n
                 elements(
                     &client,
                     &Target::Pid(812),
-                    &ElementFilter::default(),
-                    Some(5),
-                    50,
-                    false,
+                    &Asked {
+                        window: Some(5),
+                        ..Asked::every(50)
+                    },
                 ),
                 |request| {
                     if request["op"] == "windows" {
@@ -4342,17 +4340,10 @@ fn a_listed_window_is_numbered_by_the_very_frame_the_scan_gave_it() {
         ..Element::default()
     };
     let scan = scanned(vec![button(1, "Open", 99.51), button(2, "Save", 100.49)]);
-    let listed = listing_in(812, &scan, &named("Save"), 50, false, Some(&shown));
+    let listed = listing_in(812, &scan, &asked_for(&named("Save")), Some(&shown));
     assert_eq!(listed["windows"][0]["x"], 100, "shown rounded");
     assert_eq!(listed["windows"][0]["number"], 6);
-    let both = listing_in(
-        812,
-        &scan,
-        &ElementFilter::default(),
-        50,
-        false,
-        Some(&shown),
-    );
+    let both = listing_in(812, &scan, &Asked::every(50), Some(&shown));
     assert_eq!(
         both["windows"].as_array().unwrap().len(),
         1,

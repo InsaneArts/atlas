@@ -187,7 +187,9 @@ impl Policy {
             Command::Config => Self::read(View::Config),
             Command::Apps { .. } => Self::read(View::Apps),
             Command::Windows { .. } => Self::read(View::Windows),
-            Command::Elements(_) => Self::read(View::Elements),
+            Command::Elements(elements) => Self::read(View::Elements {
+                values: elements.values,
+            }),
             Command::Stop => Self::read(View::Action("Stopped the agent".into())),
             Command::Resume => Self::read(View::Action("Resumed the agent".into())),
             Command::Wait(wait) => Self::read(View::Wait {

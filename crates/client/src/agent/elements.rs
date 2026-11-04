@@ -36,6 +36,62 @@ const SCAN_ERROR_KEY: usize = 64;
 /// Most elements a refused name lists as what it may have meant.
 const CANDIDATES: usize = 5;
 
+/// How a listing names each element.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    /// Its role, name, value and state, where a click lands, its size and
+    /// its window.
+    Compact,
+    /// Its role, name, value and state alone.
+    Values,
+    /// Every attribute the scan read, as it read it.
+    Full,
+}
+
+/// Which elements of an app a listing shows, and how.
+#[derive(Debug, Clone)]
+pub struct Asked {
+    /// Only elements with this role.
+    pub role: Option<String>,
+    /// Only elements with any of these names; every element when empty.
+    pub names: Vec<String>,
+    /// Only elements of this window, by its number.
+    pub window: Option<i64>,
+    /// Only what a web page shows: the elements inside its web area.
+    pub page: bool,
+    /// At most this many elements.
+    pub max: usize,
+    pub form: Form,
+}
+
+impl Asked {
+    /// Every element, compactly, at most `max` of them.
+    #[cfg(test)]
+    pub(super) fn every(max: usize) -> Self {
+        Self {
+            role: None,
+            names: Vec::new(),
+            window: None,
+            page: false,
+            max,
+            form: Form::Compact,
+        }
+    }
+
+    /// One filter for each name asked for, each with the role asked for;
+    /// one with no name when none is.
+    fn filters(&self) -> Vec<ElementFilter> {
+        let filter = |name: Option<&String>| ElementFilter {
+            role: self.role.clone(),
+            name: name.cloned(),
+        };
+        if self.names.is_empty() {
+            return vec![filter(None)];
+        }
+        self.names.iter().map(Some).map(filter).collect()
+    }
+}
+
 /// One scan of an app, as the probe or the input service reported it.
 pub(super) struct Scanned {
     /// The look the input service keeps it as; none from the probe.
@@ -184,11 +240,62 @@ impl Scanned {
         Ok(self)
     }
 
+    /// This scan with only what its web pages show: the elements inside
+    /// each web area, which the depth-first scan lists right after it, deeper
+    /// than it. Refused when the scan found no web area.
+    pub(super) fn in_page(mut self) -> Result<Self> {
+        let mut inside: Option<usize> = None;
+        let mut found = false;
+        self.elements.retain(|element| {
+            if let Some(depth) = inside {
+                if element.depth > depth {
+                    return true;
+                }
+                inside = None;
+            }
+            if element.role.as_deref() == Some(WEB_AREA) {
+                inside = Some(element.depth);
+                found = true;
+            }
+            false
+        });
+        if found {
+            return Ok(self);
+        }
+
+        // An app that withheld its windows needs the screen unlocked, not
+        // time to load.
+        let (said, next) = if self.withheld() {
+            (
+                "The app withheld its windows, so no web page could be read",
+                WITHHELD_NEXT,
+            )
+        } else if self.incomplete {
+            (
+                "The accessibility scan stopped before it reached a web page",
+                "Look again once the page has loaded, or list without --page",
+            )
+        } else {
+            (
+                "No web page is open in that app's windows",
+                "Look again once the page has loaded, or list without --page",
+            )
+        };
+        let mut error = Error::new(Code::Elements, said).with("next", json!(next));
+        if let Some(diagnostics) = self.diagnostics().filter(|_| self.incomplete) {
+            error = error.with("scan", diagnostics);
+        }
+        Err(error)
+    }
+
     /// Whether the app handed back itself in place of its windows.
     fn withheld(&self) -> bool {
         self.reasons.contains(&Stop::Withheld)
     }
 }
+
+/// The role of the area that holds a web page's own elements.
+const WEB_AREA: &str = "AXWebArea";
 
 /// What to do about an app that withheld its windows from the scan.
 pub(super) const WITHHELD_NEXT: &str = "Ask the person to unlock the Mac: apps hide their windows from \
@@ -235,27 +342,21 @@ fn scanned(reply: &Value) -> Result<Scanned> {
     Scanned::from_reply(value)
 }
 
-/// Accessibility elements of the target app's windows that match `filter`,
-/// at most `max` of them, listed compactly unless `full`, under the name of
-/// the look a click names one by, with its index; only those of window
-/// number `window` when given. Each listed window carries its number when
-/// the window list tells it. The helper's input service reads them and
-/// keeps the look; listing them grants nothing.
+/// Accessibility elements of the target app's windows that `asked` is for,
+/// in its form, under the name of the look a click names one by, with their
+/// indexes; only those of its window, or of its web pages, when it says so.
+/// Each window a compact listing names carries its number when the window
+/// list tells it. The helper's input service reads them and keeps the look;
+/// listing them grants nothing.
 ///
 /// # Errors
 ///
 /// Returns identity, target-resolution, transport or accessibility-read failures,
-/// refuses a window number that is not one of the app's on screen, and refuses an
-/// input service that cannot keep looks. An incomplete window observation cannot
-/// establish remembered routing evidence.
-pub async fn elements(
-    client: &Client,
-    target: &Target,
-    filter: &ElementFilter,
-    window: Option<i64>,
-    max: usize,
-    full: bool,
-) -> Result<Value> {
+/// refuses a window number that is not one of the app's on screen, a page asked
+/// for where the scan found none, and an input service that cannot keep looks.
+/// An incomplete window observation cannot establish remembered routing evidence.
+pub async fn elements(client: &Client, target: &Target, asked: &Asked) -> Result<Value> {
+    let window = asked.window;
     let verified = client.verify().await?;
     let expect = target_expect(client, &verified, target).await?;
     let (scanned, seen) = client
@@ -287,14 +388,12 @@ pub async fn elements(
         }
         (None, _) => scanned,
     };
-    Ok(listing_in(
-        pid,
-        &scanned,
-        filter,
-        max,
-        full,
-        shown.as_deref(),
-    ))
+    let scanned = if asked.page {
+        scanned.in_page()?
+    } else {
+        scanned
+    };
+    Ok(listing_in(pid, &scanned, asked, shown.as_deref()))
 }
 
 /// The numbers of every window of app `pid` at `frame`, at any layer.
@@ -534,29 +633,34 @@ pub(super) fn listing(
     max: usize,
     full: bool,
 ) -> Value {
-    listing_in(pid, scanned, filter, max, full, None)
+    let asked = Asked {
+        role: filter.role.clone(),
+        names: filter.name.iter().cloned().collect(),
+        form: if full { Form::Full } else { Form::Compact },
+        ..Asked::every(max)
+    };
+    listing_in(pid, scanned, &asked, None)
 }
 
-/// [`listing`], each listed window named by its number when the windows
-/// `on_screen` have exactly one of app `pid`'s at its frame, told by the
-/// very frame the scan gave it.
+/// The listing of `scanned` that `asked` is for. Each window a compact
+/// listing names carries its number when the windows `on_screen` have
+/// exactly one of app `pid`'s at its frame, told by the very frame the scan
+/// gave it.
 pub(super) fn listing_in(
     pid: i64,
     scanned: &Scanned,
-    filter: &ElementFilter,
-    max: usize,
-    full: bool,
+    asked: &Asked,
     on_screen: Option<&[Window]>,
 ) -> Value {
+    let filters = asked.filters();
+    let narrowed = asked.role.is_some() || !asked.names.is_empty();
     let matching: Vec<&Element> = scanned
         .elements
         .iter()
-        .filter(|element| filter.matches(element))
-        .filter(|element| {
-            full || filter.name.is_some() || filter.role.is_some() || !plain_group(element)
-        })
+        .filter(|element| filters.iter().any(|filter| filter.matches(element)))
+        .filter(|element| asked.form == Form::Full || narrowed || !plain_group(element))
         .collect();
-    let shown = &matching[..max.min(matching.len())];
+    let shown = &matching[..asked.max.min(matching.len())];
 
     let mut listed = json!({
         "ok": true,
@@ -570,48 +674,17 @@ pub(super) fn listing_in(
         listed["look"] = json!(look.to_string());
     }
 
-    if full {
-        listed["elements"] = json!(shown);
-    } else {
-        let mut windows: Vec<&Bounds> = Vec::new();
-        listed["elements"] = shown
-            .iter()
-            .map(|element| compact(element, &mut windows))
-            .collect();
-        // A listed window is named by number only when every element listed
-        // in it is told, by its own frame, to be in that one window.
-        // Each element is in the first listed window its frame matches, as
-        // `compact` placed it.
-        let numbers: Vec<Option<i64>> = (0..windows.len())
-            .map(|entry| {
-                let on_screen = on_screen?;
-                let mut told = shown
-                    .iter()
-                    .filter_map(|element| element.window.as_ref())
-                    .filter(|frame| {
-                        windows.iter().position(|seen| seen.matches(frame)) == Some(entry)
-                    })
-                    .map(|frame| alone_at(on_screen, pid, frame));
-                let first = told.next()??;
-                told.all(|number| number == Some(first)).then_some(first)
-            })
-            .collect();
-        listed["windows"] = windows
-            .iter()
-            .zip(numbers)
-            .map(|(frame, number)| {
-                let mut listed = json!({
-                    "x": whole(frame.x),
-                    "y": whole(frame.y),
-                    "width": whole(frame.width),
-                    "height": whole(frame.height),
-                });
-                if let Some(number) = number {
-                    listed["number"] = json!(number);
-                }
-                listed
-            })
-            .collect();
+    match asked.form {
+        Form::Full => listed["elements"] = json!(shown),
+        Form::Values => listed["elements"] = shown.iter().copied().map(stated).collect(),
+        Form::Compact => {
+            let mut windows: Vec<&Bounds> = Vec::new();
+            listed["elements"] = shown
+                .iter()
+                .map(|element| compact(element, &mut windows))
+                .collect();
+            listed["windows"] = numbered(pid, shown, &windows, on_screen);
+        }
     }
 
     // What failed in a complete scan (an app's own getter answering
@@ -623,14 +696,71 @@ pub(super) fn listing_in(
         listed["next"] = json!(WITHHELD_NEXT);
     }
 
-    if filter.name.is_some() && matching.is_empty() {
-        let candidates = candidates(&select::in_play(&scanned.elements), &[], filter);
-        if !candidates.is_empty() {
-            listed["candidates"] = json!(candidates);
+    // Each name that matched nothing, with what it may have meant.
+    let unmatched: Vec<&ElementFilter> = filters
+        .iter()
+        .filter(|filter| filter.name.is_some())
+        .filter(|filter| !matching.iter().any(|element| filter.matches(element)))
+        .collect();
+    let in_play = select::in_play(&scanned.elements);
+    let mut close: Vec<Value> = Vec::new();
+    for filter in &unmatched {
+        for candidate in candidates(&in_play, &[], filter) {
+            if !close.contains(&candidate) {
+                close.push(candidate);
+            }
         }
+    }
+    if !close.is_empty() {
+        listed["candidates"] = json!(close);
+    }
+    if filters.len() > 1 && !unmatched.is_empty() {
+        listed["unmatched"] = unmatched
+            .iter()
+            .filter_map(|filter| filter.name.as_deref())
+            .collect();
     }
 
     listed
+}
+
+/// The windows a compact listing named, in order. A listed window is named
+/// by number only when every element listed in it is told, by its own
+/// frame, to be in that one window of app `pid` `on_screen`. Each element is
+/// in the first listed window its frame matches, as `compact` placed it.
+fn numbered(
+    pid: i64,
+    shown: &[&Element],
+    windows: &[&Bounds],
+    on_screen: Option<&[Window]>,
+) -> Value {
+    windows
+        .iter()
+        .enumerate()
+        .map(|(entry, frame)| {
+            let number = on_screen.and_then(|on_screen| {
+                let mut told = shown
+                    .iter()
+                    .filter_map(|element| element.window.as_ref())
+                    .filter(|frame| {
+                        windows.iter().position(|seen| seen.matches(frame)) == Some(entry)
+                    })
+                    .map(|frame| alone_at(on_screen, pid, frame));
+                let first = told.next()??;
+                told.all(|number| number == Some(first)).then_some(first)
+            });
+            let mut listed = json!({
+                "x": whole(frame.x),
+                "y": whole(frame.y),
+                "width": whole(frame.width),
+                "height": whole(frame.height),
+            });
+            if let Some(number) = number {
+                listed["number"] = json!(number);
+            }
+            listed
+        })
+        .collect()
 }
 
 /// Whether `element` is a group with nothing to tell, which the default
@@ -651,15 +781,7 @@ fn plain_group(element: &Element) -> bool {
 /// An element as the default listing names it, with its window's place in
 /// `windows` (added when new).
 pub(super) fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Bounds>) -> Value {
-    let mut listed = element_identity(element);
-    listed["index"] = json!(element.index);
-    if let Some(value) = element
-        .value
-        .as_deref()
-        .filter(|value| !value.is_empty() && Some(*value) != listed["name"].as_str())
-    {
-        listed["value"] = json!(value);
-    }
+    let mut listed = stated(element);
     if let Some(frame) = &element.frame {
         let (x, y) = click_point(element.role.as_deref(), frame);
         listed["at"] = json!([whole(x), whole(y)]);
@@ -674,6 +796,22 @@ pub(super) fn compact<'a>(element: &'a Element, windows: &mut Vec<&'a Bounds>) -
                 windows.len() - 1
             });
         listed["window"] = json!(place);
+    }
+
+    listed
+}
+
+/// An element as a listing of values names it: its index, role, name,
+/// value and state, and what of it could not be read in full.
+fn stated(element: &Element) -> Value {
+    let mut listed = element_identity(element);
+    listed["index"] = json!(element.index);
+    if let Some(value) = element
+        .value
+        .as_deref()
+        .filter(|value| !value.is_empty() && Some(*value) != listed["name"].as_str())
+    {
+        listed["value"] = json!(value);
     }
 
     let flags = [
@@ -910,3 +1048,6 @@ fn element_identity(element: &Element) -> Value {
 
     named
 }
+
+#[cfg(test)]
+mod tests;
