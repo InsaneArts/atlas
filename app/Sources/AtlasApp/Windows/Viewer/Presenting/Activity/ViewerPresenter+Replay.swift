@@ -15,7 +15,7 @@ extension ViewerPresenter {
   /// - Returns: The replay, or nil.
   static func replay(_ moments: ActivityMoments, _ snapshot: ViewerSnapshot) -> ViewerReplayState? {
     let facts = snapshot.panes.activity
-    guard let focus = facts.replay, let moment = moments.moments.first(where: { $0.id == focus.moment }) else {
+    guard let focus = facts.replay, let moment = moments.moment(focus.moment) else {
       return nil
     }
     let frames = replayFrames(moment, snapshot)

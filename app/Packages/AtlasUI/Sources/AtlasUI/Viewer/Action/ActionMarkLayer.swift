@@ -159,9 +159,9 @@ struct ActionMarkLayer: View {
   @ViewBuilder private func dots(_ clicks: Int, at spot: CGPoint) -> some View {
     if clicks > 1 {
       MarkDot(tone: mark.tone, style: style)
-        .position(x: spot.x - style.dot * 0.8, y: spot.y)
+        .position(x: spot.x - style.dot * ViewerLayout.markDotSpread, y: spot.y)
       MarkDot(tone: mark.tone, style: style)
-        .position(x: spot.x + style.dot * 0.8, y: spot.y)
+        .position(x: spot.x + style.dot * ViewerLayout.markDotSpread, y: spot.y)
     } else {
       MarkDot(tone: mark.tone, style: style)
         .position(spot)
@@ -268,7 +268,10 @@ struct ActionMarkLayer: View {
       path.addLine(to: end)
     }
     return ZStack {
-      line.stroke(Color.markHalo, style: StrokeStyle(lineWidth: style.line * 2.5, lineCap: .round))
+      line.stroke(
+        Color.markHalo,
+        style: StrokeStyle(lineWidth: style.line * ViewerLayout.markHaloWidth, lineCap: .round)
+      )
       line.stroke(
         mark.tone.color,
         style: StrokeStyle(lineWidth: style.line, lineCap: .round, dash: ViewerLayout.markDash)

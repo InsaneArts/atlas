@@ -46,23 +46,24 @@ extension SettingsController {
     var wanted = pictures.shown
     wanted.isOn = general.picturesBeforeActions
     pictures.customDays = general.keepFor == .custom
-    wanted.keepDays =
-      general.keepFor.days
-      ?? min(
-        max(general.keepDays, SettingsGeneralState.keepDaysRange.lowerBound),
-        SettingsGeneralState.keepDaysRange.upperBound
-      )
+    wanted.keepDays = general.keepFor.days ?? Self.kept(general.keepDays, in: SettingsGeneralState.keepDaysRange)
     switch general.typedText {
     case .full: wanted.typedTextLimit = nil
-    case .limited:
-      wanted.typedTextLimit = min(
-        max(general.typedTextLimit, SettingsGeneralState.typedTextRange.lowerBound),
-        SettingsGeneralState.typedTextRange.upperBound
-      )
+    case .limited: wanted.typedTextLimit = Self.kept(general.typedTextLimit, in: SettingsGeneralState.typedTextRange)
     }
     guard wanted != pictures.shown else { return }
     // Unstructured, as an edit is synchronous: the change runs beside it.
     Task { await choosePictures(wanted) }
+  }
+
+  /// A number the person typed, brought within what the settings take.
+  ///
+  /// - Parameters:
+  ///   - value: The number.
+  ///   - range: What the settings take.
+  /// - Returns: The number, or the nearer end of the range.
+  private static func kept(_ value: Int, in range: ClosedRange<Int>) -> Int {
+    min(max(value, range.lowerBound), range.upperBound)
   }
 
   /// Deletes every picture of agent actions once the person confirmed. One that fails says why under the pictures;

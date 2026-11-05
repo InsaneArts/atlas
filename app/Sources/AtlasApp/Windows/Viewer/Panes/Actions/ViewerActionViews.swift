@@ -57,7 +57,7 @@ final class ViewerActionViews {
   /// - Parameter offset: −1 for Previous, 1 for Next.
   func step(by offset: Int) {
     guard let model, let focus = model.panes.activity.action, let snapshot = model.viewer?.snapshot,
-      let moment = ViewerPresenter.activityMoments(snapshot)?.moments.first(where: { $0.id == focus.moment })
+      let moment = ViewerPresenter.activityMoments(snapshot)?.moment(focus.moment)
     else { return }
     let sequence = ViewerPresenter.actionSequence(moment)
     guard let index = sequence.firstIndex(where: { $0.id == focus.row }),
@@ -170,7 +170,7 @@ final class ViewerActionViews {
   /// How many frames the replay shows.
   private var frameCount: Int {
     guard let snapshot = model?.viewer?.snapshot, let focus = snapshot.panes.activity.replay,
-      let moment = ViewerPresenter.activityMoments(snapshot)?.moments.first(where: { $0.id == focus.moment })
+      let moment = ViewerPresenter.activityMoments(snapshot)?.moment(focus.moment)
     else { return 0 }
     return ViewerPresenter.replayFrames(moment, snapshot).count
   }
@@ -183,17 +183,29 @@ final class ViewerActionViews {
       return []
     }
     let facts = snapshot.panes.activity
-    if let focus = facts.action, let moment = moments.moments.first(where: { $0.id == focus.moment }),
-      let entry = ViewerPresenter.actionSequence(moment).first(where: { $0.id == focus.row })
-    {
+    if let focus = facts.action, let entry = Self.entry(focus, in: moments) {
       return Set([entry.before, entry.after].compactMap { $0 })
     }
-    if let focus = facts.replay, let moment = moments.moments.first(where: { $0.id == focus.moment }) {
+    if let focus = facts.replay, let moment = moments.moment(focus.moment) {
       let names = ViewerPresenter.replayFrames(moment, snapshot)
         .map(\.picture.name)
       return Set(names.dropFirst(focus.index).prefix(2))
     }
     return []
+  }
+
+  /// The row of the action shown large.
+  ///
+  /// - Parameters:
+  ///   - focus: The action shown large.
+  ///   - moments: Every moment in scope.
+  /// - Returns: Its row, or nil once its moment or its picture is gone.
+  private static func entry(_ focus: ViewerActionFocus, in moments: ActivityMoments) -> ActivityLog.Entry? {
+    moments.moment(focus.moment)
+      .flatMap { moment in
+        ViewerPresenter.actionSequence(moment)
+          .first { $0.id == focus.row }
+      }
   }
 
   /// Reads a picture as taken and decodes it off the main actor; one no longer wanted when it lands is dropped, and
@@ -219,8 +231,7 @@ final class ViewerActionViews {
   private func compareIfAsked(shows: Bool) {
     guard let model, shows, let focus = model.panes.activity.action, focus.showsChanges,
       let snapshot = model.viewer?.snapshot, let moments = ViewerPresenter.activityMoments(snapshot),
-      let moment = moments.moments.first(where: { $0.id == focus.moment }),
-      let entry = ViewerPresenter.actionSequence(moment).first(where: { $0.id == focus.row }),
+      let entry = Self.entry(focus, in: moments),
       let before = entry.before, let after = entry.after,
       let first = model.panes.activity.pictures[before], let second = model.panes.activity.pictures[after]
     else {

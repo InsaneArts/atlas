@@ -953,4 +953,14 @@ struct ActivityMomentsTests {
     ])
     #expect(worked.followUp(to: worked.moments[0].runs[1]) == nil, "an action that worked has no follow-up")
   }
+
+  @Test("a moment is found by its identity and none once it is gone")
+  func aMomentIsFoundByItsIdentity() throws {
+    let moments = Self.moments([
+      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 10, session: "claude", verb: "click", app: "Opie")
+    ])
+    let moment = try #require(moments.moments.first)
+    #expect(moments.moment(moment.id)?.runs.map(\.id) == ["c1"])
+    #expect(moments.moment("gone") == nil)
+  }
 }

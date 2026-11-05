@@ -16,7 +16,7 @@ extension ViewerPresenter {
   /// - Returns: The large view, or nil.
   static func actionLarge(_ moments: ActivityMoments, _ snapshot: ViewerSnapshot) -> ViewerActionLarge? {
     let facts = snapshot.panes.activity
-    guard let focus = facts.action, let moment = moments.moments.first(where: { $0.id == focus.moment }) else {
+    guard let focus = facts.action, let moment = moments.moment(focus.moment) else {
       return nil
     }
     let sequence = actionSequence(moment)

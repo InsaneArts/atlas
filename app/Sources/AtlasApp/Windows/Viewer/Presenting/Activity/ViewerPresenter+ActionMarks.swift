@@ -116,10 +116,10 @@ extension ViewerPresenter {
   /// - Returns: The shares, or nil.
   static func share(_ frame: ActionFacts.Frame, of display: ActionFacts.Size?) -> CGRect? {
     guard let display else { return nil }
-    let left = min(max(frame.x / display.width, 0), 1)
-    let top = min(max(frame.y / display.height, 0), 1)
-    let right = min(max((frame.x + frame.width) / display.width, 0), 1)
-    let bottom = min(max((frame.y + frame.height) / display.height, 0), 1)
+    let left = unit(frame.x / display.width)
+    let top = unit(frame.y / display.height)
+    let right = unit((frame.x + frame.width) / display.width)
+    let bottom = unit((frame.y + frame.height) / display.height)
     guard right > left, bottom > top else { return nil }
     return CGRect(x: left, y: top, width: right - left, height: bottom - top)
   }
@@ -132,9 +132,14 @@ extension ViewerPresenter {
   /// - Returns: The share, or nil.
   static func share(_ point: ActionFacts.Point, of display: ActionFacts.Size?) -> CGPoint? {
     guard let display else { return nil }
-    return CGPoint(
-      x: min(max(point.x / display.width, 0), 1),
-      y: min(max(point.y / display.height, 0), 1)
-    )
+    return CGPoint(x: unit(point.x / display.width), y: unit(point.y / display.height))
+  }
+
+  /// A share kept between none and all.
+  ///
+  /// - Parameter share: The share.
+  /// - Returns: It, from 0 to 1.
+  private static func unit(_ share: Double) -> Double {
+    min(max(share, 0), 1)
   }
 }

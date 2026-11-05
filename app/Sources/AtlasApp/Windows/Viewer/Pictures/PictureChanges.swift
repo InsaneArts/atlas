@@ -30,16 +30,7 @@ enum PictureChanges {
     var changed: [CGRect] = []
     for row in 0..<down {
       for column in 0..<across {
-        var total = 0
-        for y in row * side..<(row + 1) * side {
-          for x in column * side..<(column + 1) * side {
-            let at = y * first.rowBytes + x * 4
-            for channel in 0..<3 {
-              total += abs(Int(first.bytes[at + channel]) - Int(second.bytes[at + channel]))
-            }
-          }
-        }
-        guard total > threshold * side * side * 3 else { continue }
+        guard difference(first, second, row: row, column: column) > threshold * side * side * 3 else { continue }
         changed.append(
           CGRect(
             x: Double(column) * square.across,
@@ -51,6 +42,32 @@ enum PictureChanges {
       }
     }
     return changed
+  }
+
+  /// How much one square differs between two drawings: the sum, over its pixels, of each colour's difference.
+  ///
+  /// - Parameters:
+  ///   - first: The drawing before.
+  ///   - second: The drawing after, of the same size.
+  ///   - row: The square's row.
+  ///   - column: The square's column.
+  /// - Returns: The difference.
+  private nonisolated static func difference(
+    _ first: (bytes: [UInt8], rowBytes: Int),
+    _ second: (bytes: [UInt8], rowBytes: Int),
+    row: Int,
+    column: Int
+  ) -> Int {
+    var total = 0
+    for y in row * side..<(row + 1) * side {
+      for x in column * side..<(column + 1) * side {
+        let at = y * first.rowBytes + x * 4
+        for channel in 0..<3 {
+          total += abs(Int(first.bytes[at + channel]) - Int(second.bytes[at + channel]))
+        }
+      }
+    }
+    return total
   }
 
   /// A picture drawn at `width` by `height`, as its rows of red, green, blue and padding bytes, top row first.

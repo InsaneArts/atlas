@@ -2,9 +2,8 @@ import SwiftUI
 
 /// A step's small picture, at the end of its line: the screen just before it, cropped and zoomed in around the element
 /// it went to or the spot so the mark still reads at this size, the element whole and in the middle unless that would
-/// show past the picture's edge; the
-/// whole screen where no spot is known, or where it is asked not to zoom, as a replay's strip shows a whole frame.
-/// Repeats folded into one step stand on a small stack with their count.
+/// show past the picture's edge; the whole screen where no spot is known, or where it is asked not to zoom, as a
+/// replay's strip shows a whole frame. Repeats folded into one step stand on a small stack with their count.
 struct ActivityStepPicture: View {
   /// The picture and its mark.
   let picture: ViewerStepPicture
@@ -18,14 +17,17 @@ struct ActivityStepPicture: View {
     let size = CGSize(width: width, height: width / ViewerLayout.stepPictureShape)
     crop(size)
       .frame(width: size.width, height: size.height)
-      .clipShape(RoundedRectangle(cornerRadius: ViewerLayout.stepPictureRadius, style: .continuous))
+      .clipShape(Self.shape)
       .overlay {
-        RoundedRectangle(cornerRadius: ViewerLayout.stepPictureRadius, style: .continuous)
+        Self.shape
           .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
       }
       .background { stack(size) }
       .overlay(alignment: .bottomTrailing) { count }
   }
+
+  /// The rounded shape of the picture and of each one behind it.
+  private static let shape = RoundedRectangle(cornerRadius: ViewerLayout.stepPictureRadius, style: .continuous)
 
   /// The picture zoomed around its focus, and the mark over it at its own size.
   ///
@@ -63,10 +65,10 @@ struct ActivityStepPicture: View {
     if picture.repeats > 1 {
       ForEach(1...2, id: \.self) { depth in
         let offset = ViewerLayout.stepPictureStack * CGFloat(depth)
-        RoundedRectangle(cornerRadius: ViewerLayout.stepPictureRadius, style: .continuous)
+        Self.shape
           .fill(Color.ground)
           .overlay {
-            RoundedRectangle(cornerRadius: ViewerLayout.stepPictureRadius, style: .continuous)
+            Self.shape
               .strokeBorder(Color.strokeStrong, lineWidth: Stroke.hairline)
           }
           .offset(x: offset, y: -offset)

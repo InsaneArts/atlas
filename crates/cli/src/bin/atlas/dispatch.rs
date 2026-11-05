@@ -285,28 +285,7 @@ async fn carry_out(
         Command::Menubar(args) => menu_bar(config, client, args).await,
         Command::Switch(args) => switch(config, args),
         Command::Setup(args) => setup(config, client, args).await,
-        Command::Config(args) => {
-            if let Some(state) = args.pictures_before_actions {
-                atlas_core::config::keep_pictures(config, state == cli::OnOff::On)?;
-            }
-            if let Some(days) = args.keep_pictures_days {
-                atlas_core::config::keep_days(config, days)?;
-            }
-            if let Some(limit) = args.typed_text_limit {
-                atlas_core::config::typed_text_limit(config, (limit > 0).then_some(limit))?;
-            }
-            let client = client()?;
-            let output = &client.config.output_dir;
-            if args.delete_pictures {
-                atlas_client::before::delete_all(output);
-            }
-            let mut reply = json!({ "ok": true, "config": client.config, "path": config });
-            if args.pictures_summary {
-                let (count, bytes) = atlas_client::before::summary(output);
-                reply["pictures"] = json!({"count": count, "bytes": bytes});
-            }
-            Ok(reply)
-        }
+        Command::Config(args) => settings(config, client, &args),
         Command::Status => Ok(client()?.status().await),
         Command::Activity(args) => activity(&client()?, host, &args),
         Command::Doctor(args) if args.login_timing => atlas_core::login_log::timing(),
@@ -877,6 +856,35 @@ fn actions_batch(actions: String) -> Result<Vec<u8>> {
         ));
     }
     Ok(bytes)
+}
+
+/// `atlas config`: change the settings and the pictures as `args` asks,
+/// then show the settings, with the pictures kept when asked.
+fn settings(
+    config: &Path,
+    client: &impl Fn() -> Result<Client>,
+    args: &cli::Config,
+) -> Result<Value> {
+    if let Some(state) = args.pictures_before_actions {
+        atlas_core::config::keep_pictures(config, state == cli::OnOff::On)?;
+    }
+    if let Some(days) = args.keep_pictures_days {
+        atlas_core::config::keep_days(config, days)?;
+    }
+    if let Some(limit) = args.typed_text_limit {
+        atlas_core::config::typed_text_limit(config, (limit > 0).then_some(limit))?;
+    }
+    let client = client()?;
+    let output = &client.config.output_dir;
+    if args.delete_pictures {
+        atlas_client::before::delete_all(output);
+    }
+    let mut reply = json!({ "ok": true, "config": client.config, "path": config });
+    if args.pictures_summary {
+        let (count, bytes) = atlas_client::before::summary(output);
+        reply["pictures"] = json!({"count": count, "bytes": bytes});
+    }
+    Ok(reply)
 }
 
 /// Lock the screen so the person can switch to the helper (or an account

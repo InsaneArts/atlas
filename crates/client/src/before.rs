@@ -111,6 +111,16 @@ impl Named {
         parts.next().is_none().then_some(named)
     }
 
+    /// `name` read, when it names a picture, before or after an action.
+    fn picture(name: &str) -> Option<Self> {
+        Self::read(name).filter(|named| named.part != Part::Facts)
+    }
+
+    /// `name` read, when it names the picture before an action.
+    fn before(name: &str) -> Option<Self> {
+        Self::read(name).filter(|named| named.part == Part::Before)
+    }
+
     fn name(&self) -> String {
         let keys: String = [&self.session, &self.task]
             .into_iter()
@@ -131,9 +141,7 @@ impl Named {
 /// When the picture named `name`, before or after an action, was taken, in
 /// nanoseconds since 1970: only names Atlas gives a picture have one.
 pub fn time(name: &str) -> Option<u128> {
-    Named::read(name)
-        .filter(|named| named.part != Part::Facts)
-        .map(|named| named.at)
+    Named::picture(name).map(|named| named.at)
 }
 
 /// The name of a picture taken at `at`, in nanoseconds since 1970, before an
@@ -151,9 +159,7 @@ pub(crate) fn name(at: u128, session: Option<&Key>, task: Option<&Key>) -> Strin
 /// The name of `before`'s `part`, when `before` names a picture before an
 /// action.
 fn sibling(before: &str, part: Part) -> Option<String> {
-    Named::read(before)
-        .filter(|named| named.part == Part::Before)
-        .map(|named| named.with(part).name())
+    Named::before(before).map(|named| named.with(part).name())
 }
 
 /// The name of the picture taken a moment after the action `before` came
@@ -325,8 +331,8 @@ fn publish(
 }
 
 /// Keep `raw` in the private output folder `output` as a JPEG named `name`,
-/// never over another picture, last changed when it was taken. One whose session or task was cleaned up
-/// since it was taken is removed again. The folder is then pruned to `keep`
+/// never over another picture, last changed when it was taken. One whose
+/// session or task was cleaned up since it was taken is removed again. The folder is then pruned to `keep`
 /// and its room.
 ///
 /// # Errors
@@ -334,9 +340,8 @@ fn publish(
 /// Returns the failure to make either folder private, encode the picture or
 /// write it; its temporary file is removed then.
 pub(crate) fn save(output: &Path, name: &str, raw: &Raw, keep: Duration) -> Result<()> {
-    let named = Named::read(name)
-        .filter(|named| named.part != Part::Facts)
-        .ok_or_else(|| Error::new(Code::BadRequest, "Not a picture's name"))?;
+    let named =
+        Named::picture(name).ok_or_else(|| Error::new(Code::BadRequest, "Not a picture's name"))?;
     let folder = made(output)?;
     let (width, height) = (raw.width as usize, raw.height as usize);
     let (jpeg, _, _) = crate::helper_info::jpeg_rgb(
@@ -360,8 +365,7 @@ pub(crate) fn save(output: &Path, name: &str, raw: &Raw, keep: Duration) -> Resu
 ///
 /// Returns the failure to make either folder private or write the facts.
 pub(crate) fn keep_facts(output: &Path, before: &str, facts: &Value) -> Result<()> {
-    let named = Named::read(before)
-        .filter(|named| named.part == Part::Before)
+    let named = Named::before(before)
         .ok_or_else(|| Error::new(Code::BadRequest, "Not a picture's name"))?
         .with(Part::Facts);
     let name = named.name();
@@ -423,6 +427,11 @@ fn mark(session: &Key, task: Option<&Key>) -> String {
         || format!("{session}{FORGOTTEN}"),
         |task| format!("{session}-{task}{FORGOTTEN}"),
     )
+}
+
+/// The mark of the person's Delete All.
+fn everything_mark() -> String {
+    format!("{EVERYTHING}{FORGOTTEN}")
 }
 
 /// When `stat` says its file last changed, in nanoseconds since 1970.
@@ -500,7 +509,7 @@ fn prune_in(folder: &OwnedFd, now: SystemTime, room: u64, keep: Duration) -> Opt
 fn forgotten_since(folder: &OwnedFd, named: &Named) -> bool {
     let session = named.session.as_ref();
     let marks = [
-        Some(format!("{EVERYTHING}{FORGOTTEN}")),
+        Some(everything_mark()),
         session.map(|session| mark(session, None)),
         session
             .zip(named.task.as_ref())
@@ -576,7 +585,7 @@ pub fn delete_all(output: &Path) {
         return;
     };
     // Without its mark Delete All still removes what is in place now.
-    let _ = touch(&folder, &format!("{EVERYTHING}{FORGOTTEN}"));
+    let _ = touch(&folder, &everything_mark());
     for entry in entries(&folder) {
         if !matches!(entry.kind, Kind::Forgotten) {
             let _ = unlinkat(&folder, entry.file.as_str(), UnlinkatFlags::NoRemoveDir);
@@ -605,13 +614,9 @@ impl Listing {
         Self(kept)
     }
 
-    fn contains(&self, named: &Named) -> bool {
-        self.0.iter().any(|(kept, _)| kept == named)
-    }
-
     /// Whether the picture `name` is kept.
     pub fn has(&self, name: &str) -> bool {
-        Named::read(name).is_some_and(|named| named.part != Part::Facts && self.contains(&named))
+        Named::picture(name).is_some_and(|named| self.0.iter().any(|(kept, _)| *kept == named))
     }
 
     /// The picture after the action `before` names, which `ended` at, in
@@ -622,7 +627,7 @@ impl Listing {
     /// says by its name.
     pub fn after(&self, before: &str, ended: u64) -> Option<(String, u64)> {
         let millis = |nanos: u128| u64::try_from(nanos / 1_000_000).unwrap_or(u64::MAX);
-        let named = Named::read(before).filter(|named| named.part == Part::Before)?;
+        let named = Named::before(before)?;
         let own = named.with(Part::After);
         if let Some((_, modified)) = self.0.iter().find(|(kept, _)| *kept == own) {
             return Some((own.name(), millis(*modified)));
@@ -653,9 +658,7 @@ impl Listing {
 /// since 1970, needs a picture of its own after it: no next step's picture
 /// serves.
 pub(crate) fn wants_after(output: &Path, before: &str, ended: u64) -> bool {
-    Named::read(before).is_some_and(|named| {
-        named.part == Part::Before && Listing::of(output).next(&named, ended).is_none()
-    })
+    Named::before(before).is_some_and(|named| Listing::of(output).next(&named, ended).is_none())
 }
 
 /// A command's picture: taken before its first input only, named on its

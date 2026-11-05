@@ -7,7 +7,7 @@ use std::{
     future::Future,
     path::Path,
     sync::{
-        Mutex,
+        Mutex, MutexGuard, PoisonError,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -126,17 +126,15 @@ impl Helper {
     /// The op of each request it was sent, in the order they came, with
     /// `frame sent` where it finished sending a picture's frame.
     pub fn log(&self) -> Vec<String> {
-        self.log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        self.logged().clone()
     }
 
     fn note(&self, entry: &str) {
-        self.log
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(entry.to_owned());
+        self.logged().push(entry.to_owned());
+    }
+
+    fn logged(&self) -> MutexGuard<'_, Vec<String>> {
+        self.log.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Answer the request `line` on `peer`, a connection to the input service

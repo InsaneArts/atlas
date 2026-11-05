@@ -44,9 +44,7 @@ struct ReplayLayer: View {
       in: window,
       labeled: !replay.appGroups.isEmpty
     )
-    let insets = ViewerLayout.replayStripInset + ViewerLayout.replayStripInset
-    let gaps = Spacing.s * CGFloat(ViewerLayout.replayStripMost - 1)
-    let thumbnail = (size.width - insets - gaps) / CGFloat(ViewerLayout.replayStripMost)
+    let thumbnail = ViewerLayout.replayFrameWidth(picture: size.width)
     return VStack(alignment: .leading, spacing: Spacing.m) {
       head(replay)
         .frame(width: size.width)

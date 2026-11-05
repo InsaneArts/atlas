@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -153,35 +153,22 @@ fn guard(daemon: &Daemon, expected: &InputEpoch) -> Result<Value> {
 /// by claiming its start before its client cancels it or leaves, and once
 /// either happened it never begins.
 #[derive(Default)]
-struct Start(AtomicU8);
+struct Start(AtomicBool);
 
 impl Start {
-    const WAITING: u8 = 0;
-    const BEGUN: u8 = 1;
-    const CANCELLED: u8 = 2;
-
     /// Whether the capture may begin now; it is then begun.
     fn claim(&self) -> bool {
-        self.0
-            .compare_exchange(
-                Self::WAITING,
-                Self::BEGUN,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
+        self.decide()
     }
 
     /// Cancel it: whether it had not begun, and now never will.
     fn cancel(&self) -> bool {
-        self.0
-            .compare_exchange(
-                Self::WAITING,
-                Self::CANCELLED,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
+        self.decide()
+    }
+
+    /// Whether this call came first, claim or cancel: only the first decides.
+    fn decide(&self) -> bool {
+        !self.0.swap(true, Ordering::SeqCst)
     }
 }
 

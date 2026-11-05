@@ -15,6 +15,8 @@ extension ViewerLayout {
   static let markNearRight: CGFloat = 0.65
   /// 8: the dot where the pointer landed, over a large picture.
   static let markDot: CGFloat = 8
+  /// 0.8: how far either of a double click's dots stands from the spot, in dots.
+  static let markDotSpread: CGFloat = 0.8
   /// 5: the same over a small picture.
   static let markDotCompact: CGFloat = 5
   /// 4: the soft glow around a ring or a dot over a large picture.
@@ -31,6 +33,8 @@ extension ViewerLayout {
   static let markPillLength: CGFloat = 2.6
   /// 5 and 4: a dashed ring's or path's dash and gap.
   static let markDash: [CGFloat] = [5, 4]
+  /// 2.5: how much wider a drag's halo is than its path.
+  static let markHaloWidth: CGFloat = 2.5
   /// 8: between a mark and its bubble, keys or tag.
   static let markGap = Spacing.s
   /// 0.52: the widest a bubble stands, as a share of the picture's width.
@@ -130,6 +134,16 @@ extension ViewerLayout {
       + (labeled ? replayGroupLabel + Spacing.xs : .zero)
     let room = CGSize(width: width, height: window.height - replayAround - strip)
     return fitted(aspect, in: room)
+  }
+
+  /// How wide each frame of a replay's strip stands, so ``replayStripMost`` fit across its picture.
+  ///
+  /// - Parameter width: The replay's picture's width.
+  /// - Returns: A frame's width.
+  static func replayFrameWidth(picture width: CGFloat) -> CGFloat {
+    let insets = replayStripInset + replayStripInset
+    let gaps = Spacing.s * CGFloat(replayStripMost - 1)
+    return (width - insets - gaps) / CGFloat(replayStripMost)
   }
 
   /// A shape scaled to fit a room.
