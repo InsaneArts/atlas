@@ -54,12 +54,17 @@ security find-identity -v -p codesigning | grep -qF "\"$identity\"" ||
 xcrun notarytool history --keychain-profile "$profile" >/dev/null 2>&1 ||
 	fail "no notarytool profile named $profile; store it with xcrun notarytool store-credentials"
 
+# Atlas refuses a bundled plugin whose manifest names another version.
+manifests="agents/atlas/.claude-plugin/plugin.json agents/atlas/.codex-plugin/plugin.json agents/atlas/.cursor-plugin/plugin.json"
 current=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
 if [ "$current" != "$version" ]; then
 	step "Setting the version to $version"
 	sed -i '' "s/^version = \"$current\"$/version = \"$version\"/" Cargo.toml
+	# shellcheck disable=SC2086
+	sed -i '' "s/\"version\": \"$current\"/\"version\": \"$version\"/" $manifests
 	cargo update --workspace --offline --quiet
-	git commit -q -m "chore: release $version" Cargo.toml Cargo.lock
+	# shellcheck disable=SC2086
+	git commit -q -m "chore: release $version" Cargo.toml Cargo.lock $manifests
 fi
 
 step "Checks"
