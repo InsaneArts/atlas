@@ -93,7 +93,10 @@ previous=$(git describe --tags --abbrev=0 2>/dev/null || true)
 {
 	printf '## Install\n\n```sh\ncurl -fsSL https://atlas.insanearts.io/install.sh | sh\n```\n\n'
 	printf 'Requires macOS 14 or later. An installed Atlas updates with `atlas update`.\n\n## Changes\n\n'
-	if [ -n "$previous" ]; then
+	# The version's section of CHANGELOG.md, when it has one.
+	if grep -q "^## \[$version\]" CHANGELOG.md 2>/dev/null; then
+		awk -v head="## [$version]" 'index($0, head) == 1 { on = 1; next } on && /^## \[/ { exit } on' CHANGELOG.md
+	elif [ -n "$previous" ]; then
 		git log --no-merges --pretty='- %s' "$previous..HEAD"
 	else
 		echo "The first release."
