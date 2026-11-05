@@ -127,7 +127,7 @@ pub fn request_access(answered: impl Fn() + Send + Sync + 'static) -> bool {
 ///
 /// Returns the first lookup that failed: the helper's processes are then
 /// unknown, never fewer.
-pub fn owned_by(
+pub(crate) fn owned_by(
     objects: &[AudioObjectID],
     uid: u32,
     pid_of: impl Fn(AudioObjectID) -> Result<Option<i32>>,
@@ -150,7 +150,7 @@ pub fn owned_by(
 /// Whether an object Atlas made is still its own, by the UID it was made
 /// with: after Core Audio restarts, its ID may name anyone's object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Ownership {
+pub(crate) enum Ownership {
     Ours,
     /// Gone, or someone else's now: never to be destroyed.
     Gone,
@@ -334,18 +334,17 @@ impl<B: Backend> Engine<B> {
         };
         // Right before IO starts: a restart whose notice is late, or an ID
         // now naming someone else's process, ends the mute unstarted.
-        let fresh = if self.backend.generation() == generation {
-            self.backend.still_ours(&objects).map_err(Refusal::Failed)
+        let started = if self.backend.generation() == generation {
+            match self.backend.still_ours(&objects) {
+                Ok(true) => self
+                    .backend
+                    .start(&mut mute, generation)
+                    .map_err(Refusal::Failed),
+                Ok(false) => Err(Refusal::Stale),
+                Err(error) => Err(Refusal::Failed(error)),
+            }
         } else {
-            Ok(false)
-        };
-        let started = match fresh {
-            Ok(true) => self
-                .backend
-                .start(&mut mute, generation)
-                .map_err(Refusal::Failed),
-            Ok(false) => Err(Refusal::Stale),
-            Err(refusal) => Err(refusal),
+            Err(Refusal::Stale)
         };
         if let Err(refusal) = started {
             self.end(mute);
@@ -468,6 +467,7 @@ pub struct CoreAudio {
 /// A mute, or what was made of one: the tap, the aggregate device holding
 /// it, and the IOProc running on that. Each object keeps the UID it was
 /// made with, which proves its ID still names it.
+#[derive(Default)]
 pub struct Tap {
     tap: Option<(AudioObjectID, String)>,
     device: Option<(AudioObjectID, String)>,
@@ -503,48 +503,6 @@ impl CoreAudio {
             },
             built: Cell::new(0),
         })
-    }
-
-    /// Make the mute of `objects`: the tap, with a UID chosen before it is
-    /// made, then the device holding it, then its IOProc. A step that fails
-    /// gives back what the steps before it made.
-    fn create(&self, objects: &[AudioObjectID]) -> std::result::Result<Tap, Box<Unbuilt<Tap>>> {
-        let mut made = Tap {
-            tap: None,
-            device: None,
-            io: None,
-            running: false,
-        };
-        let failed = |error, made: Tap| {
-            Err(Box::new(Unbuilt {
-                error,
-                made: made.tap.is_some().then_some(made),
-            }))
-        };
-
-        let description = description(objects);
-        let uid = NSUUID::new();
-        // SAFETY: a property setter of a description this function owns.
-        unsafe { description.setUUID(&uid) };
-        let tap_uid = uid.UUIDString().to_string();
-        let mut tap = 0;
-        // SAFETY: a live description and a place for the new tap's ID.
-        let status = unsafe { (self.create_tap)(Retained::as_ptr(&description), &mut tap) };
-        if let Err(error) = refused("create the tap", status) {
-            return failed(error, made);
-        }
-        made.tap = Some((tap, tap_uid.clone()));
-
-        match self.aggregate(&tap_uid) {
-            Ok(device) => made.device = Some(device),
-            Err(error) => return failed(error, made),
-        }
-        let device = made.device.as_ref().map_or(0, |(device, _)| *device);
-        match io_proc(device) {
-            Ok(io) => made.io = Some(io),
-            Err(error) => return failed(error, made),
-        }
-        Ok(made)
     }
 
     /// The helper's processes among `objects`, read afresh.
@@ -608,7 +566,7 @@ impl CoreAudio {
 /// mutes them. Never exclusive, never of bundles, and never restoring a
 /// process that ended by its bundle: a later app of that bundle may be the
 /// person's.
-pub fn description(objects: &[AudioObjectID]) -> Retained<CATapDescription> {
+pub(crate) fn description(objects: &[AudioObjectID]) -> Retained<CATapDescription> {
     let numbers: Vec<_> = objects
         .iter()
         .map(|object| NSNumber::new_u32(*object))
@@ -676,8 +634,41 @@ impl Backend for CoreAudio {
         access()
     }
 
+    /// Make the mute of `objects`: the tap, with a UID chosen before it is
+    /// made, then the device holding it, then its IOProc. A step that fails
+    /// gives back what the steps before it made.
     fn build(&self, objects: &[AudioObjectID]) -> std::result::Result<Tap, Box<Unbuilt<Tap>>> {
-        self.create(objects)
+        let mut made = Tap::default();
+        let failed = |error, made: Tap| {
+            Err(Box::new(Unbuilt {
+                error,
+                made: made.tap.is_some().then_some(made),
+            }))
+        };
+
+        let description = description(objects);
+        let uid = NSUUID::new();
+        // SAFETY: a property setter of a description this function owns.
+        unsafe { description.setUUID(&uid) };
+        let tap_uid = uid.UUIDString().to_string();
+        let mut tap = 0;
+        // SAFETY: a live description and a place for the new tap's ID.
+        let status = unsafe { (self.create_tap)(Retained::as_ptr(&description), &mut tap) };
+        if let Err(error) = refused("create the tap", status) {
+            return failed(error, made);
+        }
+        made.tap = Some((tap, tap_uid.clone()));
+
+        let (device, device_uid) = match self.aggregate(&tap_uid) {
+            Ok(device) => device,
+            Err(error) => return failed(error, made),
+        };
+        made.device = Some((device, device_uid));
+        match io_proc(device) {
+            Ok(io) => made.io = Some(io),
+            Err(error) => return failed(error, made),
+        }
+        Ok(made)
     }
 
     fn start(&self, mute: &mut Tap, generation: u64) -> Result<()> {
@@ -709,7 +700,7 @@ impl Backend for CoreAudio {
 
 /// What came of one teardown stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stage {
+pub(crate) enum Stage {
     /// It ran and Core Audio confirmed it.
     Done,
     /// Its object is gone or no longer ours: nothing is left to do there.
@@ -721,7 +712,7 @@ pub enum Stage {
 /// One destructive teardown stage: `call` runs only when `owned` proves its
 /// object ours right before, and counts only when Core Audio says it worked
 /// or the object is then proven gone.
-pub fn stage(owned: impl Fn() -> Ownership, call: impl FnOnce() -> i32) -> Stage {
+pub(crate) fn stage(owned: impl Fn() -> Ownership, call: impl FnOnce() -> i32) -> Stage {
     match owned() {
         Ownership::Ours => {
             if call() == 0 {

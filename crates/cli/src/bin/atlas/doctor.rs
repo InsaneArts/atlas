@@ -131,8 +131,9 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
 }
 
 /// Doctor's warning when the helper's mute is not what was asked: its
-/// reason, which names the one step that fixes it. A helper that did not answer, or cannot
-/// say, is reported elsewhere; sound turned on is the person's choice.
+/// reason, which names the one step that fixes it. A helper that did not
+/// answer, or cannot say, is reported elsewhere; sound turned on is the
+/// person's choice.
 fn sound_warning(status: &Value) -> Option<String> {
     let sound = &status["sound"];
     (sound["helperSound"] == "unavailable").then(|| {

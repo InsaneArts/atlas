@@ -3,6 +3,7 @@
 //! come or go or Core Audio restarts; replies and the hello read only what
 //! it last reported, never Core Audio itself. The person's choice is kept in
 //! the helper, so a new daemon mutes again before any agent acts.
+use atlas_core::error::Result;
 use atlas_native::native::audio::{
     self, Access, Backend, Change, CoreAudio, Engine, Listener, Refusal,
 };
@@ -302,7 +303,7 @@ fn wanted(note: &Path) -> bool {
 ///
 /// Returns the failure to make its folder or write it; the kept wish is
 /// then the one before.
-fn remember(note: &Path, muted: bool) -> atlas_core::error::Result<()> {
+fn remember(note: &Path, muted: bool) -> Result<()> {
     let wish: &[u8] = if muted { b"muted\n" } else { b"on\n" };
     atlas_core::files::save_private(note, wish)
 }
@@ -321,7 +322,7 @@ trait Audio {
 
     /// Tell the thread at `sender` of Core Audio's changes until the
     /// listener is dropped, each with the generation it brought.
-    fn listen(&self, sender: Sender<Message>) -> atlas_core::error::Result<Self::Listener>;
+    fn listen(&self, sender: Sender<Message>) -> Result<Self::Listener>;
 }
 
 /// The helper's own Core Audio.
@@ -344,7 +345,7 @@ impl Audio for System {
         audio::access()
     }
 
-    fn listen(&self, sender: Sender<Message>) -> atlas_core::error::Result<Listener> {
+    fn listen(&self, sender: Sender<Message>) -> Result<Listener> {
         let generation = self.generation.clone();
         audio::listen(move |change| {
             let now = match change {
@@ -420,10 +421,7 @@ impl<A: Audio> Driver<A> {
     /// earlier mute.
     fn due(&self) -> Option<Instant> {
         let cleanup = self.engine.as_ref().and_then(Engine::next_retry);
-        match (self.rebuild, cleanup) {
-            (Some(rebuild), Some(cleanup)) => Some(rebuild.min(cleanup)),
-            (rebuild, cleanup) => rebuild.or(cleanup),
-        }
+        self.rebuild.into_iter().chain(cleanup).min()
     }
 
     fn wants(&self) -> bool {

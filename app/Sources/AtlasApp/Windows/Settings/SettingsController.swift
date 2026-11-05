@@ -1,4 +1,3 @@
-import AtlasCommands
 import AtlasUI
 import Foundation
 import Observation
@@ -64,8 +63,7 @@ final class SettingsController {
       agents: agents,
       icons: icons,
       notify: notify,
-      helperSound: actions.sound.sound,
-      soundFailure: actions.sound.failure,
+      sound: actions.sound.button,
       facts: SettingsFacts(
         status: helper.status,
         connecting: helper.connecting,

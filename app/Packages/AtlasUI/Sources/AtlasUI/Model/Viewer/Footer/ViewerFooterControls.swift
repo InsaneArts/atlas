@@ -1,6 +1,6 @@
 /// The footer's buttons at its trailing edge, in the order they stand: the picture's pause, muting the helper, Stop or
-/// Resume, and the main capsule. Only the actions that apply are drawn; each comes and goes in its slot, and the main capsule's trailing edge
-/// never moves.
+/// Resume, and the main capsule. Only the actions that apply are drawn; each comes and goes in its slot, and the main
+/// capsule's trailing edge never moves.
 public struct ViewerFooterControls: Equatable, Sendable {
   /// The picture's pause, on while the picture is paused; nil while there is no picture to pause, or while this window
   /// holds control, where pausing the picture would leave the person working blind.

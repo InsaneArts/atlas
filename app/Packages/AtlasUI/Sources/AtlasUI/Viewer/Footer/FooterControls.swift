@@ -1,13 +1,12 @@
 import SwiftUI
 
 /// The footer's buttons at its trailing edge, 6 apart: the picture's pause, muting the helper, Stop or Resume, and the
-/// main capsule. Only
-/// the actions that apply are drawn: each stands in its slot, growing in from its leading edge as it applies and
-/// shrinking away as it stops applying, its neighbours closing the gap (``ActionSlot``), while the main capsule's
-/// trailing edge keeps its place. Pressing a button never moves it or its neighbours: each keeps one width through
-/// every label it takes. In a narrow card Stop and Resume stand as a circle round their symbol and Take Control as its
-/// hand alone, as ``FooterFold`` says. Each tooltip names its menu item and shortcut, so every shortcut can be found from its
-/// button.
+/// main capsule. Only the actions that apply are drawn: each stands in its slot, growing in from its leading edge as it
+/// applies and shrinking away as it stops applying, its neighbours closing the gap (``ActionSlot``), while the main
+/// capsule's trailing edge keeps its place. Pressing a button never moves it or its neighbours: each keeps one width
+/// through every label it takes. In a narrow card Stop and Resume stand as a circle round their symbol and Take Control
+/// as its hand alone, as ``FooterFold`` says. Each tooltip names its menu item and shortcut, so every shortcut can be
+/// found from its button.
 struct FooterControls: View {
   /// The buttons' states.
   let controls: ViewerFooterControls

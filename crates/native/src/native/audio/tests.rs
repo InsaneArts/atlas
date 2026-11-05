@@ -1,5 +1,5 @@
 use super::*;
-use std::{cell::RefCell, collections::HashMap};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 const HELPER: u32 = 503;
 const PERSON: u32 = 501;
@@ -148,8 +148,6 @@ impl Fake {
         mute
     }
 }
-
-use std::rc::Rc;
 
 impl Backend for Fake {
     type Mute = u32;
@@ -360,7 +358,6 @@ fn a_mute_not_fully_ended_is_kept_and_tried_again_later_until_it_ends() {
 
 #[test]
 fn a_teardown_stage_runs_only_on_an_object_proven_ours_and_counts_only_if_it_worked() {
-    use std::cell::Cell;
     let ran = Cell::new(false);
     let ran = &ran;
     let call = |status| {

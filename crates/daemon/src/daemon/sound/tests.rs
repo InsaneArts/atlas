@@ -1,4 +1,10 @@
 use super::*;
+use atlas_core::error::{Code, Error};
+use atlas_native::native::audio::Unbuilt;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 #[test]
 fn the_mute_starts_only_once_the_person_allowed_it() {
@@ -86,7 +92,7 @@ fn a_daemon_without_the_mute_answers_from_its_report() {
 
 #[test]
 fn atlas_reads_whether_the_helper_is_on_screen_last_right_before_asking() {
-    let steps = std::cell::RefCell::new(Vec::new());
+    let steps = RefCell::new(Vec::new());
     let asked = ask_now(
         true,
         true,
@@ -154,25 +160,24 @@ enum Step {
     TornDown(u32),
 }
 
-type Shared<T> = std::rc::Rc<T>;
-type Steps = Shared<std::cell::RefCell<Vec<Step>>>;
+type Steps = Rc<RefCell<Vec<Step>>>;
 
 /// Core Audio with the helper processes in `objects`, the permission
 /// allowed; builds fail while `refuse` is set.
 #[derive(Clone, Default)]
 struct Fake {
     steps: Steps,
-    built: Shared<std::cell::Cell<u32>>,
-    objects: Shared<std::cell::RefCell<Vec<u32>>>,
-    refuse: Shared<std::cell::Cell<bool>>,
+    built: Rc<Cell<u32>>,
+    objects: Rc<RefCell<Vec<u32>>>,
+    refuse: Rc<Cell<bool>>,
     /// Core Audio's restarts so far.
-    generation: Shared<std::cell::Cell<u64>>,
+    generation: Rc<Cell<u64>>,
     /// Core Audio restarts while the mute reads the permission.
-    restart_on_access: Shared<std::cell::Cell<bool>>,
+    restart_on_access: Rc<Cell<bool>>,
     /// The mute's objects cannot be checked, so it cannot be ended yet.
-    unreadable: Shared<std::cell::Cell<bool>>,
+    unreadable: Rc<Cell<bool>>,
     /// Core Audio refuses to be listened to.
-    deaf: Shared<std::cell::Cell<bool>>,
+    deaf: Rc<Cell<bool>>,
 }
 
 impl Fake {
@@ -190,7 +195,7 @@ impl Backend for Fake {
         self.generation.get()
     }
 
-    fn objects(&self) -> atlas_core::error::Result<Vec<u32>> {
+    fn objects(&self) -> Result<Vec<u32>> {
         Ok(self.objects.borrow().clone())
     }
 
@@ -201,21 +206,18 @@ impl Backend for Fake {
         Access::Granted
     }
 
-    fn still_ours(&self, _: &[u32]) -> atlas_core::error::Result<bool> {
+    fn still_ours(&self, _: &[u32]) -> Result<bool> {
         Ok(true)
     }
 
-    fn start(&self, _: &mut u32, _: u64) -> atlas_core::error::Result<()> {
+    fn start(&self, _: &mut u32, _: u64) -> Result<()> {
         Ok(())
     }
 
-    fn build(
-        &self,
-        _: &[u32],
-    ) -> std::result::Result<u32, Box<atlas_native::native::audio::Unbuilt<u32>>> {
+    fn build(&self, _: &[u32]) -> std::result::Result<u32, Box<Unbuilt<u32>>> {
         if self.refuse.get() {
-            return Err(Box::new(atlas_native::native::audio::Unbuilt {
-                error: atlas_core::error::Error::new(atlas_core::error::Code::Daemon, "refused"),
+            return Err(Box::new(Unbuilt {
+                error: Error::new(Code::Daemon, "refused"),
                 made: None,
             }));
         }
@@ -246,12 +248,9 @@ impl Audio for Fake {
         Access::Granted
     }
 
-    fn listen(&self, _: Sender<Message>) -> atlas_core::error::Result<()> {
+    fn listen(&self, _: Sender<Message>) -> Result<()> {
         if self.deaf.get() {
-            return Err(atlas_core::error::Error::new(
-                atlas_core::error::Code::Daemon,
-                "deaf",
-            ));
+            return Err(Error::new(Code::Daemon, "deaf"));
         }
         self.steps.borrow_mut().push(Step::Listened);
         Ok(())

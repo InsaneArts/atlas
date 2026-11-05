@@ -1,5 +1,5 @@
-/// The General pane: opening at login, the picture, muting the helper, and when Atlas tells the person it needs them. Its values are
-/// edited through a binding; the controller writes each change where it belongs.
+/// The General pane: opening at login, the picture, muting the helper, and when Atlas tells the person it needs them.
+/// Its values are edited through a binding; the controller writes each change where it belongs.
 public struct SettingsGeneralState: Equatable, Sendable {
   /// Whether Atlas opens at login.
   public var opensAtLogin: Bool

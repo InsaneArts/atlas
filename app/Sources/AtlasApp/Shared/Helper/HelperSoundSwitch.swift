@@ -12,7 +12,7 @@ final class HelperSoundSwitch {
   /// What the helper last said of its sound, or the choice just made; nil until it says.
   private(set) var sound: HelperSound?
   /// Why the last change or reading did not reach the helper; nil once one did.
-  private(set) var failure: String?
+  private var failure: String?
   /// The `atlas` command line.
   @ObservationIgnored private let commands: any CommandRunning
   /// Numbers each reading or change, so a reading, or a status asked for, older than a change is dropped.

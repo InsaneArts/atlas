@@ -1,4 +1,3 @@
-import AtlasCommands
 import AtlasUI
 
 extension SettingsPresenter {
@@ -20,8 +19,8 @@ extension SettingsPresenter {
         PopupOption(id: .everyFiveSeconds, title: SettingsWords.everyFiveSeconds),
         PopupOption(id: .paused, title: SettingsWords.paused, isEnabled: facts.canPause || facts.picture == .paused),
       ],
-      muteHelper: snapshot.helperSound?.wanted ?? true,
-      soundProblem: snapshot.soundFailure ?? snapshot.helperSound?.problem,
+      muteHelper: snapshot.sound.isMuted,
+      soundProblem: snapshot.sound.problem,
       notify: snapshot.notify
     )
   }
