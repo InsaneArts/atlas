@@ -8,7 +8,7 @@ Install Atlas with the command below. Contributors can follow [Building from sou
 
 You need macOS 14 or later and an administrator account for installation and setup. Setup creates a standard account or uses an existing standard account you choose. You will need to log in to that account and approve Atlas's macOS permissions yourself.
 
-The helper is an ordinary account on your Mac. It has its own desktop and files, but shares the Mac's hardware and network. It is not a virtual machine.
+The helper is an ordinary account on your Mac. It has its own desktop, pointer, clipboard and files, but shares the Mac's speakers, network and hardware. It is not a virtual machine. See [What the helper shares](using-atlas.md#what-the-helper-shares).
 
 ## Install
 

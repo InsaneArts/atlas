@@ -94,6 +94,16 @@ Each plan has its `planId`, its `state` (`previewed`, `applying`, `applied`, `ro
 
 `atlas cleanup --apply` rolls back every copy the current task applied, newest first, along with the rest of what it left; `atlas cleanup` alone shows what it would do.
 
+## Bring results back
+
+`atlas collect FILE` copies a file the task made in the helper, in its home or `/tmp`, into Atlas's private folder in your account. The reply gives the copy's path, size and SHA-256; the file in the helper is left as it is. Each file must be a regular file the helper owns, unchanged for at least two seconds. It takes up to 16 files, 64 MiB each unless `--max-size` allows more (up to 1G), and 1 GiB in all. For a folder, archive it first, wait a moment, then collect the archive:
+
+```sh
+atlas run -- /usr/bin/ditto -c -k --keepParent atlas-work/out atlas-work/out.zip
+sleep 2
+atlas collect atlas-work/out.zip
+```
+
 ## Conflicts and interrupted work
 
 Atlas refuses to replace a different, unmanaged destination or a managed file changed in the helper. It also refuses overlapping or case-equivalent targets and unsupported destination metadata. Read the error and inspect the target. Do not remove the helper's file just to make the plan pass.

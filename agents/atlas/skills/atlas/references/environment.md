@@ -31,7 +31,8 @@ freeze a selected set of tools and variables (see `atlas environment --help`);
 a test seldom needs them. Discovery only reads, so it works while someone else
 is acting in the helper.
 
-Nothing is ever copied back to the person's account.
+Nothing comes back by itself: `atlas collect FILE` copies out a file the
+task made (see Keeping output files in limits.md).
 
 ### Rolling back
 
