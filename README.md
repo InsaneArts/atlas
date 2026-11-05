@@ -44,6 +44,12 @@ Watch the helper from Atlas's menu bar panel, the full Atlas viewer, or an embed
 
 See [Daily use](docs/using-atlas.md) and [Agent connections](docs/agents.md) for viewing options and host support.
 
+## Your files
+
+The helper is a separate account with none of your files, sign-ins or settings. Your agent works on your project in your account as usual and opens what it builds in the helper. When an app there needs a file, the agent copies in only that file and brings results back with `atlas collect`. `atlas cleanup --apply` undoes the copies.
+
+macOS lets every account on a Mac read some places, so the helper can too: `/Users/Shared`, most external drives, and folders in your home that aren't private, such as a `~/code` folder you made. [Your files](docs/using-atlas.md#your-files) shows how to make one private.
+
 ## Contributing
 
 [Contributing](CONTRIBUTING.md) covers builds, checks and pull requests. The [architecture guide](docs/architecture.md) maps the code and its responsibilities. Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report security issues privately through the [security policy](SECURITY.md).

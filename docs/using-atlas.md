@@ -92,6 +92,58 @@ Choose **Take Control** in the viewer to use your mouse and keyboard in the help
 
 If Atlas reports that an action's outcome is unknown, do not send it again. Observe the helper if it is available, follow Atlas's recovery instructions, then inspect the result before continuing. If the helper is unavailable, complete the login or permission step first. Recovery does not prove that the earlier action did nothing. The [error reference](../agents/atlas/skills/atlas/references/troubleshooting.md) gives the next step for each error code.
 
+## What the helper shares
+
+The helper is a second account on your Mac, not a virtual machine.
+
+| The helper has its own                                  | It shares with you                                                            |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Pointer, keyboard focus and screen                      | Speakers: its sound plays on yours                                            |
+| Clipboard                                               | Network, including `localhost` servers on both sides                          |
+| Files, settings and app data in its home                | `/Users/Shared`, external drives and folders in your home that aren't private |
+| Keychain and sign-ins: none, unless someone signs it in | CPU, memory and graphics                                                      |
+| Running copies of apps                                  | The process list                                                              |
+
+Agents' clicks and keys go only to the helper's own session, so your pointer and typing are never moved or interrupted.
+
+### Memory and CPU
+
+A logged-in helper runs macOS's own services for a second account, so it uses memory even with nothing open. How much varies with the apps open, how long it has been logged in and whether you watch it live. Atlas's own processes in the helper use about 30 MB. Each app adds what it would on your desktop; Chrome with one page and TextEdit added about 0.5 GB on our test Mac.
+
+With no viewer showing it, an idle helper uses little CPU. Watching costs more: a live picture of a 2560 × 1440 helper uses most of one core, split between the helper and Atlas on your side. Choose **Every 5 Seconds** or **Paused**, or close the viewer, when you don't need it; work in the helper carries on.
+
+### Sound
+
+Sound from apps in the helper plays on your speakers, and muting your Mac mutes both accounts. Atlas has no helper-only mute yet. Agents close apps that make sound when they're done; ask yours to avoid them during a call.
+
+### Apps you also use
+
+Apps that allow one copy, such as Slack, Obsidian or a password manager, allow one copy per account. When an agent opens one in the helper, it starts a second, separate copy with its own data. It is signed out, it can't see your copy, and your copy keeps running.
+
+A few apps run in only one account at a time, such as Tailscale. While yours is open, the helper can't open it, and Atlas says so. While the helper's is open, macOS won't open yours; the agent closes it with `atlas close`.
+
+A password manager in the helper starts with an empty vault, can't use Touch ID, and its browser extension only talks to the helper's copy. Atlas never signs it in. Keep it that way: an agent can use whatever the helper is signed in to.
+
+### Your files
+
+The helper starts with none of your files. To give an app in the helper what it needs, the agent copies in a few files and undoes the copies when it cleans up; see [Helper files and environment](environment.md). To bring back a file the task made, such as an export or a PDF:
+
+```sh
+atlas collect atlas-work/report.pdf
+```
+
+The reply gives the path of the copy on your side. Nothing else comes back.
+
+Some places are readable by every account on your Mac, the helper included: `/Users/Shared`, most external drives, a disk image mounted in either account, and folders in your home that aren't private. Your Desktop, Documents, Downloads and Library are private; a folder you created yourself, such as `~/code`, usually isn't. To make one private:
+
+```sh
+chmod go-rwx ~/code
+```
+
+Atlas still opens builds from a private folder: it copies them for the helper.
+
+Atlas limits what the helper's apps can see. Your agent itself runs in your account and can read what you can, as it does without Atlas.
+
 ## Settings and practical limits
 
 Open **Settings** to change picture behavior in **General**, check the account and readiness in **Helper**, manage connections in **Agents**, or view version information in **About**.
@@ -101,7 +153,7 @@ Keep these limits in mind when choosing a task:
 - Open apps with `atlas open`. A click on a Dock icon launches that app, so `--app` and `--pid` refuse a click, scroll or drag on the Dock. Dragging works for window movement, sliders and text selection, but does not provide native file or item drag and drop. With `--app` or `--window`, a drag may drop on the empty desktop only when it starts on the window's title bar and so moves the window; a drop on a desktop widget, the Dock or another window is still refused.
 - Native Save and Open panels can be inert without authenticated Screen Sharing. Compact `doctor` warns; `capabilities.nativeDialogs` in `doctor --verbose` is dated evidence, not connection detection, and `ready` only means basic readiness. Cancel an unqualified panel with Escape, create files through `atlas run`, and open files directly with `atlas open --app TextEdit PATH`. Use a new filename in the helper's home to avoid overwriting work. Cmd+S can save an existing writable file in place; verify its bytes through `run`.
 - Use Google Chrome or Firefox for hidden browser work, for example `atlas open --app "Google Chrome" http://localhost:3000` with your local server running. Safari and other WebKit views can remain blank without Screen Sharing. `capabilities.webContent` in `doctor --verbose` reports this constraint. Opening a URL without `--app` uses the default browser.
-- The helper has its own files and sign-ins. Atlas does not copy your credentials. Save working files in the helper's home rather than an app copy staged under `/Users/Shared/Atlas/Open`, which the helper can only read.
-- The helper shares your Mac's network, speakers and process list. Audio can play through your speakers. Use `atlas close --app NAME` instead of a broad process-killing command.
+- Save working files in the helper's home rather than an app copy staged under `/Users/Shared/Atlas/Open`, which the helper can only read. [What the helper shares](#what-the-helper-shares) covers files, sound and other apps.
+- The helper shares your Mac's process list. Use `atlas close --app NAME` instead of a broad process-killing command.
 
 Coordinate any lock, sleep, logout or user switch with the person using the Mac. These transitions can interrupt the helper's session and change whether input is allowed.
