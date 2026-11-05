@@ -2,14 +2,7 @@
 
 All notable changes to **Atlas** are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Each release section summarizes the changes in that version.
 
-<!--
-  At release: rename "[Unreleased]" to "[0.1.1] - 2026-11-05", add a fresh empty
-  "## [Unreleased]" above it, and update the link definitions at the bottom
-  ([Unreleased] compares v0.1.1...HEAD, [0.1.1] compares v0.1.0...v0.1.1).
-  Fill or delete every TODO comment first; HTML comments do not show on GitHub.
--->
-
-## [Unreleased]
+## [0.1.1] - 2026-11-05
 
 The first update after launch. Setup no longer does its heaviest work while you unlock your account after switching back from the helper, Compose Desktop apps now take clicks and typing in the helper, commands no longer finish late because of a rare process race, reopening Atlas from its icon shows the viewer when none of its windows are open, and agents get one-window screenshots and one-call value readouts so they finish tasks in fewer, cheaper turns. The docs now say plainly what the helper shares with your account. Update with `atlas update`.
 
@@ -17,14 +10,10 @@ Thanks to [@INGHRTY](https://github.com/INGHRTY), first-time contributor, for ma
 
 Thanks also to everyone who reported problems and asked questions on X and Reddit after launch.
 
-<!-- TODO before release: rename Unreleased to 0.1.1 with the release date, and confirm #53 is merged. -->
-
 - **Setup waits until you're back in your own account**: a Mac froze for one person while they unlocked their account after switching back from the helper during setup. Atlas started its end-to-end check, which starts input in the helper and takes a test screenshot, the moment the helper left the screen, while they were still at the login window. Setup now reads nothing while the login window has the screen and starts the check only once you have been back in your own account, unlocked, for a moment; `atlas init` waits the same way. Two system tools setup checks every second and a half, `codesign` and `launchctl`, now have time limits. ([#54](https://github.com/InsaneArts/atlas/pull/54))
 - **A clear answer for apps that run in one account at a time**: `atlas open` of an app such as Tailscale while it's open in your account told the agent to check that the app exists. Atlas now says the app runs in one account at a time and is open in another, and tells the agent not to retry it or quit yours. ([#54](https://github.com/InsaneArts/atlas/pull/54))
-
 - **Compose Desktop apps accept clicks and typing**: a Compose Multiplatform desktop window reports a focused element that no longer exists, so Atlas could not tell where keyboard focus was and refused every click and keystroke with `focus-changed`, sending nothing. Atlas now asks once more, and when the element is still gone it judges the focused window instead, as it already does for apps with no focused element. Any other failure to read focus still refuses, so input never lands in a window Atlas cannot account for. ([#53](https://github.com/InsaneArts/atlas/pull/53), part of [#51](https://github.com/InsaneArts/atlas/issues/51))
 - **Known limit: Java and Compose windows can show an old picture**: in the helper, Java (Swing) and Compose windows take input and their state is right, but the picture on screen stays old until the window is resized, and a resize can show an earlier layout. macOS doesn't show new frames drawn with Metal or OpenGL in a login that isn't on screen. In our tests the pictures update while a signed-in Screen Sharing session to the helper is open. Otherwise, read the app's state with `atlas elements --app NAME --values`. ([#51](https://github.com/InsaneArts/atlas/issues/51))
-<!-- TODO(#51 follow-up): if a doctor warning or docs note for Java/Compose frames lands, add its PR link to the bullet above. -->
 - **Finished commands report on time**: on macOS a process that another part of Atlas started at the same moment could inherit both ends of a command's output pipe and hold it open, so a command that had finished was reported late and its cleanup could be recorded as an unknown outcome, which blocks agents until `atlas restart`. Atlas now starts every process and creates every pipe one at a time, held only for the instant of the start. ([#48](https://github.com/InsaneArts/atlas/pull/48))
 - **Opening Atlas from its icon shows the viewer**: opening Atlas from Applications, Launchpad or the Dock while it was already running did nothing, which looked like the app failing to open. It now opens the viewer when none of Atlas's windows are open. Opening a set-up Atlas that is not running also opens the viewer now, instead of only starting the menu bar item. ([#52](https://github.com/InsaneArts/atlas/pull/52))
 - **Screenshot one window**: `atlas screenshot --app NAME --window N` captures just that window, and `--region` now works together with `--app` to crop part of an app. Smaller pictures cost an agent fewer tokens per look. ([#50](https://github.com/InsaneArts/atlas/pull/50))
@@ -32,7 +21,6 @@ Thanks also to everyone who reported problems and asked questions on X and Reddi
 - **Screenshots through MCP**: a new `take_screenshot` tool returns the picture inside the tool reply, so hosts that show images see it without opening a file. It runs `atlas screenshot` with the same checks and record, and never changes where another chat's untargeted clicks go. ([#50](https://github.com/InsaneArts/atlas/pull/50))
 - **Each web page gets its own browser window**: `atlas open --app "Google Chrome" URL` opens the page in a new window when Chrome is already running, so two agents' pages never share one window. The same applies to Chrome Canary, Chromium, Brave and Microsoft Edge. ([#50](https://github.com/InsaneArts/atlas/pull/50))
 - **Agents finish in fewer turns**: the bundled Atlas skill now tells agents to chain known steps, prove a step by reading its value back, and take a screenshot only when text cannot show the result. The MCP status reply gives the model only the facts it acts on; the full status goes to Atlas's embedded view. ([#50](https://github.com/InsaneArts/atlas/pull/50))
-
 - **Docs: what the helper shares**: a new section in [Using Atlas](docs/using-atlas.md#what-the-helper-shares) lists what the helper has of its own (pointer, clipboard, files, keychain) and what it shares with your account (speakers, network, CPU and the process list). It gives the helper's memory use, says that sound from the helper plays on your speakers with no helper-only mute yet, and explains what happens with apps you also use, such as Slack, a password manager or Tailscale. ([#55](https://github.com/InsaneArts/atlas/pull/55))
 - **Docs: your files**: the README and [Using Atlas](docs/using-atlas.md#your-files) now say how an agent copies in only the files an app needs and brings results back with `atlas collect`, and that the helper can read what every account on your Mac can, including `/Users/Shared`, most external drives and folders in your home that aren't private, with the one command that makes a folder private. ([#55](https://github.com/InsaneArts/atlas/pull/55))
 
@@ -51,5 +39,5 @@ The first release. Atlas gives AI agents a hidden second desktop on your Mac: a 
 - **Files in and results out**: `atlas open` copies an app the helper cannot read, `atlas environment` copies a reviewed snapshot of chosen files into the helper and can roll it back, `atlas collect` brings results out, and `atlas cleanup --apply` stops a task's jobs, rolls back its unchanged copies and moves its installs aside. Apps are closed with `atlas close`, and data an app made in the helper can remain.
 - **Safe on failure**: an action whose outcome is unknown is held and blocks further input until it is recovered with `atlas restart`, so an agent never repeats a click or keystroke that may already have landed.
 
-[Unreleased]: https://github.com/InsaneArts/atlas/compare/v0.1.0...HEAD
+[0.1.1]: https://github.com/InsaneArts/atlas/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/InsaneArts/atlas/releases/tag/v0.1.0
