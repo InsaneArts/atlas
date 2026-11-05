@@ -58,6 +58,9 @@ final class SessionConsole: NSObject {
   /// The short name of the account whose session is on the Mac's screen now, read in this process: `loginwindow`
   /// while the login window has the screen, nil when it can't be read.
   static func consoleUser() -> String? {
-    SCDynamicStoreCopyConsoleUser(nil, nil, nil).map { String($0 as NSString) }
+    guard let name = SCDynamicStoreCopyConsoleUser(nil, nil, nil) else {
+      return nil
+    }
+    return name as String
   }
 }
