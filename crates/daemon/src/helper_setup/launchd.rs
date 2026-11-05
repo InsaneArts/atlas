@@ -102,10 +102,13 @@ const NO_SUCH_DOMAIN: i32 = 125;
 
 /// Fails closed: only launchctl's "no such service", "no such desktop
 /// domain" and "no domain for this user" (the helper is signed out, or
-/// never signed in) statuses mean absent.
+/// never signed in) statuses mean absent. Setup reads this every second and
+/// a half, so launchctl gets a time limit; one that runs past it is an
+/// error, never absent.
 pub(super) fn job(layout: &Layout, label: &str) -> Result<Job> {
-    let output = atlas_core::spawn::output(
+    let output = atlas_core::bounded::output(
         Command::new("/bin/launchctl").args(["print", &format!("{}/{label}", layout.domain())]),
+        atlas_core::bounded::FILE,
     )?;
     match output.status.code() {
         Some(0) => parse_job(&String::from_utf8_lossy(&output.stdout)),

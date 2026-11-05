@@ -35,6 +35,10 @@ pub const WAITED: &str = "Atlas already waited for it. Do something else, then t
 
 pub const DISABLED_CONTROL: &str = "Choose an enabled control. If this is Save/Open, cancel with Escape and use atlas run to create files or atlas open to open them; do not retry an inert confirmation.";
 
+/// What an agent does about an app that runs in one account at a time and
+/// is already open in another, usually the person's.
+pub const OPEN_IN_ANOTHER_ACCOUNT: &str = "It can't open in the helper while it's open there. Tell the person; don't retry it, and never quit their copy.";
+
 /// What an agent does about a failure: the uncertain step when it may or
 /// may not have happened, else the code's. Waiting for the person (agents
 /// stopped, the person cancelled it, holds control or is at the helper's

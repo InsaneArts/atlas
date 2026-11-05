@@ -25,6 +25,26 @@ fn an_off_console_or_unknown_session_cannot_lock_or_switch_accounts() {
 }
 
 #[test]
+fn this_login_is_on_screen_only_when_its_own_graphical_session_says_so() {
+    assert!(on_screen(503, || Ok(console_proof())).unwrap());
+    for state in [json!(false), Value::Null, json!("true")] {
+        let mut proof = console_proof();
+        proof["onConsole"] = state;
+        assert!(
+            !on_screen(503, || Ok(proof)).unwrap(),
+            "a login at the login window or behind another is not on screen"
+        );
+    }
+    let mut other = console_proof();
+    other["uid"] = json!(501);
+    assert_eq!(
+        on_screen(503, || Ok(other)).unwrap_err().code,
+        Code::Identity,
+        "another login's session proves nothing about this one"
+    );
+}
+
+#[test]
 fn a_lock_requires_this_accounts_verified_graphical_session() {
     for (key, value) in [
         ("uid", json!(501)),
@@ -334,4 +354,47 @@ fn the_lock_calls_exist_on_this_macos() {
     assert!(login_symbol(c"SACLockScreenImmediate").is_ok());
     assert!(login_symbol(c"SACSwitchToLoginWindow").is_ok());
     assert_eq!(login_symbol(c"SACNoSuchCall").unwrap_err().code, "switch");
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_person_is_back_only_on_two_looks_in_a_row_a_settle_apart() {
+    let looks = std::cell::RefCell::new(vec![true, false, true, true].into_iter());
+    let started = tokio::time::Instant::now();
+    until_back_using(|| Ok(looks.borrow_mut().next().unwrap()), SETTLE * 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        looks.borrow_mut().next(),
+        None,
+        "a look off screen starts the count again"
+    );
+    assert_eq!(started.elapsed(), SETTLE * 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_session_that_cannot_be_verified_fails_at_once_without_waiting() {
+    let started = tokio::time::Instant::now();
+    let error = until_back_using(
+        || {
+            Err(Error::new(
+                Code::Identity,
+                "No graphical session dictionary",
+            ))
+        },
+        SETTLE * 10,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, Code::Identity);
+    assert_eq!(started.elapsed(), std::time::Duration::ZERO);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_person_who_stays_away_is_refused_once_the_limit_passes() {
+    let started = tokio::time::Instant::now();
+    let error = until_back_using(|| Ok(false), SETTLE * 4)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::NotReady);
+    assert_eq!(started.elapsed(), SETTLE * 4);
 }

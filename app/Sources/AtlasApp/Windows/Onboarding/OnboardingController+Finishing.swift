@@ -10,11 +10,12 @@ extension OnboardingController {
     enqueue(.check)
   }
 
-  /// Try Again after a failed check.
+  /// Try Again after a failed check: it starts as the first did, on the next reading, asked for at once, once this
+  /// login has been read on screen ``settledReadings`` times in a row.
   func retryFinish() {
     guard !isQueued(.check) else { return }
     snapshot.finish = .idle
-    runFinish()
+    refresh()
   }
 
   /// Runs the end-to-end check, then reads the facts again; a check the closing window stopped shows nothing. Once it

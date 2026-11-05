@@ -614,7 +614,9 @@ async fn install_job(
     Ok(())
 }
 
-/// Unless `status` has the helper in the background, wait until it is.
+/// Unless `status` has the helper in the background, wait until it is; then
+/// until the person is back in this login and settled there: work started
+/// while they are unlocking would land on the switch itself.
 async fn wait_until_back(client: &Client, uid: u32, status: &Value) -> Result<()> {
     if atlas_core::session::require_hidden(status, uid).is_err() {
         let _spinner = Spinner::new("Waiting for you to switch back to your own account…");
@@ -627,7 +629,7 @@ async fn wait_until_back(client: &Client, uid: u32, status: &Value) -> Result<()
         mark_since_lock("hidden");
     }
 
-    Ok(())
+    atlas_client::switch::until_back(PATIENCE).await
 }
 
 /// Screen Recording and Accessibility for Atlas in the helper: already
@@ -689,6 +691,7 @@ async fn permissions_step(client: &Client, config: &Config, name: &str) -> Resul
             // macOS applies a new Screen Recording grant to new processes
             // only, so the helper restarts to pick up what the person allowed.
             if !missing(&client.status().await).is_empty() {
+                wait_until_back(client, config.helper_uid, &client.status().await).await?;
                 let _spinner = Spinner::new("Restarting the helper to pick up the permissions…");
                 restart_helper(client).await?;
             }

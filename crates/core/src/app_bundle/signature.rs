@@ -38,8 +38,11 @@ fn parse_signature(text: &str) -> Signature {
 }
 
 pub fn signature(path: &Path) -> Option<Signature> {
-    let output =
-        crate::spawn::output(Command::new("/usr/bin/codesign").arg("-dvvv").arg(path)).ok()?;
+    let output = crate::bounded::output(
+        Command::new("/usr/bin/codesign").arg("-dvvv").arg(path),
+        crate::bounded::FILE,
+    )
+    .ok()?;
 
     output
         .status
@@ -75,12 +78,16 @@ pub fn requirement_for(identifier: &str) -> String {
     )
 }
 
+/// Whether `target` satisfies Atlas's signing requirement for `identifier`.
+/// Setup reads this every second and a half, so `codesign` gets a time
+/// limit; one that runs past it reads as not signed, as any failure does.
 fn satisfies(target: &std::ffi::OsStr, identifier: &str) -> bool {
-    crate::spawn::output(
+    crate::bounded::output(
         Command::new("/usr/bin/codesign")
             .args(["--verify", "--strict", "-R"])
             .arg(format!("={}", requirement_for(identifier)))
             .arg(target),
+        crate::bounded::FILE,
     )
     .is_ok_and(|output| output.status.success())
 }

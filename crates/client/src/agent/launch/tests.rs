@@ -41,6 +41,29 @@ fn a_failed_launch_keeps_copied_paths_or_explicit_null_for_non_unicode_paths() {
     );
 }
 
+#[test]
+fn an_app_open_in_another_account_says_so_and_not_that_it_may_be_missing() {
+    let said = "_LSOpenURLsWithCompletionHandler() failed for the application \
+                /Applications/Tailscale.app with error -10829.\n";
+    let finished = Finished::decode(&crate::test_support::exited(1, said), OUTPUT);
+    assert_eq!(
+        serde_json::to_value(not_opened(&finished, &[])).unwrap(),
+        json!({"ok": false, "code": "spawn-failed", "uncertain": false,
+            "error": "That app runs in one account at a time, and it is already open in another \
+                      account on this Mac.",
+            "next": atlas_core::error::advice::OPEN_IN_ANOTHER_ACCOUNT, "opened": false})
+    );
+
+    let missing = "Unable to find application named 'with error -10829.'";
+    let finished = Finished::decode(&crate::test_support::exited(1, missing), OUTPUT);
+    let error = serde_json::to_value(not_opened(&finished, &[])).unwrap();
+    assert_eq!(
+        error["error"], missing,
+        "a name is never taken for the error"
+    );
+    assert!(error.get("next").is_none());
+}
+
 /// Web pages for a browser already running open in a window of their own,
 /// so they never land as a tab in another agent's window; anything else
 /// opens as it always did.

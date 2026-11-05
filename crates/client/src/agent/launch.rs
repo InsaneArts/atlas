@@ -246,6 +246,11 @@ async fn launch(
     Ok((finished, false))
 }
 
+/// How `open`'s message ends for an app that runs in one account at a time
+/// and is already open in another (`kLSMultipleSessionsNotSupportedErr`).
+/// Only the end is matched: the app's name and path come before it.
+const ONE_ACCOUNT_AT_A_TIME: &str = "with error -10829.";
+
 /// A launch that failed, said with its code and with the `copied` copies
 /// made for it, which stay reported: the launch may still be on its way (a
 /// Gatekeeper question, say), and close removes them.
@@ -260,14 +265,26 @@ fn not_opened(finished: &Finished, copied: &[crate::handoff::Copied]) -> Error {
     } else {
         let said = finished.said();
         let said = said.trim();
-        let error = Error::new(
-            Code::SpawnFailed,
-            if said.is_empty() {
-                "macOS could not open that in the helper"
-            } else {
-                said
-            },
-        );
+        let error = if said.ends_with(ONE_ACCOUNT_AT_A_TIME) {
+            Error::new(
+                Code::SpawnFailed,
+                "That app runs in one account at a time, and it is already open in another \
+                 account on this Mac.",
+            )
+            .with(
+                "next",
+                json!(atlas_core::error::advice::OPEN_IN_ANOTHER_ACCOUNT),
+            )
+        } else {
+            Error::new(
+                Code::SpawnFailed,
+                if said.is_empty() {
+                    "macOS could not open that in the helper"
+                } else {
+                    said
+                },
+            )
+        };
         match finished.unread() {
             Some(cause) => error.with_source(cause),
             None => error,
