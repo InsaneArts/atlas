@@ -227,7 +227,7 @@ struct OnboardingControllerReadingTests {
       try await settle("Choose Another never started") { commands.ran.contains(Action.forgetHelper.arguments) }
       controller.send(.complete)
       // The check runs its command without the words an action shows: only the queue keeps it back.
-      controller.send(.retryFinish)
+      controller.runFinish()
       await controller.close()
       #expect(clock.waiting.isEmpty, "the reading loop's pause ended with the window")
       gate.open()

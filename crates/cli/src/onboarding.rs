@@ -1000,8 +1000,14 @@ pub fn window(open: bool) -> Result<Value> {
     Ok(json!({"ok": true, "open": open}))
 }
 
+/// How long setup's end-to-end check waits for the person to be back in
+/// their own account before it gives up.
+const BACK_WITHIN: Duration = Duration::from_secs(60);
+
 /// Back in the person's account: start input, record and check the setup
-/// end to end, as `atlas init` does.
+/// end to end, as `atlas init` does. Nothing starts until the person is
+/// back in this login and settled there: while they are still unlocking
+/// after the switch, this work would land on the switch itself.
 ///
 /// # Errors
 ///
@@ -1011,14 +1017,11 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     let config = Config::load(config_path)?;
     let client = Client::new(config.clone())?;
     client.bootstrap_probe()?;
-    let status = client.status().await;
-    atlas_core::session::require_hidden(&status, config.helper_uid)?;
-
-    if !setup::missing(&status).is_empty() {
-        return Err(problem(
-            "Screen Recording or Accessibility is still off in the helper",
-        ));
-    }
+    ready_to_finish(&client.status().await, config.helper_uid)?;
+    atlas_client::switch::until_back(BACK_WITHIN).await?;
+    // Places this check against the switch in a report's unified log.
+    atlas_core::login_log::mark("onboarding.finish");
+    ready_to_finish(&client.status().await, config.helper_uid)?;
 
     if !client.controller.pending()?.is_empty() {
         client.restart().await?;
@@ -1036,6 +1039,20 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     }
 
     Ok(json!({"ok": true, "ready": true, "doctor": doctor.value}))
+}
+
+/// Whether `status` lets setup's end-to-end check go on: the helper `uid`
+/// in the background with both permissions on. Read before the check waits
+/// for the person and again after, since either may change meanwhile.
+fn ready_to_finish(status: &Value, uid: u32) -> Result<()> {
+    atlas_core::session::require_hidden(status, uid)?;
+    if !setup::missing(status).is_empty() {
+        return Err(problem(
+            "Screen Recording or Accessibility is still off in the helper",
+        ));
+    }
+
+    Ok(())
 }
 
 /// Open the menu bar at login, or not, as the person chose. As with `atlas

@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Observation
+import SystemConfiguration
 
 /// Every switch and lock control follows this process's graphical session, never the account shown in a viewer.
 @Observable
@@ -43,9 +44,20 @@ final class SessionConsole: NSObject {
     return permitsSwitch(session: session, uid: getuid())
   }
 
-  /// Missing evidence, or a dictionary belonging to another login, never enables a lock.
+  /// Missing evidence, a dictionary belonging to another login, or a locked screen never enables a lock: the person
+  /// is using this login only once it is on screen and unlocked, as after a switch back once they have unlocked it.
   static func permitsSwitch(session: [String: Any]?, uid: uid_t) -> Bool {
     session?[kCGSessionUserIDKey as String] as? UInt32 == uid
       && session?[kCGSessionOnConsoleKey as String] as? Bool == true
+      && session?[screenLocked] as? Bool != true
+  }
+
+  /// The window server's key for a login whose screen is locked; it has no public name.
+  static let screenLocked = "CGSSessionScreenIsLocked"
+
+  /// The short name of the account whose session is on the Mac's screen now, read in this process: `loginwindow`
+  /// while the login window has the screen, nil when it can't be read.
+  static func consoleUser() -> String? {
+    SCDynamicStoreCopyConsoleUser(nil, nil, nil).map { String($0 as NSString) }
   }
 }

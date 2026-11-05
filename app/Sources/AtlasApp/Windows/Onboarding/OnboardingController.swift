@@ -21,6 +21,11 @@ final class OnboardingController {
   /// How often the facts are read while the window is open: 1.5 s, soon enough that a switch turned on in System
   /// Settings, or a log-in in the helper, shows without the person waiting.
   static let readEvery: Duration = .seconds(1.5)
+  /// How many readings in a row must find this login on screen before the end-to-end check starts: it starts the
+  /// helper's input and captures its screen, work that must not land on a switch the person is still unlocking.
+  static let settledReadings = 2
+  /// How long the window waits, once the person is back from being away, before it reads again.
+  static let quietAfterSwitch: Duration = .seconds(3)
   /// After `atlas agents status` failed, how many readings of the facts pass before it is asked again: 10, about 15
   /// s, so a command that keeps failing is not run every moment while the person reads the screen.
   static let agentsRetryReadings = 10
@@ -73,6 +78,10 @@ final class OnboardingController {
   @ObservationIgnored var readingsSinceAgentsFailed = 0
   /// Readings in a row whose permissions were unknown.
   @ObservationIgnored var readingsUnknown = 0
+  /// How many readings in a row have found this login on screen; see ``settledReadings``.
+  @ObservationIgnored var readingsOnConsole = 0
+  /// Whether the reading loop is in its ``quietAfterSwitch`` pause, which a refresh does not cut short.
+  @ObservationIgnored var settling = false
   /// In the helper: the account whose picture was read last, by its short name, so it is read once.
   @ObservationIgnored var askerPictured: String?
   /// The window closed: nothing new starts, nothing queued runs, and late replies are dropped.

@@ -143,11 +143,17 @@ fn login_symbol(symbol: &std::ffi::CStr) -> Result<extern "C" fn() -> i32> {
     Ok(unsafe { std::mem::transmute::<*mut std::ffi::c_void, extern "C" fn() -> i32>(function) })
 }
 
+/// Whether this login's screen is locked now, from the window server; none
+/// when the window server gave no session to read. An unlocked session has
+/// no lock entry at all.
+fn lock_state() -> Option<bool> {
+    let record = atlas_native::native::cf::session()?;
+    Some(atlas_native::native::cf::boolean(&record, "CGSSessionScreenIsLocked") == Some(true))
+}
+
 /// Whether this login's screen is locked now, from the window server.
 fn screen_locked() -> bool {
-    atlas_native::native::cf::session()
-        .and_then(|record| atlas_native::native::cf::boolean(&record, "CGSSessionScreenIsLocked"))
-        == Some(true)
+    lock_state() == Some(true)
 }
 
 /// Wait up to `seconds` for the screen to report locked.
@@ -191,15 +197,7 @@ fn lock_screen_using(
     confirmed: impl FnOnce() -> bool,
 ) -> Result<Value> {
     // Read this process's graphical session immediately before the call.
-    // A console owner's UID alone cannot prove that this session is there.
-    let proof = session()?;
-    if proof["uid"].as_u64() != Some(u64::from(uid)) || proof["hasGraphicAccess"] != true {
-        return Err(Error::new(
-            Code::Identity,
-            "Atlas could not verify this login's graphical session.",
-        ));
-    }
-    if proof["onConsole"] != true {
+    if !on_screen(uid, session)? {
         return Err(not_ready(
             "this login must be on screen at the Mac to switch accounts or lock the screen.",
         ));
@@ -214,6 +212,67 @@ fn lock_screen_using(
     }
 
     Ok(json!({"ok": true, "locked": true}))
+}
+
+/// How far apart two looks must both find the person using this login
+/// before work that would otherwise land on a switch may start.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Wait, for at most `limit`, until the person is using this login on two
+/// looks in a row, [`SETTLE`] apart: on the Mac's screen and unlocked, read
+/// from the window server. While they are still at the login window, or
+/// unlocking after a switch back, they are not.
+///
+/// # Errors
+///
+/// Returns an identity error at once when this process's graphical session
+/// can't be verified as this login's, as from a remote shell, and a
+/// not-ready error once `limit` passes.
+pub async fn until_back(limit: std::time::Duration) -> Result<()> {
+    let uid = nix::unistd::getuid().as_raw();
+    until_back_using(
+        || Ok(on_screen(uid, atlas_native::native::session_info)? && lock_state() == Some(false)),
+        limit,
+    )
+    .await
+}
+
+/// [`until_back`], reading whether the person uses this login from `look`.
+async fn until_back_using(
+    mut look: impl FnMut() -> Result<bool>,
+    limit: std::time::Duration,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + limit;
+    let mut seen = false;
+    loop {
+        let using = look()?;
+        if seen && using {
+            return Ok(());
+        }
+        seen = using;
+        if tokio::time::Instant::now() + SETTLE > deadline {
+            return Err(Error::new(
+                Code::NotReady,
+                "You're not back in your own account yet. Try again once you are.",
+            ));
+        }
+        tokio::time::sleep(SETTLE).await;
+    }
+}
+
+/// Whether login `uid`, whose graphical session `session` reads, is on the
+/// Mac's screen. A console owner's UID alone cannot prove that this
+/// session is there, so the session must be `uid`'s and graphical.
+fn on_screen(uid: u32, session: impl FnOnce() -> Result<Value>) -> Result<bool> {
+    let proof = session()?;
+    if proof["uid"].as_u64() != Some(u64::from(uid)) || proof["hasGraphicAccess"] != true {
+        return Err(Error::new(
+            Code::Identity,
+            "Atlas could not verify this login's graphical session.",
+        ));
+    }
+
+    Ok(proof["onConsole"] == true)
 }
 
 /// What the switch needs to know of the account it switches to.

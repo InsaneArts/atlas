@@ -10,6 +10,8 @@ struct OnboardingDependencies {
   var commands: any CommandRunning
   /// This process's console ownership, shared by all switch and lock offerings.
   var console: SessionConsole = .shared
+  /// The short name of the account on the Mac's screen now; see ``SessionConsole/consoleUser()``.
+  var consoleUser: @MainActor () -> String? = SessionConsole.consoleUser
   /// Opens a URL, such as a Privacy & Security page.
   var openURL: @MainActor (URL) -> Void
   /// The app's login item, read for Open at Login's first value.

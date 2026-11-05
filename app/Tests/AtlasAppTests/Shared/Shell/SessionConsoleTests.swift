@@ -19,6 +19,8 @@ struct SessionConsoleTests {
     #expect(!SessionConsole.permitsSwitch(session: [user: uid, console: false], uid: uid))
     #expect(!SessionConsole.permitsSwitch(session: [user: uid + 1, console: true], uid: uid))
     #expect(SessionConsole.permitsSwitch(session: [user: NSNumber(value: uid), console: true], uid: uid))
+    let locked = [user: NSNumber(value: uid), console: true, SessionConsole.screenLocked: true] as [String: Any]
+    #expect(!SessionConsole.permitsSwitch(session: locked, uid: uid), "a login still locked is not in use yet")
   }
 
   @Test("every setup footer and helper menu disables switching while this session is off-console")

@@ -15,6 +15,7 @@ extension OnboardingController {
   ///   - clock: The clock its waits run on; by default one nobody advances.
   ///   - mark: Where its login timing's markers go; nowhere by default, never this Mac's log.
   ///   - console: The scripted session reading; on-console by default, independent of the test machine.
+  ///   - consoleUser: Who has the Mac's screen; this login, `me`, by default.
   /// - Returns: The controller, which reads no icon or picture from this Mac and reveals what it shows in the Finder
   ///   into `opened`.
   static func scripted(
@@ -24,12 +25,14 @@ extension OnboardingController {
     installs: AgentInstalls? = nil,
     clock: ManualClock = ManualClock(),
     mark: @escaping @MainActor (String) -> Void = { _ in },
-    console: SessionConsole = SessionConsole(read: { true })
+    console: SessionConsole = SessionConsole(read: { true }),
+    consoleUser: @escaping @MainActor () -> String? = { "me" }
   ) -> OnboardingController {
     OnboardingController(
       dependencies: OnboardingDependencies(
         commands: commands,
         console: console,
+        consoleUser: consoleUser,
         openURL: { opened.urls.append($0) },
         loginItem: loginItem.seam,
         installs: installs ?? AgentInstalls(commands: commands),
@@ -88,4 +91,23 @@ extension OnboardingController {
   func untilLoaded(sourceLocation: SourceLocation = #_sourceLocation) async throws {
     try await settle("the facts were never read", sourceLocation: sourceLocation) { snapshot.loaded }
   }
+
+  /// Reads until this login has been found on screen ``OnboardingController/settledReadings`` times in a row, as the
+  /// end-to-end check waits for: each reading after the first is asked for at once, a bounded number of times.
+  ///
+  /// - Parameters:
+  ///   - commands: The window's commands, whose readings are counted.
+  ///   - sourceLocation: Where a failure is reported: the caller's line.
+  /// - Throws: The failed requirement, when a reading never comes.
+  func untilSettled(_ commands: ScriptedCommands, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+    try await untilLoaded(sourceLocation: sourceLocation)
+    for _ in 1..<Self.settledReadings {
+      let readings = commands.ran.count
+      refresh()
+      try await settle("the next reading never came", sourceLocation: sourceLocation) {
+        commands.ran.count > readings
+      }
+    }
+  }
+
 }
