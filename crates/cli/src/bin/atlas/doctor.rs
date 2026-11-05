@@ -11,6 +11,12 @@ use serde_json::{Value, json};
 /// refuses every agent's action until the helper is recovered.
 const NO_UNKNOWN_OUTCOME: &str = "No action of unknown outcome";
 
+const GIGABYTE: u64 = 1 << 30;
+
+/// Warn once the helper's screen recorder holds more than this. macOS keeps
+/// part of every capture it serves there until the helper logs out.
+const RECORDER_LIMIT: u64 = GIGABYTE;
+
 /// Read and enrich the report, retaining full facts for people or verbose output.
 pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     let uid = client.config.helper_uid;
@@ -122,10 +128,6 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     }
 }
 
-/// Warn once the helper's screen recorder holds more than this. macOS keeps
-/// part of every capture it serves there until the helper logs out.
-const RECORDER_LIMIT: u64 = 1 << 30;
-
 /// Warn the person when the helper's screen recorder, as its status says,
 /// uses more memory than [`RECORDER_LIMIT`]. Only the person can log the
 /// helper out, so an agent is not told, verbose or not; the figure itself
@@ -143,7 +145,7 @@ fn recorder_report(report: &mut Value, asking: Asker<'_>) {
     let warning = format!(
         "The helper's screen recorder is using {:.1} GB of memory. Log the helper out and back \
          in to reset it.",
-        bytes as f64 / (1_u64 << 30) as f64
+        bytes as f64 / GIGABYTE as f64
     );
     if let Some(warnings) = report["warnings"].as_array_mut() {
         warnings.push(json!(warning));

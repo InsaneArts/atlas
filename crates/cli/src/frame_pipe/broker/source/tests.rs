@@ -217,15 +217,15 @@ async fn a_changed_picture_brings_the_normal_cadence_back() {
 #[tokio::test(start_paused = true)]
 async fn input_brings_the_normal_cadence_back_at_once() {
     let (source, _, _) = scripted();
-    let input = quiet();
+    let input = Arc::new(Notify::new());
     let mut handle = spawn(source, Budget::new(1024), input.clone());
     let slow = gaps(&mut handle, STILL_AFTER as usize + 1).await;
     assert_eq!(slow.last(), Some(&STILL_CADENCE));
-    let quiet_since = tokio::time::Instant::now();
+    let wanted_at = tokio::time::Instant::now();
     let demand = handle.want();
     input.notify_one();
     answer(&mut handle, demand).await;
-    assert_eq!(quiet_since.elapsed(), CADENCE);
+    assert_eq!(wanted_at.elapsed(), CADENCE);
     // The same picture again is not yet a still screen.
     let after = gaps(&mut handle, 3).await;
     assert!(after.iter().all(|gap| *gap == CADENCE), "{after:?}");

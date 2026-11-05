@@ -19,6 +19,7 @@ const RECORDER_READING: Duration = Duration::from_secs(60);
 /// The memory of macOS's screen recorder in this login, which keeps part of
 /// every capture it serves until the login ends: read at most once a minute.
 pub(super) struct Recorder {
+    /// What reads the screen recorder's memory now.
     read: fn() -> Option<resources::Usage>,
     /// The last reading and when it was taken. It is held while reading, so
     /// a status asked for meanwhile waits for that reading, not a second.

@@ -166,7 +166,7 @@ fn with_recorder(footprint: Value) -> Value {
 fn a_screen_recorder_past_a_gigabyte_gets_a_warning_with_the_way_to_reset_it() {
     // Atlas.app runs doctor as the person, verbose.
     let asking = asker(Actor::Viewer, None, false);
-    let mut report = with_recorder(json!(6_u64 * (1 << 30) + (1 << 29)));
+    let mut report = with_recorder(json!(6 * GIGABYTE + GIGABYTE / 2));
     recorder_report(&mut report, asking);
     let warning = "The helper's screen recorder is using 6.5 GB of memory. Log the helper out \
                    and back in to reset it.";
@@ -180,7 +180,7 @@ fn a_screen_recorder_past_a_gigabyte_gets_a_warning_with_the_way_to_reset_it() {
 #[test]
 fn a_smaller_or_unknown_screen_recorder_gets_no_warning() {
     for footprint in [
-        json!(1_u64 << 30),
+        json!(RECORDER_LIMIT),
         json!(0),
         Value::Null,
         json!("6 GB"),
@@ -200,12 +200,12 @@ fn an_agents_verbose_report_keeps_the_figure_but_not_the_logout_warning() {
             asker(Actor::Agent, Some(&own), interactive),
             asker(Actor::Agent, None, false),
         ] {
-            let mut report = with_recorder(json!(6_u64 << 30));
+            let mut report = with_recorder(json!(6 * GIGABYTE));
             recorder_report(&mut report, asking);
             assert_eq!(report["warnings"], json!([]), "{asking:?}");
             assert_eq!(
                 report["session"]["daemon"]["resources"]["screenRecorder"]["footprint"],
-                6_u64 << 30
+                6 * GIGABYTE
             );
         }
     }

@@ -50,7 +50,8 @@ impl Service {
 
 /// Start the frame service for `client`'s helper, reading pictures at most
 /// `longest` pixels on their longest side, telling `witness` of each
-/// committed picture, and reading again at once on each notice on `input`.
+/// committed picture, and leaving a still screen's slower pace on each notice
+/// on `input`.
 ///
 /// # Errors
 ///
