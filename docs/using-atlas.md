@@ -65,7 +65,7 @@ Cleanup quits only what runs from the task's own copies and installs, never an a
 
 ## Watch the helper
 
-Click the Atlas menu bar item for a small screen and current status. Choose **Open Atlas**, or run `atlas monitor`, for the full native viewer. It opens on your desktop while the apps you are testing stay in the helper.
+Click the Atlas menu bar item for a small screen and current status. Choose **Open Atlas**, open Atlas from Applications, or run `atlas monitor`, to get the full native viewer. It opens on your desktop while the apps you are testing stay in the helper.
 
 The viewer has four tabs:
 

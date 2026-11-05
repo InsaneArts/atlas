@@ -33,6 +33,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     container.start()
   }
 
+  /// Atlas is opened again, from the Finder, Launchpad or the Dock, while it runs: the main window comes forward, so
+  /// opening the app never leaves the person with only its menu bar item.
+  ///
+  /// - Parameters:
+  ///   - sender: The app.
+  ///   - hasVisibleWindows: Whether a window already shows; then AppKit brings it forward itself.
+  /// - Returns: Whether the reopen was handled; not when a window was already visible.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+    guard !hasVisibleWindows else { return false }
+    sender.activate()
+    container.coordinator.openViewer()
+    return true
+  }
+
   /// Atlas is asked to terminate, from the panel's Quit, the Dock or the system: the main window's control goes back
   /// first, and Atlas quits once the release is answered or its bounded wait ends.
   ///

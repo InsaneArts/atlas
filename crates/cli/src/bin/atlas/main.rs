@@ -356,8 +356,18 @@ fn opened_as_app() -> bool {
     std::os::unix::process::parent_id() == 1 && !std::io::stdin().is_terminal()
 }
 
+/// The command a set-up Atlas runs when opened as an app: `atlas monitor`
+/// starts the menu bar when it is not running and then shows the viewer
+/// window. Starting only the menu bar leaves a second click with nothing to
+/// show when it already runs, which reads as the app not opening.
+fn viewer_command(executable: &std::path::Path, config: &std::path::Path) -> std::process::Command {
+    let mut command = std::process::Command::new(executable);
+    command.arg("--config").arg(config).arg("monitor");
+    command
+}
+
 /// Opened as an app: the onboarding window until Atlas is set up here (or
-/// in the helper another account chose), the menu bar after that. Either
+/// in the helper another account chose), the viewer window after that. Either
 /// replaces this process, so the app stays the one the person opened.
 fn open_app(config: &std::path::Path) -> ExitCode {
     use std::os::unix::process::CommandExt;
@@ -376,11 +386,7 @@ fn open_app(config: &std::path::Path) -> ExitCode {
                     .is_ok_and(|account| account.is_some())
         });
     let error = if finished {
-        std::process::Command::new(&executable)
-            .arg("--config")
-            .arg(config)
-            .arg("menubar")
-            .exec()
+        viewer_command(&executable, config).exec()
     } else {
         match atlas_cli::menubar::app_program() {
             Ok(window) => std::process::Command::new(window)
