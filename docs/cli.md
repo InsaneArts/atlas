@@ -112,6 +112,7 @@ Coordinate switching, locking and logging out with the person at the Mac. `logou
 | `install`     | Put the current executable where the helper can run it. This is not the public download installer.                                                                                         |
 | `setup`       | Inspect setup, or finish or re-check the first setup `init` started. This is an advanced repair command.                                                                                   |
 | `config`      | Show the selected settings and resolved paths.                                                                                                                                             |
+| `sound`       | Show whether apps in the helper can be heard; `on` lets them play, `off` keeps them silent.                                                                                                |
 | `agent-guide` | Print the Markdown guide supplied to agents. `--skill` prints the short version the agent plugins load, `--commands` every command and its options, `--errors` what each error code means. |
 
 See [Maintenance](maintenance.md) before updating, removing or repairing Atlas. See [Configuration](configuration.md) for settings selection and storage paths.

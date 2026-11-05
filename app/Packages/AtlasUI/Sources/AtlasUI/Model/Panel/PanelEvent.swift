@@ -28,6 +28,8 @@ public enum PanelEvent: Equatable, Sendable {
   case openSettings
   /// The pause button on the picture: stop or start the panel's picture. Work in the helper goes on either way.
   case togglePause
+  /// The sound button: mute the helper, or let it play.
+  case toggleSound
   /// ⋯: open the menu under its button.
   ///
   /// - Parameter below: The button's frame in the panel, top left first, so the menu opens under it.

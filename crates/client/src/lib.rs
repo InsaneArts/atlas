@@ -31,6 +31,7 @@ pub mod overview;
 pub mod readiness;
 pub mod session_view;
 pub mod setup;
+pub mod sound;
 pub mod switch;
 pub mod task;
 #[cfg(any(test, feature = "test-support"))]

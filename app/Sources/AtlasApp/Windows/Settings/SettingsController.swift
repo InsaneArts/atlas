@@ -1,3 +1,4 @@
+import AtlasCommands
 import AtlasUI
 import Foundation
 import Observation
@@ -63,6 +64,8 @@ final class SettingsController {
       agents: agents,
       icons: icons,
       notify: notify,
+      helperSound: actions.sound.sound,
+      soundFailure: actions.sound.failure,
       facts: SettingsFacts(
         status: helper.status,
         connecting: helper.connecting,
@@ -109,7 +112,8 @@ final class SettingsController {
   }
 
   /// Writes what changed in the General pane where each value belongs: Open at Login through the panel's command,
-  /// the picture to the main window or its saved rate, and Notify me to the saved choices.
+  /// the picture to the main window or its saved rate, muting the helper through `atlas sound`, and Notify me to the
+  /// saved choices.
   ///
   /// - Parameter general: The pane as the person left it.
   func update(_ general: SettingsGeneralState) {
@@ -122,6 +126,10 @@ final class SettingsController {
     if general.picture != shown.picture {
       links.choosePicture(general.picture)
       revision += 1
+    }
+    if general.muteHelper != shown.muteHelper {
+      // Unstructured, as an edit is synchronous: the change runs beside it.
+      Task { await setHelperSound(muted: general.muteHelper) }
     }
     if general.notify != notify {
       notify = general.notify
@@ -140,10 +148,12 @@ final class SettingsController {
     if tab == .agents { readAgents() }
   }
 
-  /// The window came forward: what the links read is read again, and the agents and projects afresh.
+  /// The window came forward: what the links read is read again, and the agents, the projects and the helper's
+  /// sound afresh.
   func cameForward() {
     revision += 1
     readAgents()
+    Task { await readHelperSound() }
   }
 
   /// The window closed: the agents reading under way stops. A command it started, such as a check for updates or a

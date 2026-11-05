@@ -77,6 +77,7 @@ extension PanelController {
     statusReading += 1
     let number = statusReading
     let latest: ViewerStatus?
+    let soundAsked = actions.sound.generation
     do {
       latest = try await service.status()
     } catch is StatusRefused {
@@ -87,6 +88,7 @@ extension PanelController {
     guard number == statusReading, !Task.isCancelled else { return }
     status = latest ?? ViewerStatus()
     answered = latest != nil
+    actions.sound.adopt(latest?.overview.sound.flatMap(HelperSound.init), asked: soundAsked)
     links.read(latest)
     wantRecentIcons()
   }

@@ -29,7 +29,13 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     };
 
     let shell_blocked = status["code"] == "blocked";
+    let sound = sound_warning(&status);
     let mut report = atlas_client::capability::doctor(status, uid);
+    if let Some(warning) = sound
+        && let Some(warnings) = report["warnings"].as_array_mut()
+    {
+        warnings.push(json!(warning));
+    }
 
     if let Some(absence) = &absence {
         absence.explain(&mut report);
@@ -122,6 +128,19 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     } else {
         atlas_client::capability::summary(report)
     }
+}
+
+/// Doctor's warning when the helper's mute is not what was asked: its
+/// reason, which names the one step that fixes it. A helper that did not answer, or cannot
+/// say, is reported elsewhere; sound turned on is the person's choice.
+fn sound_warning(status: &Value) -> Option<String> {
+    let sound = &status["sound"];
+    (sound["helperSound"] == "unavailable").then(|| {
+        sound["reason"]
+            .as_str()
+            .unwrap_or("Apps in the helper are not muted. Run atlas sound off to mute them.")
+            .to_owned()
+    })
 }
 
 fn pending_result(

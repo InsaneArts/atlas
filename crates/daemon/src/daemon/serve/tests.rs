@@ -859,6 +859,7 @@ async fn replies_keep_their_shapes() {
             "op",
             "permissions",
             "session",
+            "sound",
             "user"
         ]
     );
@@ -1389,6 +1390,7 @@ async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_inc
             "session-proof-v1",
             "capture-sck-experimental",
             "rgb-stream-stop-v1",
+            "helper-sound",
             "jobs"
         ])
     );
@@ -1453,6 +1455,7 @@ fn a_blocked_hello_lookup_leaves_other_daemon_requests_responsive() {
             "session-proof-v1",
             "capture-sck-experimental",
             "rgb-stream-stop-v1",
+            "helper-sound",
             "jobs"
         ])
     );
@@ -1476,6 +1479,7 @@ async fn the_daemon_offers_jobs_and_reads() {
             "session-proof-v1",
             "capture-sck-experimental",
             "rgb-stream-stop-v1",
+            "helper-sound",
         ]),
         "no jobs without their folder"
     );
@@ -1495,6 +1499,7 @@ async fn the_daemon_offers_jobs_and_reads() {
             "session-proof-v1",
             "capture-sck-experimental",
             "rgb-stream-stop-v1",
+            "helper-sound",
             "jobs"
         ])
     );
@@ -1644,4 +1649,15 @@ async fn no_screenshot_is_taken_while_a_live_source_is_quarantined() {
     let reply = &exchange(Arc::new(daemon), r#"{"op":"screenshot"}"#).await[0];
     assert_eq!(reply["ok"], false);
     assert_eq!(reply["code"], "busy");
+}
+
+#[tokio::test]
+async fn a_sound_request_answers_what_the_mute_last_reported() {
+    for line in [r#"{"op":"sound"}"#, r#"{"op":"sound","muted":true}"#] {
+        let reply = &exchange(daemon(false), line).await[0];
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["op"], "sound");
+        assert_eq!(reply["helperSound"], "unavailable");
+        assert!(reply["reason"].is_string(), "{reply}");
+    }
 }

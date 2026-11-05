@@ -9,6 +9,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case stop = "stop.fill"
   /// Resume the agent, where a narrow window keeps the symbol alone; not play, which the picture's pause becomes.
   case resume = "forward.fill"
+  /// The helper is muted; pressing unmutes it.
+  case speakerMuted = "speaker.slash.fill"
+  /// The helper can be heard; pressing mutes it.
+  case speakerOn = "speaker.wave.2.fill"
   /// Stop showing the window outlined on the screen, in its label.
   case clear = "xmark"
   /// Empty a search field.

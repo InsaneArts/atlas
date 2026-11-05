@@ -34,6 +34,10 @@
         return viewerShotsOneSession
       case .togglePause:
         return state.footer.controls.pause?.isOn == true ? viewerWorking : viewerPaused
+      case .toggleSound:
+        var next = state
+        next.footer.controls.sound = HelperSoundButton(isMuted: !state.footer.controls.sound.isMuted)
+        return next
       case .takeControl:
         return viewerControl
       case .giveBack, .alertConfirm, .alertCancel:

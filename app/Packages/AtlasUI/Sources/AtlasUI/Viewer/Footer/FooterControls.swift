@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The footer's buttons at its trailing edge, 6 apart: the picture's pause, Stop or Resume, and the main capsule. Only
+/// The footer's buttons at its trailing edge, 6 apart: the picture's pause, muting the helper, Stop or Resume, and the
+/// main capsule. Only
 /// the actions that apply are drawn: each stands in its slot, growing in from its leading edge as it applies and
 /// shrinking away as it stops applying, its neighbours closing the gap (``ActionSlot``), while the main capsule's
 /// trailing edge keeps its place. Pressing a button never moves it or its neighbours: each keeps one width through
@@ -19,6 +20,14 @@ struct FooterControls: View {
   var body: some View {
     HStack(spacing: ViewerLayout.footerGap) {
       ViewerPauseSlot(pause: controls.pause, send: send)
+      Button {
+        send(.toggleSound)
+      } label: {
+        HelperSoundIcon(sound: controls.sound)
+      }
+      .buttonStyle(.capsule(.glyph, size: .small, outline: .circle))
+      .help(controls.sound.help)
+      .accessibilityLabel(controls.sound.label)
       FooterAgentButton(agent: controls.agent, help: controls.agentHelp, fold: fold, send: send)
       ViewerMainButton(control: controls.control, fold: fold, send: send)
     }
@@ -30,6 +39,15 @@ struct FooterControls: View {
 }
 
 #if DEBUG
+  #Preview("Sound on and unavailable") {
+    VStack(alignment: .trailing, spacing: Spacing.s) {
+      FooterControls(controls: PreviewStates.viewerSoundOn.footer.controls) { _ in }
+      FooterControls(controls: PreviewStates.viewerSoundUnavailable.footer.controls) { _ in }
+    }
+    .padding()
+    .sampleSurface()
+  }
+
   #Preview("Interactive") {
     @Previewable @State var state = PreviewStates.viewerWorking
     InteractivePreview {

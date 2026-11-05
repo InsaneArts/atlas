@@ -1,5 +1,5 @@
-/// The footer's buttons at its trailing edge, in the order they stand: the picture's pause, Stop or Resume, and the main
-/// capsule. Only the actions that apply are drawn; each comes and goes in its slot, and the main capsule's trailing edge
+/// The footer's buttons at its trailing edge, in the order they stand: the picture's pause, muting the helper, Stop or
+/// Resume, and the main capsule. Only the actions that apply are drawn; each comes and goes in its slot, and the main capsule's trailing edge
 /// never moves.
 public struct ViewerFooterControls: Equatable, Sendable {
   /// The picture's pause, on while the picture is paused; nil while there is no picture to pause, or while this window
@@ -12,6 +12,8 @@ public struct ViewerFooterControls: Equatable, Sendable {
   /// Take Control, Give Back or Recover…; nil while the helper is logged out, not ready or still connecting, where the
   /// stage offers what to do instead.
   public var control: ViewerControlButton?
+  /// Mutes the helper or lets it play.
+  public var sound: HelperSoundButton
 
   /// Creates the footer's buttons.
   ///
@@ -20,15 +22,18 @@ public struct ViewerFooterControls: Equatable, Sendable {
   ///   - agent: Stop or Resume; nil shows neither.
   ///   - agentHelp: Stop's or Resume's tooltip, with its shortcut.
   ///   - control: Take Control, Give Back or Recover…; nil hides it.
+  ///   - sound: Mutes the helper or lets it play; muted by default.
   public init(
     pause: ViewerToggle?,
     agent: ViewerAgentButton?,
     agentHelp: String = "",
-    control: ViewerControlButton?
+    control: ViewerControlButton?,
+    sound: HelperSoundButton = HelperSoundButton()
   ) {
     self.pause = pause
     self.agent = agent
     self.agentHelp = agentHelp
     self.control = control
+    self.sound = sound
   }
 }

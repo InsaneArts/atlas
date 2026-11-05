@@ -24,6 +24,8 @@ struct ViewerSnapshot {
   var isOnConsole = false
   /// Stop and Resume requests unanswered from any window, so Resume waits.
   var agentRequests = 0
+  /// The helper's sound, as every window shows it.
+  var sound = HelperSoundButton()
   /// Whether control work is under way anywhere in the app: an acquisition awaiting its reply, or a release.
   var controlBusy = false
   /// The agents connected to Atlas, as last read for the helper's facts; nil when unknown.

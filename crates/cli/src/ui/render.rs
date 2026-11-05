@@ -60,6 +60,8 @@ pub enum View {
     },
     Restart,
     Logout,
+    /// Whether apps in the helper can be heard.
+    Sound,
     StartInput,
     Install,
     Agents,
@@ -132,6 +134,7 @@ pub fn render(view: &View, value: &Value) -> Rendered {
         View::InstallApp => checked(value, cleanup::install_app),
         View::Restart => checked(value, act::restart),
         View::Logout => checked(value, act::logout),
+        View::Sound => checked(value, act::sound),
         View::StartInput => checked(value, act::start_input),
         View::Install => checked(value, act::install),
         View::Agents => Rendered::out(manage::agents(value)),

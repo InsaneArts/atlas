@@ -1600,3 +1600,19 @@ fn unreadable_markers_and_unopenable_locks_are_reported_as_unresolved() {
         assert!(blocked.is_dir());
     }
 }
+
+#[test]
+fn the_overview_says_the_helpers_sound_only_as_its_daemon_did() {
+    let mut ready = report(true, true);
+    assert_eq!(
+        overview(&ready, false, unresolved(0), &[], NOW)["sound"],
+        Value::Null
+    );
+
+    let sound = json!({"helperSound": "muted", "reason": null, "wanted": true});
+    ready["session"]["sound"] = sound.clone();
+    assert_eq!(
+        overview(&ready, false, unresolved(0), &[], NOW)["sound"],
+        sound
+    );
+}

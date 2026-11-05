@@ -77,7 +77,8 @@ enum PanelPresenter {
         isPaused: paused,
         label: paused ? Words.resumePictureItem : Words.pausePictureItem,
         help: paused ? ShortcutWords.resumePicture : ShortcutWords.pausePicture
-      )
+      ),
+      sound: snapshot.sound
     )
     state.picture = state.showsScreen ? snapshot.picture : nil
     return state

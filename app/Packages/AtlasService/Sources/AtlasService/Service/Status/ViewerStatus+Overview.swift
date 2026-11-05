@@ -44,6 +44,8 @@ extension ViewerStatus {
     public var moreSessions = 0
     /// The background jobs agents keep running in the helper.
     public var jobs = Jobs()
+    /// Whether the helper's apps can be heard, as its daemon last said; nil when it said nothing.
+    public var sound: Sound?
 
     /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
     /// reads as working, so Stop stays where the person reaches for it.
@@ -103,7 +105,7 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
-        commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs
+        commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs, sound
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -131,6 +133,7 @@ extension ViewerStatus {
       hostSessions = container.lenientList(HostSession.self, forKey: .hostSessions)
       moreSessions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .moreSessions)) ?? 0)
       jobs = (try? container.decodeIfPresent(Jobs.self, forKey: .jobs)) ?? Jobs()
+      sound = try? container.decodeIfPresent(Sound.self, forKey: .sound)
     }
   }
 }
