@@ -529,3 +529,52 @@ fn a_focused_element_proves_its_window_when_the_app_omits_the_window_attribute()
     assert_eq!(keyboard.window.unwrap().role.as_deref(), Some("AXWindow"));
     assert_eq!(keyboard.within, Within::Window);
 }
+
+/// Compose Desktop names a focused element that no longer exists whenever
+/// nothing inside its window is focused.
+#[test]
+fn a_focused_element_that_no_longer_exists_leaves_the_window_to_judge() {
+    let mut fake = Fake::app();
+    fake.set(FIELD, "AXRole", Answer::Failed(AXError::InvalidUIElement));
+    let keyboard = read_with(&mut fake, budget()).unwrap();
+    assert_eq!(keyboard.window.unwrap().role.as_deref(), Some("AXWindow"));
+    assert!(keyboard.focused.is_none());
+    assert_eq!(keyboard.within, Within::Window);
+    let asked = fake
+        .asked
+        .iter()
+        .filter(|asked| **asked == (APP, "AXFocusedUIElement"))
+        .count();
+    assert_eq!(asked, 2, "the app is asked once more before it is believed");
+    assert!(
+        !fake
+            .asked
+            .iter()
+            .any(|(element, attribute)| *element == FIELD && *attribute != "AXRole"),
+        "nothing else is asked of an element that no longer exists"
+    );
+}
+
+#[test]
+fn a_focused_element_that_cannot_answer_still_refuses() {
+    for (status, why) in [
+        (AXError::CannotComplete, "slow"),
+        (AXError::Failure, "failed"),
+    ] {
+        let mut fake = Fake::app();
+        fake.set(FIELD, "AXRole", Answer::Failed(status));
+        assert_eq!(unread(read_with(&mut fake, budget())), why);
+    }
+}
+
+#[test]
+fn a_focused_element_that_no_longer_exists_proves_no_focus_alone() {
+    let mut fake = Fake::app();
+    fake.set(APP, "AXFrontmost", Answer::Flag(true));
+    fake.set(APP, "AXFocusedWindow", Answer::Absent);
+    fake.set(FIELD, "AXRole", Answer::Failed(AXError::InvalidUIElement));
+    assert!(!proves_focus_for(&mut fake, false).unwrap());
+
+    fake.set(APP, "AXFocusedWindow", Answer::Element(WINDOW));
+    assert!(proves_focus_for(&mut fake, false).unwrap());
+}
