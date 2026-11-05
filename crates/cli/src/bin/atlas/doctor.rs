@@ -112,15 +112,41 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
         .ok(),
     );
     let session = client.host_session.as_ref().map(HostSession::key);
-    pending_report(
-        &mut report,
-        causes,
-        asker(client.actor, session, ui::interactive()),
-    );
+    let asking = asker(client.actor, session, ui::interactive());
+    recorder_report(&mut report, asking);
+    pending_report(&mut report, causes, asking);
     if verbose || ui::human() {
         report
     } else {
         atlas_client::capability::summary(report)
+    }
+}
+
+/// Warn once the helper's screen recorder holds more than this. macOS keeps
+/// part of every capture it serves there until the helper logs out.
+const RECORDER_LIMIT: u64 = 1 << 30;
+
+/// Warn the person when the helper's screen recorder, as its status says,
+/// uses more memory than [`RECORDER_LIMIT`]. Only the person can log the
+/// helper out, so an agent is not told, verbose or not; the figure itself
+/// stays in a verbose report's status.
+fn recorder_report(report: &mut Value, asking: Asker<'_>) {
+    if asking != Asker::Person {
+        return;
+    }
+    let Some(bytes) = report["session"]["daemon"]["resources"]["screenRecorder"]["footprint"]
+        .as_u64()
+        .filter(|bytes| *bytes > RECORDER_LIMIT)
+    else {
+        return;
+    };
+    let warning = format!(
+        "The helper's screen recorder is using {:.1} GB of memory. Log the helper out and back \
+         in to reset it.",
+        bytes as f64 / (1_u64 << 30) as f64
+    );
+    if let Some(warnings) = report["warnings"].as_array_mut() {
+        warnings.push(json!(warning));
     }
 }
 

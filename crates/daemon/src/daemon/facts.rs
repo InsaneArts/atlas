@@ -6,6 +6,56 @@ use objc2_core_graphics::{
     CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode, CGMainDisplayID,
 };
 use serde_json::{Value, json};
+use std::{
+    sync::{Mutex, PoisonError},
+    time::{Duration, Instant},
+};
+
+/// How long a reading of the screen recorder's memory is kept. Status is
+/// asked for every few seconds, and each reading lists the account's
+/// processes.
+const RECORDER_READING: Duration = Duration::from_secs(60);
+
+/// The memory of macOS's screen recorder in this login, which keeps part of
+/// every capture it serves until the login ends: read at most once a minute.
+pub(super) struct Recorder {
+    read: fn() -> Option<resources::Usage>,
+    /// The last reading and when it was taken. It is held while reading, so
+    /// a status asked for meanwhile waits for that reading, not a second.
+    last: Mutex<Option<(Instant, Option<resources::Usage>)>>,
+}
+
+impl Recorder {
+    pub(super) fn new(read: fn() -> Option<resources::Usage>) -> Self {
+        Self {
+            read,
+            last: Mutex::new(None),
+        }
+    }
+
+    /// The screen recorder's memory as last read, read again when older
+    /// than a minute; none when it is not running or could not be read.
+    pub(super) fn usage(&self) -> Option<resources::Usage> {
+        self.usage_at(Instant::now())
+    }
+
+    fn usage_at(&self, now: Instant) -> Option<resources::Usage> {
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        match *last {
+            Some((at, usage)) if now.saturating_duration_since(at) < RECORDER_READING => usage,
+            _ => {
+                let usage = (self.read)();
+                *last = Some((now, usage));
+                usage
+            }
+        }
+    }
+}
+
+/// The screen recorder of this login: macOS's `replayd`.
+pub(super) fn screen_recorder() -> Option<resources::Usage> {
+    resources::named("replayd")
+}
 
 /// This process's permissions now (`atlas permissions-info`).
 pub fn permissions_now() -> Value {
@@ -82,8 +132,13 @@ pub(super) use atlas_native::native::manager_name;
 /// The daemon's hello: who and where the helper is, what it may do, and,
 /// when it keeps background jobs, how many may still run, are launching,
 /// or have records it cannot read, and whether it could not read them all
-/// (`jobs`).
-pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
+/// (`jobs`). Its resources include the screen recorder's memory, when
+/// `recorder` read it.
+pub(super) fn hello(
+    manager: &str,
+    jobs: Option<Census>,
+    recorder: Option<resources::Usage>,
+) -> Value {
     use atlas_core::protocol::{
         APP_PARTS, JOBS, READ, RGB_STREAM, RGB_STREAM_HIGH_RES, RGB_STREAM_STOP, SCK_EXPERIMENTAL,
         SESSION_PIN, SESSION_PROOF,
@@ -102,6 +157,10 @@ pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
     if jobs.is_some() {
         capabilities.push(JOBS);
     }
+    let mut usage = json!(resources::own());
+    if let (Some(fields), Some(recorder)) = (usage.as_object_mut(), recorder) {
+        fields.insert("screenRecorder".to_owned(), json!(recorder));
+    }
     let mut hello = json!({
         "ok": true,
         "op": "hello",
@@ -114,7 +173,7 @@ pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
         "session": {"managerName": manager, "onConsole": console_state()},
         "display": display(),
         "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
-            "capabilities": capabilities, "resources": resources::own()},
+            "capabilities": capabilities, "resources": usage},
     });
     if let Some(jobs) = jobs {
         hello["daemon"]["jobs"] = json!(jobs);

@@ -110,6 +110,8 @@ Agents' clicks and keys go only to the helper's own session, so your pointer and
 
 A logged-in helper runs macOS's own services for a second account, so it uses memory even with nothing open. How much varies with the apps open, how long it has been logged in and whether you watch it live. Atlas's own processes in the helper use about 30 MB. Each app adds what it would on your desktop; Chrome with one page and TextEdit added about 0.5 GB on our test Mac.
 
+Watching live also grows macOS's screen recorder in the helper, which keeps part of each picture until the helper logs out. Atlas takes fewer pictures while the helper's screen stays still, and `atlas doctor` warns once the recorder passes 1 GB. Log the helper out and back in to reset it.
+
 With no viewer showing it, an idle helper uses little CPU. Watching costs more: a live picture of a 2560 × 1440 helper uses most of one core, split between the helper and Atlas on your side. Choose **Every 5 Seconds** or **Paused**, or close the viewer, when you don't need it; work in the helper carries on.
 
 ### Sound

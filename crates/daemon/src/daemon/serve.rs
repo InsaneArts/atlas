@@ -183,6 +183,8 @@ pub struct Daemon {
     source: Arc<capture::source::Source>,
     /// The persistent child that answers session-proof requests.
     proof_worker: Mutex<Option<proof::Worker>>,
+    /// The screen recorder's memory, as each hello reports it.
+    recorder: facts::Recorder,
 }
 
 impl Daemon {
@@ -211,6 +213,7 @@ impl Daemon {
             runs: Mutex::new(JoinSet::new()),
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
+            recorder: facts::Recorder::new(facts::screen_recorder),
         }
     }
 
@@ -255,7 +258,7 @@ impl Daemon {
             atlas_core::login_log::mark("daemon.firstHello");
         }
         match self.jobs.as_deref().map(Jobs::census).transpose() {
-            Ok(census) => facts::hello(&self.manager, census),
+            Ok(census) => facts::hello(&self.manager, census, self.recorder.usage()),
             Err(error) => json!(error),
         }
     }
