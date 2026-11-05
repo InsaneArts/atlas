@@ -29,8 +29,10 @@ final class ViewerThumbnails {
     if !shown || (place != .activity && place != .screenshots) {
       resetThumbnails()
     } else {
+      // A picture of an agent's action is never listed among the screenshots, and is read all the same.
       work.wanted = work.wanted.filter { name in
-        model.panes.shots.shots?.contains(where: { $0.name == name }) == true && model.panes.thumbnails[name] == nil
+        (ActionPicture.isName(name) || model.panes.shots.shots?.contains(where: { $0.name == name }) == true)
+          && model.panes.thumbnails[name] == nil
       }
       readThumbnails()
     }

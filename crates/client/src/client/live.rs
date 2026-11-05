@@ -687,7 +687,7 @@ async fn drain_query(client: &Client, daemon: u32, generation: u64, query: &str)
     Ok(serde_json::from_slice(&reply)?)
 }
 
-async fn read_header(reader: &mut (impl tokio::io::AsyncRead + Unpin)) -> Result<Value> {
+pub(super) async fn read_header(reader: &mut (impl tokio::io::AsyncRead + Unpin)) -> Result<Value> {
     let length = reader.read_u32().await? as usize;
     if length == 0 || length > HEADER_LIMIT {
         return Err(invalid("Invalid preview header length"));

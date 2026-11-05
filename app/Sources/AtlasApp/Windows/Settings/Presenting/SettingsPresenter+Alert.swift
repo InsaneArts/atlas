@@ -38,6 +38,17 @@ extension SettingsPresenter {
           doneMessage: SettingsWords.forgetMessage
         )
       )
+    case .deletePictures:
+      HelperAlert.destructive(
+        SettingsWords.deletePicturesTitle,
+        SettingsWords.deletePicturesMessage(snapshot.pictures.stored?.count),
+        SettingsWords.deleteAll,
+        phase: progress.phase(
+          running: SettingsWords.deleting,
+          done: SettingsWords.deleteAll,
+          doneMessage: SettingsWords.deletePicturesMessage(nil)
+        )
+      )
     case .install(let version):
       HelperAlert.plain(
         SettingsWords.installTitle(version),

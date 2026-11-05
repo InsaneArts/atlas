@@ -88,12 +88,13 @@ struct ActivityGroupingSessionTests {
       ActivityFixtures.row(id: "c1", says: "scrolled in Opie", ageSeconds: 1, session: "codex"),
       ActivityFixtures.row(id: "a1", says: "scrolled in Opie", ageSeconds: 2, session: "claude"),
       ActivityFixtures.row(id: "a2", says: "scrolled in Opie", ageSeconds: 3, session: "claude"),
+      ActivityFixtures.row(id: "a3", says: "scrolled in Opie", ageSeconds: 4, session: "claude"),
     ])
     let lines = ActivityMoments(rules, captures: [], scope: .all)
       .shown(filter: .all, query: "")
       .flatMap(\.runs)
-    #expect(lines.map(\.id) == ["c1", "a2"])
-    #expect(lines.map(\.count) == [1, 2])
+    #expect(lines.map(\.id) == ["c1", "a3"])
+    #expect(lines.map(\.count) == [1, 3])
   }
 
   @Test("one session's count today leaves out the other sessions' rows and the person's")

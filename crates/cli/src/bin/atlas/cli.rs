@@ -92,7 +92,7 @@ pub(super) enum Command {
     #[command(hide = true)]
     SetupHelper(SetupHelper),
     /// Show where Atlas keeps its settings, sockets and screenshots.
-    Config,
+    Config(Config),
     /// Show the helper: who it is, where it is and what it may do.
     Status,
     /// List what this agent session did in the helper.
@@ -448,6 +448,17 @@ pub(super) enum Command {
     /// After an update, run by the new executable: move the helper onto it.
     #[command(hide = true)]
     UpdateFinish,
+    /// Take the picture a moment after an agent's action, in a process of
+    /// its own, for Atlas.app.
+    #[command(hide = true)]
+    PictureAfter {
+        /// The name of the picture taken before the action.
+        #[arg(long)]
+        before: String,
+        /// When the action ended, in milliseconds since 1970.
+        #[arg(long)]
+        ended: u64,
+    },
     /// The steps the Atlas window's onboarding drives (JSON only).
     #[command(hide = true)]
     Onboarding {
@@ -553,6 +564,40 @@ pub(super) struct Menubar {
     /// Instead, turn "Open at Login" on or off, or report it.
     #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
     pub(super) login: Option<atlas_cli::menubar::Login>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Config {
+    /// Keep a picture of the helper's screen right before each agent action
+    /// for the person to see in Atlas.app (on, the default, or off). Atlas.app
+    /// sets it from Settings, so agents are not told of it.
+    #[arg(long, value_enum, value_name = "STATE", hide = true)]
+    pub(super) pictures_before_actions: Option<OnOff>,
+    /// Keep the pictures this many days (a week unless set).
+    #[arg(long, value_name = "DAYS", hide = true)]
+    pub(super) keep_pictures_days: Option<u32>,
+    /// Keep at most this many characters of typed text with them; 0 keeps
+    /// all of it.
+    #[arg(long, value_name = "CHARACTERS", hide = true)]
+    pub(super) typed_text_limit: Option<u32>,
+    /// Delete every picture kept.
+    #[arg(long, hide = true)]
+    pub(super) delete_pictures: bool,
+    /// Say how many pictures are kept and the space they take.
+    #[arg(long, hide = true)]
+    pub(super) pictures_summary: bool,
+}
+
+impl Config {
+    /// Whether it changes the settings or the pictures, which needs no
+    /// helper.
+    pub(super) fn changes(&self) -> bool {
+        self.pictures_before_actions.is_some()
+            || self.keep_pictures_days.is_some()
+            || self.typed_text_limit.is_some()
+            || self.delete_pictures
+            || self.pictures_summary
+    }
 }
 
 #[derive(clap::Args)]

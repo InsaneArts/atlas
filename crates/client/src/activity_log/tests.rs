@@ -686,6 +686,25 @@ fn a_rows_bundle_id_reads_back_as_written_and_a_row_without_one_still_reads() {
 }
 
 #[test]
+fn a_rows_picture_before_reads_back_as_written_and_a_row_without_one_still_reads() {
+    let line = r#"{"actionCount":1,"actor":"agent","at":"5","before":"5-before.jpg","command":"c","elapsedMs":2.0,"ok":true,"operation":"input","verb":"click"}"#;
+    let row = Row::parse(&serde_json::from_str(line).unwrap()).unwrap();
+    assert_eq!(row.before.as_deref(), Some("5-before.jpg"));
+    assert_eq!(serde_json::to_value(&row).unwrap().to_string(), line);
+
+    let older = r#"{"actionCount":1,"actor":"agent","at":"5","command":"c","elapsedMs":2.0,"ok":true,"operation":"input","verb":"click"}"#;
+    let row = Row::parse(&serde_json::from_str(older).unwrap()).unwrap();
+    assert_eq!(row.before, None);
+    assert_eq!(
+        serde_json::to_value(&row).unwrap().to_string(),
+        older,
+        "a row with none is written as before"
+    );
+    let odd = Row::parse(&json!({"operation": "input", "before": ["5-before.jpg"]})).unwrap();
+    assert_eq!(odd.before, None);
+}
+
+#[test]
 fn a_field_an_older_build_wrote_otherwise_reads_as_missing_and_an_unknown_op_is_kept() {
     let row = Row::parse(
         &json!({"operation": "later", "ok": "yes", "actionCount": -1,

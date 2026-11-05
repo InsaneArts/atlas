@@ -99,6 +99,7 @@ async fn an_element_action_on_a_ref_that_names_nothing_is_refused_with_nothing_s
         identity_probe: dir.path().join("probe"),
         input_socket: dir.path().join("input"),
         output_dir: dir.path().join("out"),
+        activity: Default::default(),
     })
     .unwrap();
     client.controller = Controller::at(502, &dir.path().join("state"));
@@ -126,6 +127,7 @@ async fn a_reference_that_names_no_element_is_refused_with_nothing_sent() {
         identity_probe: dir.path().join("probe"),
         input_socket: dir.path().join("input"),
         output_dir: dir.path().join("out"),
+        activity: Default::default(),
     })
     .unwrap();
     client.controller = Controller::at(502, &dir.path().join("state"));

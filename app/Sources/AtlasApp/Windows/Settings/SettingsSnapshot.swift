@@ -10,6 +10,8 @@ struct SettingsSnapshot {
   var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   var notify = false
+  /// The pictures of agent actions.
+  var pictures = SettingsPictures()
   /// What the rest of the app says now.
   var facts = SettingsFacts()
 }

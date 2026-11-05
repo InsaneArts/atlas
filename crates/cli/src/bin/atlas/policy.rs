@@ -184,7 +184,8 @@ impl Policy {
             }),
             Command::Status => Self::read(View::Status),
             Command::Activity(_) => Self::read(View::Activity),
-            Command::Config => Self::read(View::Config),
+            Command::Config(config) if config.changes() => Self::local(View::Config),
+            Command::Config(_) => Self::read(View::Config),
             Command::Apps { .. } => Self::read(View::Apps),
             Command::Windows { .. } => Self::read(View::Windows),
             Command::Elements(elements) => Self::read(View::Elements {
@@ -221,6 +222,7 @@ impl Policy {
                 )
             },
             Command::UpdateFinish => Self::passive(AgentMachine, Tools(None), View::Generic),
+            Command::PictureAfter { .. } => Self::local(View::Quiet),
             Command::Switch(_) => Self::passive(Local, Prompt("Stopped."), View::Switch),
             Command::Init => Self::passive(
                 Local,

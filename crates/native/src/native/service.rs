@@ -442,6 +442,11 @@ impl Service {
             reply["mechanism"] = json!("accessibility");
             reply["verification"] = json!(acted.verification);
         }
+        // The element a referenced click or an action on an element reached,
+        // as it was met just before: for the mark on the picture before it.
+        if let Some(reached) = &done.reached {
+            reply["element"] = json!(reached);
+        }
 
         cancellation.owner = None;
         Ok(reply)

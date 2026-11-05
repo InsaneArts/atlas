@@ -62,6 +62,7 @@ async fn a_sessions_first_read_is_seen_even_when_the_helper_is_unavailable() {
         identity_probe: dir.path().join("probe"),
         input_socket: dir.path().join("input.sock"),
         output_dir: dir.path().join("out"),
+        activity: Default::default(),
     })
     .unwrap();
     let host = HostSession::new(Host::Named, "worker").unwrap();
@@ -155,6 +156,7 @@ fn a_rollback_a_command_finished_is_settled_in_the_task_that_claimed_the_plan() 
         identity_probe: dir.path().join("probe"),
         input_socket: dir.path().join("input.sock"),
         output_dir: dir.path().join("out"),
+        activity: Default::default(),
     })
     .unwrap();
     let (task, session, plan) = ("5be0d1a2c3f4", "3f9a1c07b2e4", atlas_core::files::token());

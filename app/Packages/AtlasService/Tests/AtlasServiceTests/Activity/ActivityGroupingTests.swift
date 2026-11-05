@@ -75,6 +75,51 @@ struct ActivityGroupingTests {
     )
   }
 
+  @Test("three repeats fold into one line that keeps each row, its first picture before and its last after")
+  func threeRepeatsFold() throws {
+    let rules = ActivityFixtures.rules([
+      ActivityFixtures.row(
+        id: "3",
+        says: "clicked in Opie",
+        ageSeconds: 140,
+        before: "3-before.jpg",
+        after: "3-after.jpg"
+      ),
+      ActivityFixtures.row(id: "2", says: "clicked in Opie", ageSeconds: 150, before: "2-before.jpg"),
+      ActivityFixtures.row(
+        id: "1",
+        says: "clicked in Opie",
+        ageSeconds: 157,
+        before: "1-before.jpg",
+        after: "2-before.jpg"
+      ),
+    ])
+    let run = try #require(
+      ActivityMoments(rules, captures: [], scope: .all)
+        .shown(filter: .all, query: "")
+        .flatMap(\.runs)
+        .first
+    )
+    #expect(run.count == 3)
+    #expect(run.members.map(\.id) == ["1", "2", "3"])
+    #expect(run.firstBefore == "1-before.jpg")
+    #expect(run.lastAfter == "3-after.jpg")
+  }
+
+  @Test("two repeats stay two lines, each with its own pictures")
+  func twoRepeatsStayApart() {
+    let rules = ActivityFixtures.rules([
+      ActivityFixtures.row(id: "2", says: "clicked in Opie", ageSeconds: 150, before: "2-before.jpg"),
+      ActivityFixtures.row(id: "1", says: "clicked in Opie", ageSeconds: 157, before: "1-before.jpg"),
+    ])
+    let runs = ActivityMoments(rules, captures: [], scope: .all)
+      .shown(filter: .all, query: "")
+      .flatMap(\.runs)
+    #expect(runs.map(\.id) == ["2", "1"])
+    #expect(runs.map(\.count) == [1, 1])
+    #expect(runs.map(\.firstBefore) == ["2-before.jpg", "1-before.jpg"])
+  }
+
   @Test(
     "actions with another between them never read as one, whatever the search or filter hides",
     arguments: [

@@ -11,6 +11,8 @@ public struct ActivityGrouping: Sendable {
   static let shotTolerance: TimeInterval = 3
   /// The operation a screenshot row names.
   public static let screenshotOperation = "screenshot"
+  /// 3: the fewest repeats that fold into one line; two in a row read better as two.
+  static let foldsFrom = 3
 
   /// The log, newest first.
   var log: ActivityLog
@@ -117,7 +119,7 @@ public struct ActivityGrouping: Sendable {
   }
 
   /// Every line of the log in its own order, each with the part of time it falls in: a row with no time stays with
-  /// the row before it, and a row that repeats the line just above it in the same part joins it.
+  /// the row before it, and three or more rows that repeat one another in the same part fold into one line.
   ///
   /// - Parameters:
   ///   - captures: The screenshots the service lists, for the screenshot rows.
@@ -147,12 +149,18 @@ public struct ActivityGrouping: Sendable {
         joined.entry.app = joined.entry.app ?? last.run.entry.app
         joined.logicalIDs = last.run.logicalIDs.union(run.logicalIDs)
         joined.actions = Self.addingActions(run.actions, to: last.run.actions)
+        joined.members = [entry] + last.run.members
         runs[runs.count - 1].run = joined
       } else {
         runs.append((current, run))
       }
     }
-    return runs
+    return runs.flatMap { part, run in
+      guard run.members.count > 1, run.members.count < Self.foldsFrom else { return [(part, run)] }
+      return run.members
+        .reversed()
+        .map { (part, ActivityRun(entry: $0, startedAt: start(of: $0))) }
+    }
   }
 
   /// Whether a row is the same action as the line just above it, by the same actor in the same host session, with the

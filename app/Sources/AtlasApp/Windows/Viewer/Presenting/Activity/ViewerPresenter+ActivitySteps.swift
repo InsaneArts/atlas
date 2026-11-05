@@ -5,9 +5,10 @@ import Foundation
 
 extension ViewerPresenter {
   /// One step of an open moment: its kind and mark, its words without the moment's app, when it was done, the
-  /// screenshot it took at its shape with its thumbnail once read, and for a step that did not work why and what the
-  /// same stream did next. The action whose outcome is unknown is marked as a problem, says that every session waits,
-  /// and offers Show Screen and Recover….
+  /// screenshot it took at its shape with its thumbnail once read, the marked picture taken right before its first
+  /// action, and for a step that did not work why and what the same stream did next. The action whose outcome is
+  /// unknown is marked as a problem, says that every session waits, and offers Show Screen and Recover…. Typing into a
+  /// password field says its text was not kept.
   ///
   /// - Parameters:
   ///   - run: The step's rows.
@@ -23,13 +24,7 @@ extension ViewerPresenter {
   ) -> ViewerActivityStep {
     let entry = run.entry
     let offersRecovery = run.id == snapshot.reading.statusReading.uncertainRow
-    let mark: ViewerStepMark =
-      switch (offersRecovery, entry.outcome) {
-      case (true, _), (false, .failed): .failed
-      case (false, .running): .live
-      case (false, .notSent): .notSent
-      case (false, .worked): .quiet
-      }
+    let mark = stepMark(run, snapshot)
     var problem: ViewerActivityProblem?
     if offersRecovery {
       problem = ViewerActivityProblem(why: ViewerWords.unfinishedReason)
@@ -47,9 +42,26 @@ extension ViewerPresenter {
       words: stepWords(run, in: moment),
       time: run.startedAt.map { stepAge($0, snapshot) } ?? Words.unknown,
       shot: run.shot.map { activityShot($0, snapshot) },
+      picture: stepPicture(run, snapshot),
       problem: problem,
-      offersRecovery: offersRecovery
+      offersRecovery: offersRecovery,
+      notKept: entry.facts?.action == .type && entry.facts?.secure == true
     )
+  }
+
+  /// How a step went, for its disc's colour: the action of unknown outcome as a problem.
+  ///
+  /// - Parameters:
+  ///   - run: The step's rows.
+  ///   - snapshot: What the controller holds.
+  /// - Returns: The mark.
+  static func stepMark(_ run: ActivityRun, _ snapshot: ViewerSnapshot) -> ViewerStepMark {
+    switch (run.id == snapshot.reading.statusReading.uncertainRow, run.entry.outcome) {
+    case (true, _), (false, .failed): .failed
+    case (false, .running): .live
+    case (false, .notSent): .notSent
+    case (false, .worked): .quiet
+    }
   }
 
   /// What kind of thing a step did, for its disc's glyph: a problem whatever it tried, the person's own as theirs
@@ -74,17 +86,28 @@ extension ViewerPresenter {
   }
 
   /// What a step did, in the service's own words less the moment's app and, in the person's own moment, less "You",
-  /// which its header already names: the control
-  /// or field it named set apart in semibold, the keys it pressed as caps in place of their label, and the repeats
-  /// counted. A command says it ran or failed and never what it ran; nothing typed is ever part of it.
+  /// which its header already names: the control or field it named set apart in semibold, the keys it pressed as caps
+  /// in place of their label, followed by the element with focus where Atlas named it, and the repeats counted. A
+  /// command says it ran or failed and never what it ran. Typing shows what was typed, shortened to one line, only
+  /// where Atlas kept it beside its picture; typing into a password field says so, and never what or how much.
   ///
   /// - Parameters:
   ///   - run: The step's rows.
   ///   - moment: Its moment.
   /// - Returns: The words.
   static func stepWords(_ run: ActivityRun, in moment: ActivityMoment) -> ViewerStepWords {
-    let entry = run.entry
-    let count = run.count > 1 ? "×\(run.count)" : ""
+    stepWords(run.entry, count: run.count, in: moment)
+  }
+
+  /// What one row, or a run of `count` like it, did (``stepWords(_:in:)``).
+  ///
+  /// - Parameters:
+  ///   - entry: The row.
+  ///   - count: How many times in a row it was done.
+  ///   - moment: Its moment.
+  /// - Returns: The words.
+  static func stepWords(_ entry: ActivityLog.Entry, count: Int, in moment: ActivityMoment) -> ViewerStepWords {
+    let counted = count > 1 ? "×\(count)" : ""
     let appOperation = ["open", "open-link", "close", "install", "cleanup"].contains(entry.verb ?? "")
     if entry.operation == "run", entry.actor != .you, !appOperation {
       let verb =
@@ -93,7 +116,7 @@ extension ViewerPresenter {
         case .failed: ViewerWords.commandFailed
         case .worked, .notSent: ViewerWords.ranCommand
         }
-      return ViewerStepWords(verb, count: count)
+      return ViewerStepWords(verb, count: counted)
     }
     var said = ActivityGrouping.text(entry)
     // The person's own moment already says it was them.
@@ -103,11 +126,39 @@ extension ViewerPresenter {
       break
     }
     guard let label = entry.label, !label.isEmpty, said.hasSuffix(" \(label)") else {
-      return ViewerStepWords(said, count: count)
+      return ViewerStepWords(said, count: counted)
     }
     let verb = String(said.dropLast(label.count + 1))
-    if !entry.keys.isEmpty { return ViewerStepWords(verb, keys: entry.keys, count: count) }
-    return ViewerStepWords(verb, target: label, count: count)
+    if !entry.keys.isEmpty {
+      let focused = entry.facts?.element?.name ?? ""
+      return ViewerStepWords(
+        verb,
+        joiner: focused.isEmpty ? "" : "in",
+        target: focused,
+        keys: entry.keys,
+        keyName: ViewerWords.keyName(entry.keys),
+        count: counted
+      )
+    }
+    if let typed = typedWords(entry.facts, verb: verb, target: label, count: counted) { return typed }
+    return ViewerStepWords(verb, target: label, count: counted)
+  }
+
+  /// Typing's words from what Atlas kept beside its picture: "Typed a password into **Password**", or "Typed
+  /// “Release 0.1.1…” into **Message**"; nil when it kept no text, which leaves the service's words.
+  ///
+  /// - Parameters:
+  ///   - facts: What Atlas kept.
+  ///   - verb: The service's verb, such as "Typed into".
+  ///   - target: The field it named.
+  ///   - count: How many times in a row it was done.
+  /// - Returns: The words, or nil.
+  static func typedWords(_ facts: ActionFacts?, verb: String, target: String, count: String) -> ViewerStepWords? {
+    guard let facts, facts.action == .type, verb.hasSuffix(" into") else { return nil }
+    let typed = String(verb.dropLast(" into".count))
+    if facts.secure { return ViewerStepWords("\(typed) \(ViewerWords.aPassword) into", target: target, count: count) }
+    guard let text = facts.text else { return nil }
+    return ViewerStepWords(typed, quote: ViewerWords.shortened(text), joiner: "into", target: target, count: count)
   }
 
   /// What the same stream did after a step that did not work, as its callout's last sentence.
@@ -130,10 +181,11 @@ extension ViewerPresenter {
     }
   }
 
-  /// A step's screenshot: its name, its shape as the screenshots list says it, and its thumbnail once read.
+  /// A step's screenshot, or the picture taken before it: its name, its shape as the screenshots list says it, and its
+  /// thumbnail once read.
   ///
   /// - Parameters:
-  ///   - name: The capture's file name.
+  ///   - name: The capture's or the picture's file name.
   ///   - snapshot: What the controller holds.
   /// - Returns: The screenshot.
   static func activityShot(_ name: String, _ snapshot: ViewerSnapshot) -> ViewerActivityShot {

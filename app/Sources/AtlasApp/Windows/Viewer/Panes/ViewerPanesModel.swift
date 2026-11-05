@@ -51,6 +51,8 @@ final class ViewerPanesModel {
     service: service,
     shotOutlet: shotOutlet
   )
+  /// The action shown large and the task replayed over Activity: their pictures, comparison and playing.
+  @ObservationIgnored private(set) lazy var actions = ViewerActionViews(model: self, service: service, clock: clock)
   /// The bounded thumbnail queue shared by Activity and Screenshots.
   @ObservationIgnored private(set) lazy var thumbnails = ViewerThumbnails(model: self, service: service)
   /// The pane and session readings under way.
@@ -103,6 +105,7 @@ final class ViewerPanesModel {
     let place = viewer?.session.place ?? .screen
     thumbnails.follow(shown: shown, place: place)
     screenshots.followLarge()
+    actions.refresh()
     guard shown, place != .screen else { return }
     let number = work.generation
     work.reading = Task { [weak self, clock] in
@@ -165,6 +168,18 @@ final class ViewerPanesModel {
     case .copyShot: copyShot()
     case .showShotInFinder: showShotInFinder()
     case .thumbnailNeeded(let name): thumbnailNeeded(name)
+    case .openAction(let step): actions.open(step)
+    case .previousAction: actions.step(by: -1)
+    case .nextAction: actions.step(by: 1)
+    case .compareAction(let mode): actions.compare(mode)
+    case .toggleChanges: actions.toggleChanges()
+    case .closeAction: actions.close()
+    case .openReplay(let moment): actions.openReplay(moment)
+    case .replayFrame(let index): actions.show(frame: index)
+    case .previousFrame: actions.step(frames: -1)
+    case .nextFrame: actions.step(frames: 1)
+    case .togglePlay: actions.togglePlay()
+    case .closeReplay: actions.closeReplay()
     default: return
     }
   }
@@ -196,6 +211,8 @@ final class ViewerPanesModel {
       panes.activity.failure = nil
       wantIcons(for: log.entries)
       if let list { screenshots.keep(list) }
+      // A newer reading may name the picture after the action shown large, or a replay's next frame.
+      if panes.activity.action != nil || panes.activity.replay != nil { actions.refresh() }
       // What the pane now shows is seen, also while the picture, and with it the status, is paused.
       viewer?.noteActivitySeen()
     } catch {

@@ -3194,3 +3194,69 @@ fn a_move_proven_in_preparation_is_proven_again_before_any_input() {
     );
     assert_eq!(posted, 3, "and the drag would be sent outside the app");
 }
+
+/// What preparing and settling keys for the app alone, as `fake` answers,
+/// says of the field they go into, with every verification passing and
+/// naming none.
+fn app_only_keys(fake: &mut Fake) -> Option<&'static str> {
+    let expect = Expect::new(812).unwrap();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let target = prepare(
+        &mut *fake,
+        &expect,
+        Need::Keys,
+        deadline,
+        &|| Ok(()),
+        &mut |_| true,
+    )
+    .unwrap();
+    settle(target, &expect, deadline, &|| Ok(()), |_, _| Ok(None)).unwrap()
+}
+
+#[test]
+fn keys_for_the_app_alone_say_the_field_admission_found_focused() {
+    let mut fake = Fake::new();
+    fake.answers
+        .insert((APP, "AXFocusedUIElement"), Answer::Element(FIELD));
+    assert_eq!(app_only_keys(&mut fake), Some("AXTextField"));
+
+    fake.answers.insert(
+        (FIELD, "AXSubrole"),
+        Answer::Text("AXSecureTextField".into()),
+    );
+    assert_eq!(
+        app_only_keys(&mut fake),
+        Some("AXSecureTextField"),
+        "a password field is said to be one"
+    );
+
+    fake.answers
+        .insert((FIELD, "AXRole"), Answer::Text("AXGroup".into()));
+    fake.answers.remove(&(FIELD, "AXSubrole"));
+    assert_eq!(
+        app_only_keys(&mut fake),
+        None,
+        "no field is said for another element"
+    );
+
+    fake.answers.remove(&(APP, "AXFocusedUIElement"));
+    assert_eq!(app_only_keys(&mut fake), None, "nor with nothing focused");
+}
+
+#[test]
+fn saying_the_focused_field_asks_the_app_nothing_more() {
+    let asks = |role: &str| {
+        let mut fake = Fake::new();
+        fake.answers
+            .insert((APP, "AXFocusedUIElement"), Answer::Element(FIELD));
+        fake.answers
+            .insert((FIELD, "AXRole"), Answer::Text(role.to_owned()));
+        app_only_keys(&mut fake);
+        fake.bounds.len()
+    };
+    assert_eq!(
+        asks("AXTextField"),
+        asks("AXGroup"),
+        "the same requests whether or not the element is a field"
+    );
+}

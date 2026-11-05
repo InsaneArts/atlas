@@ -5,7 +5,7 @@ import SwiftUI
 /// moment started and its line starts under the icon; folded, it is a true capsule that says how much it held and
 /// when, its age at the end. The chevron sits at the end, so icons stay in one column, and turns as the moment opens.
 /// A moment held open, as while a step runs, shows no chevron and its press does nothing; once it can fold, the same
-/// header shows its chevron in place.
+/// header shows its chevron in place. Open, a moment whose steps kept pictures offers Replay before its chevron.
 struct ActivityMomentRow: View {
   /// The moment.
   let moment: ViewerActivityMoment
@@ -27,6 +27,7 @@ struct ActivityMomentRow: View {
     .layoutFrame("moment \(moment.id)")
     .buttonStyle(ActivityMomentStyle(isOpen: moment.isOpen, canFold: moment.canFold))
     .accessibilityHint(hint)
+    .overlay(alignment: .trailing) { replay }
     .padding(.horizontal, -ViewerLayout.capsuleReach)
     .background(alignment: .bottomLeading) {
       if moment.isOpen {
@@ -40,6 +41,24 @@ struct ActivityMomentRow: View {
     .accessibilityLabel(moment.label)
     .accessibilityAddTraits(.isHeader)
     .accessibilityRemoveTraits(moment.canFold ? [] : .isButton)
+  }
+
+  /// Replay, over the header's end before its chevron, while the moment is open and its steps kept pictures.
+  @ViewBuilder private var replay: some View {
+    if moment.isOpen, moment.canReplay {
+      Button {
+        send(.openReplay(moment.id))
+      } label: {
+        HStack(spacing: Spacing.xs) {
+          Image(systemName: SymbolName.play.rawValue)
+          Text("Replay")
+        }
+      }
+      .buttonStyle(.capsule(.secondary, size: .mini))
+      .help("Play this task's steps in order")
+      .padding(.trailing, ViewerLayout.capsuleReach + ActivityMomentRowLayout.chevron + Spacing.xsPlus)
+      .transition(.opacity)
+    }
   }
 
   /// What pressing the header does, for VoiceOver; nothing while the moment is held open.

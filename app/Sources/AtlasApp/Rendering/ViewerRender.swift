@@ -73,6 +73,9 @@
         sample("68-apps-copy-monogram", PreviewStates.viewerAppsCopy),
         sample("69-apps-hidden", PreviewStates.viewerAppsHidden),
         sample("70-apps-many", PreviewStates.viewerAppsMany),
+        sample("71-activity-pictures", PreviewStates.viewerActivityPictures),
+        sample("72-activity-replay", PreviewStates.viewerActivityReplay),
+        sample("73-activity-action-large", PreviewStates.viewerActionLarge),
       ]
     }
 

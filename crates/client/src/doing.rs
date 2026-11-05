@@ -77,6 +77,9 @@ pub struct Doing {
     /// the helper confirmed the text went to a field of [`FIELD_ROLES`].
     field: Option<String>,
     command: String,
+    /// The picture taken before its first input, which its rows name once
+    /// saved.
+    before: crate::before::Slot,
 }
 
 impl Doing {
@@ -91,7 +94,19 @@ impl Doing {
             asked: false,
             field: None,
             command,
+            before: crate::before::Slot::default(),
         }
+    }
+
+    /// The picture taken before its first input.
+    pub(crate) fn before(&self) -> &crate::before::Slot {
+        &self.before
+    }
+
+    /// The name of the picture taken before its first input, once it is in
+    /// hand: the one a picture after it follows.
+    pub fn picture(&self) -> Option<String> {
+        self.before.name()
     }
 
     /// The app it acted in: a name, or the name of an app bundle's path.

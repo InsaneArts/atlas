@@ -43,6 +43,20 @@
       return state
     }()
 
+    /// Delete All… asked for the pictures of agent actions on this Mac.
+    @MainActor static let settingsDeletePictures: SettingsState = {
+      var state = settingsGeneral
+      state.alert = AlertCardState(
+        title: "Delete all pictures of agent actions?",
+        message: "Atlas deletes the 1,240 pictures on this Mac. Activity keeps its steps, without pictures.",
+        buttons: [
+          AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
+          AlertCardButton(id: .confirm, title: "Delete All", role: .destructive),
+        ]
+      )
+      return state
+    }()
+
     /// Install asked for the newer version found.
     @MainActor static let settingsInstall: SettingsState = {
       var state = settingsAboutNewer

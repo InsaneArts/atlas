@@ -36,6 +36,8 @@ extension ViewerLayout {
   static let stepThumbnailRadius = Radius.small
   /// 4:3 to 16:9: the narrowest and widest a step's thumbnail stands.
   static let shotAspects: ClosedRange<CGFloat> = (4.0 / 3.0)...(16.0 / 9.0)
+  /// 6: a step's small picture's corner.
+  static let stepPictureRadius = Radius.extraSmall
   /// 14: a callout's corner, a 28-point capsule's, so a one-line callout is a true capsule.
   static let calloutRadius: CGFloat = 14
   /// 12: a callout's side inset.

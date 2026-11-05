@@ -1,7 +1,7 @@
 import Foundation
 
-/// One line of the Activity pane: a row of the log, or the same action done by the same actor several times one after
-/// another, as one line with a count.
+/// One line of the Activity pane: a row of the log, or the same action done by the same actor three or more times one
+/// after another, folded into one line with a count that keeps each of its rows.
 public struct ActivityRun: Equatable, Sendable, Identifiable {
   /// The run's earliest row: the line keeps its id, which a newer repeat never changes, and says what was done.
   public var entry: ActivityLog.Entry
@@ -17,9 +17,17 @@ public struct ActivityRun: Equatable, Sendable, Identifiable {
   public internal(set) var actions: Int
   /// The capture a screenshot row took, by its file name, when the screenshots list it.
   public var shot: String?
+  /// Every row it holds, oldest first: the row itself for a line on its own.
+  public internal(set) var members: [ActivityLog.Entry]
 
   /// The line's identity: its earliest row's id.
   public var id: String { entry.id }
+
+  /// The picture taken right before its first row, by its file name.
+  public var firstBefore: String? { members.first?.before }
+
+  /// The picture right after its last row, by its file name.
+  public var lastAfter: String? { members.last?.after }
 
   /// Creates a line.
   ///
@@ -37,5 +45,6 @@ public struct ActivityRun: Equatable, Sendable, Identifiable {
     self.count = count
     actions = ActivityGrouping.actionCount(entry.count)
     self.shot = shot
+    members = [entry]
   }
 }

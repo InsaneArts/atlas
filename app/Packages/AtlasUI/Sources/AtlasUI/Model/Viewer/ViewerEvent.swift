@@ -108,6 +108,38 @@ public enum ViewerEvent: Equatable, Sendable {
   case copyShot
   /// Show in Finder: show the large screenshot's file.
   case showShotInFinder
+  /// A step's picture pressed: its action large over the whole window.
+  ///
+  /// - Parameter id: The step's identity.
+  case openAction(String)
+  /// Previous, or ←: the action before, each repeat of a folded step in turn.
+  case previousAction
+  /// Next, or →: the action after.
+  case nextAction
+  /// Before, After or Slide, or B and A: how the action's pictures are compared.
+  ///
+  /// - Parameter mode: The way.
+  case compareAction(ViewerCompareMode)
+  /// Show changes: dim what stayed the same between the pictures, or stop.
+  case toggleChanges
+  /// Close, or Esc: close the action shown large.
+  case closeAction
+  /// A moment's Replay: its steps played over the whole window.
+  ///
+  /// - Parameter id: The moment's identity.
+  case openReplay(String)
+  /// A frame of the replay picked, from its strip or its bar.
+  ///
+  /// - Parameter index: The frame.
+  case replayFrame(Int)
+  /// Previous, or ←: the replay's frame before.
+  case previousFrame
+  /// Next, or →: the replay's frame after.
+  case nextFrame
+  /// Play or Pause, or Space.
+  case togglePlay
+  /// Done, or Esc: close the replay.
+  case closeReplay
   /// A thumbnail came into view, to be read if it is not yet.
   ///
   /// - Parameter name: The screenshot's file name.

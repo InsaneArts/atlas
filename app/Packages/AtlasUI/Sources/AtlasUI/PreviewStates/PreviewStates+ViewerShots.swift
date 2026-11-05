@@ -14,6 +14,13 @@
       "1792663121000000000-capture.png",
     ]
 
+    /// The pictures taken before the Activity sample's typing and key press in Opie, at 10:31:17 and 10:31:15 on 22
+    /// October 2026, in UTC.
+    public static let beforeNames = [
+      "1792665077000000000-before.jpg",
+      "1792665075000000000-before.jpg",
+    ]
+
     /// A screenshot's thumbnail in the samples: the sample desktop at the samples' 2560 by 1440 captures' shape,
     /// known by the screenshot's name.
     ///

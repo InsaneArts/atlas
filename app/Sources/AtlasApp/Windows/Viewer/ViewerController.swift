@@ -139,7 +139,8 @@ final class ViewerController {
     case .filterActivity, .toggleMoment, .showMomentSteps, .showWindow, .clearOutline, .shotColumns, .selectShot,
       .openShot, .toggleShot, .previousShot,
       .nextShot, .shotAbove, .shotBelow, .clearShotSelection, .closeShot,
-      .copyShot, .showShotInFinder, .thumbnailNeeded:
+      .copyShot, .showShotInFinder, .thumbnailNeeded, .openAction, .previousAction, .nextAction, .compareAction,
+      .toggleChanges, .closeAction, .openReplay, .replayFrame, .previousFrame, .nextFrame, .togglePlay, .closeReplay:
       panesModel.sendPane(event)
     }
   }
@@ -306,5 +307,6 @@ final class ViewerController {
     readingLoop.watch(false)
     panesModel.followPane()
     panesModel.stopCopy()
+    panesModel.actions.stop()
   }
 }

@@ -415,6 +415,7 @@ impl Client {
             actions,
             owner,
             epoch: session.epoch.input_epoch(),
+            capture_pid: session.epoch.capture_pid,
             app: self.doing.is_some(),
             expect: expect.as_ref(),
         };

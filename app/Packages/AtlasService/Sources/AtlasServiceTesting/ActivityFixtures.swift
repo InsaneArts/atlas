@@ -41,6 +41,10 @@ public enum ActivityFixtures {
   ///   - label: The recorded target or shortcut.
   ///   - bundleId: The app's bundle identifier.
   ///   - keys: The shortcut's chords as keycaps.
+  ///   - before: The picture taken right before it, by its file name.
+  ///   - after: The picture right after it, by its file name.
+  ///   - afterAt: When the picture after it was taken.
+  ///   - facts: What was recorded to mark its pictures.
   /// - Returns: The row.
   public static func row(
     id: String,
@@ -59,7 +63,11 @@ public enum ActivityFixtures {
     app: String? = nil,
     label: String? = nil,
     bundleId: String? = nil,
-    keys: [[String]] = []
+    keys: [[String]] = [],
+    before: String? = nil,
+    after: String? = nil,
+    afterAt: Date? = nil,
+    facts: ActionFacts? = nil
   ) -> ActivityLog.Entry {
     ActivityLog.Entry(
       id: id,
@@ -78,7 +86,11 @@ public enum ActivityFixtures {
       app: app,
       label: label,
       bundleId: bundleId,
-      keys: keys
+      keys: keys,
+      before: before,
+      after: after,
+      afterAt: afterAt,
+      facts: facts
     )
   }
 }

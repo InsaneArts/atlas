@@ -51,6 +51,11 @@ struct Viewer {
     settings: Option<PathBuf>,
     /// That file's text when last found to match the client.
     settings_text: std::sync::Mutex<Option<Vec<u8>>>,
+    /// Every output folder served since the viewer started, the pictures
+    /// kept in each pruned while it runs, and the signal that the settings
+    /// added one or changed how long pictures are kept.
+    outputs: std::sync::Mutex<Vec<PathBuf>>,
+    output_moved: tokio::sync::Notify,
     lease: SharedLease,
     lease_epoch: Mutex<Option<Epoch>>,
     /// The helper the lease was taken on. Control ends there, and input

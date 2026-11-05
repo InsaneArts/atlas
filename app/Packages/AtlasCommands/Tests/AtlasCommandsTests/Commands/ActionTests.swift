@@ -43,6 +43,13 @@ struct ActionTests {
       (.doctor, ["doctor", "--verbose"]),
       (.checkForUpdate, ["update", "--check"]),
       (.update, ["update"]),
+      (.picturesSummary, ["config", "--pictures-summary"]),
+      (.keepPictures(true), ["config", "--pictures-before-actions", "on"]),
+      (.keepPictures(false), ["config", "--pictures-before-actions", "off"]),
+      (.keepPicturesFor(days: 14), ["config", "--keep-pictures-days", "14"]),
+      (.limitTypedText(80), ["config", "--typed-text-limit", "80"]),
+      (.limitTypedText(0), ["config", "--typed-text-limit", "0"]),
+      (.deletePictures, ["config", "--delete-pictures"]),
     ] as [(Action, [String])]
   )
   func arguments(action: Action, arguments: [String]) {

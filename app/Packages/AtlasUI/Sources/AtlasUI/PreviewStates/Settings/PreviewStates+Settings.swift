@@ -56,12 +56,23 @@
           PopupOption(id: .everyFiveSeconds, title: "Every 5 Seconds"),
           PopupOption(id: .paused, title: "Paused", isEnabled: false),
         ],
+        storedPictures: "1,240 pictures · 142 MB",
+        canDeletePictures: true,
         notify: true
       ),
       helper: settingsHelperPane,
       agents: settingsAgentsPane,
       about: SettingsAboutState(version: "Version 0.1.0", update: .check)
     )
+
+    /// The General pane with pictures kept a custom 14 days and typed text limited to 80 characters.
+    @MainActor static let settingsGeneralCustom: SettingsState = {
+      var state = settingsGeneral
+      state.general.keepFor = .custom
+      state.general.keepDays = 14
+      state.general.typedText = .limited
+      return state
+    }()
 
     /// The Helper pane.
     @MainActor static let settingsHelper: SettingsState = selecting(.helper)

@@ -95,6 +95,8 @@
     ///   - reason: Why it did not work; none by default.
     ///   - operation: The operation; input by default.
     ///   - session: The host session's key; Terminal's by default.
+    ///   - before: The picture taken right before it; none by default.
+    ///   - facts: What was recorded to mark its picture; none by default.
     /// - Returns: The row.
     static func row(
       _ id: String,
@@ -107,7 +109,9 @@
       keys: [[String]] = [],
       reason: String? = nil,
       operation: String = "input",
-      session: String? = nil
+      session: String? = nil,
+      before: String? = nil,
+      facts: ActionFacts? = nil
     ) -> ActivityLog.Entry {
       ActivityLog.Entry(
         id: id,
@@ -122,9 +126,19 @@
         app: app?.name,
         label: label,
         bundleId: app?.id,
-        keys: keys
+        keys: keys,
+        before: before,
+        facts: facts
       )
     }
+
+    /// The display the Activity sample's pictures show, in points: half the samples' 2560 by 1440 captures.
+    static let sampleDisplay = ActionFacts.Size(width: 1280, height: 720)
+    /// Where the sample's typing and ⌘S went in Opie: its Name field, at ``PreviewStates/sampleSpot``.
+    static let sampleSpot = ActionFacts.Point(
+      x: PreviewStates.sampleSpot.x * sampleDisplay.width,
+      y: PreviewStates.sampleSpot.y * sampleDisplay.height
+    )
 
     /// Opie, by its sample bundle identifier.
     static let opie = (name: "Opie", id: Optional(SampleAppIcons.opie))
@@ -151,8 +165,40 @@
       ),
       row("o5", "scrolled in Opie", age: 4, verb: "scroll", app: opie),
       row("o4", "took a screenshot", age: 22, verb: "screenshot", app: nil, operation: "screenshot"),
-      row("o3", "typed into Name in Opie", age: 25, verb: "type", app: opie, label: "Name"),
-      row("o2", "pressed ⌘S in Opie", age: 27, verb: "key", app: opie, label: "⌘S", keys: [["⌘", "S"]]),
+      row(
+        "o3",
+        "typed into Name in Opie",
+        age: 25,
+        verb: "type",
+        app: opie,
+        label: "Name",
+        before: PreviewStates.beforeNames[0],
+        facts: ActionFacts(
+          action: .type,
+          outcome: .worked,
+          display: sampleDisplay,
+          point: sampleSpot,
+          text: PreviewStates.sampleTyped,
+          length: PreviewStates.sampleTyped.count
+        )
+      ),
+      row(
+        "o2",
+        "pressed ⌘S in Opie",
+        age: 27,
+        verb: "key",
+        app: opie,
+        label: "⌘S",
+        keys: [["⌘", "S"]],
+        before: PreviewStates.beforeNames[1],
+        facts: ActionFacts(
+          action: .key,
+          outcome: .worked,
+          display: sampleDisplay,
+          point: sampleSpot,
+          keys: [["⌘", "S"]]
+        )
+      ),
       row("o1", "opened Opie", age: 30, verb: "open", app: opie, operation: "open"),
       row("n3", "typed in Notes", age: 186, verb: "type", app: notes),
       row(

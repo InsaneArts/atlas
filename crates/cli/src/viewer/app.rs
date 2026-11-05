@@ -86,6 +86,7 @@ pub async fn serve(
 
     ready(&shown);
 
+    let pictures = tokio::spawn(prune_pictures(viewer.clone()));
     let expiry = expire_control(viewer.clone());
 
     // Changes in progress in the helper (taking control, input, recovery)
@@ -106,6 +107,7 @@ pub async fn serve(
     .await;
 
     expiry.abort();
+    pictures.abort();
     viewer.close().await;
     let _ = viewer.release(None).await;
     let _ = pipe_stop.send(());
@@ -204,6 +206,32 @@ impl Viewer {
             let _ = self.release(None).await;
         }
         true
+    }
+}
+
+/// Keep the pictures taken before agents' actions to their week and room
+/// while the viewer runs, even once none is taken any more: pruned now, and
+/// again when the oldest left expires or the settings move the output
+/// folder, never more often. Every folder served since it started is
+/// pruned, so pictures left in an earlier one still expire. Saving a
+/// picture prunes too, and none taken later expires before the oldest left.
+pub(super) async fn prune_pictures(viewer: Arc<Viewer>) {
+    loop {
+        let pruning = unpoisoned(&viewer.outputs).clone();
+        let keep = viewer.client().config.activity.keep();
+        let next = tokio::task::spawn_blocking(move || {
+            pruning
+                .iter()
+                .map(|folder| atlas_client::before::prune(folder, keep))
+                .min()
+        });
+        let Ok(Some(next)) = next.await else {
+            return;
+        };
+        tokio::select! {
+            () = tokio::time::sleep(next) => {}
+            () = viewer.output_moved.notified() => {}
+        }
     }
 }
 

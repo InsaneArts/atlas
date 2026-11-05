@@ -136,3 +136,105 @@ fn atomic_writes_get_exactly_the_mode_asked_for() {
     write_atomic(&path, b"{}", 0o600).unwrap();
     assert_eq!(mode(&path), 0o600, "a private file stays private");
 }
+
+#[test]
+fn pictures_before_actions_are_kept_unless_the_settings_turn_them_off() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    let parse = |text: &str| Config::parse(text.as_bytes(), &path);
+
+    let absent = parse(crate::test_support::SETTINGS)?;
+    assert!(absent.activity.pictures_before_actions);
+    assert!(
+        !absent.to_toml()?.contains("activity"),
+        "a default setting is not written"
+    );
+
+    let off = parse(&format!(
+        "{}[activity]\npictures_before_actions = false\n",
+        crate::test_support::SETTINGS
+    ))?;
+    assert!(!off.activity.pictures_before_actions);
+    assert!(
+        absent.same_helper(&off),
+        "it changes nothing about the helper"
+    );
+
+    for invalid in [
+        "[activity]\npictures_before_actions = \"no\"\n",
+        "[activity]\nvideo = true\n",
+        "activity = true\n",
+    ] {
+        let error = parse(&format!("{}{invalid}", crate::test_support::SETTINGS)).unwrap_err();
+        assert_eq!(error.code, Code::Config, "{invalid}");
+    }
+    Ok(())
+}
+
+#[test]
+fn turning_pictures_off_and_on_keeps_every_other_setting_as_written() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    fs::write(&path, crate::test_support::SETTINGS)?;
+    let original = Config::load(&path)?;
+
+    keep_pictures(&path, false)?;
+    let off = Config::load(&path)?;
+    assert!(!off.activity.pictures_before_actions);
+    assert_eq!(
+        Config {
+            activity: Activity::default(),
+            ..off
+        },
+        original
+    );
+    assert!(
+        fs::read_to_string(&path)?.contains("output_dir = \"out\""),
+        "a relative path stays as written"
+    );
+
+    keep_pictures(&path, true)?;
+    assert_eq!(Config::load(&path)?, original);
+    assert!(!fs::read_to_string(&path)?.contains("activity"));
+    let entries = fs::read_dir(directory.path())?.count();
+    assert_eq!(entries, 1, "no temporary file is left behind");
+    Ok(())
+}
+
+#[test]
+fn pictures_keep_a_week_and_all_typed_text_unless_the_settings_say_otherwise() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    fs::write(&path, crate::test_support::SETTINGS)?;
+    let original = Config::load(&path)?;
+    assert_eq!(original.activity.keep_days, 7);
+    assert_eq!(original.activity.typed_text_limit, None);
+
+    keep_days(&path, 3)?;
+    typed_text_limit(&path, Some(80))?;
+    let changed = Config::load(&path)?.activity;
+    assert_eq!((changed.keep_days, changed.typed_text_limit), (3, Some(80)));
+    assert_eq!(
+        changed.keep(),
+        std::time::Duration::from_secs(3 * 24 * 60 * 60)
+    );
+
+    keep_days(&path, 7)?;
+    typed_text_limit(&path, None)?;
+    assert_eq!(Config::load(&path)?, original);
+    assert!(!fs::read_to_string(&path)?.contains("activity"));
+
+    for invalid in [0, KEEP_DAYS_MAX + 1] {
+        assert_eq!(keep_days(&path, invalid).unwrap_err().code, Code::Config);
+    }
+    assert_eq!(
+        typed_text_limit(&path, Some(0)).unwrap_err().code,
+        Code::Config
+    );
+    assert_eq!(
+        Config::load(&path)?,
+        original,
+        "a refused change writes nothing"
+    );
+    Ok(())
+}

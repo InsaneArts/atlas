@@ -16,6 +16,9 @@ final class SettingsController {
   private(set) var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   private(set) var notify = false
+  /// The pictures of agent actions: shown, confirmed and being written, and how many this Mac holds. Written only by
+  /// the controller's own files.
+  var pictures = SettingsPictures()
   /// Counts the times the window came forward and a choice was kept where no other window shows it, so what the
   /// links read is read again then.
   private(set) var revision = 0
@@ -63,6 +66,7 @@ final class SettingsController {
       agents: agents,
       icons: icons,
       notify: notify,
+      pictures: pictures,
       facts: SettingsFacts(
         status: helper.status,
         connecting: helper.connecting,
@@ -100,6 +104,7 @@ final class SettingsController {
     case .askForget(let path): askForget(path)
     case .checkForUpdates: Task { await checkForUpdates() }
     case .askInstall: askInstall()
+    case .askDeletePictures: ask(.deletePictures)
     case .gettingStarted: dependencies.links.gettingStarted()
     case .showAppInFinder: dependencies.revealFile(Bundle.main.bundlePath)
     case .showAgentFile(let id): showAgentFile(id)
@@ -109,7 +114,8 @@ final class SettingsController {
   }
 
   /// Writes what changed in the General pane where each value belongs: Open at Login through the panel's command,
-  /// the picture to the main window or its saved rate, and Notify me to the saved choices.
+  /// the picture to the main window or its saved rate, the pictures of agent actions to Atlas's settings, and Notify
+  /// me to the saved choices.
   ///
   /// - Parameter general: The pane as the person left it.
   func update(_ general: SettingsGeneralState) {
@@ -123,6 +129,7 @@ final class SettingsController {
       links.choosePicture(general.picture)
       revision += 1
     }
+    updatePictures(general)
     if general.notify != notify {
       notify = general.notify
       dependencies.preferences.saveNotify(notify)
@@ -140,10 +147,13 @@ final class SettingsController {
     if tab == .agents { readAgents() }
   }
 
-  /// The window came forward: what the links read is read again, and the agents and projects afresh.
+  /// The window came forward: what the links read is read again, and the agents, the projects and the pictures of
+  /// agent actions afresh.
   func cameForward() {
     revision += 1
     readAgents()
+    // Unstructured, as coming forward is synchronous: the reading runs beside it.
+    Task { await readPictures() }
   }
 
   /// The window closed: the agents reading under way stops. A command it started, such as a check for updates or a

@@ -20,6 +20,8 @@ public struct ViewerActivityMoment: Equatable, Sendable, Identifiable {
   public var isOpen: Bool
   /// Whether the person can fold or open it; a moment held open offers neither.
   public var canFold: Bool
+  /// Whether its steps kept pictures to replay, which its header's Replay offers.
+  public var canReplay: Bool
 
   /// Its shown steps, newest first; empty while folded.
   public var steps: [ViewerActivityStep]
@@ -38,6 +40,7 @@ public struct ViewerActivityMoment: Equatable, Sendable, Identifiable {
   ///   - age: How long ago it ended.
   ///   - isOpen: Whether its steps show.
   ///   - canFold: Whether the person can fold or open it; they can by default.
+  ///   - canReplay: Whether its steps kept pictures to replay; they did not by default.
   ///   - steps: Its shown steps.
   ///   - more: Its optional Show more control.
   public init(
@@ -50,6 +53,7 @@ public struct ViewerActivityMoment: Equatable, Sendable, Identifiable {
     age: String,
     isOpen: Bool,
     canFold: Bool = true,
+    canReplay: Bool = false,
     steps: [ViewerActivityStep] = [],
     more: ViewerMoreSteps? = nil
   ) {
@@ -62,6 +66,7 @@ public struct ViewerActivityMoment: Equatable, Sendable, Identifiable {
     self.age = age
     self.isOpen = isOpen
     self.canFold = canFold
+    self.canReplay = canReplay
     self.steps = steps
     self.more = more
   }

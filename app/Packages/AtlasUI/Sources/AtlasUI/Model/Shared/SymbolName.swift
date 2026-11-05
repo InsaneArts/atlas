@@ -89,4 +89,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case hand = "hand.point.up.left"
   /// The drag ghost's hand, its fill.
   case handFill = "hand.point.up.left.fill"
+  /// A scroll mark's arrow, pointing the way the page moved.
+  case scrollArrow = "arrow.down"
+  /// Show changes: what changed between two pictures.
+  case changes = "square.grid.3x3.square"
 }

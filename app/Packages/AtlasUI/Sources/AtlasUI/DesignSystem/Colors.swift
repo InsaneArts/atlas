@@ -241,4 +241,35 @@ extension Color {
   /// A heavier shadow, for a surface over other content, such as the mini screen's or a large screenshot's:
   /// black at 0.22, or black at 0.55.
   static let dropShadowStrong = Color(light: .black(0.22), dark: .black(0.55))
+  /// A mark over a picture of the helper's screen that worked, the same in either appearance as the picture is:
+  /// system blue, #0A84FF.
+  static let markWorked = Color(red: 0x0A / 255, green: 0x84 / 255, blue: 0xFF / 255)
+  /// A mark that did not work or may not have finished: #FF9500.
+  static let markFailed = Color(red: 0xFF / 255, green: 0x95 / 255, blue: 0x00 / 255)
+  /// A mark that sent nothing: #8E8E93.
+  static let markQuiet = Color(red: 0x8E / 255, green: 0x8E / 255, blue: 0x93 / 255)
+  /// The halo that lifts a mark off the screen under it: white at 0.95.
+  static let markHalo = Color.white
+    .opacity(0.95)
+  /// A word or arrow on a mark's own colour: white.
+  static let onMark = Color.white
+  /// The bubble that says what was typed or pressed: rgb(20, 20, 22) at 0.92.
+  static let markBubble = Color(red: 0x14 / 255, green: 0x14 / 255, blue: 0x16 / 255)
+    .opacity(0.92)
+  /// The words in a bubble: #F5F5F7.
+  static let markBubbleText = Color(red: 0xF5 / 255, green: 0xF5 / 255, blue: 0xF7 / 255)
+  /// A bubble's quiet line: #A1A1A6.
+  static let markBubbleDim = Color(red: 0xA1 / 255, green: 0xA1 / 255, blue: 0xA6 / 255)
+  /// A keycap in a bubble: white.
+  static let markKey = Color.white
+  /// A keycap's letter: #1D1D1F.
+  static let markKeyText = Color(red: 0x1D / 255, green: 0x1D / 255, blue: 0x1F / 255)
+  /// A keycap's lower edge: #B8B8BE.
+  static let markKeyEdge = Color(red: 0xB8 / 255, green: 0xB8 / 255, blue: 0xBE / 255)
+  /// The shade over what stayed the same between two pictures: black at 0.5.
+  static let pictureUnchanged = Color.black
+    .opacity(0.5)
+  /// A line between parts of a dark panel over a picture: white at 0.12.
+  static let overPictureLine = Color.white
+    .opacity(0.12)
 }

@@ -137,6 +137,7 @@ fn config() -> Config {
         identity_probe: "/Users/Shared/Atlas/atlas".into(),
         input_socket: "/tmp/atlas-input-502/input.sock".into(),
         output_dir: "/Users/c/runs".into(),
+        activity: Default::default(),
     }
 }
 
