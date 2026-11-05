@@ -851,7 +851,7 @@ impl<A: Backend> Target<A> {
                 reader.admit_window(&sheet, Some(current), &scope)?;
             }
         }
-        if let Some(element) = reader.reference(app, "AXFocusedUIElement")? {
+        if let Some(element) = reader.focused_element(app)? {
             reader.admit_focus_path(element, focused.as_ref(), &scope)?;
         }
         Ok(())
@@ -881,7 +881,7 @@ impl<A: Backend> Target<A> {
         let Some(name) = expect.field() else {
             return Ok(true);
         };
-        if let Some(focused) = self.reader.reference(&self.app, "AXFocusedUIElement")? {
+        if let Some(focused) = self.reader.focused_element(&self.app)? {
             let field = self.reader.field(&focused)?;
             if named_field(name).match_of(&field) == Some(NameMatch::Exact) {
                 self.field = Some(focused);

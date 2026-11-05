@@ -337,6 +337,23 @@ impl<A: Ask> Reader<A> {
         reference(self.answer(element, attribute)?)
     }
 
+    /// The app's focused element; none when the element it names no longer
+    /// exists, also when asked again. Compose Desktop windows name such an
+    /// element whenever nothing inside them is focused; like an app that
+    /// names none, the focused window alone is then judged.
+    pub(super) fn focused_element(&mut self, app: &A::Element) -> Result<Option<A::Element>> {
+        for _ in 0..2 {
+            let Some(element) = self.reference(app, "AXFocusedUIElement")? else {
+                return Ok(None);
+            };
+            let answer = self.asked(&element, "AXRole")?;
+            if answer != Answer::Failed(AXError::InvalidUIElement) {
+                return Ok(Some(element));
+            }
+        }
+        Ok(None)
+    }
+
     /// The frame from position and size, both there or both absent.
     pub(super) fn frame(&mut self, element: &A::Element) -> Result<Option<Bounds>> {
         let position = self.answer(element, "AXPosition")?;
@@ -504,7 +521,7 @@ pub(super) fn read<A: Ask>(
     } else {
         None
     };
-    let element = reader.reference(app, "AXFocusedUIElement")?;
+    let element = reader.focused_element(app)?;
     if judged.window {
         if let Some(element) = &element
             && let Some(focused) = reader.focused_window(element.clone(), window.as_ref())?
@@ -584,7 +601,11 @@ fn app_focus<A: Ask>(
     }
     let mut unwindowed = false;
     for attribute in ["AXFocusedWindow", "AXFocusedUIElement"] {
-        if let Some(element) = reader.reference(app, attribute)? {
+        let element = match attribute {
+            "AXFocusedUIElement" => reader.focused_element(app)?,
+            _ => reader.reference(app, attribute)?,
+        };
+        if let Some(element) = element {
             if reader.ask.owner(&element) != Some(pid) {
                 return Err(Unread::Failed.error());
             }
