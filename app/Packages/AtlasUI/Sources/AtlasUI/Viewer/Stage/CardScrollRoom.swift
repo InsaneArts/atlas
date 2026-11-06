@@ -18,6 +18,16 @@ enum CardScrollRoom {
     )
   }
 
+  /// The room the rows leave beside them for the scroll bar: a classic scroll bar's width, which it takes from the
+  /// list whenever it shows, so the rows keep one width as it comes and goes; none for overlay scroll bars, which
+  /// take no room.
+  ///
+  /// - Parameter style: The scroll bars' style the Mac prefers now.
+  /// - Returns: The room.
+  static func scrollerGutter(_ style: NSScroller.Style) -> CGFloat {
+    style == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : .zero
+  }
+
   /// How far a selected row's room reaches past it, which a step scrolls wholly into view
   /// (``View/listSelection(_:isSelected:)``): ``ViewerLayout/listRevealMargin`` all round, for its ring, and the small
   /// screen's band at the end it floats over, so the row lands clear of it.

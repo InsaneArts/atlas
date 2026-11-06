@@ -68,7 +68,9 @@
       case .clearOutline:
         return viewerIdle
       case .filterActivity, .toggleMoment, .showMomentSteps, .selectShot, .openShot, .toggleShot, .previousShot,
-        .nextShot, .shotAbove, .shotBelow, .clearShotSelection, .closeShot:
+        .nextShot, .shotAbove, .shotBelow, .clearShotSelection, .closeShot, .openAction, .previousAction, .nextAction,
+        .compareAction, .toggleChanges, .closeAction, .openReplay, .replayFrame, .previousFrame, .nextFrame,
+        .togglePlay, .closeReplay:
         return viewerPane(state, applying: event)
       }
     }

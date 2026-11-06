@@ -442,3 +442,36 @@ fn a_static_text_is_the_same_only_while_its_value_is_and_is_proven() {
     assert!(!same(&then, &again(relabelled, &[])));
     assert!(!same(&then, &again(label, &["AXValue"])));
 }
+
+#[test]
+fn an_element_met_with_a_frame_is_reported_by_its_frame_role_and_shown_name() {
+    let element = Element {
+        frame: Some(Bounds {
+            x: 10.0,
+            y: 20.0,
+            width: 80.0,
+            height: 24.0,
+        }),
+        ..button(4, "Save")
+    };
+    assert_eq!(
+        json!(Reached::of(&element).unwrap()),
+        json!({"frame": {"x": 10.0, "y": 20.0, "width": 80.0, "height": 24.0},
+            "role": "AXButton", "name": "Save"})
+    );
+
+    let unnamed = Element {
+        role: None,
+        title: None,
+        ..element
+    };
+    assert_eq!(
+        json!(Reached::of(&unnamed).unwrap()),
+        json!({"frame": {"x": 10.0, "y": 20.0, "width": 80.0, "height": 24.0}})
+    );
+}
+
+#[test]
+fn an_element_met_without_a_frame_is_not_reported() {
+    assert!(Reached::of(&button(4, "Save")).is_none());
+}

@@ -794,6 +794,43 @@ async fn typing_records_the_whole_commands_outcome_after_its_batches() {
 }
 
 #[tokio::test]
+async fn typed_text_names_its_field_only_when_every_batch_went_into_it() {
+    use crate::{activity_log, doing::Doing};
+
+    let batches = type_batches(&"z".repeat(95)).unwrap();
+    for (second, named) in [
+        (json!({"role": "AXTextField"}), true),
+        (Value::Null, false),
+        (json!({"role": "AXSecureTextField"}), false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(directory.path()).doing(
+            Doing::new("type")
+                .app(Some("TextEdit"))
+                .field(Some("Email")),
+        );
+        let interrupt = Interrupt::new_for_test(Duration::from_secs(10));
+        let mut sent = 0;
+        type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
+            let field = if sent == 0 {
+                json!({"role": "AXTextField"})
+            } else {
+                second.clone()
+            };
+            sent += 1;
+            Ok(
+                json!({"ok": true, "performed": actions.as_array().unwrap().len(),
+                "field": field}),
+            )
+        })
+        .await;
+
+        let row = activity_log::recent(client.output_dir().unwrap(), 1).remove(0);
+        assert_eq!(row.label.is_some(), named, "{second}");
+    }
+}
+
+#[tokio::test]
 async fn typing_without_a_command_context_keeps_only_its_batch_rows() {
     let directory = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(directory.path());

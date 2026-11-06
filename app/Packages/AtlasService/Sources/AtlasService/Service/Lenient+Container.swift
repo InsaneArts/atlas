@@ -45,6 +45,19 @@ extension KeyedDecodingContainer {
       .flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0 / 1000) : nil }
   }
 
+  /// A finite number, for a value an object cannot do without.
+  ///
+  /// - Parameter key: The field.
+  /// - Returns: The number.
+  /// - Throws: `DecodingError` when it is missing, of the wrong type or not finite.
+  func finite(_ key: Key) throws -> Double {
+    let value = try decode(Double.self, forKey: key)
+    guard value.isFinite else {
+      throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "Not a finite number")
+    }
+    return value
+  }
+
   /// A list, each element decoded on its own, so one odd element is dropped and the rest are kept; none when the
   /// list is missing or of the wrong type.
   ///

@@ -369,7 +369,7 @@ pub(crate) fn jpeg(_png: &[u8], _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
 }
 
 #[cfg(target_os = "macos")]
-fn jpeg_rgb(
+pub(crate) fn jpeg_rgb(
     rgb: &[u8],
     pixels: (usize, usize, usize),
     (limit, quality): (u32, f64),
@@ -378,7 +378,11 @@ fn jpeg_rgb(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn jpeg_rgb(_: &[u8], _: (usize, usize, usize), _: (u32, f64)) -> Result<(Vec<u8>, u32, u32)> {
+pub(crate) fn jpeg_rgb(
+    _: &[u8],
+    _: (usize, usize, usize),
+    _: (u32, f64),
+) -> Result<(Vec<u8>, u32, u32)> {
     Err(Error::new(Code::Platform, "Atlas runs on macOS only"))
 }
 

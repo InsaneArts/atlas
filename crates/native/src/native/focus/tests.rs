@@ -1123,8 +1123,22 @@ fn in_field(name: &str) -> Expect {
 #[test]
 fn keys_ask_for_nothing_inside_the_app_without_a_window_or_field() {
     let mut look = inside_with(typing(field("Email")), vec![document()]);
-    keys_with(&mut look).unwrap();
+    assert_eq!(keys_with(&mut look).unwrap(), None);
     assert_eq!(look.keyboard_reads, 0);
+}
+
+#[test]
+fn a_named_field_that_is_a_password_field_by_its_subrole_says_so() {
+    let password = Element {
+        subrole: Some("AXSecureTextField".to_owned()),
+        ..field("Password")
+    };
+    let mut look = inside_with(typing(password), vec![document()]);
+    assert_eq!(
+        expecting(&in_field("Password"), &mut look).unwrap(),
+        Some("AXSecureTextField")
+    );
+    assert_eq!(look.keyboard_reads, 1, "only the check's own read");
 }
 
 #[test]

@@ -296,6 +296,8 @@ impl Client {
     /// [`Client::write_row`] on a blocking thread: a row waits its turn
     /// behind another command's, which must not hold up the runtime. Only
     /// the row goes there, never the request or reply it was projected from.
+    /// The facts beside the command's picture are kept there first, saying
+    /// how it went as its row does.
     async fn recorded(
         &self,
         request: &Value,
@@ -304,10 +306,20 @@ impl Client {
         step: Step,
     ) -> Result<()> {
         let (row, ok) = (self.row(request, reply, elapsed, step), worked(reply));
+        let facts = (step == Step::End)
+            .then(|| self.picture_facts(request, &row, reply))
+            .flatten();
         let client = self.clone();
-        let written = tokio::task::spawn_blocking(move || client.write_row(row, step, ok))
-            .await
-            .map_err(row_worker_failed)?;
+        let written = tokio::task::spawn_blocking(move || {
+            if let Some((before, facts)) = facts {
+                // Facts that cannot be kept leave the picture unmarked; the
+                // row stands.
+                let _ = crate::before::keep_facts(&client.config.output_dir, &before, &facts);
+            }
+            client.write_row(row, step, ok)
+        })
+        .await
+        .map_err(row_worker_failed)?;
 
         // The person's gathered input is written once its span ends, even
         // when no more comes.
@@ -439,6 +451,9 @@ impl Client {
                 .as_ref()
                 .filter(|task| task.name().is_some())
                 .map(|task| task.key().as_str().to_owned());
+            // The picture before its first input, once saved: never one
+            // still being written.
+            row.before = self.doing.as_ref().and_then(|doing| doing.before().name());
         }
 
         // A collection says how many files and bytes it kept, never which.

@@ -7,7 +7,8 @@ extension ViewerPresenter {
   /// The Activity pane: whose work it lists and today's count for VoiceOver, the filters with their problem and
   /// screenshot counts, and the moments with their steps, narrowed by the filter and the sidebar's search, or why
   /// nothing shows. Moments form from every row in scope before the filter, so each keeps its identity whichever
-  /// filter shows it. With nothing in the log yet there is nothing to filter. Times are the person's own clock.
+  /// filter shows it. With nothing in the log yet there is nothing to filter. Times are the person's own clock. An
+  /// action shown large, or a task replayed, covers the window.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
@@ -15,12 +16,7 @@ extension ViewerPresenter {
     let facts = snapshot.panes.activity
     let chosen = snapshot.shownSessions.key
     let title = chosen.map { resolvedSession($0, snapshot).name } ?? ViewerWords.place(.activity)
-    guard facts.failure == nil, let log = facts.log, let readAt = facts.readAt,
-      let prepared = facts.prepared(
-        captures: snapshot.panes.shots.shots ?? [],
-        calendar: snapshot.zonedCalendar,
-        now: snapshot.date
-      )
+    guard facts.failure == nil, let log = facts.log, let readAt = facts.readAt, let moments = activityMoments(snapshot)
     else {
       let failed = facts.failure.map {
         EmptyMessageState(headline: ViewerWords.activityFailed, message: Words.sentence($0))
@@ -36,10 +32,6 @@ extension ViewerPresenter {
     }
     let rules = ActivityGrouping(log: log, readAt: readAt, now: snapshot.date, calendar: snapshot.zonedCalendar)
     let scope = ActivityScope(snapshot.shownSessions)
-    var moments = prepared.moments
-    if case .session(let key) = scope {
-      moments.moments = moments.moments.filter { $0.stream == .session(key) }
-    }
     let query = snapshot.session.search.query
     let shown = moments.shown(filter: activityFilter(facts.filter), query: query)
     let counts = [ViewerActivityFilter.problems, .screenshots].reduce(into: [ViewerActivityFilter: Int]()) {
@@ -53,8 +45,30 @@ extension ViewerPresenter {
       filters: activityFilters(facts.filter, counts: counts),
       days: days,
       empty: days.isEmpty ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil) : nil,
-      showsFilters: !moments.moments.isEmpty
+      showsFilters: !moments.moments.isEmpty,
+      large: actionLarge(moments, snapshot),
+      replay: replay(moments, snapshot)
     )
+  }
+
+  /// Every moment of the reading in scope: the chosen session's, or every session's.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The moments, or nil before the log is read.
+  static func activityMoments(_ snapshot: ViewerSnapshot) -> ActivityMoments? {
+    let facts = snapshot.panes.activity
+    guard
+      var moments = facts.prepared(
+        captures: snapshot.panes.shots.shots ?? [],
+        calendar: snapshot.zonedCalendar,
+        now: snapshot.date
+      )?
+      .moments
+    else { return nil }
+    if case .session(let key) = ActivityScope(snapshot.shownSessions) {
+      moments.moments = moments.moments.filter { $0.stream == .session(key) }
+    }
+    return moments
   }
 
   /// The filters, the chosen one selected, Problems and Screenshots with how many they hold once they hold any.

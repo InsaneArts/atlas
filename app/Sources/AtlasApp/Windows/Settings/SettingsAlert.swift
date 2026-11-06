@@ -12,4 +12,6 @@ enum SettingsAlert: Equatable {
   case forget(String)
   /// Install this newer version?
   case install(String)
+  /// Delete every picture of agent actions?
+  case deletePictures
 }

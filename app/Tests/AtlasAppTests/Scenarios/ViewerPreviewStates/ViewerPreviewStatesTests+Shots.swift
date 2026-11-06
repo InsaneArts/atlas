@@ -61,11 +61,12 @@
       keepThumbnails(&snapshot)
     }
 
-    /// Every capture's thumbnail read: the sample desktop at the captures' shape, known by the capture's name.
+    /// Every capture's thumbnail read, and every picture's taken before an action: the sample desktop at the
+    /// captures' shape, known by the file's name.
     ///
     /// - Parameter snapshot: The facts to change.
     static func keepThumbnails(_ snapshot: inout ViewerSnapshot) {
-      for name in PreviewStates.shotNames {
+      for name in PreviewStates.shotNames + PreviewStates.beforeNames {
         guard let picture = PreviewStates.shotPicture(name) else { continue }
         snapshot.panes.thumbnails.keep(picture, for: name)
       }

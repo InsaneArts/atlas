@@ -73,6 +73,26 @@ struct ViewerPresenterActivityTests {
     #expect(pressed.kind == .keys)
   }
 
+  @Test("an action shows the picture taken right before it, with its thumbnail once read, and one without shows none")
+  func anActionShowsItsPictureBefore() throws {
+    let name = "1792665100000000000-before.jpg"
+    var snapshot = try ViewerActivityFixtures.onActivity(
+      [
+        ActivityFixtures.row(id: "c2", says: "clicked Save in TextEdit", ageSeconds: 1, verb: "click", before: name),
+        ActivityFixtures.row(id: "c1", says: "scrolled in TextEdit", ageSeconds: 3, verb: "scroll"),
+      ],
+      sessions: []
+    )
+    let steps = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
+    #expect(steps.map(\.picture?.shot.name) == [name, nil])
+    #expect(steps.first?.picture?.shot.thumbnail == nil, "until it is read")
+
+    let picture = DesktopPicture(id: name, image: try SettingsControllerTests.image())
+    snapshot.panes.thumbnails.keep(picture, for: name)
+    let read = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
+    #expect(read.first?.picture?.shot.thumbnail == picture)
+  }
+
   @Test("a typed action names its field only when the row names one")
   func aTypedActionNamesItsFieldOnlyWhenTheRowDoes() throws {
     let steps = ViewerActivityFixtures.steps(

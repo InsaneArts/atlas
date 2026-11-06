@@ -1,7 +1,7 @@
 #if DEBUG
   extension PreviewStates {
-    /// The working sample's pane: Opie held open while its click runs, Notes open with its typing refused and done
-    /// again, TextEdit and an older command folded.
+    /// The working sample's pane: Opie held open while its click runs, two of its steps with their marked pictures
+    /// taken before them, Notes open with its typing refused and done again, TextEdit and an older command folded.
     @MainActor static let workingActivity = ViewerActivityState(
       meta: "19 actions today",
       filters: activityFilters(.all, problems: 1, screenshots: 1),
@@ -19,6 +19,7 @@
               age: "now",
               isOpen: true,
               canFold: false,
+              canReplay: true,
               steps: [
                 ViewerActivityStep(
                   id: "o6",
@@ -43,14 +44,16 @@
                 ViewerActivityStep(
                   id: "o3",
                   kind: .typing,
-                  words: ViewerStepWords("Typed into", target: "Name"),
-                  time: "25 s"
+                  words: ViewerStepWords("Typed", quote: sampleTyped, joiner: "into", target: "Name"),
+                  time: "25 s",
+                  picture: sampleTypingPicture
                 ),
                 ViewerActivityStep(
                   id: "o2",
                   kind: .keys,
                   words: ViewerStepWords("Pressed", keys: [["⌘", "S"]]),
-                  time: "27 s"
+                  time: "27 s",
+                  picture: sampleKeysPicture
                 ),
                 ViewerActivityStep(
                   id: "o1",
@@ -138,6 +141,7 @@
               age: "now",
               isOpen: true,
               canFold: false,
+              canReplay: true,
               steps: [
                 ViewerActivityStep(
                   id: "o6",
@@ -162,14 +166,16 @@
                 ViewerActivityStep(
                   id: "o3",
                   kind: .typing,
-                  words: ViewerStepWords("Typed into", target: "Name"),
-                  time: "25 s"
+                  words: ViewerStepWords("Typed", quote: sampleTyped, joiner: "into", target: "Name"),
+                  time: "25 s",
+                  picture: sampleTypingPicture
                 ),
                 ViewerActivityStep(
                   id: "o2",
                   kind: .keys,
                   words: ViewerStepWords("Pressed", keys: [["⌘", "S"]]),
-                  time: "27 s"
+                  time: "27 s",
+                  picture: sampleKeysPicture
                 ),
                 ViewerActivityStep(
                   id: "o1",

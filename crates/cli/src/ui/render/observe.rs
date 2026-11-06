@@ -286,6 +286,14 @@ pub(super) fn config(value: &Value) -> String {
         ("Shared command", path(&config["identity_probe"])),
         ("Helper socket", path(&config["socket_path"])),
         ("Input socket", path(&config["input_socket"])),
+        (
+            "Pictures",
+            if config["activity"]["pictures_before_actions"] == false {
+                "off".into()
+            } else {
+                "before each action".into()
+            },
+        ),
     ];
 
     labelled(&rows, 14).join("\n")

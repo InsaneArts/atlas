@@ -184,7 +184,8 @@ impl Policy {
             }),
             Command::Status => Self::read(View::Status),
             Command::Activity(_) => Self::read(View::Activity),
-            Command::Config => Self::read(View::Config),
+            Command::Config(config) if config.changes() => Self::local(View::Config),
+            Command::Config(_) => Self::read(View::Config),
             // The person's own setting: Stop and other control never hold it up.
             Command::Sound { .. } => Self::local(View::Sound),
             Command::Apps { .. } => Self::read(View::Apps),
@@ -223,6 +224,7 @@ impl Policy {
                 )
             },
             Command::UpdateFinish => Self::passive(AgentMachine, Tools(None), View::Generic),
+            Command::PictureAfter { .. } => Self::local(View::Quiet),
             Command::Switch(_) => Self::passive(Local, Prompt("Stopped."), View::Switch),
             Command::Init => Self::passive(
                 Local,

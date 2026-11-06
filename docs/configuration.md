@@ -23,7 +23,7 @@ This reads the file; it does not create it or set up another helper. For normal 
 
 ## Settings fields
 
-There are five supported keys. Unknown keys are rejected, and the file must be UTF-8 TOML no larger than 16 KiB.
+There are five supported keys and one optional table. Unknown keys are rejected, and the file must be UTF-8 TOML no larger than 16 KiB.
 
 | Key              | Meaning                                                                          | Value written by guided setup                               |
 | ---------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -34,6 +34,17 @@ There are five supported keys. Unknown keys are rejected, and the file must be U
 | `output_dir`     | Captures, viewer records and associated metadata.                                | `~/Library/Application Support/Atlas/runs` in your account. |
 
 Only `output_dir` has a parser default: `runs`, relative to the settings file. The other four keys are required. `<helper-home>` and `<uid>` above are placeholders, not text to put in the file.
+
+One optional table changes what the activity keeps:
+
+```toml
+[activity]
+pictures_before_actions = false # on unless set
+keep_days = 3                   # 7 unless set, at most 365
+typed_text_limit = 80           # all typed text unless set
+```
+
+By default Atlas keeps a picture of the helper's screen right before each agent action, and one a second after it unless the next step's picture serves, with the few facts Atlas.app needs to mark where the action happened, for you to see in Atlas.app's Activity. Typed text is kept in full unless `typed_text_limit` is set; text typed into a password field is never kept, nor its length, nor is text with a tab, a return or another control character in it, which may move on to a password field, and neither are keys pressed one at a time that type text. They stay on your Mac in the `before` folder of `output_dir`, for `keep_days` and 500 MB in all; `atlas cleanup --apply` also removes the ones its session took. No agent is given one: agents' replies and `atlas activity` never name them. Atlas's **Settings > General** writes these settings, changing only that line of the file, and can delete every picture.
 
 The [example configuration](../examples/config.toml) documents the keys for development. Its UID `502`, `/tmp` socket paths and local `runs` directory are examples, not universal installation defaults. Do not copy its helper identity into an existing installation. `atlas setup --helper NAME` can inspect a proposed setup for an existing account; replace `NAME` with that account's short name.
 

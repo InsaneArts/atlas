@@ -32,7 +32,7 @@ pub(super) use ffi::act;
 pub(super) use keyboard::{
     Asked, Focused, Judged, Keyboard, Status, Unread, Within, frontmost, keyboard, remaining,
 };
-pub(super) use references::{Looks, Resolved, confirm, read, resolve};
+pub(super) use references::{Looks, Reached, Resolved, confirm, read, resolve};
 pub(super) use system::dock_item;
 pub use system::{DOCK_TIMEOUT, dock};
 pub(super) use system::{focused_pid, menu_bar_owner};

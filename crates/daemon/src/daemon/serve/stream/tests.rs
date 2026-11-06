@@ -406,3 +406,221 @@ async fn a_truncated_stop_request_still_gives_the_source_back() {
     task.await.unwrap().unwrap();
     assert_eq!(daemon.source.lifecycle(), Lifecycle::Stopped);
 }
+
+fn refused_consent(_: u32, _: Option<u32>) -> Result<RawShot> {
+    Err(Error::new(
+        Code::Permission,
+        "Screen Recording is not allowed for Atlas in the helper account",
+    ))
+}
+
+/// A connection that asked `daemon` for one frame pinned to display
+/// `display`, and the daemon's side of it.
+async fn asked(daemon: Arc<Daemon>, display: u64) -> (UnixStream, JoinHandle<Result<()>>) {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let task = tokio::spawn(super::super::handle(
+        server,
+        daemon,
+        true,
+        watch::channel(ConnectionPhase::Refusal).0,
+    ));
+    let request = json!({"op":"frame","maxDimension":1280,"session":{"securitySessionId":42,"displayId":display}});
+    client
+        .write_all(format!("{request}\n").as_bytes())
+        .await
+        .unwrap();
+    (client, task)
+}
+
+/// One frame asked of `daemon` pinned to display `display`: its header,
+/// and every byte after it.
+async fn one_frame(daemon: Arc<Daemon>, display: u64) -> (Value, Vec<u8>) {
+    let (mut client, task) = asked(daemon, display).await;
+    let header = header(&mut client).await;
+    let mut rest = Vec::new();
+    client.read_to_end(&mut rest).await.unwrap();
+    task.await.unwrap().unwrap();
+    (header, rest)
+}
+
+#[tokio::test]
+async fn one_frame_comes_as_raw_pixels_after_a_header_that_proves_its_session() {
+    let _serial = SERIAL.lock().await;
+    reset();
+    let daemon = daemon(raw);
+    let (header, pixels) = one_frame(daemon.clone(), 7).await;
+    assert_eq!(header["ok"], true);
+    assert_eq!(
+        (&header["width"], &header["height"]),
+        (&json!(2), &json!(1))
+    );
+    assert_eq!(header["session"]["displayID"], 7);
+    assert_eq!(header["daemonPID"], std::process::id());
+    assert_eq!(pixels, [11, 22, 33, 44, 55, 66]);
+    assert_eq!(CAPTURES.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        daemon.source.lifecycle(),
+        Lifecycle::Stopped,
+        "it needs no live source"
+    );
+}
+
+#[tokio::test]
+async fn one_frame_is_refused_on_screen_in_another_session_and_without_consent() {
+    let _serial = SERIAL.lock().await;
+    // The capture a refusal comes after, if any: one the helper left mid-way.
+    for (capture, on_screen, display, code, captures) in [
+        (
+            raw as fn(u32, Option<u32>) -> Result<RawShot>,
+            true,
+            7,
+            "on-console",
+            0,
+        ),
+        (raw, false, 8, "session-changed", 0),
+        (changed, false, 7, "session-changed", 1),
+        (console, false, 7, "on-console", 1),
+        (refused_consent, false, 7, "permission", 0),
+    ] {
+        reset();
+        CONSOLE.store(on_screen, Ordering::SeqCst);
+        let (header, pixels) = one_frame(daemon(capture), display).await;
+        assert_eq!(header["ok"], false, "{code}");
+        assert_eq!(header["code"], code);
+        assert!(pixels.is_empty(), "no pixel leaves the daemon: {code}");
+        assert_eq!(CAPTURES.load(Ordering::SeqCst), captures, "{code}");
+    }
+}
+
+#[tokio::test]
+async fn one_frame_waits_out_no_unconfirmed_live_source() {
+    let _serial = SERIAL.lock().await;
+    reset();
+    let daemon = stopping(never_stops);
+    let (mut client, task) = connection_from(daemon.clone(), 640, CaptureBackend::ScreenCaptureKit);
+    accepted(&mut client).await;
+    ask_stop(&mut client, 5).await;
+    header(&mut client).await;
+    task.await.unwrap().unwrap();
+
+    let (header, pixels) = one_frame(daemon, 7).await;
+    assert_eq!(header["code"], "busy");
+    assert!(pixels.is_empty());
+    assert_eq!(CAPTURES.load(Ordering::SeqCst), 0);
+}
+
+static READS: AtomicUsize = AtomicUsize::new(0);
+static HELD: AtomicBool = AtomicBool::new(false);
+static WAITING: AtomicBool = AtomicBool::new(false);
+
+/// The helper's session, its third reading, a capture's first check, held
+/// while [`HELD`] is: after admission and the epoch, before the capture
+/// can begin.
+fn held_before_capture() -> Result<Value> {
+    if READS.fetch_add(1, Ordering::SeqCst) == 2 {
+        WAITING.store(true, Ordering::SeqCst);
+        while HELD.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    session()
+}
+
+async fn until(flag: &AtomicBool) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !flag.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_cancelled_or_abandoned_frame_never_begins_its_capture() {
+    let _serial = SERIAL.lock().await;
+    for leaves in [false, true] {
+        reset();
+        READS.store(0, Ordering::SeqCst);
+        HELD.store(true, Ordering::SeqCst);
+        WAITING.store(false, Ordering::SeqCst);
+        let mut daemon = Daemon::new(
+            "Aqua".into(),
+            |_, _, _| -> Result<Shot> { panic!("A frame must never encode PNG") },
+            || false,
+            held_before_capture,
+        );
+        daemon.screen.raw_capture = raw;
+        let (mut client, task) = asked(Arc::new(daemon), 7).await;
+        until(&WAITING).await;
+        if leaves {
+            drop(client);
+            tokio::time::sleep(Duration::from_millis(15)).await;
+            HELD.store(false, Ordering::SeqCst);
+        } else {
+            client.write_all(&[0]).await.unwrap();
+            let answered = header(&mut client).await;
+            assert_eq!(
+                answered["code"], "cancelled",
+                "answered before it could begin"
+            );
+            HELD.store(false, Ordering::SeqCst);
+        }
+        task.await.unwrap().unwrap();
+        // The worker is joined by the source before the next test runs.
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        assert_eq!(CAPTURES.load(Ordering::SeqCst), 0, "leaves: {leaves}");
+    }
+}
+
+#[tokio::test]
+async fn a_cancel_is_answered_only_once_a_begun_capture_has_ended() {
+    let _serial = SERIAL.lock().await;
+    reset();
+    BLOCKED.store(true, Ordering::SeqCst);
+    let (mut client, task) = asked(daemon(blocking), 7).await;
+    until(&STARTED).await;
+    client.write_all(&[0]).await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(15), header(&mut client))
+            .await
+            .is_err(),
+        "not while the capture runs"
+    );
+    BLOCKED.store(false, Ordering::SeqCst);
+    let answered = header(&mut client).await;
+    assert_eq!(answered["code"], "cancelled");
+    let mut rest = Vec::new();
+    client.read_to_end(&mut rest).await.unwrap();
+    assert!(rest.is_empty(), "its pixels never leave the daemon");
+    task.await.unwrap().unwrap();
+    assert_eq!(CAPTURES.load(Ordering::SeqCst), 1);
+}
+
+/// The helper's session, on another display from the fifth reading on: after
+/// admission, the epoch and both of a capture's checks.
+fn moves_once_captured() -> Result<Value> {
+    let mut proof = session()?;
+    if READS.fetch_add(1, Ordering::SeqCst) >= 4 {
+        proof["displayID"] = json!(8);
+    }
+    Ok(proof)
+}
+
+#[tokio::test]
+async fn one_frame_is_checked_again_once_its_worker_is_back() {
+    let _serial = SERIAL.lock().await;
+    reset();
+    READS.store(0, Ordering::SeqCst);
+    let mut daemon = Daemon::new(
+        "Aqua".into(),
+        |_, _, _| -> Result<Shot> { panic!("A frame must never encode PNG") },
+        || CONSOLE.load(Ordering::SeqCst),
+        moves_once_captured,
+    );
+    daemon.screen.raw_capture = raw;
+    let (header, pixels) = one_frame(Arc::new(daemon), 7).await;
+    assert_eq!(header["code"], "session-changed");
+    assert!(pixels.is_empty(), "the picture never leaves the daemon");
+    assert_eq!(CAPTURES.load(Ordering::SeqCst), 1);
+}

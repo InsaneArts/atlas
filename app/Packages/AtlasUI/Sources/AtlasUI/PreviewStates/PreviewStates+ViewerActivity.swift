@@ -44,6 +44,37 @@
       ViewerActivityShot(name: name, aspect: Self.shotAspect, thumbnail: shotPicture(name))
     }
 
+    /// The picture taken before a step in a sample, at the shape a picture no screenshot list names takes until it is
+    /// read, its thumbnail read.
+    ///
+    /// - Parameter name: The picture's file name.
+    /// - Returns: The picture.
+    @MainActor static func samplePicture(_ name: String) -> ViewerActivityShot {
+      ViewerActivityShot(name: name, thumbnail: shotPicture(name))
+    }
+
+    /// What the Activity sample's agent typed into Opie's Name field.
+    public static let sampleTyped = "Ring settings"
+
+    /// Where the Activity sample's typing and key press went in Opie: its Name field, a little left of the middle.
+    public static let sampleSpot = CGPoint(x: 0.35, y: 0.375)
+
+    /// The Activity sample's typing, marked on the picture before it: a ring on the field, the text in a bubble.
+    @MainActor static var sampleTypingPicture: ViewerStepPicture {
+      ViewerStepPicture(
+        shot: samplePicture(beforeNames[0]),
+        mark: ViewerActionMark(shape: .typing(text: sampleTyped, detail: "Typed · 13 characters"), spot: sampleSpot)
+      )
+    }
+
+    /// The Activity sample's ⌘S, marked on the picture before it: a soft ring on the field, the keys over it.
+    @MainActor static var sampleKeysPicture: ViewerStepPicture {
+      ViewerStepPicture(
+        shot: samplePicture(beforeNames[1]),
+        mark: ViewerActionMark(shape: .keys([["⌘", "S"]]), spot: sampleSpot)
+      )
+    }
+
     /// 16:9: the samples' captures' shape, 2560 by 1440.
     static let shotAspect: CGFloat = 2560.0 / 1440.0
 

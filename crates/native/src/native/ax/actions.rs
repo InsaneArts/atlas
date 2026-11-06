@@ -10,7 +10,7 @@ use super::{
     Status, absent,
     bring::{admitted, check_application},
     ffi,
-    references::{Found, Looks, kept, meet},
+    references::{Found, Looks, Reached, kept, meet},
     tree::Retraced,
 };
 use atlas_core::{
@@ -46,13 +46,15 @@ const TEXT_ROLES: [&str; 4] = ["AXTextField", "AXTextArea", "AXSearchField", "AX
 const INSTEAD: &str = "Click it with atlas click --ref instead, or run atlas elements again.";
 
 /// What an action on an element came to: whether it reads as asked, the
-/// process it acted in, and whether the app took a request to change it
-/// (not when it already read as asked).
-#[derive(Debug, Clone, Copy)]
+/// process it acted in, whether the app took a request to change it (not
+/// when it already read as asked), and the element (for a pick, its
+/// control) as it was met just before, when it has a frame.
+#[derive(Debug, Clone)]
 pub(in crate::native) struct Acted {
     pub(in crate::native) verification: Verification,
     pub(in crate::native) instance: Instance,
     pub(in crate::native) changed: bool,
+    pub(in crate::native) reached: Option<Reached>,
 }
 
 /// The element an action names, met again; for a pick, the option of it;
@@ -140,6 +142,7 @@ pub(in crate::native) fn act_on(
     }
     let object: &AXUIElement = &met.option.as_ref().unwrap_or(&met.control).object;
     let instance = control.instance();
+    let reached = Reached::of(&met.control.element);
     if ffi::owner(object).ok() != Some(instance.pid) {
         return Err(stale("The element belongs to another process than its app"));
     }
@@ -155,6 +158,7 @@ pub(in crate::native) fn act_on(
             verification: Verification::Matched,
             instance,
             changed: false,
+            reached,
         });
     }
 
@@ -179,6 +183,7 @@ pub(in crate::native) fn act_on(
         verification: read_back(object, &wanted, deadline),
         instance,
         changed: true,
+        reached,
     })
 }
 

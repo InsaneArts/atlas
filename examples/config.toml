@@ -20,3 +20,8 @@ input_socket = "/tmp/atlas-input-502/input.sock"
 
 # Private (0700) directory for captures, viewer records and metadata.
 output_dir = "runs"
+
+# A picture of the helper's screen is kept right before each agent action, for
+# Atlas.app's Activity. Uncomment to keep none.
+# [activity]
+# pictures_before_actions = false

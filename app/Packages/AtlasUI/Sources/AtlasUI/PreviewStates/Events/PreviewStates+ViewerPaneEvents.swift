@@ -24,6 +24,13 @@
         next.pane = .activity(activitySample(activity, moment: id, opens: opens))
       case (.activity(let activity), .showMomentSteps(let id)):
         next.pane = .activity(activitySample(activity, moment: id, opens: true, every: true))
+      case (.activity(let activity), .openAction), (.activity(let activity), .previousAction),
+        (.activity(let activity), .nextAction), (.activity(let activity), .compareAction),
+        (.activity(let activity), .toggleChanges), (.activity(let activity), .closeAction),
+        (.activity(let activity), .openReplay), (.activity(let activity), .replayFrame),
+        (.activity(let activity), .previousFrame), (.activity(let activity), .nextFrame),
+        (.activity(let activity), .togglePlay), (.activity(let activity), .closeReplay):
+        next.pane = .activity(actionSample(activity, applying: event))
       case (.screenshots(let shots), _):
         next.pane = .screenshots(shotsSample(shots, applying: event))
       case (_, .openShot(let name)):

@@ -13,6 +13,10 @@ public struct ViewerActivityState: Equatable, Sendable {
   public var empty: EmptyMessageState?
   /// Whether the log holds anything to filter, so the filters show.
   public var showsFilters: Bool
+  /// The action shown large over the whole window; nil shows none.
+  public var large: ViewerActionLarge?
+  /// The task replayed over the whole window; nil shows none.
+  public var replay: ViewerReplayState?
 
   /// Creates the Activity pane's state.
   ///
@@ -23,13 +27,17 @@ public struct ViewerActivityState: Equatable, Sendable {
   ///   - days: The days and their nested moments and steps.
   ///   - empty: Why nothing shows.
   ///   - showsFilters: Whether the filters show; they do by default.
+  ///   - large: The action shown large; none by default.
+  ///   - replay: The task replayed; none by default.
   public init(
     title: String = "Activity",
     meta: String,
     filters: CapsuleTabsState<ViewerActivityFilter>,
     days: [ViewerActivityDay],
     empty: EmptyMessageState? = nil,
-    showsFilters: Bool = true
+    showsFilters: Bool = true,
+    large: ViewerActionLarge? = nil,
+    replay: ViewerReplayState? = nil
   ) {
     self.title = title
     self.meta = meta
@@ -37,6 +45,8 @@ public struct ViewerActivityState: Equatable, Sendable {
     self.days = days
     self.empty = empty
     self.showsFilters = showsFilters
+    self.large = large
+    self.replay = replay
   }
 
   /// The newest step's identity, whose change is a new step arriving at the top.

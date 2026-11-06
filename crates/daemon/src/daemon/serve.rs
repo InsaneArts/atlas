@@ -689,6 +689,9 @@ pub(crate) async fn handle(
             pin,
             backend,
         } => return stream::serve(daemon, reader, writer, max_dimension, pin, backend).await,
+        Request::Frame { max_dimension, pin } => {
+            return stream::one(daemon, reader, writer, max_dimension, pin).await;
+        }
         Request::SessionProof { challenge } => proof::query(&daemon.proof_worker, &challenge)
             .await
             .unwrap_or_else(refused),
@@ -813,7 +816,7 @@ async fn admit(
         .await
         .map_err(|error| (refused(error), false))?;
     let request = protocol::parse(&line).map_err(|refusal| (refusal, false))?;
-    let framed = matches!(request, Request::Stream { .. });
+    let framed = matches!(request, Request::Stream { .. } | Request::Frame { .. });
     let policy = request.policy();
     if !controller && !policy.open_to_helper() {
         return Err((

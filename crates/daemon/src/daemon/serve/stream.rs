@@ -12,7 +12,13 @@ use atlas_native::native::capture::{
     source::{Drain, Owner, Source},
 };
 use serde_json::{Value, json};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::unix::{OwnedReadHalf, OwnedWriteHalf},
@@ -20,6 +26,9 @@ use tokio::{
 
 /// A stalled terminal must not hold raw pixels waiting for later playback.
 const WRITE: Duration = Duration::from_millis(200);
+/// The most send buffer one picture's frame asks for: the largest frame it
+/// can be, 1280 by 1280 pixels of three bytes, rounded up.
+const FRAME_ROOM: usize = 5 << 20;
 /// How long a connection may go without asking for a frame.
 const IDLE: Duration = Duration::from_secs(10);
 /// The shortest gap between CoreGraphics capture starts.
@@ -143,13 +152,46 @@ fn guard(daemon: &Daemon, expected: &InputEpoch) -> Result<Value> {
     Ok(proof)
 }
 
+/// Whether one frame's capture has begun or was cancelled: it begins only
+/// by claiming its start before its client cancels it or leaves, and once
+/// either happened it never begins.
+#[derive(Default)]
+struct Start(AtomicBool);
+
+impl Start {
+    /// Whether the capture may begin now; it is then begun.
+    fn claim(&self) -> bool {
+        self.decide()
+    }
+
+    /// Cancel it: whether it had not begun, and now never will.
+    fn cancel(&self) -> bool {
+        self.decide()
+    }
+
+    /// Whether this call came first, claim or cancel: only the first decides.
+    fn decide(&self) -> bool {
+        !self.0.swap(true, Ordering::SeqCst)
+    }
+}
+
+fn no_longer_wanted() -> Error {
+    Error::new(Code::Cancelled, "The picture was no longer wanted")
+}
+
+/// One raw frame with the session checked before and after it. With
+/// `start`, it begins only once it claims it.
 fn capture(
     daemon: &Daemon,
     expected: &InputEpoch,
     side: u32,
     backend: CaptureBackend,
+    start: Option<&Start>,
 ) -> Result<(RawShot, Value, &'static str, f64)> {
     guard(daemon, expected)?;
+    if start.is_some_and(|start| !start.claim()) {
+        return Err(no_longer_wanted());
+    }
     let capturing = std::time::Instant::now();
     let (shot, source) = match backend {
         CaptureBackend::CoreGraphics => (
@@ -180,6 +222,83 @@ fn capture(
         ));
     }
     Ok((shot, proof, source, capture_ms))
+}
+
+/// One raw frame, as a live frame is framed: the picture right before an
+/// agent's action. It is taken with a live frame's checks around it and
+/// again once its worker is back, never while a live source's stop is
+/// unconfirmed, and needs no live source of its own.
+///
+/// The client sends one byte to cancel it when its action will not wait
+/// longer, or leaves. From then on no capture begins; the cancel is
+/// answered only once none can, a capture already begun having ended, so
+/// the action goes on only after every capture for it.
+pub(super) async fn one(
+    daemon: Arc<Daemon>,
+    mut reader: OwnedReadHalf,
+    mut writer: OwnedWriteHalf,
+    side: u32,
+    pin: SessionPin,
+) -> Result<()> {
+    let expected = match daemon.screen.epoch() {
+        Ok(epoch)
+            if epoch.security_session_id == pin.security_session_id
+                && epoch.display_id == pin.display_id =>
+        {
+            epoch
+        }
+        Ok(_) => return write_header(&mut writer, &refused(Error::session_changed())).await,
+        Err(error) => return write_header(&mut writer, &refused(error)).await,
+    };
+    let start = Arc::new(Start::default());
+    let (worker, checking, claim) = (daemon.clone(), expected.clone(), start.clone());
+    let mut capturing = tokio::task::spawn_blocking(move || {
+        worker.source.one_shot(|| {
+            capture(
+                &worker,
+                &checking,
+                side,
+                CaptureBackend::CoreGraphics,
+                Some(&claim),
+            )
+        })?
+    });
+    let mut cancel = [0_u8; 1];
+    let captured = tokio::select! {
+        captured = &mut capturing => captured,
+        read = reader.read(&mut cancel) => {
+            // A capture already begun ends before the cancel is answered.
+            if !start.cancel() {
+                let _ = capturing.await;
+            }
+            if !matches!(read, Ok(1)) {
+                return Ok(());
+            }
+            return write_header(&mut writer, &refused(no_longer_wanted())).await;
+        }
+    }
+    .unwrap_or_else(|_| Err(Error::new(Code::Capture, "The capture failed")));
+    // The helper may have come on screen or changed while the worker ran.
+    let checked = captured.and_then(|captured| guard(&daemon, &expected).map(|_| captured));
+    let (shot, proof, _, _) = match checked {
+        Ok(captured) => captured,
+        Err(error) => return write_header(&mut writer, &refused(error)).await,
+    };
+    let header = json!({"ok": true, "width": shot.width, "height": shot.height,
+        "scale": shot.scale, "session": proof, "daemonPID": std::process::id()});
+    // Room for the whole frame at once: its action waits for it, and the
+    // socket's own small buffer would hand it over in thousands of turns.
+    // Without that room it goes all the same, only slower.
+    let room = shot.rgb.len().saturating_add(MAX_HEADER).min(FRAME_ROOM);
+    let _ = nix::sys::socket::setsockopt(writer.as_ref(), nix::sys::socket::sockopt::SndBuf, &room);
+    tokio::time::timeout(WRITE, async {
+        write_header(&mut writer, &header).await?;
+        writer.write_all(&shot.rgb).await?;
+        writer.flush().await?;
+        Ok::<_, Error>(())
+    })
+    .await
+    .map_err(|_| stopped())?
 }
 
 pub(super) async fn serve(
@@ -296,7 +415,7 @@ pub(super) async fn serve(
         let held = producer.clone();
         let mut worker = tokio::task::spawn_blocking(move || {
             let _held = held;
-            capture(&worker_daemon, &worker_expected, side, backend)
+            capture(&worker_daemon, &worker_expected, side, backend, None)
         });
         // A blocking framework capture cannot be interrupted safely. On
         // departure or shutdown its result is discarded, and its task is

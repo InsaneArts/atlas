@@ -66,8 +66,8 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     _pictureInCorner = State(initialValue: state.pane.place.keepsScreenInCorner)
   }
 
-  /// The sidebar beside the card, the toggle over them in the window buttons' band; a screenshot shown large over all
-  /// of it, and the alert over that.
+  /// The sidebar beside the card, the toggle over them in the window buttons' band; a screenshot or an action shown
+  /// large, or a task replayed, over all of it, and the alert over that.
   public var body: some View {
     GeometryReader { proxy in
       SidebarSplit(sidebar: state.sidebar, isFullScreen: state.isFullScreen, send: send) { slide in
@@ -75,11 +75,19 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
           .padding(.vertical, ViewerLayout.cardInset)
           .padding(.trailing, ViewerLayout.cardInset)
       }
-      .disabled(largeShot != nil)
-      .accessibilityHidden(largeShot != nil)
+      .disabled(isCovered)
+      .accessibilityHidden(isCovered)
       .overlay {
         LargeShotLayer(shot: largeShot, zoom: zoom, send: send)
           .allowsHitTesting(largeShot != nil)
+      }
+      .overlay {
+        ActionLargeLayer(large: activity?.large, send: send)
+          .allowsHitTesting(activity?.large != nil)
+      }
+      .overlay {
+        ReplayLayer(replay: activity?.replay, send: send)
+          .allowsHitTesting(activity?.replay != nil)
       }
       .overlay {
         AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
@@ -312,6 +320,17 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   private var largeShot: ViewerLargeShot? {
     guard case .screenshots(let shots) = state.pane else { return nil }
     return shots.large
+  }
+
+  /// The Activity pane, while it shows, for the action shown large or the task replayed over the whole window.
+  private var activity: ViewerActivityState? {
+    guard case .activity(let activity) = state.pane else { return nil }
+    return activity
+  }
+
+  /// Whether a screenshot or an action shown large, or a replay, covers the window, which then takes no clicks.
+  private var isCovered: Bool {
+    largeShot != nil || activity?.large != nil || activity?.replay != nil
   }
 
   /// Settles the stage on a new place once its switch has begun, keeping whether the picture moved.

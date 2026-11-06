@@ -167,6 +167,18 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     if snapshot.session.place == .screen {
       return outlineKey(event, hasModifiers: !held.isEmpty, snapshot: snapshot)
     }
+    if snapshot.session.place == .activity {
+      let shown = ViewerPresenter.shownOverlays(snapshot)
+      let key = ActionKeys.event(
+        keyCode: event.keyCode,
+        hasModifiers: !held.isEmpty,
+        large: shown.large,
+        replaying: shown.replay
+      )
+      guard let key else { return event }
+      controller.send(key)
+      return nil
+    }
     guard snapshot.session.place == .screenshots, screenshotFocused else { return event }
     let largeShown = snapshot.panes.shots.large != nil
     guard let shot = ShotKeys.event(keyCode: event.keyCode, hasModifiers: !held.isEmpty, largeShown: largeShown)

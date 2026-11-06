@@ -468,6 +468,7 @@ fn library_construction_cannot_target_the_caller() {
         identity_probe: dir.path().join("probe"),
         input_socket: dir.path().join("input"),
         output_dir: dir.path().join("out"),
+        activity: Default::default(),
     };
 
     assert_eq!(
@@ -870,6 +871,7 @@ fn config(dir: &std::path::Path) -> Config {
         identity_probe: dir.join("probe"),
         input_socket: dir.join("input"),
         output_dir: dir.join("out"),
+        activity: Default::default(),
     }
 }
 

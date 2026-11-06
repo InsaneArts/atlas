@@ -243,14 +243,15 @@ struct ActivityMomentsTests {
   func actionTotalsSurviveRowCollapsing() throws {
     let entries = [
       ActivityFixtures.row(id: "new", says: "sent input", actor: .you, ageSeconds: 1, count: 2107),
+      ActivityFixtures.row(id: "mid", says: "sent input", actor: .you, ageSeconds: 2),
       ActivityFixtures.row(id: "old", says: "sent input", actor: .you, ageSeconds: 2, count: 12),
       ActivityFixtures.row(id: "plain", says: "clicked", actor: .you, ageSeconds: 3),
     ]
     let moment = try #require(Self.moments(entries).moments.first)
     #expect(moment.runs.count == 2)
-    #expect(moment.runs.first?.count == 2)
-    #expect(moment.runs.first?.actions == 2119)
-    #expect(moment.actions == 2120)
+    #expect(moment.runs.first?.count == 3)
+    #expect(moment.runs.first?.actions == 2120)
+    #expect(moment.actions == 2121)
     #expect(Self.moments([entries[0]]).moments.first?.actions == 2107)
   }
 
@@ -364,21 +365,18 @@ struct ActivityMomentsTests {
 
   @Test("overlapping repeat runs retain their moment identity after their oldest row leaves")
   func overlappingRepeatsRetainTheirMomentIdentity() {
-    let before = Self.moments([
-      ActivityFixtures.row(id: "b", says: "scrolled", ageSeconds: 10, session: "claude", verb: "scroll", app: "Opie"),
-      ActivityFixtures.row(id: "a", says: "scrolled", ageSeconds: 20, session: "claude", verb: "scroll", app: "Opie"),
-    ])
+    let scroll = { (id: String, age: Double) in
+      ActivityFixtures.row(id: id, says: "scrolled", ageSeconds: age, session: "claude", verb: "scroll", app: "Opie")
+    }
+    let before = Self.moments([scroll("b", 10), scroll("a", 20), scroll("z", 25)])
     let after = ActivityMoments(
-      ActivityFixtures.rules([
-        ActivityFixtures.row(id: "c", says: "scrolled", ageSeconds: 5, session: "claude", verb: "scroll", app: "Opie"),
-        ActivityFixtures.row(id: "b", says: "scrolled", ageSeconds: 10, session: "claude", verb: "scroll", app: "Opie"),
-      ]),
+      ActivityFixtures.rules([scroll("c", 5), scroll("b", 10), scroll("a", 20)]),
       captures: [],
       scope: .all,
       preserving: before.moments
     )
     #expect(after.moments.map(\.id) == before.moments.map(\.id))
-    #expect(after.moments.first?.runs.first?.id == "b")
+    #expect(after.moments.first?.runs.first?.id == "a")
   }
 
   @Test("another app starts a new moment, and the same app by bundle id joins whatever its name's case")
@@ -954,5 +952,15 @@ struct ActivityMomentsTests {
       ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 20, session: "claude", verb: "click", app: "Opie"),
     ])
     #expect(worked.followUp(to: worked.moments[0].runs[1]) == nil, "an action that worked has no follow-up")
+  }
+
+  @Test("a moment is found by its identity and none once it is gone")
+  func aMomentIsFoundByItsIdentity() throws {
+    let moments = Self.moments([
+      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 10, session: "claude", verb: "click", app: "Opie")
+    ])
+    let moment = try #require(moments.moments.first)
+    #expect(moments.moment(moment.id)?.runs.map(\.id) == ["c1"])
+    #expect(moments.moment("gone") == nil)
   }
 }

@@ -29,6 +29,7 @@ extension SettingsController {
     case .logOutAnyway: await run { await self.logOut(force: true) }
     case .forget(let path): await run { await self.forget(path) }
     case .install(let version): await install(version)
+    case .deletePictures: await run { await self.deletePictures() }
     }
   }
 

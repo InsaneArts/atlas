@@ -3,7 +3,8 @@ import AtlasUI
 import Foundation
 
 /// What the Activity pane last read, and what the person asked of it: the filter, the moments they opened or folded,
-/// and those they asked to list every step of, each kept for the window's life. The sidebar's search narrows it.
+/// and those they asked to list every step of, each kept for the window's life, and the action shown large or the task
+/// replayed with the pictures read for them. The sidebar's search narrows it.
 struct ViewerActivityFacts {
   /// The log, newest first; nil before the first reading.
   var log: ActivityLog?
@@ -22,6 +23,24 @@ struct ViewerActivityFacts {
   var choices: [String: Bool] = [:]
   /// The moments the person asked to list every step of, by their ids.
   var expanded: Set<String> = []
+  /// The action shown large over the window; nil shows none.
+  var action: ViewerActionFocus?
+  /// The task replayed over the window; nil shows none.
+  var replay: ViewerReplayFocus?
+  /// The pictures of agent actions read as taken, for the action shown large and the replay, by file name.
+  var pictures: [String: DesktopPicture] = [:]
+  /// The squares that changed between two pictures, as shares of them, by ``changesKey(before:after:)``.
+  var changes: [String: [CGRect]] = [:]
+
+  /// How the squares that changed between two pictures are kept.
+  ///
+  /// - Parameters:
+  ///   - before: The picture before, by file name.
+  ///   - after: The picture after.
+  /// - Returns: The key.
+  static func changesKey(before: String, after: String) -> String {
+    "\(before)|\(after)"
+  }
 
   /// The prepared model for this snapshot's inputs, including captures and calendar changes between log readings.
   ///

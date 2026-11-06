@@ -180,12 +180,12 @@ struct ListMotionFrameTests {
   static let footColumn: CGFloat = 1100
   /// 300: a point on that line in Opie's open steps, where only the list's ground is drawn.
   static let groundRow: CGFloat = 300
-  /// 470: where the search for TextEdit's capsule starts, under Notes' header.
-  static let footSearch: CGFloat = 470
+  /// 521: where the search for TextEdit's capsule starts, under Notes' header.
+  static let footSearch: CGFloat = 521
   /// 40: the least the moment below must travel, a step's height or more.
   static let leastTravel: CGFloat = 40
   /// Points across and down the words of Notes' first step, "Typed", where they rest while it is open.
-  static let typedPoints = (464...478)
+  static let typedPoints = (515...529)
     .flatMap { y in points(across: 286...330, down: y) }
   /// 0.6: how far open a moment stands, as a share of its travel, by when its first step is wholly revealed.
   static let mostlyOpen: CGFloat = 0.6
@@ -196,9 +196,9 @@ struct ListMotionFrameTests {
   /// 0.2: the most of its travel the moment below may move between two tenths, twice an even tenth's share.
   static let mostStep: CGFloat = 0.2
 
-  /// Points across and down Notes' title in its header, under Opie's open steps, every point from 286 to 328 across
-  /// and 430 to 444 down.
-  static let titlePoints = (430...444)
+  /// Points across and down Notes' title in its header, under Opie's open steps, two of them with their pictures,
+  /// every point from 286 to 328 across and 481 to 495 down.
+  static let titlePoints = (481...495)
     .flatMap { y in points(across: 286...328, down: y) }
   /// 0.5: darker than this is the title's ink, not the list's ground.
   static let ink: CGFloat = 0.5

@@ -6,8 +6,10 @@ import SwiftUI
 /// nothing faded and nothing ended early. Headings scroll with their rows. A step to a row scrolls it into view only
 /// as far as it must, clear of the small screen (``View/listSelection(_:isSelected:)``). Scrolled down, rows coming
 /// in above, or the list changing around the row scrolled to, leave what the person reads where it is; at the top the
-/// list stays at the top, so new rows show. The scroll bar hides while the pane fades in or out. A list supplies only
-/// its content, with `scrollTargetLayout()` on the stack whose rows hold the place.
+/// list stays at the top, so new rows show. The scroll bar hides while the pane fades in or out. The rows keep one
+/// width whether a scroll bar that takes room shows or not (``CardScrollRoom/scrollerGutter(_:)``), so a list growing
+/// past its height, or shrinking under it, never lays its rows out again mid-motion. A list supplies only its content,
+/// with `scrollTargetLayout()` on the stack whose rows hold the place.
 struct CardScroll<Content: View>: View {
   /// The selected row to scroll into view as the person steps to it; nil for a list with no selection.
   var reveal: CardScrollReveal?
@@ -19,6 +21,10 @@ struct CardScroll<Content: View>: View {
   @State private var isAtTop = true
   /// Where the selected row stands as the list scrolls.
   @State private var selection = CardScrollSelection()
+  /// The list's whole width, its scroll bar's included.
+  @State private var width: CGFloat = .zero
+  /// The room kept beside the rows for a scroll bar that takes room.
+  @State private var gutter = CardScrollRoom.scrollerGutter(NSScroller.preferredScrollerStyle)
   @Environment(\.miniClearance) private var clearance
   @Environment(\.paneSettled) private var paneSettled
   @Environment(\.cardScrollPlacement) private var placement
@@ -40,18 +46,31 @@ struct CardScroll<Content: View>: View {
               }
           }
           .environment(\.cardScrollSelection, selection)
+          // One width for the rows, inside a frame that fills the list, so the list never takes its width from them.
+          .frame(width: width > gutter ? width - gutter : nil, alignment: .leading)
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
       .scrollIndicators(paneSettled ? .automatic : .hidden)
       .scrollPosition(id: anchor, anchor: .top)
-      .onGeometryChange(for: CGFloat.self) { proxy in
-        proxy.size.height
-      } action: { height in
-        selection.viewport = height
+      .onGeometryChange(for: CGSize.self) { proxy in
+        proxy.size
+      } action: { size in
+        selection.viewport = size.height
+        width = size.width
+      }
+      .onReceive(scrollerStyleChanges) { _ in
+        gutter = CardScrollRoom.scrollerGutter(NSScroller.preferredScrollerStyle)
       }
       .onChange(of: reveal?.request) { _, _ in
         show(reveal?.id, in: scroll)
       }
     }
+  }
+
+  /// The Mac's word that the scroll bars' style changed, as the person plugs in a mouse or changes their setting.
+  private var scrollerStyleChanges: NotificationCenter.Publisher {
+    NotificationCenter.default
+      .publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)
   }
 
   /// The list's scroll position (``CardScrollRoom/anchor(scrolledTo:isAtTop:)``).

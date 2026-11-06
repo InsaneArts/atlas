@@ -81,6 +81,14 @@ public struct ActivityMoments: Sendable {
     }
   }
 
+  /// The moment in scope with an identity.
+  ///
+  /// - Parameter id: The moment's identity.
+  /// - Returns: The moment, or nil once it is gone.
+  public func moment(_ id: String) -> ActivityMoment? {
+    moments.first { $0.id == id }
+  }
+
   /// The moments the pane lists: each with only the lines the filter and the search keep, a moment left with none
   /// left out, at most ``mostMoments``. The search matches what a line did, or the moment's app by name, which keeps
   /// each of its lines the filter keeps.

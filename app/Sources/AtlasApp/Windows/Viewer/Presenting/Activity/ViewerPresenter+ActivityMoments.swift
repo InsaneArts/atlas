@@ -77,7 +77,7 @@ extension ViewerPresenter {
 
   /// A moment's header: its app's icon and name, or for a moment in no app the person's mark and "You", or Commands
   /// or Screenshots; whose work it was while every session's work shows, and the person's own always; when it
-  /// started, how much it held and when, and how long ago it ended.
+  /// started, how much it held and when, how long ago it ended, and whether its steps kept pictures to replay.
   ///
   /// - Parameters:
   ///   - moment: The moment.
@@ -109,7 +109,8 @@ extension ViewerPresenter {
       ),
       age: age,
       isOpen: fold.isOpen,
-      canFold: fold != .held
+      canFold: fold != .held,
+      canReplay: moment.runs.contains { $0.firstBefore != nil }
     )
   }
 
