@@ -1,8 +1,17 @@
 use super::*;
 
-fn input(actions: Value) -> Value {
-    json!({"op": "input", "actions": actions,
-        "epoch": {"width": 1512.0, "height": 982.0, "uid": 502}})
+/// The facts of an input sending `actions` on a display of 1512 by 982 points.
+fn input(actions: Value) -> Map<String, Value> {
+    let actions: Vec<Action> = serde_json::from_value(actions).unwrap();
+    let epoch = InputEpoch {
+        uid: 502,
+        security_session_id: 1,
+        display_id: 1,
+        width: 1512.0,
+        height: 982.0,
+        process_id: 1,
+    };
+    of_input(&actions, &epoch)
 }
 
 fn row(fields: Value) -> Row {
@@ -15,39 +24,34 @@ fn row(fields: Value) -> Row {
 
 #[test]
 fn an_inputs_facts_say_what_it_did_where_on_which_display() {
-    let click = of_input(&input(
-        json!([{"type": "click", "x": 10.5, "y": 20.0, "button": "right", "count": 2}]),
-    ));
+    let click =
+        input(json!([{"type": "click", "x": 10.5, "y": 20.0, "button": "right", "count": 2}]));
     assert_eq!(
         Value::Object(click),
         json!({"action": "click", "point": {"x": 10.5, "y": 20.0}, "clicks": 2,
             "button": "right", "display": {"width": 1512.0, "height": 982.0}})
     );
 
-    let drag = of_input(&input(
-        json!([{"type": "drag", "fromX": 1, "fromY": 2, "toX": 3, "toY": 4}]),
-    ));
-    assert_eq!(drag["point"], json!({"x": 1, "y": 2}));
-    assert_eq!(drag["to"], json!({"x": 3, "y": 4}));
+    let drag = input(json!([{"type": "drag", "fromX": 1, "fromY": 2, "toX": 3, "toY": 4}]));
+    assert_eq!(drag["point"], json!({"x": 1.0, "y": 2.0}));
+    assert_eq!(drag["to"], json!({"x": 3.0, "y": 4.0}));
 
-    let scrolls = of_input(&input(json!([
+    let scrolls = input(json!([
         {"type": "scroll", "x": 5, "y": 6, "dy": 3},
         {"type": "scroll", "x": 5, "y": 6, "dy": 4}
-    ])));
+    ]));
     assert_eq!(
         scrolls["scroll"],
         json!({"dx": 0, "dy": 7}),
         "one scroll by all"
     );
 
-    let typed = of_input(&input(
-        json!([{"type": "type", "text": "Hello, "}, {"type": "type", "text": "world"}]),
-    ));
+    let typed =
+        input(json!([{"type": "type", "text": "Hello, "}, {"type": "type", "text": "world"}]));
     assert_eq!(typed["text"], "Hello, world");
 
-    let referenced = of_input(&input(
-        json!([{"type": "reference", "ref": "8123abc.12", "button": "right", "count": 2}]),
-    ));
+    let referenced =
+        input(json!([{"type": "reference", "ref": "8123abc.12", "button": "right", "count": 2}]));
     assert_eq!(
         Value::Object(referenced),
         json!({"action": "click", "clicks": 2, "button": "right",
@@ -55,7 +59,7 @@ fn an_inputs_facts_say_what_it_did_where_on_which_display() {
         "a referenced click is a click, at its element"
     );
 
-    let pressed = of_input(&input(json!([{"type": "press", "ref": "8123abc.12"}])));
+    let pressed = input(json!([{"type": "press", "ref": "8123abc.12"}]));
     assert_eq!(pressed["action"], "press");
     assert!(
         pressed.get("point").is_none(),
@@ -73,7 +77,7 @@ fn typed(text: Option<&str>, into: &[Option<&str>]) -> Typed {
 
 #[test]
 fn typed_text_is_kept_whole_or_to_its_limit_and_never_for_a_password() {
-    let typing = of_input(&input(json!([{"type": "type", "text": "part"}])));
+    let typing = input(json!([{"type": "type", "text": "part"}]));
     let worked = row(json!({"ok": true, "verb": "type"}));
     let field = Some("AXTextField");
     let release = || typed(Some("Release 0.1.1"), &[field, field]);
@@ -143,8 +147,36 @@ fn typed_text_is_kept_whole_or_to_its_limit_and_never_for_a_password() {
 }
 
 #[test]
+fn no_text_is_kept_that_may_have_moved_on_to_another_field() {
+    let field = Some("AXTextField");
+    let worked = row(json!({"ok": true, "verb": "type"}));
+    for text in [
+        "alice\thunter2",
+        "alice\nhunter2",
+        "alice\rhunter2",
+        "alice\u{1b}x",
+        "a\u{2028}b",
+    ] {
+        let typing = input(json!([{"type": "type", "text": text}]));
+        let facts = finished(
+            typing,
+            &worked,
+            &json!({}),
+            typed(Some(text), &[field]),
+            None,
+            0,
+        );
+        assert!(
+            facts.get("text").is_none() && facts.get("length").is_none(),
+            "{text:?}: {facts}"
+        );
+        assert!(!facts.to_string().contains("hunter2"), "{facts}");
+    }
+}
+
+#[test]
 fn a_commands_outcome_reads_as_it_is_marked() {
-    let click = of_input(&input(json!([{"type": "click", "x": 1, "y": 1}])));
+    let click = input(json!([{"type": "click", "x": 1, "y": 1}]));
     for (fields, outcome) in [
         (json!({"ok": true}), "worked"),
         (
@@ -172,7 +204,7 @@ fn a_commands_outcome_reads_as_it_is_marked() {
 
 #[test]
 fn a_shortcuts_keys_read_as_keycaps_and_its_times_in_milliseconds() {
-    let keys = of_input(&input(json!([{"type": "key", "key": "cmd+s"}])));
+    let keys = input(json!([{"type": "key", "key": "cmd+s"}]));
     let pressed = row(json!({"ok": true, "verb": "key", "label": "⌘S"}));
     let facts = finished(
         keys,
@@ -190,9 +222,7 @@ fn a_shortcuts_keys_read_as_keycaps_and_its_times_in_milliseconds() {
 
 #[test]
 fn keys_that_type_text_are_never_kept() {
-    let typed = of_input(&input(
-        json!([{"type": "key", "key": "s"}, {"type": "key", "key": "shift+e"}]),
-    ));
+    let typed = input(json!([{"type": "key", "key": "s"}, {"type": "key", "key": "shift+e"}]));
     assert!(!typed.contains_key("keys"), "{typed:?}");
     // A row names no key that types text, so neither do the facts.
     let pressed = row(json!({"ok": true, "verb": "key"}));
@@ -245,7 +275,7 @@ fn a_found_element_is_kept_by_its_frame_role_and_window_with_a_name_only_for_a_c
 
 #[test]
 fn an_element_the_input_service_reached_is_kept_unless_the_command_found_one() {
-    let click = of_input(&input(json!([{"type": "reference", "ref": "8123abc.12"}])));
+    let click = input(json!([{"type": "reference", "ref": "8123abc.12"}]));
     let worked = row(json!({"ok": true}));
     let reached = json!({"ok": true, "element": {"frame": {"x": 1, "y": 2, "width": 3, "height": 4},
         "role": "AXTextArea", "name": "Dear Sam"}});

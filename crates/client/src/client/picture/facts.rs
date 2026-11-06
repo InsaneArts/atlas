@@ -8,8 +8,10 @@ use crate::{
     doing::{captioned, chords},
 };
 use atlas_core::{
+    actions::Action,
     error::Code,
     screen::{elements::Element, geometry::Bounds, select::shown_name},
+    session::InputEpoch,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -17,67 +19,85 @@ use serde_json::{Map, Value, json};
 /// A password field's role, as the input service reports it.
 const SECURE: &str = "AXSecureTextField";
 
-/// What the input `request` sends does, and where: its kind, the points it
-/// acts at in display points, and the display those points are on.
-pub(in crate::client) fn of_input(request: &Value) -> Map<String, Value> {
-    let actions = request["actions"].as_array().map_or(&[][..], Vec::as_slice);
-    let mut facts = Map::new();
-    let point = |action: &Value, x: &str, y: &str| json!({"x": action[x], "y": action[y]});
-    let Some(first) = actions.first() else {
-        return facts;
-    };
-    let (kind, fields) = match first["type"].as_str().unwrap_or_default() {
-        "click" | "pointer" => (
-            "click",
-            json!({"point": point(first, "x", "y"), "clicks": first["count"],
-                "button": first["button"]}),
-        ),
+/// What the input `actions` send does, and where: its kind, the points it
+/// acts at in display points, and the display of `epoch` those points are on.
+pub(in crate::client) fn of_input(actions: &[Action], epoch: &InputEpoch) -> Map<String, Value> {
+    let point = |x: &f64, y: &f64| json!({"x": x, "y": y});
+    let fields = match actions.first() {
+        None => return Map::new(),
+        Some(
+            Action::Click {
+                x,
+                y,
+                button,
+                count,
+                ..
+            }
+            | Action::Pointer {
+                x,
+                y,
+                button,
+                count,
+                ..
+            },
+        ) => json!({"action": "click", "point": point(x, y), "clicks": count, "button": button}),
         // A click on a referenced element: where is the element's own,
         // which the input service's reply says.
-        "reference" => (
-            "click",
-            json!({"clicks": first["count"], "button": first["button"]}),
-        ),
-        "move" => ("move", json!({"point": point(first, "x", "y")})),
-        "scroll" => {
-            // A batch of scrolls at one point reads as one scroll by all of them.
-            let sum = |axis: &str| {
-                actions
-                    .iter()
-                    .filter_map(|action| action[axis].as_i64())
-                    .sum::<i64>()
-            };
-            (
-                "scroll",
-                json!({"point": point(first, "x", "y"),
-                    "scroll": {"dx": sum("dx"), "dy": sum("dy")}}),
-            )
+        Some(Action::Reference { button, count, .. }) => {
+            json!({"action": "click", "clicks": count, "button": button})
         }
-        "drag" => (
-            "drag",
-            json!({"point": point(first, "fromX", "fromY"), "to": point(first, "toX", "toY"),
-                "button": first["button"]}),
-        ),
-        "type" => {
+        Some(Action::Move { x, y }) => json!({"action": "move", "point": point(x, y)}),
+        Some(Action::Scroll { x, y, .. }) => {
+            // A batch of scrolls at one point reads as one scroll by all of them.
+            let (dx, dy) = actions
+                .iter()
+                .fold((0_i64, 0_i64), |(dx, dy), action| match action {
+                    Action::Scroll { dx: x, dy: y, .. } => (dx + i64::from(*x), dy + i64::from(*y)),
+                    _ => (dx, dy),
+                });
+            json!({"action": "scroll", "point": point(x, y), "scroll": {"dx": dx, "dy": dy}})
+        }
+        Some(Action::Drag {
+            from_x,
+            from_y,
+            to_x,
+            to_y,
+            button,
+        }) => json!({"action": "drag", "point": point(from_x, from_y), "to": point(to_x, to_y),
+            "button": button}),
+        Some(Action::Type { .. }) => {
             let text: String = actions
                 .iter()
-                .filter_map(|action| action["text"].as_str())
+                .filter_map(|action| match action {
+                    Action::Type { text } => Some(text.as_str()),
+                    _ => None,
+                })
                 .collect();
-            ("type", json!({"text": text}))
+            json!({"action": "type", "text": text})
         }
         // Its keys come from its row's label once it ends, which names only
         // keys that type no text: a letter pressed may be a password's.
-        "key" => ("key", json!({})),
-        _ => ("press", json!({})),
+        Some(Action::Key { .. }) => json!({"action": "key"}),
+        Some(
+            Action::Press { .. }
+            | Action::SetValue { .. }
+            | Action::Check { .. }
+            | Action::Uncheck { .. }
+            | Action::Pick { .. }
+            | Action::Expand { .. }
+            | Action::Collapse { .. }
+            | Action::ScrollIntoView { .. },
+        ) => json!({"action": "press"}),
+        // A pause first does nothing to mark.
+        Some(Action::Wait { .. }) => json!({}),
     };
-    facts.insert("action".into(), json!(kind));
+    let mut facts = Map::new();
     if let Value::Object(fields) = fields {
-        facts.extend(fields.into_iter().filter(|(_, value)| !value.is_null()));
+        facts.extend(fields);
     }
-    let epoch = &request["epoch"];
     facts.insert(
         "display".into(),
-        json!({"width": epoch["width"], "height": epoch["height"]}),
+        json!({"width": epoch.width, "height": epoch.height}),
     );
     facts
 }
@@ -131,8 +151,9 @@ fn replied(reply: &Value) -> Option<Value> {
 /// in milliseconds since 1970, and what it `typed`. Typed text is kept
 /// whole, or its first `limit` characters, with how many there were, only
 /// when the helper found every input that typed it going into the same
-/// field, no password field: for a password field, or one it could not
-/// tell, neither is kept.
+/// field, no password field, and none of it may have moved on from that
+/// field: for a password field, one it could not tell, or text that may
+/// have left it, neither is kept.
 pub(in crate::client) fn finished(
     mut facts: Map<String, Value>,
     row: &Row,
@@ -166,12 +187,17 @@ pub(in crate::client) fn finished(
         let batch = facts
             .remove("text")
             .and_then(|text| text.as_str().map(str::to_owned));
-        // Text is kept only for a field the helper said is no password; one
-        // it could not tell may be one.
+        // Text is kept only for a field the helper said is no password, and
+        // only while none of it may have moved on: a field it could not tell,
+        // or the next one, may be one.
         let role = typed_into(&typed.into);
         if role == Some(SECURE) {
             facts.insert("secure".into(), json!(true));
-        } else if let Some(text) = typed.text.or(batch).filter(|_| role.is_some()) {
+        } else if let Some(text) = typed
+            .text
+            .or(batch)
+            .filter(|text| role.is_some() && !may_leave_its_field(text))
+        {
             let length = text.chars().count();
             let kept: String = match limit {
                 Some(limit) => text.chars().take(limit as usize).collect(),
@@ -182,6 +208,14 @@ pub(in crate::client) fn finished(
         }
     }
     Value::Object(facts)
+}
+
+/// Whether typing `text` may move the keyboard focus out of the field the
+/// helper found before it was sent, perhaps into a password field: a tab, a
+/// return or another control character, or a line break, may.
+fn may_leave_its_field(text: &str) -> bool {
+    text.chars()
+        .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
 }
 
 /// The field a command's text went into, from the role the helper found

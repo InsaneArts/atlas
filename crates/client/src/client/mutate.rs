@@ -287,8 +287,10 @@ impl Client {
         let mut claim = self.claim(&mutation, lease.is_some(), command)?;
         let request = mutation.request();
         let sent = self.send(connection, &request, claim.as_ref()).await?;
-        if let Some(picture) = picture {
-            self.keep_picture(picture, &request);
+        if let Some(picture) = picture
+            && let Mutation::Input { actions, epoch, .. } = &mutation
+        {
+            self.keep_picture(picture, actions.actions(), epoch);
         }
 
         drop(authorization);

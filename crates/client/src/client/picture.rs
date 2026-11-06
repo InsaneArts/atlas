@@ -9,6 +9,7 @@
 use super::{Actor, Client, live::read_header};
 use crate::before::{self, Raw};
 use atlas_core::{
+    actions::Action,
     error::{Code, Error, Result},
     protocol::SessionPin,
     screen::elements::Element,
@@ -107,10 +108,11 @@ impl Client {
     }
 
     /// Name `raw` on its command's rows from now on, with the facts of the
-    /// input `request` sends and the name of its task, and encode and save
-    /// it aside, off the input's path. A picture that cannot be saved is
-    /// never shown: its rows name a file that is not there.
-    pub(super) fn keep_picture(&self, raw: Raw, request: &serde_json::Value) {
+    /// input `actions` sent in the session of `epoch` and the name of its
+    /// task, and encode and save it aside, off the input's path. A picture
+    /// that cannot be saved is never shown: its rows name a file that is
+    /// not there.
+    pub(super) fn keep_picture(&self, raw: Raw, actions: &[Action], epoch: &InputEpoch) {
         let Some(doing) = &self.doing else {
             return;
         };
@@ -121,7 +123,7 @@ impl Client {
             self.host_session.as_ref().map(|session| session.key()),
             task.map(|task| task.key()),
         );
-        let mut facts = facts::of_input(request);
+        let mut facts = facts::of_input(actions, epoch);
         if let Some(task) = task.and_then(|task| task.name()) {
             facts.insert("task".into(), json!(task.as_str()));
         }

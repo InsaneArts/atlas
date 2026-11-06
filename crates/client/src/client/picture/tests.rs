@@ -268,7 +268,7 @@ async fn a_click_at_a_point_marks_only_its_point() {
         .unwrap();
 
     let facts = only_facts(&client);
-    assert_eq!(facts["point"], json!({"x": 10, "y": 20}));
+    assert_eq!(facts["point"], json!({"x": 10.0, "y": 20.0}));
     for absent in ["element", "window", "task"] {
         assert!(facts.get(absent).is_none(), "{absent}: {facts}");
     }
@@ -484,6 +484,46 @@ async fn a_refused_or_late_picture_never_holds_the_input_back() {
                 "the input waits for the cancel's answer: {log:?}"
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn a_frame_whose_pixels_come_only_after_the_input_leaves_no_trace() {
+    for pictures_answer in [Pictures::AfterInput, Pictures::PixelsAfterInput] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = agent(directory.path(), pictures_answer, "type");
+        let reply = helper
+            .serve(crate::agent::type_text(&client, "hello", None), |request| {
+                let mut reply = input_service(&client, false, request)?;
+                if request["op"] == "input" {
+                    reply["field"] = json!({"role": "AXTextField"});
+                }
+                Some(reply)
+            })
+            .await
+            .unwrap();
+        // Long enough for a writer that should not exist to have written.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(reply["ok"], true, "{pictures_answer:?}");
+        let log = helper.log();
+        let input = log.iter().position(|op| op == "input");
+        let released = log.iter().position(|op| op == "frame released");
+        assert!(
+            input
+                .zip(released)
+                .is_some_and(|(input, released)| input < released),
+            "valid pixels came, only after the input: {log:?}"
+        );
+        let folder = client.config.output_dir.join(before::FOLDER);
+        let kept: Vec<_> = fs::read_dir(folder)
+            .map(|entries| entries.map(|entry| entry.unwrap().file_name()).collect())
+            .unwrap_or_default();
+        assert!(kept.is_empty(), "{pictures_answer:?}: {kept:?}");
+        assert!(
+            rows(&client).iter().all(|row| row.get("before").is_none()),
+            "{pictures_answer:?}"
+        );
     }
 }
 

@@ -28,6 +28,11 @@ pub enum Pictures {
     Late,
     /// Only once cancelled: then refused, as a daemon answers a cancel.
     Cancelled,
+    /// With a frame of its session, only once the input came.
+    AfterInput,
+    /// With a frame's header at once, and its pixels only once the input
+    /// came.
+    PixelsAfterInput,
 }
 
 /// The helper's home, as its hello reports it.
@@ -139,14 +144,15 @@ impl Helper {
 
     /// Answer the request `line` on `peer`, a connection to the input service
     /// when `input`, handing to `answer` what the stand-in does not answer
-    /// itself. A late picture's peer is kept in `held`.
+    /// itself. A late picture's peer is kept in `held`, with what it is
+    /// still to be sent once the input comes.
     async fn respond(
         &self,
         mut peer: BufReader<UnixStream>,
         line: &str,
         input: bool,
         answer: &mut impl FnMut(&Value) -> Option<Value>,
-        held: &mut Vec<UnixStream>,
+        held: &mut Vec<(UnixStream, Vec<u8>)>,
     ) {
         // A peer that left without asking, as a client refusing the peer
         // does, is asked nothing.
@@ -156,6 +162,13 @@ impl Helper {
         let request: Value = serde_json::from_str(line).unwrap();
         let requests = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
         self.note(request["op"].as_str().unwrap_or_default());
+        if request["op"] == "input" {
+            for (peer, rest) in held.iter_mut().filter(|(_, rest)| !rest.is_empty()) {
+                // The client may have given up on it already.
+                let _ = peer.write_all(&std::mem::take(rest)).await;
+                self.note("frame released");
+            }
+        }
         if request["op"] == "frame"
             && let Some(pictures) = self.pictures
         {
@@ -189,9 +202,14 @@ impl Helper {
     /// as the daemon frames one. A late answer keeps the peer in `held`; a
     /// cancel is waited for beside the client's other requests, as the
     /// daemon serves each connection on its own.
-    async fn picture(&self, pictures: Pictures, mut peer: UnixStream, held: &mut Vec<UnixStream>) {
+    async fn picture(
+        &self,
+        pictures: Pictures,
+        mut peer: UnixStream,
+        held: &mut Vec<(UnixStream, Vec<u8>)>,
+    ) {
         let header = match pictures {
-            Pictures::Late => return held.push(peer),
+            Pictures::Late => return held.push((peer, Vec::new())),
             Pictures::Cancelled => {
                 let log = Arc::clone(&self.log);
                 tokio::spawn(async move {
@@ -209,16 +227,29 @@ impl Helper {
             }
             Pictures::Refused => json!({"ok": false, "code": "on-console", "uncertain": false,
                 "error": "The helper is on the screen"}),
-            Pictures::Taken => json!({"ok": true, "width": 2, "height": 1, "scale": 1.0,
-                "session": self.session_proof(self.proofs()), "daemonPID": std::process::id()}),
+            Pictures::Taken | Pictures::AfterInput | Pictures::PixelsAfterInput => {
+                json!({"ok": true, "width": 2, "height": 1, "scale": 1.0,
+                    "session": self.session_proof(self.proofs()), "daemonPID": std::process::id()})
+            }
         };
-        let pixels: &[u8] = if pictures == Pictures::Taken {
+        let pixels: &[u8] = if header["ok"] == true {
             &[11, 22, 33, 44, 55, 66]
         } else {
             &[]
         };
+        let mut framed = framed(&header, pixels);
+        let later = match pictures {
+            Pictures::AfterInput => framed.split_off(0),
+            Pictures::PixelsAfterInput => framed.split_off(framed.len() - pixels.len()),
+            Pictures::Taken | Pictures::Refused | Pictures::Late | Pictures::Cancelled => {
+                Vec::new()
+            }
+        };
         // The client may have given up on it already.
-        if peer.write_all(&framed(&header, pixels)).await.is_ok() && pictures == Pictures::Taken {
+        let sent = peer.write_all(&framed).await.is_ok();
+        if !later.is_empty() {
+            held.push((peer, later));
+        } else if sent && pictures == Pictures::Taken {
             self.note("frame sent");
         }
     }
