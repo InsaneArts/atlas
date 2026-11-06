@@ -124,7 +124,8 @@ async fn update_preflight_inspects_only_the_managed_job_and_writes_no_record() {
         .expect("a setting that leaves the helper alone is no change to the setup");
 
     let other_helper = CONFIG.replace("60001", "60002");
-    for edited in ["edited", other_helper.as_str()] {
+    let moved_output = CONFIG.replace("\"runs\"", "\"elsewhere\"");
+    for edited in ["edited", other_helper.as_str(), moved_output.as_str()] {
         fs::write(&config_path, edited).unwrap();
         let error = migration
             .preflight_with(program, signed, inspect)
