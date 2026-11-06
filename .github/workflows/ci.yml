@@ -11,7 +11,9 @@ jobs:
       - name: Probe
         env:
           PROBE_DIR: ${{ runner.temp }}/probe
-        run: swift test --package-path app --filter ProbeMotionTests 2>&1 | grep -E "SCROLL|PROBE|✘|✔|error:" || true
+        run: |
+          swift build --build-tests --package-path app 2>&1 | grep -E "error:" || true
+          for v in none min bounce minbounce; do echo "VARIANT $v"; PROBE_VARIANT=$v swift test --skip-build --package-path app --filter ProbeMotionTests 2>&1 | grep -E "SCROLL|PROBE|✘|✔|error:" || true; done
       - uses: actions/upload-artifact@v4
         with:
           name: probe

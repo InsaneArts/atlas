@@ -19,6 +19,8 @@ struct CardScroll<Content: View>: View {
   @State private var isAtTop = true
   /// Where the selected row stands as the list scrolls.
   @State private var selection = CardScrollSelection()
+  @State private var probeViewport: CGFloat = .zero
+  private let probe = ProcessInfo.processInfo.environment["PROBE_VARIANT"] ?? ""
   @Environment(\.miniClearance) private var clearance
   @Environment(\.paneSettled) private var paneSettled
   @Environment(\.cardScrollPlacement) private var placement
@@ -30,6 +32,7 @@ struct CardScroll<Content: View>: View {
         content
           .environment(\.listIsAtTop, isAtTop)
           .padding(CardScrollRoom.contentInsets(clearance))
+          .frame(minHeight: probe.contains("min") ? probeViewport : nil, alignment: .top)
           .background {
             // Measure the padded origin, so partial scrolling through the top band counts as scrolling.
             Color.clear
@@ -42,11 +45,13 @@ struct CardScroll<Content: View>: View {
           .environment(\.cardScrollSelection, selection)
       }
       .scrollIndicators(paneSettled ? .automatic : .hidden)
+      .scrollBounceBehavior(probe.contains("bounce") ? .basedOnSize : .automatic)
       .scrollPosition(id: anchor, anchor: .top)
       .onGeometryChange(for: CGFloat.self) { proxy in
         proxy.size.height
       } action: { height in
         selection.viewport = height
+        probeViewport = height
       }
       .onChange(of: reveal?.request) { _, _ in
         show(reveal?.id, in: scroll)
