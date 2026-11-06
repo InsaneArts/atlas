@@ -2568,6 +2568,11 @@ fn the_input_service_offers_actions_on_the_elements_of_a_look() {
     assert_eq!(atlas_core::session::ELEMENT_ACTIONS, "element-actions");
 }
 
+#[test]
+fn the_input_service_says_it_names_a_password_field_by_its_subrole() {
+    assert!(CAPABILITIES.contains(&atlas_core::session::TYPED_FIELDS));
+}
+
 fn pressed() -> Action {
     serde_json::from_value(json!({"type": "press", "ref": "8123abc.12"})).unwrap()
 }

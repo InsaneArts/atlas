@@ -10,7 +10,7 @@ use atlas_core::{
     error::{Code, Error, Holder, Result},
     session::{
         ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
-        NativeObservation, Observation, Session,
+        NativeObservation, Observation, Session, TYPED_FIELDS,
     },
     transport::Transport,
 };
@@ -336,6 +336,13 @@ impl Client {
     ) -> Result<Value> {
         let observation = Observation::decode(status);
         let session = observation.require_hidden(self.config.helper_uid)?;
+        // An input service older than this one may call a password field a
+        // plain one: no text typed through it is kept.
+        if !observation.native.has_capability(TYPED_FIELDS)
+            && let Some(doing) = &self.doing
+        {
+            doing.before().typed_into(None);
+        }
         let expect = expectation(&observation.native, check)?;
 
         if expected.is_some_and(|(epoch, _)| *epoch != session.epoch) {

@@ -5,7 +5,10 @@ use crate::{
     host_session::{Host, HostSession},
     test_support::{Helper, Pictures},
 };
-use atlas_core::{session::FOCUS_APP, test_support::UID};
+use atlas_core::{
+    session::{FOCUS_APP, TYPED_FIELDS},
+    test_support::UID,
+};
 use serde_json::Value;
 use std::{fs, path::Path};
 
@@ -16,7 +19,7 @@ fn agent(directory: &Path, pictures: Pictures, verb: &'static str) -> (Client, H
     let mut client = client.doing(Doing::new(verb));
     client.config.activity.pictures_before_actions = true;
     let helper = helper
-        .serving_input(&client, &[FOCUS_APP])
+        .serving_input(&client, &[FOCUS_APP, TYPED_FIELDS])
         .taking_pictures(pictures);
     (client, helper)
 }
@@ -420,6 +423,37 @@ async fn text_typed_in_batches_is_kept_only_when_every_batch_went_into_a_known_f
         if kept {
             assert_eq!(facts["length"], 129);
         }
+    }
+}
+
+#[tokio::test]
+async fn no_text_is_kept_through_an_input_service_that_cannot_tell_a_password_field() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let mut client = client.doing(Doing::new("type"));
+    client.config.activity.pictures_before_actions = true;
+    // An older service names a password field by its role alone.
+    let helper = helper
+        .serving_input(&client, &[FOCUS_APP])
+        .taking_pictures(Pictures::Taken);
+    helper
+        .serve(
+            crate::agent::type_text(&client, "secret", None),
+            |request| {
+                let mut reply = input_service(&client, true, request)?;
+                if request["op"] == "input" {
+                    reply["field"] = json!({"role": "AXTextField"});
+                }
+                Some(reply)
+            },
+        )
+        .await
+        .unwrap();
+
+    let facts = only_facts(&client);
+    assert_eq!(facts["action"], "type");
+    for absent in ["text", "length"] {
+        assert!(facts.get(absent).is_none(), "{absent}: {facts}");
     }
 }
 
