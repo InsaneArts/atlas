@@ -228,6 +228,20 @@ pub(super) fn logout(_: &Value) -> String {
     )
 }
 
+pub(super) fn sound(value: &Value) -> String {
+    match value["helperSound"].as_str() {
+        Some("muted") => format!("{} Apps in the helper are muted", style::ok()),
+        Some("on") => format!("{} Apps in the helper can be heard", style::ok()),
+        _ => {
+            let reason = value["reason"]
+                .as_str()
+                .map(text::printable)
+                .unwrap_or_default();
+            format!("{} {reason}", style::fail())
+        }
+    }
+}
+
 pub(super) fn start_input(value: &Value) -> String {
     let how = if value["alreadyRunning"] == true {
         "was already running"

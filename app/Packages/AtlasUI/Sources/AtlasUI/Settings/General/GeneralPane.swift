@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The General pane: opening at login and how often the screen updates, then when Atlas needs the person. Its values
-/// change through the binding.
+/// The General pane: opening at login, how often the screen updates and muting the helper, then when Atlas needs the
+/// person. Its values change through the binding.
 struct GeneralPane: View {
   /// The pane's values.
   @Binding var state: SettingsGeneralState
@@ -36,6 +36,13 @@ struct GeneralPane: View {
       ListRowBody("Screen updates", detail: "How often Atlas's windows show the helper's screen", size: .compact) {
         PopupButton(label: "Screen updates", options: state.pictureOptions, selection: $state.picture)
       }
+    case .muteHelper:
+      ListRow(
+        "Mute the helper",
+        detail: state.soundProblem ?? "Apps in the helper stay silent on your speakers",
+        trailing: .toggle(isOn: state.muteHelper),
+        size: .compact
+      ) { state.muteHelper.toggle() }
     case .notify:
       ListRow(
         "Notify me",

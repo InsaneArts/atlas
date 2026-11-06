@@ -43,6 +43,9 @@ struct ActionTests {
       (.doctor, ["doctor", "--verbose"]),
       (.checkForUpdate, ["update", "--check"]),
       (.update, ["update"]),
+      (.helperSound, ["sound"]),
+      (.setHelperSound(muted: true), ["sound", "off"]),
+      (.setHelperSound(muted: false), ["sound", "on"]),
     ] as [(Action, [String])]
   )
   func arguments(action: Action, arguments: [String]) {

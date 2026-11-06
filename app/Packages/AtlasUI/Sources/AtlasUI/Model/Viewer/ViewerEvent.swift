@@ -12,6 +12,8 @@ public enum ViewerEvent: Equatable, Sendable {
   case menu(ViewerCommand)
   /// The pause button.
   case togglePause
+  /// The sound button: mute the helper, or let it play.
+  case toggleSound
   /// Take Control.
   case takeControl
   /// Give Back.

@@ -54,8 +54,8 @@
   Chrome may open a tab of its own in front of yours;
   switch to yours. Report a page that only a WebKit view shows as not checked.
 - Credentials and app sign-ins are never copied from the person's account.
-- Audio plays on the person's speakers, and there is no helper-only mute:
-  close apps that make sound when you're done.
+- Atlas mutes apps in the helper unless the person turned their sound on
+  (`atlas sound` says which). Close apps that make sound when you're done.
 - Apps run one copy per account, so the helper's Slack or browser is its own,
   signed out, and never the person's. An app that runs in one account at a
   time and is open in the person's refuses to open: tell them; don't retry it

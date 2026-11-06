@@ -31,6 +31,8 @@ final class HelperActions {
   private(set) var agentRequests = 0
   /// Shared with setup and notices so menus cannot offer a lock from an off-console session.
   let console: SessionConsole
+  /// The helper's sound, as every window shows and changes it.
+  let sound: HelperSoundSwitch
   /// The `atlas` command line each command runs.
   @ObservationIgnored private let commands: any CommandRunning
   /// The viewer service, which ends every viewer's control before a log-out from a controlled helper.
@@ -63,6 +65,7 @@ final class HelperActions {
     self.barrier = barrier
     self.console = console
     self.endControl = endControl
+    sound = HelperSoundSwitch(commands: commands)
   }
 
   /// Whether a command runs now, from any window: control is not taken meanwhile.

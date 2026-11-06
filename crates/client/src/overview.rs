@@ -382,6 +382,9 @@ pub fn overview(
         "commands": pending.commands,
         "nativeDialogs": report.native,
         "jobs": jobs,
+        // Whether the helper's apps can be heard, as its daemon last said:
+        // read with the status, never asked for on its own.
+        "sound": session["sound"].is_object().then_some(&session["sound"]),
         "activity": activity.iter().map(|row| shown(row, now)).collect::<Vec<_>>(),
     });
     Overview {

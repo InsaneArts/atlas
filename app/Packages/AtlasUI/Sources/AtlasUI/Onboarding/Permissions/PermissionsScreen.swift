@@ -13,7 +13,9 @@ struct PermissionsScreen: View {
         label: "Permissions",
         title: OnboardingScreen.permissionsTitle,
         tail: OnboardingScreen.permissionsTail,
-        lede: "You allow Atlas twice. Atlas uses them only in this account, never in your own."
+        lede:
+          "You allow Atlas twice. Then macOS asks once more, so apps here stay silent on your speakers. Atlas uses "
+          + "them only in this account, never in your own."
       )
       GroupedList([state.accessibility, state.screenRecording]) { permission in
         PermissionRow(

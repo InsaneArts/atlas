@@ -24,6 +24,8 @@ struct PanelSnapshot {
   var isOnConsole = false
   /// Stop and Resume requests unanswered from any window, so Resume waits.
   var agentRequests = 0
+  /// The helper's sound, as every window shows it.
+  var sound = HelperSoundButton()
   /// Where Open at Login stands; nil when unknown, as in a render.
   var opensAtLogin: OpenAtLogin.State?
   /// The time it was taken, which a session's age counts to.

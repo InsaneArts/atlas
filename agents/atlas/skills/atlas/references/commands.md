@@ -1941,6 +1941,41 @@ Global options:
           Use another settings file
 ```
 
+## atlas sound
+
+```text
+Show whether apps in the helper can be heard, or turn their sound off or on.
+
+Atlas keeps apps in the helper silent on your speakers unless you turn their sound on.
+
+Usage: atlas sound [OPTIONS] [STATE]
+
+Arguments:
+  [STATE]
+          off keeps them silent; on lets them play
+          
+          [possible values: on, off]
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options:
+      --json
+          Print JSON (the default when the output is not a terminal)
+
+      --allow-disrupt
+          Permit service restarts while other sessions or background jobs are active. A controller or an unfinished action can still block the restart
+
+      --config <FILE>
+          Use another settings file
+
+Examples:
+  atlas sound
+  atlas sound on
+  atlas sound off
+```
+
 ## atlas agent-guide
 
 ```text

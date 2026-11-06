@@ -56,6 +56,10 @@ public enum Action: Sendable, Equatable {
   case checkForUpdate
   /// Install the newer Atlas, checking its signature first.
   case update
+  /// Read whether apps in the helper can be heard.
+  case helperSound
+  /// Keep apps in the helper silent, or let them play.
+  case setHelperSound(muted: Bool)
 
   /// Recover as the viewer service's own Recover does: restart the helper while an action's outcome is unknown or
   /// under way, else start its input, which never needs the full restart.
@@ -106,6 +110,8 @@ public enum Action: Sendable, Equatable {
     case .checkForUpdate: ["update", "--check"]
     // The person confirmed in Settings.
     case .update: ["update"]
+    case .helperSound: ["sound"]
+    case .setHelperSound(let muted): ["sound", muted ? "off" : "on"]
     }
   }
 }

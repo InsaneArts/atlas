@@ -106,6 +106,7 @@ final class PanelController {
       running: actions.running,
       isOnConsole: actions.console.isOnConsole,
       agentRequests: actions.agentRequests,
+      sound: actions.sound.button,
       opensAtLogin: opensAtLogin,
       date: wallClock(),
       icons: icons
@@ -156,6 +157,8 @@ final class PanelController {
     case .askSwitch: links.showAlert(.switchToHelper)
     case .openSettings: links.openSettings()
     case .togglePause: togglePause()
+    // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
+    case .toggleSound: Task { await actions.sound.toggle() }
     case .showMore: break
     }
   }

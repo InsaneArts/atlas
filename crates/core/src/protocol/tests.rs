@@ -228,6 +228,14 @@ fn every_request_deliberately_selects_admission_and_lost_reply_handling() {
             false,
             "job",
         ),
+        (json!({"op": "sound"}), false, false, false, "sound"),
+        (
+            json!({"op": "sound", "muted": false}),
+            false,
+            false,
+            true,
+            "sound",
+        ),
     ] {
         request["session"] = pin.clone();
         let parsed = parse(request.to_string().as_bytes());
@@ -663,4 +671,20 @@ fn screenshots_parse_one_window_or_an_apps_part_of_a_region_only_with_the_app() 
         let error = refused(request)["error"].as_str().unwrap().to_owned();
         assert!(error.contains(says), "{request}: {error}");
     }
+}
+
+#[test]
+fn a_sound_request_reads_or_sets_whether_the_helper_is_muted() {
+    assert_eq!(
+        parse(br#"{"op":"sound"}"#),
+        Ok(Request::Sound { muted: None })
+    );
+    assert_eq!(
+        parse(br#"{"op":"sound","muted":true}"#),
+        Ok(Request::Sound { muted: Some(true) })
+    );
+    assert_eq!(
+        refused(r#"{"op":"sound","muted":"yes"}"#)["error"],
+        "\"muted\" must be true or false"
+    );
 }

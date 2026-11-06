@@ -48,7 +48,7 @@ struct PanelPicture: View {
     .overlay(alignment: .topLeading) { badge }
     .overlay(alignment: .topTrailing) { expand }
     .overlay(alignment: .bottomLeading) { caption }
-    .overlay(alignment: .bottomTrailing) { pauseButton }
+    .overlay(alignment: .bottomTrailing) { cornerButtons }
     .environment(\.colorScheme, .dark)
     .onHover { isHovered = $0 }
   }
@@ -101,6 +101,30 @@ struct PanelPicture: View {
     .allowsHitTesting(false)
   }
 
+  /// The sound button and the pause button under it in the picture's corner, one above the other, so the caption
+  /// keeps its room beside them.
+  private var cornerButtons: some View {
+    VStack(spacing: PanelLayout.cornerGap) {
+      soundButton
+      pauseButton
+    }
+    .padding(PanelLayout.captionInset)
+  }
+
+  /// The sound button, drawn as the pause button is: the speaker struck through while the helper is muted, sounding
+  /// while not, in the attention tint while the helper cannot make the choice hold, with why as its tooltip.
+  private var soundButton: some View {
+    Button {
+      send(.toggleSound)
+    } label: {
+      HelperSoundIcon(sound: state.sound)
+    }
+    .buttonStyle(.capsule(.overPicture, size: .mini, outline: .circle))
+    .overlay { edge }
+    .help(state.sound.help)
+    .accessibilityLabel(state.sound.label)
+  }
+
   /// The pause button, a solid dark circle with a fine edge so it reads over any picture: pause turns into play at once
   /// once the picture is paused, each drawn centred in the circle's square, with no replace effect, which leaves the new
   /// symbol in the old one's box, off the circle's centre. It pauses the picture only; work in the helper goes on.
@@ -115,7 +139,6 @@ struct PanelPicture: View {
     .overlay { edge }
     .help(state.pause.help)
     .accessibilityLabel(state.pause.label)
-    .padding(PanelLayout.captionInset)
   }
 
   /// The fine edge round a circle over the picture, as round the chips, so it reads over a dark screen too.
@@ -140,6 +163,14 @@ struct PanelPicture: View {
   #Preview("Working") {
     PanelPicture(state: PreviewStates.panelWorking.picture) { _ in }
       .sampleSurface()
+  }
+
+  #Preview("Sound on and unavailable") {
+    VStack(spacing: Spacing.s) {
+      PanelPicture(state: PreviewStates.panelSoundOn.picture) { _ in }
+      PanelPicture(state: PreviewStates.panelSoundUnavailable.picture) { _ in }
+    }
+    .sampleSurface()
   }
 
   #Preview("Needs you") {
