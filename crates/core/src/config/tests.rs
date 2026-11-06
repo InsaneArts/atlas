@@ -263,3 +263,50 @@ fn pictures_keep_a_week_and_all_typed_text_unless_the_settings_say_otherwise() -
     );
     Ok(())
 }
+
+#[test]
+fn picture_settings_written_at_once_keep_each_others_change() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    fs::write(&path, crate::test_support::SETTINGS)?;
+
+    for round in 0..20_u32 {
+        let (days, limit) = (round % 5 + 1, round + 10);
+        std::thread::scope(|scope| {
+            let writers = [
+                scope.spawn(|| keep_days(&path, days)),
+                scope.spawn(|| typed_text_limit(&path, Some(limit))),
+            ];
+            for writer in writers {
+                writer.join().expect("a writer panicked")?;
+            }
+            Ok::<_, Error>(())
+        })?;
+        let activity = Config::load(&path)?.activity;
+        assert_eq!(
+            (activity.keep_days, activity.typed_text_limit),
+            (days, Some(limit)),
+            "round {round}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_picture_setting_that_would_outgrow_the_settings_file_is_refused() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    let base = crate::test_support::SETTINGS;
+    let room = usize::try_from(LIMIT).unwrap() - base.len() - 3;
+    let written = format!("{base}\n#{}", "x".repeat(room));
+    assert_eq!(
+        written.len() as u64,
+        LIMIT - 1,
+        "the file is a byte short of full"
+    );
+    fs::write(&path, &written)?;
+
+    assert_eq!(keep_days(&path, 3).unwrap_err().code, Code::Config);
+    assert_eq!(fs::read_to_string(&path)?, written, "nothing is written");
+    Ok(())
+}

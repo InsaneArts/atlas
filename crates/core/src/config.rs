@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
     io::Write,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 pub(crate) const DEFAULT_PATH: &str = "atlas.local.toml";
@@ -347,10 +348,39 @@ pub fn typed_text_limit(path: &Path, limit: Option<u32>) -> Result<()> {
     )
 }
 
+/// How long a settings write waits for another to finish.
+const WRITING: Duration = Duration::from_secs(5);
+
+/// The settings file at `path`, locked for this writer alone, so two
+/// settings writes never lose one another's change: the lock is on the file
+/// in place, taken again when another writer replaced it meanwhile.
+fn locked(path: &Path) -> Result<crate::files::LockFile> {
+    let deadline = Instant::now() + WRITING;
+    loop {
+        let file = fs::File::open(path).map_err(context("Read settings in", path))?;
+        let file = crate::files::LockFile(file);
+        crate::files::lock_retrying(&file, crate::files::Lock::Exclusive, deadline, |deadline| {
+            Instant::now() < deadline
+        })
+        .map_err(|_| {
+            Error::new(
+                Code::Config,
+                format!("{} is being updated; try again", tilde(path)),
+            )
+        })?;
+        let (held, placed) = (file.0.metadata()?, fs::metadata(path)?);
+        if (held.dev(), held.ino()) == (placed.dev(), placed.ino()) {
+            return Ok(file);
+        }
+    }
+}
+
 /// Set `key` of `[activity]` to `value`, or leave it out with none, in the
-/// settings at `path`, changing nothing else in the file.
+/// settings at `path`, changing nothing else in the file. Another settings
+/// write waits its turn.
 fn set_activity(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Result<()> {
     let path = fs::canonicalize(path).map_err(context("Read settings in", path))?;
+    let _writing = locked(&path)?;
     let read = || -> Result<Vec<u8>> {
         let file = fs::File::open(&path)?;
         let bytes = crate::files::read_up_to(file, LIMIT + 1)?;
@@ -401,6 +431,10 @@ fn set_activity(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Resu
     let text = document.to_string();
     if text.as_bytes() == before {
         return Ok(());
+    }
+    // Only settings that load again are written.
+    if text.len() as u64 > LIMIT {
+        return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
     }
     Config::parse(text.as_bytes(), &path)?;
 
