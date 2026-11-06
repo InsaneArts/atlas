@@ -364,5 +364,11 @@ fn no_capture_begins_until_a_process_told_to_end_is_gone() {
         "a process gone lets captures run"
     );
     assert_eq!(source.one_shot(|| 2).unwrap(), 2);
+    source.until_gone(Instance::new(1, [1, 0]));
+    assert_eq!(
+        source.frame(|| 3).unwrap(),
+        3,
+        "so does one whose PID another account's process took"
+    );
     source.stop(owner, None).unwrap();
 }

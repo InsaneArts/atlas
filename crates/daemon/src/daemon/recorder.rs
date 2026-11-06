@@ -4,7 +4,7 @@
 //! recorder is ended between two captures, with a live stream paused around
 //! it, and only while no input runs or has for a moment. launchd starts a
 //! fresh one for the next capture, and Screen Recording stays allowed.
-use atlas_core::process::{Instance, State};
+use atlas_core::process::Instance;
 use atlas_native::native::{
     activity,
     capture::{self, source::Source},
@@ -92,12 +92,11 @@ fn sigkill(pid: i32) -> nix::Result<()> {
     kill(Pid::from_raw(pid), Signal::SIGKILL)
 }
 
-/// Whether `instance` exits within [`EXIT`]: it is gone, and its PID free
-/// or another process's.
+/// Whether `instance` exits within [`EXIT`]: see [`Instance::ended`].
 fn exits(instance: Instance) -> bool {
     let deadline = Instant::now() + EXIT;
     loop {
-        if instance.state() == State::Gone {
+        if instance.ended() {
             return true;
         }
         if Instant::now() >= deadline {

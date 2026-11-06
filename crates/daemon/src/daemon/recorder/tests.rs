@@ -375,6 +375,11 @@ fn no_signal_ever_reaches_a_process_group_every_process_or_launchd() {
 }
 
 #[test]
+fn a_recorder_whose_pid_another_accounts_process_took_has_exited() {
+    assert!(exits(Instance::new(1, [1, 0])));
+}
+
+#[test]
 fn the_screen_recorder_is_read_once_a_minute_however_often_status_is_asked() {
     static READS: AtomicUsize = AtomicUsize::new(0);
     let recorder = Recorder::new(

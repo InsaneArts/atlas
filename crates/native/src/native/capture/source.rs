@@ -7,7 +7,7 @@
 use atlas_core::{
     error::{Code, Error, Result},
     frame_pipe::diagnostics::Lifecycle,
-    process::{self, Instance},
+    process::Instance,
     protocol::CaptureBackend,
 };
 use std::{
@@ -200,7 +200,7 @@ impl Source {
     fn exited(&self) -> Result<()> {
         let mut state = self.state();
         match state.exiting {
-            Some(instance) if instance.state() != process::State::Gone => Err(restarting()),
+            Some(instance) if !instance.ended() => Err(restarting()),
             Some(_) => {
                 state.exiting = None;
                 Ok(())
