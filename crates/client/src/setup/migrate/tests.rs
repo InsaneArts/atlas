@@ -115,6 +115,28 @@ async fn update_preflight_inspects_only_the_managed_job_and_writes_no_record() {
     assert_eq!(error.error, "not signed as Atlas");
 
     let config_path = migration.log.plan.config_path.clone();
+    shown.replace(json!({"loaded": false, "plistKind": "absent"}));
+    atlas_core::config::keep_pictures(&config_path, false).unwrap();
+    atlas_core::config::keep_days(&config_path, 3).unwrap();
+    migration
+        .preflight_with(program, signed, inspect)
+        .await
+        .expect("a setting that leaves the helper alone is no change to the setup");
+
+    let other_helper = CONFIG.replace("60001", "60002");
+    for edited in ["edited", other_helper.as_str()] {
+        fs::write(&config_path, edited).unwrap();
+        let error = migration
+            .preflight_with(program, signed, inspect)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .error
+                .contains("changed during setup; it was not overwritten"),
+            "{edited}"
+        );
+    }
     fs::write(&config_path, "edited").unwrap();
     let error = migration
         .preflight_with(program, signed, inspect)

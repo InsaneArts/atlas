@@ -202,6 +202,31 @@ fn turning_pictures_off_and_on_keeps_every_other_setting_as_written() -> Result<
 }
 
 #[test]
+fn a_picture_setting_changes_only_its_own_line_in_the_settings_file() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("u.toml");
+    let written = format!(
+        "# Atlas settings\n{}\n[activity]\n# how long\nkeep_days = 3 # days\n",
+        crate::test_support::SETTINGS
+    );
+    fs::write(&path, &written)?;
+
+    keep_days(&path, 5)?;
+    assert_eq!(
+        fs::read_to_string(&path)?,
+        written.replace("keep_days = 3", "keep_days = 5")
+    );
+
+    keep_pictures(&path, false)?;
+    typed_text_limit(&path, Some(80))?;
+    keep_pictures(&path, true)?;
+    typed_text_limit(&path, None)?;
+    keep_days(&path, 3)?;
+    assert_eq!(fs::read_to_string(&path)?, written);
+    Ok(())
+}
+
+#[test]
 fn pictures_keep_a_week_and_all_typed_text_unless_the_settings_say_otherwise() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("u.toml");

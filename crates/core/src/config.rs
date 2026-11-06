@@ -310,17 +310,16 @@ impl Config {
 }
 
 /// Turn pictures before actions `on` or off in the settings at `path`,
-/// keeping every other setting as the file has it. The file is replaced in
-/// one rename, only with settings that load, and only while it still holds
-/// what was read.
+/// changing only that setting: every other line, comment and order stays
+/// as the file has it. The file is replaced in one rename, only with
+/// settings that load, and only while it still holds what was read.
 ///
 /// # Errors
 ///
 /// Returns the failure to read, parse or write the settings, or a refusal
 /// when the file changed while it was being updated.
 pub fn keep_pictures(path: &Path, on: bool) -> Result<()> {
-    let off = (!on).then_some(toml::Value::Boolean(false));
-    set_activity(path, "pictures_before_actions", off)
+    set_activity(path, "pictures_before_actions", (!on).then(|| false.into()))
 }
 
 /// Keep pictures `days` days in the settings at `path`, as
@@ -330,7 +329,7 @@ pub fn keep_pictures(path: &Path, on: bool) -> Result<()> {
 ///
 /// As [`keep_pictures`], and a refusal of a number of days out of range.
 pub fn keep_days(path: &Path, days: u32) -> Result<()> {
-    let set = (days != a_week()).then_some(toml::Value::Integer(i64::from(days)));
+    let set = (days != a_week()).then(|| i64::from(days).into());
     set_activity(path, "keep_days", set)
 }
 
@@ -341,13 +340,16 @@ pub fn keep_days(path: &Path, days: u32) -> Result<()> {
 ///
 /// As [`keep_pictures`].
 pub fn typed_text_limit(path: &Path, limit: Option<u32>) -> Result<()> {
-    let set = limit.map(|limit| toml::Value::Integer(i64::from(limit)));
-    set_activity(path, "typed_text_limit", set)
+    set_activity(
+        path,
+        "typed_text_limit",
+        limit.map(|limit| i64::from(limit).into()),
+    )
 }
 
 /// Set `key` of `[activity]` to `value`, or leave it out with none, in the
-/// settings at `path`, keeping every other setting as the file has it.
-fn set_activity(path: &Path, key: &str, value: Option<toml::Value>) -> Result<()> {
+/// settings at `path`, changing nothing else in the file.
+fn set_activity(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Result<()> {
     let path = fs::canonicalize(path).map_err(context("Read settings in", path))?;
     let read = || -> Result<Vec<u8>> {
         let file = fs::File::open(&path)?;
@@ -358,25 +360,48 @@ fn set_activity(path: &Path, key: &str, value: Option<toml::Value>) -> Result<()
         Ok(bytes)
     };
     let before = read()?;
-    let mut table: toml::Table = parse_toml(&before, &path)?;
-    let activity = table
-        .entry("activity")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    let toml::Value::Table(activity) = activity else {
-        return Err(Error::new(
-            Code::Config,
-            format!("{}: activity is not a table", tilde(&path)),
-        ));
+    let invalid = |error: &dyn std::fmt::Display| {
+        Error::new(Code::Config, format!("{}: {error}", tilde(&path)))
     };
+    let mut document = std::str::from_utf8(&before)
+        .map_err(|error| invalid(&error))?
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| invalid(&error))?;
+    let not_a_table = || invalid(&"activity is not a table");
     match value {
-        Some(value) => activity.insert(key.into(), value),
-        None => activity.remove(key),
-    };
-    if activity.is_empty() {
-        table.remove("activity");
+        Some(mut value) => {
+            let activity = document
+                .entry("activity")
+                .or_insert_with(toml_edit::table)
+                .as_table_like_mut()
+                .ok_or_else(not_a_table)?;
+            match activity
+                .get_mut(key)
+                .and_then(toml_edit::Item::as_value_mut)
+            {
+                Some(written) => {
+                    *value.decor_mut() = written.decor().clone();
+                    *written = value;
+                }
+                None => {
+                    activity.insert(key, toml_edit::Item::Value(value));
+                }
+            }
+        }
+        None => {
+            if let Some(activity) = document.get_mut("activity") {
+                let activity = activity.as_table_like_mut().ok_or_else(not_a_table)?;
+                activity.remove(key);
+                if activity.is_empty() {
+                    document.remove("activity");
+                }
+            }
+        }
     }
-    let text = toml::to_string(&table)
-        .map_err(|error| Error::new(Code::Config, error.to_string()).with_source(error))?;
+    let text = document.to_string();
+    if text.as_bytes() == before {
+        return Ok(());
+    }
     Config::parse(text.as_bytes(), &path)?;
 
     let mode = fs::metadata(&path)?.permissions().mode() & 0o777;

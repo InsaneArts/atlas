@@ -484,7 +484,7 @@ impl Migration {
     }
 
     /// The same worker inspections update uses before any bundle swap: the
-    /// configuration is the recorded one, the updated program is validly
+    /// configuration names the recorded helper, the updated program is validly
     /// signed, and the managed job is absent or the one this setup defines.
     async fn preflight_with(
         &self,
@@ -494,7 +494,13 @@ impl Migration {
     ) -> Result<()> {
         self.require_owned_pending()?;
         let plan = &self.log.plan;
-        if fs::read_to_string(&plan.config_path)? != plan.new_config {
+        // Settings that leave the helper alone (pictures, the output folder)
+        // may change after setup; the helper it set up may not.
+        let recorded = Config::parse(plan.new_config.as_bytes(), &plan.config_path)?;
+        let current = fs::read(&plan.config_path)
+            .ok()
+            .and_then(|text| Config::parse(&text, &plan.config_path).ok());
+        if !current.is_some_and(|current| current.same_helper(&recorded)) {
             return Err(problem(format!(
                 "{} changed during setup; it was not overwritten",
                 plan.config_path.display()
