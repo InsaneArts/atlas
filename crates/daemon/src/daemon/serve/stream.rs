@@ -294,9 +294,14 @@ pub(super) async fn serve(
         let worker_daemon = daemon.clone();
         let worker_expected = expected.clone();
         let held = producer.clone();
+        // The frame holds the source's fence, so nothing that must run
+        // between captures starts under it.
         let mut worker = tokio::task::spawn_blocking(move || {
             let _held = held;
-            capture(&worker_daemon, &worker_expected, side, backend)
+            worker_daemon
+                .source
+                .frame(|| capture(&worker_daemon, &worker_expected, side, backend))
+                .and_then(std::convert::identity)
         });
         // A blocking framework capture cannot be interrupted safely. On
         // departure or shutdown its result is discarded, and its task is

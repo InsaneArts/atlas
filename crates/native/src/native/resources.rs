@@ -1,7 +1,15 @@
 //! What a process uses, as the kernel accounts it: physical footprint, its
 //! lifetime peak, and resident size. Only this account's processes are read;
 //! another account's accounting would need its owner's rights.
+use atlas_core::{
+    app_bundle::signature::executable_of,
+    process::{self, Instance},
+};
 use serde::Serialize;
+use std::{
+    os::unix::ffi::OsStrExt,
+    path::{Path, PathBuf},
+};
 
 /// A process's memory, in bytes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -17,15 +25,56 @@ pub fn own() -> Option<Usage> {
     of(nix::unistd::getpid().as_raw())
 }
 
-/// The memory of this account's running process named `name`, or none when
-/// it has none or the kernel refuses to say. Nothing is started to find out.
-pub fn named(name: &str) -> Option<Usage> {
+/// One process as it was found: which instance, whose, and what it runs.
+/// Two readings describe the same process only when all of these agree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Process {
+    pub instance: Instance,
+    /// Its effective user ID.
+    pub uid: u32,
+    /// Its real user ID.
+    pub real_uid: u32,
+    /// The executable it runs.
+    pub path: PathBuf,
+}
+
+/// Process `pid` as it is now, or none when it has exited or macOS would
+/// not say. Its start time is read before and after its executable, so a
+/// PID reused in between is not described as one process.
+pub fn describe(pid: i32) -> Option<Process> {
+    let live = || {
+        process::info(pid)
+            .ok()
+            .flatten()
+            .filter(|info| !info.zombie)
+    };
+    let before = live()?;
+    let path = executable_of(u32::try_from(pid).ok()?)?;
+    let after = live()?;
+    (after == before).then_some(Process {
+        instance: before.instance,
+        uid: before.uid,
+        real_uid: before.ruid,
+        path,
+    })
+}
+
+/// This account's process running the executable at `path`, and its
+/// memory; none when it has none or the kernel refuses to say. Only the
+/// account's processes with the executable's name are described, and
+/// nothing is started to find out.
+pub fn running(path: &Path) -> Option<(Process, Usage)> {
     let uid = nix::unistd::getuid().as_raw();
-    let process = atlas_core::process::of_user(uid)
+    // The kernel keeps at most the first 16 bytes of a command name.
+    let name = path.file_name()?.as_bytes();
+    let name = &name[..name.len().min(16)];
+    let found = process::of_user(uid)
         .ok()?
         .into_iter()
-        .find(|process| process.name == name && process.ruid == uid && !process.zombie)?;
-    of(process.instance.pid)
+        .filter(|info| info.ruid == uid && !info.zombie && info.name.as_bytes() == name)
+        .find_map(|info| describe(info.instance.pid).filter(|process| process.path == path))?;
+    let usage = of(found.instance.pid)?;
+    Some((found, usage))
 }
 
 /// Process `pid`'s memory now, or none when the kernel refuses to say.

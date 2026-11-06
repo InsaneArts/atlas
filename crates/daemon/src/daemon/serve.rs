@@ -4,7 +4,9 @@ use super::capture::{Capture, Screen, screenshot};
 use crate::daemon::{
     consent, facts,
     job::{self, Jobs},
-    preferences, proof, read, run,
+    preferences, proof, read,
+    recorder::{self, Recorder},
+    run,
     sound::{Set, Sound},
 };
 use atlas_core::{
@@ -186,8 +188,9 @@ pub struct Daemon {
     proof_worker: Mutex<Option<proof::Worker>>,
     /// Whether the helper's apps can be heard on the person's speakers.
     sound: Sound,
-    /// The screen recorder's memory, as each hello reports it.
-    recorder: facts::Recorder,
+    /// The screen recorder, as each hello reports it; restarted only in the
+    /// helper.
+    recorder: Recorder,
 }
 
 impl Daemon {
@@ -217,7 +220,7 @@ impl Daemon {
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
             sound: Sound::detached(),
-            recorder: facts::Recorder::new(facts::screen_recorder),
+            recorder: Recorder::new(recorder::System::real(), None),
         }
     }
 
@@ -246,6 +249,9 @@ impl Daemon {
         // The helper's apps go silent before any agent acts, as the person
         // last chose.
         daemon.sound = Sound::start(uid, std::env::var_os("HOME").map(PathBuf::from));
+        // Only a daemon shown to run as the helper restarts its screen
+        // recorder; one built any other way only reads it.
+        daemon.recorder = Recorder::new(recorder::System::real(), Some(uid));
         // Jobs are kept beside the socket; the jobs a daemon before this one
         // started are found again by their records.
         if let (Some(folder), Ok(launcher)) = (socket.parent(), std::env::current_exe()) {
@@ -266,7 +272,8 @@ impl Daemon {
         }
         match self.jobs.as_deref().map(Jobs::census).transpose() {
             Ok(census) => {
-                let mut hello = facts::hello(&self.manager, census, self.recorder.usage());
+                let mut hello =
+                    facts::hello(&self.manager, census, self.recorder.report(&self.source));
                 hello["sound"] = self.sound.report().json();
                 hello
             }

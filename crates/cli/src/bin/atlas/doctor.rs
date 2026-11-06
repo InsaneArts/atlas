@@ -13,9 +13,9 @@ const NO_UNKNOWN_OUTCOME: &str = "No action of unknown outcome";
 
 const GIGABYTE: u64 = 1 << 30;
 
-/// Warn once the helper's screen recorder holds more than this. macOS keeps
-/// part of every capture it serves there until the helper logs out.
-const RECORDER_LIMIT: u64 = GIGABYTE;
+/// Warn once the helper has found its screen recorder too large this many
+/// times in a row, a minute or more apart, and could not restart it.
+const RECORDER_TRIES: u64 = 3;
 
 /// Read and enrich the report, retaining full facts for people or verbose output.
 pub(super) async fn report(client: &Client, verbose: bool) -> Value {
@@ -148,23 +148,25 @@ fn sound_warning(status: &Value) -> Option<String> {
     })
 }
 
-/// Warn the person when the helper's screen recorder, as its status says,
-/// uses more memory than [`RECORDER_LIMIT`]. Only the person can log the
-/// helper out, so an agent is not told, verbose or not; the figure itself
-/// stays in a verbose report's status.
+/// Warn the person when the helper, as its status says, keeps finding its
+/// screen recorder too large and cannot restart it. The helper restarts it
+/// on its own otherwise. Only the person can log the helper out, so an agent
+/// is not told, verbose or not; the figures stay in a verbose report's
+/// status.
 fn recorder_report(report: &mut Value, asking: Asker<'_>) {
     if asking != Asker::Person {
         return;
     }
-    let Some(bytes) = report["session"]["daemon"]["resources"]["screenRecorder"]["footprint"]
+    let recorder = &report["session"]["daemon"]["resources"]["screenRecorder"];
+    let stuck = recorder["resetFailures"]
         .as_u64()
-        .filter(|bytes| *bytes > RECORDER_LIMIT)
-    else {
+        .is_some_and(|tries| tries >= RECORDER_TRIES);
+    let Some(bytes) = recorder["footprint"].as_u64().filter(|_| stuck) else {
         return;
     };
     let warning = format!(
-        "The helper's screen recorder is using {:.1} GB of memory. Log the helper out and back \
-         in to reset it.",
+        "The helper's screen recorder is using {:.1} GB of memory and Atlas could not restart \
+         it. Log the helper out and back in to reset it.",
         bytes as f64 / GIGABYTE as f64
     );
     if let Some(warnings) = report["warnings"].as_array_mut() {
