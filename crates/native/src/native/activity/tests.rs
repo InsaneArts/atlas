@@ -1,13 +1,5 @@
 use super::*;
-use std::{
-    fs::File,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    time::Instant,
-};
+use std::{fs::File, sync::mpsc};
 
 const GAP: Duration = Duration::from_secs(2);
 
@@ -65,28 +57,33 @@ fn a_clock_set_back_since_the_last_input_still_counts_the_time_between() {
 #[test]
 fn input_that_comes_during_the_work_waits_for_it_and_then_goes_on() {
     let (_folder, path) = stamped(GAP * 2);
-    let working = Arc::new(AtomicBool::new(false));
-    let (started, began) = mpsc::channel();
+    let (started, working) = mpsc::channel();
+    let (finish, finished) = mpsc::channel::<()>();
     let work = {
-        let (path, working) = (path.clone(), working.clone());
+        let path = path.clone();
         std::thread::spawn(move || {
             quiet(&path, GAP, || {
-                working.store(true, Ordering::SeqCst);
                 started.send(()).unwrap();
-                std::thread::sleep(Duration::from_millis(300));
-                working.store(false, Ordering::SeqCst);
+                finished.recv().unwrap();
             })
         })
     };
-    began.recv().unwrap();
-    let asked = Instant::now();
-    let input = acting(&path);
+    working.recv().unwrap();
+    let (notice, contended) = mpsc::channel();
+    let input = {
+        let path = path.clone();
+        std::thread::spawn(move || {
+            files::on_next_lock_contention(notice);
+            acting(&path)
+        })
+    };
+    contended.recv().unwrap();
+    finish.send(()).unwrap();
+    let input = input.join().unwrap();
     assert!(
-        !working.load(Ordering::SeqCst),
-        "input began under the work"
+        input.is_some(),
+        "input goes on after the work, holding the file"
     );
-    assert!(asked.elapsed() >= Duration::from_millis(200), "it waited");
-    assert!(input.is_some(), "input goes on, holding the file");
     assert_eq!(work.join().unwrap(), Some(()));
     drop(input);
     assert_eq!(quiet(&path, GAP, || ()), None, "the input was stamped");

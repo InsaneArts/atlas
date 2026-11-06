@@ -660,30 +660,31 @@ fn a_restart_put_off_for_input_is_tried_again_within_seconds_not_a_minute() {
 
 #[test]
 fn input_that_comes_during_a_restart_waits_for_it_and_then_goes_on() {
-    static UNDER_WAY: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
-    static DONE: AtomicBool = AtomicBool::new(false);
-    fn slow_exit(_: Instance) -> bool {
-        if let Some(under_way) = UNDER_WAY.lock().unwrap().take() {
-            under_way.send(()).unwrap();
-        }
-        std::thread::sleep(Duration::from_millis(300));
-        DONE.store(true, Ordering::SeqCst);
+    /// The agent told the restart is under way, and its notice of waiting.
+    static AGENT: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
+    static WAITED: AtomicBool = AtomicBool::new(false);
+    fn exit_once_input_waits(_: Instance) -> bool {
+        let (under_way, waiting) = AGENT.lock().unwrap().take().unwrap();
+        under_way.send(()).unwrap();
+        let waited = waiting.recv_timeout(Duration::from_secs(5)).is_ok();
+        WAITED.store(waited, Ordering::SeqCst);
         true
     }
     FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
     REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
     let (_folder, input) = input_stamped(QUIET * 2);
     let (under_way, restarting) = mpsc::channel();
-    *UNDER_WAY.lock().unwrap() = Some(under_way);
+    let (notice, waiting) = mpsc::channel();
+    *AGENT.lock().unwrap() = Some((under_way, waiting));
     let path = input.clone();
     let agent = std::thread::spawn(move || {
+        atlas_core::files::on_next_lock_contention(notice);
         restarting.recv().unwrap();
-        let acting = activity::acting(&path);
-        (DONE.load(Ordering::SeqCst), acting)
+        activity::acting(&path)
     });
     let report = Recorder::new(
         System {
-            exits: slow_exit,
+            exits: exit_once_input_waits,
             ..fake()
         },
         Some(HELPER),
@@ -692,7 +693,12 @@ fn input_that_comes_during_a_restart_waits_for_it_and_then_goes_on() {
     .report_at(&source(), Instant::now())
     .unwrap();
     assert_eq!((report.resets, report.reset_failures), (1, 0));
-    let (restarted_first, acting) = agent.join().unwrap();
-    assert!(restarted_first, "the input began only after the restart");
-    assert!(acting.is_some(), "and went on holding the file");
+    assert!(
+        WAITED.load(Ordering::SeqCst),
+        "the input waited for the restart"
+    );
+    assert!(
+        agent.join().unwrap().is_some(),
+        "and then went on holding the file"
+    );
 }

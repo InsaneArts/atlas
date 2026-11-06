@@ -4115,8 +4115,15 @@ async fn expiry_cleanup_remains_registered_until_its_journal_finishes() {
     assert_eq!(up.kind, objc2_core_graphics::CGEventType::LeftMouseUp.0);
 }
 
-#[tokio::test]
-async fn input_that_comes_while_quiet_work_runs_waits_for_it_and_is_then_posted() {
+#[test]
+fn input_that_comes_while_quiet_work_runs_waits_for_it_and_is_then_posted() {
+    let (notice, contended) = std::sync::mpsc::channel();
+    // The batch takes the activity lock on a blocking thread of this runtime.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .on_thread_start(move || atlas_core::files::on_next_lock_contention(notice.clone()))
+        .build()
+        .unwrap();
     let owner = "a".repeat(48);
     let directory = tempfile::tempdir().unwrap();
     let (tap, seen) = Tap::new();
@@ -4126,12 +4133,13 @@ async fn input_that_comes_while_quiet_work_runs_waits_for_it_and_is_then_posted(
         .acquire_lasting(&owner, super::Who::Agent, LASTING)
         .unwrap();
     let (started, working) = std::sync::mpsc::channel();
+    let (finish, finished) = std::sync::mpsc::channel::<()>();
     let work = std::thread::spawn({
         let (activity, seen) = (service.activity.clone(), seen.clone());
         move || {
             crate::native::activity::quiet(&activity, Duration::ZERO, || {
                 started.send(()).unwrap();
-                std::thread::sleep(Duration::from_millis(300));
+                finished.recv().unwrap();
                 posts(&seen).is_empty()
             })
         }
@@ -4139,17 +4147,29 @@ async fn input_that_comes_while_quiet_work_runs_waits_for_it_and_is_then_posted(
     working.recv().unwrap();
     let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
     let actions = vec![serde_json::from_value(json!({"type": "move", "x": 10, "y": 20})).unwrap()];
-    let reply = service
-        .input(
-            owner,
-            Ok(display_epoch()),
-            Ok(actions),
-            Ok(None),
-            false,
-            &phase,
+    let (reply, waited) = runtime.block_on(async {
+        tokio::join!(
+            service.input(
+                owner,
+                Ok(display_epoch()),
+                Ok(actions),
+                Ok(None),
+                false,
+                &phase,
+            ),
+            async {
+                let waited = tokio::task::spawn_blocking(move || {
+                    contended.recv_timeout(Duration::from_secs(5)).is_ok()
+                })
+                .await
+                .unwrap();
+                finish.send(()).unwrap();
+                waited
+            },
         )
-        .await
-        .unwrap();
+    });
+    let reply = reply.unwrap();
+    assert!(waited, "the input waited for the work");
     assert_eq!(
         work.join().unwrap(),
         Some(true),
