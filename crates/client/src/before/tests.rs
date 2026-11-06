@@ -421,7 +421,7 @@ fn settings_count_the_pictures_and_delete_all_of_them() {
     assert_eq!(count, 2, "the pictures before and after");
     assert!(bytes >= 32, "{bytes}");
 
-    delete_all(&output);
+    delete_all(&output).unwrap();
     assert_eq!(summary(&output), (0, 0));
     assert_eq!(
         names(&output),
@@ -437,7 +437,7 @@ fn nothing_taken_before_delete_all_is_kept_again_after_it() {
     let mine = key("0123456789ab");
     let taken = nanos(SystemTime::now());
     std::thread::sleep(Duration::from_millis(2));
-    delete_all(&output);
+    delete_all(&output).unwrap();
     for session in [Some(&mine), None] {
         let late = name(taken, session, None);
         save(&output, &late, &raw(taken), KEEP).unwrap();
@@ -466,8 +466,20 @@ fn delete_all_before_any_picture_is_kept_still_marks_when() {
     let output = directory.path().join("runs");
     let taken = nanos(SystemTime::now());
     std::thread::sleep(Duration::from_millis(2));
-    delete_all(&output);
+    delete_all(&output).unwrap();
     let late = name(taken, None, None);
     save(&output, &late, &raw(taken), KEEP).unwrap();
     assert!(!kept(&output, &late));
+}
+
+#[test]
+fn delete_all_that_cannot_mark_when_says_so_rather_than_done() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = output(directory.path());
+    let taken = name(nanos(SystemTime::now()), None, None);
+    picture(&output, &taken, 10);
+    // Something that is not a mark stands in its place.
+    fs::create_dir(output.join(FOLDER).join("all.forgotten")).unwrap();
+
+    assert!(delete_all(&output).is_err());
 }

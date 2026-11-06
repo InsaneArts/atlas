@@ -578,19 +578,34 @@ pub fn summary(output: &Path) -> (u64, u64) {
 /// Remove every file of every action in `output`, as the person's Delete
 /// All does. It first marks when it did, so a picture or facts still being
 /// written of an action taken by then are removed once in place, and none
-/// is kept again; cleanup marks stay, for the same reason. A folder that
-/// cannot be made or opened has none to remove.
-pub fn delete_all(output: &Path) {
-    let Ok(folder) = made(output) else {
-        return;
-    };
-    // Without its mark Delete All still removes what is in place now.
-    let _ = touch(&folder, &everything_mark());
+/// is kept again; cleanup marks stay, for the same reason.
+///
+/// # Errors
+///
+/// Returns the failure to make or open the folder, to mark it, or to remove
+/// a file: without its mark, a picture still being written could be kept
+/// again, so nothing is said to be deleted.
+pub fn delete_all(output: &Path) -> Result<()> {
+    let folder = made(output)?;
+    touch(&folder, &everything_mark())?;
+    let mut left = 0_usize;
     for entry in entries(&folder) {
-        if !matches!(entry.kind, Kind::Forgotten) {
-            let _ = unlinkat(&folder, entry.file.as_str(), UnlinkatFlags::NoRemoveDir);
+        if matches!(entry.kind, Kind::Forgotten) {
+            continue;
+        }
+        match unlinkat(&folder, entry.file.as_str(), UnlinkatFlags::NoRemoveDir) {
+            // Pruned or cleaned up meanwhile.
+            Ok(()) | Err(nix::errno::Errno::ENOENT) => {}
+            Err(_) => left += 1,
         }
     }
+    if left > 0 {
+        return Err(Error::new(
+            Code::Io,
+            format!("{left} of the pictures could not be deleted; try again"),
+        ));
+    }
+    Ok(())
 }
 
 /// The files kept in a folder, read once, to name each action's pictures:

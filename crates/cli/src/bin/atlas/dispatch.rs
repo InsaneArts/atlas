@@ -881,7 +881,7 @@ fn settings(
     let client = client()?;
     let output = &client.config.output_dir;
     if args.delete_pictures {
-        atlas_client::before::delete_all(output);
+        atlas_client::before::delete_all(output)?;
     }
     let mut reply = json!({ "ok": true, "config": client.config, "path": config });
     if args.pictures_summary {
