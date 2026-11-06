@@ -31,9 +31,8 @@ pub(crate) enum Mutation<'a> {
         actions: Batch<'a>,
         owner: &'a str,
         epoch: InputEpoch,
-        /// The verified helper daemon, which alone takes the picture before
-        /// it.
-        capture_pid: u32,
+        /// The picture before it, being taken since its session was known.
+        picture: Option<picture::Taking>,
         /// An agent's command names the app it acted in.
         app: bool,
         expect: Option<&'a Expect>,
@@ -243,7 +242,7 @@ impl Client {
     /// `observed_at` the frame it acts on must still be fresh.
     pub(crate) async fn mutate(
         &self,
-        mutation: Mutation<'_>,
+        mut mutation: Mutation<'_>,
         lease: Option<(&SharedLease, &str)>,
         observed_at: Option<Instant>,
         // Control to let go of once the request has reached the helper; its
@@ -270,7 +269,10 @@ impl Client {
         // The picture before an agent's input is taken beside its preflight,
         // and kept only when it is in hand before the input is sent: the
         // input waits for it until its deadline at most, and goes either way.
-        let picture = self.picture_before(&mutation, started + picture::WAIT);
+        let picture = match &mut mutation {
+            Mutation::Input { picture, .. } => picture.take(),
+            _ => None,
+        };
         // Connect without holding the lease. Release can cancel slow preflight.
         let connection = self.connect(&mutation).await?;
         let authorization = authorize(lease, observed_at).await?;

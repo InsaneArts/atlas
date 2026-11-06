@@ -6,7 +6,7 @@
 //! answered that it was cancelled: no capture for it begins after that, and
 //! one already begun has ended. A daemon that answers neither in time is
 //! left, and the input goes then too.
-use super::{Actor, Client, Mutation, live::read_header};
+use super::{Actor, Client, live::read_header};
 use crate::before::{self, Raw};
 use atlas_core::{
     error::{Code, Error, Result},
@@ -24,19 +24,32 @@ use tokio::{
     task::JoinHandle,
 };
 
-/// The longest an input waits for its picture, from when it began, its
-/// cancel's answer included.
+/// The longest an input waits for its picture, from when it was asked for,
+/// its cancel's answer included.
 pub(super) const WAIT: Duration = Duration::from_millis(150);
 /// The last part of [`WAIT`], kept for the daemon to answer the picture's
 /// cancel.
 const CANCEL: Duration = Duration::from_millis(50);
+/// The longest the picture after an action is waited for, once due: a
+/// helper that takes longer leaves the action without one, and its process
+/// ends.
+const AFTER: Duration = Duration::from_secs(5);
 
 /// A picture being taken, when the input stops waiting for it, and the way
 /// to cancel it then; dropping it leaves the picture.
-pub(super) struct Taking {
+pub(crate) struct Taking {
     task: JoinHandle<Result<Raw>>,
     deadline: Instant,
     cancel: Option<oneshot::Sender<()>>,
+}
+
+impl std::fmt::Debug for Taking {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Taking")
+            .field("deadline", &self.deadline)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for Taking {
@@ -67,21 +80,14 @@ impl Taking {
 }
 
 impl Client {
-    /// Start taking the picture before `mutation` when it is an agent's
-    /// recorded input, the settings keep pictures, and its command has none
-    /// yet: one for each command, before its first input. The input stops
-    /// waiting for it at `deadline`.
-    pub(super) fn picture_before(
-        &self,
-        mutation: &Mutation<'_>,
-        deadline: Instant,
-    ) -> Option<Taking> {
-        let Mutation::Input {
-            epoch, capture_pid, ..
-        } = mutation
-        else {
-            return None;
-        };
+    /// Start taking the picture before an input in the session of `epoch`,
+    /// whose daemon is `capture_pid`, when it is an agent's recorded input,
+    /// the settings keep pictures, and its command has none yet: one for
+    /// each command, before its first input. It is asked for as soon as the
+    /// input's session is known, beside the rest of its preflight, and the
+    /// input stops waiting for it [`WAIT`] after that.
+    pub(super) fn picture_before(&self, epoch: &InputEpoch, capture_pid: u32) -> Option<Taking> {
+        let deadline = Instant::now() + WAIT;
         let doing = self.doing.as_ref().filter(|_| self.actor == Actor::Agent)?;
         if !self.config.activity.pictures_before_actions || !doing.before().take() {
             return None;
@@ -90,7 +96,7 @@ impl Client {
         let task = tokio::spawn(frame(
             self.transport.clone(),
             epoch.clone(),
-            *capture_pid,
+            capture_pid,
             cancelled,
         ));
         Some(Taking {
@@ -128,7 +134,8 @@ impl Client {
     /// which ended at `ended`, in milliseconds since 1970: a moment later,
     /// once no next step of its session began within that moment, whose
     /// picture before then serves as this one's after. It runs in a process
-    /// of its own, so no agent waits for it.
+    /// of its own, so no agent waits for it, and ends when the helper takes
+    /// longer than [`AFTER`] for it.
     ///
     /// # Errors
     ///
@@ -151,17 +158,22 @@ impl Client {
             return Ok(());
         }
 
-        let verified = self.verify().await?;
-        let epoch = &verified.session().epoch;
-        // Never cancelled: nothing waits for this picture.
-        let (_keep_open, cancelled) = oneshot::channel();
-        let raw = frame(
-            self.transport.clone(),
-            epoch.input_epoch(),
-            epoch.capture_pid,
-            cancelled,
-        )
-        .await?;
+        let taken = tokio::time::timeout(AFTER, async {
+            let verified = self.verify().await?;
+            let epoch = &verified.session().epoch;
+            // Never cancelled: nothing waits for this picture but its time.
+            let (_keep_open, cancelled) = oneshot::channel();
+            frame(
+                self.transport.clone(),
+                epoch.input_epoch(),
+                epoch.capture_pid,
+                cancelled,
+            )
+            .await
+        });
+        let raw = taken
+            .await
+            .map_err(|_| Error::new(Code::Capture, "The picture took too long"))??;
         let keep = self.config.activity.keep();
         tokio::task::spawn_blocking(move || before::save(&output, &after, &raw, keep))
             .await

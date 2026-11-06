@@ -43,7 +43,7 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
             actions: Batch::decode(&actions).unwrap(),
             owner: "owner",
             epoch: epoch(),
-            capture_pid: 40,
+            picture: None,
             app: false,
             expect: None,
         }
@@ -62,7 +62,7 @@ fn an_element_action_is_confirmed_only_with_its_verification() {
         actions: Batch::decode(&actions).unwrap(),
         owner: "owner",
         epoch: epoch(),
-        capture_pid: 40,
+        picture: None,
         app: false,
         expect: None,
     };
@@ -143,7 +143,7 @@ fn each_mutation_sends_its_exact_request() {
         actions: Batch::decode(&actions).unwrap(),
         owner: "owner",
         epoch: epoch(),
-        capture_pid: 40,
+        picture: None,
         app: true,
         expect,
     };

@@ -309,6 +309,27 @@ async fn the_picture_after_an_action_is_taken_only_when_no_next_step_serves() {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_picture_after_the_helper_never_answers_gives_up_in_time() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Late, "key");
+    let at = atlas_core::time::timestamp() - 5_000_000_000;
+    let first = before::name(at, None, None);
+    let ended = u64::try_from(at / 1_000_000).unwrap() + 100;
+
+    let error = helper
+        .serve(client.picture_after(&first, ended), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await
+        .unwrap_err();
+
+    // Its process ends rather than waiting on with the next action's.
+    assert_eq!(error.code, Code::Capture, "{error:?}");
+    let after = before::after_name(&first).unwrap();
+    assert!(!before::Listing::of(&client.config.output_dir).has(&after));
+}
+
 #[tokio::test]
 async fn the_persons_input_and_a_setting_turned_off_take_no_picture() {
     for person in [true, false] {
@@ -436,24 +457,8 @@ async fn a_refused_or_late_picture_never_holds_the_input_back() {
 async fn a_picture_comes_only_from_the_verified_daemon() {
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
-    let actions = key();
-    let mutation = Mutation::Input {
-        actions: atlas_core::actions::Batch::decode(&actions).unwrap(),
-        owner: "owner",
-        epoch: InputEpoch {
-            uid: UID,
-            security_session_id: 42,
-            display_id: 7,
-            width: 100.0,
-            height: 100.0,
-            process_id: 456,
-        },
-        capture_pid: std::process::id() + 1,
-        app: true,
-        expect: None,
-    };
     let taking = client
-        .picture_before(&mutation, Instant::now() + WAIT)
+        .picture_before(&epoch(), std::process::id() + 1)
         .unwrap();
     let picture = helper
         .serve(taking.taken(), |request| {
@@ -471,26 +476,12 @@ async fn a_picture_comes_only_from_the_verified_daemon() {
 async fn a_late_picture_is_given_up_at_its_deadline() {
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = agent(directory.path(), Pictures::Late, "key");
-    let actions = key();
-    let mutation = Mutation::Input {
-        actions: atlas_core::actions::Batch::decode(&actions).unwrap(),
-        owner: "owner",
-        epoch: InputEpoch {
-            uid: UID,
-            security_session_id: 42,
-            display_id: 7,
-            width: 100.0,
-            height: 100.0,
-            process_id: 456,
-        },
-        capture_pid: std::process::id(),
-        app: true,
-        expect: None,
-    };
     let started = Instant::now();
-    let taking = client.picture_before(&mutation, started + WAIT).unwrap();
+    let taking = client.picture_before(&epoch(), std::process::id()).unwrap();
     assert!(
-        client.picture_before(&mutation, started + WAIT).is_none(),
+        client
+            .picture_before(&epoch(), std::process::id())
+            .is_none(),
         "one for each command"
     );
     let picture = helper
@@ -505,4 +496,16 @@ async fn a_late_picture_is_given_up_at_its_deadline() {
         waited < WAIT + Duration::from_millis(80),
         "the cancel's answer is waited for within the deadline: {waited:?}"
     );
+}
+
+/// The session a picture is asked of.
+fn epoch() -> InputEpoch {
+    InputEpoch {
+        uid: UID,
+        security_session_id: 42,
+        display_id: 7,
+        width: 100.0,
+        height: 100.0,
+        process_id: 456,
+    }
 }

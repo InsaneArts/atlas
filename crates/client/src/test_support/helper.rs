@@ -7,7 +7,7 @@ use std::{
     future::Future,
     path::Path,
     sync::{
-        Mutex, MutexGuard, PoisonError,
+        Arc, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
@@ -74,7 +74,7 @@ pub struct Helper {
     /// How it answers a picture's frame request; none hands it to the test.
     pictures: Option<Pictures>,
     /// Each request's op as it came, and `frame` once a frame was sent.
-    log: Mutex<Vec<String>>,
+    log: Arc<Mutex<Vec<String>>>,
 }
 
 impl Helper {
@@ -100,7 +100,7 @@ impl Helper {
             pins: true,
             parts: true,
             pictures: None,
-            log: Mutex::default(),
+            log: Arc::default(),
         };
 
         (client, helper)
@@ -134,7 +134,7 @@ impl Helper {
     }
 
     fn logged(&self) -> MutexGuard<'_, Vec<String>> {
-        self.log.lock().unwrap_or_else(PoisonError::into_inner)
+        logged(&self.log)
     }
 
     /// Answer the request `line` on `peer`, a connection to the input service
@@ -186,32 +186,39 @@ impl Helper {
     }
 
     /// Answer a picture's frame request on `peer` as `pictures` says, framed
-    /// as the daemon frames one. A late answer keeps the peer in `held`.
+    /// as the daemon frames one. A late answer keeps the peer in `held`; a
+    /// cancel is waited for beside the client's other requests, as the
+    /// daemon serves each connection on its own.
     async fn picture(&self, pictures: Pictures, mut peer: UnixStream, held: &mut Vec<UnixStream>) {
         let header = match pictures {
             Pictures::Late => return held.push(peer),
             Pictures::Cancelled => {
-                let mut cancel = [0_u8; 1];
-                if !matches!(peer.read(&mut cancel).await, Ok(1)) {
-                    return;
-                }
-                self.note("frame cancelled");
-                json!({"ok": false, "code": "cancelled", "uncertain": false,
-                    "error": "The picture was no longer wanted"})
+                let log = Arc::clone(&self.log);
+                tokio::spawn(async move {
+                    let mut cancel = [0_u8; 1];
+                    if !matches!(peer.read(&mut cancel).await, Ok(1)) {
+                        return;
+                    }
+                    logged(&log).push("frame cancelled".to_owned());
+                    let refusal = json!({"ok": false, "code": "cancelled", "uncertain": false,
+                        "error": "The picture was no longer wanted"});
+                    // The client may have given up on it already.
+                    let _ = peer.write_all(&framed(&refusal, &[])).await;
+                });
+                return;
             }
             Pictures::Refused => json!({"ok": false, "code": "on-console", "uncertain": false,
                 "error": "The helper is on the screen"}),
             Pictures::Taken => json!({"ok": true, "width": 2, "height": 1, "scale": 1.0,
                 "session": self.session_proof(self.proofs()), "daemonPID": std::process::id()}),
         };
-        let header = header.to_string();
-        let mut framed = u32::try_from(header.len()).unwrap().to_be_bytes().to_vec();
-        framed.extend_from_slice(header.as_bytes());
-        if pictures == Pictures::Taken {
-            framed.extend_from_slice(&[11, 22, 33, 44, 55, 66]);
-        }
+        let pixels: &[u8] = if pictures == Pictures::Taken {
+            &[11, 22, 33, 44, 55, 66]
+        } else {
+            &[]
+        };
         // The client may have given up on it already.
-        if peer.write_all(&framed).await.is_ok() && pictures == Pictures::Taken {
+        if peer.write_all(&framed(&header, pixels)).await.is_ok() && pictures == Pictures::Taken {
             self.note("frame sent");
         }
     }
@@ -383,4 +390,19 @@ impl Helper {
             "accessibility": true, "session": self.session_proof(next),
             "capabilities": self.capabilities})
     }
+}
+
+/// `log`, whoever holds it now.
+fn logged(log: &Mutex<Vec<String>>) -> MutexGuard<'_, Vec<String>> {
+    log.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `header` framed as the daemon frames a picture, its length first, then
+/// `pixels`.
+fn framed(header: &Value, pixels: &[u8]) -> Vec<u8> {
+    let header = header.to_string();
+    let mut framed = u32::try_from(header.len()).unwrap().to_be_bytes().to_vec();
+    framed.extend_from_slice(header.as_bytes());
+    framed.extend_from_slice(pixels);
+    framed
 }

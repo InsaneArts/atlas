@@ -623,7 +623,7 @@ fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
             actions: actions::Batch::decode(&actions).unwrap(),
             owner: "owner",
             epoch: epoch.clone(),
-            capture_pid: 40,
+            picture: None,
             app: false,
             expect,
         }

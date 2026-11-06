@@ -26,6 +26,9 @@ use tokio::{
 
 /// A stalled terminal must not hold raw pixels waiting for later playback.
 const WRITE: Duration = Duration::from_millis(200);
+/// The most send buffer one picture's frame asks for: the largest frame it
+/// can be, 1280 by 1280 pixels of three bytes, rounded up.
+const FRAME_ROOM: usize = 5 << 20;
 /// How long a connection may go without asking for a frame.
 const IDLE: Duration = Duration::from_secs(10);
 /// The shortest gap between CoreGraphics capture starts.
@@ -283,6 +286,11 @@ pub(super) async fn one(
     };
     let header = json!({"ok": true, "width": shot.width, "height": shot.height,
         "scale": shot.scale, "session": proof, "daemonPID": std::process::id()});
+    // Room for the whole frame at once: its action waits for it, and the
+    // socket's own small buffer would hand it over in thousands of turns.
+    // Without that room it goes all the same, only slower.
+    let room = shot.rgb.len().saturating_add(MAX_HEADER).min(FRAME_ROOM);
+    let _ = nix::sys::socket::setsockopt(writer.as_ref(), nix::sys::socket::sockopt::SndBuf, &room);
     tokio::time::timeout(WRITE, async {
         write_header(&mut writer, &header).await?;
         writer.write_all(&shot.rgb).await?;

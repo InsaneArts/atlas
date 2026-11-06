@@ -390,6 +390,8 @@ impl Client {
         session: &Session,
     ) -> Result<Value> {
         self.controller.interrupt().check()?;
+        // Asked for now, so its capture runs beside the grant and the claim.
+        let picture = self.picture_before(&session.epoch.input_epoch(), session.epoch.capture_pid);
         let standalone = atlas_core::files::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
         if lease.is_none()
@@ -415,7 +417,7 @@ impl Client {
             actions,
             owner,
             epoch: session.epoch.input_epoch(),
-            capture_pid: session.epoch.capture_pid,
+            picture,
             app: self.doing.is_some(),
             expect: expect.as_ref(),
         };
