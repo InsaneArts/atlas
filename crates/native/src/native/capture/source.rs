@@ -174,10 +174,17 @@ impl Source {
     ///
     /// # Errors
     ///
-    /// Returns busy while a process that serves captures has been told to
-    /// end and is not yet gone.
+    /// Returns busy while the native source's stop is unconfirmed, or while
+    /// a process that serves captures has been told to end and is not yet
+    /// gone.
     pub fn frame<T>(&self, capture: impl FnOnce() -> T) -> Result<T> {
         let _capturing = self.fence.read().unwrap_or_else(PoisonError::into_inner);
+        if matches!(
+            self.state().lifecycle,
+            Lifecycle::Quarantined | Lifecycle::Stopping
+        ) {
+            return Err(quarantined());
+        }
         self.exited()?;
         Ok(capture())
     }
@@ -204,11 +211,16 @@ impl Source {
 
     /// Run `quiet` once no capture runs, with none able to begin until it
     /// returns. A CoreGraphics owner may stay: each of its frames is a
-    /// capture of its own, and the next one waits. A native source keeps its
-    /// stream open between frames, so while one is live, stopping or
-    /// unconfirmed `quiet` does not run. Nor does it when captures still run
-    /// after `within`, so a capture that never ends holds nothing else up.
-    /// None says `quiet` did not run. This blocks for up to `within`.
+    /// capture of its own, and the next one waits. A native owner keeps its
+    /// stream open between frames, so that stream is stopped and drained
+    /// first; the owner stays, and its next frame opens a new stream, which
+    /// has no picture from before. When that stop is not confirmed, `quiet`
+    /// does not run and the source stays stopping: nothing captures until
+    /// the owner's own stop settles it. Nor does `quiet` run while an
+    /// earlier native source is stopping or unconfirmed, or when captures
+    /// still run after `within`, so a capture that never ends holds nothing
+    /// else up. None says `quiet` did not run. This blocks for up to
+    /// `within`, and then for the native stop.
     pub fn between_captures<T>(&self, within: Duration, quiet: impl FnOnce() -> T) -> Option<T> {
         let deadline = Instant::now() + within;
         let _fence = loop {
@@ -221,15 +233,22 @@ impl Source {
                 Err(TryLockError::WouldBlock) => return None,
             }
         };
-        let between = {
+        let native = {
             let state = self.state();
             match (state.lifecycle, state.owner) {
-                (Lifecycle::Stopped, _) => true,
-                (Lifecycle::Active, Some((_, backend))) => backend == CaptureBackend::CoreGraphics,
-                _ => false,
+                (Lifecycle::Stopped, _) => false,
+                (Lifecycle::Active, Some((_, backend))) => {
+                    backend == CaptureBackend::ScreenCaptureKit
+                }
+                _ => return None,
             }
         };
-        between.then(quiet)
+        if native {
+            self.state().lifecycle = Lifecycle::Stopping;
+            (self.stop)().ok()?;
+            self.state().lifecycle = Lifecycle::Active;
+        }
+        Some(quiet())
     }
 
     /// Give the source back. A native source is stopped and drained first;

@@ -26,8 +26,9 @@ use tokio::sync::{Notify, watch};
 pub(crate) const IDLE: Duration = Duration::from_secs(2);
 /// The shortest time between two acquisitions: 30 a second at most.
 const CADENCE: Duration = Duration::from_millis(33);
-/// The time between acquisitions while the screen stays still. macOS keeps
-/// part of the memory of each capture it serves until the helper logs out.
+/// The time between acquisitions while the screen stays still. Every picture
+/// is copied and sent whole, so reading a still screen less often saves the
+/// helper and the broker CPU.
 const STILL_CADENCE: Duration = Duration::from_millis(250);
 /// How many pictures in a row must match the one before for the screen to
 /// count as still.

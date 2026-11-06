@@ -64,6 +64,7 @@ fn service(marker: &std::path::Path) -> super::Service {
         executable: None,
         stopping: tokio::sync::Notify::new(),
         stop_marker: marker.to_owned(),
+        activity: marker.with_extension("activity"),
     }
 }
 
@@ -3766,7 +3767,8 @@ fn display_epoch() -> atlas_core::session::InputEpoch {
 /// A service whose engine journals into `directory` and posts only to `tap`.
 fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc<super::Service> {
     let epoch = display_epoch();
-    let engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
+    let mut engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
+    engine.activity = Some(directory.join("input.activity"));
     Arc::new(super::Service {
         looks: engine.looks.clone(),
         engine: Arc::new(Mutex::new(engine)),
@@ -3777,6 +3779,7 @@ fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc
         executable: None,
         stopping: tokio::sync::Notify::new(),
         stop_marker: directory.join("stopped"),
+        activity: directory.join("input.activity"),
     })
 }
 
@@ -4110,4 +4113,87 @@ async fn expiry_cleanup_remains_registered_until_its_journal_finishes() {
     assert!(!service.engine.lock().await.held_input());
     let up = posts(&seen).pop().unwrap();
     assert_eq!(up.kind, objc2_core_graphics::CGEventType::LeftMouseUp.0);
+}
+
+#[tokio::test]
+async fn input_that_comes_while_quiet_work_runs_waits_for_it_and_is_then_posted() {
+    let owner = "a".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    let (started, working) = std::sync::mpsc::channel();
+    let work = std::thread::spawn({
+        let (activity, seen) = (service.activity.clone(), seen.clone());
+        move || {
+            crate::native::activity::quiet(&activity, Duration::ZERO, || {
+                started.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(300));
+                posts(&seen).is_empty()
+            })
+        }
+    });
+    working.recv().unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let actions = vec![serde_json::from_value(json!({"type": "move", "x": 10, "y": 20})).unwrap()];
+    let reply = service
+        .input(
+            owner,
+            Ok(display_epoch()),
+            Ok(actions),
+            Ok(None),
+            false,
+            &phase,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        work.join().unwrap(),
+        Some(true),
+        "nothing posted under the work"
+    );
+    assert_eq!(reply["ok"], true, "the input waited rather than failed");
+    assert_eq!(reply["performed"], 1);
+    assert!(!posts(&seen).is_empty());
+    assert_eq!(
+        crate::native::activity::quiet(&service.activity, Duration::from_secs(2), || ()),
+        None,
+        "the input was told to the helper's other processes"
+    );
+}
+
+#[tokio::test]
+async fn input_held_between_requests_keeps_quiet_work_out_until_it_is_let_go() {
+    let owner = "a".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, _seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let down = vec![
+        serde_json::from_value(json!({"type": "pointer", "phase": "down", "x": 50, "y": 60}))
+            .unwrap(),
+    ];
+    let reply = service
+        .input(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(down),
+            Ok(None),
+            false,
+            &phase,
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["ok"], true);
+    let quiet = || crate::native::activity::quiet(&service.activity, Duration::ZERO, || ());
+    assert_eq!(quiet(), None, "the button is still held");
+    service.release(owner, &phase).await.unwrap();
+    assert_eq!(quiet(), Some(()), "let go");
 }

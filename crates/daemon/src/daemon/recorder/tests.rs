@@ -41,7 +41,11 @@ thread_local! {
     static DESCRIBED: RefCell<Option<Option<Process>>> = const { RefCell::new(None) };
     static KILLED: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) };
     static KILL_FAILS: Cell<bool> = const { Cell::new(false) };
+    /// The recorder exits on its own just before the signal.
+    static KILL_GONE: Cell<bool> = const { Cell::new(false) };
     static EXITS: Cell<bool> = const { Cell::new(true) };
+    /// How often the live stream was told of a new recorder.
+    static TOLD: Cell<usize> = const { Cell::new(0) };
 }
 
 fn found() -> Option<(Process, Usage)> {
@@ -59,6 +63,10 @@ fn killed(pid: i32) -> nix::Result<()> {
     if KILL_FAILS.get() {
         return Err(Errno::EPERM);
     }
+    if KILL_GONE.get() {
+        FOUND.set(REPLACEMENT.take());
+        return Err(Errno::ESRCH);
+    }
     KILLED.with_borrow_mut(|killed| killed.push(pid));
     FOUND.set(REPLACEMENT.take());
     Ok(())
@@ -70,6 +78,7 @@ fn fake() -> System {
         describe: described,
         kill: killed,
         exits: |_| EXITS.get(),
+        restarted: || TOLD.set(TOLD.get() + 1),
     }
 }
 
@@ -86,13 +95,18 @@ fn a_recorder_past_the_limit_is_restarted_and_the_reading_shows_the_new_one() {
     FOUND.set(Some(replayd(700, HELPER, LIMIT + 1)));
     REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
     let report = Recorder::new(fake(), Some(HELPER))
-        .report(&source())
+        .report_at(&source(), Instant::now())
         .unwrap();
     assert_eq!(kills(), [700]);
     assert_eq!(report.resets, 1);
     assert!(report.last_reset_at.is_some());
     assert_eq!(report.reset_failures, 0);
     assert_eq!(report.usage.map(|usage| usage.footprint), Some(13 << 20));
+    assert_eq!(
+        TOLD.get(),
+        1,
+        "the stream waits longer for its first picture"
+    );
 }
 
 #[test]
@@ -100,19 +114,23 @@ fn a_recorder_at_or_under_the_limit_is_left_alone() {
     for footprint in [LIMIT, LIMIT / 2, 0] {
         FOUND.set(Some(replayd(700, HELPER, footprint)));
         let report = Recorder::new(fake(), Some(HELPER))
-            .report(&source())
+            .report_at(&source(), Instant::now())
             .unwrap();
         assert_eq!(kills(), [] as [i32; 0], "{footprint}");
         assert_eq!(report.resets, 0);
         assert_eq!(report.last_reset_at, None);
         assert_eq!(report.usage.map(|usage| usage.footprint), Some(footprint));
     }
+    assert_eq!(TOLD.get(), 0, "the stream waits as usual");
 }
 
 #[test]
 fn no_recorder_running_reports_nothing_and_ends_nothing() {
     FOUND.set(None);
-    assert_eq!(Recorder::new(fake(), Some(HELPER)).report(&source()), None);
+    assert_eq!(
+        Recorder::new(fake(), Some(HELPER)).report_at(&source(), Instant::now()),
+        None
+    );
     assert_eq!(kills(), [] as [i32; 0]);
 }
 
@@ -151,7 +169,7 @@ fn a_restart_waits_for_a_capture_that_ends_in_time_and_none_begins_under_it() {
         },
         Some(HELPER),
     )
-    .report(&source)
+    .report_at(&source, Instant::now())
     .unwrap();
     ending.join().unwrap();
     frame.join().unwrap();
@@ -164,7 +182,7 @@ fn a_restart_waits_for_a_capture_that_ends_in_time_and_none_begins_under_it() {
 }
 
 #[test]
-fn a_capture_still_in_flight_puts_the_restart_off_to_the_next_reading() {
+fn a_capture_still_in_flight_puts_the_restart_off_and_it_is_tried_again_shortly() {
     FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
     let source = Arc::new(source());
     let owner = source.admit(CaptureBackend::CoreGraphics).unwrap();
@@ -184,7 +202,11 @@ fn a_capture_still_in_flight_puts_the_restart_off_to_the_next_reading() {
     let start = Instant::now();
     let held = recorder.report_at(&source, start).unwrap();
     assert_eq!(kills(), [] as [i32; 0], "nothing is ended under a capture");
-    assert_eq!((held.resets, held.reset_failures), (0, 1));
+    assert_eq!(
+        (held.resets, held.reset_failures),
+        (0, 0),
+        "a restart put off is not a failed one"
+    );
     finish.send(()).unwrap();
     frame.join().unwrap();
     let next = recorder.report_at(&source, start + READING).unwrap();
@@ -195,21 +217,50 @@ fn a_capture_still_in_flight_puts_the_restart_off_to_the_next_reading() {
 }
 
 #[test]
-fn a_live_native_stream_is_never_cut_and_the_missed_restart_is_counted() {
+fn a_live_native_stream_is_stopped_for_the_restart_and_its_owner_keeps_streaming() {
+    thread_local! {
+        /// How many signals had been sent at each stream stop.
+        static STOPS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    }
+    fn stop() -> atlas_core::error::Result<()> {
+        STOPS.with_borrow_mut(|stops| stops.push(kills().len()));
+        Ok(())
+    }
     FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
-    let source = source();
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let source = Source::new(stop);
     let owner = source.admit(CaptureBackend::ScreenCaptureKit).unwrap();
+    let report = Recorder::new(fake(), Some(HELPER))
+        .report_at(&source, Instant::now())
+        .unwrap();
+    assert_eq!(
+        STOPS.with_borrow(Clone::clone),
+        [0],
+        "the stream stopped before the signal"
+    );
+    assert_eq!(kills(), [700]);
+    assert_eq!((report.resets, report.reset_failures), (1, 0));
+    assert_eq!(source.frame(|| 1).unwrap(), 1, "the stream opens again");
+    source.stop(owner, None).unwrap();
+}
+
+#[test]
+fn a_native_stream_that_cannot_stop_puts_the_restart_off_without_a_failure() {
+    fn stuck() -> atlas_core::error::Result<()> {
+        Err(Error::new(Code::Capture, "still stopping"))
+    }
+    FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
+    let source = Source::new(stuck);
+    let _owner = source.admit(CaptureBackend::ScreenCaptureKit).unwrap();
     let recorder = Recorder::new(fake(), Some(HELPER));
     let start = Instant::now();
-    let first = recorder.report_at(&source, start).unwrap();
-    let second = recorder.report_at(&source, start + READING).unwrap();
+    for reading in 0..4 {
+        let report = recorder
+            .report_at(&source, start + READING * reading)
+            .unwrap();
+        assert_eq!((report.resets, report.reset_failures), (0, 0));
+    }
     assert_eq!(kills(), [] as [i32; 0]);
-    assert_eq!((first.reset_failures, second.reset_failures), (1, 2));
-    assert_eq!(second.resets, 0);
-    source.stop(owner, None).unwrap();
-    let third = recorder.report_at(&source, start + READING * 2).unwrap();
-    assert_eq!(kills(), [700]);
-    assert_eq!((third.resets, third.reset_failures), (1, 0));
 }
 
 #[test]
@@ -282,7 +333,7 @@ fn a_recorder_that_changed_before_the_signal_is_never_signalled() {
     reused.path = PathBuf::from("/bin/sleep");
     DESCRIBED.set(Some(Some(reused)));
     let report = Recorder::new(fake(), Some(HELPER))
-        .report(&source())
+        .report_at(&source(), Instant::now())
         .unwrap();
     assert_eq!(kills(), [] as [i32; 0]);
     assert_eq!((report.resets, report.reset_failures), (0, 0));
@@ -299,11 +350,13 @@ fn another_accounts_recorder_is_never_signalled() {
     assert!(!may_restart(&setuid, Some(&setuid), HELPER));
 
     FOUND.set(Some(replayd(600, PERSON, 6 << 30)));
-    Recorder::new(fake(), Some(HELPER)).report(&source());
+    Recorder::new(fake(), Some(HELPER)).report_at(&source(), Instant::now());
     assert_eq!(kills(), [] as [i32; 0], "the person's recorder stays");
 
     FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
-    let report = Recorder::new(fake(), None).report(&source()).unwrap();
+    let report = Recorder::new(fake(), None)
+        .report_at(&source(), Instant::now())
+        .unwrap();
     assert_eq!(
         kills(),
         [] as [i32; 0],
@@ -394,9 +447,11 @@ fn a_failed_capture_source_stop_does_not_reach_the_recorder() {
     let source = Source::new(never);
     let owner = source.admit(CaptureBackend::ScreenCaptureKit).unwrap();
     assert!(source.stop(owner, None).is_err());
-    let report = Recorder::new(fake(), Some(HELPER)).report(&source).unwrap();
+    let report = Recorder::new(fake(), Some(HELPER))
+        .report_at(&source, Instant::now())
+        .unwrap();
     assert_eq!(kills(), [] as [i32; 0]);
-    assert_eq!(report.reset_failures, 1);
+    assert_eq!(report.reset_failures, 0, "put off, not failed");
 }
 
 #[test]
@@ -410,9 +465,12 @@ fn a_recorder_that_has_not_exited_after_the_signal_keeps_every_capture_out() {
     EXITS.set(false);
     let source = source();
     let owner = source.admit(CaptureBackend::CoreGraphics).unwrap();
-    let report = Recorder::new(fake(), Some(HELPER)).report(&source).unwrap();
+    let report = Recorder::new(fake(), Some(HELPER))
+        .report_at(&source, Instant::now())
+        .unwrap();
     assert_eq!(kills(), [std::process::id() as i32]);
     assert_eq!((report.resets, report.reset_failures), (0, 1));
+    assert_eq!(TOLD.get(), 0, "no new recorder to wait for");
     assert_eq!(
         source
             .frame(|| panic!("no frame while it may exit"))
@@ -466,4 +524,170 @@ fn a_healthy_replacement_found_before_the_signal_clears_the_failures() {
     assert_eq!(kills(), [] as [i32; 0]);
     assert_eq!((report.resets, report.reset_failures), (0, 0));
     assert_eq!(report.usage.map(|usage| usage.footprint), Some(13 << 20));
+}
+
+#[test]
+fn a_recorder_that_exits_just_before_the_signal_is_not_a_failure() {
+    FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
+    let source = source();
+    let recorder = Recorder::new(fake(), Some(HELPER));
+    let start = Instant::now();
+    KILL_FAILS.set(true);
+    for reading in 0..2 {
+        recorder.report_at(&source, start + READING * reading);
+    }
+    KILL_FAILS.set(false);
+    KILL_GONE.set(true);
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let report = recorder.report_at(&source, start + READING * 2).unwrap();
+    assert_eq!((report.resets, report.reset_failures), (0, 0));
+    assert_eq!(report.usage.map(|usage| usage.footprint), Some(13 << 20));
+}
+
+#[test]
+fn a_status_never_waits_for_a_reading_or_a_restart_and_shows_it_once_done() {
+    static GATE: Mutex<Option<mpsc::Receiver<()>>> = Mutex::new(None);
+    static READS: AtomicUsize = AtomicUsize::new(0);
+    let (release, released) = mpsc::channel();
+    *GATE.lock().unwrap() = Some(released);
+    let recorder = Arc::new(Recorder::new(
+        System {
+            find: || {
+                READS.fetch_add(1, Ordering::SeqCst);
+                if let Some(released) = GATE.lock().unwrap().take() {
+                    released.recv().unwrap();
+                }
+                Some(replayd(700, HELPER, 1))
+            },
+            ..fake()
+        },
+        Some(HELPER),
+    ));
+    let source = Arc::new(source());
+    for _ in 0..5 {
+        assert_eq!(recorder.report(&source), None, "the reading still runs");
+    }
+    release.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let shown = loop {
+        if let Some(report) = recorder.report(&source) {
+            break report;
+        }
+        assert!(Instant::now() < deadline, "the reading never finished");
+        std::thread::yield_now();
+    };
+    assert_eq!(shown.usage.map(|usage| usage.footprint), Some(1));
+    assert_eq!(
+        READS.load(Ordering::SeqCst),
+        1,
+        "statuses share one reading"
+    );
+}
+
+/// The input service's activity file in a new folder, its last input
+/// `ago`.
+fn input_stamped(ago: Duration) -> (tempfile::TempDir, PathBuf) {
+    let folder = tempfile::tempdir().unwrap();
+    let path = activity::beside(&folder.path().join("input.sock"));
+    drop(activity::acting(&path));
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - ago)
+        .unwrap();
+    (folder, path)
+}
+
+#[test]
+fn a_restart_waits_for_input_under_way_and_then_for_the_quiet_gap() {
+    FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let (_folder, input) = input_stamped(QUIET * 2);
+    let source = source();
+    let recorder = Recorder::new(fake(), Some(HELPER)).beside_input(input.clone());
+    let start = Instant::now();
+
+    let acting = activity::acting(&input);
+    let held = recorder.report_at(&source, start).unwrap();
+    assert_eq!(kills(), [] as [i32; 0], "nothing is ended under input");
+    assert_eq!(
+        (held.resets, held.reset_failures),
+        (0, 0),
+        "put off, not failed"
+    );
+    drop(acting);
+
+    let just_after = recorder.report_at(&source, start + RETRY).unwrap();
+    assert_eq!(kills(), [] as [i32; 0], "input ended only just now");
+    assert_eq!((just_after.resets, just_after.reset_failures), (0, 0));
+
+    let (_quiet, input) = input_stamped(QUIET + Duration::from_millis(100));
+    let recorder = Recorder::new(fake(), Some(HELPER)).beside_input(input);
+    let restarted = recorder.report_at(&source, start).unwrap();
+    assert_eq!(kills(), [700]);
+    assert_eq!((restarted.resets, restarted.reset_failures), (1, 0));
+}
+
+#[test]
+fn a_restart_put_off_for_input_is_tried_again_within_seconds_not_a_minute() {
+    FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let (_folder, input) = input_stamped(QUIET * 2);
+    let source = source();
+    let recorder = Recorder::new(fake(), Some(HELPER)).beside_input(input.clone());
+    let start = Instant::now();
+    let acting = activity::acting(&input);
+    recorder.report_at(&source, start);
+    drop(acting);
+    std::fs::File::options()
+        .write(true)
+        .open(&input)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - QUIET * 2)
+        .unwrap();
+    assert!(recorder.report_at(&source, start + RETRY / 2).is_some());
+    assert_eq!(kills(), [] as [i32; 0], "not before the retry");
+    let report = recorder.report_at(&source, start + RETRY).unwrap();
+    assert_eq!(kills(), [700]);
+    assert_eq!((report.resets, report.reset_failures), (1, 0));
+}
+
+#[test]
+fn input_that_comes_during_a_restart_waits_for_it_and_then_goes_on() {
+    static UNDER_WAY: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
+    static DONE: AtomicBool = AtomicBool::new(false);
+    fn slow_exit(_: Instance) -> bool {
+        if let Some(under_way) = UNDER_WAY.lock().unwrap().take() {
+            under_way.send(()).unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        DONE.store(true, Ordering::SeqCst);
+        true
+    }
+    FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let (_folder, input) = input_stamped(QUIET * 2);
+    let (under_way, restarting) = mpsc::channel();
+    *UNDER_WAY.lock().unwrap() = Some(under_way);
+    let path = input.clone();
+    let agent = std::thread::spawn(move || {
+        restarting.recv().unwrap();
+        let acting = activity::acting(&path);
+        (DONE.load(Ordering::SeqCst), acting)
+    });
+    let report = Recorder::new(
+        System {
+            exits: slow_exit,
+            ..fake()
+        },
+        Some(HELPER),
+    )
+    .beside_input(input)
+    .report_at(&source(), Instant::now())
+    .unwrap();
+    assert_eq!((report.resets, report.reset_failures), (1, 0));
+    let (restarted_first, acting) = agent.join().unwrap();
+    assert!(restarted_first, "the input began only after the restart");
+    assert!(acting.is_some(), "and went on holding the file");
 }

@@ -190,7 +190,7 @@ pub struct Daemon {
     sound: Sound,
     /// The screen recorder, as each hello reports it; restarted only in the
     /// helper.
-    recorder: Recorder,
+    recorder: Arc<Recorder>,
 }
 
 impl Daemon {
@@ -220,7 +220,7 @@ impl Daemon {
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
             sound: Sound::detached(),
-            recorder: Recorder::new(recorder::System::real(), None),
+            recorder: Arc::new(Recorder::new(recorder::System::real(), None)),
         }
     }
 
@@ -250,8 +250,14 @@ impl Daemon {
         // last chose.
         daemon.sound = Sound::start(uid, std::env::var_os("HOME").map(PathBuf::from));
         // Only a daemon shown to run as the helper restarts its screen
-        // recorder; one built any other way only reads it.
-        daemon.recorder = Recorder::new(recorder::System::real(), Some(uid));
+        // recorder; one built any other way only reads it. A restart never
+        // overlaps the input service's input, told beside its socket.
+        let mut recorder = Recorder::new(recorder::System::real(), Some(uid));
+        if let Some(home) = std::env::var_os("HOME") {
+            let input = crate::helper_setup::Layout::new(uid, PathBuf::from(home)).input_socket();
+            recorder = recorder.beside_input(atlas_native::native::activity::beside(&input));
+        }
+        daemon.recorder = Arc::new(recorder);
         // Jobs are kept beside the socket; the jobs a daemon before this one
         // started are found again by their records.
         if let (Some(folder), Ok(launcher)) = (socket.parent(), std::env::current_exe()) {

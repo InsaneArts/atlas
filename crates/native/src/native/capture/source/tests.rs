@@ -232,12 +232,63 @@ fn no_capture_begins_while_work_between_captures_runs() {
 }
 
 #[test]
-fn nothing_runs_between_captures_while_a_native_stream_is_live_or_unconfirmed() {
+fn a_live_native_stream_is_stopped_before_work_between_captures_and_its_owner_stays() {
+    static STOPS: AtomicUsize = AtomicUsize::new(0);
+    fn counted() -> Result<()> {
+        STOPS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    let source = Source::new(counted);
+    let owner = source.admit(CaptureBackend::ScreenCaptureKit).unwrap();
+    let stops = STOPS.load(Ordering::SeqCst);
+    assert_eq!(
+        source.between_captures(WAIT, || STOPS.load(Ordering::SeqCst)),
+        Some(stops + 1),
+        "the stream's stop is confirmed before the work runs"
+    );
+    assert_eq!(source.lifecycle(), Lifecycle::Active);
+    assert_eq!(
+        source.drain(owner.generation()),
+        Drain::Held(Lifecycle::Active)
+    );
+    assert_eq!(
+        source.frame(|| 1).unwrap(),
+        1,
+        "its next frame opens a new stream"
+    );
+    source.stop(owner, None).unwrap();
+}
+
+#[test]
+fn nothing_runs_between_captures_while_a_native_stream_cannot_be_stopped_or_is_unconfirmed() {
     let source = Source::new(never_stops);
     let owner = source.admit(CaptureBackend::ScreenCaptureKit).unwrap();
     assert_eq!(
         source.between_captures(WAIT, || panic!("a live native stream would be cut")),
         None
+    );
+    assert_eq!(source.lifecycle(), Lifecycle::Stopping);
+    assert_eq!(
+        source.drain(owner.generation()),
+        Drain::Held(Lifecycle::Stopping)
+    );
+    assert_eq!(
+        source
+            .frame(|| panic!("no frame while the stop is unconfirmed"))
+            .unwrap_err()
+            .code,
+        Code::Busy
+    );
+    assert_eq!(
+        source
+            .one_shot(|| panic!("no screenshot while the stop is unconfirmed"))
+            .unwrap_err()
+            .code,
+        Code::Busy
+    );
+    assert_eq!(
+        source.admit(CaptureBackend::CoreGraphics).unwrap_err().code,
+        Code::Busy
     );
     assert!(source.stop(owner, None).is_err());
     assert_eq!(source.lifecycle(), Lifecycle::Quarantined);
@@ -247,6 +298,31 @@ fn nothing_runs_between_captures_while_a_native_stream_is_live_or_unconfirmed() 
         )),
         None
     );
+}
+
+#[test]
+fn a_failed_pause_recovers_once_the_owners_own_stop_is_confirmed() {
+    static CONFIRMS: AtomicBool = AtomicBool::new(false);
+    fn later() -> Result<()> {
+        if CONFIRMS.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            never_stops()
+        }
+    }
+    let source = Source::new(later);
+    let owner = source.admit(CaptureBackend::ScreenCaptureKit).unwrap();
+    assert_eq!(source.between_captures(WAIT, || ()), None);
+    CONFIRMS.store(true, Ordering::SeqCst);
+    let generation = owner.generation();
+    source.stop(owner, None).unwrap();
+    assert_eq!(source.lifecycle(), Lifecycle::Stopped);
+    assert_eq!(
+        source.drain(generation),
+        Drain::Drained { stop_request: None }
+    );
+    assert_eq!(source.one_shot(|| 1).unwrap(), 1);
+    assert_eq!(source.between_captures(WAIT, || 2), Some(2));
 }
 
 #[test]

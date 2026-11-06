@@ -86,7 +86,7 @@ pub(crate) async fn start(
         vec![UpdateKind::Full],
     );
     let source = source::spawn(
-        Live::new(client, longest, CaptureBackend::CoreGraphics),
+        Live::new(client, longest, CaptureBackend::ScreenCaptureKit),
         Budget::new(BROKER_PIXELS),
         input,
     );
