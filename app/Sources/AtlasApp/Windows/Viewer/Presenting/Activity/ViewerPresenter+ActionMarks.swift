@@ -3,16 +3,15 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// A step's small picture: the screen before its first action, marked as that action, with how many repeats it
-  /// holds; nil for a step that kept no picture.
+  /// A step's small picture: the screen before its first action that kept one, marked as that action, with how many
+  /// repeats it holds; nil for a step that kept no picture.
   ///
   /// - Parameters:
   ///   - run: The step's rows.
   ///   - snapshot: What the controller holds.
   /// - Returns: The picture, or nil.
   static func stepPicture(_ run: ActivityRun, _ snapshot: ViewerSnapshot) -> ViewerStepPicture? {
-    guard let before = run.firstBefore else { return nil }
-    let first = run.members.first ?? run.entry
+    guard let first = run.pictured, let before = first.before else { return nil }
     let uncertain = run.id == snapshot.reading.statusReading.uncertainRow
     return ViewerStepPicture(
       shot: activityShot(before, snapshot),

@@ -178,4 +178,15 @@ struct SettingsPicturesTests {
     #expect(controller.state.general.storedPictures == "No pictures")
     #expect(!controller.state.general.canDeletePictures)
   }
+
+  @Test("details left without their pictures can still be deleted, and say what they take")
+  func detailsLeftCanBeDeleted() async {
+    let left = #"{"ok": true, "config": {}, "pictures": {"count": 0, "bytes": 2048}}"#
+    let commands = ScriptedCommands(["config --pictures-summary": left])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.readPictures()
+    let general = controller.state.general
+    #expect(general.storedPictures.hasPrefix("No pictures · "))
+    #expect(general.canDeletePictures)
+  }
 }

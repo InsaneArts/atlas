@@ -27,12 +27,12 @@ extension SettingsWords {
   /// - Parameters:
   ///   - count: How many.
   ///   - bytes: Their size on disk.
-  /// - Returns: "1,240 pictures · 142 MB", or "No pictures".
+  /// - Returns: "1,240 pictures · 142 MB", "No pictures · 2 KB" for what is left beside none, or "No pictures".
   static func storedPictures(count: Int, bytes: Int) -> String {
-    guard count > 0 else { return "No pictures" }
+    guard count > 0 || bytes > 0 else { return "No pictures" }
     let size = Int64(bytes)
       .formatted(.byteCount(style: .file))
-    return "\(pictures(count)) · \(size)"
+    return count > 0 ? "\(pictures(count)) · \(size)" : "No pictures · \(size)"
   }
 
   /// A count of pictures.

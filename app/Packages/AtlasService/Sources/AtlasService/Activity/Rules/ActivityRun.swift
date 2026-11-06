@@ -23,8 +23,14 @@ public struct ActivityRun: Equatable, Sendable, Identifiable {
   /// The line's identity: its earliest row's id.
   public var id: String { entry.id }
 
-  /// The picture taken right before its first row, by its file name.
-  public var firstBefore: String? { members.first?.before }
+  /// Its first row that kept a picture taken right before it: the line shows that picture, marked as that row. A
+  /// repeat whose picture was not taken leaves it to the next.
+  public var pictured: ActivityLog.Entry? {
+    members.first { $0.before != nil }
+  }
+
+  /// The picture taken right before the first of its rows that kept one, by its file name.
+  public var firstBefore: String? { pictured?.before }
 
   /// The picture right after its last row, by its file name.
   public var lastAfter: String? { members.last?.after }

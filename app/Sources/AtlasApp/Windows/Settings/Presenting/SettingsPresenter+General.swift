@@ -34,7 +34,8 @@ extension SettingsPresenter {
       typedText: pictures.shown.typedTextLimit == nil ? .full : .limited,
       typedTextLimit: pictures.shown.typedTextLimit ?? SettingsGeneralState.typedTextDefault,
       storedPictures: pictures.stored.map { SettingsWords.storedPictures(count: $0.count, bytes: $0.bytes) } ?? "",
-      canDeletePictures: (pictures.stored?.count ?? 0) > 0,
+      // What a picture's details keep, typed text among them, may be left beside none.
+      canDeletePictures: pictures.stored.map { $0.count > 0 || $0.bytes > 0 } ?? false,
       notify: snapshot.notify,
       notice: notice(snapshot, in: .general, busy: false)
     )

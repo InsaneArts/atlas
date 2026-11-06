@@ -106,6 +106,24 @@ struct ActivityGroupingTests {
     #expect(run.lastAfter == "3-after.jpg")
   }
 
+  @Test("a folded line whose first repeat kept no picture shows the next one's, marked as that repeat")
+  func aFoldedLineShowsItsFirstKeptPicture() throws {
+    let rules = ActivityFixtures.rules([
+      ActivityFixtures.row(id: "3", says: "clicked in Opie", ageSeconds: 140, before: "3-before.jpg"),
+      ActivityFixtures.row(id: "2", says: "clicked in Opie", ageSeconds: 150, before: "2-before.jpg"),
+      ActivityFixtures.row(id: "1", says: "clicked in Opie", ageSeconds: 157),
+    ])
+    let run = try #require(
+      ActivityMoments(rules, captures: [], scope: .all)
+        .shown(filter: .all, query: "")
+        .flatMap(\.runs)
+        .first
+    )
+    #expect(run.count == 3)
+    #expect(run.pictured?.id == "2")
+    #expect(run.firstBefore == "2-before.jpg")
+  }
+
   @Test("two repeats stay two lines, each with its own pictures")
   func twoRepeatsStayApart() {
     let rules = ActivityFixtures.rules([
