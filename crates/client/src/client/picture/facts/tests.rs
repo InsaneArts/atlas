@@ -188,6 +188,19 @@ fn a_shortcuts_keys_read_as_keycaps_and_its_times_in_milliseconds() {
     assert!(facts["endedAt"].as_u64().is_some());
 }
 
+#[test]
+fn keys_that_type_text_are_never_kept() {
+    let typed = of_input(&input(
+        json!([{"type": "key", "key": "s"}, {"type": "key", "key": "shift+e"}]),
+    ));
+    assert!(!typed.contains_key("keys"), "{typed:?}");
+    // A row names no key that types text, so neither do the facts.
+    let pressed = row(json!({"ok": true, "verb": "key"}));
+    let facts = finished(typed, &pressed, &json!({}), Typed::default(), None, 0);
+    assert_eq!(facts["action"], "key");
+    assert!(facts.get("keys").is_none(), "{facts}");
+}
+
 fn element(role: &str, title: &str, frame: Option<Bounds>) -> Element {
     Element {
         role: Some(role.into()),

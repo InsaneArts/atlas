@@ -65,14 +65,9 @@ pub(in crate::client) fn of_input(request: &Value) -> Map<String, Value> {
                 .collect();
             ("type", json!({"text": text}))
         }
-        "key" => {
-            let keys: Vec<Value> = actions
-                .iter()
-                .filter_map(|action| action["key"].as_str())
-                .map(|key| json!([key]))
-                .collect();
-            ("key", json!({"keys": keys}))
-        }
+        // Its keys come from its row's label once it ends, which names only
+        // keys that type no text: a letter pressed may be a password's.
+        "key" => ("key", json!({})),
         _ => ("press", json!({})),
     };
     facts.insert("action".into(), json!(kind));
