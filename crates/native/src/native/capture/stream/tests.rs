@@ -301,12 +301,12 @@ fn replacing_one_pending_request_cancels_it_and_cannot_deliver_its_old_result() 
             .code,
         Code::Cancelled
     );
-    slot.finish(1, Ok(shot(1)));
+    assert!(slot.settle(0, Ok(Some((1, shot(1))))));
     assert!(matches!(
         second_reply.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    slot.finish(2, Ok(shot(2)));
+    assert!(slot.settle(0, Ok(Some((2, shot(2))))));
     assert_eq!(second_reply.recv().unwrap().unwrap().rgb, vec![2; 24]);
     assert!(slot.pending.lock().unwrap().is_none());
 }
@@ -318,7 +318,7 @@ fn cancelling_during_a_pixel_copy_prevents_its_late_pixels_from_escaping() {
     let alive = pending.alive.clone();
     slot.begin(pending);
     alive.store(false, Ordering::Release);
-    slot.finish(1, Ok(shot(42)));
+    assert!(slot.settle(0, Ok(Some((1, shot(42))))));
     assert!(matches!(
         reply.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
@@ -376,7 +376,7 @@ fn a_live_owner_survives_request_gaps_but_explicit_close_cancels_delivery() {
     assert!(!alive.load(Ordering::Acquire));
     assert_eq!(reply.recv().unwrap().err().unwrap().code, Code::Cancelled);
     // A callback finishing after close cannot give pixels new authority.
-    slot.finish(1, Ok(shot(42)));
+    assert!(slot.settle(1, Ok(Some((1, shot(42))))));
     assert!(slot.pending.lock().unwrap().is_none());
 }
 

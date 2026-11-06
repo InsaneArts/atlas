@@ -310,14 +310,7 @@ impl Slot {
             return false;
         }
         match answer {
-            Ok(Some((id, shot))) => {
-                if pending.as_ref().is_some_and(|request| request.id == id) {
-                    let request = pending.take().expect("matched request");
-                    if request.alive.load(Ordering::Acquire) {
-                        let _ = request.reply.try_send(Ok(shot));
-                    }
-                }
-            }
+            Ok(Some((id, shot))) => Self::deliver(&mut pending, id, Ok(shot)),
             Ok(None) => {}
             Err(error) => {
                 drop(pending);
@@ -360,12 +353,16 @@ impl Slot {
         }
     }
     fn finish(&self, id: u64, result: Result<RawShot>) {
-        let mut slot = self.pending.lock().unwrap_or_else(|p| p.into_inner());
-        if slot.as_ref().is_some_and(|request| request.id == id) {
-            let request = slot.take().expect("matched request");
-            if request.alive.load(Ordering::Acquire) {
-                let _ = request.reply.try_send(result);
-            }
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        Self::deliver(&mut pending, id, result);
+    }
+    /// End `pending`, the locked request, with `result` when it is request
+    /// `id`; one cancelled meanwhile is told nothing.
+    fn deliver(pending: &mut Option<Pending>, id: u64, result: Result<RawShot>) {
+        if let Some(request) = pending.take_if(|request| request.id == id)
+            && request.alive.load(Ordering::Acquire)
+        {
+            let _ = request.reply.try_send(result);
         }
     }
 }
