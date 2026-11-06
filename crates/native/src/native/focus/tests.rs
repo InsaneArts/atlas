@@ -2253,3 +2253,47 @@ fn absent_system_focus_accepts_the_menu_bar_owner_with_its_own_proof_and_still_c
         "unreadable"
     );
 }
+
+#[test]
+fn a_read_whose_element_was_replaced_is_read_once_more_and_that_read_decides() {
+    let replaced = || {
+        refused(Reason::Unreadable).with_source(Asked {
+            call: "AXRole",
+            status: AXError::InvalidUIElement,
+        })
+    };
+    let later = Instant::now() + Duration::from_secs(1);
+    let mut reads = 0;
+    let read = read_again_if_replaced(later, || {
+        reads += 1;
+        if reads == 1 { Err(replaced()) } else { Ok(7) }
+    });
+    assert_eq!((read.unwrap(), reads), (7, 2));
+
+    let mut reads = 0;
+    let read: Result<()> = read_again_if_replaced(later, || {
+        reads += 1;
+        Err(replaced())
+    });
+    assert!(read.is_err(), "the second read decides");
+    assert_eq!(reads, 2, "and no third is made");
+
+    let mut reads = 0;
+    let read: Result<()> = read_again_if_replaced(Instant::now(), || {
+        reads += 1;
+        Err(replaced())
+    });
+    assert!(read.is_err());
+    assert_eq!(reads, 1, "no time is left for another");
+
+    let mut reads = 0;
+    let read: Result<()> = read_again_if_replaced(later, || {
+        reads += 1;
+        Err(refused(Reason::Unreadable).with_source(Asked {
+            call: "AXRole",
+            status: AXError::CannotComplete,
+        }))
+    });
+    assert!(read.is_err());
+    assert_eq!(reads, 1, "only a replaced element is read again");
+}
