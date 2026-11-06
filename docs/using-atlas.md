@@ -69,12 +69,14 @@ Click the Atlas menu bar item for a small screen and current status. Choose **Op
 
 The viewer has four tabs:
 
-| Tab         | What you can see                        |
-| ----------- | --------------------------------------- |
-| Screen      | The helper's current picture.           |
-| Activity    | Recent Atlas actions and their results. |
-| Apps        | Apps running in the helper.             |
-| Screenshots | Captures saved by Atlas.                |
+| Tab         | What you can see                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| Screen      | The helper's current picture.                                                                          |
+| Activity    | Recent Atlas actions and their results, each agent action with a picture of the helper just before it. |
+| Apps        | Apps running in the helper.                                                                            |
+| Screenshots | Captures saved by Atlas.                                                                               |
+
+In Activity, open a step to see its picture before and after the action, marked where the agent clicked, typed or scrolled, or play the task back with **Replay**. Pictures stay on your Mac for 7 days unless **Settings > General** says otherwise, where you can also turn them off, limit the typed text kept beside them, or delete them all. Text typed into a password field is never kept, and no agent is ever given a picture. The [configuration guide](configuration.md#settings-fields) has the details.
 
 When you leave Screen, a small screen remains over the other tabs. Drag or throw it toward another corner to move it out of the way. Click it to return to Screen. It follows the viewer's picture setting, including a paused picture.
 
