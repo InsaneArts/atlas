@@ -10,6 +10,8 @@ struct SettingsSnapshot {
   var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   var notify = false
+  /// The helper's sound, as every window shows it.
+  var sound = HelperSoundButton()
   /// What the rest of the app says now.
   var facts = SettingsFacts()
 }

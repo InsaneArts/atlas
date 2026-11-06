@@ -44,7 +44,8 @@
       CapsuleTab(id: SettingsTab.about, title: "About", symbol: .info),
     ]
 
-    /// The General pane: opening at login and notifying on, the screen live; the other panes at rest.
+    /// The General pane: opening at login, muting the helper and notifying on, the screen live; the other panes at
+    /// rest.
     @MainActor static let settingsGeneral = SettingsState(
       tabs: CapsuleTabsState(tabs: settingsTabs, selected: .general, label: "Settings"),
       general: SettingsGeneralState(
@@ -56,6 +57,8 @@
           PopupOption(id: .everyFiveSeconds, title: "Every 5 Seconds"),
           PopupOption(id: .paused, title: "Paused", isEnabled: false),
         ],
+        muteHelper: true,
+        soundProblem: nil,
         notify: true
       ),
       helper: settingsHelperPane,

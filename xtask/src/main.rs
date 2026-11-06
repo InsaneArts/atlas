@@ -180,7 +180,18 @@ fn info_plist(version: &str) -> String {
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>InsaneArts</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Atlas silences apps in its helper login so they don't play on your speakers.</string>
 {PLIST_TAIL}"#
+    )
+}
+
+/// What the hardened runtime lets the app's `atlas` do beyond its default:
+/// record audio, which muting the helper's apps takes once the person allows
+/// it. Nothing else.
+fn entitlements() -> String {
+    format!(
+        "{PLIST_HEAD}\t<key>com.apple.security.device.audio-input</key>\n\t<true/>\n{PLIST_TAIL}"
     )
 }
 
@@ -624,10 +635,16 @@ fn bundle_permissions(app: &Path) -> Result<()> {
 fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
     // Inside out: the Swift executable carries its own identifier, then the app
     // (whose main executable is the consented `atlas`) seals it.
-    let sign = |identifier: Option<&str>, path: &Path| -> Result<()> {
+    // The app's own `atlas`, the helper daemon, mutes the helper's apps.
+    let granted = app.with_file_name("Atlas.entitlements");
+    io(fs::write(&granted, entitlements()))?;
+    let sign = |identifier: Option<&str>, entitled: Option<&Path>, path: &Path| -> Result<()> {
         let mut args = vec!["--force", "--options", "runtime", "--timestamp"];
         if let Some(identifier) = identifier {
             args.extend(["--identifier", identifier]);
+        }
+        if let Some(entitled) = entitled {
+            args.extend(["--entitlements", text(entitled)?]);
         }
         args.extend(["--sign", &options.sign, text(path)?]);
         exec("/usr/bin/codesign", &args)
@@ -635,9 +652,10 @@ fn sign_and_verify(options: &Options, app: &Path, upload: &Path) -> Result<()> {
 
     sign(
         Some(atlas_core::app_bundle::APP_IDENTIFIER),
+        None,
         &app.join("Contents/MacOS").join(APP_EXECUTABLE),
     )?;
-    sign(None, app)?;
+    sign(None, Some(&granted), app)?;
     // Signing may create a private _CodeSignature directory under a restrictive
     // umask. Normalize it too, then verify the unchanged signed contents.
     bundle_permissions(app)?;

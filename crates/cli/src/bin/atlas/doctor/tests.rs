@@ -152,6 +152,24 @@ async fn a_failed_pending_worker_is_not_a_clean_marker() {
     }
 }
 
+#[test]
+fn doctor_warns_when_the_helper_should_be_silent_and_is_not() {
+    let unavailable = json!({"sound": {
+        "helperSound": "unavailable",
+        "reason": "Switch to the helper and allow Atlas when macOS asks."
+    }});
+    assert_eq!(
+        sound_warning(&unavailable).as_deref(),
+        Some("Switch to the helper and allow Atlas when macOS asks.")
+    );
+
+    for sound in ["muted", "on"] {
+        let said = json!({"sound": {"helperSound": sound, "reason": null}});
+        assert_eq!(sound_warning(&said), None, "{sound}");
+    }
+    assert_eq!(sound_warning(&json!({"ok": false})), None);
+}
+
 fn with_recorder(footprint: Value) -> Value {
     let mut report = ready();
     report["warnings"] = json!([]);

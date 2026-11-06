@@ -63,7 +63,8 @@ extension ViewerPresenter {
       pause: pause(snapshot),
       agent: agent,
       agentHelp: agentHelp,
-      control: offersControl(snapshot) ? control(snapshot) : nil
+      control: offersControl(snapshot) ? control(snapshot) : nil,
+      sound: snapshot.sound
     )
   }
 

@@ -1,7 +1,7 @@
 //! Asking the person for the helper's permissions when they arrive in it,
 //! and restarting for a Screen Recording grant only a new process can use.
-use super::facts::console_state;
-use atlas_native::native::{accessibility_trusted as accessibility, capture};
+use super::{facts::console_state, sound::Sound};
+use atlas_native::native::{accessibility_trusted as accessibility, audio, capture};
 use objc2_application_services::AXIsProcessTrustedWithOptions;
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFString};
 use serde_json::Value;
@@ -55,18 +55,42 @@ fn request_accessibility() {
 ///
 /// With nothing to ask right after the person logged in (after a restart
 /// or a log-out), they are told they can switch back to `controller`.
-pub(super) async fn request_consent_on_arrival(controller: u32, restart: impl Fn()) {
+///
+/// Once both are on, Atlas asks to record the helper's audio when the
+/// person wants its apps silent and never answered; leaving the helper has
+/// `sound` read the answer again.
+pub(super) async fn request_consent_on_arrival(controller: u32, restart: impl Fn(), sound: Sound) {
     let shown = || console_state() == Some(true);
     let mut present = false;
 
     loop {
         let now = shown();
         if now && !present {
-            ask(&shown, &restart, controller).await;
+            ask(&shown, &restart, controller, &sound).await;
+        }
+        if !now && present {
+            sound.check();
         }
 
         // Leaving while being asked counts as never having arrived.
         present = now && shown();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+/// Ask to record the helper's audio, as [`Sound::ask`] decides, and wait
+/// while the person stays for their answer: the prompt is theirs alone, and
+/// a restart of this process while it shows would lose it. Whether the
+/// helper is still on screen is read again right before asking.
+async fn audio_answered(shown: &impl Fn() -> bool, sound: &Sound) {
+    let restarting = !capture::permitted();
+    let sound = sound.clone();
+    let on_screen = || console_state() == Some(true);
+    if blocking(move || sound.ask(restarting, on_screen)).await != Some(true) {
+        return;
+    }
+
+    while shown() && blocking(audio::access).await == Some(audio::Access::Undetermined) {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -253,8 +277,9 @@ fn within(age: Option<Duration>, gap: Duration) -> bool {
 /// they know to switch back, and restarts this process if it cannot yet use
 /// Screen Recording (macOS applies that grant to new processes only). While
 /// the setup window is open, it guides the person and this only watches
-/// ([`Asking::pass`]); closing it midway brings the requests back.
-async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
+/// ([`Asking::pass`]); closing it midway brings the requests back. Before
+/// saying so, it asks to record the helper's audio when that is wanted.
+async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32, sound: &Sound) {
     // Let the desktop settle after the switch, and let macOS finish a new
     // account's setup screens: a prompt raised behind them is never seen.
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -284,6 +309,7 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
                 arrival_notice(controller, arrival);
             }
         };
+        audio_answered(shown, sound).await;
         announce(notice, capture::permitted, restart).await;
         return;
     }
@@ -303,6 +329,7 @@ async fn ask(shown: &impl Fn() -> bool, restart: &impl Fn(), controller: u32) {
             asked(false);
             arrival_notice(controller, Arrival::SetUp);
         };
+        audio_answered(shown, sound).await;
         announce(notice, capture::permitted, restart).await;
     }
 }

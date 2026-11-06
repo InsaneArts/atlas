@@ -1,3 +1,4 @@
+import AtlasCommands
 import AtlasService
 import AtlasUI
 import Foundation
@@ -156,6 +157,7 @@ final class ViewerReadingLoop {
   func read(_ number: Int, decode: (Frame) async -> DesktopPicture.Decoded? = DesktopPicture.decode) async {
     statusReading += 1
     let readingNumber = statusReading
+    let soundAsked = viewer?.actions.sound.generation
     let current = { [unowned self] in watching && number == generation && readingNumber == statusReading }
     let paused = viewer?.session.paused == true
     // While the frame service streams pictures, a reading reads the status alone.
@@ -167,7 +169,7 @@ final class ViewerReadingLoop {
     do {
       let reply = try await service.status()
       guard current() else { return }
-      show(reply)
+      show(reply, soundAsked: soundAsked)
       guard !paused else {
         reading.unavailable = nil
         return
@@ -198,9 +200,10 @@ final class ViewerReadingLoop {
   func readStatus() async {
     statusReading += 1
     let readingNumber = statusReading
+    let soundAsked = viewer?.actions.sound.generation
     // A status that cannot be read leaves the window as it is; the reading loop reads it again.
     guard let reply = try? await service.status(), readingNumber == statusReading else { return }
-    show(reply)
+    show(reply, soundAsked: soundAsked)
   }
 
   /// Refreshes ``now`` every ``tickEvery`` while readings run, so the picture's age stays current; stops otherwise.
@@ -243,12 +246,17 @@ final class ViewerReadingLoop {
   /// viewer holds it, as after Release Control in the menu bar; a recovery set aside is forgotten once nothing needs
   /// it.
   ///
-  /// - Parameter reply: The status read; only the newest reading started is shown, so it is ``statusReading``'s.
-  func show(_ reply: ViewerStatus) {
+  /// - Parameters:
+  ///   - reply: The status read; only the newest reading started is shown, so it is ``statusReading``'s.
+  ///   - soundAsked: The helper sound switch's generation when the status was asked for; nil shows no sound.
+  func show(_ reply: ViewerStatus, soundAsked: Int? = nil) {
     let newAccount = reply.overview.account != reading.status.overview.account
     reading.status = reply
     reading.hasStatus = true
     guard let viewer else { return }
+    if let soundAsked {
+      viewer.actions.sound.adopt(reply.overview.sound.flatMap(HelperSound.init), asked: soundAsked)
+    }
     // The helper's facts tell when it logged in once its account is known, and again should it change.
     if newAccount { viewer.readLoginTime() }
     // Input not ready: control ends now, not with the next picture, saying why in the status's own words.

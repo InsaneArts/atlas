@@ -20,6 +20,8 @@ pub(crate) mod read;
 mod run;
 #[cfg(target_os = "macos")]
 pub mod serve;
+#[cfg(target_os = "macos")]
+mod sound;
 
 #[cfg(not(target_os = "macos"))]
 pub mod serve {

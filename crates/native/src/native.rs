@@ -95,6 +95,8 @@ pub fn accessibility_trusted() -> bool {
 #[cfg(target_os = "macos")]
 pub mod apps;
 #[cfg(target_os = "macos")]
+pub mod audio;
+#[cfg(target_os = "macos")]
 pub mod ax;
 #[cfg(target_os = "macos")]
 pub mod capture;

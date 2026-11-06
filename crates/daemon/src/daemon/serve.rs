@@ -5,6 +5,7 @@ use crate::daemon::{
     consent, facts,
     job::{self, Jobs},
     preferences, proof, read, run,
+    sound::{Set, Sound},
 };
 use atlas_core::{
     error::{Code, Error, Result},
@@ -183,6 +184,8 @@ pub struct Daemon {
     source: Arc<capture::source::Source>,
     /// The persistent child that answers session-proof requests.
     proof_worker: Mutex<Option<proof::Worker>>,
+    /// Whether the helper's apps can be heard on the person's speakers.
+    sound: Sound,
     /// The screen recorder's memory, as each hello reports it.
     recorder: facts::Recorder,
 }
@@ -213,6 +216,7 @@ impl Daemon {
             runs: Mutex::new(JoinSet::new()),
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
+            sound: Sound::detached(),
             recorder: facts::Recorder::new(facts::screen_recorder),
         }
     }
@@ -239,6 +243,9 @@ impl Daemon {
             facts::on_console,
             atlas_native::native::session_info,
         );
+        // The helper's apps go silent before any agent acts, as the person
+        // last chose.
+        daemon.sound = Sound::start(uid, std::env::var_os("HOME").map(PathBuf::from));
         // Jobs are kept beside the socket; the jobs a daemon before this one
         // started are found again by their records.
         if let (Some(folder), Ok(launcher)) = (socket.parent(), std::env::current_exe()) {
@@ -258,7 +265,11 @@ impl Daemon {
             atlas_core::login_log::mark("daemon.firstHello");
         }
         match self.jobs.as_deref().map(Jobs::census).transpose() {
-            Ok(census) => facts::hello(&self.manager, census, self.recorder.usage()),
+            Ok(census) => {
+                let mut hello = facts::hello(&self.manager, census, self.recorder.usage());
+                hello["sound"] = self.sound.report().json();
+                hello
+            }
             Err(error) => json!(error),
         }
     }
@@ -363,6 +374,7 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
         move || {
             restarter.restarting.notify_one();
         },
+        daemon.sound.clone(),
     ));
     let watcher = daemon.clone();
     let recording = tokio::spawn(consent::restart_for_recording(move || {
@@ -754,6 +766,38 @@ pub(crate) async fn handle(
             ),
         },
         Request::Read(request) => return serve_read(&daemon, request, policy, writer).await,
+        // Setting it waits briefly for the mute to follow; reading it only
+        // says what the mute last reported.
+        Request::Sound { muted } => {
+            let daemon = daemon.clone();
+            tokio::task::spawn_blocking(move || {
+                let set = match muted {
+                    Some(muted) => daemon.sound.set(muted),
+                    None => Set::Done(daemon.sound.report()),
+                };
+                let report = match set {
+                    Set::Done(report) => report,
+                    Set::Unsaved => {
+                        return failure(
+                            Code::Daemon,
+                            "The helper could not save this choice, so nothing changed",
+                        );
+                    }
+                    Set::Uncertain => {
+                        return interrupted(
+                            Code::Daemon,
+                            "The helper did not confirm its sound changed; run atlas sound to see",
+                        );
+                    }
+                };
+                let mut reply = report.json();
+                reply["ok"] = json!(true);
+                reply["op"] = json!("sound");
+                reply
+            })
+            .await
+            .unwrap_or_else(|_| interrupted(Code::Daemon, "The helper's sound could not be set"))
+        }
     };
 
     write(&mut writer, &reply).await

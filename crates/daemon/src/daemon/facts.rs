@@ -142,7 +142,7 @@ pub(super) fn hello(
 ) -> Value {
     use atlas_core::protocol::{
         APP_PARTS, JOBS, READ, RGB_STREAM, RGB_STREAM_HIGH_RES, RGB_STREAM_STOP, SCK_EXPERIMENTAL,
-        SESSION_PIN, SESSION_PROOF,
+        SESSION_PIN, SESSION_PROOF, SOUND,
     };
 
     let mut capabilities = vec![
@@ -154,6 +154,7 @@ pub(super) fn hello(
         SESSION_PROOF,
         SCK_EXPERIMENTAL,
         RGB_STREAM_STOP,
+        SOUND,
     ];
     if jobs.is_some() {
         capabilities.push(JOBS);
