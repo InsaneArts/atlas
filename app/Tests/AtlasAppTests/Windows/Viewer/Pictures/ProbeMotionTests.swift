@@ -41,6 +41,8 @@ struct ProbeMotionTests {
         let shades = (286...328).map { ListMotionFrameTests.brightness(of: frame, at: CGPoint(x: $0, y: y)) }
         rows.append("\(y):\(String(format: "%.2f", shades.min() ?? 1))")
       }
+      let scrolls = host.scrollViews.map { "y=\($0.contentView.bounds.origin.y) doc=\($0.documentView?.frame.height ?? -1) clip=\($0.contentView.bounds.height)" }.joined(separator: ";")
+      print("SCROLL \(name) \(step) \(scrolls)")
       let centre = ListMotionFrameTests.inkCentre(of: frame, in: ListMotionFrameTests.titlePoints)
       print("PROBE \(name) \(step) centre=\(String(describing: centre)) foot=\(String(describing: ListMotionFrameTests.textEditFoot(in: frame))) \(rows.joined(separator: " "))")
     }

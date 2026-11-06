@@ -11,7 +11,7 @@ jobs:
       - name: Probe
         env:
           PROBE_DIR: ${{ runner.temp }}/probe
-        run: swift test --package-path app --filter ProbeMotionTests 2>&1 | grep -E "PROBE|✘|✔|error:" || true
+        run: swift test --package-path app --filter ProbeMotionTests 2>&1 | grep -E "SCROLL|PROBE|✘|✔|error:" || true
       - uses: actions/upload-artifact@v4
         with:
           name: probe
