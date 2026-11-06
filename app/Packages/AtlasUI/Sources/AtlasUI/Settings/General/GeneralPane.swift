@@ -67,11 +67,7 @@ struct GeneralPane: View {
       }
     case .keepDays:
       ListRowBody("Days", size: .compact) {
-        Stepper(value: $state.keepDays, in: SettingsGeneralState.keepDaysRange) {
-          Text(state.keepDays == 1 ? "1 day" : "\(state.keepDays) days")
-            .font(Typography.digits(.callout))
-        }
-        .fixedSize()
+        number("Days", value: $state.keepDays, in: SettingsGeneralState.keepDaysRange)
       }
     case .typedText:
       ListRowBody("Typed text", detail: "What an agent typed, kept beside its picture", size: .compact) {
@@ -79,15 +75,12 @@ struct GeneralPane: View {
       }
     case .typedTextLimit:
       ListRowBody("Characters", size: .compact) {
-        Stepper(
+        number(
+          "Characters",
           value: $state.typedTextLimit,
           in: SettingsGeneralState.typedTextRange,
           step: SettingsGeneralState.typedTextStep
-        ) {
-          Text("Up to \(state.typedTextLimit)")
-            .font(Typography.digits(.callout))
-        }
-        .fixedSize()
+        )
       }
     case .stored:
       ListRow(
@@ -105,6 +98,37 @@ struct GeneralPane: View {
         size: .compact
       ) { state.notify.toggle() }
     }
+  }
+
+  /// A number the person types, or steps by `step`: it takes effect once they press Return or leave the field.
+  ///
+  /// - Parameters:
+  ///   - label: What the number is, read aloud.
+  ///   - value: The number.
+  ///   - range: What it may be; a number typed outside it is taken as its nearer end.
+  ///   - step: How far a step moves it.
+  /// - Returns: The field and its stepper.
+  private func number(
+    _ label: String,
+    value: Binding<Int>,
+    in range: ClosedRange<Int>,
+    step: Int = 1
+  ) -> some View {
+    let within = Binding {
+      value.wrappedValue
+    } set: {
+      value.wrappedValue = min(max($0, range.lowerBound), range.upperBound)
+    }
+    return HStack(spacing: Spacing.xs) {
+      TextField(label, value: within, format: .number.grouping(.never))
+        .textFieldStyle(.roundedBorder)
+        .multilineTextAlignment(.trailing)
+        .font(Typography.digits(.callout))
+        .frame(width: SettingsLayout.numberWidth)
+      Stepper(label, value: within, in: range, step: step)
+        .labelsHidden()
+    }
+    .fixedSize()
   }
 
   /// How long pictures are kept: three days, seven, or a number the person chooses.
