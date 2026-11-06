@@ -136,6 +136,9 @@ pub struct SessionPin {
 /// The daemon capability to keep background jobs, as its hello lists it.
 pub const JOBS: &str = "jobs";
 
+/// The daemon capability to mute the helper's apps, as its hello lists it.
+pub const SOUND: &str = "helper-sound";
+
 /// Readiness-driven, unencoded RGB frames on a persistent connection.
 pub const RGB_STREAM: &str = "rgb-stream-v1";
 /// The raw frame protocol with preview sizes through 4096 pixels.
@@ -329,6 +332,12 @@ requests! { request =>
     "job" Job(JobRequest) = job(request).map(Request::Job),
     /// Part of a file in the helper, or its digest.
     "read" Read(ReadRequest) = read(request).map(Request::Read),
+    /// Whether the helper's apps can be heard; with `muted`, change it.
+    "sound" Sound { muted: Option<bool> } = Ok(Request::Sound {
+        muted: optional(&request["muted"], |value| {
+            value.as_bool().ok_or_else(|| bad("\"muted\" must be true or false"))
+        })?,
+    }),
 }
 
 /// Admission and lost-reply handling are chosen together for every request.
@@ -381,6 +390,8 @@ impl Request {
                 (Any, None, Mutation("job-stop"))
             }
             Self::Job(JobRequest::Show { .. } | JobRequest::Log { .. }) => (Any, None, Read("job")),
+            Self::Sound { muted: None } => (Any, None, Read("sound")),
+            Self::Sound { muted: Some(_) } => (Any, None, Mutation("sound")),
         };
         Policy {
             console,

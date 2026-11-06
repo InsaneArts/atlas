@@ -1485,3 +1485,28 @@ fn a_listing_of_elements_without_frames_keeps_its_place_column() {
         shown.out
     );
 }
+
+#[test]
+fn the_helpers_sound_reads_as_muted_heard_or_why_not() {
+    let muted = show(
+        View::Sound,
+        json!({"ok": true, "helperSound": "muted", "reason": null}),
+    );
+    assert_eq!(muted.out, "✓ Apps in the helper are muted");
+
+    let on = show(
+        View::Sound,
+        json!({"ok": true, "helperSound": "on", "reason": null}),
+    );
+    assert_eq!(on.out, "✓ Apps in the helper can be heard");
+
+    let unavailable = show(
+        View::Sound,
+        json!({"ok": true, "helperSound": "unavailable",
+            "reason": "Switch to the helper and allow Atlas when macOS asks."}),
+    );
+    assert_eq!(
+        unavailable.out,
+        "✗ Switch to the helper and allow Atlas when macOS asks."
+    );
+}

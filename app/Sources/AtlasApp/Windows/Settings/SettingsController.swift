@@ -66,6 +66,7 @@ final class SettingsController {
       agents: agents,
       icons: icons,
       notify: notify,
+      sound: actions.sound.button,
       pictures: pictures,
       facts: SettingsFacts(
         status: helper.status,
@@ -114,8 +115,8 @@ final class SettingsController {
   }
 
   /// Writes what changed in the General pane where each value belongs: Open at Login through the panel's command,
-  /// the picture to the main window or its saved rate, the pictures of agent actions to Atlas's settings, and Notify
-  /// me to the saved choices.
+  /// the picture to the main window or its saved rate, muting the helper through `atlas sound`, the pictures of agent
+  /// actions to Atlas's settings, and Notify me to the saved choices.
   ///
   /// - Parameter general: The pane as the person left it.
   func update(_ general: SettingsGeneralState) {
@@ -128,6 +129,10 @@ final class SettingsController {
     if general.picture != shown.picture {
       links.choosePicture(general.picture)
       revision += 1
+    }
+    if general.muteHelper != shown.muteHelper {
+      // Unstructured, as an edit is synchronous: the change runs beside it.
+      Task { await setHelperSound(muted: general.muteHelper) }
     }
     updatePictures(general)
     if general.notify != notify {
@@ -147,12 +152,13 @@ final class SettingsController {
     if tab == .agents { readAgents() }
   }
 
-  /// The window came forward: what the links read is read again, and the agents, the projects and the pictures of
-  /// agent actions afresh.
+  /// The window came forward: what the links read is read again, and the agents, the projects, the helper's sound
+  /// and the pictures of agent actions afresh.
   func cameForward() {
     revision += 1
     readAgents()
-    // Unstructured, as coming forward is synchronous: the reading runs beside it.
+    // Unstructured, as coming forward is synchronous: the readings run beside it.
+    Task { await readHelperSound() }
     Task { await readPictures() }
   }
 

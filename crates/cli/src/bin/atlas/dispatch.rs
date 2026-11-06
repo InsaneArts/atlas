@@ -287,6 +287,10 @@ async fn carry_out(
         Command::Setup(args) => setup(config, client, args).await,
         Command::Config(args) => settings(config, client, &args),
         Command::Status => Ok(client()?.status().await),
+        Command::Sound { state: None } => atlas_client::sound::show(&client()?).await,
+        Command::Sound { state: Some(state) } => {
+            atlas_client::sound::set(&client()?, state == cli::OnOff::Off).await
+        }
         Command::Activity(args) => activity(&client()?, host, &args),
         Command::Doctor(args) if args.login_timing => atlas_core::login_log::timing(),
         Command::Doctor(args) => Ok(doctor::report(&client()?, args.verbose).await),

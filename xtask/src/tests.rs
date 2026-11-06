@@ -221,7 +221,15 @@ fn the_info_plist_is_valid_and_names_the_consented_executable() {
         r#""CFBundleShortVersionString":"1.2.3""#,
         r#""LSUIElement":true"#,
         r#""LSMinimumSystemVersion":"14.0""#,
+        r#""NSAudioCaptureUsageDescription":"Atlas silences apps in its helper login so they don't play on your speakers.""#,
     ] {
         assert!(json.contains(expected), "{expected} in {json}");
     }
+}
+
+#[test]
+fn the_app_may_record_audio_and_nothing_else_beyond_the_hardened_runtime() {
+    let json = plist_json(&entitlements());
+
+    assert_eq!(json, r#"{"com.apple.security.device.audio-input":true}"#);
 }

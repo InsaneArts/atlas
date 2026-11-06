@@ -16,6 +16,10 @@
         return panelIdle
       case .togglePause:
         return state.picture.pause.isPaused ? panelIdle : panelPaused
+      case .toggleSound:
+        var next = state
+        next.picture.sound = HelperSoundButton(isMuted: !state.picture.sound.isMuted)
+        return next
       case .openAtlas, .openScreen, .openActivity, .openSession, .showAllSessions, .askRecover, .askSwitch,
         .openSettings,
         .showMore:

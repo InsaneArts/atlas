@@ -34,11 +34,13 @@ dispatch2.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = ["std", "NSImage", "NSRunningApplication", "NSWorkspace", "libc"] }
 objc2-application-services = { workspace = true, features = ["std", "HIServices", "AXError", "AXUIElement", "AXValue", "libc"] }
+objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "block2", "dispatch2", "objc2", "objc2-core-audio-types", "objc2-foundation"] }
+objc2-core-audio-types = { workspace = true, features = ["std", "CoreAudioBaseTypes"] }
 objc2-core-foundation = { workspace = true, features = ["std", "block2", "CFArray", "CFCGTypes", "CFData", "CFDictionary", "CFError", "CFNotificationCenter", "CFNumber", "CFRunLoop", "CFString", "CFURL"] }
 objc2-core-graphics = { workspace = true, features = ["std", "CGBitmapContext", "CGColorSpace", "CGContext", "CGDataProvider", "CGDirectDisplay", "CGEvent", "CGEventSource", "CGEventTypes", "CGImage", "CGRemoteOperation", "CGSession", "CGWindow"] }
 objc2-core-media = { workspace = true, features = ["std", "CMFormatDescription", "CMSampleBuffer", "CMSync", "CMTime", "objc2-core-video"] }
 objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVBuffer", "CVPixelBuffer", "CVImageBuffer", "CVReturn"] }
-objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSError", "NSObject", "NSString"] }
+objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSEnumerator", "NSError", "NSObject", "NSString", "NSUUID", "NSValue"] }
 objc2-image-io = { workspace = true, features = ["std", "CGImageDestination", "CGImageSource", "objc2-core-graphics"] }
 objc2-screen-capture-kit = { workspace = true, features = ["std", "SCStream", "SCShareableContent", "block2", "dispatch2", "objc2-core-foundation", "objc2-core-graphics", "objc2-core-media"] }
 objc2-security = { workspace = true, features = ["std", "AuthSession", "Authorization"] }

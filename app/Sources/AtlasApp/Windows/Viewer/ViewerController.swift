@@ -69,6 +69,7 @@ final class ViewerController {
       running: actions.running,
       isOnConsole: actions.console.isOnConsole,
       agentRequests: actions.agentRequests,
+      sound: actions.sound.button,
       controlBusy: actions.barrier.isBusy,
       agents: helperFacts.agents,
       loggedInAt: helperFacts.loggedInAt,
@@ -115,6 +116,8 @@ final class ViewerController {
       chooseLibrary(place)
     case .menu(let command): perform(command)
     case .togglePause: togglePause()
+    // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
+    case .toggleSound: Task { await actions.sound.toggle() }
     case .takeControl: Task { await control.takeControlOnScreen() }
     case .giveBack: control.releaseControl()
     case .stopAgent: Task { await setStopped(true) }

@@ -49,7 +49,10 @@ enum PanelLayout {
   static let captionInset = Spacing.s
   /// 26: the round pause button on the picture, and the expand symbol's circle.
   static let pauseButton = ControlHeight.xsPlus
-  /// The room the caption leaves at its right for the pause button: the button and its inset on both sides.
+  /// 4: between the sound button and the pause button under it on the picture.
+  static let cornerGap = Spacing.xs
+  /// The room the caption leaves at its right for the pause button, the sound button standing above it: the button
+  /// and its inset on both sides.
   static let captionTrailing = pauseButton + captionInset * 2
   /// The widest the caption may run: the picture less its inset on the left and the pause button's room.
   static let captionWidth = picture.width - captionInset - captionTrailing

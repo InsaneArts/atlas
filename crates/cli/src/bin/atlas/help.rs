@@ -176,6 +176,10 @@ const GROUPS: &[(&str, &[Entry])] = &[
             ("setup", &[]),
             ("config", &[]),
             (
+                "sound",
+                &["atlas sound", "atlas sound on", "atlas sound off"],
+            ),
+            (
                 "agent-guide",
                 &[
                     "atlas agent-guide",

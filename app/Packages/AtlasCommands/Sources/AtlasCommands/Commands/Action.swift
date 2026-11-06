@@ -56,6 +56,10 @@ public enum Action: Sendable, Equatable {
   case checkForUpdate
   /// Install the newer Atlas, checking its signature first.
   case update
+  /// Read whether apps in the helper can be heard.
+  case helperSound
+  /// Keep apps in the helper silent, or let them play.
+  case setHelperSound(muted: Bool)
   /// Read Atlas's settings with how many pictures of agent actions this Mac keeps, and their size.
   case picturesSummary
   /// Keep pictures of the helper's screen around each agent action, or stop keeping them.
@@ -116,6 +120,8 @@ public enum Action: Sendable, Equatable {
     case .checkForUpdate: ["update", "--check"]
     // The person confirmed in Settings.
     case .update: ["update"]
+    case .helperSound: ["sound"]
+    case .setHelperSound(let muted): ["sound", muted ? "off" : "on"]
     case .picturesSummary: ["config", "--pictures-summary"]
     // The person turned the switch in Settings.
     case .keepPictures(let on): ["config", "--pictures-before-actions", on ? "on" : "off"]

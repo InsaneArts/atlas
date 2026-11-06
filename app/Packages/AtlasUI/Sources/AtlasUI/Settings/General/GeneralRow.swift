@@ -4,6 +4,8 @@ enum GeneralRow: CaseIterable, Identifiable {
   case openAtLogin
   /// How often the screen updates, a popup.
   case picture
+  /// Mute the helper, a switch.
+  case muteHelper
   /// Pictures of agent actions, a switch.
   case picturesBefore
   /// How long pictures are kept, a popup.
@@ -19,8 +21,8 @@ enum GeneralRow: CaseIterable, Identifiable {
   /// Notify me, a switch.
   case notify
 
-  /// The rows of the pane's first section: how Atlas starts and shows the helper.
-  static let start: [GeneralRow] = [.openAtLogin, .picture]
+  /// The rows of the pane's first section: how Atlas starts, and how the helper shows and sounds.
+  static let start: [GeneralRow] = [.openAtLogin, .picture, .muteHelper]
   /// The rows of "Activity": pictures of agent actions, each stepper only while its popup asks for a number.
   ///
   /// - Parameter state: The pane.

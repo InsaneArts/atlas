@@ -98,7 +98,7 @@ The helper is a second account on your Mac, not a virtual machine.
 
 | The helper has its own                                  | It shares with you                                                            |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Pointer, keyboard focus and screen                      | Speakers: its sound plays on yours                                            |
+| Pointer, keyboard focus and screen                      | Speakers: its sound plays on yours unless Atlas mutes it                      |
 | Clipboard                                               | Network, including `localhost` servers on both sides                          |
 | Files, settings and app data in its home                | `/Users/Shared`, external drives and folders in your home that aren't private |
 | Keychain and sign-ins: none, unless someone signs it in | CPU, memory and graphics                                                      |
@@ -114,7 +114,9 @@ With no viewer showing it, an idle helper uses little CPU. Watching costs more: 
 
 ### Sound
 
-Sound from apps in the helper plays on your speakers, and muting your Mac mutes both accounts. Atlas has no helper-only mute yet. Agents close apps that make sound when they're done; ask yours to avoid them during a call.
+Atlas keeps apps in the helper silent on your speakers, and your own sound is never touched. Muting needs one permission in the helper: the first time you switch to it, macOS asks to let Atlas record the helper's audio. Allow it there; Atlas never reads that audio, it only stops it reaching your speakers. Nothing is muted until you allow it, and `atlas doctor` says so.
+
+Turn the helper's sound on with `atlas sound on` or in Atlas › Settings › General, and off again with `atlas sound off`; `atlas sound` says which it is. The helper keeps this choice itself. After the helper's Atlas restarts, its apps can be heard for a moment before the mute is back. Muting your Mac still mutes both accounts.
 
 ### Apps you also use
 

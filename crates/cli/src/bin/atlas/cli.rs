@@ -422,6 +422,14 @@ pub(super) enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Show whether apps in the helper can be heard, or turn their sound off or on.
+    ///
+    /// Atlas keeps apps in the helper silent on your speakers unless you turn their sound on.
+    Sound {
+        /// off keeps them silent; on lets them play.
+        #[arg(value_enum)]
+        state: Option<OnOff>,
+    },
     /// Lock the screen so you can switch to the helper.
     ///
     /// You log in on the lock screen; Atlas never sees a password.

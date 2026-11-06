@@ -1,5 +1,5 @@
 /// The panel's picture: the helper's screen in the look of its state, with the newest action over its corner while an
-/// agent works and the pause button on it; or, with no screen to show, the empty stage.
+/// agent works and the sound and pause buttons on it; or, with no screen to show, the empty stage.
 public struct PanelPictureState: Equatable, Sendable {
   /// How the picture looks.
   public enum Look: Equatable, Sendable {
@@ -27,6 +27,8 @@ public struct PanelPictureState: Equatable, Sendable {
   public var caption: PanelCaption?
   /// The pause button on the picture: whether the picture is paused, and its words.
   public var pause: PanelPause
+  /// The sound button beside the pause: mutes the helper or lets it play.
+  public var sound: HelperSoundButton
 
   /// Creates the picture's state.
   ///
@@ -35,11 +37,19 @@ public struct PanelPictureState: Equatable, Sendable {
   ///   - picture: The screen; nil shows the empty stage.
   ///   - caption: The newest action while an agent works; nil shows none.
   ///   - pause: The pause button's state and words.
-  public init(look: Look, picture: DesktopPicture? = nil, caption: PanelCaption? = nil, pause: PanelPause) {
+  ///   - sound: The sound button beside the pause; muted by default.
+  public init(
+    look: Look,
+    picture: DesktopPicture? = nil,
+    caption: PanelCaption? = nil,
+    pause: PanelPause,
+    sound: HelperSoundButton = HelperSoundButton()
+  ) {
     self.look = look
     self.picture = picture
     self.caption = caption
     self.pause = pause
+    self.sound = sound
   }
 
   /// Whether the frame shows the screen, with its pause button: every look but the empty stage's.

@@ -39,6 +39,14 @@ target=/Applications
 dest="$target/Atlas.app"
 installed="$dest/Contents/MacOS/atlas"
 
+# Whether the app at $1 may be replaced: nothing is there, or it is Atlas by
+# its bundle id, signed or not. Another app named Atlas is left alone.
+replaceable() {
+	[ -e "$1" ] || [ -L "$1" ] || return 0
+	[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null)" = "$IDENTIFIER" ]
+}
+replaceable "$dest" || fail "another app named Atlas is in $target. Move or rename it, then run this again."
+
 # Whether Atlas was set up on this Mac: a live setup record, setup-<uid>.json.
 # Archived records carry a timestamp in their name and do not count.
 set_up() {
