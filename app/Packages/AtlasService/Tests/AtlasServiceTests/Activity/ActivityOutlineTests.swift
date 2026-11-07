@@ -87,6 +87,8 @@ struct ActivityOutlineTests {
         == ActivityGist(kind: .pointer, count: 3, app: "Google Chrome")
     )
     #expect(ActivityGist(counts: ["environment": 2], apps: [:]) == nil)
+    #expect(ActivityGist(counts: ["click": .max, "drag": 1], apps: [:])?.count == .max, "huge counts saturate")
+    #expect(ActivityGist(counts: ["type": .max, "key": 1], apps: [:])?.count == .max)
     #expect(ActivityGist(counts: [:], apps: ["Notes": 1]) == nil)
   }
 }

@@ -29,7 +29,8 @@ public struct ActivityGist: Equatable, Sendable {
   init?(kinds: [ActivityAction: Int], app: String?) {
     var counted: [ActivityAction: Int] = [:]
     for (kind, count) in kinds where kind != .control {
-      counted[kind == .keys ? .typing : kind, default: 0] += count
+      let said = kind == .keys ? ActivityAction.typing : kind
+      counted[said] = Self.adding(count, to: counted[said] ?? 0)
     }
     guard
       let most = Self.preference.max(by: { (counted[$0] ?? 0, -Self.rank($0)) < (counted[$1] ?? 0, -Self.rank($1)) }),
@@ -48,7 +49,7 @@ public struct ActivityGist: Equatable, Sendable {
     var kinds: [ActivityAction: Int] = [:]
     for (verb, count) in counts {
       guard let kind = ActivityAction.verb(verb) else { continue }
-      kinds[kind, default: 0] += count
+      kinds[kind] = Self.adding(count, to: kinds[kind] ?? 0)
     }
     let app = apps.filter { $0.value > 0 }
       .max { ($0.value, $1.key) < ($1.value, $0.key) }?
@@ -58,6 +59,17 @@ public struct ActivityGist: Equatable, Sendable {
 
   /// The kinds a gist can say, the first winning among equals.
   static let preference: [ActivityAction] = [.typing, .pointer, .window, .scroll, .screenshot, .command]
+
+  /// A count added to a total, saturating, so counts a record kept as large as they come never trap.
+  ///
+  /// - Parameters:
+  ///   - count: The count.
+  ///   - total: The total so far.
+  /// - Returns: The total, capped at the largest count.
+  private static func adding(_ count: Int, to total: Int) -> Int {
+    let (sum, overflow) = total.addingReportingOverflow(count)
+    return overflow ? .max : sum
+  }
 
   /// A kind's place in ``preference``.
   ///

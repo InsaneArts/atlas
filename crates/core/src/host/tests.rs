@@ -407,6 +407,10 @@ fn a_temporary_folder_names_no_project_but_a_folder_inside_one_does() {
     assert_eq!(project_folder(&system), None);
     if let Ok(resolved) = fs::canonicalize(&system) {
         assert_eq!(project_folder(&resolved), None);
+        // The other spelling of a resolved $TMPDIR: /var for /private/var.
+        if let Ok(unresolved) = resolved.strip_prefix("/private") {
+            assert_eq!(project_folder(&Path::new("/").join(unresolved)), None);
+        }
     }
     assert_eq!(project_folder(Path::new("/tmp")), None);
     assert_eq!(project_folder(Path::new("/private/tmp/")), None);

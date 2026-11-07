@@ -429,20 +429,27 @@ pub(crate) fn project_folder(directory: &Path) -> Option<String> {
 }
 
 /// Whether `folder` is a temporary folder itself: the system's own
-/// (`$TMPDIR`), or `/tmp`, by either spelling of each.
+/// (`$TMPDIR`), or `/tmp`, by any spelling of each, as written or with
+/// its links resolved.
 fn temporary(folder: &Path) -> bool {
-    let system = std::env::temp_dir();
-    let resolved = fs::canonicalize(&system).ok();
-    let folder = folder.components().collect::<PathBuf>();
+    let spellings = |path: &Path| {
+        [
+            Some(path.components().collect::<PathBuf>()),
+            fs::canonicalize(path).ok(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+    };
+    let folder = spellings(folder);
     [
-        Some(system),
-        resolved,
-        Some(PathBuf::from("/tmp")),
-        Some(PathBuf::from("/private/tmp")),
+        std::env::temp_dir(),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
     ]
-    .into_iter()
-    .flatten()
-    .any(|temporary| temporary.components().collect::<PathBuf>() == folder)
+    .iter()
+    .flat_map(|temporary| spellings(temporary))
+    .any(|temporary| folder.contains(&temporary))
 }
 
 #[cfg(test)]
