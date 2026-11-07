@@ -27,7 +27,7 @@ pub mod source;
 mod stream;
 
 pub use raw::RawShot;
-pub use stream::{stop_display_stream, stream_diagnostics, stream_display_rgb};
+pub use stream::{recorder_restarted, stop_display_stream, stream_diagnostics, stream_display_rgb};
 
 /// premultipliedFirst | byteOrder32Little: the native BGRA layout.
 const BGRA: u32 = CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0;

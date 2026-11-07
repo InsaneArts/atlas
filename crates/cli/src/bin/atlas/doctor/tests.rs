@@ -169,3 +169,70 @@ fn doctor_warns_when_the_helper_should_be_silent_and_is_not() {
     }
     assert_eq!(sound_warning(&json!({"ok": false})), None);
 }
+
+fn with_recorder(footprint: Value, failures: Value) -> Value {
+    let mut report = ready();
+    report["warnings"] = json!([]);
+    report["session"] = json!({"daemon": {"resources": {
+        "footprint": 1,
+        "screenRecorder": {"footprint": footprint, "resets": 0, "resetFailures": failures},
+    }}});
+    report
+}
+
+#[test]
+fn a_recorder_the_helper_cannot_restart_gets_a_warning_with_the_way_to_reset_it() {
+    // Atlas.app runs doctor as the person, verbose.
+    let asking = asker(Actor::Viewer, None, false);
+    let mut report = with_recorder(json!(6 * GIGABYTE + GIGABYTE / 2), json!(RECORDER_TRIES));
+    recorder_report(&mut report, asking);
+    let warning = "The helper's screen recorder is using 6.5 GB of memory and Atlas could not \
+                   restart it. Log the helper out and back in to reset it.";
+    assert_eq!(report["warnings"], json!([warning]));
+    assert_eq!(
+        atlas_client::capability::summary(report)["warnings"],
+        json!([warning])
+    );
+}
+
+#[test]
+fn a_large_screen_recorder_the_helper_restarts_on_its_own_gets_no_warning() {
+    for failures in [
+        json!(0),
+        json!(RECORDER_TRIES - 1),
+        Value::Null,
+        json!("3"),
+        json!(-1),
+    ] {
+        let mut report = with_recorder(json!(6 * GIGABYTE), failures.clone());
+        recorder_report(&mut report, Asker::Person);
+        assert_eq!(report["warnings"], json!([]), "{failures}");
+    }
+}
+
+#[test]
+fn an_unknown_screen_recorder_footprint_gets_no_warning() {
+    for footprint in [Value::Null, json!("6 GB"), json!(-1)] {
+        let mut report = with_recorder(footprint.clone(), json!(RECORDER_TRIES));
+        recorder_report(&mut report, Asker::Person);
+        assert_eq!(report["warnings"], json!([]), "{footprint}");
+    }
+}
+
+#[test]
+fn an_agents_verbose_report_keeps_the_figures_but_not_the_logout_warning() {
+    let own = Key::of(Host::Claude, "own");
+    for interactive in [false, true] {
+        for asking in [
+            asker(Actor::Agent, Some(&own), interactive),
+            asker(Actor::Agent, None, false),
+        ] {
+            let mut report = with_recorder(json!(6 * GIGABYTE), json!(RECORDER_TRIES));
+            recorder_report(&mut report, asking);
+            assert_eq!(report["warnings"], json!([]), "{asking:?}");
+            let recorder = &report["session"]["daemon"]["resources"]["screenRecorder"];
+            assert_eq!(recorder["footprint"], 6 * GIGABYTE);
+            assert_eq!(recorder["resetFailures"], RECORDER_TRIES);
+        }
+    }
+}

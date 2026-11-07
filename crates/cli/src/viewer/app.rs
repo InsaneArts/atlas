@@ -179,9 +179,14 @@ async fn start_pipe(
             viewer.remember_committed(key, epoch, at);
         }
     });
-    let service = crate::frame_pipe::service::start(client, viewer.frame_width, witness)
-        .await
-        .ok()?;
+    let service = crate::frame_pipe::service::start(
+        client,
+        viewer.frame_width,
+        witness,
+        viewer.input_sent.clone(),
+    )
+    .await
+    .ok()?;
     *unpoisoned(&viewer.pipe) = Some(service.descriptor().clone());
     Some(service)
 }

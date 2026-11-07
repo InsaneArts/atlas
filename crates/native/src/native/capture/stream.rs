@@ -1,5 +1,13 @@
-//! Experimental ScreenCaptureKit source. Objective-C state stays on one native
+//! The helper's live picture from ScreenCaptureKit: one stream, kept open
+//! while its owner wants pictures. Objective-C state stays on one native
 //! worker run loop. Callbacks send only checked, owned RGB bytes to callers.
+//!
+//! macOS's screen recorder keeps part of every picture a one-shot capture
+//! asks it for, but not of the samples one open stream delivers. A stream
+//! sends a sample within a refresh of any change, unchanged samples for a
+//! few seconds after, and then nothing until the screen changes again. So
+//! while it says the screen is unchanged, or says nothing, its newest
+//! picture is served again rather than captured anew.
 #![allow(
     unsafe_code,
     reason = "FFI: ScreenCaptureKit callbacks, CoreMedia clocks and locked pixel buffers"
@@ -47,16 +55,46 @@ use std::{
     time::{Duration, Instant},
 };
 
-const WAIT: Duration = Duration::from_millis(35);
+/// How long a request waits for its answer. A new stream sends its first
+/// picture in about 120 ms, and the caller refuses a frame half a second old
+/// anyway.
+const WAIT: Duration = Duration::from_millis(250);
+/// How long the first request after macOS's screen recorder was restarted
+/// waits: a stream on a new recorder sends its first picture in 200–350 ms.
+/// A picture still has to reach the caller within its half second, even a
+/// CoreGraphics one taken after this wait.
+const RESTARTED_WAIT: Duration = Duration::from_millis(400);
+/// How long a request waits before a silent stream's newest picture answers
+/// it. A stream sends a sample within a refresh of any change, unchanged
+/// samples for a few seconds after, and then nothing until the next change.
+const SILENCE: Duration = Duration::from_millis(100);
+/// How often a request still waiting after [`SILENCE`] asks again.
+const SILENCE_CHECK: Duration = Duration::from_millis(20);
+/// How long the session check before a CoreGraphics capture may take before
+/// it says WindowServer stalled the whole session; it takes well under a
+/// millisecond otherwise.
+const STALLED: Duration = Duration::from_millis(20);
+/// How long a stream may go without a valid sample before it is replaced,
+/// so a stream that stalled without saying so shows a stale picture no
+/// longer than this.
+const RENEW: Duration = Duration::from_secs(10);
 const STOP_WAIT: Duration = Duration::from_millis(200);
+/// How far ahead of its callback a sample may be stamped. Its display time
+/// is the refresh that shows it, a few milliseconds away at most; a clock in
+/// other units would be off by far more.
+const LEAD: Duration = Duration::from_millis(20);
 
 #[derive(Default)]
 struct Diagnostics {
     requests: AtomicU64,
     native_frames: AtomicU64,
+    reused_frames: AtomicU64,
+    renewals: AtomicU64,
     fallbacks: AtomicU64,
     idle_hints: AtomicU64,
     timeouts: AtomicU64,
+    /// Requests whose wait ran into a WindowServer stall.
+    stalls: AtomicU64,
     callbacks: AtomicU64,
     no_request: AtomicU64,
     missing_metadata: AtomicU64,
@@ -90,12 +128,19 @@ impl Diagnostics {
         };
         *self.last_error.lock().unwrap_or_else(|p| p.into_inner()) = Some((reason, error.code));
     }
+    /// A request answered by a CoreGraphics capture instead, and why.
+    fn fell_back(&self, reason: &'static str) {
+        *self.last_fallback.lock().unwrap_or_else(|p| p.into_inner()) = Some(reason);
+        self.fallbacks.fetch_add(1, Ordering::Relaxed);
+    }
     fn snapshot(&self) -> Value {
         let value = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         let last_error = *self.last_error.lock().unwrap_or_else(|p| p.into_inner());
         json!({"requests":value(&self.requests),"nativeFrames":value(&self.native_frames),
+            "reusedFrames":value(&self.reused_frames),"renewals":value(&self.renewals),
             "fallbacks":value(&self.fallbacks),"idleHints":value(&self.idle_hints),
-            "timeouts":value(&self.timeouts),"callbacks":value(&self.callbacks),
+            "timeouts":value(&self.timeouts),"stalls":value(&self.stalls),
+            "callbacks":value(&self.callbacks),
             "noRequest":value(&self.no_request),"missingMetadata":value(&self.missing_metadata),
             "oldSamples":value(&self.old_samples),"futureSamples":value(&self.future_samples),
             "layoutErrors":value(&self.layout_errors),"setupStarts":value(&self.setup_starts),
@@ -154,6 +199,19 @@ fn checkpoint() -> u64 {
     unsafe { CMClock::convert_host_time_to_system_units(CMClock::host_time_clock().time()) }
 }
 
+/// `span` in mach ticks.
+fn ticks(span: Duration) -> u64 {
+    let micros = i64::try_from(span.as_micros()).unwrap_or(i64::MAX);
+    // SAFETY: a span in CoreMedia's host-time units; the conversion is
+    // linear, so it yields the same span in mach ticks.
+    unsafe { CMClock::convert_host_time_to_system_units(CMTime::new(micros, 1_000_000)) }
+}
+
+/// The latest display time a sample seen now may carry, in mach ticks.
+fn latest() -> u64 {
+    checkpoint().saturating_add(ticks(LEAD))
+}
+
 #[derive(Clone, PartialEq)]
 struct Key {
     epoch: InputEpoch,
@@ -162,6 +220,9 @@ struct Key {
     scale: f64,
 }
 struct Pending {
+    made: Instant,
+    /// When the stream's silence was last asked to answer it.
+    hushed: Option<Instant>,
     id: u64,
     checkpoint: u64,
     key: Key,
@@ -174,10 +235,23 @@ struct Slot {
     generation: AtomicU64,
     stopping: AtomicBool,
     preparing: AtomicBool,
+    /// Whether the screen recorder was restarted since the last request.
+    restarted: AtomicBool,
     failure: Mutex<Option<(Code, String)>>,
     diagnostics: Diagnostics,
 }
 impl Slot {
+    /// How long the next request, asked for at `asked`, still waits for its
+    /// picture: longer once, for the first one after the screen recorder was
+    /// restarted, and counted from `asked`.
+    fn wait(&self, asked: Instant) -> Duration {
+        let wait = if self.restarted.swap(false, Ordering::AcqRel) {
+            RESTARTED_WAIT
+        } else {
+            WAIT
+        };
+        wait.saturating_sub(asked.elapsed())
+    }
     fn quiescent(&self, running: bool) -> bool {
         !running
             && !self.preparing.load(Ordering::Acquire)
@@ -191,8 +265,15 @@ impl Slot {
 
     fn stop(&self) {
         self.stopping.store(true, Ordering::Release);
-        self.generation.fetch_add(1, Ordering::AcqRel);
+        self.invalidate();
         self.cancel();
+    }
+    /// End the current stream's right to answer. The pending request's lock
+    /// orders this against [`Slot::settle`]: a stream's answer lands either
+    /// before its invalidation or not at all.
+    fn invalidate(&self) {
+        let _pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        self.generation.fetch_add(1, Ordering::AcqRel);
     }
     fn failure(&self) -> Option<Error> {
         self.failure
@@ -202,19 +283,63 @@ impl Slot {
             .map(|(code, message)| Error::new(*code, message))
     }
     fn fail(&self, error: Error) {
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        self.failed(&mut pending, error);
+    }
+    /// [`Slot::fail`], with the pending request's lock already held.
+    fn failed(&self, pending: &mut Option<Pending>, error: Error) {
         *self.failure.lock().unwrap_or_else(|p| p.into_inner()) =
             Some((error.code, error.error.clone()));
         self.stopping.store(true, Ordering::Release);
         self.generation.fetch_add(1, Ordering::AcqRel);
-        if let Some(request) = self
-            .pending
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .take()
-        {
+        if let Some(request) = pending.take() {
             request.alive.store(false, Ordering::Release);
             let _ = request.reply.try_send(Err(error));
         }
+    }
+    /// [`Slot::fail`] for the stream of `generation`, unless that stream was
+    /// invalidated meanwhile; a newer stream answers the request then. False
+    /// says it was.
+    fn fail_from(&self, generation: u64, error: Error) -> bool {
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        if self.generation.load(Ordering::Acquire) != generation {
+            return false;
+        }
+        self.failed(&mut pending, error);
+        true
+    }
+    /// Hand on the answer of the stream of `generation`, unless that stream
+    /// was invalidated meanwhile: a newer stream answers the request then.
+    /// False says it was. A failure ends the stream and its request.
+    fn settle(&self, generation: u64, answer: Result<Option<(u64, RawShot)>>) -> bool {
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        if self.generation.load(Ordering::Acquire) != generation {
+            return false;
+        }
+        match answer {
+            Ok(Some((id, shot))) => Self::deliver(&mut pending, id, Ok(shot)),
+            Ok(None) => {}
+            Err(error) => {
+                drop(pending);
+                self.diagnostics.error("metadata", &error);
+                return self.fail_from(generation, error);
+            }
+        }
+        true
+    }
+    /// The pending request still unanswered after [`SILENCE`], at most
+    /// once every [`SILENCE_CHECK`].
+    fn overdue(&self) -> Option<u64> {
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        let request = pending.as_mut().filter(|request| {
+            request.alive.load(Ordering::Acquire)
+                && request.made.elapsed() >= SILENCE
+                && request
+                    .hushed
+                    .is_none_or(|asked| asked.elapsed() >= SILENCE_CHECK)
+        })?;
+        request.hushed = Some(Instant::now());
+        Some(request.id)
     }
     fn begin(&self, request: Pending) {
         let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
@@ -235,12 +360,16 @@ impl Slot {
         }
     }
     fn finish(&self, id: u64, result: Result<RawShot>) {
-        let mut slot = self.pending.lock().unwrap_or_else(|p| p.into_inner());
-        if slot.as_ref().is_some_and(|request| request.id == id) {
-            let request = slot.take().expect("matched request");
-            if request.alive.load(Ordering::Acquire) {
-                let _ = request.reply.try_send(result);
-            }
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        Self::deliver(&mut pending, id, result);
+    }
+    /// End `pending`, the locked request, with `result` when it is request
+    /// `id`; one cancelled meanwhile is told nothing.
+    fn deliver(pending: &mut Option<Pending>, id: u64, result: Result<RawShot>) {
+        if let Some(request) = pending.take_if(|request| request.id == id)
+            && request.alive.load(Ordering::Acquire)
+        {
+            let _ = request.reply.try_send(result);
         }
     }
 }
@@ -281,15 +410,26 @@ pub fn stream_diagnostics() -> Option<Value> {
     Some(cached.as_ref()?.slot.diagnostics.snapshot())
 }
 
-/// True means pixels came from a new SCK sample. False reports an explicitly
-/// revalidated synchronous CG fallback; no idle buffer receives a fresh key.
+/// The display as the stream shows it after this call began: a picture
+/// delivered after it, or the stream's newest picture when a sample after it
+/// says the screen is unchanged or the stream stays silent. A new stream's
+/// first picture is waited for, the wait counted from `asked`, when the
+/// caller was asked for it. True means the pixels came from the stream.
+/// False reports an explicitly revalidated synchronous CoreGraphics capture,
+/// taken only when the stream cannot start, failed, or had no picture in
+/// time; a wait that ran into a WindowServer stall lasts until a moment after
+/// the stall, which held up both alike.
 ///
 /// # Errors
 ///
 /// Returns an error when the session or display changed, consent is missing,
 /// the login is not graphical, the source is draining or failed, or neither
 /// the native sample nor the guarded fallback could be captured.
-pub fn stream_display_rgb(display: u32, limit: Option<u32>) -> Result<(RawShot, bool)> {
+pub fn stream_display_rgb(
+    display: u32,
+    limit: Option<u32>,
+    asked: Instant,
+) -> Result<(RawShot, bool)> {
     let epoch = InputEpoch::from_proof(&native::session_info()?, std::process::id())?;
     if epoch.display_id != u64::from(display) {
         return Err(changed());
@@ -325,6 +465,8 @@ pub fn stream_display_rgb(display: u32, limit: Option<u32>) -> Result<(RawShot, 
     let (send, receive) = mpsc::sync_channel(1);
     static SEQUENCE: AtomicU64 = AtomicU64::new(1);
     let request = Pending {
+        made: Instant::now(),
+        hushed: None,
         id: SEQUENCE.fetch_add(1, Ordering::Relaxed),
         checkpoint: tick,
         key,
@@ -334,9 +476,18 @@ pub fn stream_display_rgb(display: u32, limit: Option<u32>) -> Result<(RawShot, 
     let sent = !worker.slot.stopping.load(Ordering::Acquire)
         && worker.messages.try_send(Message::Capture(request)).is_ok();
     let waiting = Instant::now();
-    let outcome = sent
-        .then(|| receive.recv_timeout(WAIT))
+    let wait = worker.slot.wait(asked);
+    let mut outcome = sent
+        .then(|| receive.recv_timeout(wait))
         .and_then(std::result::Result::ok);
+    if sent && outcome.is_none() && !worker.slot.stopping.load(Ordering::Acquire) {
+        // A failed check earns no wait; the fallback's own check refuses.
+        let check = || {
+            let checking = Instant::now();
+            guard(&epoch).is_ok() && checking.elapsed() >= STALLED
+        };
+        outcome = after_stall(&receive, SILENCE, check, &worker.slot.diagnostics);
+    }
     worker
         .slot
         .diagnostics
@@ -370,15 +521,6 @@ pub fn stream_display_rgb(display: u32, limit: Option<u32>) -> Result<(RawShot, 
             guard(&epoch)?;
             let reason = if !sent {
                 "queue-full"
-            } else if outcome.as_ref().is_some_and(|result| {
-                result.as_ref().err().is_some_and(|error| {
-                    error
-                        .details
-                        .get("nativeFallback")
-                        .is_some_and(|value| value == "idle")
-                })
-            }) {
-                "idle"
             } else if outcome.is_some() {
                 "native-error"
             } else if worker.slot.preparing.load(Ordering::Acquire) {
@@ -386,23 +528,50 @@ pub fn stream_display_rgb(display: u32, limit: Option<u32>) -> Result<(RawShot, 
             } else {
                 "timeout"
             };
-            *worker
-                .slot
-                .diagnostics
-                .last_fallback
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()) = Some(reason);
-            worker
-                .slot
-                .diagnostics
-                .fallbacks
-                .fetch_add(1, Ordering::Relaxed);
+            worker.slot.diagnostics.fell_back(reason);
             Ok((shot, false))
         }
     }
 }
+/// The answer to a request whose wait ran out, once `check`, the session
+/// check a CoreGraphics capture needs first, has said whether it passed and
+/// was held up.
+/// One held up says WindowServer stalled the whole session: the stream could
+/// send nothing meanwhile, and a CoreGraphics capture would have waited out
+/// the same stall. So the stream then has up to `grace` more, from the end
+/// of the stall, to answer. An answer that came during the check is taken
+/// either way.
+fn after_stall(
+    receive: &Receiver<Result<RawShot>>,
+    grace: Duration,
+    check: impl FnOnce() -> bool,
+    diagnostics: &Diagnostics,
+) -> Option<Result<RawShot>> {
+    if check() {
+        diagnostics.stalls.fetch_add(1, Ordering::Relaxed);
+        return receive.recv_timeout(grace).ok();
+    }
+    receive.try_recv().ok()
+}
+
 fn fallback_allowed(error: &Error) -> bool {
     error.code == Code::Capture
+}
+
+/// Note that macOS's screen recorder was restarted, so the next request,
+/// which opens a stream on the new recorder, waits longer for its first
+/// picture. This never starts the stream worker.
+pub fn recorder_restarted() {
+    let worker = WORKER.get().and_then(|cached| {
+        cached
+            .lock()
+            .ok()?
+            .as_ref()
+            .map(|worker| worker.slot.clone())
+    });
+    if let Some(slot) = worker {
+        slot.restarted.store(true, Ordering::Release);
+    }
 }
 
 /// Invalidate delivery before waiting for the native stop and callback queue.
@@ -484,6 +653,34 @@ fn run(incoming: Receiver<Message>, slot: Arc<Slot>) {
             });
             expected.as_ref().map_or(Ok(()), guard)
         });
+        // A stream without a valid sample for too long is replaced before a
+        // request needs it, so its picture is proven again by the new
+        // stream's first.
+        let silent = RUNNING.with(|running| {
+            running
+                .borrow()
+                .as_ref()
+                .filter(|source| source.state.stale(RENEW))
+                .map(|source| source.key.clone())
+        });
+        if let Some(key) = silent
+            && !slot.stopping.load(Ordering::Acquire)
+        {
+            slot.diagnostics.renewals.fetch_add(1, Ordering::Relaxed);
+            if replace(&key, &slot, &run_loop) {
+                preparing = Some(key);
+            }
+        }
+        if let Some(id) = slot.overdue() {
+            RUNNING.with(|running| {
+                if let Some(source) = running.borrow().as_ref() {
+                    let state = source.state.clone();
+                    // On the stream's own queue, behind every sample it has
+                    // delivered, so none newer is still waiting there.
+                    source.queue.exec_async(move || state.silent(id));
+                }
+            });
+        }
         if slot.stopping.load(Ordering::Acquire) && stop_native(&slot, false).is_ok_and(|done| done)
         {
             slot.stopping.store(false, Ordering::Release);
@@ -539,17 +736,13 @@ fn run(incoming: Receiver<Message>, slot: Arc<Slot>) {
                     && (preparing.as_ref() != Some(&request.key)
                         || !slot.preparing.load(Ordering::Acquire))
                 {
-                    slot.generation.fetch_add(1, Ordering::AcqRel);
-                    if !stop_native(&slot, true).is_ok_and(|done| done) {
-                        slot.stopping.store(true, Ordering::Release);
+                    if !replace(&request.key, &slot, &run_loop) {
                         let _ = request
                             .reply
                             .try_send(Err(capture_error("The previous native stream is draining")));
                         continue;
                     }
                     preparing = Some(request.key.clone());
-                    *slot.failure.lock().unwrap_or_else(|p| p.into_inner()) = None;
-                    prepare(request.key.clone(), slot.clone(), run_loop.clone());
                 }
                 slot.begin(request);
             }
@@ -566,13 +759,75 @@ fn run(incoming: Receiver<Message>, slot: Arc<Slot>) {
     }
 }
 
+/// The newest complete picture of one stream, served again while the stream
+/// reports the screen unchanged.
+struct Newest(CFRetained<CVPixelBuffer>);
+
+// SAFETY: CoreVideo buffers are reference counted atomically. This one is
+// only read under a read-only base-address lock while its mutex is held, and
+// ScreenCaptureKit's buffer pool reuses no buffer while it is retained.
+unsafe impl Send for Newest {}
+
+/// Stop any stream and its callbacks, then start one for `key`. False while
+/// the old stream's stop is still unconfirmed; it then stays draining.
+fn replace(key: &Key, slot: &Arc<Slot>, run_loop: &CFRetained<CFRunLoop>) -> bool {
+    slot.invalidate();
+    if !stop_native(slot, true).is_ok_and(|done| done) {
+        slot.stopping.store(true, Ordering::Release);
+        return false;
+    }
+    *slot.failure.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    prepare(key.clone(), slot.clone(), run_loop.clone());
+    true
+}
+
 struct Callback {
     key: Key,
     slot: Arc<Slot>,
     generation: u64,
     active: AtomicBool,
+    /// Only samples of this stream reach it, in the order they were made, so
+    /// a new stream starts with none.
+    newest: Mutex<Option<Newest>>,
+    /// When this stream last delivered a sample of any kind, or started, in
+    /// mach ticks.
+    heard: AtomicU64,
+    /// The display time of its last valid sample, or when it started: a
+    /// complete or unchanged one stamped no earlier than the one before and
+    /// not ahead of [`LEAD`].
+    stamped: AtomicU64,
+    /// The session, display and consent check around every copy.
+    guard: fn(&InputEpoch) -> Result<()>,
 }
 impl Callback {
+    fn new(key: Key, slot: Arc<Slot>, generation: u64) -> Self {
+        Self {
+            key,
+            slot,
+            generation,
+            active: AtomicBool::new(true),
+            newest: Mutex::new(None),
+            heard: AtomicU64::new(checkpoint()),
+            stamped: AtomicU64::new(checkpoint()),
+            guard,
+        }
+    }
+
+    fn current(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+            && self.slot.generation.load(Ordering::Acquire) == self.generation
+    }
+
+    /// Whether this stream has delivered nothing at all for `span`.
+    fn quiet(&self, span: Duration) -> bool {
+        checkpoint().saturating_sub(self.heard.load(Ordering::Acquire)) > ticks(span)
+    }
+
+    /// Whether this stream has delivered no valid sample for `span`.
+    fn stale(&self, span: Duration) -> bool {
+        checkpoint().saturating_sub(self.stamped.load(Ordering::Acquire)) > ticks(span)
+    }
+
     fn stopped(&self, check: impl FnOnce() -> Result<()>) {
         if !self.active.swap(false, Ordering::AcqRel)
             || self.slot.generation.load(Ordering::Acquire) != self.generation
@@ -598,7 +853,7 @@ impl Callback {
             .diagnostics
             .delegate_stop_errors
             .fetch_add(1, Ordering::Relaxed);
-        self.slot.fail(error);
+        self.slot.fail_from(self.generation, error);
     }
 
     fn sample(&self, sample: &CMSampleBuffer) {
@@ -606,133 +861,207 @@ impl Callback {
             .diagnostics
             .callbacks
             .fetch_add(1, Ordering::Relaxed);
-        if !self.active.load(Ordering::Acquire)
-            || self.slot.generation.load(Ordering::Acquire) != self.generation
-        {
+        if !self.current() {
             return;
         }
+        self.heard.store(checkpoint(), Ordering::Release);
+        let answer = self.answer(sample);
+        self.settle(answer);
+    }
+
+    /// Answer request `id`, still unanswered after [`SILENCE`], with the
+    /// newest picture once the stream has delivered nothing at all for
+    /// [`SILENCE`]. This runs on the stream's sample queue, after every
+    /// sample it delivered: the stream saw no change since that picture,
+    /// as it sends a sample within a refresh of any. A stream without a
+    /// picture yet leaves the request waiting for its first, and one with no
+    /// valid sample for [`RENEW`] leaves it to the replacement.
+    fn silent(&self, id: u64) {
+        if !self.current() || !self.quiet(SILENCE) || self.stale(RENEW) {
+            return;
+        }
+        let newest = self.newest.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(Newest(buffer)) = newest.as_ref() else {
+            return;
+        };
+        if self.asking().is_none_or(|(asking, _)| asking != id) {
+            return;
+        }
+        let answer = self.copy(buffer, true).map(|shot| Some((id, shot)));
+        self.settle(answer);
+    }
+
+    /// Hand `answer` on, unless this stream was replaced or stopped
+    /// meanwhile: whoever did that owns the pending request now, and a new
+    /// stream answers it.
+    fn settle(&self, answer: Result<Option<(u64, RawShot)>>) {
+        if !self.active.load(Ordering::Acquire) {
+            return;
+        }
+        let failed = answer.is_err();
+        if self.slot.settle(self.generation, answer) && failed {
+            self.active.store(false, Ordering::Release);
+        }
+    }
+
+    /// The pending request for this stream, and its checkpoint.
+    fn asking(&self) -> Option<(u64, u64)> {
         let pending = self.slot.pending.lock().unwrap_or_else(|p| p.into_inner());
-        let Some(request) = pending
+        pending
             .as_ref()
             .filter(|r| r.key == self.key && r.alive.load(Ordering::Acquire))
-        else {
+            .map(|request| (request.id, request.checkpoint))
+    }
+
+    /// Note what `sample` says of the screen, then the picture it answers
+    /// the pending request with, if it answers it.
+    fn answer(&self, sample: &CMSampleBuffer) -> Result<Option<(u64, RawShot)>> {
+        let metadata = metadata(sample)?;
+        // Only this stream's sample queue takes this lock, and takes the
+        // pending request's only briefly while holding it.
+        let mut newest = self.newest.lock().unwrap_or_else(|p| p.into_inner());
+        // Every sample, asked for or not, says what the screen shows now: a
+        // valid complete one is the newest picture, a valid unchanged one
+        // keeps it, and anything else (blank, suspended, stopped, unreadable,
+        // unstamped, out of order or stamped too far ahead) leaves no picture
+        // that may be served again.
+        let previous = self.stamped.load(Ordering::Acquire);
+        let valid = metadata.as_ref().and_then(|metadata| {
+            metadata
+                .time
+                .filter(|time| (previous..=latest()).contains(time))
+                .map(|time| (metadata.status, time))
+        });
+        match valid {
+            Some((status, time)) if status == SCFrameStatus::Complete.0 as i64 => {
+                // SAFETY: a live SCK screen sample; its image buffer is retained.
+                *newest = unsafe { sample.image_buffer() }.map(Newest);
+                self.stamped.store(time, Ordering::Release);
+            }
+            Some((status, time)) if status == SCFrameStatus::Idle.0 as i64 => {
+                self.stamped.store(time, Ordering::Release);
+            }
+            _ => *newest = None,
+        }
+        let Some((id, after)) = self.asking() else {
             self.slot
                 .diagnostics
                 .no_request
                 .fetch_add(1, Ordering::Relaxed);
-            return;
+            return Ok(None);
         };
-        let (id, after) = (request.id, request.checkpoint);
-        drop(pending);
-        let result = (|| {
-            let Some(metadata) = metadata(sample)? else {
+        let Some(metadata) = metadata else {
+            self.slot
+                .diagnostics
+                .missing_metadata
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(None);
+        };
+        let reused = match eligibility(metadata, after, latest()) {
+            Eligibility::Frame => false,
+            Eligibility::Unchanged => {
+                self.slot
+                    .diagnostics
+                    .idle_hints
+                    .fetch_add(1, Ordering::Relaxed);
+                // Without a picture yet, the request waits for the first.
+                if newest.is_none() {
+                    return Ok(None);
+                }
+                true
+            }
+            Eligibility::Old => {
+                self.slot
+                    .diagnostics
+                    .old_samples
+                    .fetch_add(1, Ordering::Relaxed);
+                return Ok(None);
+            }
+            Eligibility::Future => {
+                self.slot
+                    .diagnostics
+                    .future_samples
+                    .fetch_add(1, Ordering::Relaxed);
+                return Ok(None);
+            }
+            Eligibility::Incomplete => {
                 self.slot
                     .diagnostics
                     .missing_metadata
                     .fetch_add(1, Ordering::Relaxed);
                 return Ok(None);
-            };
-            match eligibility(metadata, after, checkpoint()) {
-                Eligibility::Idle => {
-                    self.slot
-                        .diagnostics
-                        .idle_hints
-                        .fetch_add(1, Ordering::Relaxed);
-                    self.slot.finish(
-                        id,
-                        Err(capture_error(
-                            "The native display is idle; capture a fresh synchronous frame",
-                        )
-                        .with("nativeFallback", "idle".into())),
-                    );
-                    return Ok(None);
-                }
-                Eligibility::Old => {
-                    self.slot
-                        .diagnostics
-                        .old_samples
-                        .fetch_add(1, Ordering::Relaxed);
-                    return Ok(None);
-                }
-                Eligibility::Future => {
-                    self.slot
-                        .diagnostics
-                        .future_samples
-                        .fetch_add(1, Ordering::Relaxed);
-                    return Ok(None);
-                }
-                Eligibility::Incomplete => {
-                    self.slot
-                        .diagnostics
-                        .missing_metadata
-                        .fetch_add(1, Ordering::Relaxed);
-                    return Ok(None);
-                }
-                Eligibility::OtherStatus => return Ok(None),
-                Eligibility::Frame => {}
             }
-            // Only now consider image data. Rejected metadata never bypasses
-            // a pixel guard; both fresh epoch/consent checks still bracket copy.
-            let before = Instant::now();
-            let guarded = guard(&self.key.epoch);
+            Eligibility::OtherStatus => return Ok(None),
+        };
+        let Some(Newest(buffer)) = newest.as_ref() else {
             self.slot
                 .diagnostics
-                .guard_before_us
-                .store(elapsed_us(before), Ordering::Relaxed);
-            if let Err(error) = guarded {
-                self.slot
-                    .diagnostics
-                    .guard_errors
-                    .fetch_add(1, Ordering::Relaxed);
-                return Err(error.with("nativeReason", "guard".into()));
-            }
-            let copying = Instant::now();
-            let rgb = pixels(sample, self.key.width, self.key.height);
+                .layout_errors
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(capture_error("Native frame has no pixels")
+                .with("nativeReason", "format-layout".into()));
+        };
+        self.copy(buffer, reused).map(|shot| Some((id, shot)))
+    }
+
+    /// `buffer`'s pixels, bracketed by fresh session, display and consent
+    /// checks, while this stream is still the current one. `reused` says it
+    /// is the newest picture served again.
+    fn copy(&self, buffer: &CVPixelBuffer, reused: bool) -> Result<RawShot> {
+        let before = Instant::now();
+        let guarded = (self.guard)(&self.key.epoch);
+        self.slot
+            .diagnostics
+            .guard_before_us
+            .store(elapsed_us(before), Ordering::Relaxed);
+        if let Err(error) = guarded {
             self.slot
                 .diagnostics
-                .copy_us
-                .store(elapsed_us(copying), Ordering::Relaxed);
-            let rgb = rgb.map_err(|error| {
-                self.slot
-                    .diagnostics
-                    .layout_errors
-                    .fetch_add(1, Ordering::Relaxed);
-                error.with("nativeReason", "format-layout".into())
-            })?;
-            let after = Instant::now();
-            let guarded = guard(&self.key.epoch);
-            self.slot
-                .diagnostics
-                .guard_after_us
-                .store(elapsed_us(after), Ordering::Relaxed);
-            if let Err(error) = guarded {
-                self.slot
-                    .diagnostics
-                    .guard_errors
-                    .fetch_add(1, Ordering::Relaxed);
-                return Err(error.with("nativeReason", "guard".into()));
-            }
-            if !self.active.load(Ordering::Acquire)
-                || self.slot.generation.load(Ordering::Acquire) != self.generation
-            {
-                return Err(cancelled());
-            }
-            Ok(Some(RawShot {
-                rgb,
-                width: self.key.width as u32,
-                height: self.key.height as u32,
-                scale: self.key.scale,
-            }))
-        })();
-        match result {
-            Ok(Some(shot)) => self.slot.finish(id, Ok(shot)),
-            Ok(None) => {}
-            Err(error) => {
-                self.slot.diagnostics.error("metadata", &error);
-                self.active.store(false, Ordering::Release);
-                self.slot.fail(error);
-            }
+                .guard_errors
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(error.with("nativeReason", "guard".into()));
         }
+        let copying = Instant::now();
+        let rgb = pixels(buffer, self.key.width, self.key.height);
+        self.slot
+            .diagnostics
+            .copy_us
+            .store(elapsed_us(copying), Ordering::Relaxed);
+        let rgb = rgb.map_err(|error| {
+            self.slot
+                .diagnostics
+                .layout_errors
+                .fetch_add(1, Ordering::Relaxed);
+            error.with("nativeReason", "format-layout".into())
+        })?;
+        let after = Instant::now();
+        let guarded = (self.guard)(&self.key.epoch);
+        self.slot
+            .diagnostics
+            .guard_after_us
+            .store(elapsed_us(after), Ordering::Relaxed);
+        if let Err(error) = guarded {
+            self.slot
+                .diagnostics
+                .guard_errors
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(error.with("nativeReason", "guard".into()));
+        }
+        if !self.current() {
+            return Err(cancelled());
+        }
+        if reused {
+            self.slot
+                .diagnostics
+                .reused_frames
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(RawShot {
+            rgb,
+            width: self.key.width as u32,
+            height: self.key.height as u32,
+            scale: self.key.scale,
+        })
     }
 }
 
@@ -796,12 +1125,7 @@ impl Running {
             })?;
         let _display: &SCDisplay = &display;
         let excluded = NSArray::<SCWindow>::new();
-        let state = Arc::new(Callback {
-            key: key.clone(),
-            slot,
-            generation,
-            active: AtomicBool::new(true),
-        });
+        let state = Arc::new(Callback::new(key.clone(), slot, generation));
         let this = Output::alloc().set_ivars(state.clone());
         // SAFETY: NSObject initialization after all declared Rust ivars were set.
         let output: Retained<Output> = unsafe { msg_send![super(this), init] };
@@ -866,7 +1190,9 @@ impl Running {
                         .setup_errors
                         .fetch_add(1, Ordering::Relaxed);
                     started_state.slot.diagnostics.error("start-error", &error);
-                    started_state.slot.fail(error);
+                    started_state
+                        .slot
+                        .fail_from(started_state.generation, error);
                 } else if error.is_null() {
                     started_state
                         .slot
@@ -1048,29 +1374,29 @@ fn confirmed_stop(
     }
 }
 
-fn accepts(status: i64, time: u64, checkpoint: u64, now: u64) -> bool {
-    checkpoint > 0 && status == SCFrameStatus::Complete.0 as i64 && time > checkpoint && time <= now
-}
-
 #[derive(Debug, PartialEq)]
 struct Metadata {
     status: i64,
     time: Option<u64>,
 }
+/// What one sample says to a request made at a mach-clock checkpoint.
 #[derive(Debug, PartialEq)]
 enum Eligibility {
+    /// A new picture, displayed after the checkpoint.
     Frame,
-    Idle,
+    /// The screen, after the checkpoint, unchanged since the stream's newest
+    /// picture.
+    Unchanged,
     Old,
     Future,
     Incomplete,
     OtherStatus,
 }
-fn eligibility(metadata: Metadata, checkpoint: u64, now: u64) -> Eligibility {
-    if metadata.status == SCFrameStatus::Idle.0 as i64 {
-        return Eligibility::Idle;
-    }
-    if metadata.status != SCFrameStatus::Complete.0 as i64 {
+/// Only a complete or unchanged sample stamped strictly after `checkpoint`,
+/// and not after `latest`, answers a request.
+fn eligibility(metadata: Metadata, checkpoint: u64, latest: u64) -> Eligibility {
+    let unchanged = metadata.status == SCFrameStatus::Idle.0 as i64;
+    if !unchanged && metadata.status != SCFrameStatus::Complete.0 as i64 {
         return Eligibility::OtherStatus;
     }
     let Some(time) = metadata.time else {
@@ -1082,13 +1408,13 @@ fn eligibility(metadata: Metadata, checkpoint: u64, now: u64) -> Eligibility {
     if time <= checkpoint {
         return Eligibility::Old;
     }
-    if time > now {
+    if time > latest {
         return Eligibility::Future;
     }
-    if accepts(metadata.status, time, checkpoint, now) {
-        Eligibility::Frame
+    if unchanged {
+        Eligibility::Unchanged
     } else {
-        Eligibility::Incomplete
+        Eligibility::Frame
     }
 }
 
@@ -1124,20 +1450,17 @@ fn metadata(sample: &CMSampleBuffer) -> Result<Option<Metadata>> {
     Ok(Some(Metadata { status, time }))
 }
 
-fn pixels(sample: &CMSampleBuffer, width: usize, height: usize) -> Result<Buffer> {
-    // SAFETY: SCK's screen sample contains a retained CoreVideo image buffer.
-    let buffer = unsafe { sample.image_buffer() }
-        .ok_or_else(|| capture_error("Native frame has no pixels"))?;
-    if CVPixelBufferGetPixelFormatType(&buffer) != kCVPixelFormatType_32BGRA
-        || CVPixelBufferIsPlanar(&buffer)
-        || CVPixelBufferGetWidth(&buffer) != width
-        || CVPixelBufferGetHeight(&buffer) != height
+fn pixels(buffer: &CVPixelBuffer, width: usize, height: usize) -> Result<Buffer> {
+    if CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA
+        || CVPixelBufferIsPlanar(buffer)
+        || CVPixelBufferGetWidth(buffer) != width
+        || CVPixelBufferGetHeight(buffer) != height
     {
         return Err(capture_error("Unexpected native pixel layout"));
     }
     // SAFETY: lock and unlock use the same read-only flag; the retained buffer
     // outlives the lock and all reads. No mutable access is exposed.
-    if unsafe { CVPixelBufferLockBaseAddress(&buffer, CVPixelBufferLockFlags::ReadOnly) } != 0 {
+    if unsafe { CVPixelBufferLockBaseAddress(buffer, CVPixelBufferLockFlags::ReadOnly) } != 0 {
         return Err(capture_error("Native pixels could not be locked"));
     }
     struct Unlock<'a>(&'a CVPixelBuffer);
@@ -1148,15 +1471,15 @@ fn pixels(sample: &CMSampleBuffer, width: usize, height: usize) -> Result<Buffer
                 unsafe { CVPixelBufferUnlockBaseAddress(self.0, CVPixelBufferLockFlags::ReadOnly) };
         }
     }
-    let _unlock = Unlock(&buffer);
-    let stride = CVPixelBufferGetBytesPerRow(&buffer);
+    let _unlock = Unlock(buffer);
+    let stride = CVPixelBufferGetBytesPerRow(buffer);
     let length = stride
         .checked_mul(height)
         .filter(|length| {
-            *length <= isize::MAX as usize && *length <= CVPixelBufferGetDataSize(&buffer)
+            *length <= isize::MAX as usize && *length <= CVPixelBufferGetDataSize(buffer)
         })
         .ok_or_else(|| capture_error("Native pixels exceed their allocation"))?;
-    let data = CVPixelBufferGetBaseAddress(&buffer).cast::<u8>();
+    let data = CVPixelBufferGetBaseAddress(buffer).cast::<u8>();
     if data.is_null() {
         return Err(capture_error("Native pixels have no base address"));
     }

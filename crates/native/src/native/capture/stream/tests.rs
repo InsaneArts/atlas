@@ -173,6 +173,8 @@ fn request(id: u64) -> (Pending, Receiver<Result<RawShot>>) {
     let (reply, receive) = mpsc::sync_channel(1);
     (
         Pending {
+            made: Instant::now(),
+            hushed: None,
             id,
             checkpoint: 500,
             key: key(),
@@ -193,27 +195,71 @@ fn shot(value: u8) -> RawShot {
 }
 
 #[test]
-fn only_complete_samples_strictly_after_the_mach_checkpoint_are_eligible() {
-    let complete = SCFrameStatus::Complete.0 as i64;
-    assert!(accepts(complete, 501, 500, 1000));
-    for (time, checkpoint, now) in [
-        (500, 500, 1000),
-        (499, 500, 1000),
-        (1001, 500, 1000),
-        (1, 0, 1000),
-        (501, 500, 499),
-    ] {
-        assert!(!accepts(complete, time, checkpoint, now));
+fn only_complete_or_unchanged_samples_strictly_after_the_mach_checkpoint_answer() {
+    let stamped = |status: SCFrameStatus, time| Metadata {
+        status: status.0 as i64,
+        time: Some(time),
+    };
+    assert_eq!(
+        eligibility(stamped(SCFrameStatus::Complete, 501), 500, 1000),
+        Eligibility::Frame
+    );
+    assert_eq!(
+        eligibility(stamped(SCFrameStatus::Idle, 501), 500, 1000),
+        Eligibility::Unchanged
+    );
+    for status in [SCFrameStatus::Complete, SCFrameStatus::Idle] {
+        assert_eq!(
+            eligibility(stamped(status, 500), 500, 1000),
+            Eligibility::Old
+        );
+        assert_eq!(
+            eligibility(stamped(status, 499), 500, 1000),
+            Eligibility::Old
+        );
+        assert_eq!(
+            eligibility(stamped(status, 1001), 500, 1000),
+            Eligibility::Future
+        );
+        assert_eq!(
+            eligibility(stamped(status, 1), 0, 1000),
+            Eligibility::Incomplete
+        );
+        let unstamped = Metadata {
+            status: status.0 as i64,
+            time: None,
+        };
+        assert_eq!(eligibility(unstamped, 500, 1000), Eligibility::Incomplete);
     }
     for status in [
-        SCFrameStatus::Idle,
         SCFrameStatus::Blank,
         SCFrameStatus::Started,
         SCFrameStatus::Stopped,
         SCFrameStatus::Suspended,
     ] {
-        assert!(!accepts(status.0 as i64, 501, 500, 1000));
+        assert_eq!(
+            eligibility(stamped(status, 501), 500, 1000),
+            Eligibility::OtherStatus
+        );
     }
+}
+
+#[test]
+fn a_sample_stamped_within_one_refresh_ahead_still_answers() {
+    let now = checkpoint();
+    let ahead = Metadata {
+        status: SCFrameStatus::Idle.0 as i64,
+        time: Some(now + ticks(Duration::from_millis(6))),
+    };
+    assert_eq!(
+        eligibility(ahead, now - 1, latest()),
+        Eligibility::Unchanged
+    );
+    let far = Metadata {
+        status: SCFrameStatus::Complete.0 as i64,
+        time: Some(now + ticks(Duration::from_secs(1))),
+    };
+    assert_eq!(eligibility(far, now - 1, latest()), Eligibility::Future);
 }
 
 #[test]
@@ -255,12 +301,12 @@ fn replacing_one_pending_request_cancels_it_and_cannot_deliver_its_old_result() 
             .code,
         Code::Cancelled
     );
-    slot.finish(1, Ok(shot(1)));
+    assert!(slot.settle(0, Ok(Some((1, shot(1))))));
     assert!(matches!(
         second_reply.try_recv(),
         Err(mpsc::TryRecvError::Empty)
     ));
-    slot.finish(2, Ok(shot(2)));
+    assert!(slot.settle(0, Ok(Some((2, shot(2))))));
     assert_eq!(second_reply.recv().unwrap().unwrap().rgb, vec![2; 24]);
     assert!(slot.pending.lock().unwrap().is_none());
 }
@@ -272,7 +318,7 @@ fn cancelling_during_a_pixel_copy_prevents_its_late_pixels_from_escaping() {
     let alive = pending.alive.clone();
     slot.begin(pending);
     alive.store(false, Ordering::Release);
-    slot.finish(1, Ok(shot(42)));
+    assert!(slot.settle(0, Ok(Some((1, shot(42))))));
     assert!(matches!(
         reply.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
@@ -330,7 +376,7 @@ fn a_live_owner_survives_request_gaps_but_explicit_close_cancels_delivery() {
     assert!(!alive.load(Ordering::Acquire));
     assert_eq!(reply.recv().unwrap().err().unwrap().code, Code::Cancelled);
     // A callback finishing after close cannot give pixels new authority.
-    slot.finish(1, Ok(shot(42)));
+    assert!(slot.settle(1, Ok(Some((1, shot(42))))));
     assert!(slot.pending.lock().unwrap().is_none());
 }
 
@@ -367,12 +413,7 @@ fn unexpected_native_stop_is_counted_without_exposing_native_error_text() {
     let slot = Arc::new(Slot::default());
     let (pending, reply) = request(1);
     slot.begin(pending);
-    let callback = Callback {
-        key: key(),
-        slot: slot.clone(),
-        generation: 0,
-        active: AtomicBool::new(true),
-    };
+    let callback = Callback::new(key(), slot.clone(), 0);
     callback.stopped(|| Ok(()));
     assert!(slot.stopping.load(Ordering::Acquire));
     assert_eq!(reply.recv().unwrap().err().unwrap().code, Code::Capture);
@@ -386,12 +427,7 @@ fn unexpected_native_stop_is_counted_without_exposing_native_error_text() {
 #[test]
 fn native_stop_after_explicit_close_is_not_reported_as_a_source_failure() {
     let slot = Arc::new(Slot::default());
-    let callback = Callback {
-        key: key(),
-        slot: slot.clone(),
-        generation: 0,
-        active: AtomicBool::new(true),
-    };
+    let callback = Callback::new(key(), slot.clone(), 0);
     slot.stop();
     callback.stopped(|| panic!("obsolete generation must not query native facts"));
     assert!(slot.failure().is_none());
@@ -560,16 +596,18 @@ fn sample() -> CFRetained<CMSampleBuffer> {
 #[test]
 fn locked_corevideo_pixels_keep_exact_synthetic_colors_and_orientation() {
     let sample = sample();
-    let rgb = pixels(&sample, 4, 2).unwrap();
+    // SAFETY: the synthetic sample holds its retained image buffer.
+    let buffer = unsafe { sample.image_buffer() }.unwrap();
+    let rgb = pixels(&buffer, 4, 2).unwrap();
     let mut expected = [255, 0, 0].repeat(4);
     expected.extend([0, 0, 255].repeat(4));
     assert_eq!(rgb, expected);
     assert!(
-        pixels(&sample, 3, 2).is_err(),
+        pixels(&buffer, 3, 2).is_err(),
         "dimension changes cannot reinterpret pixel storage"
     );
     // Re-reading proves the read-only lock was released symmetrically.
-    assert_eq!(pixels(&sample, 4, 2).unwrap(), expected);
+    assert_eq!(pixels(&buffer, 4, 2).unwrap(), expected);
 }
 
 #[test]
@@ -613,108 +651,6 @@ fn missing_or_incomplete_sample_metadata_never_becomes_a_new_frame() {
 }
 
 #[test]
-fn idle_metadata_is_only_a_fallback_hint_and_never_a_fresh_image() {
-    let idle = Metadata {
-        status: SCFrameStatus::Idle.0 as i64,
-        time: None,
-    };
-    assert_eq!(eligibility(idle, 500, 1000), Eligibility::Idle);
-    let complete_without_time = Metadata {
-        status: SCFrameStatus::Complete.0 as i64,
-        time: None,
-    };
-    assert_eq!(
-        eligibility(complete_without_time, 500, 1000),
-        Eligibility::Incomplete
-    );
-    assert_eq!(
-        eligibility(
-            Metadata {
-                status: 0,
-                time: Some(499)
-            },
-            500,
-            1000
-        ),
-        Eligibility::Old
-    );
-    assert_eq!(
-        eligibility(
-            Metadata {
-                status: 0,
-                time: Some(1001)
-            },
-            500,
-            1000
-        ),
-        Eligibility::Future
-    );
-    assert_eq!(
-        eligibility(
-            Metadata {
-                status: 0,
-                time: Some(501)
-            },
-            500,
-            1000
-        ),
-        Eligibility::Frame
-    );
-}
-
-#[test]
-fn an_idle_callback_wakes_the_caller_for_a_new_capture_without_disabling_native_streaming() {
-    let sample = sample();
-    // SAFETY: this synthetic sample's mutable attachment array owns CF values.
-    let attachments = unsafe { sample.sample_attachments_array(true) }.unwrap();
-    // SAFETY: CoreMedia documents CF dictionaries in this attachment array.
-    let attachments = unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(attachments) };
-    let dictionary = attachments
-        .get(0)
-        .unwrap()
-        .downcast::<CFDictionary>()
-        .unwrap();
-    // SAFETY: CoreMedia's sample-attachment dictionaries are mutable CF objects.
-    let dictionary = unsafe {
-        CFRetained::cast_unchecked::<objc2_core_foundation::CFMutableDictionary<CFString, CFType>>(
-            dictionary,
-        )
-    };
-    // SAFETY: the exported metadata key is a live immutable string.
-    let status = unsafe { SCStreamFrameInfoStatus }.to_string();
-    dictionary.set(
-        &CFString::from_str(&status),
-        CFNumber::new_i64(SCFrameStatus::Idle.0 as i64).as_ref(),
-    );
-    let slot = Arc::new(Slot::default());
-    let (pending, reply) = request(1);
-    slot.begin(pending);
-    let callback = Callback {
-        key: key(),
-        slot: slot.clone(),
-        generation: 0,
-        active: AtomicBool::new(true),
-    };
-    callback.sample(&sample);
-    let hint = reply
-        .recv()
-        .unwrap()
-        .err()
-        .expect("idle cannot return pixels");
-    assert_eq!(hint.details["nativeFallback"], "idle");
-    assert!(
-        fallback_allowed(&hint),
-        "caller may take a new guarded synchronous capture"
-    );
-    assert!(callback.active.load(Ordering::Acquire));
-    assert!(!slot.stopping.load(Ordering::Acquire));
-    assert_eq!(slot.generation.load(Ordering::Acquire), 0);
-    assert!(slot.failure().is_none());
-    assert_eq!(slot.diagnostics.snapshot()["idleHints"], 1);
-    assert_eq!(slot.diagnostics.snapshot()["nativeFrames"], 0);
-}
-
-#[test]
 fn native_diagnostics_are_bounded_metadata_without_error_text_or_pixel_contents() {
     let diagnostics = Diagnostics::default();
     diagnostics.requests.store(4, Ordering::Relaxed);
@@ -737,4 +673,388 @@ fn native_diagnostics_are_bounded_metadata_without_error_text_or_pixel_contents(
         encoded.len() < 1024,
         "stats must leave room in the bounded protocol header"
     );
+}
+
+/// A synthetic sample whose metadata says `status`, displayed at `time`
+/// when it has one.
+fn marked(status: SCFrameStatus, time: Option<u64>) -> CFRetained<CMSampleBuffer> {
+    let sample = sample();
+    // SAFETY: this synthetic sample's mutable attachment array owns CF values.
+    let attachments = unsafe { sample.sample_attachments_array(true) }.unwrap();
+    // SAFETY: CoreMedia documents CF dictionaries in this attachment array.
+    let attachments = unsafe { CFRetained::cast_unchecked::<CFArray<CFType>>(attachments) };
+    let dictionary = attachments
+        .get(0)
+        .unwrap()
+        .downcast::<CFDictionary>()
+        .unwrap();
+    // SAFETY: CoreMedia's sample-attachment dictionaries are mutable CF objects.
+    let dictionary = unsafe {
+        CFRetained::cast_unchecked::<objc2_core_foundation::CFMutableDictionary<CFString, CFType>>(
+            dictionary,
+        )
+    };
+    // SAFETY: the exported metadata keys are live immutable strings.
+    let (status_key, time_key) = unsafe { (SCStreamFrameInfoStatus, SCStreamFrameInfoDisplayTime) };
+    dictionary.set(
+        &CFString::from_str(&status_key.to_string()),
+        CFNumber::new_i64(status.0 as i64).as_ref(),
+    );
+    if let Some(time) = time {
+        dictionary.set(
+            &CFString::from_str(&time_key.to_string()),
+            CFNumber::new_i64(time as i64).as_ref(),
+        );
+    }
+    sample
+}
+
+fn stamped(status: SCFrameStatus, time: u64) -> CFRetained<CMSampleBuffer> {
+    marked(status, Some(time))
+}
+
+/// A stream's callback whose session, display and consent checks pass,
+/// and the mach time just after it started.
+fn streaming(slot: &Arc<Slot>, generation: u64) -> (Callback, u64) {
+    let callback = Callback {
+        guard: |_| Ok(()),
+        ..Callback::new(key(), slot.clone(), generation)
+    };
+    (callback, checkpoint())
+}
+
+/// A request made at mach time `checkpoint`, pending on `slot`.
+fn asked(slot: &Slot, id: u64, checkpoint: u64) -> Receiver<Result<RawShot>> {
+    let (mut pending, reply) = request(id);
+    pending.checkpoint = checkpoint;
+    slot.begin(pending);
+    reply
+}
+
+/// Make `callback` look as if it last heard of its stream `ago`.
+fn heard_long_ago(callback: &Callback, ago: Duration) {
+    let then = checkpoint() - ticks(ago) - ticks(Duration::from_millis(1));
+    callback.heard.store(then, Ordering::Release);
+}
+
+fn unanswered(reply: &Receiver<Result<RawShot>>) -> bool {
+    matches!(reply.try_recv(), Err(mpsc::TryRecvError::Empty))
+}
+
+fn picture() -> Vec<u8> {
+    let mut expected = [255, 0, 0].repeat(4);
+    expected.extend([0, 0, 255].repeat(4));
+    expected
+}
+
+#[test]
+fn an_unchanged_sample_after_the_request_serves_the_newest_picture_again() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let reply = asked(&slot, 1, t + 2);
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 3));
+    assert_eq!(reply.recv().unwrap().unwrap().rgb, picture());
+    assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 1);
+    assert!(slot.failure().is_none());
+}
+
+#[test]
+fn an_unchanged_sample_from_before_the_request_never_answers_it() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let reply = asked(&slot, 1, t + 5);
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 5));
+    assert!(unanswered(&reply));
+    assert_eq!(slot.diagnostics.snapshot()["oldSamples"], 1);
+}
+
+#[test]
+fn a_request_waits_for_the_streams_first_picture() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    let reply = asked(&slot, 1, t + 1);
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 2));
+    heard_long_ago(&callback, SILENCE);
+    callback.silent(1);
+    assert!(
+        unanswered(&reply),
+        "no picture yet, so nothing to serve again"
+    );
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 3));
+    assert_eq!(reply.recv().unwrap().unwrap().rgb, picture());
+    assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 0);
+}
+
+#[test]
+fn a_new_stream_never_serves_the_previous_streams_picture() {
+    let slot = Arc::new(Slot::default());
+    let (previous, t) = streaming(&slot, 0);
+    previous.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    // The stream is replaced, as on a stop, a renewal or a changed request.
+    slot.generation.fetch_add(1, Ordering::AcqRel);
+    let (next, u) = streaming(&slot, 1);
+    let reply = asked(&slot, 1, u + 1);
+    previous.sample(&stamped(SCFrameStatus::Idle, u + 2));
+    heard_long_ago(&previous, SILENCE);
+    previous.silent(1);
+    next.sample(&stamped(SCFrameStatus::Idle, u + 2));
+    heard_long_ago(&next, SILENCE);
+    next.silent(1);
+    assert!(unanswered(&reply));
+    assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 0);
+}
+
+#[test]
+fn a_blank_unreadable_or_badly_stamped_sample_leaves_no_picture_to_serve_again() {
+    let far = ticks(Duration::from_secs(1));
+    let gone: [fn(u64, u64) -> CFRetained<CMSampleBuffer>; 8] = [
+        |t, _| stamped(SCFrameStatus::Blank, t + 2),
+        |t, _| stamped(SCFrameStatus::Suspended, t + 2),
+        |t, _| stamped(SCFrameStatus::Stopped, t + 2),
+        |_, _| sample(),
+        |_, _| marked(SCFrameStatus::Complete, None),
+        |_, _| marked(SCFrameStatus::Idle, None),
+        |t, far| stamped(SCFrameStatus::Complete, t + far),
+        |t, _| stamped(SCFrameStatus::Complete, t),
+    ];
+    for gone in gone {
+        let slot = Arc::new(Slot::default());
+        let (callback, t) = streaming(&slot, 0);
+        callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+        callback.sample(&gone(t, far));
+        let reply = asked(&slot, 1, t + 3);
+        callback.sample(&stamped(SCFrameStatus::Idle, t + 4));
+        heard_long_ago(&callback, SILENCE);
+        callback.silent(1);
+        assert!(unanswered(&reply));
+    }
+}
+
+#[test]
+fn a_changed_session_refuses_the_kept_picture_and_ends_the_stream() {
+    let slot = Arc::new(Slot::default());
+    let callback = Callback {
+        guard: |_| Err(Error::new(Code::SessionChanged, "the display changed")),
+        ..Callback::new(key(), slot.clone(), 0)
+    };
+    let t = checkpoint();
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let reply = asked(&slot, 1, t + 2);
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 3));
+    let refusal = reply.recv().unwrap().err().expect("no pixels");
+    assert_eq!(refusal.code, Code::SessionChanged);
+    assert!(!fallback_allowed(&refusal));
+    assert!(slot.stopping.load(Ordering::Acquire));
+    assert!(!callback.active.load(Ordering::Acquire));
+    assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 0);
+}
+
+#[test]
+fn a_silent_stream_serves_its_newest_picture_only_after_real_quiet_and_to_the_request_waiting() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let reply = asked(&slot, 1, t + 2);
+    callback.silent(1);
+    assert!(unanswered(&reply), "a sample was just delivered");
+    heard_long_ago(&callback, SILENCE);
+    callback.silent(2);
+    assert!(
+        unanswered(&reply),
+        "an answered or replaced request stays so"
+    );
+    callback.silent(1);
+    assert_eq!(reply.recv().unwrap().unwrap().rgb, picture());
+    assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 1);
+}
+
+#[test]
+fn samples_that_prove_nothing_keep_a_stream_from_counting_as_silent_but_not_from_renewal() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    assert!(!callback.stale(RENEW));
+    let long_ago = t - ticks(RENEW);
+    callback.stamped.store(long_ago, Ordering::Release);
+    let reply = asked(&slot, 1, t + 2);
+    // Delivered, but stamped before the last valid sample: no progress.
+    callback.sample(&stamped(SCFrameStatus::Idle, long_ago - 1));
+    assert!(!callback.quiet(SILENCE));
+    assert!(
+        callback.stale(RENEW),
+        "only a valid sample proves the stream"
+    );
+    heard_long_ago(&callback, SILENCE);
+    callback.silent(1);
+    assert!(
+        unanswered(&reply),
+        "a stream due for renewal serves nothing"
+    );
+}
+
+#[test]
+fn silence_is_asked_only_after_its_wait_and_then_again_at_each_check() {
+    let slot = Slot::default();
+    let (pending, _reply) = request(1);
+    slot.begin(pending);
+    assert_eq!(
+        slot.overdue(),
+        None,
+        "a new request still waits for a sample"
+    );
+    let (mut pending, _reply) = request(2);
+    pending.made = Instant::now() - SILENCE;
+    slot.begin(pending);
+    assert_eq!(slot.overdue(), Some(2));
+    assert_eq!(slot.overdue(), None);
+    if let Some(request) = slot.pending.lock().unwrap().as_mut() {
+        request.hushed = Some(Instant::now() - SILENCE_CHECK);
+    }
+    assert_eq!(slot.overdue(), Some(2));
+}
+
+#[test]
+fn every_core_graphics_fallback_is_counted_with_its_reason() {
+    let diagnostics = Diagnostics::default();
+    diagnostics.fell_back("starting");
+    diagnostics.fell_back("timeout");
+    let snapshot = diagnostics.snapshot();
+    assert_eq!(snapshot["fallbacks"], 2);
+    assert_eq!(snapshot["lastFallback"], "timeout");
+}
+
+#[test]
+fn a_picture_copied_while_its_stream_is_replaced_is_dropped_and_the_request_waits() {
+    thread_local! {
+        static REPLACED: std::cell::RefCell<Option<Arc<Slot>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let slot = Arc::new(Slot::default());
+    REPLACED.set(Some(slot.clone()));
+    // The worker replaces the stream while the copy runs.
+    let callback = Callback {
+        guard: |_| {
+            REPLACED.with_borrow(|slot| {
+                slot.as_ref()
+                    .unwrap()
+                    .generation
+                    .fetch_add(1, Ordering::AcqRel)
+            });
+            Ok(())
+        },
+        ..Callback::new(key(), slot.clone(), 0)
+    };
+    let t = checkpoint();
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let reply = asked(&slot, 1, t + 2);
+    heard_long_ago(&callback, SILENCE);
+    callback.silent(1);
+    assert!(unanswered(&reply), "the new stream answers it");
+    assert!(!slot.stopping.load(Ordering::Acquire));
+    assert!(slot.failure().is_none());
+    assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 0);
+}
+
+#[test]
+fn an_answer_settled_after_its_stream_was_invalidated_neither_lands_nor_fails_the_request() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    let reply = asked(&slot, 1, t + 1);
+    // The worker invalidates the stream after the copy and before it lands.
+    slot.invalidate();
+    callback.settle(Ok(Some((1, shot(7)))));
+    callback.settle(Err(Error::new(Code::SessionChanged, "too late")));
+    assert!(unanswered(&reply), "the new stream answers it");
+    assert!(!slot.stopping.load(Ordering::Acquire));
+    assert!(slot.failure().is_none());
+    assert!(callback.active.load(Ordering::Acquire));
+}
+
+#[test]
+fn a_replaced_streams_late_stop_report_never_fails_its_replacement() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    let reply = asked(&slot, 1, t + 1);
+    callback.stopped(|| {
+        // The worker replaces the stream while the stop is being checked.
+        slot.invalidate();
+        Ok(())
+    });
+    assert!(unanswered(&reply), "the new stream answers it");
+    assert!(!slot.stopping.load(Ordering::Acquire));
+    assert!(slot.failure().is_none());
+}
+
+#[test]
+fn only_the_first_request_after_a_recorder_restart_waits_longer() {
+    let slot = Slot::default();
+    let now = Instant::now();
+    let roughly = |wait: Duration, expected: Duration| {
+        assert!(
+            wait <= expected && wait + Duration::from_millis(50) > expected,
+            "{wait:?}"
+        );
+    };
+    roughly(slot.wait(now), WAIT);
+    slot.restarted.store(true, Ordering::Release);
+    roughly(slot.wait(now), RESTARTED_WAIT);
+    roughly(slot.wait(now), WAIT);
+}
+
+#[test]
+fn a_request_held_back_before_it_waits_only_for_what_is_left_of_its_time() {
+    let slot = Slot::default();
+    slot.restarted.store(true, Ordering::Release);
+    let asked = Instant::now() - Duration::from_millis(300);
+    assert!(slot.wait(asked) <= RESTARTED_WAIT - Duration::from_millis(300));
+    let long_ago = Instant::now() - Duration::from_secs(1);
+    assert_eq!(
+        slot.wait(long_ago),
+        Duration::ZERO,
+        "the stream is not waited for"
+    );
+}
+
+#[test]
+fn a_request_that_waited_through_a_window_server_stall_takes_the_streams_late_answer() {
+    let diagnostics = Diagnostics::default();
+    let (reply, receive) = mpsc::sync_channel(1);
+    let (stall_over, ended) = mpsc::sync_channel(1);
+    // The stream answers once the stall that held up the check ends.
+    let stream = std::thread::spawn(move || {
+        ended.recv().unwrap();
+        reply.send(Ok(shot(7))).unwrap();
+    });
+    let check = || {
+        stall_over.send(()).unwrap();
+        true
+    };
+    let answer = after_stall(&receive, Duration::from_secs(3600), check, &diagnostics);
+    assert_eq!(answer.unwrap().unwrap().rgb, vec![7; 24]);
+    assert_eq!(diagnostics.snapshot()["stalls"], 1);
+    stream.join().unwrap();
+}
+
+#[test]
+fn a_request_whose_session_check_was_quick_or_failed_falls_back_without_waiting_longer() {
+    let diagnostics = Diagnostics::default();
+    let (_reply, receive) = mpsc::sync_channel::<Result<RawShot>>(1);
+    // A wait here would outlast the test run; only a stall earns one.
+    assert!(after_stall(&receive, Duration::from_secs(3600), || false, &diagnostics).is_none());
+    assert_eq!(diagnostics.snapshot()["stalls"], 0);
+}
+
+#[test]
+fn an_answer_that_lands_during_the_session_check_is_taken_instead_of_a_fallback() {
+    let diagnostics = Diagnostics::default();
+    let (reply, receive) = mpsc::sync_channel(1);
+    let check = || {
+        reply.send(Ok(shot(5))).unwrap();
+        false
+    };
+    let answer = after_stall(&receive, Duration::from_secs(3600), check, &diagnostics);
+    assert_eq!(answer.unwrap().unwrap().rgb, vec![5; 24]);
+    assert_eq!(diagnostics.snapshot()["stalls"], 0);
 }

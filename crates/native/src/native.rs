@@ -93,6 +93,8 @@ pub fn accessibility_trusted() -> bool {
 }
 
 #[cfg(target_os = "macos")]
+pub mod activity;
+#[cfg(target_os = "macos")]
 pub mod apps;
 #[cfg(target_os = "macos")]
 pub mod audio;

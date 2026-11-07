@@ -23,4 +23,4 @@ A client must hold the observer capability from the viewer's private address to 
 
 ## Diagnostics
 
-`atlas monitor --terminal` shares the frame service when the menu bar runs for the same helper. Otherwise it uses its own private viewer and the helper's stream directly, as it did before, and `--max-dimension` or `--capture-backend sck` select that private path explicitly.
+`atlas monitor --terminal` shares the frame service when the menu bar runs for the same helper. Otherwise it uses its own private viewer and the helper's stream directly, as it did before, and `--max-dimension` or `--capture-backend cg` select that private path explicitly.

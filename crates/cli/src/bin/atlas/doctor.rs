@@ -11,6 +11,12 @@ use serde_json::{Value, json};
 /// refuses every agent's action until the helper is recovered.
 const NO_UNKNOWN_OUTCOME: &str = "No action of unknown outcome";
 
+const GIGABYTE: u64 = 1 << 30;
+
+/// Warn once the helper has found its screen recorder too large this many
+/// times in a row, a minute or more apart, and could not restart it.
+const RECORDER_TRIES: u64 = 3;
+
 /// Read and enrich the report, retaining full facts for people or verbose output.
 pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     let uid = client.config.helper_uid;
@@ -118,11 +124,9 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
         .ok(),
     );
     let session = client.host_session.as_ref().map(HostSession::key);
-    pending_report(
-        &mut report,
-        causes,
-        asker(client.actor, session, ui::interactive()),
-    );
+    let asking = asker(client.actor, session, ui::interactive());
+    recorder_report(&mut report, asking);
+    pending_report(&mut report, causes, asking);
     if verbose || ui::human() {
         report
     } else {
@@ -142,6 +146,32 @@ fn sound_warning(status: &Value) -> Option<String> {
             .unwrap_or("Apps in the helper are not muted. Run atlas sound off to mute them.")
             .to_owned()
     })
+}
+
+/// Warn the person when the helper, as its status says, keeps finding its
+/// screen recorder too large and cannot restart it. The helper restarts it
+/// on its own otherwise. Only the person can log the helper out, so an agent
+/// is not told, verbose or not; the figures stay in a verbose report's
+/// status.
+fn recorder_report(report: &mut Value, asking: Asker<'_>) {
+    if asking != Asker::Person {
+        return;
+    }
+    let recorder = &report["session"]["daemon"]["resources"]["screenRecorder"];
+    let stuck = recorder["resetFailures"]
+        .as_u64()
+        .is_some_and(|tries| tries >= RECORDER_TRIES);
+    let Some(bytes) = recorder["footprint"].as_u64().filter(|_| stuck) else {
+        return;
+    };
+    let warning = format!(
+        "The helper's screen recorder is using {:.1} GB of memory and Atlas could not restart \
+         it. Log the helper out and back in to reset it.",
+        bytes as f64 / GIGABYTE as f64
+    );
+    if let Some(warnings) = report["warnings"].as_array_mut() {
+        warnings.push(json!(warning));
+    }
 }
 
 fn pending_result(

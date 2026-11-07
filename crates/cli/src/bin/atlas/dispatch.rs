@@ -311,10 +311,10 @@ async fn carry_out(
             capture_backend,
             ..
         } => {
-            let backend = if capture_backend.as_deref() == Some("sck") {
-                atlas_core::protocol::CaptureBackend::ScreenCaptureKit
-            } else {
+            let backend = if capture_backend.as_deref() == Some("cg") {
                 atlas_core::protocol::CaptureBackend::CoreGraphics
+            } else {
+                atlas_core::protocol::CaptureBackend::ScreenCaptureKit
             };
             atlas_cli::terminal::monitor(client()?, config, read_only, max_dimension, backend)
                 .await?;

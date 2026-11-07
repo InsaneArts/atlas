@@ -30,7 +30,7 @@ use atlas_core::{
 };
 use serde_json::Value;
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard, Semaphore};
+use tokio::sync::{Mutex, Notify, RwLock, RwLockReadGuard, Semaphore};
 
 /// How long control lasts without a renewal; the app is told the same.
 const LEASE_SECONDS: u64 = 10;
@@ -71,6 +71,9 @@ struct Viewer {
     /// The frame service this viewer runs, when it runs one: what a client
     /// needs to pair with it. A bearer secret, like the URL.
     pipe: std::sync::Mutex<Option<Value>>,
+    /// Told each time input was sent, so the frame service reads the
+    /// helper again at once rather than at a still screen's slower pace.
+    input_sent: Arc<Notify>,
     /// The widest picture a capture asks for, in pixels.
     frame_width: u32,
     /// How recent the last frame must be to stand in for a capture.

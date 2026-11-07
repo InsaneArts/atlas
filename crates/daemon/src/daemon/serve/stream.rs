@@ -143,11 +143,14 @@ fn guard(daemon: &Daemon, expected: &InputEpoch) -> Result<Value> {
     Ok(proof)
 }
 
+/// One frame, asked for at `asked`: a stream's wait for its picture is
+/// counted from then, so a frame held back meanwhile still answers in time.
 fn capture(
     daemon: &Daemon,
     expected: &InputEpoch,
     side: u32,
     backend: CaptureBackend,
+    asked: std::time::Instant,
 ) -> Result<(RawShot, Value, &'static str, f64)> {
     guard(daemon, expected)?;
     let capturing = std::time::Instant::now();
@@ -158,7 +161,7 @@ fn capture(
         ),
         CaptureBackend::ScreenCaptureKit => {
             let (shot, streamed) =
-                capture::stream_display_rgb(expected.display_id as u32, Some(side))?;
+                capture::stream_display_rgb(expected.display_id as u32, Some(side), asked)?;
             (shot, if streamed { "sck" } else { "cg-fallback" })
         }
     };
@@ -294,9 +297,15 @@ pub(super) async fn serve(
         let worker_daemon = daemon.clone();
         let worker_expected = expected.clone();
         let held = producer.clone();
+        let asked = std::time::Instant::now();
+        // The frame holds the source's fence, so nothing that must run
+        // between captures starts under it.
         let mut worker = tokio::task::spawn_blocking(move || {
             let _held = held;
-            capture(&worker_daemon, &worker_expected, side, backend)
+            worker_daemon
+                .source
+                .frame(|| capture(&worker_daemon, &worker_expected, side, backend, asked))
+                .and_then(std::convert::identity)
         });
         // A blocking framework capture cannot be interrupted safely. On
         // departure or shutdown its result is discarded, and its task is
