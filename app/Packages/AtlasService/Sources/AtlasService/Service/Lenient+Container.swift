@@ -36,6 +36,17 @@ extension KeyedDecodingContainer {
     max(0, (try? decodeIfPresent(Int.self, forKey: key)) ?? 0)
   }
 
+  /// Counts by name: each name kept with its count when that is a whole number of at least 1, and none when the map is
+  /// missing or of the wrong type.
+  ///
+  /// - Parameter key: The field.
+  /// - Returns: The counts.
+  func lenientCounts(_ key: Key) -> [String: Int] {
+    ((try? decodeIfPresent([String: Lenient<Int>].self, forKey: key)) ?? [:])
+      .compactMapValues(\.value)
+      .filter { !$0.key.isEmpty && $0.value > 0 }
+  }
+
   /// A moment written as milliseconds since 1970, or nil when it is missing, of the wrong type or not finite.
   ///
   /// - Parameter key: The field.

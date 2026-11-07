@@ -108,8 +108,7 @@ struct ActivityMomentsTests {
         of: after.moments,
         filter: .all,
         uncertainRow: nil,
-        choices: [ids[0]: opensFirst, ids[1]: !opensFirst],
-        now: ActivityFixtures.readAt
+        choices: [ids[0]: opensFirst, ids[1]: !opensFirst]
       )
       #expect(folds[ids[0]] == (opensFirst ? .open : .folded))
       #expect(folds[ids[1]] == (opensFirst ? .folded : .open))
@@ -153,9 +152,9 @@ struct ActivityMomentsTests {
         of: before.moments,
         filter: .all,
         uncertainRow: nil,
-        choices: choices,
-        now: ActivityFixtures.readAt
-      )[id] == .held
+        choices: choices
+      )[id] == .folded,
+      "a run under way folds like any other"
     )
 
     var completed = ActivityFixtures.row(
@@ -181,8 +180,7 @@ struct ActivityMomentsTests {
         of: after.moments,
         filter: .all,
         uncertainRow: nil,
-        choices: choices,
-        now: ActivityFixtures.readAt
+        choices: choices
       )[id] == .folded
     )
     #expect(
@@ -190,8 +188,7 @@ struct ActivityMomentsTests {
         of: after.moments,
         filter: .all,
         uncertainRow: nil,
-        choices: [id: true],
-        now: ActivityFixtures.readAt
+        choices: [id: true]
       )[id] == .open
     )
   }
@@ -233,8 +230,7 @@ struct ActivityMomentsTests {
         of: after.moments,
         filter: .all,
         uncertainRow: nil,
-        choices: [id: false],
-        now: ActivityFixtures.readAt
+        choices: [id: false]
       )[id] == .folded
     )
   }
@@ -625,41 +621,21 @@ struct ActivityMomentsTests {
     #expect(moments.first?.actions == 3)
   }
 
-  @Test("the newest moment and those ended in the last five minutes open by default")
-  func theNewestAndTheRecentOpenByDefault() {
+  @Test("a run folds by default under All and opens under any other filter")
+  func aRunFoldsUnderAllAndOpensUnderAnotherFilter() {
     let rules = Self.moments([
-      ActivityFixtures.row(id: "e1", says: "click e1", ageSeconds: 10, session: "claude", verb: "click", app: "Notes"),
-      ActivityFixtures.row(id: "d1", says: "click d1", ageSeconds: 60, session: "claude", verb: "click", app: "Mail"),
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 290, session: "claude", verb: "click", app: "Maps"),
-      ActivityFixtures.row(
-        id: "b1",
-        says: "click b1",
-        ageSeconds: 299,
-        session: "claude",
-        verb: "click",
-        app: "Safari"
-      ),
-      ActivityFixtures.row(id: "a1", says: "click a1", ageSeconds: 600, session: "claude", verb: "click", app: "Opie"),
+      ActivityFixtures.row(id: "e1", says: "type e1", ageSeconds: 10, session: "claude", verb: "type", app: "Notes"),
+      ActivityFixtures.row(id: "d1", says: "type d1", ageSeconds: 60, session: "claude", verb: "type", app: "Mail"),
     ])
     let shown = rules.shown(filter: .all, query: "")
-    let folds = rules.folds(of: shown, filter: .all, uncertainRow: nil, choices: [:], now: ActivityFixtures.readAt)
-    #expect(shown.map { folds[$0.id] } == [.open, .open, .open, .folded, .folded], "at most three")
-    let old = Self.moments([
-      ActivityFixtures.row(id: "b1", says: "click b1", ageSeconds: 900, session: "claude", verb: "click", app: "Notes"),
-      ActivityFixtures.row(id: "a1", says: "click a1", ageSeconds: 1000, session: "claude", verb: "click", app: "Opie"),
-    ])
-    let oldShown = old.shown(filter: .all, query: "")
-    let oldFolds = old.folds(
-      of: oldShown,
-      filter: .all,
-      uncertainRow: nil,
-      choices: [:],
-      now: ActivityFixtures.readAt
-    )
-    #expect(oldShown.map { oldFolds[$0.id] } == [.open, .folded], "the newest opens however old")
+    let folds = rules.folds(of: shown, filter: .all, uncertainRow: nil, choices: [:])
+    #expect(shown.map { folds[$0.id] } == [.folded, .folded])
+    let typing = rules.shown(filter: .typing, query: "")
+    let opened = rules.folds(of: typing, filter: .typing, uncertainRow: nil, choices: [:])
+    #expect(typing.map { opened[$0.id] } == [.open, .open])
   }
 
-  @Test("the person's choice wins, and a moment under way or of unknown outcome is held open")
+  @Test("the person's choice wins, and a run of unknown outcome is held open")
   func thePersonsChoiceWinsButHeldMomentsStayOpen() {
     let rules = Self.moments([
       ActivityFixtures.row(
@@ -689,22 +665,20 @@ struct ActivityMomentsTests {
       of: shown,
       filter: .all,
       uncertainRow: "b1",
-      choices: choices,
-      now: ActivityFixtures.readAt
+      choices: choices
     )
-    #expect(shown.map { folds[$0.id] } == [.held, .held, .open])
+    #expect(shown.map { folds[$0.id] } == [.folded, .held, .open])
     let unchosen = rules.folds(
       of: shown,
       filter: .all,
       uncertainRow: nil,
-      choices: [ids[0]: false],
-      now: ActivityFixtures.readAt
+      choices: [ids[0]: false]
     )
-    #expect(shown.map { unchosen[$0.id] } == [.held, .folded, .folded])
-    #expect(unchosen[ids[0]]?.isOpen == true && unchosen[ids[1]]?.isOpen == false)
+    #expect(shown.map { unchosen[$0.id] } == [.folded, .folded, .folded])
+    #expect(unchosen[ids[0]]?.isOpen == false)
   }
 
-  @Test("Problems keeps only moments with a problem, held open, and keeps each moment's id")
+  @Test("Problems keeps only runs with a problem, open unless the person folds one, and keeps each run's id")
   func problemsKeepsOnlyMomentsWithAProblem() {
     let rules = Self.moments([
       ActivityFixtures.row(id: "c2", says: "click c2", ageSeconds: 5, session: "claude", verb: "click", app: "Notes"),
@@ -736,14 +710,14 @@ struct ActivityMomentsTests {
       of: problems,
       filter: .problems,
       uncertainRow: nil,
-      choices: [all[0].id: false],
-      now: ActivityFixtures.readAt
+      choices: [all[0].id: false]
     )
-    #expect(folds[all[0].id] == .held)
+    #expect(folds[all[0].id] == .folded)
+    #expect(rules.folds(of: problems, filter: .problems, uncertainRow: nil, choices: [:])[all[0].id] == .open)
   }
 
-  @Test("Screenshots and Typing keep their own steps")
-  func screenshotsAndTypingKeepTheirOwnSteps() {
+  @Test("Pictures and Typing keep their own steps")
+  func picturesAndTypingKeepTheirOwnSteps() {
     let rules = Self.moments([
       ActivityFixtures.row(id: "k1", says: "key k1", ageSeconds: 5, session: "claude", verb: "key", app: "Opie"),
       ActivityFixtures.row(
@@ -758,7 +732,7 @@ struct ActivityMomentsTests {
       ActivityFixtures.row(id: "t1", says: "type t1", ageSeconds: 15, session: "claude", verb: "type", app: "Opie"),
       ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 20, session: "claude", verb: "click", app: "Opie"),
     ])
-    #expect(rules.shown(filter: .screenshots, query: "").map { $0.runs.map(\.id) } == [["s1"]])
+    #expect(rules.shown(filter: .pictures, query: "").map { $0.runs.map(\.id) } == [["s1"]])
     #expect(rules.shown(filter: .typing, query: "").map { $0.runs.map(\.id) } == [["k1", "t1"]])
   }
 
@@ -796,24 +770,66 @@ struct ActivityMomentsTests {
     #expect(rules.shown(filter: .typing, query: "notes").map { $0.runs.map(\.id) } == [["n2"]])
   }
 
-  @Test("an open moment shows eight steps and counts the rest")
-  func anOpenMomentShowsEightSteps() {
-    let rows = (0..<11)
-      .map {
+  @Test("an opened run reads oldest first, and a folded one keeps its newest pictures and its problems")
+  func anOpenedRunReadsOldestFirst() {
+    let rules = ActivityMoments(
+      ActivityFixtures.rules([
         ActivityFixtures.row(
-          id: "c\($0)",
-          says: "\($0.isMultiple(of: 2) ? "click" : "type") c\($0)",
-          ageSeconds: Double($0 * 5),
+          id: "s2",
+          says: "took a screenshot",
+          ageSeconds: 5,
+          operation: "screenshot",
           session: "claude",
-          verb: $0.isMultiple(of: 2) ? "click" : "type",
+          capture: "b.png",
+          verb: "screenshot"
+        ),
+        ActivityFixtures.row(
+          id: "c1",
+          says: "couldn't click Go",
+          outcome: .failed,
+          ageSeconds: 10,
+          session: "claude",
+          verb: "click",
           app: "Opie"
-        )
-      }
-    let moment = Self.moments(rows).moments[0]
-    let folded = moment.steps(expanded: false)
-    #expect(folded.shown.map(\.id) == (0..<8).map { "c\($0)" })
-    #expect(folded.more == 3)
-    #expect(moment.steps(expanded: true).shown.count == 11 && moment.steps(expanded: true).more == 0)
+        ),
+        ActivityFixtures.row(
+          id: "s1",
+          says: "took a screenshot",
+          ageSeconds: 15,
+          operation: "screenshot",
+          session: "claude",
+          capture: "a.png",
+          verb: "screenshot"
+        ),
+        ActivityFixtures.row(id: "t1", says: "typed", ageSeconds: 20, session: "claude", verb: "type", app: "Opie"),
+      ]),
+      captures: [Screenshot(name: "a.png"), Screenshot(name: "b.png")],
+      scope: .all
+    )
+    let run = rules.moments[0]
+    #expect(run.story.map(\.id) == ["t1", "s1", "c1", "s2"])
+    #expect(run.shots.map(\.id) == ["s2", "s1"])
+    #expect(run.problems.map(\.id) == ["c1"])
+  }
+
+  @Test("neighbouring commands and screenshots form one run however far apart")
+  func neighbouringCommandsAndScreenshotsFormOneRun() {
+    let moments = Self.moments([
+      ActivityFixtures.row(
+        id: "s1",
+        says: "took a screenshot",
+        ageSeconds: 10,
+        operation: "screenshot",
+        session: "claude",
+        verb: "screenshot"
+      ),
+      ActivityFixtures.row(id: "r2", says: "ran", ageSeconds: 400, operation: "run", session: "claude", verb: "run"),
+      ActivityFixtures.row(id: "r1", says: "ran", ageSeconds: 900, operation: "run", session: "claude", verb: "run"),
+      ActivityFixtures.row(id: "c1", says: "click", ageSeconds: 1200, session: "claude", verb: "click", app: "Opie"),
+    ])
+    .moments
+    #expect(moments.map { $0.runs.map(\.id) } == [["s1", "r2", "r1"], ["c1"]])
+    #expect(moments.map(\.subject) == [.commands, .app(ActivityApp(name: "Opie"))])
   }
 
   @Test("at most sixty moments are listed")

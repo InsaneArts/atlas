@@ -1,17 +1,13 @@
 import Foundation
 
-/// The Activity pane's moments, all pure: which lines form one moment, which the filters and the search keep, which
-/// moments show their steps, and what followed a problem. Moments form from every line in scope before any filter
+/// The Activity outline's runs, all pure: which lines form one run, which the filters and the search keep, which
+/// runs show their steps, and what followed a problem. Moments form from every line in scope before any filter
 /// applies, so a moment keeps its identity whichever filter shows it. Time comes in and is never read.
 public struct ActivityMoments: Sendable {
   /// 120 s: the longest pause inside a moment, between its oldest line so far and the line before it. An agent's run
   /// of work is a string of actions seconds apart; a longer pause starts a new
   /// moment, even in the same app.
   static let momentGap: TimeInterval = 120
-  /// 5 min: how lately a moment must have ended to stay open on its own.
-  static let openSpan: TimeInterval = 300
-  /// 3: the most moments open by default, the newest included.
-  static let mostOpen = 3
   /// 120 s: how soon after a problem the same stream's next line must start to be what it did next.
   static let followUpSpan: TimeInterval = 120
   /// 60: the most moments the pane draws, which the service's 200 rows never pass in practice.
@@ -110,39 +106,30 @@ public struct ActivityMoments: Sendable {
     return Array(kept.prefix(Self.mostMoments))
   }
 
-  /// Whether each moment shows its steps. A moment with a line under way or the action of unknown outcome, and every
-  /// moment under Problems, is held open. Otherwise the person's choice wins; without one, the newest moment and any
-  /// that ended within ``openSpan`` are open, at most ``mostOpen`` in all, the held ones counted.
+  /// Whether each run shows its steps. A run holding the action of unknown outcome is held open, so its recovery
+  /// shows. Otherwise the person's choice wins; without one, a run folds to its summary, problems and pictures under
+  /// All, and opens under any other filter, whose steps are what the person asked to see.
   ///
   /// - Parameters:
-  ///   - shown: The moments the pane lists, newest first.
+  ///   - shown: The runs the pane lists, newest first.
   ///   - filter: The pane's filter.
   ///   - uncertainRow: The id of the row whose outcome is unknown, while one is.
-  ///   - choices: The person's own choice for a moment, by its id: true to open it, false to fold it.
-  ///   - now: The current time, measured against each moment's end without reforming it.
-  /// - Returns: Each moment's fold, by its id.
+  ///   - choices: The person's own choice for a run, by its id: true to open it, false to fold it.
+  /// - Returns: Each run's fold, by its id.
   public func folds(
     of shown: [ActivityMoment],
     filter: ActivityFilter,
     uncertainRow: String?,
-    choices: [String: Bool],
-    now: Date
+    choices: [String: Bool]
   ) -> [String: ActivityMoment.Fold] {
     var folds: [String: ActivityMoment.Fold] = [:]
-    var opened = 0
-    for (index, moment) in shown.enumerated() {
-      let held =
-        filter == .problems || moment.isRunning
-        || moment.runs.contains { $0.id == uncertainRow }
-      let recent = moment.endedAt.map { now.timeIntervalSince($0) < Self.openSpan } ?? false
-      let opens = held || ((index == 0 || recent) && opened < Self.mostOpen)
-      if opens { opened += 1 }
-      if held {
+    for moment in shown {
+      if moment.runs.contains(where: { $0.id == uncertainRow }) {
         folds[moment.id] = .held
       } else if let chosen = choices[moment.id] {
         folds[moment.id] = chosen ? .open : .folded
       } else {
-        folds[moment.id] = opens ? .open : .folded
+        folds[moment.id] = filter == .all ? .folded : .open
       }
     }
     return folds

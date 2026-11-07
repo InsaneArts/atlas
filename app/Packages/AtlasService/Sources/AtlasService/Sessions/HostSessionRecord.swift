@@ -35,6 +35,15 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
   public var cleanup: CleanupState?
   /// Its newest screenshots' file names, newest first.
   public var screenshots: [String]
+  /// How many of each verb it did, such as `type` or `click`, kept once its activity rows are gone.
+  public var counts: [String: Int]
+  /// How many of its actions named each app, by the app's name, kept once its activity rows are gone.
+  public var appCounts: [String: Int]
+
+  /// What it mostly did and where, as its record keeps it; nil while it did nothing this app can name.
+  public var gist: ActivityGist? {
+    ActivityGist(counts: counts, apps: appCounts)
+  }
 
   /// The session's identity: its key.
   public var id: String { key }
@@ -67,6 +76,8 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
   ///   - installs: The apps its tasks installed that may still be there.
   ///   - cleanup: Where its newest unfinished cleanup stands.
   ///   - screenshots: Its newest screenshots' file names.
+  ///   - counts: How many of each verb it did.
+  ///   - appCounts: How many of its actions named each app.
   public init(
     key: String,
     name: String,
@@ -83,7 +94,9 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
     plans: [HostSessionPlan] = [],
     installs: [String] = [],
     cleanup: CleanupState? = nil,
-    screenshots: [String] = []
+    screenshots: [String] = [],
+    counts: [String: Int] = [:],
+    appCounts: [String: Int] = [:]
   ) {
     self.key = key
     self.name = name
@@ -101,13 +114,15 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
     self.installs = installs
     self.cleanup = cleanup
     self.screenshots = screenshots
+    self.counts = counts
+    self.appCounts = appCounts
   }
 
   /// The fields of one `sessions` entry.
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.
     case key, host, hostLabel, name, folder, startedAt, lastSeenAt, endedAt, state, actions, apps, copies, plans,
-      installs, cleanup, screenshots
+      installs, cleanup, screenshots, counts, appCounts
   }
 
   /// Decodes a record, keeping the default of anything missing or of the wrong type; each app, copy, plan and install
@@ -142,5 +157,7 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
     cleanup = CleanupState(word: container.lenientText(.cleanup))
     screenshots = container.lenientList(String.self, forKey: .screenshots)
       .filter { !$0.isEmpty }
+    counts = container.lenientCounts(.counts)
+    appCounts = container.lenientCounts(.appCounts)
   }
 }

@@ -99,7 +99,7 @@ extension ViewerPresenter {
     switch filter {
     case .all: .all
     case .problems: .problems
-    case .screenshots: .screenshots
+    case .screenshots: .pictures
     case .typing: .typing
     }
   }

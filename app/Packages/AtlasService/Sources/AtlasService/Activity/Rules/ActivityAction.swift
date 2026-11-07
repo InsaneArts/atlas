@@ -2,7 +2,7 @@
 /// line with its kind. A row from a build that sent no verb reads by its words, which lead with that verb ("clicked
 /// Save in TextEdit", "couldn't scroll", "opening TextEdit…"); a row that says nothing Atlas knows reads by its
 /// operation.
-public enum ActivityAction: Equatable, Sendable {
+public enum ActivityAction: Hashable, Sendable {
   /// A click, a drag or the pointer moved, and mouse-and-keyboard input with no finer verb.
   case pointer
   /// Text typed.

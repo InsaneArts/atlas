@@ -25,8 +25,7 @@ extension ViewerPresenter {
       of: shown,
       filter: activityFilter(facts.filter),
       uncertainRow: snapshot.reading.statusReading.uncertainRow,
-      choices: facts.choices,
-      now: snapshot.date
+      choices: facts.choices
     )
     let today = snapshot.zonedCalendar.startOfDay(for: snapshot.date)
     var days: [ViewerActivityDay] = []
@@ -45,7 +44,7 @@ extension ViewerPresenter {
       let fold = folds[moment.id] ?? .folded
       var nested = momentHeader(moment, fold: fold, snapshot)
       if fold.isOpen {
-        let (steps, more) = moment.steps(expanded: facts.expanded.contains(moment.id))
+        let (steps, more) = (moment.runs, 0)
         nested.steps = steps.enumerated()
           .map { index, run in
             var step = activityStep(run, in: moment, moments: moments, snapshot)

@@ -33,8 +33,9 @@ extension ActivityMoments {
     }
 
     /// Whether an older line joins the moment: on the same day, at most ``ActivityMoments/momentGap`` before its
-    /// oldest line, and in the same app, in none, or the moment is in none yet. A line or a moment with no time is
-    /// never too far.
+    /// oldest line, and in the same app, in none, or the moment is in none yet. A line in no app joins a moment in none
+    /// however long before it was, so neighbouring commands and screenshots read as one run. A line or a moment with no
+    /// time is never too far.
     ///
     /// - Parameters:
     ///   - run: The line.
@@ -43,6 +44,7 @@ extension ActivityMoments {
     /// - Returns: Whether it joins.
     func takes(_ run: ActivityRun, app: ActivityApp?, day: Date) -> Bool {
       guard day == self.day else { return false }
+      if app == nil, self.app == nil { return true }
       if let startedAt, let ended = run.endedAt, startedAt.timeIntervalSince(ended) > ActivityMoments.momentGap {
         return false
       }
