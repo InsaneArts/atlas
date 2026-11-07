@@ -1222,3 +1222,15 @@ fn a_sample_that_came_before_the_ask_proves_no_one_shot_picture_however_late_it_
     let _ = callback.answer(&late, came);
     assert!(waiting(&callback.picture_after(asked)));
 }
+
+#[test]
+fn a_stop_screencapturekit_confirms_in_its_usual_time_is_confirmed() {
+    let (send, receive) = mpsc::sync_channel(1);
+    // ScreenCaptureKit takes 170-200 ms, sometimes a little more.
+    let confirming = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(250));
+        send.send(Ok(())).unwrap();
+    });
+    assert!(confirmed_stop(&receive, &mut None, true).unwrap());
+    confirming.join().unwrap();
+}

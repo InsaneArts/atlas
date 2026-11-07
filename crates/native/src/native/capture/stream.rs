@@ -83,7 +83,10 @@ const RENEW: Duration = Duration::from_secs(10);
 /// screen stays still, often for longer than [`RENEW`], so this alone bounds
 /// how long a stream that stalled without saying so shows an old picture.
 const SILENT_RENEW: Duration = Duration::from_secs(60);
-const STOP_WAIT: Duration = Duration::from_millis(200);
+/// How long a stop waits for ScreenCaptureKit to confirm it, which takes
+/// 170–200 ms here. A stop not confirmed in time leaves the source stopping,
+/// and the owner's frames are refused until its own stop settles it.
+const STOP_WAIT: Duration = Duration::from_millis(500);
 /// How long a one-shot picture waits for the open stream to prove its
 /// picture current: a few refreshes, as a screen that changes, or changed in
 /// the last few seconds, sends a sample at each. A still screen sends none,
