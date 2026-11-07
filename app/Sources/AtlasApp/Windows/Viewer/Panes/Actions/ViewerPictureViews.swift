@@ -94,9 +94,10 @@ final class ViewerPictureViews {
     copying = Task { [weak self, service] in
       // A picture that cannot be read gives nothing; the person can ask again.
       let data = try? await service.screenshot(name: name, full: true)
-      guard !Task.isCancelled, let self, let data else { return }
+      let png = if let data { await ImageEncoding.png(data) } else { Data?.none }
+      guard !Task.isCancelled, let self, let png else { return }
       copying = nil
-      outlet.copy(data)
+      outlet.copy(png)
     }
   }
 
@@ -109,9 +110,10 @@ final class ViewerPictureViews {
     copying?.cancel()
     copying = Task { [weak self, service] in
       let data = try? await service.screenshot(name: name, full: true)
-      guard !Task.isCancelled, let self, let data else { return }
+      let png = if let data { await ImageEncoding.png(data) } else { Data?.none }
+      guard !Task.isCancelled, let self, let png else { return }
       copying = nil
-      if outlet.save(data, file) == false { failed() }
+      if outlet.save(png, file) == false { failed() }
     }
   }
 
@@ -180,6 +182,11 @@ final class ViewerPictureViews {
       if !shown.replay { model.panes.activity.replay = nil }
     }
     let shows = model.viewer?.shown == true && model.viewer?.session.place == .activity
+    if !shows || model.panes.activity.sheet == nil {
+      // A copy or save asked of a sheet no longer shown never lands over what the person copies next.
+      copying?.cancel()
+      copying = nil
+    }
     let wanted = shows ? wantedPictures() : []
     for (name, load) in loads where !wanted.contains(name) {
       load.cancel()
@@ -252,7 +259,8 @@ final class ViewerPictureViews {
       case .shot(let name):
         return [name]
       case .before(let row):
-        let entry = run.runs.flatMap(\.members)
+        let entry = run.runs
+          .flatMap(\.members)
           .first { $0.id == row }
         return Set([entry?.before, entry?.after].compactMap { $0 })
       }

@@ -17,7 +17,7 @@ struct ReplayLayer: View {
       ZStack {
         if let replay {
           Color.letterbox
-            .opacity(ViewerLayout.shotScrim)
+            .opacity(ViewerLayout.replayScrim)
             .contentShape(Rectangle())
             .onTapGesture { send(.closeReplay) }
           card(replay, in: proxy.size)
@@ -26,7 +26,7 @@ struct ReplayLayer: View {
       .frame(width: proxy.size.width, height: proxy.size.height)
       .transition(.opacity)
     }
-    .animation(ViewerLayout.shotFade, value: replay == nil)
+    .animation(ViewerLayout.replayFade, value: replay == nil)
     .accessibilityElement(children: .contain)
     .accessibilityAddTraits(replay == nil ? [] : .isModal)
   }

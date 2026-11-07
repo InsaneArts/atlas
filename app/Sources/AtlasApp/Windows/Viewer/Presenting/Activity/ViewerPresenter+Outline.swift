@@ -41,7 +41,8 @@ extension ViewerPresenter {
     let chosen = snapshot.shownSessions.key != nil
     return order.map { day in
       let id = "\(Int(day.timeIntervalSince1970))"
-      let title = order.count > 1 ? dayTitle(day, snapshot) : ""
+      let name = dayTitle(day, snapshot)
+      let title = order.count > 1 ? name : ""
       let all = byDay[day] ?? []
       let listed = chosen || facts.shownDays.contains(id) ? all : Array(all.prefix(ViewerWords.mostSessions))
       let sessions = listed.map { group in
@@ -52,7 +53,7 @@ extension ViewerPresenter {
         id: id,
         title: title,
         sessions: sessions,
-        more: rest > 0 ? ViewerMoreSessions(day: id, title: ViewerWords.moreSessions(rest, day: title)) : nil
+        more: rest > 0 ? ViewerMoreSessions(day: id, title: ViewerWords.moreSessions(rest, day: name)) : nil
       )
     }
   }
@@ -72,7 +73,8 @@ extension ViewerPresenter {
   }
 
   /// A session of the outline: its agent and project, what it did, its problems and when; open while it works, while
-  /// it is the only one, or as the person chose, else folded to its newest pictures.
+  /// it is the only one, under a filter, or as the person chose, else folded to its newest pictures; always open while
+  /// one of its runs is held open.
   ///
   /// - Parameters:
   ///   - group: The session's runs on one day.
@@ -93,8 +95,11 @@ extension ViewerPresenter {
     let facts = snapshot.panes.activity
     let tally = group.tally
     let (icon, agent, project, working) = sessionHead(group.stream, snapshot)
-    let opensByDefault = working || only
-    let isOpen = chosen || (facts.sessionChoices[group.id] ?? opensByDefault)
+    // A run held open, as its action's outcome is unknown, keeps its session open, so its recovery shows; under a
+    // filter a session opens on the steps it kept.
+    let held = group.runs.contains { folds[$0.id] == .held }
+    let opensByDefault = working || only || facts.filter != .all
+    let isOpen = chosen || held || (facts.sessionChoices[group.id] ?? opensByDefault)
     let shots = group.shots
     return ViewerOutlineSession(
       id: group.id,
@@ -228,12 +233,16 @@ extension ViewerPresenter {
   static func pictureTile(_ name: String?, _ snapshot: ViewerSnapshot) -> ViewerPictureTile? {
     guard let name else { return nil }
     let listed = snapshot.panes.shots.shots ?? []
-    let taken = listed.first { $0.name == name }?.takenAt
+    let taken = listed.first { $0.name == name }?
+      .takenAt
     let time = taken.map { clock($0, snapshot) } ?? ""
     return ViewerPictureTile(
       id: name,
       thumbnail: snapshot.panes.thumbnails[name],
-      fillsFrame: ScreenshotShape.fillsFrame(name, in: listed),
+      fillsFrame: ScreenshotShape.fillsFrame(
+        listed.first { $0.name == name },
+        display: snapshot.reading.status.overview.display.map { CGSize(width: $0.width, height: $0.height) }
+      ),
       isCurrent: snapshot.panes.activity.sheet?.item == .shot(name),
       label: ViewerWords.dotted([ViewerWords.screenshotWord, time])
     )

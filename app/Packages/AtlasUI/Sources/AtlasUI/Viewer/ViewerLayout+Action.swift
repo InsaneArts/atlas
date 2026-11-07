@@ -54,8 +54,6 @@ extension ViewerLayout {
   static let stepPictureZoom: CGFloat = 2.6
   /// 3: how far each picture behind a folded step's stands up and to the side.
   static let stepPictureStack: CGFloat = 3
-  /// 40: the least width of a pictured step's time, such as "5 min", so the small pictures stand in one column.
-  static let stepPictureTime: CGFloat = 40
   /// 22: a replayed step's disc.
   static let stepDisc: CGFloat = 22
   /// 6: a replayed step's small picture's corner.
@@ -63,20 +61,7 @@ extension ViewerLayout {
   /// 15: a folded step's count's height.
   static let stepCount: CGFloat = 15
 
-  /// 16: the opaque panel's inset around an action's large picture, its words, its details and its bar.
-  static let actionPanelInset = Spacing.l
-  /// 232: the details' column beside an action's large picture.
-  static let actionDetails: CGFloat = 232
-  /// 1040 by 600: the most room an action's large view takes: its picture, its details and its bar.
-  static let actionLargest = CGSize(width: 1040, height: 600)
-  /// 26: the round handle on the line between before and after.
-  static let compareHandle: CGFloat = 26
-  /// 2: the line between before and after.
-  static let compareLine = Stroke.thick
-  /// 0.5: where the line between before and after starts, as a share of the picture's width.
-  static let compareStart: CGFloat = 0.5
-
-  /// 24: the agent's icon leading a replay's title and an action's words shown large.
+  /// 24: the agent's icon leading a replay's title.
   static let replayAgentIcon = IconSize.m
   /// 820: a replay's widest.
   static let replayWidth: CGFloat = 820
@@ -93,33 +78,12 @@ extension ViewerLayout {
   /// 6: the most frames the strip shows side by side before it scrolls.
   static let replayStripMost = 6
 
-  /// The room an action's large view leaves around its picture: the details beside it and the margins, across; its
-  /// words over it, its bar under it and the margins, down.
-  private static let actionAround = CGSize(
-    width: actionDetails + Spacing.mPlus + (Spacing.xxxl + Spacing.xxxl) + actionPanelInset * 2,
-    height: ControlHeight.xl + ControlHeight.mPlus + (Spacing.mPlus + shotBarInset) * 2 + actionPanelInset * 2
-  )
   /// The window's margins either side of a replay's card, and the card's own insets.
   private static let replaySides = (Spacing.xxxl + Spacing.mPlus) * 2
   /// The height a replay's card takes beside its picture and strip: the window's margins and the card's insets, its
   /// head, what the step did, its controls, and the four gaps between them.
   private static let replayAround =
     replaySides + ControlHeight.xl + replaySay + replayButton + (Spacing.m + Spacing.m) * 2
-
-  /// How large an action's picture is drawn in its large view: at its own shape, within ``actionLargest`` less the
-  /// details, and within a window `window` large less the room around it.
-  ///
-  /// - Parameters:
-  ///   - aspect: The picture's shape.
-  ///   - window: The window's size.
-  /// - Returns: The picture's size; zero when nothing fits.
-  static func actionPictureSize(aspect: CGSize, in window: CGSize) -> CGSize {
-    let room = CGSize(
-      width: min(actionLargest.width - actionDetails - Spacing.mPlus, window.width - actionAround.width),
-      height: min(actionLargest.height, window.height - actionAround.height)
-    )
-    return fitted(aspect, in: room)
-  }
 
   /// How large a replay's picture is drawn: at its own shape, as wide as the replay, and within a window `window`
   /// large less its words, its strip, the strip's app names when it has them, and its bar.

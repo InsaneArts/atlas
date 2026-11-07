@@ -35,16 +35,10 @@ enum ViewerLayout {
   static let shotHeadingTop = Spacing.sPlus
   /// 16: above each later heading, past the gap under the row before it, so a group reads apart from the last.
   static let shotHeadingAbove = Spacing.l
-  /// 6: between a screenshot and its time under it.
-  static let shotTimeGap = Spacing.xsPlus
-  /// 0.72: the shade over the window behind a screenshot shown large; the window behind is not blurred, the shade is
-  /// enough.
-  static let shotScrim = 0.72
-  /// The shade's and the large view's bar's fade, in and out: ``Motion/fade``, which only changes opacity, so
-  /// Reduce Motion keeps it.
-  static var shotFade: Animation { Motion.fade }
-  /// 26: from the window's bottom to the large screenshot's bar.
-  static let shotBarInset: CGFloat = 26
+  /// 0.72: the shade over the window behind a run replayed; the window behind is not blurred, the shade is enough.
+  static let replayScrim = 0.72
+  /// The replay's shade's fade, in and out: ``Motion/fade``, which only changes opacity, so Reduce Motion keeps it.
+  static var replayFade: Animation { Motion.fade }
   /// 0.36: how dark the picture goes outside a window shown from the Apps pane.
   static let spotlightDim = 0.36
   /// 14: how much the last picture blurs behind Connecting's words.
@@ -55,7 +49,7 @@ enum ViewerLayout {
   static let lastFrameShade = 0.55
   /// 1.04: how much larger the blurred picture draws than the stage, so its blurred edges fall outside it.
   static let lastFrameScale: CGFloat = 1.04
-  /// 1040 by 650: the largest a screenshot is drawn in the large view, leaving room for its controls.
+  /// 1040 by 650: the size the previews draw a pane at.
   static let largeShotLargest = CGSize(width: 1040, height: 650)
 
   /// How large the mini screen draws as it comes in: from ``miniArrival`` while it fades in on its own; its own size
@@ -100,28 +94,5 @@ enum ViewerLayout {
       width: outline.width * shown.width,
       height: outline.height * shown.height
     )
-  }
-
-  /// The width a large screenshot leaves beside it: Previous and Next, each with its gap and the page margin.
-  private static let largeShotBeside = (ControlHeight.mPlus + Spacing.mPlus + Spacing.xxxl) * 2
-  /// The height a large screenshot leaves above and below it, as it is centred: the bar at the window's foot, its
-  /// inset under it and a gap over it, on each side.
-  private static let largeShotUnder = (shotBarInset + ControlHeight.mPlus + Spacing.mPlus) * 2
-
-  /// How large a screenshot is drawn in the large view: at its own shape, within ``largeShotLargest``, and within a
-  /// window `window` large with room for Previous and Next beside it and the bar under it.
-  ///
-  /// - Parameters:
-  ///   - aspect: The screenshot's shape.
-  ///   - window: The window's size.
-  /// - Returns: The picture's size; zero when nothing fits.
-  static func largeShotSize(aspect: CGSize, in window: CGSize) -> CGSize {
-    let room = CGSize(
-      width: min(largeShotLargest.width, window.width - largeShotBeside),
-      height: min(largeShotLargest.height, window.height - largeShotUnder)
-    )
-    guard aspect.width > 0, aspect.height > 0, room.width > 0, room.height > 0 else { return .zero }
-    let scale = min(room.width / aspect.width, room.height / aspect.height)
-    return CGSize(width: aspect.width * scale, height: aspect.height * scale)
   }
 }

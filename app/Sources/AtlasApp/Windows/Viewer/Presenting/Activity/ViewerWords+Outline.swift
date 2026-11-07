@@ -170,7 +170,9 @@ extension ViewerWords {
   static func listed(_ phrases: [String]) -> String {
     guard let last = phrases.last else { return "" }
     guard phrases.count > 1 else { return last }
-    return "\(phrases.dropLast().joined(separator: ", ")) and \(last)"
+    let rest = phrases.dropLast()
+      .joined(separator: ", ")
+    return "\(rest) and \(last)"
   }
 
   /// A count with the locale's grouping, such as "5,044".

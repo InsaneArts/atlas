@@ -39,7 +39,10 @@ extension ViewerPresenter {
         canExport: list.pictureFile(named: shot) != nil
       )
     case .before(let row):
-      guard let entry = run.runs.flatMap(\.members).first(where: { $0.id == row }), let before = entry.before else {
+      let entry = run.runs
+        .flatMap(\.members)
+        .first { $0.id == row }
+      guard let entry, let before = entry.before else {
         return nil
       }
       let after = entry.after
@@ -97,7 +100,8 @@ extension ViewerPresenter {
     case .shot(let shot):
       return shot
     case .before(let row):
-      let entry = run.runs.flatMap(\.members)
+      let entry = run.runs
+        .flatMap(\.members)
         .first { $0.id == row }
       guard focus.side == .after, let after = entry?.after else { return entry?.before }
       return after

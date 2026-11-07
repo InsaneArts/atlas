@@ -248,14 +248,14 @@
         icon: SessionSamples.codexIcon,
         agent: "Codex",
         project: "atlas-t\(index % 4 + 1)-r\(index % 3 + 1)",
-        summary: "TextEdit · \(index % 3 + 3) actions · \(index % 2 + 1) screenshots",
+        summary: "TextEdit · \(index % 3 + 3) actions · \(index % 2 == 0 ? "1 screenshot" : "2 screenshots")",
         time: time,
         isOpen: false,
         runs: [],
         strip: ViewerPictureStrip(
           run: "run.codex.\(index)",
-          tiles: outlineTiles("codex-\(index)", count: index % 2 + 1),
-          total: index % 2 + 1
+          tiles: outlineTiles("codex-\(index)", count: index % 2 == 0 ? 1 : 2),
+          total: index % 2 == 0 ? 1 : 2
         )
       )
     }
