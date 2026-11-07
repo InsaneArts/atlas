@@ -164,7 +164,7 @@ pub(crate) fn spawn(mut acquire: impl Acquire, budget: Budget, input: Arc<Notify
             let asked = *wanted.borrow_and_update();
             if asked > answered {
                 let began = tokio::time::Instant::now();
-                let latest = match acquire.acquire(&budget).await {
+                let latest = match read(&mut acquire, &budget).await {
                     Ok(picture) => {
                         let picture = Arc::new(picture);
                         still.saw(&picture);
@@ -212,6 +212,19 @@ pub(crate) fn spawn(mut acquire: impl Acquire, budget: Budget, input: Arc<Notify
         demand,
         answers,
         task,
+    }
+}
+
+/// The next picture from `acquire`. One that came too late is read again,
+/// once and at once: the helper was slow for a moment, as when WindowServer
+/// stalls, and its stream is still at a frame boundary. Reported as a
+/// failure, it would end every observer's credits and, with no demand left,
+/// the helper's stream; the new reading still begins after the demand it
+/// answers.
+async fn read(acquire: &mut impl Acquire, budget: &Budget) -> Result<Picture, Reason> {
+    match acquire.acquire(budget).await {
+        Err(Reason::SourceStale) => acquire.acquire(budget).await,
+        read => read,
     }
 }
 

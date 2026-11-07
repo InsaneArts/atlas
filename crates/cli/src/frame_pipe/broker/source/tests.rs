@@ -249,3 +249,62 @@ async fn pictures_of_a_still_screen_are_each_new_and_a_failure_lets_the_last_go(
     *fail.lock().unwrap() = None;
     assert_eq!(gaps(&mut handle, 1).await, [CADENCE]);
 }
+
+/// A source whose first picture comes too late.
+struct LateOnce {
+    source: Scripted,
+    late: bool,
+}
+
+impl Acquire for LateOnce {
+    async fn acquire(&mut self, budget: &Budget) -> Result<Picture, Reason> {
+        if std::mem::take(&mut self.late) {
+            self.source.log.0.lock().unwrap().push("late");
+            return Err(Reason::SourceStale);
+        }
+        self.source.acquire(budget).await
+    }
+
+    async fn stop(&mut self) -> Result<(), Reason> {
+        self.source.stop().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_picture_that_came_too_late_is_read_again_at_once_and_the_new_one_answers() {
+    let (source, log, _) = scripted();
+    let late = LateOnce { source, late: true };
+    let mut handle = spawn(late, Budget::new(1024), quiet());
+    let demand = handle.want();
+    assert!(matches!(
+        answer(&mut handle, demand).await.latest,
+        Latest::Picture(_)
+    ));
+    assert_eq!(log.take(), ["late", "acquire"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_picture_too_late_twice_in_a_row_is_the_answer() {
+    let (source, log, fail) = scripted();
+    *fail.lock().unwrap() = Some(Reason::SourceStale);
+    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let demand = handle.want();
+    assert!(matches!(
+        answer(&mut handle, demand).await.latest,
+        Latest::Failed(Reason::SourceStale)
+    ));
+    assert_eq!(log.take(), ["acquire", "acquire"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn any_other_failure_is_the_answer_without_reading_again() {
+    let (source, log, fail) = scripted();
+    *fail.lock().unwrap() = Some(Reason::SourceStartFailed);
+    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let demand = handle.want();
+    assert!(matches!(
+        answer(&mut handle, demand).await.latest,
+        Latest::Failed(Reason::SourceStartFailed)
+    ));
+    assert_eq!(log.take(), ["acquire"]);
+}
