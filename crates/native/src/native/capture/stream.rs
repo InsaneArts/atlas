@@ -84,6 +84,13 @@ const RENEW: Duration = Duration::from_secs(10);
 /// how long a stream that stalled without saying so shows an old picture.
 const SILENT_RENEW: Duration = Duration::from_secs(60);
 const STOP_WAIT: Duration = Duration::from_millis(200);
+/// How long a one-shot picture waits for the open stream to prove its
+/// picture current: a few refreshes, as a screen that changes, or changed in
+/// the last few seconds, sends a sample at each. A still screen sends none,
+/// and its picture is taken another way.
+const PICTURE_WAIT: Duration = Duration::from_millis(50);
+/// How often a one-shot picture asked of an open stream looks again.
+const PICTURE_CHECK: Duration = Duration::from_millis(5);
 /// How far ahead of its callback a sample may be stamped. Its display time
 /// is the refresh that shows it, a few milliseconds away at most; a clock in
 /// other units would be off by far more.
@@ -242,6 +249,9 @@ struct Slot {
     preparing: AtomicBool,
     /// Whether the screen recorder was restarted since the last request.
     restarted: AtomicBool,
+    /// The open stream's state, for one-shot pictures to read without a
+    /// request of their own.
+    serving: Mutex<Option<Arc<Callback>>>,
     failure: Mutex<Option<(Code, String)>>,
     diagnostics: Diagnostics,
 }
@@ -378,6 +388,31 @@ impl Slot {
         }
     }
 }
+/// Why an open stream did not give a one-shot picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Unserved {
+    /// No stream is open.
+    Closed,
+    /// The open stream shows another session or display.
+    Elsewhere,
+    /// The open stream's pictures have fewer pixels than asked for.
+    Smaller,
+    /// The stream proved no picture current in time: the screen is still,
+    /// or the stream has no picture.
+    Unproven,
+}
+
+impl Unserved {
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::Closed => "no-stream",
+            Self::Elsewhere => "other-display",
+            Self::Smaller => "smaller",
+            Self::Unproven => "unproven",
+        }
+    }
+}
+
 enum Message {
     Capture(Pending),
     Stop(SyncSender<Result<()>>),
@@ -413,6 +448,84 @@ fn worker() -> Result<Worker> {
 pub fn stream_diagnostics() -> Option<Value> {
     let cached = WORKER.get()?.lock().ok()?;
     Some(cached.as_ref()?.slot.diagnostics.snapshot())
+}
+
+/// The display as the open stream shows it now, for a one-shot picture of
+/// at most `limit` pixels on its longer side, without a request of its own,
+/// so the stream's own requests go on as they were: the stream's newest
+/// picture, once a valid sample stamped after this call began says it is
+/// current. The copy is bracketed by session, display and consent checks.
+/// This never opens a stream, waits up to [`PICTURE_WAIT`], and never waits
+/// on the stream's sample queue.
+///
+/// # Errors
+///
+/// Returns why the stream gave no picture; the caller then captures it
+/// another way.
+pub(super) fn streamed_display_rgb(
+    display: u32,
+    limit: Option<u32>,
+) -> std::result::Result<RawShot, Unserved> {
+    let state = WORKER
+        .get()
+        .and_then(|cached| {
+            cached
+                .lock()
+                .ok()?
+                .as_ref()
+                .map(|worker| worker.slot.clone())
+        })
+        .and_then(|slot| {
+            slot.serving
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+        })
+        .filter(|state| state.current())
+        .ok_or(Unserved::Closed)?;
+    let epoch = native::session_info()
+        .and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
+        .map_err(|_| Unserved::Elsewhere)?;
+    let mode = CGDisplayCopyDisplayMode(display).ok_or(Unserved::Elsewhere)?;
+    let pixels = (
+        CGDisplayMode::pixel_width(Some(&mode)),
+        CGDisplayMode::pixel_height(Some(&mode)),
+    );
+    // The display's backing scale is part of what the stream shows: a mode
+    // change of the same display and points makes its pictures obsolete.
+    if epoch != state.key.epoch
+        || epoch.display_id != u64::from(display)
+        || pixels.0 as f64 / epoch.width != state.key.scale
+    {
+        return Err(Unserved::Elsewhere);
+    }
+    let (width, height) = fit(pixels.0, pixels.1, limit);
+    if width > state.key.width || height > state.key.height {
+        return Err(Unserved::Smaller);
+    }
+    let asked = checkpoint();
+    let started = Instant::now();
+    loop {
+        match state.picture_after(asked) {
+            Proof::Proven(picture) => return picture.map_err(|_| Unserved::Unproven),
+            Proof::Never => return Err(Unserved::Unproven),
+            Proof::Waiting if started.elapsed() >= PICTURE_WAIT => {
+                return Err(Unserved::Unproven);
+            }
+            Proof::Waiting => std::thread::sleep(PICTURE_CHECK),
+        }
+    }
+}
+
+/// What an open stream says of a one-shot picture asked for at a moment.
+enum Proof {
+    /// A valid sample stamped after it says the newest picture is current;
+    /// here is its copy.
+    Proven(Result<RawShot>),
+    /// None has yet, or the stream's sample queue holds the picture now.
+    Waiting,
+    /// The stream was replaced or stopped, or is due for renewal.
+    Never,
 }
 
 /// The display as the stream shows it after this call began: a picture
@@ -522,7 +635,7 @@ pub fn stream_display_rgb(
                 return Err(worker.slot.failure().unwrap_or_else(cancelled));
             }
             guard(&epoch)?;
-            let shot = super::main_display_rgb(display, limit)?;
+            let shot = super::core_graphics_rgb(display, limit)?;
             guard(&epoch)?;
             let reason = if !sent {
                 "queue-full"
@@ -800,6 +913,9 @@ struct Callback {
     /// complete or unchanged one stamped no earlier than the one before and
     /// not ahead of [`LEAD`].
     stamped: AtomicU64,
+    /// When that sample's callback began, in mach ticks, before it waited for
+    /// anything; 0 before the first. Written under `newest`, with `stamped`.
+    received: AtomicU64,
     /// The session, display and consent check around every copy.
     guard: fn(&InputEpoch) -> Result<()>,
 }
@@ -813,6 +929,7 @@ impl Callback {
             newest: Mutex::new(None),
             heard: AtomicU64::new(checkpoint()),
             stamped: AtomicU64::new(checkpoint()),
+            received: AtomicU64::new(0),
             guard,
         }
     }
@@ -844,6 +961,33 @@ impl Callback {
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .is_none())
+    }
+
+    /// The newest picture, copied, once a valid sample stamped and received
+    /// after `asked` says it is current. Never blocks on the sample queue: while it
+    /// holds the picture, this is still waiting.
+    fn picture_after(&self, asked: u64) -> Proof {
+        if !self.current() || self.stale(SILENT_RENEW) {
+            return Proof::Never;
+        }
+        let newest = match self.newest.try_lock() {
+            Ok(newest) => newest,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return Proof::Waiting,
+        };
+        // Under the lock, the newest picture is at least as new as the
+        // stamp. A sample may be stamped a moment ahead, so one received
+        // before the ask proves nothing of the screen after it.
+        if self.stamped.load(Ordering::Acquire) <= asked
+            || self.received.load(Ordering::Acquire) <= asked
+        {
+            return Proof::Waiting;
+        }
+        match newest.as_ref() {
+            Some(Newest(buffer)) => Proof::Proven(self.copy(buffer, false)),
+            // The last sample proved nothing, or no picture came yet.
+            None => Proof::Waiting,
+        }
     }
 
     fn stopped(&self, check: impl FnOnce() -> Result<()>) {
@@ -882,8 +1026,9 @@ impl Callback {
         if !self.current() {
             return;
         }
-        self.heard.store(checkpoint(), Ordering::Release);
-        let answer = self.answer(sample);
+        let arrived = checkpoint();
+        self.heard.store(arrived, Ordering::Release);
+        let answer = self.answer(sample, arrived);
         self.settle(answer);
     }
 
@@ -933,7 +1078,7 @@ impl Callback {
 
     /// Note what `sample` says of the screen, then the picture it answers
     /// the pending request with, if it answers it.
-    fn answer(&self, sample: &CMSampleBuffer) -> Result<Option<(u64, RawShot)>> {
+    fn answer(&self, sample: &CMSampleBuffer, arrived: u64) -> Result<Option<(u64, RawShot)>> {
         let metadata = metadata(sample)?;
         // Only this stream's sample queue holds this lock for longer than a
         // look, and takes the pending request's only briefly while holding
@@ -956,9 +1101,11 @@ impl Callback {
                 // SAFETY: a live SCK screen sample; its image buffer is retained.
                 *newest = unsafe { sample.image_buffer() }.map(Newest);
                 self.stamped.store(time, Ordering::Release);
+                self.received.store(arrived, Ordering::Release);
             }
             Some((status, time)) if status == SCFrameStatus::Idle.0 as i64 => {
                 self.stamped.store(time, Ordering::Release);
+                self.received.store(arrived, Ordering::Release);
             }
             _ => *newest = None,
         }
@@ -1277,7 +1424,11 @@ fn prepare(key: Key, slot: Arc<Slot>, run_loop: CFRetained<CFRunLoop>) {
                         Running::start(content, key.clone(), slot.clone(), generation)
                     });
                 match result {
-                    Ok(source) => RUNNING.with(|running| *running.borrow_mut() = Some(source)),
+                    Ok(source) => {
+                        *slot.serving.lock().unwrap_or_else(|p| p.into_inner()) =
+                            Some(source.state.clone());
+                        RUNNING.with(|running| *running.borrow_mut() = Some(source));
+                    }
                     Err(error) => {
                         slot.diagnostics
                             .setup_errors
@@ -1352,6 +1503,7 @@ fn stop_native(slot: &Slot, wait: bool) -> Result<bool> {
         // The delegate cannot access its Rust state after this drain. If a
         // callback is slow, its one source stays quarantined on this worker.
         source.queue.exec_sync(|| {});
+        *slot.serving.lock().unwrap_or_else(|p| p.into_inner()) = None;
         *running = None;
         Ok(true)
     })?;

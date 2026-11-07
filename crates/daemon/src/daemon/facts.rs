@@ -135,6 +135,7 @@ pub(super) fn hello(
     if let Some(stats) = capture::stream_diagnostics() {
         hello["daemon"]["captureStats"] = stats;
     }
+    hello["daemon"]["pictureStats"] = capture::picture_diagnostics();
     hello
 }
 

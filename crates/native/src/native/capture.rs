@@ -22,6 +22,7 @@ use objc2_image_io::{
     CGImageDestination, CGImageSource, kCGImageDestinationLossyCompressionQuality,
 };
 
+mod pictures;
 mod raw;
 pub mod source;
 mod stream;
@@ -193,10 +194,19 @@ pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)>
 /// encoded.
 pub fn jpeg_rgb(
     rgb: &[u8],
-    (width, height, stride): (usize, usize, usize),
+    layout: (usize, usize, usize),
     limit: u32,
     quality: f64,
 ) -> Result<(Vec<u8>, u32, u32)> {
+    jpeg_of(rgb_pixels_image(rgb, layout)?, limit, quality)
+}
+
+/// Packed 8-bit sRGB pixels, `width`×`height` with rows `stride` bytes
+/// apart, as an image.
+fn rgb_pixels_image(
+    rgb: &[u8],
+    (width, height, stride): (usize, usize, usize),
+) -> Result<CFRetained<CGImage>> {
     let failed = || Error::new(Code::Capture, "The screen could not be read");
     let row = width.checked_mul(3).ok_or_else(failed)?;
     let filled = height
@@ -211,7 +221,7 @@ pub fn jpeg_rgb(
     let space = srgb().ok_or_else(failed)?;
     // SAFETY: the provider holds every row of 8-bit RGB the size and stride
     // describe, checked above, and no decode array is given.
-    let image = unsafe {
+    unsafe {
         CGImage::new(
             width,
             height,
@@ -226,8 +236,7 @@ pub fn jpeg_rgb(
             CGColorRenderingIntent::RenderingIntentDefault,
         )
     }
-    .ok_or_else(failed)?;
-    jpeg_of(image, limit, quality)
+    .ok_or_else(failed)
 }
 
 /// `image` as a JPEG of `quality`, at most `limit` pixels on its longest
@@ -321,14 +330,26 @@ fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
 }
 
 /// The checked main display, or only `area` of it (in global display
-/// points), at most `limit` pixels on its longest side.
+/// points), at most `limit` pixels on its longest side. The whole display
+/// comes from the open stream when it has the pixels asked for; otherwise,
+/// and for an area, from CoreGraphics. Each is counted, with why.
 ///
 /// # Errors
 ///
 /// Returns an error when Screen Recording is not allowed or the display can't
 /// be captured.
 pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
-    let (image, scale) = display_image(display, area)?;
+    consented()?;
+    let (image, scale) = match area {
+        None => match streamed(display, limit) {
+            Ok(shot) => (rgb_image(&shot)?, shot.scale),
+            Err(()) => display_image(display, None)?,
+        },
+        Some(area) => {
+            pictures::COUNTS.captured(pictures::Captured::Area);
+            display_image(display, Some(area))?
+        }
+    };
     let (image, target_width, target_height) = resized(image, limit)?;
 
     Ok(Shot {
@@ -339,28 +360,85 @@ pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> R
     })
 }
 
-/// The checked whole display as packed sRGB pixels, without image encoding.
-/// Session and display-epoch checks belong to the caller, around each capture.
+/// The checked whole display as packed sRGB pixels, without image encoding:
+/// from the open stream when it has the pixels asked for, otherwise from
+/// CoreGraphics, each counted, with why. Session and display-epoch checks
+/// belong to the caller, around each capture.
 ///
 /// # Errors
 ///
 /// Returns an error when Screen Recording is not allowed or the display can't
 /// be captured or read.
 pub fn main_display_rgb(display: u32, limit: Option<u32>) -> Result<RawShot> {
+    consented()?;
+    match streamed(display, limit) {
+        Ok(shot)
+            if fit(shot.width as usize, shot.height as usize, limit)
+                == (shot.width as usize, shot.height as usize) =>
+        {
+            Ok(shot)
+        }
+        Ok(shot) => raw::from_image(&*rgb_image(&shot)?, limit, shot.scale),
+        Err(()) => core_graphics_rgb(display, limit),
+    }
+}
+
+/// The checked whole display as packed sRGB pixels from CoreGraphics alone,
+/// for the stream's own fallback.
+///
+/// # Errors
+///
+/// Returns an error when Screen Recording is not allowed or the display can't
+/// be captured or read.
+pub(crate) fn core_graphics_rgb(display: u32, limit: Option<u32>) -> Result<RawShot> {
     let (image, scale) = display_image(display, None)?;
     raw::from_image(&image, limit, scale)
 }
 
-/// The one synchronous, consent-gated source of encoded and raw captures:
-/// the image, and the display's backing pixels per point.
-fn display_image(display: u32, area: Option<CGRect>) -> Result<(CFRetained<CGImage>, f64)> {
-    if !permitted() {
-        return Err(Error::new(
+/// The whole display from the open stream, counted either way: macOS's
+/// screen recorder keeps part of every CoreGraphics capture, but nothing
+/// measurable of a stream's pictures.
+fn streamed(display: u32, limit: Option<u32>) -> std::result::Result<RawShot, ()> {
+    match stream::streamed_display_rgb(display, limit) {
+        Ok(shot) => {
+            pictures::COUNTS.captured(pictures::Captured::Stream);
+            Ok(shot)
+        }
+        Err(why) => {
+            pictures::COUNTS.captured(pictures::Captured::CoreGraphics(why));
+            Err(())
+        }
+    }
+}
+
+/// Packed sRGB pixels as an image.
+fn rgb_image(shot: &RawShot) -> Result<CFRetained<CGImage>> {
+    let width = shot.width as usize;
+    rgb_pixels_image(&shot.rgb, (width, shot.height as usize, width * 3))
+}
+
+/// The counts of one-shot pictures: those the open stream gave, and those
+/// CoreGraphics took, with why the last of those did.
+pub fn picture_diagnostics() -> serde_json::Value {
+    pictures::COUNTS.snapshot()
+}
+
+fn consented() -> Result<()> {
+    if permitted() {
+        Ok(())
+    } else {
+        Err(Error::new(
             Code::Permission,
             "Screen Recording is not allowed for Atlas in the helper account",
-        ));
+        ))
     }
+}
 
+/// The one synchronous, consent-gated CoreGraphics capture: the image, and
+/// the display's backing pixels per point. Consent is checked right before
+/// it, however long the stream was waited for first.
+fn display_image(display: u32, area: Option<CGRect>) -> Result<(CFRetained<CGImage>, f64)> {
+    consented()?;
     let failed = || Error::new(Code::Capture, "The display could not be captured");
     let bounds = CGDisplayBounds(display);
     // Deprecated for ScreenCaptureKit, but still a synchronous, consent-gated

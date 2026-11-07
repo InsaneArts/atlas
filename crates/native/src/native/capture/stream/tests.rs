@@ -1103,3 +1103,122 @@ fn an_answer_that_lands_during_the_session_check_is_taken_instead_of_a_fallback(
     assert_eq!(answer.unwrap().unwrap().rgb, vec![5; 24]);
     assert_eq!(diagnostics.snapshot()["stalls"], 0);
 }
+
+fn proven(proof: Proof) -> Vec<u8> {
+    match proof {
+        Proof::Proven(picture) => picture.unwrap().rgb.to_vec(),
+        Proof::Waiting => panic!("still waiting"),
+        Proof::Never => panic!("never proven"),
+    }
+}
+
+fn waiting(proof: &Proof) -> bool {
+    matches!(proof, Proof::Waiting)
+}
+
+#[test]
+fn a_one_shot_picture_is_given_only_by_a_sample_stamped_after_it_was_asked() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    assert!(waiting(&callback.picture_after(t + 2)));
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 2));
+    assert!(
+        waiting(&callback.picture_after(t + 2)),
+        "stamped at the moment asked, not after"
+    );
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 3));
+    assert_eq!(proven(callback.picture_after(t + 2)), picture());
+    assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 0);
+}
+
+#[test]
+fn a_still_screens_silence_never_proves_a_one_shot_picture() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    heard_long_ago(&callback, RENEW);
+    assert!(waiting(&callback.picture_after(checkpoint())));
+}
+
+#[test]
+fn a_one_shot_picture_waits_while_the_stream_has_no_picture() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&marked(SCFrameStatus::Blank, Some(t + 1)));
+    assert!(waiting(&callback.picture_after(t)));
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 2));
+    assert_eq!(proven(callback.picture_after(t)), picture());
+}
+
+#[test]
+fn a_one_shot_picture_never_waits_on_the_sample_queue() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 3));
+    let holding = callback.newest.lock().unwrap();
+    assert!(waiting(&callback.picture_after(t + 2)));
+    drop(holding);
+    assert_eq!(proven(callback.picture_after(t + 2)), picture());
+}
+
+#[test]
+fn a_replaced_or_stale_stream_gives_no_one_shot_picture() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    proven_long_ago(&callback, SILENT_RENEW);
+    assert!(matches!(callback.picture_after(t), Proof::Never));
+
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 2));
+    slot.invalidate();
+    assert!(matches!(callback.picture_after(t), Proof::Never));
+}
+
+#[test]
+fn a_one_shot_picture_leaves_the_streams_own_request_waiting() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let reply = asked(&slot, 1, t + 5);
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 3));
+    assert_eq!(proven(callback.picture_after(t + 2)), picture());
+    assert!(unanswered(&reply));
+    assert!(slot.pending.lock().unwrap().is_some());
+    callback.sample(&stamped(SCFrameStatus::Idle, t + 6));
+    assert_eq!(reply.recv().unwrap().unwrap().rgb, picture());
+}
+
+#[test]
+fn a_sample_stamped_ahead_but_received_before_the_ask_proves_no_one_shot_picture() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let asked = checkpoint();
+    // Its display time is a moment after the ask, but it came before it.
+    callback.stamped.store(asked + 1_000, Ordering::Release);
+    callback.received.store(asked - 1, Ordering::Release);
+    assert!(
+        waiting(&callback.picture_after(asked)),
+        "the screen may have changed since it came"
+    );
+    callback.received.store(asked + 1, Ordering::Release);
+    assert_eq!(proven(callback.picture_after(asked)), picture());
+}
+
+#[test]
+fn a_sample_that_came_before_the_ask_proves_no_one_shot_picture_however_late_it_is_read() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let came = checkpoint();
+    let asked = came + 1;
+    // Its callback began before the ask, then waited for the picture's lock
+    // until after it; its display time is a moment ahead of the ask.
+    let late = stamped(SCFrameStatus::Idle, asked + 1);
+    let _ = callback.answer(&late, came);
+    assert!(waiting(&callback.picture_after(asked)));
+}
