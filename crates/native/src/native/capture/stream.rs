@@ -481,12 +481,12 @@ pub fn stream_display_rgb(
         .then(|| receive.recv_timeout(wait))
         .and_then(std::result::Result::ok);
     if sent && outcome.is_none() && !worker.slot.stopping.load(Ordering::Acquire) {
+        // A failed check earns no wait; the fallback's own check refuses.
         let check = || {
             let checking = Instant::now();
-            guard(&epoch)?;
-            Ok(checking.elapsed() >= STALLED)
+            guard(&epoch).is_ok() && checking.elapsed() >= STALLED
         };
-        outcome = after_stall(&receive, SILENCE, check, &worker.slot.diagnostics)?;
+        outcome = after_stall(&receive, SILENCE, check, &worker.slot.diagnostics);
     }
     worker
         .slot
@@ -534,7 +534,8 @@ pub fn stream_display_rgb(
     }
 }
 /// The answer to a request whose wait ran out, once `check`, the session
-/// check a CoreGraphics capture needs first, has said whether it was held up.
+/// check a CoreGraphics capture needs first, has said whether it passed and
+/// was held up.
 /// One held up says WindowServer stalled the whole session: the stream could
 /// send nothing meanwhile, and a CoreGraphics capture would have waited out
 /// the same stall. So the stream then has up to `grace` more, from the end
@@ -543,14 +544,14 @@ pub fn stream_display_rgb(
 fn after_stall(
     receive: &Receiver<Result<RawShot>>,
     grace: Duration,
-    check: impl FnOnce() -> Result<bool>,
+    check: impl FnOnce() -> bool,
     diagnostics: &Diagnostics,
-) -> Result<Option<Result<RawShot>>> {
-    if check()? {
+) -> Option<Result<RawShot>> {
+    if check() {
         diagnostics.stalls.fetch_add(1, Ordering::Relaxed);
-        return Ok(receive.recv_timeout(grace).ok());
+        return receive.recv_timeout(grace).ok();
     }
-    Ok(receive.try_recv().ok())
+    receive.try_recv().ok()
 }
 
 fn fallback_allowed(error: &Error) -> bool {

@@ -1029,26 +1029,20 @@ fn a_request_that_waited_through_a_window_server_stall_takes_the_streams_late_an
     });
     let check = || {
         stall_over.send(()).unwrap();
-        Ok(true)
+        true
     };
-    let answer = after_stall(&receive, Duration::from_secs(3600), check, &diagnostics).unwrap();
+    let answer = after_stall(&receive, Duration::from_secs(3600), check, &diagnostics);
     assert_eq!(answer.unwrap().unwrap().rgb, vec![7; 24]);
     assert_eq!(diagnostics.snapshot()["stalls"], 1);
     stream.join().unwrap();
 }
 
 #[test]
-fn a_request_whose_session_check_was_not_held_up_falls_back_without_waiting_longer() {
+fn a_request_whose_session_check_was_quick_or_failed_falls_back_without_waiting_longer() {
     let diagnostics = Diagnostics::default();
     let (_reply, receive) = mpsc::sync_channel::<Result<RawShot>>(1);
     // A wait here would outlast the test run; only a stall earns one.
-    let answer = after_stall(
-        &receive,
-        Duration::from_secs(3600),
-        || Ok(false),
-        &diagnostics,
-    );
-    assert!(answer.unwrap().is_none());
+    assert!(after_stall(&receive, Duration::from_secs(3600), || false, &diagnostics).is_none());
     assert_eq!(diagnostics.snapshot()["stalls"], 0);
 }
 
@@ -1058,23 +1052,9 @@ fn an_answer_that_lands_during_the_session_check_is_taken_instead_of_a_fallback(
     let (reply, receive) = mpsc::sync_channel(1);
     let check = || {
         reply.send(Ok(shot(5))).unwrap();
-        Ok(false)
+        false
     };
-    let answer = after_stall(&receive, Duration::from_secs(3600), check, &diagnostics).unwrap();
+    let answer = after_stall(&receive, Duration::from_secs(3600), check, &diagnostics);
     assert_eq!(answer.unwrap().unwrap().rgb, vec![5; 24]);
     assert_eq!(diagnostics.snapshot()["stalls"], 0);
-}
-
-#[test]
-fn a_failed_session_check_after_the_wait_refuses_the_request() {
-    let diagnostics = Diagnostics::default();
-    let (reply, receive) = mpsc::sync_channel(1);
-    reply.send(Ok(shot(5))).unwrap();
-    let answer = after_stall(
-        &receive,
-        Duration::from_secs(3600),
-        || Err(changed()),
-        &diagnostics,
-    );
-    assert!(matches!(answer, Err(error) if error.code == Code::SessionChanged));
 }
