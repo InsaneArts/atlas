@@ -737,6 +737,12 @@ fn heard_long_ago(callback: &Callback, ago: Duration) {
     callback.heard.store(then, Ordering::Release);
 }
 
+/// Make `callback` look as if its last valid sample was stamped `ago`.
+fn proven_long_ago(callback: &Callback, ago: Duration) {
+    let then = checkpoint() - ticks(ago) - ticks(Duration::from_millis(1));
+    callback.stamped.store(then, Ordering::Release);
+}
+
 fn unanswered(reply: &Receiver<Result<RawShot>>) -> bool {
     matches!(reply.try_recv(), Err(mpsc::TryRecvError::Empty))
 }
@@ -875,23 +881,62 @@ fn samples_that_prove_nothing_keep_a_stream_from_counting_as_silent_but_not_from
     let slot = Arc::new(Slot::default());
     let (callback, t) = streaming(&slot, 0);
     callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
-    assert!(!callback.stale(RENEW));
-    let long_ago = t - ticks(RENEW);
-    callback.stamped.store(long_ago, Ordering::Release);
+    assert!(!callback.due());
+    proven_long_ago(&callback, RENEW);
+    let long_ago = callback.stamped.load(Ordering::Acquire);
     let reply = asked(&slot, 1, t + 2);
     // Delivered, but stamped before the last valid sample: no progress.
     callback.sample(&stamped(SCFrameStatus::Idle, long_ago - 1));
     assert!(!callback.quiet(SILENCE));
-    assert!(
-        callback.stale(RENEW),
-        "only a valid sample proves the stream"
-    );
+    assert!(callback.due(), "only a valid sample proves the stream");
     heard_long_ago(&callback, SILENCE);
     callback.silent(1);
     assert!(
         unanswered(&reply),
         "a stream due for renewal serves nothing"
     );
+}
+
+#[test]
+fn a_still_screens_silent_stream_serves_its_newest_picture_past_the_short_renewal() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    // macOS then sends nothing while the screen stays still.
+    proven_long_ago(&callback, RENEW);
+    heard_long_ago(&callback, RENEW);
+    let reply = asked(&slot, 1, t + 2);
+    callback.silent(1);
+    let shot = reply.try_recv().expect("answered at once");
+    assert_eq!(shot.unwrap().rgb, picture());
+    assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 1);
+}
+
+#[test]
+fn a_silent_stream_is_renewed_once_its_picture_is_too_old_to_trust() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    proven_long_ago(&callback, RENEW);
+    assert!(!callback.due(), "a still screen sends nothing for a while");
+    proven_long_ago(&callback, SILENT_RENEW);
+    heard_long_ago(&callback, SILENT_RENEW);
+    assert!(callback.due());
+    let reply = asked(&slot, 1, t + 2);
+    callback.silent(1);
+    assert!(
+        unanswered(&reply),
+        "a stream due for renewal serves nothing"
+    );
+}
+
+#[test]
+fn a_stream_still_without_its_first_picture_is_renewed_after_the_short_wait() {
+    let slot = Arc::new(Slot::default());
+    let (callback, _) = streaming(&slot, 0);
+    assert!(!callback.due());
+    proven_long_ago(&callback, RENEW);
+    assert!(callback.due());
 }
 
 #[test]

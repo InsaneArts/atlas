@@ -74,10 +74,15 @@ const SILENCE_CHECK: Duration = Duration::from_millis(20);
 /// it says WindowServer stalled the whole session; it takes well under a
 /// millisecond otherwise.
 const STALLED: Duration = Duration::from_millis(20);
-/// How long a stream may go without a valid sample before it is replaced,
-/// so a stream that stalled without saying so shows a stale picture no
-/// longer than this.
+/// How long a stream with no picture to serve again (none yet, or its last
+/// sample proved nothing) may go without a valid sample before it is
+/// replaced.
 const RENEW: Duration = Duration::from_secs(10);
+/// How long a stream that still has a picture to serve again may go without
+/// a valid sample before it is replaced. macOS sends nothing while the
+/// screen stays still, often for longer than [`RENEW`], so this alone bounds
+/// how long a stream that stalled without saying so shows an old picture.
+const SILENT_RENEW: Duration = Duration::from_secs(60);
 const STOP_WAIT: Duration = Duration::from_millis(200);
 /// How far ahead of its callback a sample may be stamped. Its display time
 /// is the refresh that shows it, a few milliseconds away at most; a clock in
@@ -653,14 +658,13 @@ fn run(incoming: Receiver<Message>, slot: Arc<Slot>) {
             });
             expected.as_ref().map_or(Ok(()), guard)
         });
-        // A stream without a valid sample for too long is replaced before a
-        // request needs it, so its picture is proven again by the new
-        // stream's first.
+        // A stream due for renewal is replaced before a request needs it,
+        // so its picture is proven again by the new stream's first.
         let silent = RUNNING.with(|running| {
             running
                 .borrow()
                 .as_ref()
-                .filter(|source| source.state.stale(RENEW))
+                .filter(|source| source.state.due())
                 .map(|source| source.key.clone())
         });
         if let Some(key) = silent
@@ -828,6 +832,20 @@ impl Callback {
         checkpoint().saturating_sub(self.stamped.load(Ordering::Acquire)) > ticks(span)
     }
 
+    /// Whether this stream is due for replacement: it has delivered no valid
+    /// sample for [`SILENT_RENEW`], or for [`RENEW`] while it has no picture
+    /// to serve again. A still screen leaves a stream silent, with its
+    /// newest picture still the screen as it is.
+    fn due(&self) -> bool {
+        self.stale(SILENT_RENEW)
+            || (self.stale(RENEW)
+                && self
+                    .newest
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .is_none())
+    }
+
     fn stopped(&self, check: impl FnOnce() -> Result<()>) {
         if !self.active.swap(false, Ordering::AcqRel)
             || self.slot.generation.load(Ordering::Acquire) != self.generation
@@ -874,10 +892,10 @@ impl Callback {
     /// [`SILENCE`]. This runs on the stream's sample queue, after every
     /// sample it delivered: the stream saw no change since that picture,
     /// as it sends a sample within a refresh of any. A stream without a
-    /// picture yet leaves the request waiting for its first, and one with no
-    /// valid sample for [`RENEW`] leaves it to the replacement.
+    /// picture yet leaves the request waiting for its first, and one due for
+    /// renewal leaves it to the replacement.
     fn silent(&self, id: u64) {
-        if !self.current() || !self.quiet(SILENCE) || self.stale(RENEW) {
+        if !self.current() || !self.quiet(SILENCE) || self.due() {
             return;
         }
         let newest = self.newest.lock().unwrap_or_else(|p| p.into_inner());
@@ -917,8 +935,9 @@ impl Callback {
     /// the pending request with, if it answers it.
     fn answer(&self, sample: &CMSampleBuffer) -> Result<Option<(u64, RawShot)>> {
         let metadata = metadata(sample)?;
-        // Only this stream's sample queue takes this lock, and takes the
-        // pending request's only briefly while holding it.
+        // Only this stream's sample queue holds this lock for longer than a
+        // look, and takes the pending request's only briefly while holding
+        // it; the worker looks at it holding no other lock.
         let mut newest = self.newest.lock().unwrap_or_else(|p| p.into_inner());
         // Every sample, asked for or not, says what the screen shows now: a
         // valid complete one is the newest picture, a valid unchanged one
