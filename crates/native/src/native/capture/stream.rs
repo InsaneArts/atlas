@@ -70,6 +70,10 @@ const RESTARTED_WAIT: Duration = Duration::from_millis(400);
 const SILENCE: Duration = Duration::from_millis(100);
 /// How often a request still waiting after [`SILENCE`] asks again.
 const SILENCE_CHECK: Duration = Duration::from_millis(20);
+/// How long the session check before a CoreGraphics capture may take before
+/// it says WindowServer stalled the whole session; it takes well under a
+/// millisecond otherwise.
+const STALLED: Duration = Duration::from_millis(20);
 /// How long a stream may go without a valid sample before it is replaced,
 /// so a stream that stalled without saying so shows a stale picture no
 /// longer than this.
@@ -89,6 +93,8 @@ struct Diagnostics {
     fallbacks: AtomicU64,
     idle_hints: AtomicU64,
     timeouts: AtomicU64,
+    /// Requests whose wait ran into a WindowServer stall.
+    stalls: AtomicU64,
     callbacks: AtomicU64,
     no_request: AtomicU64,
     missing_metadata: AtomicU64,
@@ -133,7 +139,8 @@ impl Diagnostics {
         json!({"requests":value(&self.requests),"nativeFrames":value(&self.native_frames),
             "reusedFrames":value(&self.reused_frames),"renewals":value(&self.renewals),
             "fallbacks":value(&self.fallbacks),"idleHints":value(&self.idle_hints),
-            "timeouts":value(&self.timeouts),"callbacks":value(&self.callbacks),
+            "timeouts":value(&self.timeouts),"stalls":value(&self.stalls),
+            "callbacks":value(&self.callbacks),
             "noRequest":value(&self.no_request),"missingMetadata":value(&self.missing_metadata),
             "oldSamples":value(&self.old_samples),"futureSamples":value(&self.future_samples),
             "layoutErrors":value(&self.layout_errors),"setupStarts":value(&self.setup_starts),
@@ -410,7 +417,8 @@ pub fn stream_diagnostics() -> Option<Value> {
 /// caller was asked for it. True means the pixels came from the stream.
 /// False reports an explicitly revalidated synchronous CoreGraphics capture,
 /// taken only when the stream cannot start, failed, or had no picture in
-/// time.
+/// time; a wait that ran into a WindowServer stall lasts until a moment after
+/// the stall, which held up both alike.
 ///
 /// # Errors
 ///
@@ -469,9 +477,17 @@ pub fn stream_display_rgb(
         && worker.messages.try_send(Message::Capture(request)).is_ok();
     let waiting = Instant::now();
     let wait = worker.slot.wait(asked);
-    let outcome = sent
+    let mut outcome = sent
         .then(|| receive.recv_timeout(wait))
         .and_then(std::result::Result::ok);
+    if sent && outcome.is_none() && !worker.slot.stopping.load(Ordering::Acquire) {
+        let check = || {
+            let checking = Instant::now();
+            guard(&epoch)?;
+            Ok(checking.elapsed() >= STALLED)
+        };
+        outcome = after_stall(&receive, SILENCE, check, &worker.slot.diagnostics)?;
+    }
     worker
         .slot
         .diagnostics
@@ -517,6 +533,26 @@ pub fn stream_display_rgb(
         }
     }
 }
+/// The answer to a request whose wait ran out, once `check`, the session
+/// check a CoreGraphics capture needs first, has said whether it was held up.
+/// One held up says WindowServer stalled the whole session: the stream could
+/// send nothing meanwhile, and a CoreGraphics capture would have waited out
+/// the same stall. So the stream then has up to `grace` more, from the end
+/// of the stall, to answer. An answer that came during the check is taken
+/// either way.
+fn after_stall(
+    receive: &Receiver<Result<RawShot>>,
+    grace: Duration,
+    check: impl FnOnce() -> Result<bool>,
+    diagnostics: &Diagnostics,
+) -> Result<Option<Result<RawShot>>> {
+    if check()? {
+        diagnostics.stalls.fetch_add(1, Ordering::Relaxed);
+        return Ok(receive.recv_timeout(grace).ok());
+    }
+    Ok(receive.try_recv().ok())
+}
+
 fn fallback_allowed(error: &Error) -> bool {
     error.code == Code::Capture
 }
