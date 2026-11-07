@@ -402,6 +402,22 @@ fn a_session_works_in_its_projects_folder_by_name_only() {
 }
 
 #[test]
+fn a_temporary_folder_names_no_project_but_a_folder_inside_one_does() {
+    let system = std::env::temp_dir();
+    assert_eq!(project_folder(&system), None);
+    if let Ok(resolved) = fs::canonicalize(&system) {
+        assert_eq!(project_folder(&resolved), None);
+    }
+    assert_eq!(project_folder(Path::new("/tmp")), None);
+    assert_eq!(project_folder(Path::new("/private/tmp/")), None);
+
+    let directory = tempfile::tempdir().unwrap();
+    let inside = directory.path().join("demo");
+    fs::create_dir(&inside).unwrap();
+    assert_eq!(project_folder(&inside).as_deref(), Some("demo"));
+}
+
+#[test]
 fn every_variable_that_tells_a_session_or_task_is_named_once() {
     let named: Vec<&str> = Host::session_variables().collect();
     for variable in [

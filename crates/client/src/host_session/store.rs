@@ -587,11 +587,12 @@ fn note_at(
     }
     let verb = doing.map_or("environment", Doing::verb);
     let verb = (!facts.refusal).then_some(verb);
+    let app = doing.and_then(Doing::app_name);
     let store = Store::at(client.output_dir()?);
     let now = now();
 
     store.update(session, now, &client.controller, |record| {
-        record.seen(session, now, verb);
+        record.seen(session, now, verb, app);
         match &facts.left {
             Left::None => {}
             Left::Capture(capture) => record.took(capture.clone()),

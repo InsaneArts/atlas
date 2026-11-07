@@ -408,7 +408,8 @@ fn nearest(
 
 /// The project a command works in: the name of the nearest folder from
 /// `directory` up that holds a `.git` entry, else of `directory` itself.
-/// None for the home folder and `/`, which name no project.
+/// None for the home folder, `/` and a temporary folder itself, such as
+/// `$TMPDIR` (whose last part is `T`) or `/tmp`, which name no project.
 pub(crate) fn project_folder(directory: &Path) -> Option<String> {
     let project = directory
         .ancestors()
@@ -416,7 +417,7 @@ pub(crate) fn project_folder(directory: &Path) -> Option<String> {
         .find(|folder| fs::symlink_metadata(folder.join(".git")).is_ok())
         .unwrap_or(directory);
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    if home.as_deref() == Some(project) {
+    if home.as_deref() == Some(project) || temporary(project) {
         return None;
     }
 
@@ -425,6 +426,23 @@ pub(crate) fn project_folder(directory: &Path) -> Option<String> {
         .and_then(|name| name.to_str())
         .map(bounded)
         .filter(|name| !name.is_empty())
+}
+
+/// Whether `folder` is a temporary folder itself: the system's own
+/// (`$TMPDIR`), or `/tmp`, by either spelling of each.
+fn temporary(folder: &Path) -> bool {
+    let system = std::env::temp_dir();
+    let resolved = fs::canonicalize(&system).ok();
+    let folder = folder.components().collect::<PathBuf>();
+    [
+        Some(system),
+        resolved,
+        Some(PathBuf::from("/tmp")),
+        Some(PathBuf::from("/private/tmp")),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|temporary| temporary.components().collect::<PathBuf>() == folder)
 }
 
 #[cfg(test)]
