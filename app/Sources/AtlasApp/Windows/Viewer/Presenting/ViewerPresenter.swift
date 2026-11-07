@@ -52,7 +52,6 @@ enum ViewerPresenter {
     case .screen: .screen
     case .activity: .activity(activity(snapshot))
     case .apps: .apps(apps(snapshot))
-    case .screenshots: .screenshots(shots(snapshot))
     }
   }
 

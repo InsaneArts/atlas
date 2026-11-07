@@ -57,6 +57,23 @@ public struct ActivityGist: Equatable, Sendable {
     self.init(kinds: kinds, app: app)
   }
 
+  /// The gist of a session's rows: each row's kind, and the app most rows acted in. The person's own rows are not a
+  /// session's.
+  ///
+  /// - Parameter entries: The session's rows.
+  public init?(_ entries: [ActivityLog.Entry]) {
+    var kinds: [ActivityAction: Int] = [:]
+    var apps: [String: Int] = [:]
+    for entry in entries where entry.actor != .you {
+      let kind = ActivityAction(entry)
+      kinds[kind] = Self.adding(1, to: kinds[kind] ?? 0)
+      if let app = entry.app, !app.isEmpty { apps[app] = Self.adding(1, to: apps[app] ?? 0) }
+    }
+    let app = apps.max { ($0.value, $1.key) < ($1.value, $0.key) }?
+      .key
+    self.init(kinds: kinds, app: app)
+  }
+
   /// The kinds a gist can say, the first winning among equals.
   static let preference: [ActivityAction] = [.typing, .pointer, .window, .scroll, .screenshot, .command]
 

@@ -38,8 +38,8 @@
     case appCards = "app-cards"
     /// Activity's steps of every kind and mark.
     case activitySteps = "activity-steps"
-    /// Activity's moments, open, folded and held.
-    case activityMoments = "activity-moments"
+    /// Activity's runs, folded with their problems and pictures, and open.
+    case activityRuns = "activity-runs"
     /// The account picture in its circle at each size.
     case accountPictureSizes = "account-picture-sizes"
     /// Choose's accounts in a grouped list, the new one picked.

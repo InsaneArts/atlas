@@ -15,14 +15,11 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   private let input: Input
   /// Draws the newest picture.
   private let livePicture: (ViewerLivePicture) -> LivePicture
-  @FocusedValue(\.screenshotKeys) private var screenshotKeys
-  @FocusState private var screenshotFocus: ScreenshotFocusTarget?
-  @Environment(\.screenshotFocusReport) private var screenshotFocusReport
   /// The place the stage last settled on, which the next switch goes from.
   @State private var settledPlace: ViewerPlace
   /// Whether the last switch moved the picture between the stage and the corner, from ``ScreenZoom``.
   @State private var settledZoom = false
-  /// Activity, Screenshots and Apps as each last showed, kept built once shown, so a switch back fades the pane
+  /// Activity and Apps as each last showed, kept built once shown, so a switch back fades the pane
   /// already there instead of building it again (``KeptPaneShift``).
   @State private var kept: [ViewerPlace: ViewerPane] = [:]
   /// Sequences list departures and arrivals, cancelling superseded destinations.
@@ -37,8 +34,6 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   /// Whether the picture rests in the corner, small, rather than on the stage: what its corners round to, the small
   /// screen's or the stage's, changing on the picture's own spring as it moves between the two.
   @State private var pictureInCorner: Bool
-  /// The namespace a screenshot zooms in between its tile and the large view.
-  @Namespace private var zoom
   /// The namespace the helper's screen moves in between the stage and the corner.
   @Namespace private var screenZoom
   @Environment(\.motionReduced) private var reduceMotion
@@ -66,8 +61,8 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     _pictureInCorner = State(initialValue: state.pane.place.keepsScreenInCorner)
   }
 
-  /// The sidebar beside the card, the toggle over them in the window buttons' band; a screenshot or an action shown
-  /// large, or a task replayed, over all of it, and the alert over that.
+  /// The sidebar beside the card, the toggle over them in the window buttons' band; the picture sheet, or a run
+  /// replayed, over all of it, and the alert over that.
   public var body: some View {
     GeometryReader { proxy in
       SidebarSplit(sidebar: state.sidebar, isFullScreen: state.isFullScreen, send: send) { slide in
@@ -78,12 +73,8 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
       .disabled(isCovered)
       .accessibilityHidden(isCovered)
       .overlay {
-        LargeShotLayer(shot: largeShot, zoom: zoom, send: send)
-          .allowsHitTesting(largeShot != nil)
-      }
-      .overlay {
-        ActionLargeLayer(large: activity?.large, send: send)
-          .allowsHitTesting(activity?.large != nil)
+        PictureSheetLayer(sheet: activity?.sheet, send: send)
+          .allowsHitTesting(activity?.sheet != nil)
       }
       .overlay {
         ReplayLayer(replay: activity?.replay, send: send)
@@ -93,15 +84,6 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
         AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
       }
       .ignoresSafeArea(.container, edges: .top)
-    }
-    .onChange(of: screenshotKeys, initial: true) { _, ownsKeys in screenshotFocusReport?.report(ownsKeys == true) }
-    .environment(\.screenshotFocus, $screenshotFocus)
-    .onChange(of: largeShot != nil) { wasLarge, isLarge in
-      if isLarge {
-        screenshotFocus = .large
-      } else if wasLarge, state.pane.place == .screenshots {
-        screenshotFocus = .grid
-      }
     }
     .background(Color.groundRecessed)
     .foregroundStyle(Color.textPrimary)
@@ -139,7 +121,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     }
   }
 
-  /// The width Activity, Screenshots and Apps are laid out at, the whole card's: as it stands once the sidebar has
+  /// The width Activity and Apps are laid out at, the whole card's: as it stands once the sidebar has
   /// settled, so a list is laid out once as the sidebar hides or shows, pinned to the card's trailing edge, which does
   /// not move, and uncovered or covered as the card's leading edge travels rather than laid out again at every
   /// frame. The small screen is sized from it too, so it keeps its size through the slide.
@@ -155,7 +137,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   /// The stage: the Screen or the chosen list's pane in the card's body, with the small screen in its corner over a
   /// list. The Screen sits inside the stage's inset; the lists reach the card's edges, which frame them, as their rows
   /// keep their own insets. The Screen is built as it shows and goes as it is left, so its picture and the surface that
-  /// takes input exist only while it shows; Activity, Screenshots and Apps are kept once shown and only fade as the
+  /// takes input exist only while it shows; Activity and Apps are kept once shown and only fade as the
   /// place changes, the new one over the old, rising in from the Screen and sinking back to it (``ListRise``). A switch
   /// between the Screen and a list moves the picture between the two on ``Motion/zoom``, the one thing that travels,
   /// its corners rounding with it; every other switch only crossfades.
@@ -181,7 +163,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
       }
       ForEach(ViewerPlace.keptPlaces, id: \.self) { place in
         if let pane = pane(for: place) {
-          KeptPane(pane: pane, zoom: zoom, send: send)
+          KeptPane(pane: pane, send: send)
             .frame(width: listWidth)
             .frame(minWidth: .zero, maxWidth: .infinity, alignment: .trailing)
             .modifier(
@@ -310,27 +292,21 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
 
   /// A kept place's pane as it shows now, or as it last showed while another place shows; nil until it has shown.
   ///
-  /// - Parameter place: Activity, Apps or Screenshots.
+  /// - Parameter place: Activity or Apps.
   /// - Returns: Its pane, or nil.
   private func pane(for place: ViewerPlace) -> ViewerPane? {
     state.pane.place == place ? state.pane : kept[place]
   }
 
-  /// The screenshot shown large over the whole window, if the Screenshots list shows one.
-  private var largeShot: ViewerLargeShot? {
-    guard case .screenshots(let shots) = state.pane else { return nil }
-    return shots.large
-  }
-
-  /// The Activity pane, while it shows, for the action shown large or the task replayed over the whole window.
+  /// The Activity pane, while it shows, for the picture sheet or the run replayed over the whole window.
   private var activity: ViewerActivityState? {
     guard case .activity(let activity) = state.pane else { return nil }
     return activity
   }
 
-  /// Whether a screenshot or an action shown large, or a replay, covers the window, which then takes no clicks.
+  /// Whether the picture sheet or a replay covers the window, which then takes no clicks.
   private var isCovered: Bool {
-    largeShot != nil || activity?.large != nil || activity?.replay != nil
+    activity?.sheet != nil || activity?.replay != nil
   }
 
   /// Settles the stage on a new place once its switch has begun, keeping whether the picture moved.
@@ -348,7 +324,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     withAnimation(ScreenZoom.animation(zooms: zooms)) { pictureInCorner = inCorner }
   }
 
-  /// Keeps Activity, Screenshots or Apps as it shows now, to draw while another place shows.
+  /// Keeps Activity or Apps as it shows now, to draw while another place shows.
   ///
   /// - Parameter pane: The pane shown.
   private func keep(_ pane: ViewerPane) {
@@ -437,13 +413,8 @@ extension ViewerView where Input == EmptyView, LivePicture == StillPicture {
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 
-  #Preview("Screenshots") {
-    ViewerView(state: PreviewStates.viewerShots) { _ in }
-      .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
-  }
-
-  #Preview("A screenshot, large") {
-    ViewerView(state: PreviewStates.viewerShotLarge) { _ in }
+  #Preview("A picture") {
+    ViewerView(state: PreviewStates.viewerPictureSheet) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 

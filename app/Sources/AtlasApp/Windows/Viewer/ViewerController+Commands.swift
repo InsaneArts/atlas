@@ -24,7 +24,6 @@ extension ViewerController {
     case .askCleanup(let key): Task { await askCleanup(key) }
     case .sendKey(let index): sendKey(at: index)
     case .showActivity(let key): show(.activity, of: key)
-    case .showScreenshots(let key): show(.screenshots, of: key)
     }
   }
 }

@@ -2,23 +2,23 @@
   import Foundation
 
   extension PreviewStates {
-    /// The Activity pane's filters, one of them chosen, Problems and Screenshots with their counts.
+    /// The Activity pane's filters, one of them chosen, Problems and Pictures with their counts.
     ///
     /// - Parameters:
     ///   - selected: The filter chosen.
     ///   - problems: How many problems; none drawn for zero.
-    ///   - screenshots: How many screenshots; none drawn for zero.
+    ///   - pictures: How many pictures; none drawn for zero.
     /// - Returns: The filters.
     static func activityFilters(
       _ selected: ViewerActivityFilter = .all,
       problems: Int = 0,
-      screenshots: Int = 0
+      pictures: Int = 0
     ) -> CapsuleTabsState<ViewerActivityFilter> {
       CapsuleTabsState(
         tabs: [
           CapsuleTab(id: .all, title: "All"),
           CapsuleTab(id: .problems, title: "Problems", count: problems > 0 ? problems : nil),
-          CapsuleTab(id: .screenshots, title: "Screenshots", count: screenshots > 0 ? screenshots : nil),
+          CapsuleTab(id: .pictures, title: "Pictures", count: pictures > 0 ? pictures : nil),
           CapsuleTab(id: .typing, title: "Typing"),
         ],
         selected: selected,
@@ -78,46 +78,45 @@
     /// 16:9: the samples' captures' shape, 2560 by 1440.
     static let shotAspect: CGFloat = 2560.0 / 1440.0
 
-    /// Activity while an agent works, with the live screen in the corner: Opie open with the step running, Notes
-    /// open with the typing refused and done again, TextEdit and an older command folded.
+    /// Activity while an agent works, with the live screen in the corner: Claude Code's session today with its four
+    /// runs folded to their problems and pictures, and yesterday's Terminal folded.
     @MainActor public static let viewerActivity: ViewerState = {
       var state = viewerWorking
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 19, .screenshots: 6])
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 19])
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(workingActivity)
       return state
     }()
 
-    /// Activity with TextEdit opened by the person, its newest eight steps and Show 1 more, and Notes folded.
+    /// Activity with the Chrome run opened by the person: its steps oldest first, its screenshot in place.
     @MainActor public static let viewerActivityOpened: ViewerState = {
       var state = viewerActivity
       state.pane = .activity(openedActivity)
       return state
     }()
 
-    /// Activity under Problems: only the click in TextEdit that failed, its moment held open, and what came next.
+    /// Activity under Problems: only the Chrome run, open to the press that failed.
     @MainActor public static let viewerActivityProblems: ViewerState = {
       var state = viewerActivity
       state.pane = .activity(problemsActivity)
       return state
     }()
 
-    /// Activity from the days before: a quiet heading over yesterday's Safari and the day before's BuildTool, a copy
-    /// whose icon is its tile.
+    /// Activity from the days before: yesterday's Terminal, then Wednesday's sessions and the row for the rest.
     @MainActor public static let viewerActivityDays: ViewerState = {
       var state = viewerIdle
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 0, .screenshots: 6])
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 0])
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(daysActivity)
       return state
     }()
 
-    /// A morning of an agent moving between apps every few minutes: the newest moment open, the rest folded.
+    /// A long list: today's live session, then a day of many short sessions and the row for the rest.
     @MainActor public static let viewerActivityMany: ViewerState = {
       var state = viewerIdle
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 20, .screenshots: 6])
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 20])
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(manyActivity)
@@ -149,10 +148,36 @@
     /// Activity while the picture is paused: the screen in the corner fades, and the list is as it was.
     @MainActor public static let viewerActivityPaused: ViewerState = {
       var state = viewerPaused
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 19, .screenshots: 6])
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 19])
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0, isPaused: true) }
       state.pane = viewerActivity.pane
+      return state
+    }()
+
+    /// Activity with the live TextEdit run's pictures opened in place, and Show fewer.
+    @MainActor public static let viewerActivityShots: ViewerState = {
+      var state = viewerActivity
+      state.pane = .activity(shotsActivity)
+      return state
+    }()
+
+    /// A screenshot of the live TextEdit run open in the picture sheet over Activity, its tile marked current.
+    @MainActor public static let viewerPictureSheet: ViewerState = {
+      var activity = shotsActivity
+      activity.days[0].sessions[0].runs[0].grid?.tiles[0].isCurrent = true
+      activity.sheet = pictureSheet
+      var state = viewerActivity
+      state.pane = .activity(activity)
+      return state
+    }()
+
+    /// The screen just before Return was pressed in Chrome, open in the picture sheet over Claude Code's runs.
+    @MainActor public static let viewerStepPicture: ViewerState = {
+      var activity = oneSessionActivity
+      activity.sheet = stepPictureSheet
+      var state = viewerActivityOneSession
+      state.pane = .activity(activity)
       return state
     }()
   }

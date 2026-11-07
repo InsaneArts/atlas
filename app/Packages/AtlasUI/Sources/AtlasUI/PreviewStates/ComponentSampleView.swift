@@ -34,7 +34,7 @@
       case .keycapsSoft: KeycapSamples()
       case .appCards: AppsSamples(.cards)
       case .activitySteps: ActivitySamples(.steps)
-      case .activityMoments: ActivitySamples(.moments)
+      case .activityRuns: ActivitySamples(.runs)
       case .accountPictureSizes: BrandSamples(.accountPicture)
       case .listRowChoices: ListRowSamples(.choices)
       case .listRowLeads: ListRowSamples(.leads)

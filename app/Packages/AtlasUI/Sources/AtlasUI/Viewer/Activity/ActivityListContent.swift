@@ -8,6 +8,8 @@ struct ActivityListContent: View {
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.listIsAtTop) private var isAtTop
+  /// The card's width as last measured, which the outline gives way to.
+  @State private var width = CGFloat.infinity
 
   /// 48: above and below an empty filtered list's message.
   private static let emptyInset: CGFloat = 48
@@ -27,6 +29,12 @@ struct ActivityListContent: View {
       }
     }
     .padding(.horizontal, ViewerLayout.swapInset)
+    .onGeometryChange(for: CGFloat.self) {
+      $0.size.width
+    } action: {
+      width = $0
+    }
+    .environment(\.outlineWidth, width)
   }
 
   /// A whole capsule track: narrow panes omit visible counts and use smaller insets, keeping the counts spoken.
@@ -59,22 +67,34 @@ struct ActivityListContent: View {
     .fixedSize()
   }
 
-  /// Every day's heading and moment, keyed by its identity, so a moment in two filters stays where it is, each moment
-  /// opening and folding as one (``ActivityMomentBlock``).
+  /// Every day's heading, its sessions with a hairline between two, and the row for the rest of a long day, each keyed
+  /// by its identity so a session in two filters stays where it is.
   private var rows: some View {
     LazyVStack(alignment: .leading, spacing: .zero) {
       ForEach(state.days) { day in
         if !day.title.isEmpty {
-          ListHeading(title: day.title)
+          Text(verbatim: day.title)
+            .font(Typography.font(.body, weight: .semibold))
+            .foregroundStyle(Color.textSecondary)
+            .lineLimit(1)
             .frame(height: ViewerLayout.dayHeight)
             .padding(.top, ViewerLayout.dayAbove)
+            .accessibilityAddTraits(.isHeader)
             .id("day.\(day.id)")
             .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
         }
-        ForEach(day.moments) { moment in
-          ActivityMomentBlock(moment: moment, send: send)
-            .id("moment.\(moment.id)")
+        ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
+          if index > 0 {
+            SeparatorLine()
+              .padding(.vertical, ViewerLayout.sessionSeparatorGap)
+          }
+          ActivitySessionBlock(session: session, send: send)
+            .id("session.\(session.id)")
             .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
+        }
+        if let more = day.more {
+          ActivityMoreSessionsRow(more: more, send: send)
+            .id("more.\(more.day)")
         }
       }
     }
@@ -87,5 +107,4 @@ struct ActivityListContent: View {
       )
     }
   }
-
 }

@@ -18,8 +18,7 @@ extension ViewerPresenter {
     let alertUp = alert(snapshot) != nil
     var sections = [
       ViewerMenuSection([
-        ViewerMenuItem(ViewerWords.showActivity, command: .showActivity(session: key)),
-        ViewerMenuItem(ViewerWords.showScreenshots, command: .showScreenshots(session: key)),
+        ViewerMenuItem(ViewerWords.showActivity, command: .showActivity(session: key))
       ])
     ]
     if needsYou {

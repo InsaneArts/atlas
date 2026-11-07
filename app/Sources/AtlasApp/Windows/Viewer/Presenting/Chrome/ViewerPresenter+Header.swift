@@ -26,7 +26,12 @@ extension ViewerPresenter {
       return ViewerHeaderState(who: ViewerWords.paused, what: ViewerWords.pictureFrom(minute(taken, snapshot)))
     }
     guard let holder = snapshot.reading.statusReading.holder else { return word }
-    return ViewerHeaderState(who: resolvedSession(holder.key, snapshot).name, what: ViewerWords.hasTheHelper)
+    let session = resolvedSession(holder.key, snapshot)
+    let (_, agent, project, working) = sessionHead(.session(holder.key), snapshot)
+    return ViewerHeaderState(
+      who: sessionTitle(holder.key, working: working, fallback: session.name, snapshot),
+      what: ViewerWords.dotted([agent, project, ViewerWords.hasTheHelper])
+    )
   }
 
   /// When the newest picture was read, on the wall clock: as long before now as the picture is old.

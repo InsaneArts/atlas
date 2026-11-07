@@ -91,4 +91,17 @@ struct ActivityOutlineTests {
     #expect(ActivityGist(counts: ["type": .max, "key": 1], apps: [:])?.count == .max)
     #expect(ActivityGist(counts: [:], apps: ["Notes": 1]) == nil)
   }
+
+  @Test("a session's rows give its gist, the person's own left out")
+  func aSessionsRowsGiveItsGist() {
+    let gist = ActivityGist([
+      ActivityFixtures.row(id: "t2", says: "typed", session: "claude", verb: "type", app: "TextEdit"),
+      ActivityFixtures.row(id: "k1", says: "pressed", session: "claude", verb: "key", app: "TextEdit"),
+      ActivityFixtures.row(id: "c1", says: "clicked", session: "claude", verb: "click", app: "Google Chrome"),
+      ActivityFixtures.row(id: "y1", says: "clicked", actor: .you, verb: "click", app: "Notes"),
+      ActivityFixtures.row(id: "y2", says: "clicked", actor: .you, verb: "click", app: "Notes"),
+    ])
+    #expect(gist == ActivityGist(kind: .typing, count: 2, app: "TextEdit"))
+    #expect(ActivityGist([]) == nil)
+  }
 }

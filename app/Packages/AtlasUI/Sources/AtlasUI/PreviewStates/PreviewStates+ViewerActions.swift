@@ -2,56 +2,6 @@
   import CoreGraphics
 
   extension PreviewStates {
-    /// The Activity sample's typing in Opie shown large: the screen before with its ring and bubble, the screen after,
-    /// compared on a slide, with what Atlas knows beside them.
-    @MainActor public static let actionLarge = ViewerActionLarge(
-      id: "o3",
-      words: ViewerStepWords("Typed", quote: sampleTyped, joiner: "into", target: "Name"),
-      context: "Opie · step 2 of 2",
-      before: shotPicture(beforeNames[0]),
-      after: shotPicture(shotNames[2]),
-      hasAfter: true,
-      aspect: CGSize(width: 2560, height: 1440),
-      mark: sampleTypingPicture.mark,
-      beforeLabel: "Before · 10:31:17.00",
-      afterLabel: "After · 10:31:20.00",
-      details: [
-        ViewerActionDetail(title: "What", value: "Typed “Ring settings”"),
-        ViewerActionDetail(title: "Where", value: "Opie › Name"),
-        ViewerActionDetail(title: "Outcome", value: "Worked", tone: .worked),
-        ViewerActionDetail(title: "Before", value: "10:31:17.00, just before the action"),
-        ViewerActionDetail(title: "After", value: "10:31:20.00, the next step's picture before it"),
-      ],
-      changes: [CGRect(x: 0.25, y: 0.3125, width: 0.1875, height: 0.125)],
-      canGoBack: true,
-      canGoForward: false
-    )
-
-    /// A click that failed shown large, with no picture after it, so the ways to compare leave its bar.
-    @MainActor public static let actionLargeFailed = ViewerActionLarge(
-      id: "e7",
-      words: ViewerStepWords("Couldn't click", target: "Save"),
-      context: "TextEdit · step 7 of 9",
-      before: shotPicture(beforeNames[1]),
-      hasAfter: false,
-      aspect: CGSize(width: 2560, height: 1440),
-      mark: ViewerActionMark(
-        shape: .click(clicks: 1),
-        spot: CGPoint(x: 0.62, y: 0.2),
-        tone: .failed,
-        note: "No “Save” in this window"
-      ),
-      beforeLabel: "Before · 10:24:02.40",
-      details: [
-        ViewerActionDetail(title: "What", value: "Clicked Save"),
-        ViewerActionDetail(title: "Where", value: "TextEdit › Save"),
-        ViewerActionDetail(title: "Outcome", value: "Failed: No “Save” in this window", tone: .failed),
-        ViewerActionDetail(title: "Before", value: "10:24:02.40, just before the action"),
-      ],
-      canGoBack: true,
-      canGoForward: true
-    )
-
     /// The Activity sample's Opie task replayed: its ⌘S, its typing, then the screen after.
     @MainActor public static let replay = ViewerReplayState(
       title: "Opie · 10:31",
@@ -141,7 +91,7 @@
       ViewerStepPicture(shot: samplePicture(beforeNames[1]), mark: sampleMarks[12].mark),
     ]
 
-    /// The Activity sample after one of its large view's or replay's events, roughly as the app answers them.
+    /// The Activity sample after one of its picture sheet's or replay's events, roughly as the app answers them.
     ///
     /// - Parameters:
     ///   - activity: The pane shown.
@@ -153,12 +103,10 @@
       var next = activity
       let index = activity.replay?.index ?? 0
       switch event {
-      case .openAction(let id): next.large = id == "o2" ? actionLargeFailed : actionLarge
-      case .closeAction: next.large = nil
-      case .previousAction: next.large = next.large.map { $0.id == "o3" ? actionLargeFailed : actionLarge }
-      case .nextAction: next.large = next.large.map { $0.id == "o3" ? $0 : actionLarge }
-      case .compareAction(let mode): next.large?.compare = mode
-      case .toggleChanges: next.large?.showsChanges.toggle()
+      case .openAction: next.sheet = stepPictureSheet
+      case .openShot: next.sheet = pictureSheet
+      case .closePicture: next.sheet = nil
+      case .pictureSide(let side): next.sheet?.side = side
       case .openReplay: next.replay = replay
       case .closeReplay: next.replay = nil
       case .replayFrame(let picked): next.replay?.index = picked

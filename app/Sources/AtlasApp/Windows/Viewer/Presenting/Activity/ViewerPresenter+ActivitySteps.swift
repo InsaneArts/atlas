@@ -4,16 +4,16 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// One step of an open moment: its kind and mark, its words without the moment's app, when it was done, the
-  /// screenshot it took at its shape with its thumbnail once read, the marked picture taken right before its first
-  /// action, and for a step that did not work why and what the same stream did next. The action whose outcome is
+  /// One step of a run: its kind and mark, its words without the run's app, the minute it was done, the screenshot it
+  /// took framed in place, whether it kept a picture right before its first action, and for a step that did not work
+  /// why and what the same stream did next. The action whose outcome is
   /// unknown is marked as a problem, says that every session waits, and offers Show Screen and Recover…. Typing into a
   /// password field says its text was not kept.
   ///
   /// - Parameters:
   ///   - run: The step's rows.
-  ///   - moment: Its moment.
-  ///   - moments: Every moment in scope, for what followed a problem.
+  ///   - moment: Its run.
+  ///   - moments: Every run in scope, for what followed a problem.
   ///   - snapshot: What the controller holds.
   /// - Returns: The step.
   static func activityStep(
@@ -40,9 +40,9 @@ extension ViewerPresenter {
       kind: offersRecovery ? .problem : stepKind(entry),
       mark: mark,
       words: stepWords(run, in: moment),
-      time: run.startedAt.map { stepAge($0, snapshot) } ?? Words.unknown,
-      shot: run.shot.map { activityShot($0, snapshot) },
-      picture: stepPicture(run, snapshot),
+      time: run.startedAt.map { minute($0, snapshot) } ?? "",
+      inPlace: pictureTile(run.shot, snapshot),
+      hasPicture: run.firstBefore != nil,
       problem: problem,
       offersRecovery: offersRecovery,
       notKept: entry.facts?.action == .type && entry.facts?.secure == true
@@ -179,23 +179,5 @@ extension ViewerPresenter {
     case .then(let next):
       ViewerWords.then(stepWords(next, in: moment).text, personal: next.entry.actor == .you)
     }
-  }
-
-  /// A step's screenshot, or the picture taken before it: its name, its shape as the screenshots list says it, and its
-  /// thumbnail once read.
-  ///
-  /// - Parameters:
-  ///   - name: The capture's or the picture's file name.
-  ///   - snapshot: What the controller holds.
-  /// - Returns: The screenshot.
-  static func activityShot(_ name: String, _ snapshot: ViewerSnapshot) -> ViewerActivityShot {
-    let listed = snapshot.panes.shots.shots?.first { $0.name == name }
-    let aspect: CGFloat =
-      if let width = listed?.width, let height = listed?.height, width > 0, height > 0 {
-        CGFloat(width) / CGFloat(height)
-      } else {
-        ViewerActivityShot.defaultAspect
-      }
-    return ViewerActivityShot(name: name, aspect: aspect, thumbnail: snapshot.panes.thumbnails[name])
   }
 }

@@ -56,6 +56,10 @@ extension ViewerLayout {
   static let stepPictureStack: CGFloat = 3
   /// 40: the least width of a pictured step's time, such as "5 min", so the small pictures stand in one column.
   static let stepPictureTime: CGFloat = 40
+  /// 22: a replayed step's disc.
+  static let stepDisc: CGFloat = 22
+  /// 6: a replayed step's small picture's corner.
+  static let stepPictureRadius = Radius.extraSmall
   /// 15: a folded step's count's height.
   static let stepCount: CGFloat = 15
 
@@ -152,7 +156,7 @@ extension ViewerLayout {
   ///   - aspect: The shape.
   ///   - room: The room.
   /// - Returns: The size; zero when nothing fits.
-  private static func fitted(_ aspect: CGSize, in room: CGSize) -> CGSize {
+  static func fitted(_ aspect: CGSize, in room: CGSize) -> CGSize {
     guard aspect.width > 0, aspect.height > 0, room.width > 0, room.height > 0 else { return .zero }
     let scale = min(room.width / aspect.width, room.height / aspect.height)
     return CGSize(width: aspect.width * scale, height: aspect.height * scale)

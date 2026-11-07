@@ -6,16 +6,10 @@ import Foundation
 extension ViewerWords {
   /// The Activity filters, for VoiceOver.
   static let activityFiltersLabel = "Which actions"
-  /// The group of what was done in the last two minutes, as Screenshots heads it.
-  static let nowGroup = "Now"
-  /// The group of what was done earlier today, as Screenshots heads it.
-  static let earlierTodayGroup = "Earlier today"
-  /// The heading over yesterday's moments, and Screenshots' group of yesterday's.
+  /// The heading over yesterday's sessions.
   static let yesterdayGroup = "Yesterday"
   /// A moment of commands, and anything else done in no app.
   static let commandsMoment = "Commands"
-  /// A moment of screenshots alone.
-  static let screenshotsMoment = "Screenshots"
   /// A command that ran.
   static let ranCommand = "Ran a command"
   /// A command that runs now.
@@ -34,9 +28,9 @@ extension ViewerWords {
   static let noProblems = "No problems"
   /// Problems, with none: the sentence.
   static let noProblemsMessage = "Every action here worked."
-  /// Screenshots or Typing, with nothing: the headline.
+  /// Pictures or Typing, with nothing: the headline.
   static let noneFiltered = "No actions here"
-  /// Screenshots or Typing, with nothing: the sentence.
+  /// Pictures or Typing, with nothing: the sentence.
   static let noneFilteredMessage = "Choose All to see every action."
   /// A problem's retry that worked.
   static let workedOnRetry = "The agent tried again, and it worked."
@@ -48,12 +42,12 @@ extension ViewerWords {
   /// A filter's word.
   ///
   /// - Parameter filter: The filter.
-  /// - Returns: "All", "Problems", "Screenshots" or "Typing".
+  /// - Returns: "All", "Problems", "Pictures" or "Typing".
   static func filter(_ filter: ViewerActivityFilter) -> String {
     switch filter {
     case .all: "All"
     case .problems: "Problems"
-    case .screenshots: "Screenshots"
+    case .pictures: "Pictures"
     case .typing: "Typing"
     }
   }

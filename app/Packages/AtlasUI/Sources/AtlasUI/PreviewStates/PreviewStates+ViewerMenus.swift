@@ -122,8 +122,7 @@
     ) -> [ViewerMenuSection] {
       var sections = [
         ViewerMenuSection([
-          ViewerMenuItem("Show Activity", command: .showActivity(session: key)),
-          ViewerMenuItem("Show Screenshots", command: .showScreenshots(session: key)),
+          ViewerMenuItem("Show Activity", command: .showActivity(session: key))
         ])
       ]
       if let recover {

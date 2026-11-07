@@ -19,7 +19,6 @@ extension ViewerController {
   func show(_ place: ViewerPlace) {
     guard place != session.place else { return }
     if holdingControl || control.acquiring { control.releaseControl() }
-    if session.place == .screenshots { panesModel.closeShot() }
     session.place = place
     noteActivitySeen()
     panesModel.followPane()

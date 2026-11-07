@@ -15,13 +15,12 @@ extension ViewerPresenter {
     )
   }
 
-  /// Whether Copy and Save act on a screenshot now: the Screenshots list shows, with one shown large or selected.
+  /// Whether Copy and Save act on a picture now: the picture sheet shows over Activity.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: Whether they do.
   static func actsOnShot(_ snapshot: ViewerSnapshot) -> Bool {
-    guard snapshot.session.place == .screenshots else { return false }
-    return snapshot.panes.shots.large != nil || selectedShot(snapshot) != nil
+    snapshot.session.place == .activity && snapshot.panes.activity.sheet != nil
   }
 
   /// What a right click on the picture offers: Copy Picture and Save Picture…; then Actual Size, ticked while on,

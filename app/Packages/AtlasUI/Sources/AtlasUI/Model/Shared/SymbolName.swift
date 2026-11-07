@@ -81,6 +81,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case windows = "macwindow.on.rectangle"
   /// Screenshots, in the Library.
   case photos = "photo.on.rectangle"
+  /// A picture: a step's picture button.
+  case photo
   /// Something locked.
   case lock
   /// A popup button's choices.

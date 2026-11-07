@@ -20,7 +20,7 @@ extension ViewerWords {
   /// A picture that could not be written.
   static let pictureNotSaved = "Atlas couldn't save the picture."
   /// A screenshot that could not be written.
-  static let shotNotSaved = "Atlas couldn't save the screenshot."
+  static let shotNotSaved = "Atlas couldn't save the picture."
 
   /// A rate's item.
   ///

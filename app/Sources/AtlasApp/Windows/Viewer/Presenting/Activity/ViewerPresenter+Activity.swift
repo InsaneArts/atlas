@@ -5,10 +5,10 @@ import Foundation
 
 extension ViewerPresenter {
   /// The Activity pane: whose work it lists and today's count for VoiceOver, the filters with their problem and
-  /// screenshot counts, and the moments with their steps, narrowed by the filter and the sidebar's search, or why
-  /// nothing shows. Moments form from every row in scope before the filter, so each keeps its identity whichever
-  /// filter shows it. With nothing in the log yet there is nothing to filter. Times are the person's own clock. An
-  /// action shown large, or a task replayed, covers the window.
+  /// picture counts, and the outline of sessions, runs and steps, narrowed by the filter and the sidebar's search, or
+  /// why nothing shows. Runs form from every row in scope before the filter, so each keeps its identity whichever
+  /// filter shows it. With nothing in the log yet there is nothing to filter. Times are the person's own clock. The
+  /// picture sheet, or a run replayed, covers the window.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
@@ -34,7 +34,7 @@ extension ViewerPresenter {
     let scope = ActivityScope(snapshot.shownSessions)
     let query = snapshot.session.search.query
     let shown = moments.shown(filter: activityFilter(facts.filter), query: query)
-    let counts = [ViewerActivityFilter.problems, .screenshots].reduce(into: [ViewerActivityFilter: Int]()) {
+    let counts = [ViewerActivityFilter.problems, .pictures].reduce(into: [ViewerActivityFilter: Int]()) {
       $0[$1] = moments.shown(filter: activityFilter($1), query: "")
         .reduce(0) { $0 + $1.runs.count }
     }
@@ -46,7 +46,7 @@ extension ViewerPresenter {
       days: days,
       empty: days.isEmpty ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil) : nil,
       showsFilters: !moments.moments.isEmpty,
-      large: actionLarge(moments, snapshot),
+      sheet: pictureSheet(moments, snapshot),
       replay: replay(moments, snapshot)
     )
   }
@@ -71,7 +71,7 @@ extension ViewerPresenter {
     return moments
   }
 
-  /// The filters, the chosen one selected, Problems and Screenshots with how many they hold once they hold any.
+  /// The filters, the chosen one selected, Problems and Pictures with how many they hold once they hold any.
   ///
   /// - Parameters:
   ///   - chosen: The filter chosen.
@@ -99,7 +99,7 @@ extension ViewerPresenter {
     switch filter {
     case .all: .all
     case .problems: .problems
-    case .screenshots: .pictures
+    case .pictures: .pictures
     case .typing: .typing
     }
   }

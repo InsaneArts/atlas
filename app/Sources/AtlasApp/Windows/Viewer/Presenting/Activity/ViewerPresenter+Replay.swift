@@ -56,7 +56,7 @@ extension ViewerPresenter {
     let session = resolved?.state == nil ? nil : resolved?.name
     if let task { return (task, session ?? streamName(moment.stream, snapshot)) }
     if let session { return (session, "") }
-    let (_, app) = momentSubject(moment, snapshot)
+    let (_, app) = runSubject(moment, snapshot)
     let minute =
       moment.startedAt.map {
         Words.clockMinute($0, locale: snapshot.locale, calendar: snapshot.zonedCalendar, timeZone: snapshot.timeZone)
@@ -132,5 +132,20 @@ extension ViewerPresenter {
       ViewerWords.span(start, end),
       run.count > 1 ? ViewerWords.folded(run.count) : "",
     ])
+  }
+
+  /// A picture as a replayed step shows it: its shape as the screenshots list says it, its thumbnail once read.
+  ///
+  /// - Parameters:
+  ///   - name: The picture's file name.
+  ///   - snapshot: What the controller holds.
+  /// - Returns: The picture.
+  static func activityShot(_ name: String, _ snapshot: ViewerSnapshot) -> ViewerActivityShot {
+    let listed = listedSize(snapshot.panes.shots.shots?.first { $0.name == name })
+    return ViewerActivityShot(
+      name: name,
+      aspect: listed.map { $0.width / $0.height } ?? ViewerActivityShot.defaultAspect,
+      thumbnail: snapshot.panes.thumbnails[name]
+    )
   }
 }

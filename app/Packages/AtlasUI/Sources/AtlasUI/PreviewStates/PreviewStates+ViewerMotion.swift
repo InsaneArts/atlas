@@ -43,50 +43,32 @@
       ]
     }
 
-    /// Activity's: Notes folding and opening again, and TextEdit's "Show 1 more", as the person asks, each in tenths;
-    /// a new step arriving at the top of the live
-    /// moment, and a new app's moment over it; the Problems filter chosen, which keeps only the failed click and holds
-    /// its moment open.
+    /// Activity's: the Chrome run opening and folding again as the person asks, each in tenths; a new run arriving at
+    /// the top of the live session; and the Problems filter chosen, which keeps only the run with the failed press.
     @MainActor private static var activityMotion: [ViewerMotionPose] {
       [
         ViewerMotionPose(
-          "moment-open",
-          from: viewerActivityNotesFolded,
-          to: viewer(viewerActivityNotesFolded, applying: .toggleMoment("session:|n1", opens: true)),
-          size: viewerSize,
-          lead: .spring(Motion.Springs.state),
-          steps: ViewerMotionPose.tenths,
-          animation: { ActivityMotion.fold(reduceMotion: false) }
-        ),
-        ViewerMotionPose(
-          "moment-fold",
+          "run-open",
           from: viewerActivity,
-          to: viewerActivityNotesFolded,
+          to: viewerActivityOpened,
           size: viewerSize,
           lead: .spring(Motion.Springs.state),
           steps: ViewerMotionPose.tenths,
           animation: { ActivityMotion.fold(reduceMotion: false) }
         ),
         ViewerMotionPose(
-          "moment-more",
+          "run-fold",
           from: viewerActivityOpened,
-          to: viewerActivityEveryStep,
-          size: viewerSize,
-          lead: .spring(Motion.Springs.state),
-          steps: ViewerMotionPose.tenths,
-          animation: { ActivityMotion.fold(reduceMotion: false) }
-        ),
-        ViewerMotionPose(
-          "step-arrive",
-          from: viewerActivityBeforeStep,
           to: viewerActivity,
           size: viewerSize,
-          lead: .list(Motion.Springs.state)
+          lead: .spring(Motion.Springs.state),
+          steps: ViewerMotionPose.tenths,
+          animation: { ActivityMotion.fold(reduceMotion: false) }
         ),
         ViewerMotionPose(
-          "moment-arrive",
+          "run-arrive",
           from: viewerActivity,
-          to: viewerActivityNewMoment,
+          to: viewerActivityNewRun,
           size: viewerSize,
           lead: .list(Motion.Springs.state)
         ),

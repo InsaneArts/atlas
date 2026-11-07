@@ -51,23 +51,23 @@ extension ViewerWindow: ViewerMenuActions, HelperMenuActions {
     }
   }
 
-  /// Copies what the window shows: the screenshot shown large or selected in the Screenshots list, else the picture.
+  /// Copies what the window shows: the picture in the sheet, else the helper's screen.
   ///
   /// - Parameter sender: The menu item.
   @objc func copy(_ sender: Any?) {
     if controller.pictureMenu.actsOnShot {
-      controller.send(.copyShot)
+      controller.send(.copyPicture)
     } else {
       controller.readingLoop.copyPicture()
     }
   }
 
-  /// Saves what the window shows: the screenshot shown large or selected in the Screenshots list, else the picture.
+  /// Saves what the window shows: the picture in the sheet, else the helper's screen.
   ///
   /// - Parameter sender: The menu item.
   func savePicture(_ sender: Any?) {
     if controller.pictureMenu.actsOnShot {
-      controller.panesModel.saveShot()
+      controller.panesModel.pictures.save { [weak controller] in controller?.say(ViewerWords.shotNotSaved) }
     } else {
       controller.readingLoop.savePicture()
     }

@@ -23,14 +23,12 @@ extension ViewerController {
     setOverlayShown(session.overlayShown)
   }
 
-  /// A resize began or ended. While it lasts the Screenshots grid keeps the columns it had and the thumbnails wait;
-  /// once it ends the grid takes the columns the width holds and the thumbnails waiting are read.
+  /// A resize began or ended. While it lasts the thumbnails wait; once it ends the thumbnails waiting are read.
   ///
   /// - Parameter resizing: Whether the resize is under way.
   func setLiveResizing(_ resizing: Bool) {
     guard resizing != session.liveResizing else { return }
     session.liveResizing = resizing
-    session.heldShotColumns = resizing ? panes.shots.columns : nil
     panesModel.holdThumbnails(resizing)
   }
 }

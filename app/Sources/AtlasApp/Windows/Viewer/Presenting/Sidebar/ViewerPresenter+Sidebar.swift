@@ -72,12 +72,14 @@ extension ViewerPresenter {
         let rows =
           live
           .filter { self.section(of: $0.state) == section }
+          .filter { isBusy($0) || !neverActed($0.key, snapshot) }
           .map { sessionRow($0, snapshot) }
           .filter { matches($0, query: query) }
         return ViewerSessionGroup(section, rows: rows)
       }
       .filter { !$0.rows.isEmpty }
-    let endedRows = ended.map { endedRow($0, snapshot) }
+    let endedRows = ended.filter { !neverActed($0.key, snapshot) }
+      .map { endedRow($0, snapshot) }
       .filter { matches($0, query: query) }
     let endedShown = snapshot.session.endedShown
     if !endedRows.isEmpty {
@@ -119,24 +121,25 @@ extension ViewerPresenter {
     }
   }
 
-  /// A live session's row: its icon and badge, its name, what it last did, its tooltip and its menu; while its work
-  /// is cleaned up, "Cleaning up…" with a spinner in the badge's place.
+  /// A live session's row: its icon and badge, its title from what it mostly did, what it does now while it works, or
+  /// its project and start while it is quiet, its tooltip and its menu; while its work is cleaned up, "Cleaning up…"
+  /// with a spinner in the badge's place.
   ///
   /// - Parameters:
   ///   - session: The session, as the status or the list has it.
   ///   - snapshot: What the controller holds.
   /// - Returns: The row.
   private static func sessionRow(_ session: ViewerStatus.HostSession, _ snapshot: ViewerSnapshot) -> ViewerSessionRow {
-    let line = ViewerWords.sessionRowLine(
-      session,
-      line: snapshot.reading.statusReading.line(of: session),
-      now: snapshot.date
-    )
+    let busy = isBusy(session)
+    let line =
+      busy
+      ? ViewerWords.sessionRowLine(session, line: snapshot.reading.statusReading.line(of: session), now: snapshot.date)
+      : quietLine(folder: session.folder, hostLabel: session.hostLabel, started: session.startedAt, snapshot)
     let record = snapshot.panes.sessions.record(session.key)
     return row(
       session.key,
       icon: session.host.icon,
-      name: session.name,
+      name: sessionTitle(session.key, working: busy, fallback: session.name, snapshot),
       line: line,
       badge: badge(of: session.state),
       facts: sessionFacts(session, record: record, snapshot),
@@ -144,7 +147,8 @@ extension ViewerPresenter {
     )
   }
 
-  /// An ended session's row: its icon, its name and when it ended, with no badge, its tooltip and its menu.
+  /// An ended session's row: its icon, its title from what it did, its project and when it started, with no badge, its
+  /// tooltip and its menu.
   ///
   /// - Parameters:
   ///   - record: The session, as the list has it.
@@ -154,8 +158,8 @@ extension ViewerPresenter {
     row(
       record.key,
       icon: record.host.icon,
-      name: record.name,
-      line: ViewerWords.endedSubtitle(record, now: snapshot.date),
+      name: sessionTitle(record.key, working: false, fallback: record.name, snapshot),
+      line: quietLine(folder: record.folder, hostLabel: record.hostLabel, started: record.startedAt, snapshot),
       badge: nil,
       facts: sessionFacts(nil, record: record, snapshot),
       snapshot
@@ -199,6 +203,15 @@ extension ViewerPresenter {
       help: sessionHelp(name: name, line: shownLine, facts: facts, receipt: receipt),
       menu: sessionMenu(key: key, needsYou: badge == .needsYou, facts: facts, snapshot)
     )
+  }
+
+  /// Whether a session works now, waits for the helper or needs the person, so its line says what it is doing and it
+  /// keeps its row whatever it did before.
+  ///
+  /// - Parameter session: The session.
+  /// - Returns: Whether it does.
+  static func isBusy(_ session: ViewerStatus.HostSession) -> Bool {
+    [.acting, .waiting, .needsYou].contains(session.state) || session.holdsHelper
   }
 
   /// Whether a row is kept by the search: every row while there is no query, else one whose name or line holds it,

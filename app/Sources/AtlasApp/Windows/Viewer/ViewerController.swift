@@ -139,11 +139,10 @@ final class ViewerController {
     case .alertConfirm: Task { await confirmAlert() }
     case .alertCancel: cancelAlert()
     case .moveCorner(let corner): moveCorner(corner)
-    case .filterActivity, .toggleMoment, .showMomentSteps, .showWindow, .clearOutline, .shotColumns, .selectShot,
-      .openShot, .toggleShot, .previousShot,
-      .nextShot, .shotAbove, .shotBelow, .clearShotSelection, .closeShot,
-      .copyShot, .showShotInFinder, .thumbnailNeeded, .openAction, .previousAction, .nextAction, .compareAction,
-      .toggleChanges, .closeAction, .openReplay, .replayFrame, .previousFrame, .nextFrame, .togglePlay, .closeReplay:
+    case .filterActivity, .toggleSession, .toggleRun, .showRunPictures, .showAllRunPictures, .hideRunPictures,
+      .showDaySessions, .showWindow, .clearOutline, .thumbnailNeeded, .openShot, .openAction, .previousPicture,
+      .nextPicture, .pictureSide, .copyPicture, .showPictureInFinder, .closePicture, .openReplay, .replayFrame,
+      .previousFrame, .nextFrame, .togglePlay, .closeReplay:
       panesModel.sendPane(event)
     }
   }
@@ -285,14 +284,14 @@ final class ViewerController {
     session.fullScreen = fullScreen
   }
 
-  /// Shows every host session's work, or one's, in Activity and Screenshots; the list of sessions is read again for
-  /// it. A screenshot shown large goes, as it may no longer be among those listed.
+  /// Shows every host session's work, or one's, in Activity and Apps; the list of sessions is read again for it. A
+  /// picture in the sheet goes, as its run may no longer be among those listed.
   ///
   /// - Parameter choice: Whose work.
   func chooseSession(_ choice: ViewerSessionChoice) {
     guard choice != session.chosenSession else { return }
     session.chosenSession = choice
-    panesModel.closeShot()
+    panesModel.sendPane(.closePicture)
     panesModel.followSessions(readNow: true)
   }
 
@@ -309,7 +308,6 @@ final class ViewerController {
     control.releaseControl()
     readingLoop.watch(false)
     panesModel.followPane()
-    panesModel.stopCopy()
-    panesModel.actions.stop()
+    panesModel.stopPictures()
   }
 }

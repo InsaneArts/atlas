@@ -1,74 +1,20 @@
 #if DEBUG
   extension PreviewStates {
-    /// Activity with Notes folded by the person, its three actions on one row under Opie.
-    @MainActor static let viewerActivityNotesFolded = viewer(
-      viewerActivity,
-      applying: .toggleMoment("session:|n1", opens: false)
-    )
-
-    /// Activity a moment before the click in Opie began: scrolling is the newest step, still running, and the day
-    /// counts one action fewer, so the click arriving over it is the working sample.
-    @MainActor static let viewerActivityBeforeStep: ViewerState = {
+    /// Activity a moment after the agent moved on to Safari: Safari's run at the top of the live session, its first
+    /// step running, and TextEdit's run done.
+    @MainActor static let viewerActivityNewRun: ViewerState = {
       var state = viewerActivity
       var pane = workingActivity
-      pane.meta = "18 actions today"
-      pane.days[0].moments[0].span = "5 actions · 10:31"
-      pane.days[0].moments[0].steps.removeAll { $0.id == "o6" }
-      pane.days[0].moments[0].steps[0].mark = .live
-      pane.days[0].moments[0].steps[0].words = ViewerStepWords("Scrolling")
-      state.pane = .activity(pane)
-      return state
-    }()
-
-    /// Activity with TextEdit's "Show 1 more" pressed: its oldest step, its opening, under the eight it listed.
-    @MainActor static let viewerActivityEveryStep: ViewerState = {
-      var state = viewerActivityOpened
-      guard case .activity(var pane) = state.pane else { return state }
-      guard let index = pane.days[0].moments.firstIndex(where: { $0.id == "session:|e1" }) else { return state }
-      pane.days[0].moments[index].steps[pane.days[0].moments[index].steps.count - 1].isLast = false
-      pane.days[0].moments[index].steps.append(
-        ViewerActivityStep(
-          id: "e1",
-          kind: .window,
-          words: ViewerStepWords("Opened TextEdit"),
-          time: "10 min",
-          isLast: true
-        )
-      )
-      pane.days[0].moments[index].more = nil
-      state.pane = .activity(pane)
-      return state
-    }()
-
-    /// Activity a moment after the agent moved on to Safari: Safari's moment at the top with its first step running,
-    /// and Opie's click done, its moment now one the person can fold.
-    @MainActor static let viewerActivityNewMoment: ViewerState = {
-      var state = viewerActivity
-      var pane = workingActivity
-      pane.meta = "20 actions today"
-      pane.days[0].moments[0].steps[0].mark = .quiet
-      pane.days[0].moments[0].steps[0].words = ViewerStepWords("Clicked", target: "Show Center")
-      pane.days[0].moments[0].canFold = true
-      pane.days[0].moments.insert(
-        ViewerActivityMoment(
-          id: "session:|s1",
+      pane.days[0].sessions[0].runs[0].isRunning = false
+      pane.days[0].sessions[0].runs[0].time = "01:51–01:58"
+      pane.days[0].sessions[0].runs.insert(
+        ViewerOutlineRun(
+          id: "run.safari",
           icon: sampleApp(SampleAppIcons.safari, "Safari"),
-          title: "Safari",
-          time: "10:32",
-          span: "1 action · 10:32",
-          age: "now",
-          isOpen: true,
-          canFold: false,
-          steps: [
-            ViewerActivityStep(
-              id: "s1",
-              kind: .window,
-              mark: .live,
-              words: ViewerStepWords("Opening Safari"),
-              time: "now",
-              isLast: true
-            )
-          ]
+          name: "Safari",
+          summary: "Opening Safari · 1 action",
+          time: "now",
+          isRunning: true
         ),
         at: 0
       )

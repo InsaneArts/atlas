@@ -10,8 +10,4 @@ public enum ViewerPane: Equatable, Sendable {
   ///
   /// - Parameter state: The Apps pane.
   case apps(ViewerAppsState)
-  /// The screenshots agents took.
-  ///
-  /// - Parameter state: The Screenshots pane.
-  case screenshots(ViewerShotsState)
 }
