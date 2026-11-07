@@ -5,10 +5,11 @@ import os
 
 /// The live picture's layer and what it shows, as ``LayerPictureView``'s coordinator: each new picture
 /// replaces the layer's contents inside a transaction with actions disabled, so a frame lands whole in one
-/// display tick, never crossfading from the last, and SwiftUI never rebuilds the picture's view for it. The
-/// colour a look keeps is a Core Image filter on the layer; the black that darkens it lies over the view. Its corners
-/// change at once, but while the picture zooms between the stage and the small screen, where they follow the zoom's
-/// spring so they land with the view's clip.
+/// display tick, never crossfading from the last, and SwiftUI never rebuilds the picture's view for it. The same
+/// image again leaves the contents alone. The colour a look keeps is a Core Image filter on the layer, there only
+/// while the picture keeps less than all its colour or eases to or from it: the window server would run it on every
+/// frame. The black that darkens it lies over the view. Its corners change at once, but while the picture zooms
+/// between the stage and the small screen, where they follow the zoom's spring so they land with the view's clip.
 final class LayerPicture {
   /// Marks each swap, so Instruments shows the main thread's time per frame.
   private static let signposter = OSSignposter(subsystem: "com.insanearts.atlas", category: "Viewer")
@@ -51,15 +52,21 @@ final class LayerPicture {
     let previousCorner = presentation?.cornerRadius ?? layer.cornerRadius
     let signposter = Self.signposter
     let swap = signposter.beginInterval("Frame swap")
+    let eases = colourChanged && previousColour.map { $0 != live.saturation } == true
     CATransaction.begin()
     CATransaction.setDisableActions(true)
-    layer.contents = live.picture.image
+    if shown?.picture.image !== live.picture.image {
+      layer.contents = live.picture.image
+    }
     layer.cornerRadius = live.corner
     if colourChanged {
-      layer.filters = Self.filters(saturation: live.saturation)
+      layer.filters = live.saturation < 1 || eases ? Self.filters(saturation: live.saturation) : nil
+    } else if live.saturation == 1, layer.filters != nil, layer.animation(forKey: Self.saturationPath) == nil {
+      // An ease back to full colour has ended: the next frame goes without the filter.
+      layer.filters = nil
     }
     CATransaction.commit()
-    if colourChanged, let previousColour {
+    if eases, let previousColour {
       let animation = CABasicAnimation(keyPath: Self.saturationPath)
       animation.fromValue = previousColour
       animation.toValue = live.saturation

@@ -25,7 +25,7 @@ const IDLE: Duration = Duration::from_secs(10);
 /// The shortest gap between CoreGraphics capture starts.
 const CADENCE: Duration = Duration::from_nanos(1_000_000_000 / 30);
 /// The shortest gap between ScreenCaptureKit capture starts.
-const NATIVE_CADENCE: Duration = Duration::from_nanos(1_000_000_000 / 60);
+const NATIVE_CADENCE: Duration = Duration::from_nanos(1_000_000_000 / 30);
 const MAX_HEADER: usize = 4096;
 
 /// The connection's ownership of the live source. Dropping it gives the

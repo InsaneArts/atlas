@@ -87,6 +87,9 @@ const SILENT_RENEW: Duration = Duration::from_secs(60);
 /// 170–200 ms here. A stop not confirmed in time leaves the source stopping,
 /// and the owner's frames are refused until its own stop settles it.
 const STOP_WAIT: Duration = Duration::from_millis(500);
+/// The most samples a second the stream makes. Each one is a composite the
+/// window server makes for it, and no viewer reads more than this.
+const PICTURES_A_SECOND: i32 = 30;
 /// How long a one-shot picture waits for the open stream to prove its
 /// picture current: a few refreshes, as a screen that changes, or changed in
 /// the last few seconds, sends a sample at each. A still screen sends none,
@@ -1315,7 +1318,7 @@ impl Running {
             configuration.setHeight(key.height);
             configuration.setPixelFormat(kCVPixelFormatType_32BGRA);
             configuration.setColorSpaceName(&color_space);
-            configuration.setMinimumFrameInterval(CMTime::new(1, 60));
+            configuration.setMinimumFrameInterval(CMTime::new(1, PICTURES_A_SECOND));
             configuration.setQueueDepth(3);
             configuration.setShowsCursor(false);
             if configuration.respondsToSelector(sel!(setPreservesAspectRatio:)) {
