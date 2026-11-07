@@ -2,7 +2,8 @@
 //! every one-shot capture it serves until it exits. Its memory is read at
 //! most once a minute, and once it passes [`LIMIT`] the helper's own
 //! recorder is ended between two captures, with a live stream paused around
-//! it, and only while no input runs or has for a moment. launchd starts a
+//! it, and only while no input runs or has for a moment and the helper is
+//! off the screen, where the person cannot be using it. launchd starts a
 //! fresh one for the next capture, and Screen Recording stays allowed.
 use atlas_core::process::Instance;
 use atlas_native::native::{
@@ -68,6 +69,8 @@ pub(super) struct System {
     /// Tells the live stream that its next picture comes from a new
     /// recorder, which takes longer to send its first.
     restarted: fn(),
+    /// Whether the helper is on the screen, or that cannot be read.
+    on_console: fn() -> bool,
 }
 
 impl System {
@@ -79,6 +82,7 @@ impl System {
             kill: sigkill,
             exits,
             restarted: capture::recorder_restarted,
+            on_console: super::facts::on_console,
         }
     }
 }
@@ -137,7 +141,8 @@ enum Restart {
     /// The recorder measured was ended and has exited.
     Done,
     /// The process found now is not the one measured, or is not this
-    /// account's recorder, or it is already gone: nothing was ended.
+    /// account's recorder, or it is already gone, or the helper is on the
+    /// screen: nothing was ended.
     Refused,
     /// The signal was refused, or the recorder did not exit.
     Failed,
@@ -244,6 +249,12 @@ impl Recorder {
             report.reset_failures = 0;
             return (report, READING);
         }
+        // The person may be using the helper, physical input announces
+        // nothing, and its recorder may be theirs too: the next reading
+        // tries again.
+        if (self.system.on_console)() {
+            return (report, READING);
+        }
         let restarted = match &self.input {
             // Input is kept out only around the restart itself, once no
             // capture runs; a first look spares the stream a needless pause.
@@ -280,6 +291,9 @@ impl Recorder {
     /// was measured, and wait for it to exit. One that has not exited by
     /// then keeps the captures of `source` out until it has.
     fn restart(&self, source: &Source, measured: &Process, helper: u32) -> Restart {
+        if (self.system.on_console)() {
+            return Restart::Refused;
+        }
         let pid = measured.instance.pid;
         let now = (self.system.describe)(pid);
         if !may_restart(measured, now.as_ref(), helper) {

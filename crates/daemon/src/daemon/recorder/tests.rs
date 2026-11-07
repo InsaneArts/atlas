@@ -46,6 +46,9 @@ thread_local! {
     static EXITS: Cell<bool> = const { Cell::new(true) };
     /// How often the live stream was told of a new recorder.
     static TOLD: Cell<usize> = const { Cell::new(0) };
+    /// How many on-screen checks say the helper is off the screen before
+    /// it is on it.
+    static OFF_SCREEN_FOR: Cell<usize> = const { Cell::new(usize::MAX) };
 }
 
 fn found() -> Option<(Process, Usage)> {
@@ -79,6 +82,11 @@ fn fake() -> System {
         kill: killed,
         exits: |_| EXITS.get(),
         restarted: || TOLD.set(TOLD.get() + 1),
+        on_console: || {
+            let left = OFF_SCREEN_FOR.get();
+            OFF_SCREEN_FOR.set(left.saturating_sub(1));
+            left == 0
+        },
     }
 }
 
@@ -701,4 +709,42 @@ fn input_that_comes_during_a_restart_waits_for_it_and_then_goes_on() {
         agent.join().unwrap().is_some(),
         "and then went on holding the file"
     );
+}
+
+#[test]
+fn a_recorder_past_the_limit_is_left_alone_while_the_helper_is_on_the_screen() {
+    FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    OFF_SCREEN_FOR.set(0);
+    let source = source();
+    let recorder = Recorder::new(fake(), Some(HELPER));
+    let start = Instant::now();
+    let report = recorder.report_at(&source, start).unwrap();
+    assert_eq!(kills(), [] as [i32; 0]);
+    assert_eq!((report.resets, report.reset_failures), (0, 0));
+    assert_eq!(
+        recorder
+            .report_at(&source, start + Duration::from_secs(30))
+            .unwrap()
+            .resets,
+        0,
+        "nothing is tried again within the minute"
+    );
+    OFF_SCREEN_FOR.set(usize::MAX);
+    let restarted = recorder.report_at(&source, start + READING).unwrap();
+    assert_eq!(kills(), [700]);
+    assert_eq!((restarted.resets, restarted.reset_failures), (1, 0));
+}
+
+#[test]
+fn the_helper_coming_on_the_screen_while_captures_end_leaves_the_recorder_alone() {
+    FOUND.set(Some(replayd(700, HELPER, 6 << 30)));
+    // Off the screen for the first look, on it by the time the restart runs.
+    OFF_SCREEN_FOR.set(1);
+    let report = Recorder::new(fake(), Some(HELPER))
+        .report_at(&source(), Instant::now())
+        .unwrap();
+    assert_eq!(kills(), [] as [i32; 0]);
+    assert_eq!((report.resets, report.reset_failures), (0, 0));
+    assert_eq!(TOLD.get(), 0);
 }
