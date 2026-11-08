@@ -4181,7 +4181,8 @@ fn refusal_to_ask(canary: &str) -> Value {
     })
 }
 
-/// A stand-in input service that grants and releases, and answers each input with the next of `replies`.
+/// A stand-in input service that grants and releases, and answers each input with the next of `replies`,
+/// until it has released after the second input.
 fn answering_input(
     listener: UnixListener,
     replies: Vec<Value>,
@@ -4190,12 +4191,13 @@ fn answering_input(
         let mut replies = replies.into_iter();
         let mut inputs = Vec::new();
         while let Ok(Ok((peer, _))) =
-            tokio::time::timeout(Duration::from_secs(3), listener.accept()).await
+            tokio::time::timeout(Duration::from_secs(15), listener.accept()).await
         {
             let mut peer = BufReader::new(peer);
             let mut line = String::new();
             peer.read_line(&mut line).await.unwrap();
             let request = serde_json::from_str::<Value>(&line).unwrap();
+            let released = request["op"] == "release";
             let reply = match request["op"].as_str() {
                 Some("input") => {
                     inputs.push(request);
@@ -4206,7 +4208,7 @@ fn answering_input(
                 _ => json!({"ok": true}),
             };
             answer(&mut peer, reply).await;
-            if inputs.len() >= 2 {
+            if released && inputs.len() >= 2 {
                 break;
             }
         }
@@ -4301,5 +4303,66 @@ async fn a_request_that_sent_part_of_itself_is_never_asked_about_or_sent_again()
     assert!(
         shown.contains("\"performed\":1") || shown.contains("waiting-for-person"),
         "{shown}"
+    );
+}
+
+#[tokio::test]
+async fn an_allow_after_the_observation_freshness_limit_still_runs_through_a_fresh_look() {
+    let (_dir, client, listener, session) = native_client();
+    let client = Client {
+        controller: client.controller.clone().waiting(Duration::from_secs(30)),
+        ..client
+    };
+    let service = answering_input(listener, vec![refusal_to_ask("fresh")]);
+    let asks = client.controller.asks();
+    let (first_tx, first_rx) = std::sync::mpsc::channel::<Instant>();
+    // The person answers once the first look is past its freshness limit.
+    let person = std::thread::spawn(move || {
+        let first = first_rx.recv().unwrap();
+        let ask = loop {
+            if let Some(ask) = asks.open(atlas_core::time::now_ms()).into_iter().next() {
+                break ask;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        std::thread::sleep(
+            (first + Duration::from_millis(8_200)).saturating_duration_since(Instant::now()),
+        );
+        asks.answer(
+            &ask.id,
+            atlas_control::asks::Answer::Task,
+            true,
+            atlas_core::time::now_ms(),
+        )
+        .unwrap();
+    });
+    let mut looks = Vec::new();
+    let reply = crate::asking::after_asking(&client, async || {
+        // Each attempt takes control and looks at its target itself.
+        let _ownership = client.controller.acquire(false)?;
+        let looked = Instant::now();
+        if looks.is_empty() {
+            first_tx.send(looked).unwrap();
+        }
+        looks.push(looked);
+        let actions = json!([{"type": "key", "key": "return"}]);
+        client
+            .input_in_session(
+                actions::Batch::decode(&actions)?,
+                Some((&session.epoch, looked)),
+                None,
+                None,
+                &session,
+            )
+            .await
+    })
+    .await;
+    person.join().unwrap();
+    let inputs = service.await.unwrap();
+    assert_eq!(reply.unwrap()["ok"], true, "the allowed attempt ran");
+    assert_eq!(inputs.len(), 2, "and reached the input service");
+    assert!(
+        looks[1].duration_since(looks[0]) >= Duration::from_secs(8),
+        "the first look was past its limit when the person answered"
     );
 }
