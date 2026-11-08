@@ -1,4 +1,5 @@
 import AppKit
+import AsyncSupportTesting
 import AtlasUI
 import CoreGraphics
 import Foundation
@@ -11,7 +12,7 @@ import Testing
 @MainActor
 struct SheetMotionTests {
   @Test("the sheet grows in its place as it opens and shrinks back as it closes, the window dimming and lighting")
-  func theSheetComesAndGoesInPlace() throws {
+  func theSheetComesAndGoesInPlace() async throws {
     let previous = Motion.Pose.moment
     Motion.Pose.hold(at: .zero)
     defer { Motion.Pose.hold(at: previous) }
@@ -27,9 +28,9 @@ struct SheetMotionTests {
     host.render()
     var held = TimeInterval.zero
     host.show(shown, animatesArrivals: false)
-    let opening = try Self.follow(host, from: &held)
+    let opening = try await Self.follow(host, from: &held)
     host.show(closed, animatesArrivals: false)
-    let closing = try Self.follow(host, from: &held)
+    let closing = try await Self.follow(host, from: &held)
     let settled = try #require(opening.last?.frame)
     #expect(host.frames["picture sheet"] != nil)
     for (moves, name) in [(opening, "opening"), (closing, "closing")] {
@@ -73,16 +74,19 @@ struct SheetMotionTests {
   ///   - held: The moment held, which moves on.
   /// - Returns: Each frame's move.
   /// - Throws: When a frame cannot be drawn.
-  static func follow(_ host: ViewerHost, from held: inout TimeInterval) throws -> [Move] {
+  static func follow(_ host: ViewerHost, from held: inout TimeInterval) async throws -> [Move] {
     host.render()
     let end = held + Self.settledAfter
     var moves: [Move] = []
     while held < end {
+      // Each frame lets the main actor's other work run, so suites beside this one are never starved of it.
+      await afterQueuedWork()
       held += Self.sampleEvery
       Motion.Pose.hold(at: held)
       host.render()
       guard let frame = host.frames["picture sheet"] else { continue }
-      moves.append(Move(frame: frame, dimmed: try host.sampled().brightness(at: Self.beside)))
+      let beside = try host.sampled(in: CGRect(origin: Self.beside, size: Self.spot))
+      moves.append(Move(frame: frame, dimmed: beside.brightness(at: Self.beside)))
     }
     return moves
   }
@@ -97,4 +101,6 @@ struct SheetMotionTests {
   static let shade: CGFloat = 0.01
   /// A point in the sidebar, clear of the sheet, where the scrim dims the window.
   static let beside = CGPoint(x: 100, y: 600)
+  /// The part of the frame read around it.
+  static let spot = CGSize(width: 2, height: 2)
 }

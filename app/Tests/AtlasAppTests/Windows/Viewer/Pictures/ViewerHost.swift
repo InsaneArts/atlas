@@ -239,15 +239,27 @@ final class ViewerHost {
     }
   }
 
-  /// This frame, to read pixel by pixel.
+  /// Part of this frame, to read pixel by pixel: drawing only that part keeps a test that follows a move frame by
+  /// frame quick.
   ///
-  /// - Returns: The frame.
+  /// - Parameter rect: The part, in the window's points from its top left.
+  /// - Returns: The part of the frame.
   /// - Throws: When nothing was drawn.
-  func sampled() throws -> SampledFrame {
-    let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
-    hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+  func sampled(in rect: CGRect) throws -> SampledFrame {
+    let part = rect.intersection(hosting.bounds)
+    let drawn =
+      hosting.isFlipped
+      ? part
+      : CGRect(
+        x: part.minX,
+        y: hosting.bounds.height - part.maxY,
+        width: part.width,
+        height: part.height
+      )
+    let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: drawn))
+    hosting.cacheDisplay(in: drawn, to: bitmap)
     let pixels = try #require(bitmap.converting(to: .sRGB, renderingIntent: .default))
-    return SampledFrame(pixels: pixels, scale: CGFloat(bitmap.pixelsWide) / hosting.bounds.width)
+    return SampledFrame(pixels: pixels, origin: part.origin, scale: CGFloat(bitmap.pixelsWide) / part.width)
   }
 
   /// What this frame draws in `rect`, as raw pixels, for comparing one frame with another.

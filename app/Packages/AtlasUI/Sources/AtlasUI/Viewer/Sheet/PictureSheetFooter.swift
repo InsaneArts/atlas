@@ -15,6 +15,32 @@ struct PictureSheetFooter: View {
 
   /// The two sides of the footer, on one row or two.
   var body: some View {
+    VStack(alignment: .trailing, spacing: Spacing.s) {
+      controls
+      if let failure {
+        // On a line of its own under the buttons, wrapping in a narrow sheet rather than pushing them out.
+        Text(failure)
+          .font(Typography.font(.callout))
+          .foregroundStyle(Color.textAttention)
+          .multilineTextAlignment(.trailing)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .trailing)
+          .transition(.opacity)
+      }
+    }
+    .animation(Motion.textSwap, value: sheet.notice)
+    .padding(ViewerLayout.sheetInset)
+    .background {
+      // Escape closes the sheet as Done does.
+      Button("Close") { send(.closePicture) }
+        .keyboardShortcut(.cancelAction)
+        .hidden()
+        .accessibilityHidden(true)
+    }
+  }
+
+  /// ‹ › and the position, then the buttons: side by side, or on a narrow window one over the other.
+  private var controls: some View {
     Group {
       if window <= ViewerLayout.outlineNarrowest {
         VStack(alignment: .trailing, spacing: ViewerLayout.sheetInset) {
@@ -29,14 +55,6 @@ struct PictureSheetFooter: View {
           buttons
         }
       }
-    }
-    .padding(ViewerLayout.sheetInset)
-    .background {
-      // Escape closes the sheet as Done does.
-      Button("Close") { send(.closePicture) }
-        .keyboardShortcut(.cancelAction)
-        .hidden()
-        .accessibilityHidden(true)
     }
   }
 
@@ -79,16 +97,9 @@ struct PictureSheetFooter: View {
     return "\(sheet.position) \(sheet.run)"
   }
 
-  /// What could not be done, then Copy, Show in Finder and Done, in macOS order with the default button last.
+  /// Copy, Show in Finder and Done, in macOS order with the default button last.
   private var buttons: some View {
     HStack(spacing: Spacing.s) {
-      if let failure {
-        Text(failure)
-          .font(Typography.font(.callout))
-          .foregroundStyle(Color.textAttention)
-          .lineLimit(1)
-          .transition(.opacity)
-      }
       Button(action: { send(.copyPicture) }) {
         // Both words hold the button's width, so it never changes size as one gives way to the other.
         ZStack {
@@ -115,7 +126,6 @@ struct PictureSheetFooter: View {
         .onAppear { doneFocused = true }
     }
     .fixedSize()
-    .animation(Motion.textSwap, value: sheet.notice)
     .onChange(of: sheet.notice) { _, notice in
       // VoiceOver hears what the footer says, as it may not be looking at it.
       guard let words = spoken(notice) else { return }

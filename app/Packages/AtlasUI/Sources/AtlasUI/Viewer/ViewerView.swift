@@ -322,9 +322,10 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     return activity
   }
 
-  /// Whether the picture sheet or a replay covers the window, which then takes no clicks.
+  /// Whether the picture sheet or a replay covers the window, which then takes no clicks: the sheet until its closing
+  /// has finished, so nothing behind it takes focus before its opener has it back.
   private var isCovered: Bool {
-    activity?.sheet != nil || activity?.replay != nil
+    activity?.sheet != nil || activity?.replay != nil || sheetCovers
   }
 
   /// Settles the stage on a new place once its switch has begun, keeping whether the picture moved.

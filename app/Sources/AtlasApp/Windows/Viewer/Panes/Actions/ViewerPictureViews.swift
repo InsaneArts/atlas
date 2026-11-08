@@ -76,6 +76,7 @@ final class ViewerPictureViews {
     model.panes.activity.sheet?.item = sequence[index + offset]
     model.panes.activity.sheet?.side = .before
     model.panes.activity.sheet?.notice = nil
+    cancelCopy()
     refresh()
   }
 
@@ -85,6 +86,7 @@ final class ViewerPictureViews {
   func side(_ side: ViewerPictureSide) {
     model?.panes.activity.sheet?.side = side
     model?.panes.activity.sheet?.notice = nil
+    cancelCopy()
     refresh()
   }
 
@@ -107,7 +109,8 @@ final class ViewerPictureViews {
     copying = Task { [weak self, service] in
       let data = try? await service.screenshot(name: name, full: true)
       let png = if let data { await ImageEncoding.png(data) } else { Data?.none }
-      guard !Task.isCancelled, let self else { return }
+      // Only for the picture the sheet still shows: stepping away calls Copy off, and this checks it too.
+      guard !Task.isCancelled, let self, shownPicture() == name else { return }
       copying = nil
       let copied = png.map { outlet.copy($0, file) } ?? false
       notify(copied ? .copied : .copyFailed)
@@ -145,6 +148,13 @@ final class ViewerPictureViews {
     guard let model else { return nil }
     let list = ScreenshotList(shots: model.panes.shots.shots ?? [], folder: model.panes.shots.folder)
     return list.pictureFile(named: name)
+  }
+
+  /// Calls off a Copy still reading its picture, as the sheet steps to another, so it never lands on the clipboard or
+  /// says Copied for a picture no longer shown.
+  private func cancelCopy() {
+    copying?.cancel()
+    copying = nil
   }
 
   /// Says `notice` in the sheet's footer for ``noticeHold``, unless another picture shows first.

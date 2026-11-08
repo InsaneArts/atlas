@@ -1,4 +1,5 @@
 import AppKit
+import AsyncSupportTesting
 import AtlasUI
 import CoreGraphics
 import Foundation
@@ -15,7 +16,7 @@ struct DisclosureMotionTests {
     "opening or folding is one move: its row stands still, the rows below move one way, and its content never vanishes",
     arguments: ["run-open", "run-fold", "session-open", "session-fold"]
   )
-  func aDisclosureIsOneMove(name: String) throws {
+  func aDisclosureIsOneMove(name: String) async throws {
     let pose = try #require(PreviewStates.viewerMotion.first { $0.name == name })
     let previous = Motion.Pose.moment
     Motion.Pose.hold(at: .zero)
@@ -24,9 +25,11 @@ struct DisclosureMotionTests {
     host.render()
     let row = try #require(host.frames[try Self.toggledRow(pose)], "the toggled row is laid out")
     let points = Self.rowPoints(row)
-    let still = try host.brightness(at: points)
+    let still = try host.sampled(in: row)
+      .brightness(at: points)
     let band = CGRect(x: row.minX + Self.contentLead, y: row.maxY, width: Self.contentReach, height: Self.contentDepth)
-    let start = try host.sampled()
+    let watched = CGRect(x: row.minX, y: row.maxY, width: Self.contentLead + Self.contentReach, height: Self.listBottom)
+    let start = try host.sampled(in: watched)
     let opens = Self.opens(pose)
     withAnimation(pose.animation()) {
       host.show(pose.to, animatesArrivals: false)
@@ -36,11 +39,15 @@ struct DisclosureMotionTests {
     var below: [CGFloat] = []
     var ink: [CGFloat] = [start.ink(in: band)]
     while held < Self.settledAt {
+      // Each frame lets the main actor's other work run, so suites beside this one are never starved of it.
+      await afterQueuedWork()
       held += Self.sampleEvery
       Motion.Pose.hold(at: held)
       host.render()
-      #expect(try host.brightness(at: points) == still, "\(name): the row moved at \(held) s")
-      let frame = try host.sampled()
+      let drawn = try host.sampled(in: row)
+        .brightness(at: points)
+      #expect(drawn == still, "\(name): the row moved at \(held) s")
+      let frame = try host.sampled(in: watched)
       ink.append(frame.ink(in: band))
       let columns = (row.minX + Self.sessionColumn.lowerBound)...(row.minX + Self.sessionColumn.upperBound)
       if let top = frame.firstInk(across: columns, from: row.maxY + 1, to: Self.listBottom, ink: Self.inkLevel) {
