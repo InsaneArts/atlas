@@ -52,7 +52,6 @@
     @MainActor public static let viewerActivityOtherSession: ViewerState = {
       var state = viewerActivityBySession
       state.sidebar.sessions.chosen = .one(SessionSamples.codexKey)
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 3])
       state.pane = .activity(otherSessionActivity)
       return state
     }()
