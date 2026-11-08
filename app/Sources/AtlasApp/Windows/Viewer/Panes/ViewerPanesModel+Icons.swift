@@ -43,7 +43,8 @@ extension ViewerPanesModel {
     iconWants = latest
     let keys = Set(wants.map { $0.key.text })
     // A pane owns its active images independently of the repository's reusable, bounded cache.
-    panes.icons.images = panes.icons.images.filter { keys.contains($0.key) }
+    let kept = panes.icons.images.filter { keys.contains($0.key) }
+    if kept.count != panes.icons.images.count { panes.icons.images = kept }
     for key in Array(iconRequests.keys) where !keys.contains(key) {
       iconRequests.removeValue(forKey: key)?
         .cancel()

@@ -79,7 +79,10 @@ extension ViewerController {
   /// - Parameter list: The list just read.
   func sessionsRead(_ list: HostSessionList) async {
     let named = Set(list.sessions.map(\.key) + list.live.map(\.key))
-    session.cleanup.keepReceipts(for: named)
+    var cleanup = session.cleanup
+    cleanup.keepReceipts(for: named)
+    // Written only when a receipt went, so the same list again changes nothing the window shows.
+    if cleanup != session.cleanup { session.cleanup = cleanup }
     await checkUnansweredCleanup()
   }
 

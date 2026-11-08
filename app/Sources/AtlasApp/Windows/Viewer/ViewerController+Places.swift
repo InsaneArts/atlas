@@ -18,6 +18,7 @@ extension ViewerController {
   func show(_ place: ViewerPlace) {
     guard place != session.place else { return }
     if holdingControl || control.acquiring { control.releaseControl() }
+    if place == .apps { readingLoop.layOutWithNewest() }
     session.place = place
     noteActivitySeen()
     panesModel.followPane()

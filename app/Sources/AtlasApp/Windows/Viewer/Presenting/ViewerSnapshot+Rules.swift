@@ -24,8 +24,7 @@ extension ViewerSnapshot {
   /// Whether the picture is too old to aim input at, as of the snapshot's time: control ends over one, and none is
   /// taken.
   var pictureStale: Bool {
-    guard let frameAt = reading.frameAt else { return true }
-    return now - frameAt >= Freshness.stale
+    reading.pictureStale(at: now)
   }
 
   /// Why taking control must wait now, if it must.
