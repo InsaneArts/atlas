@@ -30,6 +30,8 @@ final class WindowCoordinator {
   private var reopeningOnboarding = false
   /// Whether termination has been requested, so late setup requests cannot reopen a window.
   private var terminating = false
+  /// The main window asked for before launch could make its controller, opened once launch finishes.
+  private var viewerAsked: (place: ViewerPlace?, session: ViewerSessionChoice?)?
 
   /// Reports Copy Diagnostics when its invoking window is not the viewer.
   let diagnosticsNotice: @MainActor (String) -> Void
@@ -50,7 +52,9 @@ final class WindowCoordinator {
     self.viewerPreferences = viewerPreferences
   }
 
-  /// The main window; brought forward when already open, on `place` when one is given.
+  /// The main window; brought forward when already open, on `place` when one is given. Asked for before launch, it
+  /// opens once launch finishes (``launched()``). It is remembered as open until it closes
+  /// (``ViewerController/close()``), so an Atlas that quit or was stopped with it open opens it again.
   ///
   /// - Parameters:
   ///   - place: The place to show, or nil for the one it shows.
@@ -73,7 +77,21 @@ final class WindowCoordinator {
       },
       window: windows.viewer
     )
-    if let place { controller?.show(place) }
+    guard let controller else {
+      viewerAsked = (place ?? viewerAsked?.place, session ?? viewerAsked?.session)
+      return
+    }
+    viewerPreferences.saveWindowOpen(true)
+    if let place { controller.show(place) }
+  }
+
+  /// Launch has made the app's parts: the main window opens if it was asked for meanwhile, or was open when Atlas
+  /// last stopped, as when an update relaunches it.
+  func launched() {
+    let asked = viewerAsked
+    viewerAsked = nil
+    guard asked != nil || viewerPreferences.loadWindowOpen() else { return }
+    openViewer(place: asked?.place, session: asked?.session)
   }
 
   /// The Settings window; brought forward when already open. Its controller is made once and kept.

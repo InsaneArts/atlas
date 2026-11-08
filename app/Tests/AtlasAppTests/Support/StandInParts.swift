@@ -26,6 +26,9 @@ final class StandInParts: WindowParts {
   var diagnostics = true
   /// App-level diagnostic results, without presenting a native alert.
   var diagnosticNotices: [String] = []
+  /// Whether launch has made the helper's commands; before it, no main window's controller can be made, as with the
+  /// container.
+  var ready = true
   /// Runs as Atlas is asked to quit, before it is counted.
   var quitting: @MainActor () -> Void = {}
   /// Each Dock icon change the coordinator asked for, in order.
@@ -66,8 +69,9 @@ final class StandInParts: WindowParts {
   /// A main window's controller over a scripted service.
   ///
   /// - Parameter switchToHelper: Not used.
-  /// - Returns: The controller.
+  /// - Returns: The controller, or nil before launch.
   func viewerController(switchToHelper: @escaping @MainActor () async -> String) -> ViewerController? {
+    guard ready else { return nil }
     viewersMade += 1
     return makeViewer()
   }
