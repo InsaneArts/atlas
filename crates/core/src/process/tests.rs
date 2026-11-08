@@ -162,6 +162,26 @@ fn only_this_accounts_live_processes_are_described() {
 }
 
 #[test]
+fn a_process_has_ended_once_its_pid_is_free_unreaped_or_any_accounts_other_process() {
+    let this = Instance::current().unwrap();
+    assert!(!this.ended());
+    let launchd = info(1).unwrap().unwrap().instance;
+    assert!(!launchd.ended(), "another account's, still running");
+    let reused = Instance::new(1, [1, 0]);
+    assert!(reused.ended(), "its PID taken by another account's process");
+    let mut zombie = info(this.pid).unwrap().unwrap();
+    zombie.zombie = true;
+    assert!(ended(&this, Ok(Some(zombie))));
+    assert!(ended(&this, Ok(None)));
+}
+
+#[test]
+fn a_process_the_kernel_would_not_describe_has_not_ended() {
+    let this = Instance::current().unwrap();
+    assert!(!ended(&this, Err(Error::new(Code::State, "unread"))));
+}
+
+#[test]
 fn a_suspended_process_reads_as_stopped() {
     use nix::sys::signal::{Signal, kill};
 

@@ -1687,7 +1687,7 @@ Options:
           Override automatic Retina-aware capture sizing (320–4096 pixels)
 
       --capture-backend <BACKEND>
-          Capture with cg (default) or experimental sck; requires the updated signed helper
+          Capture with sck (default), one ScreenCaptureKit stream, or cg, a CoreGraphics capture per picture
 
       --port <PORT>
           Local port for the native viewer

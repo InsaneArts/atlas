@@ -67,6 +67,38 @@ struct PanelControllerTests {
     #expect(read.map { $0?.overview.state } == [.needsYou, nil])
   }
 
+  @Test("the service note shows while the service restarts in the helper, and OK hides it now and keeps it hidden")
+  func okKeepsTheServiceNoteHidden() async {
+    let service = ScriptedService()
+    service.reply = ["overview": ["mode": "observing", "state": "idle"], "restartingService": "restarting"]
+    var saved = false
+    let preferences = PanelPreferences(
+      loadServiceNoteDismissed: { saved },
+      saveServiceNoteDismissed: { saved = true }
+    )
+    let controller = PanelController.scripted(service, preferences: preferences)
+    await controller.readStatus()
+    #expect(controller.state.showsServiceNote)
+    controller.send(.dismissServiceNote)
+    #expect(!controller.state.showsServiceNote)
+    #expect(saved)
+    let reopened = PanelController.scripted(service, preferences: preferences)
+    await reopened.readStatus()
+    #expect(!reopened.state.showsServiceNote)
+  }
+
+  @Test("the service note goes once nothing restarts in the helper")
+  func theServiceNoteGoesWithTheRestarts() async {
+    let service = ScriptedService()
+    service.reply = ["overview": ["mode": "observing", "state": "idle"], "restartingService": "restarting"]
+    let controller = PanelController.scripted(service)
+    await controller.readStatus()
+    #expect(controller.state.showsServiceNote)
+    service.reply = ["overview": ["mode": "observing", "state": "idle"], "restartingService": "none"]
+    await controller.readStatus()
+    #expect(!controller.state.showsServiceNote)
+  }
+
   @Test("the picture opens the main window on Screen and Open Atlas on the tab it shows")
   func theOpenersOpenTheirTabs() {
     var opened: [ViewerPlace?] = []

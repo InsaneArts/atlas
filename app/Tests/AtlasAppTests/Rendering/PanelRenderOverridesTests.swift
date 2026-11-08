@@ -47,4 +47,14 @@ struct PanelRenderOverridesTests {
     #expect(panel.recent.isEmpty)
     #expect((panel.moreSessions != nil) == (sessions == "more"))
   }
+
+  @Test("the service note render shows the note over the live panel, and no other render does")
+  func theServiceNoteRenderShowsTheNote() {
+    let note = PanelRenderOverrides(environment: ["ATLAS_RENDER_SERVICE_NOTE": "1", "ATLAS_RENDER_PREVIEW": "1"])
+      .applied(to: PanelSnapshot())
+    #expect(PanelPresenter.state(note).showsServiceNote)
+    let plain = PanelRenderOverrides(environment: ["ATLAS_RENDER_PREVIEW": "1"])
+      .applied(to: PanelSnapshot())
+    #expect(!PanelPresenter.state(plain).showsServiceNote)
+  }
 }

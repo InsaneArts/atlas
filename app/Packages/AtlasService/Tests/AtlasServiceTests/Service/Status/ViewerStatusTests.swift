@@ -80,6 +80,16 @@ struct ViewerStatusTests {
     #expect(!older.helperStale)
   }
 
+  @Test("a service restarting in the helper is read by its word, and unknown when missing or unexpected")
+  func restartingService() throws {
+    #expect(try status(["restartingService": "restarting"]).restartingService == .restarting)
+    #expect(try status(["restartingService": "failed"]).restartingService == .unknown)
+    #expect(try status(["restartingService": "none"]).restartingService == .clear)
+    #expect(try status(["restartingService": "later"]).restartingService == .unknown)
+    #expect(try status(["restartingService": 1]).restartingService == .unknown)
+    #expect(try status(["ready": true]).restartingService == .unknown)
+  }
+
   @Test("a status report decodes the session, the mode, the helper's names, its display and what it did")
   func decodes() throws {
     let reading = try status([

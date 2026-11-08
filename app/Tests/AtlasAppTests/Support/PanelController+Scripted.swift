@@ -15,6 +15,7 @@ extension PanelController {
   ///   - clock: The clock the pauses between readings run on; by default one nobody advances, so nothing is read
   ///     twice unasked.
   ///   - icons: The shared icon repository; by default no workspace or disk reads.
+  ///   - preferences: Where the service note's OK is kept; by default in memory.
   /// - Returns: The panel's controller.
   static func scripted(
     _ service: ScriptedService = ScriptedService(),
@@ -22,7 +23,8 @@ extension PanelController {
     loginItem: ScriptedLoginItem = ScriptedLoginItem(),
     links: PanelLinks = PanelLinks(),
     clock: ManualClock = ManualClock(),
-    icons: AppIcons = .none
+    icons: AppIcons = .none,
+    preferences: PanelPreferences = PanelPreferences()
   ) -> PanelController {
     PanelController(
       dependencies: PanelDependencies(
@@ -32,7 +34,8 @@ extension PanelController {
         loginItem: loginItem.seam,
         links: links,
         clock: clock,
-        icons: icons
+        icons: icons,
+        preferences: preferences
       )
     )
   }

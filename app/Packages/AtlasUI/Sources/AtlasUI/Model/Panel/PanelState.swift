@@ -6,6 +6,9 @@ public struct PanelState: Equatable, Sendable {
   /// What the last action of the panel's own said when it did not work, shown in place of the status's line until
   /// the next action or the next opening; nil shows the line.
   public var notice: String?
+  /// Whether the note that a macOS service in the helper slowly slows the Mac shows under the header, until the person
+  /// says OK to it.
+  public var showsServiceNote: Bool
   /// Whether the ⋯ menu is open, which draws its button in the header pressed.
   public var isMoreOpen: Bool
   /// The helper's screen and how it looks, or why there is none.
@@ -32,6 +35,8 @@ public struct PanelState: Equatable, Sendable {
   /// - Parameters:
   ///   - status: The helper's status, with its line; an empty line hides its row.
   ///   - notice: What the last action said when it did not work; nil shows the status's line.
+  ///   - showsServiceNote: Whether the note that a macOS service in the helper slowly slows the Mac shows; not by
+  ///     default.
   ///   - isMoreOpen: Whether the ⋯ menu is open.
   ///   - picture: The helper's screen and how it looks, or why there is none.
   ///   - recent: The newest actions, newest first, at most three; empty hides Recent.
@@ -42,6 +47,7 @@ public struct PanelState: Equatable, Sendable {
   public init(
     status: StatusSummary,
     notice: String? = nil,
+    showsServiceNote: Bool = false,
     isMoreOpen: Bool = false,
     picture: PanelPictureState,
     recent: [PanelRecentEntry],
@@ -52,6 +58,7 @@ public struct PanelState: Equatable, Sendable {
   ) {
     self.status = status
     self.notice = notice
+    self.showsServiceNote = showsServiceNote
     self.isMoreOpen = isMoreOpen
     self.picture = picture
     self.recent = recent

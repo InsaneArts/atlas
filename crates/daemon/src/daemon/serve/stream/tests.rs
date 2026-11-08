@@ -460,8 +460,8 @@ async fn one_frame_comes_as_raw_pixels_after_a_header_that_proves_its_session() 
     assert_eq!(CAPTURES.load(Ordering::SeqCst), 1);
     assert_eq!(
         daemon.source.lifecycle(),
-        Lifecycle::Stopped,
-        "it needs no live source"
+        Lifecycle::Active,
+        "it keeps the native source for the next picture"
     );
 }
 

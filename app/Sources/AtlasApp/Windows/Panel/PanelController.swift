@@ -37,6 +37,8 @@ final class PanelController {
   var opensAtLogin: OpenAtLogin.State
   /// The icons found for Recent's apps, by their key's text (``AppIconKey/text``).
   var icons: [String: IconImage] = [:]
+  /// Whether the person said OK to the note that a macOS service in the helper slowly slows their Mac, as saved.
+  var serviceNoteDismissed: Bool
 
   /// The viewer service it reads and asks.
   @ObservationIgnored let service: any ViewerService
@@ -52,6 +54,8 @@ final class PanelController {
   @ObservationIgnored let loginItem: OpenAtLogin
   /// What the panel asks of the rest of the app.
   @ObservationIgnored let links: PanelLinks
+  /// Where the person's OK to the service note is kept.
+  @ObservationIgnored let preferences: PanelPreferences
   /// The clock the pauses between readings run on; a cancelled pause ends at once.
   @ObservationIgnored let clock: any Clock<Duration>
   /// The time now, which the snapshot carries.
@@ -83,7 +87,9 @@ final class PanelController {
     clock = dependencies.clock
     wallClock = dependencies.wallClock
     appIcons = dependencies.icons
+    preferences = dependencies.preferences
     opensAtLogin = dependencies.loginItem.state
+    serviceNoteDismissed = dependencies.preferences.loadServiceNoteDismissed()
   }
 
   /// Everything the controller holds, as one value, with whether the main window holds control and which of the
@@ -102,7 +108,8 @@ final class PanelController {
       sound: actions.sound.button,
       opensAtLogin: opensAtLogin,
       date: wallClock(),
-      icons: icons
+      icons: icons,
+      serviceNoteDismissed: serviceNoteDismissed
     )
   }
 
@@ -152,8 +159,15 @@ final class PanelController {
     case .togglePause: togglePause()
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }
+    case .dismissServiceNote: dismissServiceNote()
     case .showMore: break
     }
+  }
+
+  /// OK on the service note: it goes now and never shows again.
+  func dismissServiceNote() {
+    serviceNoteDismissed = true
+    preferences.saveServiceNoteDismissed()
   }
 
   /// Marks the ⋯ menu open or closed, so its button draws pressed while it is open.

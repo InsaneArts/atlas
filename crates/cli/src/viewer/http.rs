@@ -91,6 +91,7 @@ pub(super) fn configured(
         frames: Mutex::new(Frames::default()),
         committed: std::sync::Mutex::new(std::collections::VecDeque::new()),
         pipe: std::sync::Mutex::new(None),
+        input_sent: Arc::new(tokio::sync::Notify::new()),
         frame_width: FRAME_WIDTH,
         frame_reuse: FRAME_REUSE,
         capture: std::sync::Mutex::new(None),
