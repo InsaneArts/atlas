@@ -136,7 +136,19 @@ atlas collect atlas-work/report.pdf
 
 The reply gives the path of the copy on your side. Nothing else comes back.
 
-Some places are readable by every account on your Mac, the helper included: `/Users/Shared`, most external drives, a disk image mounted in either account, and folders in your home that aren't private. Your Desktop, Documents, Downloads and Library are private; a folder you created yourself, such as `~/code`, usually isn't. To make one private:
+Some places are readable by every account on your Mac, the helper included: `/Users/Shared`, most external drives, a disk image mounted in either account, and folders in your home that aren't private. Your Desktop, Documents, Downloads and Library are private; a folder you created yourself, such as `~/code`, usually isn't.
+
+**Keep your home folder private from the helper.** Setup's last screen has this switch, on unless you turned it off before, and **Settings › Helper › Your files** shows how your home folder stands, with **Make Private** or **Undo…**. It adds one access entry to your home folder that keeps the helper, and only the helper, from listing it or going into it. Nothing else changes: your apps and other accounts keep their access, and `/Users/Shared` and external drives keep their own permissions. `atlas doctor` in your terminal says how many of your folders the helper can open while it isn't private. Only you open it again; an agent can make it private, never undo it.
+
+While your home folder is private:
+
+- Agents still open your apps and files from it: Atlas copies each one in first, and keeps the copy for 7 days. Rebuilding an app that is still open in the helper can stop at "An earlier copy … is still running"; close it there first.
+- `atlas open` of a folder in your home, and a profile's `[[references]]` to a place in your home, stop working. Put shared material in `/Users/Shared`, or open a single file.
+- An app that loads files by a full path into your home, such as a build that links a library from `~/dev`, can't reach them from the helper.
+
+To undo it without the app, run `chmod -a "user:HELPER deny list,search" ~` with the helper's account name. Uninstalling Atlas leaves it in place and prints that line.
+
+To make only one folder private instead:
 
 ```sh
 chmod go-rwx ~/code
@@ -153,6 +165,8 @@ Atlas never copies your sign-ins into the helper. It refuses to copy, or open th
 Anything the helper is signed in to, an agent can use: it can read, send, merge or delete there as you could. So sign in only to what the task needs, and prefer a test account or one with few rights. Your agent's own app may also ask you before it runs a command; that is separate from Atlas.
 
 Atlas checks where a file is, not what is in it: a renamed copy of a store, or a project folder copied whole with a `.env` inside, is not recognized.
+
+If you want agents to copy such files in anyway, turn on **Copy sign-ins into the helper** in **Settings › Helper › Your files**. It is off unless you turn it on, it asks first, and only you can turn it on; anyone can turn it off. Like Stop, it holds against agents using Atlas's commands, not against a shell that edits Atlas's files itself.
 
 ## Settings and practical limits
 
