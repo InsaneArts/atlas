@@ -27,7 +27,8 @@ extension ViewerController {
   /// seen: its own log once read, which reads on while the picture is paused, else the status's actions. At
   /// the first reading the status's actions are seen, so what the helper did before the window opened is
   /// never new. Otherwise an unseen action that failed is remembered until Activity shows, even once newer
-  /// ones push it out of the status.
+  /// ones push it out of the status. One session's own log holds only its actions, so the status's stay seen
+  /// beside them, as they were while every session's showed.
   func noteActivitySeen() {
     guard reading.hasStatus else { return }
     let status = reading.statusReading.activity(limit: .max)
@@ -37,8 +38,10 @@ extension ViewerController {
       let unseen = shown.unseen(in: status)
       seen.failed = shown.failed || unseen.contains(where: \.failed)
     } else {
-      let log = session.place == .activity ? panesModel.panes.activity.log?.entries.map(\.id) : nil
-      seen = ViewerSeenActivity(ids: Set(log ?? status.map(\.id)))
+      let activity = panesModel.panes.activity
+      let log = session.place == .activity ? activity.log?.entries.map(\.id) : nil
+      let others = activity.scope == .all ? [] : status.map(\.id)
+      seen = ViewerSeenActivity(ids: Set((log.map { $0 + others }) ?? status.map(\.id)))
     }
     if session.activitySeen != seen { session.activitySeen = seen }
   }

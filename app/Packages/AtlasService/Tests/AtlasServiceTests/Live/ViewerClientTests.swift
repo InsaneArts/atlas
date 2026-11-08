@@ -63,6 +63,25 @@ struct ViewerClientTests {
     #expect(full.url?.query == "name=1700000005000000000-capture.png&size=full")
   }
 
+  @Test("a session's activity request keeps the capability URL and names the session by its key, Terminal's empty")
+  func sessionActivityRequest() throws {
+    let client = try #require(ViewerClient("http://127.0.0.1:8765/abc/"))
+    let one = try client.activityRequest(session: "3f9a1c07b2e4")
+    #expect(one.url?.absoluteString == "http://127.0.0.1:8765/abc/activity.json?session=3f9a1c07b2e4")
+    #expect(one.httpMethod == "GET")
+    #expect(try client.activityRequest(session: "").url?.query == "session=")
+    #expect(try client.activityRequest(session: "a&b").url?.query == "session=a%26b")
+  }
+
+  @Test("a session's activity says its steps were cleared only when the service says so")
+  func activityCleared() throws {
+    let cleared = Data(#"{"ok": true, "activity": [], "sessions": {}, "cleared": true}"#.utf8)
+    #expect(try ViewerClient.activity(cleared, response: reply(200)).cleared)
+    for body in [#"{"ok": true, "activity": []}"#, #"{"ok": true, "activity": [], "cleared": "yes"}"#] {
+      #expect(try !ViewerClient.activity(Data(body.utf8), response: reply(200)).cleared)
+    }
+  }
+
   @Test("an apps reply that is not a 200 is the service's error with its code, never an empty list")
   func appsRefused() throws {
     #expect(throws: ServiceError("The helper is not running.", code: "unavailable")) {

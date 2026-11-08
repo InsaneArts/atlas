@@ -114,6 +114,31 @@ struct ViewerControllerPlacesTests {
     viewer.close()
   }
 
+  @Test("one session's activity keeps every session's actions seen once the Screen shows again")
+  func oneSessionsActivityKeepsEverySessionsActionsSeen() async throws {
+    let key = "3f9a1c07b2e4"
+    let service = ScriptedService()
+    service.reply = Self.reply([Self.row("a2", ok: true), Self.row("a1", ok: true)])
+    service.activityLog = ActivityLog(entries: [
+      ActivityLog.Entry(id: "a2", ageSeconds: 1),
+      ActivityLog.Entry(id: "a1", ageSeconds: 1, session: key),
+    ])
+    service.sessionList = HostSessionList(sessions: [
+      HostSessionRecord(key: key, name: "Codex · demo", host: .codex, state: .ended, actions: 1)
+    ])
+    let viewer = try await ViewerController.watching(service)
+    try await settle("the list was never read") { viewer.panes.sessions.record(key) != nil }
+    viewer.send(.show(.activity))
+    try await settle("every session's activity was never read") { viewer.panes.activity.log != nil }
+    viewer.send(.chooseSession(.one(key)))
+    try await settle("the session's activity was never read") {
+      viewer.panes.activity.scope == .session(key)
+    }
+    viewer.send(.show(.screen))
+    #expect(ViewerPresenter.unseen(viewer.snapshot) == .none, "nothing happened since")
+    viewer.close()
+  }
+
   @Test("an unseen action refused before anything was sent is new, never orange")
   func aRefusedActionIsNeverOrange() async throws {
     let service = ScriptedService()

@@ -53,6 +53,11 @@ public final class ScriptedService: ViewerService {
   public var leaseHeld: Bool?
   /// What was done in the helper lately, as the activity reply lists it.
   public var activityLog = ActivityLog()
+  /// What one session's activity reply lists, by its key; a session not named here gets ``activityLog``'s rows of
+  /// its own, as the service narrows them.
+  public var sessionLogs: [String: ActivityLog] = [:]
+  /// The sessions whose activity was asked for, in order.
+  public var activitySessions: [String] = []
   /// The apps open in the helper, front to back.
   public var openApps: [HelperApp] = []
   /// The host sessions the apps' origins name, by key.
@@ -279,6 +284,23 @@ public final class ScriptedService: ViewerService {
     activityCalls += 1
     try await pause("activity")
     return activityLog
+  }
+
+  /// Answers the session's ``sessionLogs`` entry, else ``activityLog``'s rows of that session, unless held or failed.
+  /// It counts as an activity request, and holds and fails as one.
+  ///
+  /// - Parameter session: The session's key; empty for Terminal.
+  /// - Returns: The session's activity log.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func activity(of session: String) async throws(ServiceError) -> ActivityLog {
+    activityCalls += 1
+    activitySessions.append(session)
+    try await pause("activity")
+    if let log = sessionLogs[session] { return log }
+    var narrowed = activityLog
+    narrowed.entries = activityLog.entries.filter { $0.groupKey == session }
+    return narrowed
   }
 
   /// Answers `openApps`, unless held or failed.

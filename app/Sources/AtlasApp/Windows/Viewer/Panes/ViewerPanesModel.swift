@@ -170,13 +170,19 @@ final class ViewerPanesModel {
     }
   }
 
-  /// Reads the log, and the screenshots while the log has a screenshot's row. A reply overtaken by a newer start or
-  /// stop has no effect; a failure is kept until a reading succeeds, and a cancelled request says nothing.
+  /// Reads the log, the chosen session's own while one shows, and the screenshots while the log has a screenshot's
+  /// row. A reply overtaken by a newer start or stop has no effect; a failure is kept until a reading succeeds, and a
+  /// cancelled request says nothing.
   ///
   /// - Parameter number: The reading's generation.
   func readActivity(_ number: Int) async {
+    let scope = ActivityScope(viewer?.snapshot.shownSessions ?? .all)
     do {
-      let log = try await service.activity()
+      let log =
+        switch scope {
+        case .all: try await service.activity()
+        case .session(let key): try await service.activity(of: key)
+        }
       // Each row's age counts back from the moment the log arrived, never from after the screenshots' reply.
       let readAt = wallClock()
       // The screenshots' list sizes and finds the pictures: wanted while the log names a screenshot or a picture shows.
@@ -185,6 +191,7 @@ final class ViewerPanesModel {
       let list = wantsShots ? try? await service.screenshots() : nil
       guard number == work.generation else { return }
       panes.activity.log = log
+      panes.activity.scope = scope
       panes.activity.readAt = readAt
       let preparation = ViewerActivityPreparation(
         log: log,

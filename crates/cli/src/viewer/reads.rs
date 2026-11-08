@@ -8,6 +8,7 @@ use super::{
     unpoisoned,
 };
 use atlas_client::{
+    activity_log::{self, Whose},
     before,
     client::{AppList, Client},
     helper_info::{self, Capture},
@@ -98,14 +99,36 @@ impl Viewer {
     }
 
     /// What was done in the helper lately, newest first, as the app lists
-    /// it. Reading it records nothing.
-    pub(super) async fn activity(&self) -> Result<Value> {
+    /// it: every session's newest rows, or with `session=` in `query` one
+    /// session's, from every file the log keeps, and whether its rows were
+    /// all cleared. An empty key is Terminal's, the commands no host named.
+    /// Reading it records nothing.
+    pub(super) async fn activity(&self, query: Option<&str>) -> Result<Value> {
+        let whose = activity_session(query)?;
         let client = self.client();
         // A folder that can't be read is said, never shown as no activity.
         let directory = client.output_dir()?.to_path_buf();
         let unreadable = || Error::new(Code::Io, "The activity log could not be read.");
-        let (rows, pictures, records) = tokio::task::spawn_blocking(move || {
-            let mut rows = atlas_client::activity_log::try_recent(&directory, ACTIVITY_ROWS)?;
+        let (rows, cleared, pictures, records) = tokio::task::spawn_blocking(move || {
+            let records = Store::at(&directory).recent();
+            let (mut rows, cleared) = match &whose {
+                None => (
+                    atlas_client::activity_log::try_recent(&directory, ACTIVITY_ROWS)?,
+                    None,
+                ),
+                Some(whose) => {
+                    let found = activity_log::session_rows(&directory, whose, ACTIVITY_ROWS)?;
+                    let record = match whose {
+                        Whose::Host(key) => records
+                            .iter()
+                            .map(|seen| &seen.record)
+                            .find(|record| record.key == *key),
+                        Whose::Terminal => None,
+                    };
+                    let cleared = record.is_some_and(|record| found.cleared(record));
+                    (found.rows, Some(cleared))
+                }
+            };
             let kept = atlas_client::before::Listing::of(&directory);
             // A picture pruned or cleaned up since is no longer named. Each
             // kept one comes with the picture after it and its facts.
@@ -119,7 +142,7 @@ impl Viewer {
                     })
                 })
                 .collect::<Vec<_>>();
-            Ok::<_, std::io::Error>((rows, pictures, Store::at(&directory).recent()))
+            Ok::<_, std::io::Error>((rows, cleared, pictures, records))
         })
         .await
         .map_err(|error| unreadable().with_source(error))?
@@ -144,7 +167,11 @@ impl Viewer {
             .collect::<Vec<_>>();
         let sessions =
             sessions_named(&client, &records, rows.iter().map(|row| &row["session"])).await;
-        Ok(json!({"ok": true, "activity": rows, "sessions": sessions}))
+        let mut reply = json!({"ok": true, "activity": rows, "sessions": sessions});
+        if let Some(cleared) = cleared {
+            reply["cleared"] = json!(cleared);
+        }
+        Ok(reply)
     }
 
     /// The host sessions of the last days, live and ended, newest first:
@@ -448,6 +475,26 @@ impl Viewer {
         .await
         .map_err(|_| late())?
     }
+}
+
+/// Whose activity `query` asks for: every session's without `session=`,
+/// Terminal's for an empty key, else the session its key names.
+///
+/// # Errors
+///
+/// Returns an input error for a key that is not one.
+fn activity_session(query: Option<&str>) -> Result<Option<Whose>> {
+    let Some(given) = query
+        .unwrap_or_default()
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("session="))
+    else {
+        return Ok(None);
+    };
+    if given.is_empty() {
+        return Ok(Some(Whose::Terminal));
+    }
+    cleanup_session(Some(given)).map(|key| Some(Whose::Host(key)))
 }
 
 /// Account `name`'s full name, as `ask` finds it, kept in `known`. It is

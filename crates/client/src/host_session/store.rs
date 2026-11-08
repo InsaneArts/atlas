@@ -33,6 +33,9 @@ pub(crate) const MAX_RECORDS: usize = 64;
 /// How long a record with nothing left in the helper is kept after its
 /// session's last recorded action.
 pub(crate) const IDLE_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// The verb a record counts for environment work, which may need no helper
+/// command of its own: a preview keeps no activity row.
+pub(crate) const ENVIRONMENT_VERB: &str = "environment";
 
 /// How long the copy folders counted for status reads are trusted: they
 /// can go without any record changing.
@@ -585,14 +588,18 @@ fn note_at(
     if !facts.kind.recorded(doing) {
         return Ok(());
     }
-    let verb = doing.map_or("environment", Doing::verb);
+    let verb = doing.map_or(ENVIRONMENT_VERB, Doing::verb);
     let verb = (!facts.refusal).then_some(verb);
     let app = doing.and_then(Doing::app_name);
     let store = Store::at(client.output_dir()?);
     let now = now();
 
+    let logged = crate::client::logged_at(session.key());
     store.update(session, now, &client.controller, |record| {
         record.seen(session, now, verb, app);
+        if let Some(logged) = logged {
+            record.logged = record.logged.max(Some(logged));
+        }
         match &facts.left {
             Left::None => {}
             Left::Capture(capture) => record.took(capture.clone()),

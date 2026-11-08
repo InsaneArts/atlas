@@ -31,6 +31,8 @@ use std::{os::unix::net::UnixStream, path::Path, time::Instant};
 
 /// The activity log's rotated file.
 pub const PREVIOUS: &str = crate::activity_log::PREVIOUS;
+/// The folder of the activity log's older files.
+pub const HISTORY: &str = crate::activity_log::HISTORY;
 /// The warning a doctor gives of web content.
 pub const WEB_CONTENT: &str = crate::capability::WEB_CONTENT;
 /// The warning a doctor gives of a failed Save/Open check.

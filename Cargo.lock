@@ -120,6 +120,7 @@ dependencies = [
  "base64",
  "fs2",
  "libc",
+ "memchr",
  "nix",
  "serde",
  "serde_json",
