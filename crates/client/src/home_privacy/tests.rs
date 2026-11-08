@@ -160,17 +160,19 @@ fn the_undo_line_names_the_helpers_entry() {
 }
 
 #[test]
-fn a_home_that_denies_the_helper_going_in_hides_its_folders() {
-    assert!(denies_search(
-        &listing(&["user:helper deny search"]),
-        "helper"
-    ));
-    assert!(!denies_search(
-        &listing(&["group:staff allow search", "user:helper deny search"]),
-        "helper"
-    ));
-    assert!(!denies_search(
-        &listing(&["user:helper deny list"]),
-        "helper"
-    ));
+fn a_home_that_may_keep_the_helper_out_hides_its_folders() {
+    assert!(denies_search(&listing(&["user:helper deny search"])));
+    assert!(denies_search(&listing(&["group:everyone deny search"])));
+    assert!(denies_search(&listing(&[
+        "group:staff allow search,only_inherit",
+        "group:everyone deny search"
+    ])));
+    assert!(!denies_search(&listing(&[
+        "group:staff allow search",
+        "user:helper deny search"
+    ])));
+    assert!(!denies_search(&listing(&[
+        "user:helper deny list",
+        "group:everyone deny delete"
+    ])));
 }

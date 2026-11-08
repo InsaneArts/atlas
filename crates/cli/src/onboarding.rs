@@ -1116,7 +1116,7 @@ pub fn files(config_path: &Path, change: Option<HomeChange>, by_person: bool) ->
     };
     let mut reply = json!(files);
     reply["ok"] = json!(true);
-    reply["offered"] = json!(home_privacy::offered(uid));
+    reply["offered"] = json!(home_privacy::offered_now(uid));
     reply["signInCopies"] = json!(atlas_client::sign_in_copies::allowed());
     Ok(reply)
 }

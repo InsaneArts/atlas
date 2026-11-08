@@ -49,7 +49,7 @@ pub fn status(helper_uid: u32) -> Result<Files> {
     }
     // A home the helper may not go into hides everything in it, whatever
     // the folders inside allow.
-    let (readable, examples) = if denies_search(&entries, &helper.name) {
+    let (readable, examples) = if denies_search(&entries) {
         (0, Vec::new())
     } else {
         readable_in(&list(&["-laen"], &home)?, helper_uid, &helper.groups()?)
@@ -156,22 +156,35 @@ pub fn entry_index(helper: &str) -> Result<Option<usize>> {
 }
 
 /// Whether making the home folder private was offered for the helper
-/// `helper_uid`, as it is now: a replaced helper is offered it again.
+/// `helper_uid`, as it is now: a replaced helper is offered it again. It
+/// reads only Atlas's own records, so a status poll may ask it; a helper
+/// with no record counts as not offered.
 #[must_use]
 pub fn offered(helper_uid: u32) -> bool {
-    let (Ok(home), Some(identity)) = (atlas_core::config::home(), identity_of(helper_uid)) else {
-        return false;
-    };
-    offered_in(&home, &identity)
+    offered_as(recorded(helper_uid))
+}
+
+/// [`offered`], asking macOS for the helper's GeneratedUID when Atlas has no
+/// record of it, as setup's last screen, Settings and the one-time offer do.
+#[must_use]
+pub fn offered_now(helper_uid: u32) -> bool {
+    offered_as(identity_now(helper_uid))
 }
 
 /// Remember that making the home folder private was offered for the helper
 /// `helper_uid`, whatever the person chose. Nothing is kept for a helper
-/// whose record can't be read, so it is offered again.
+/// whose GeneratedUID can't be found, so it is offered again.
 pub fn mark_offered(helper_uid: u32) {
-    if let (Ok(home), Some(identity)) = (atlas_core::config::home(), identity_of(helper_uid)) {
+    if let (Ok(home), Some(identity)) = (atlas_core::config::home(), identity_now(helper_uid)) {
         mark_offered_in(&home, &identity);
     }
+}
+
+fn offered_as(identity: Option<String>) -> bool {
+    let (Ok(home), Some(identity)) = (atlas_core::config::home(), identity) else {
+        return false;
+    };
+    offered_in(&home, &identity)
 }
 
 /// [`offered`] in the home folder `home`, for the helper known as `identity`.
@@ -189,17 +202,24 @@ fn mark_offered_in(home: &Path, identity: &str) {
     let _ = fs::write(path, format!("offered {identity}\n"));
 }
 
-/// The helper as recorded when it was chosen: its GeneratedUID, which no
-/// later account gets. With nothing recorded, a name that holds only while
-/// nothing is: choosing a helper records it, so the next one is offered
-/// again. `None` when the record can't be read.
-fn identity_of(helper_uid: u32) -> Option<String> {
+/// The helper's GeneratedUID as Atlas recorded it when it was chosen: no
+/// later account gets it.
+fn recorded(helper_uid: u32) -> Option<String> {
     use atlas_daemon::helper_setup::identity::{OnFile, on_file};
     match on_file(helper_uid) {
         OnFile::Recorded(identity) => Some(identity.generated_uid),
-        OnFile::Nothing => Some(format!("unrecorded:{helper_uid}")),
-        OnFile::Unreadable => None,
+        OnFile::Nothing | OnFile::Unreadable => None,
     }
+}
+
+/// [`recorded`], or, with no record, the GeneratedUID macOS gives the
+/// account with that user ID now (a bounded `dscl` look).
+fn identity_now(helper_uid: u32) -> Option<String> {
+    recorded(helper_uid).or_else(|| {
+        let account = atlas_core::account::account_with_uid(helper_uid).ok()??;
+        atlas_daemon::helper_setup::identity::current(&account)
+            .map(|identity| identity.generated_uid)
+    })
 }
 
 /// The helper's account: its name and the groups it is in.
@@ -292,16 +312,15 @@ fn private_in(listing: &str, helper: &str) -> bool {
     false
 }
 
-/// Whether the listing denies `helper` going into the home folder before
-/// anything allows it, whatever else it denies.
-fn denies_search(listing: &str, helper: &str) -> bool {
-    let subject = format!("user:{helper}");
-    for entry in entries(listing) {
+/// Whether an entry of the listing may keep the helper from going into the
+/// home folder: any deny of `search` that applies, for anyone, before an
+/// allow of it that applies. The groups a subject covers aren't looked up,
+/// so an unknown case counts as kept out, and its folders as unreachable.
+fn denies_search(listing: &str) -> bool {
+    for entry in entries(listing).filter(|entry| entry.applies() && entry.grants("search")) {
         match entry.kind {
-            "allow" if entry.grants("search") => return false,
-            "deny" if entry.subject == subject && entry.grants("search") && entry.applies() => {
-                return true;
-            }
+            "allow" => return false,
+            "deny" => return true,
             _ => {}
         }
     }
