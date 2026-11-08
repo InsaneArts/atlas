@@ -62,6 +62,61 @@ struct ActivityFoldFocusTests {
     #expect(sent.isEmpty)
   }
 
+  @Test("Return on a focused Replay plays the run and leaves the run open")
+  func returnOnReplayPlaysTheRun() async throws {
+    let run = ViewerOutlineRun(
+      id: "run",
+      icon: .atlas,
+      name: "Commands",
+      summary: "Ran a command · 1 action",
+      time: "10:21",
+      isOpen: true,
+      canReplay: true,
+      steps: [ViewerActivityStep(id: "step", kind: .command, words: ViewerStepWords("Ran a command"))]
+    )
+    var sent: [ViewerEvent] = []
+    let hosting = NSHostingView(rootView: ActivityRunBlock(run: run, level: 0, send: { sent.append($0) }))
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+      styleMask: .titled,
+      backing: .buffered,
+      defer: false
+    )
+    window.isReleasedWhenClosed = false
+    window.contentView = hosting
+    defer { window.close() }
+    window.makeKeyAndOrderFront(nil)
+    try await Self.render(hosting) { Self.focusedLabel() != nil }
+    for _ in 0..<10 {
+      if Self.focusedLabel() == "Replay" { break }
+      window.selectNextKeyView(nil)
+      hosting._renderForTest(interval: .zero)
+      await afterQueuedWork()
+    }
+    try #require(Self.focusedLabel() == "Replay")
+    let press = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: .zero,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: Self.returnKey
+      )
+    )
+    window.sendEvent(press)
+    hosting._renderForTest(interval: .zero)
+    await afterQueuedWork()
+    #expect(sent == [.openReplay("run")], "Return plays the run and never folds it")
+  }
+
+  /// Return's key code.
+  private static let returnKey: UInt16 = 36
+
   private static func focusedLabel() -> String? {
     let element = NSApplication.accessibilityFocusedUIElement() as? any NSAccessibilityProtocol
     return element?.accessibilityLabel()
