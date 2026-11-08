@@ -10,22 +10,29 @@ struct ActivitySessionRow: View {
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.motionReduced) private var reduceMotion
 
-  /// The row, which opens or folds the session.
+  /// The row, which opens or folds the session; Space or Return does too while it has keyboard focus.
   var body: some View {
-    Button {
-      withAnimation(ActivityMotion.fold(reduceMotion: reduceMotion)) {
-        send(.toggleSession(session.id, opens: !session.isOpen))
-      }
-    } label: {
+    Button(action: toggle) {
       label
     }
     .buttonStyle(OutlineRowStyle(height: ViewerLayout.sessionRowHeight))
+    .onKeyPress(.return) {
+      toggle()
+      return .handled
+    }
     .layoutFrame("session \(session.id)")
     .accessibilityElement(children: .combine)
     .accessibilityLabel(session.label)
     .accessibilityValue(session.isOpen ? Text("Open") : Text("Folded"))
     .accessibilityHint(session.isOpen ? Text("Folds this session") : Text("Shows this session's runs"))
     .accessibilityAddTraits(.isHeader)
+  }
+
+  /// Opens or folds the session.
+  private func toggle() {
+    withAnimation(ActivityMotion.fold(reduceMotion: reduceMotion)) {
+      send(.toggleSession(session.id, opens: !session.isOpen))
+    }
   }
 
   /// The disclosure, the icon, the two lines and the time.

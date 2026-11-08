@@ -13,23 +13,31 @@ struct ActivityRunRow: View {
   @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.outlineWidth) private var width
 
-  /// The row, one button whether or not it can fold; held open, its press does nothing.
+  /// The row, one button whether or not it can fold; held open, its press does nothing. Space or Return opens or folds
+  /// it while it has keyboard focus.
   var body: some View {
-    Button {
-      guard run.canFold else { return }
-      withAnimation(ActivityMotion.fold(reduceMotion: reduceMotion)) {
-        send(.toggleRun(run.id, opens: !run.isOpen))
-      }
-    } label: {
+    Button(action: toggle) {
       label
     }
     .buttonStyle(OutlineRowStyle(height: ViewerLayout.runRowHeight))
+    .onKeyPress(.return) {
+      toggle()
+      return .handled
+    }
     .layoutFrame("run \(run.id)")
     .accessibilityElement(children: .combine)
     .accessibilityLabel(run.label)
     .accessibilityValue(run.isOpen ? Text("Open") : Text("Folded"))
     .accessibilityHint(hint)
     .accessibilityRemoveTraits(run.canFold ? [] : .isButton)
+  }
+
+  /// Opens or folds the run, unless it is held open.
+  private func toggle() {
+    guard run.canFold else { return }
+    withAnimation(ActivityMotion.fold(reduceMotion: reduceMotion)) {
+      send(.toggleRun(run.id, opens: !run.isOpen))
+    }
   }
 
   /// What pressing it does, for VoiceOver; nothing while it is held open.

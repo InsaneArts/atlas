@@ -7,6 +7,8 @@ struct PictureSheetHeader: View {
   let sheet: ViewerPictureSheet
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
+  /// Whether VoiceOver reads the title, as it does on the sheet's arrival, so it starts in the sheet.
+  @AccessibilityFocusState private var titleSpoken: Bool
 
   /// The row.
   var body: some View {
@@ -15,6 +17,8 @@ struct PictureSheetHeader: View {
       VStack(alignment: .leading, spacing: .zero) {
         ActivityStepWords(words: sheet.title, style: .heading, weight: .semibold)
           .accessibilityAddTraits(.isHeader)
+          .accessibilityFocused($titleSpoken)
+          .onAppear { titleSpoken = true }
         Text(verbatim: sheet.line)
           .font(Typography.digits(.callout))
           .foregroundStyle(Color.textSecondary)

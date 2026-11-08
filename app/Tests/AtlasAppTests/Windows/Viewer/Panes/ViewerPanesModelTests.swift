@@ -420,13 +420,13 @@ struct ViewerPanesModelTests {
       service.resumeAllShots()
     }
     viewer.send(.openShot(Self.newer))
-    #expect(Self.sheet(viewer)?.canExport == true)
+    #expect(Self.sheet(viewer)?.canShowInFinder == true)
     viewer.send(.showPictureInFinder)
     #expect(revealed.map(\.path) == ["/Users/me/runs/\(Self.newer)"])
     service.shotsFolder = nil
     await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
     try #require(viewer.panes.shots.folder == nil, "a reading that names no folder leaves it unknown")
-    #expect(Self.sheet(viewer)?.canExport == false)
+    #expect(Self.sheet(viewer)?.canShowInFinder == false)
     viewer.send(.showPictureInFinder)
     #expect(revealed.count == 1, "no file is shown while the folder is unknown")
   }

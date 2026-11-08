@@ -92,7 +92,7 @@ struct ActivityOutlineTests {
     #expect(ActivityGist(counts: [:], apps: ["Notes": 1]) == nil)
   }
 
-  @Test("a session's rows give its gist, the person's own left out")
+  @Test("a session's rows give its gist, the person's own and refused ones left out")
   func aSessionsRowsGiveItsGist() {
     let gist = ActivityGist([
       ActivityFixtures.row(id: "t2", says: "typed", session: "claude", verb: "type", app: "TextEdit"),
@@ -103,5 +103,14 @@ struct ActivityOutlineTests {
     ])
     #expect(gist == ActivityGist(kind: .typing, count: 2, app: "TextEdit"))
     #expect(ActivityGist([]) == nil)
+    let refused = ActivityFixtures.row(
+      id: "n1",
+      says: "didn't type in TextEdit",
+      outcome: .notSent,
+      session: "claude",
+      verb: "type",
+      app: "TextEdit"
+    )
+    #expect(ActivityGist([refused]) == nil, "a row refused before anything was sent did nothing")
   }
 }

@@ -58,13 +58,13 @@ public struct ActivityGist: Equatable, Sendable {
   }
 
   /// The gist of a session's rows: each row's kind, and the app most rows acted in. The person's own rows are not a
-  /// session's.
+  /// session's, and a row refused before anything was sent did nothing.
   ///
   /// - Parameter entries: The session's rows.
   public init?(_ entries: [ActivityLog.Entry]) {
     var kinds: [ActivityAction: Int] = [:]
     var apps: [String: Int] = [:]
-    for entry in entries where entry.actor != .you {
+    for entry in entries where entry.actor != .you && entry.outcome != .notSent {
       let kind = ActivityAction(entry)
       kinds[kind] = Self.adding(1, to: kinds[kind] ?? 0)
       if let app = entry.app, !app.isEmpty { apps[app] = Self.adding(1, to: apps[app] ?? 0) }

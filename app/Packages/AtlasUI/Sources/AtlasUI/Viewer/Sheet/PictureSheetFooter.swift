@@ -10,6 +10,8 @@ struct PictureSheetFooter: View {
   let window: CGFloat
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
+  /// Whether Done has keyboard focus, as it takes on the sheet's arrival so the keyboard is in the sheet.
+  @FocusState private var doneFocused: Bool
 
   /// The two sides of the footer, on one row or two.
   var body: some View {
@@ -82,15 +84,16 @@ struct PictureSheetFooter: View {
     HStack(spacing: Spacing.s) {
       Button("Copy") { send(.copyPicture) }
         .buttonStyle(.capsule(.secondary, size: .small))
-        .disabled(!sheet.canExport)
         .help("Copy this picture")
       Button("Show in Finder") { send(.showPictureInFinder) }
         .buttonStyle(.capsule(.secondary, size: .small))
-        .disabled(!sheet.canExport)
+        .disabled(!sheet.canShowInFinder)
         .help("Show this picture's file in the Finder")
       Button("Done") { send(.closePicture) }
         .buttonStyle(.capsule(.accent, size: .small))
         .keyboardShortcut(.defaultAction)
+        .focused($doneFocused)
+        .onAppear { doneFocused = true }
     }
     .fixedSize()
   }

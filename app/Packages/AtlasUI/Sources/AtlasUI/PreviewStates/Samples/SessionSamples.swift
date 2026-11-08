@@ -30,7 +30,7 @@
     /// Claude Code's title, from what it mostly did.
     static let claudeTitle = "Clicking in Opie"
     /// Codex's title, from what it mostly did.
-    static let codexTitle = "Typing in Notes"
+    static let codexTitle = "Opening Notes"
     /// Cursor's title, from what it mostly did.
     static let cursorTitle = "Opened Opie"
     /// Terminal's title, from what its commands mostly did.

@@ -409,7 +409,7 @@
       run: "in this TextEdit run",
       canGoBack: true,
       canGoForward: false,
-      canExport: true
+      canShowInFinder: true
     )
 
     /// The sheet over the screen just before Return was pressed in Chrome, with Before and After.
@@ -426,7 +426,7 @@
       run: "in this Google Chrome run",
       canGoBack: true,
       canGoForward: true,
-      canExport: true
+      canShowInFinder: true
     )
   }
 #endif

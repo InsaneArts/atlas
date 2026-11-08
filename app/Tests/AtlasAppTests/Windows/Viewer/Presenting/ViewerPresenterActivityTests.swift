@@ -634,6 +634,41 @@ struct ViewerPresenterActivityTests {
     #expect(ViewerActivityFixtures.sessions(ViewerPresenter.activity(snapshot)).first?.isOpen == false)
   }
 
+  @Test("a long day still lists the session holding the action of unknown outcome, so its recovery shows")
+  func aLongDayKeepsTheHeldSession() throws {
+    let newer = (0..<6)
+      .map { index in
+        ActivityFixtures.row(
+          id: "r\(index)",
+          says: "clicked in Notes",
+          ageSeconds: Double(index * 60),
+          session: "5d0c77aa1e0\(index)",
+          verb: "click",
+          app: "Notes"
+        )
+      }
+    let held = ActivityFixtures.row(
+      id: "c1",
+      says: "clicked Show Center in Opie",
+      outcome: .failed,
+      ageSeconds: 900,
+      session: ViewerActivityFixtures.claude,
+      verb: "click",
+      app: "Opie"
+    )
+    let snapshot = try ViewerActivityFixtures.onActivity(
+      newer + [held],
+      sessions: [SessionReplies.claudeNeedsYou],
+      mode: "recovering",
+      state: "needsYou",
+      pending: 1
+    )
+    let day = try #require(ViewerPresenter.activity(snapshot).days.first)
+    #expect(day.sessions.count == ViewerWords.mostSessions + 1)
+    #expect(day.sessions.last?.runs.first?.steps.first?.offersRecovery == true)
+    #expect(day.more?.title == "1 more session today")
+  }
+
   @Test("a long day lists five sessions, then a row naming the rest, which lists them all")
   func aLongDayListsFiveSessions() throws {
     let log = (0..<7)

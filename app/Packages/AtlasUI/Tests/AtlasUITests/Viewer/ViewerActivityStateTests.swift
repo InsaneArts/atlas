@@ -54,7 +54,7 @@ struct ViewerActivityStateTests {
       run: "",
       canGoBack: false,
       canGoForward: false,
-      canExport: false
+      canShowInFinder: false
     )
     #expect(sheet.shownSide == .before)
     sheet.hasAfter = true

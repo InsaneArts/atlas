@@ -65,7 +65,8 @@ final class ViewerPictureViews {
       let run = runs()?.first(where: { $0.id == focus.run })
     else { return }
     let sequence = ViewerPresenter.pictureSequence(run, everyStep: focus.everyStep)
-    guard let index = sequence.firstIndex(of: focus.item), sequence.indices.contains(index + offset) else { return }
+    let current = ViewerPresenter.pictureItem(focus.item, in: run)
+    guard let index = sequence.firstIndex(of: current), sequence.indices.contains(index + offset) else { return }
     model.panes.activity.sheet?.item = sequence[index + offset]
     model.panes.activity.sheet?.side = .before
     refresh()

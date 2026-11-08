@@ -14,7 +14,7 @@ extension ViewerPresenter {
     let facts = snapshot.panes.activity
     guard let focus = facts.sheet, let run = moments.moment(focus.run) else { return nil }
     let sequence = pictureSequence(run, everyStep: focus.everyStep)
-    guard let index = sequence.firstIndex(of: focus.item) else { return nil }
+    guard let index = sequence.firstIndex(of: pictureItem(focus.item, in: run)) else { return nil }
     let (icon, name) = runSubject(run, snapshot)
     let app = run.app.map { _ in name } ?? ""
     let who = streamName(run.stream, snapshot)
@@ -36,7 +36,7 @@ extension ViewerPresenter {
         run: ViewerWords.inRun(name),
         canGoBack: index > 0,
         canGoForward: index < sequence.count - 1,
-        canExport: list.pictureFile(named: shot) != nil
+        canShowInFinder: list.pictureFile(named: shot) != nil
       )
     case .before(let row):
       let entry = run.runs
@@ -68,7 +68,7 @@ extension ViewerPresenter {
         run: ViewerWords.inRun(name),
         canGoBack: index > 0,
         canGoForward: index < sequence.count - 1,
-        canExport: list.pictureFile(named: shown) != nil
+        canShowInFinder: list.pictureFile(named: shown) != nil
       )
     }
   }
@@ -85,6 +85,21 @@ extension ViewerPresenter {
       if everyStep, let pictured = line.pictured { return .before(pictured.id) }
       return line.shot.map(ViewerPictureItem.shot)
     }
+  }
+
+  /// The picture as ‹ and › know it: a step's picture by its line's first pictured row, so a picture stays found as
+  /// newer repeats of the same action fold into its line.
+  ///
+  /// - Parameters:
+  ///   - item: The picture.
+  ///   - run: Its run.
+  /// - Returns: The picture as the run's sequence names it.
+  static func pictureItem(_ item: ViewerPictureItem, in run: ActivityMoment) -> ViewerPictureItem {
+    guard case .before(let row) = item,
+      let line = run.runs.first(where: { line in line.members.contains { $0.id == row } }),
+      let pictured = line.pictured
+    else { return item }
+    return .before(pictured.id)
   }
 
   /// The file name of the picture the sheet shows, for Copy and Show in Finder: the screenshot, or a step's picture

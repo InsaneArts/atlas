@@ -51,7 +51,8 @@ extension ViewerPresenter {
     return ViewerWords.dotted([place, when ?? ""])
   }
 
-  /// A session's rows in the log as last read; none while Activity has not been read.
+  /// A session's rows in the log as last read that sent something: a row refused before anything was sent is no work.
+  /// None while Activity has not been read.
   ///
   /// - Parameters:
   ///   - key: The session's key.
@@ -59,6 +60,6 @@ extension ViewerPresenter {
   /// - Returns: Its rows, newest first.
   static func sessionRows(_ key: String, _ snapshot: ViewerSnapshot) -> [ActivityLog.Entry] {
     (snapshot.panes.activity.log?.entries ?? [])
-      .filter { $0.groupKey == key }
+      .filter { $0.groupKey == key && $0.outcome != .notSent }
   }
 }

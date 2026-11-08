@@ -67,6 +67,8 @@ struct ViewerStageTests {
       }
     )
     host.show(try Self.activity(lines: 81))
+    // The list keeps its place as SwiftUI hears the change, on the run loop's next turn: take it before measuring.
+    loop.run(mode: .default, before: .distantPast)
     host.render()
     // Scrolled down, the list moves on by the new session's height, so the line the person reads holds its place.
     #expect(list.contentView.bounds.origin.y > before, "the list moved on")

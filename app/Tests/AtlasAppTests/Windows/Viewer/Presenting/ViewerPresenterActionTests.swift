@@ -165,6 +165,35 @@ struct ViewerPresenterActionTests {
     #expect(sheet.mark?.shape == .scroll(arrow: .down, label: "Down"))
   }
 
+  @Test("a later repeat's picture stays open as newer repeats fold it into one line")
+  func aRepeatsPictureStaysOpenAsItFolds() throws {
+    let scroll = ActionFacts(
+      action: .scroll,
+      display: Self.display,
+      point: .init(x: 720, y: 450),
+      scroll: .init(dx: 0, dy: 3)
+    )
+    let snapshot = try ViewerActivityFixtures.onActivity([
+      Self.row("c3", "scrolled in TextEdit", age: 3, facts: scroll),
+      Self.row("c2", "scrolled in TextEdit", age: 4, facts: scroll),
+      Self.row("c1", "scrolled in TextEdit", age: 5, facts: scroll),
+    ])
+    let sheet = try #require(ViewerActivityFixtures.sheet(snapshot, row: "c2"), "the second repeat's picture shows")
+    #expect(sheet.id == "c2")
+    #expect(sheet.position == "1 of 1")
+  }
+
+  @Test("Copy is offered without the screenshots' folder, and Show in Finder only with it")
+  func copyNeedsNoFolder() throws {
+    let click = ActionFacts(action: .click, display: Self.display, point: .init(x: 720, y: 450))
+    var snapshot = try ViewerActivityFixtures.onActivity([Self.row("c1", "clicked in TextEdit", age: 5, facts: click)])
+    snapshot.panes.shots.folder = nil
+    let sheet = try #require(ViewerActivityFixtures.sheet(snapshot, row: "c1"))
+    #expect(!sheet.canShowInFinder)
+    snapshot.panes.shots.folder = URL(fileURLWithPath: "/Users/me/runs", isDirectory: true)
+    #expect(ViewerActivityFixtures.sheet(snapshot, row: "c1")?.canShowInFinder == true)
+  }
+
   @Test("a step's picture opens in the sheet, steps through every step's picture, and offers After only where it can")
   func pictureSheetOfASteps() throws {
     let click = ActionFacts(action: .click, display: Self.display, point: .init(x: 720, y: 450))

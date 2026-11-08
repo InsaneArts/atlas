@@ -570,6 +570,28 @@ struct ViewerPresenterSessionsTests {
     ])
     snapshot.panes.activity.readAt = snapshot.date
     #expect(ViewerPresenter.sessions(snapshot).rows(.idle).map(\.id) == ["5d21e9a04c3f"], "a row in the log is work")
+    snapshot.panes.activity.log = ActivityLog(entries: [
+      ActivityLog.Entry(
+        id: "n1",
+        says: "didn't click in Opie",
+        outcome: .notSent,
+        ageSeconds: 5,
+        session: "5d21e9a04c3f",
+        app: "Opie"
+      )
+    ])
+    #expect(ViewerPresenter.sessions(snapshot).rows(.idle).isEmpty, "a row refused before anything was sent is not")
+  }
+
+  @Test("sessions that never acted do not use up the ended sessions listed")
+  func emptySessionsLeaveRoomForEndedWork() throws {
+    var snapshot = try ViewerSnapshot.listing([])
+    let empty = (0..<ViewerPresenter.mostEnded)
+      .map { HostSessionRecord(key: "e\($0)", name: "Codex · T", host: .codex, state: .ended) }
+    let worked = HostSessionRecord(key: "w1", name: "Codex · atlas", host: .codex, state: .ended, actions: 3)
+    snapshot.panes.sessions.list = HostSessionList(sessions: empty + [worked])
+    snapshot.session.endedShown = true
+    #expect(ViewerPresenter.sessions(snapshot).rows(.ended).map(\.id) == ["w1"])
   }
 
   @Test("with one session chosen a list's header names it, and says it has the helper only when it does")

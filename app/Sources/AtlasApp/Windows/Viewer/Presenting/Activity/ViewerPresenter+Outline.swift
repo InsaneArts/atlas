@@ -44,7 +44,15 @@ extension ViewerPresenter {
       let name = dayTitle(day, snapshot)
       let title = order.count > 1 ? name : ""
       let all = byDay[day] ?? []
-      let listed = chosen || facts.shownDays.contains(id) ? all : Array(all.prefix(ViewerWords.mostSessions))
+      // A session holding the run of unknown outcome is always listed, so its recovery never hides behind the rest.
+      let listed =
+        chosen || facts.shownDays.contains(id)
+        ? all
+        : all.enumerated()
+          .filter { place, group in
+            place < ViewerWords.mostSessions || group.runs.contains { folds[$0.id] == .held }
+          }
+          .map(\.element)
       let sessions = listed.map { group in
         outlineSession(group, folds: folds, moments: moments, only: groups.count == 1, chosen: chosen, snapshot)
       }

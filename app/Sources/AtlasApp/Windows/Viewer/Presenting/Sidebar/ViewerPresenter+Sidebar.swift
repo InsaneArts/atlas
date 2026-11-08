@@ -58,7 +58,8 @@ extension ViewerPresenter {
       }
       + (snapshot.panes.sessions.list?.sessions ?? [])
       .filter { $0.isEnded && !liveKeys.contains($0.key) && !currentEndKeys.contains($0.key) }
-    let ended = history.enumerated()
+    let ended = history.filter { !neverActed($0.key, snapshot) || chosen == .one($0.key) }
+      .enumerated()
       .filter { $0.offset < mostEnded || chosen == .one($0.element.key) }
       .map(\.element)
     let icons =
@@ -78,8 +79,7 @@ extension ViewerPresenter {
         return ViewerSessionGroup(section, rows: rows)
       }
       .filter { !$0.rows.isEmpty }
-    let endedRows = ended.filter { !neverActed($0.key, snapshot) }
-      .map { endedRow($0, snapshot) }
+    let endedRows = ended.map { endedRow($0, snapshot) }
       .filter { matches($0, query: query) }
     let endedShown = snapshot.session.endedShown
     if !endedRows.isEmpty {
