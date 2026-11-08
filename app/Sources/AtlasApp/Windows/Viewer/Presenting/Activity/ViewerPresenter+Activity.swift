@@ -49,6 +49,7 @@ extension ViewerPresenter {
       filters: activityFilters(facts.filter, counts: counts),
       days: days,
       empty: days.isEmpty ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil) : nil,
+      query: query,
       showsFilters: !moments.moments.isEmpty,
       sheet: pictureSheet(moments, snapshot),
       replay: replay(moments, snapshot)

@@ -5,6 +5,9 @@ import SwiftUI
 /// and the content keeps the small screen's band as room at the end it floats over, so the last row, or the first,
 /// can always be scrolled wholly clear of it. Headings scroll with their rows; none is pinned.
 enum CardScrollRoom {
+  /// The identity of the content's top, which a list scrolls to as the person asks for what waits above.
+  static let top = "card scroll top"
+
   /// The room the content keeps at its ends: the small screen's band at the end it floats over, none elsewhere.
   ///
   /// - Parameter clearance: Where the small screen floats.

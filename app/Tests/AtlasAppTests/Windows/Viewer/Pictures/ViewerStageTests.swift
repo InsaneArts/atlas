@@ -40,13 +40,15 @@ struct ViewerStageTests {
     #expect(host.scrollViews.count == 2, "a pane was built again")
   }
 
-  @Test("a new session arrives at the top and shows there, while a list scrolled down keeps the line read in place")
+  @Test("a new session shows at the top, while a list scrolled down holds it under a line and never moves")
   func aNewActionKeepsAScrolledListInPlace() throws {
     let top = ViewerHost(try Self.activity(lines: 80))
     let atTop = try #require(top.scrollViews.first)
     top.show(try Self.activity(lines: 81))
-    // At the top it stays at the top, so the new line shows.
+    top.render()
+    // At the top it stays at the top, so the new session shows.
     #expect(atTop.contentView.bounds.origin.y == 0)
+    #expect(top.frames["session line 80"] != nil)
 
     let host = ViewerHost(try Self.activity(lines: 80))
     let list = try #require(host.scrollViews.first)
@@ -64,8 +66,7 @@ struct ViewerStageTests {
     #expect(before == Self.scrolled, "the scroll did not hold: \(before)")
     host.render()
     let viewport = host.frameFromTop(of: list)
-    // A session row measured after scrolling and well inside the list, which the person reads. A row the list let go
-    // keeps its last report, so only one measured anew counts.
+    // A session row measured after scrolling and well inside the list, which the person reads.
     let read = try #require(
       host.frames.first { key, frame in
         key.hasPrefix("session line ") && unscrolled[key] != frame
@@ -73,15 +74,17 @@ struct ViewerStageTests {
       }
     )
     host.show(try Self.activity(lines: 81))
-    // The list keeps its place as SwiftUI hears the change on the run loop's later turns, sooner or later as the Mac
-    // is busy: take a few, each without waiting, until the line has settled.
-    for _ in 0..<Self.settlingTurns where host.frames[read.key] != read.value {
+    // SwiftUI hears the change on the run loop's later turns, sooner or later as the Mac is busy: take a few, each
+    // without waiting, until the line shows.
+    for _ in 0..<Self.settlingTurns where host.frames["waiting line"] == nil {
       loop.run(mode: .default, before: .distantPast)
       host.render()
     }
-    // Scrolled down, the list moves on by the new session's height, so the line the person reads holds its place.
-    #expect(list.contentView.bounds.origin.y > before, "the list moved on")
+    // Scrolled down, the new session waits above under a line, so nothing the person reads moves.
+    #expect(list.contentView.bounds.origin.y == before, "the list stayed")
     #expect(host.frames[read.key] == read.value, "\(read.key) moved from \(read.value)")
+    #expect(host.frames["session line 80"] == nil, "the new session waits")
+    #expect(host.frames["waiting line"] != nil, "the line says it waits")
   }
 
   /// In the card, under its header and clear of the small screen: where the panes draw.

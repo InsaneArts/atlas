@@ -51,7 +51,6 @@ struct ActivitySessionBlock: View {
         }
         .outlineBox(session.isBoxed)
         .id("session.\(session.id)")
-        .listPlace("session.\(session.id)")
         .transition(arrival)
       }
       if session.isOpen || !session.showsHead {
@@ -59,7 +58,6 @@ struct ActivitySessionBlock: View {
           ActivityRunBlock(run: run, level: session.showsHead ? 1 : 0, send: send)
             .padding(.top, gap(above: index))
             .id("run.\(run.id)")
-            .listPlace("run.\(run.id)")
             .transition(runArrival)
         }
       }

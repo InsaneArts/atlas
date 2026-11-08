@@ -35,6 +35,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case reload = "arrow.clockwise"
   /// The previous screenshot.
   case back = "chevron.left"
+  /// Up to sessions waiting at the top of a scrolled-down list.
+  case up = "chevron.up"
   /// The next screenshot, and the helper's allow pairing: the asking account handing over to Atlas.
   case next = "chevron.right"
   /// Copy.
