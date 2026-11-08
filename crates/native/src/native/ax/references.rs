@@ -295,7 +295,7 @@ impl Looks {
         epoch: &InputEpoch,
     ) -> Option<(i64, Option<String>, Option<String>, bool)> {
         let found = self.find(reference, epoch, Instant::now()).ok()?;
-        let element = &found.chain.last()?.element;
+        let element = &found.chain.first()?.element;
         let name = element
             .title
             .clone()
