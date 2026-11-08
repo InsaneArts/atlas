@@ -32,6 +32,18 @@ struct CardScrollPlaceTests {
     #expect(scroll.contentView.bounds.origin.y == 535, "brought back by the 85 it moved")
   }
 
+  @Test("with no row standing below the list's top, the one crossing it, such as a long open run, is held")
+  func aRowCrossingTheTopIsHeld() {
+    let scroll = Self.scrolled(to: 620)
+    let place = CardScrollPlace()
+    place.scroll = scroll
+    place.report("run far above", top: -900)
+    place.report("run read", top: -40)
+    place.hold()
+    place.report("run read", top: -125)
+    #expect(scroll.contentView.bounds.origin.y == 535, "brought back by the 85 it moved")
+  }
+
   @Test("a row the Mac already kept in place, or one reported with nothing held, moves nothing")
   func nothingMovesWithoutADrift() {
     let scroll = Self.scrolled(to: 535)

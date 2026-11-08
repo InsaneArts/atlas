@@ -33,11 +33,13 @@ final class CardScrollPlace {
     tops[row] = nil
   }
 
-  /// Holds the row the person reads, the first standing at or below the list's top, where it stands, until the rows
-  /// arriving above it have been laid out.
+  /// Holds the row the person reads where it stands, until the rows arriving above it have been laid out: the first
+  /// standing at or below the list's top, else the one crossing it, such as a long open run.
   func hold() {
-    held = tops.filter { $0.value >= .zero }
+    let below = tops.filter { $0.value >= .zero }
       .min { $0.value < $1.value }
+    let crossing = tops.max { $0.value < $1.value }
+    held = (below ?? crossing)
       .map { (row: $0.key, top: $0.value) }
     // Laid out by the next turn, the arrival's rows have reported: a later scroll by the person is theirs.
     Task { [weak self] in self?.held = nil }

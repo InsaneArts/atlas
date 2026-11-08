@@ -71,6 +71,12 @@ struct ActivityListContent: View {
     .fixedSize()
   }
 
+  /// What changes as work arrives at the top: the newest session, and the newest run, which a folded session does not
+  /// list.
+  private var arrival: [String?] {
+    [state.days.first?.sessions.first?.id, state.newest]
+  }
+
   /// The days holding more sessions than they show.
   private var foldedDays: Set<String> {
     Set(
@@ -129,8 +135,9 @@ struct ActivityListContent: View {
     }
     .scrollTargetLayout()
     .onChange(of: foldedDays, initial: true) { _, days in drawnFolded = days }
-    // Work arriving at the top while the person reads further down leaves the row they read where it stands.
-    .onChange(of: state.newest) {
+    // Work arriving at the top while the person reads further down, a new run or a new session folded or not, leaves
+    // the row they read where it stands.
+    .onChange(of: arrival) {
       if !isAtTop { place?.hold() }
     }
     .transaction(value: state.newest) { transaction in
