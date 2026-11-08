@@ -22,9 +22,10 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::MutexGuard;
 
-/// Whether the input service sent nothing for a request: only checked it
-/// before a command types, or refused it before its first event to ask the
-/// person, or for a Look Only account.
+/// Whether the input service proved it sent nothing for a request: only
+/// checked it before a command types, or refused it before its first event
+/// to ask the person, or for a Look Only account. A refusal after some of
+/// it ran, partly or uncertainly, keeps its picture.
 fn gated(reply: &Value) -> bool {
     reply["dry"] == true
         || reply["ok"] == false
@@ -32,6 +33,9 @@ fn gated(reply: &Value) -> bool {
                 Code::of_reply(reply, Code::Native),
                 Code::WaitingForPerson | Code::Denied
             )
+            && reply["performed"].as_u64().unwrap_or(0) == 0
+            && reply["partial"] != true
+            && reply["uncertain"] != true
 }
 
 /// One change to the helper. Its wire request, completion proof, destination

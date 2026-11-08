@@ -243,3 +243,33 @@ fn a_check_before_typing_is_confirmed_only_as_judged_with_nothing_performed() {
         "never said it only checked"
     );
 }
+
+#[test]
+fn only_a_refusal_proven_to_have_sent_nothing_drops_its_picture() {
+    let refusal = |extra: Value| {
+        let mut reply = json!({"ok": false, "code": "waiting-for-person"});
+        for (key, value) in extra.as_object().unwrap() {
+            reply[key] = value.clone();
+        }
+        reply
+    };
+    assert!(gated(&refusal(json!({}))), "refused before its first event");
+    assert!(gated(&json!({"ok": false, "code": "denied"})));
+    assert!(gated(&json!({"ok": true, "performed": 0, "dry": true})));
+    assert!(gated(&refusal(
+        json!({"performed": 0, "partial": false, "uncertain": false})
+    )));
+    assert!(
+        !gated(&refusal(
+            json!({"performed": 0, "partial": true, "uncertain": true})
+        )),
+        "stopped by the check before its second typed character"
+    );
+    assert!(
+        !gated(&refusal(
+            json!({"performed": 1, "partial": false, "uncertain": false})
+        )),
+        "stopped after one action ran"
+    );
+    assert!(!gated(&refusal(json!({"uncertain": true}))));
+}
