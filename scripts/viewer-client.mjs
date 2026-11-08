@@ -288,19 +288,6 @@ export class ViewerClient {
     this.cleanupError = null;
   }
 
-  /** End whichever lease is held, anyone's. */
-  async revoke() {
-    this.stop();
-    this.lease = null;
-    const answer = await this.call('control/revoke', {});
-    this.settled();
-    return answer;
-  }
-
-  recover() {
-    return this.call('recover', {}, { timeout: 20000 });
-  }
-
   hover(x, y) {
     return this.send([{ type: 'move', x, y }]);
   }

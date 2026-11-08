@@ -54,7 +54,7 @@ Relative paths resolve against the configuration file's directory, not the shell
 
 Atlas resolves existing path parents, including symbolic links. For `identity_probe`, it preserves the final path entry because installation may replace that link. Empty paths and paths containing a NUL are rejected. These settings identify real services and storage; they are not a way to bypass account or session checks.
 
-JSON configuration is no longer read. If a `.json` file with the same basename sits beside a `.toml` settings file, Atlas refuses the combination. Confirm the TOML values and stop any old process using the JSON file before removing the obsolete file.
+JSON configuration is no longer read. Confirm the TOML values and stop any old process using the JSON file before removing the obsolete file.
 
 ## Where data lives
 
