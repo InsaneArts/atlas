@@ -626,6 +626,7 @@ fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
             picture: None,
             app: false,
             expect,
+            asking: None,
         }
         .validate(&reply);
         assert_eq!(outcome.is_ok(), confirmed, "{expect:?} {reply}");

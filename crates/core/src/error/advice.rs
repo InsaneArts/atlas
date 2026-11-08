@@ -108,6 +108,10 @@ pub fn next(code: Code, holder: Option<Holder>) -> &'static str {
         (Code::Credentials, _) => {
             "Don't copy it another way. If the task needs an account, ask the person to sign the helper in; copy only what the test needs, without secrets."
         }
+        (Code::WaitingForPerson, _) => {
+            "Do other work, then run the same command again. Never send it another way."
+        }
+        (Code::Denied, _) => "Don't try another way. Ask the person what they want instead.",
         (Code::Onboarding, _) => "Show the error to the person. They open Atlas again to carry on.",
         (Code::Install, _) => "Ask the person to move Atlas.app to /Applications.",
         (Code::Logout, _) => {
@@ -277,6 +281,10 @@ pub fn fix(code: Code) -> Option<&'static str> {
         Code::ConfigInvalid => "Fix that file, or move it aside and run atlas init.",
         Code::Credentials => {
             "Sign the helper in to the account instead, and select only files without secrets."
+        }
+        Code::WaitingForPerson => "Answer it in the Atlas menu bar, or in the viewer.",
+        Code::Denied => {
+            "Change the account's level in Atlas › Settings › Accounts if agents should act there."
         }
         Code::Daemon | Code::State => "Run atlas restart.",
         Code::Elements => {

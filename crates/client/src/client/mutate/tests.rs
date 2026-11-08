@@ -46,6 +46,7 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
             picture: None,
             app: false,
             expect: None,
+            asking: None,
         }
         .validate(&json!({"ok":true,"performed":0}))
         .unwrap_err()
@@ -65,6 +66,7 @@ fn an_element_action_is_confirmed_only_with_its_verification() {
         picture: None,
         app: false,
         expect: None,
+        asking: None,
     };
     input()
         .validate(&json!({"ok": true, "performed": 1, "mechanism": "accessibility", "verification": "matched"}))
@@ -146,6 +148,7 @@ fn each_mutation_sends_its_exact_request() {
         picture: None,
         app: true,
         expect,
+        asking: None,
     };
     let epoch_wire = r#"{"displayId":3,"height":982.0,"processId":41,"securitySessionId":7,"uid":502,"width":1512.0}"#;
     let cases = [

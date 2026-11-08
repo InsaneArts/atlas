@@ -723,6 +723,14 @@ impl Slot {
         first
     }
 
+    /// The picture's turn comes again: the input it was for sent nothing,
+    /// and the next attempt takes its own.
+    pub(crate) fn reset(&self) {
+        let mut held = self.lock();
+        held.taken = Taken::No;
+        held.facts = Map::new();
+    }
+
     /// The picture is in hand, to be saved as `name`, before an input that
     /// did what `facts` say.
     pub(crate) fn named(&self, name: String, facts: Map<String, Value>) {

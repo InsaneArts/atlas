@@ -58,6 +58,25 @@ pub(super) fn add(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
 /// Remove the account `body` names: its kind, id, and for a site the
 /// browser it was seen in.
 pub(super) fn remove(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
+    let (kind, id) = named(body)?;
+    let browser = body["browser"].as_str();
+    let removed = sign_ins::remove_in(known(home)?, kind, id, browser, true)?;
+    Ok(json!({"ok": true, "removed": removed}))
+}
+
+/// Set the level of the account `body` names: its kind, id and browser, and
+/// `level` (`lookOnly`, `ask` or `trusted`).
+pub(super) fn set_level(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
+    let (kind, id) = named(body)?;
+    let level = serde_json::from_value::<Level>(body["level"].clone())
+        .map_err(|_| Error::new(Code::Input, "Name the level: lookOnly, ask or trusted"))?;
+    let browser = body["browser"].as_str();
+    let changed = sign_ins::set_level_in(known(home)?, kind, id, browser, level, true)?;
+    Ok(json!({"ok": true, "changed": changed}))
+}
+
+/// The account `body` names, by its kind and id.
+fn named(body: &Value) -> Result<(Kind, &str)> {
     let kind = match body["kind"].as_str() {
         Some("site") => Kind::Site,
         Some("app") => Kind::App,
@@ -66,9 +85,64 @@ pub(super) fn remove(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
     let Some(id) = text(&body["id"]) else {
         return Err(Error::new(Code::Input, "Name the account by its id"));
     };
-    let browser = body["browser"].as_str();
-    let removed = sign_ins::remove_in(known(home)?, kind, id, browser, true)?;
-    Ok(json!({"ok": true, "removed": removed}))
+    Ok((kind, id))
+}
+
+/// The questions up now, for the person: who asks, the account, what would
+/// be sent and, for a message, its preview.
+pub(super) fn asks(client: &atlas_client::client::Client) -> Value {
+    let now = atlas_core::time::now_ms();
+    let asks = client.controller.asks();
+    json!({"ok": true, "asks": asks.open(now), "allowed": asks.allowed(now)})
+}
+
+/// The status's part of them: the questions up, without what would be sent,
+/// and what the person allowed.
+pub(super) fn asks_for_status(client: &atlas_client::client::Client) -> (Value, Value) {
+    let now = atlas_core::time::now_ms();
+    let asks = client.controller.asks();
+    let open: Vec<Value> = asks
+        .open(now)
+        .into_iter()
+        .map(|ask| {
+            json!({
+                "id": ask.id,
+                "who": ask.who,
+                "task": ask.task,
+                "account": ask.account,
+                "what": ask.question["what"],
+                "ends": ask.ends,
+            })
+        })
+        .collect();
+    (json!(open), json!(asks.allowed(now)))
+}
+
+/// The person's answer to the question `body` names: `task`, `once` or
+/// `deny`.
+pub(super) fn answer(client: &atlas_client::client::Client, body: &Value) -> Result<Value> {
+    let Some(id) = text(&body["id"]) else {
+        return Err(Error::new(Code::Input, "Name the question by its id"));
+    };
+    let answer = serde_json::from_value::<atlas_control::asks::Answer>(body["choice"].clone())
+        .map_err(|_| Error::new(Code::Input, "Answer task, once or deny"))?;
+    client
+        .controller
+        .asks()
+        .answer(id, answer, true, atlas_core::time::now_ms())?;
+    Ok(json!({"ok": true}))
+}
+
+/// End what the person allowed in the account `body` names.
+pub(super) fn end_allowed(client: &atlas_client::client::Client, body: &Value) -> Result<Value> {
+    let Some(account) = text(&body["account"]) else {
+        return Err(Error::new(Code::Input, "Name the account"));
+    };
+    client
+        .controller
+        .asks()
+        .end(Some(account), None, true, atlas_core::time::now_ms())?;
+    Ok(json!({"ok": true}))
 }
 
 /// Add the account the person signed in to while they had control, as the

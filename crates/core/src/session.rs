@@ -410,6 +410,11 @@ pub const ELEMENT_ACTIONS: &str = "element-actions";
 /// actions found different fields: what typed text may be kept by.
 pub const TYPED_FIELDS: &str = "typed-fields";
 
+/// An input service with this asks the person before an agent sends from
+/// an account they listed: it reads the request's `asking` and refuses with
+/// `waiting-for-person` or `denied` before anything is sent.
+pub const ASKS: &str = "asks";
+
 /// Whether an input service's hello lists `name` among its capabilities.
 pub fn has_capability(native: &Value, name: &str) -> bool {
     capability_names(native)

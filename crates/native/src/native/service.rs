@@ -3,7 +3,7 @@
 //! The service retains its gate, registered work and engine through cleanup;
 //! a vanished request or reply cannot acknowledge an unknown outcome.
 use super::{
-    accessibility_trusted,
+    accessibility_trusted, asking,
     ax::Looks,
     events::Engine,
     lease::{Gate, Grant, Who, busy},
@@ -48,7 +48,7 @@ const MAX_REQUEST: usize = 64 * 1024;
 /// app, with the Dock covering where it takes clicks, and the window and
 /// field it names, reading an app's elements as looks a click can name, and
 /// acting on an element of a look through Accessibility.
-const CAPABILITIES: [&str; 9] = [
+const CAPABILITIES: [&str; 10] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,
@@ -58,6 +58,7 @@ const CAPABILITIES: [&str; 9] = [
     atlas_core::session::LOOKS,
     atlas_core::session::ELEMENT_ACTIONS,
     atlas_core::session::TYPED_FIELDS,
+    atlas_core::session::ASKS,
 ];
 
 struct Service {
@@ -182,7 +183,11 @@ impl Service {
                 actions,
                 expect,
                 app,
-            } => self.input(owner, epoch, actions, expect, app, phase).await,
+                asking,
+            } => {
+                self.input_asking(owner, epoch, actions, expect, app, asking, phase)
+                    .await
+            }
             Request::Elements { epoch, expect } => self.look(epoch, expect).await,
         }
     }
@@ -411,6 +416,7 @@ impl Service {
         Ok(json!({ "ok": true }))
     }
 
+    #[cfg(test)]
     async fn input(
         &self,
         owner: String,
@@ -418,6 +424,32 @@ impl Service {
         actions: Result<Vec<Action>>,
         expect: Result<Option<Expect>>,
         report_app: bool,
+        phase: &watch::Sender<ConnectionPhase>,
+    ) -> Result<Value> {
+        self.input_asking(
+            owner,
+            expected,
+            actions,
+            expect,
+            report_app,
+            Ok(None),
+            phase,
+        )
+        .await
+    }
+
+    /// [`Service::input`], an agent's request judged first by the accounts
+    /// and grants it brings: refused before its first event when the person
+    /// must be asked, or the account is Look Only.
+    #[allow(clippy::too_many_arguments)]
+    async fn input_asking(
+        &self,
+        owner: String,
+        expected: Result<InputEpoch>,
+        actions: Result<Vec<Action>>,
+        expect: Result<Option<Expect>>,
+        report_app: bool,
+        asking: Result<Option<asking::Asking>>,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         let epoch = self.check_epoch(expected?)?;
@@ -436,13 +468,30 @@ impl Service {
             .iter()
             .any(|action| matches!(action, Action::Type { .. } | Action::Key { .. }));
         let expect = expect?;
+        let asking = asking?;
         agent_target(&self.gate, expect.as_ref(), &actions)?;
+        // A command's check before its first request: judged, nothing sent.
+        if let Some(asking) = asking.as_ref().filter(|asking| asking.dry)
+            && grant.person().is_none()
+        {
+            drop(grant.authorize()?);
+            let engine = self.engine.clone().lock_owned().await;
+            let asking = asking.clone();
+            return tokio::task::spawn_blocking(move || {
+                gate_request(&engine, &actions, &asking)
+                    .map(|()| json!({"ok": true, "performed": 0, "dry": true}))
+            })
+            .await
+            .map_err(|cause| worker_failed().with_source(cause))?;
+        }
         phase.send_replace(ConnectionPhase::Mutation("input"));
         let mut cancellation = Cancellation {
             gate: self.gate.clone(),
             owner: Some(owner),
         };
-        let (done, dock_pressed) = match self.execute(grant, actions, expect.clone(), typed).await?
+        let (done, dock_pressed) = match self
+            .execute(grant, actions, expect.clone(), typed, asking)
+            .await?
         {
             Ok(done) => done,
             Err(failure) => return Ok(failure.reply()),
@@ -497,6 +546,7 @@ impl Service {
         actions: Vec<Action>,
         expect: Option<Expect>,
         typed: bool,
+        asking: Option<asking::Asking>,
     ) -> Result<Performed> {
         let engine = self.engine.clone().lock_owned().await;
         let gate = self.gate.clone();
@@ -520,6 +570,14 @@ impl Service {
                         .map(super::ax::target_application)
                         .transpose()?;
                     engine.dock_pressed = false;
+                    // An agent's request into an account the person listed is
+                    // judged whole, under the engine's lock, before its first
+                    // event; the person's own input never is.
+                    if let Some(asking) = &asking
+                        && person.is_none()
+                    {
+                        gate_request(engine, &actions, asking)?;
+                    }
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
                     // Part of the batch's own work, so giving control back
                     // waits for it before it reads what was seen.
@@ -624,6 +682,42 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
     Ok(())
 }
 
+/// How long the gate may take to read where a request lands, in all.
+const ASK_BUDGET: Duration = Duration::from_millis(300);
+
+/// Judge `actions` by `asking` on the helper's screen as it is now: refused
+/// with `waiting-for-person` while the person must be asked, or `denied` in
+/// a Look Only account. Nothing is sent either way.
+fn gate_request(engine: &Engine, actions: &[Action], asking: &asking::Asking) -> Result<()> {
+    let mut look = asking::live::OnScreen {
+        looks: &engine.looks,
+        epoch: &engine.epoch,
+        deadline: std::time::Instant::now() + ASK_BUDGET,
+    };
+    match asking::decide(actions, asking, &mut look) {
+        asking::Decision::Free => Ok(()),
+        asking::Decision::Ask(question) => {
+            let mut details = question.details();
+            details["dry"] = json!(asking.dry);
+            Err(Error::new(
+                Code::WaitingForPerson,
+                format!(
+                    "{} is signed in; Atlas asked the person before sending and they haven't answered.",
+                    question.account
+                ),
+            )
+            .with("ask", details))
+        }
+        asking::Decision::Deny { account } => Err(Error::new(
+            Code::Denied,
+            format!(
+                "{account} is Look Only: the person lets agents read it, not click or type there. \
+                 Nothing was sent."
+            ),
+        )),
+    }
+}
+
 /// How long the whole look at a password field after the person's typing
 /// may take.
 const PASSWORD_READ: Duration = Duration::from_millis(250);
@@ -682,7 +776,7 @@ pub(super) fn seen_at(app: &str, name: Option<String>, address: Option<&str>) ->
 
 /// The host of a web page's address, lowercased: only for `http` and
 /// `https`, with any user, port, path, query and fragment dropped.
-fn page_host(url: &str) -> Option<String> {
+pub(super) fn page_host(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     if !["http", "https"]
         .iter()

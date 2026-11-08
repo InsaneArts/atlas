@@ -309,6 +309,9 @@ routes! {
         Frame => "frame.png",
         // How to pair with the frame service, when this viewer runs one.
         Pipe => "pipe.json",
+        // What Atlas asks the person before an agent sends, with what would
+        // be sent: theirs alone.
+        Asks => "asks.json",
     }
     POST {
         Recover => "recover",
@@ -323,6 +326,10 @@ routes! {
         // The person's own list of the helper's accounts.
         AddAccount => "accounts/add",
         RemoveAccount => "accounts/remove",
+        SetLevel => "accounts/level",
+        // The person's answer to a question, and the end of what they allowed.
+        Answer => "asks/answer",
+        EndAllowed => "allowed/end",
     }
 }
 
@@ -331,7 +338,9 @@ impl Route {
     /// own.
     fn urgent(self) -> bool {
         match self {
-            Self::Change(Change::Hold | Change::Release | Change::Revoke) => true,
+            // The person's answer ends an agent's wait: it never waits behind
+            // other requests.
+            Self::Change(Change::Hold | Change::Release | Change::Revoke | Change::Answer) => true,
             Self::Service
             | Self::Read(_)
             | Self::OpenViewer
@@ -342,7 +351,9 @@ impl Route {
                 | Change::Acquire
                 | Change::Renew
                 | Change::AddAccount
-                | Change::RemoveAccount,
+                | Change::RemoveAccount
+                | Change::SetLevel
+                | Change::EndAllowed,
             ) => false,
         }
     }
@@ -439,6 +450,9 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
         Change::Revoke => viewer.revoke().await,
         Change::AddAccount => super::accounts::add(&viewer.accounts_home(), body),
         Change::RemoveAccount => super::accounts::remove(&viewer.accounts_home(), body),
+        Change::SetLevel => super::accounts::set_level(&viewer.accounts_home(), body),
+        Change::Answer => super::accounts::answer(&viewer.client(), body),
+        Change::EndAllowed => super::accounts::end_allowed(&viewer.client(), body),
     };
 
     mutation_reply(viewer, owner, outcome).await
@@ -523,6 +537,7 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>) -> Respon
         },
         Read::Screenshots => read_reply(viewer.screenshots().await),
         Read::Screenshot => viewer.screenshot(query).await,
+        Read::Asks => json_response(200, super::accounts::asks(&viewer.client())),
         Read::Pipe => match unpoisoned(&viewer.pipe).clone() {
             Some(descriptor) => json_response(200, descriptor),
             None => json_response(

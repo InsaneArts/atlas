@@ -128,6 +128,11 @@ pub struct Client {
     /// logged; none for every other client, whose rows are written at once.
     pub person_input: Option<record::PersonInput>,
     installed: BuildCache,
+    /// What the person allowed this command once, for its next attempt only.
+    granted: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    /// Whether this command's next input is only its check before typing:
+    /// judged, nothing sent.
+    checking: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Client {
@@ -157,8 +162,42 @@ impl Client {
             allow_disrupt: false,
             task: None,
             person_input: None,
+            granted: std::sync::Arc::default(),
+            checking: std::sync::Arc::default(),
             config,
         })
+    }
+
+    /// What the person allowed this command once, for its next attempt.
+    pub(crate) fn granted(&self) -> Vec<Value> {
+        self.granted
+            .lock()
+            .map(|granted| granted.clone())
+            .unwrap_or_default()
+    }
+
+    /// Keep `grant` for this command's next attempt.
+    pub(crate) fn grant(&self, grant: Value) {
+        if let Ok(mut granted) = self.granted.lock() {
+            granted.push(grant);
+        }
+    }
+
+    /// Whether this command's next input is only its check.
+    pub(crate) fn checking(&self) -> bool {
+        self.checking.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Make this command's next inputs only its check, or real again.
+    pub(crate) fn set_checking(&self, on: bool) {
+        self.checking.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Spend what was allowed once: an attempt used it.
+    pub(crate) fn clear_granted(&self) {
+        if let Ok(mut granted) = self.granted.lock() {
+            granted.clear();
+        }
     }
 
     /// This client, recording what its command does in each activity row.

@@ -125,6 +125,7 @@ fn input_requests_take_each_member_from_its_last_value() {
             actions,
             expect: actual_expect,
             app: actual_app,
+            ..
         } = Request::decode(body.as_bytes()).unwrap()
         else {
             panic!("expected typed input");
@@ -4542,4 +4543,67 @@ fn a_stop_or_release_landing_before_the_batch_runs_keeps_its_own_refusal() {
         grant.authorize().err().map(|error| error.code),
         Some(Code::Cancelled)
     );
+}
+
+/// An agent's click, with the accounts the client sends while the person lists any: refused before its first event.
+async fn gated_click(asking: Value) -> (Result<Value>, usize) {
+    let owner = "e".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, posted) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    // Over the menu bar, where no ordinary window is: the app there can't be told.
+    let click = vec![serde_json::from_value(json!({"type": "click", "x": 1, "y": 1})).unwrap()];
+    let asking = serde_json::from_value(asking).unwrap();
+    let reply = service
+        .input_asking(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(click),
+            Ok(None),
+            false,
+            Ok(Some(asking)),
+            &phase,
+        )
+        .await;
+    let _ = service.release(owner, &phase).await;
+    (reply, posts(&posted).len())
+}
+
+#[tokio::test]
+async fn a_request_the_person_must_be_asked_about_sends_nothing() {
+    let (reply, posted) = gated_click(json!({"unknown": true})).await;
+    let error = reply.unwrap_err();
+    assert_eq!(error.code, Code::WaitingForPerson);
+    assert_eq!(error.details["ask"]["what"], "unnamed");
+    assert_eq!(posted, 0, "nothing was sent");
+}
+
+#[tokio::test]
+async fn an_app_that_cant_be_told_takes_the_strictest_level_and_look_only_sends_nothing() {
+    let asking = json!({"accounts": [
+        {"kind": "app", "id": "com.example.bank", "name": "Bank", "level": "lookOnly"},
+        {"kind": "app", "id": "com.example.chat", "name": "Chat", "level": "ask"},
+    ]});
+    let (reply, posted) = gated_click(asking).await;
+    assert_eq!(reply.unwrap_err().code, Code::Denied);
+    assert_eq!(posted, 0, "nothing was sent");
+}
+
+#[test]
+fn a_request_brings_its_accounts_only_when_it_has_any() {
+    let plain = br#"{"op":"input","owner":"o","actions":[]}"#;
+    let Request::Input { asking, .. } = Request::decode(plain).unwrap() else {
+        panic!("input");
+    };
+    assert!(asking.unwrap().is_none());
+    let malformed = br#"{"op":"input","owner":"o","actions":[],"asking":{"accounts":7}}"#;
+    let Request::Input { asking, .. } = Request::decode(malformed).unwrap() else {
+        panic!("input");
+    };
+    assert_eq!(asking.unwrap_err().code, Code::Input);
 }

@@ -99,6 +99,9 @@ impl Viewer {
         let (accounts, note) = super::accounts::for_status(&self.accounts_home());
         status.value["overview"]["accounts"] = accounts;
         status.value["overview"]["accountNote"] = note;
+        let (asks, allowed) = super::accounts::asks_for_status(&client);
+        status.value["overview"]["asks"] = asks;
+        status.value["overview"]["allowed"] = allowed;
 
         status.value
     }

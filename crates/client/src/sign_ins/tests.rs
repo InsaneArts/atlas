@@ -158,3 +158,45 @@ fn changes_made_at_once_are_all_kept() {
     }
     assert!(matches!(listed_in(&path), Listed::Accounts(accounts) if accounts.len() == 16));
 }
+
+#[test]
+fn the_person_sets_an_accounts_level_and_an_agent_cannot() {
+    let home = tempfile::tempdir().unwrap();
+    add_in(home.path(), github(1), true).unwrap();
+    let browser = Some("com.google.Chrome");
+    let refused = set_level_in(
+        home.path(),
+        Kind::Site,
+        "github.com",
+        browser,
+        Level::Trusted,
+        false,
+    );
+    assert_eq!(refused.unwrap_err().code, Code::Stopped);
+    assert!(
+        set_level_in(
+            home.path(),
+            Kind::Site,
+            "github.com",
+            browser,
+            Level::LookOnly,
+            true
+        )
+        .unwrap()
+    );
+    assert!(
+        !set_level_in(
+            home.path(),
+            Kind::Site,
+            "gitlab.com",
+            browser,
+            Level::LookOnly,
+            true
+        )
+        .unwrap()
+    );
+    let Listed::Accounts(accounts) = listed_in(home.path()) else {
+        panic!("unread");
+    };
+    assert_eq!(accounts[0].level, Level::LookOnly);
+}

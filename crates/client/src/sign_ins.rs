@@ -206,6 +206,34 @@ pub fn remove_in(
     Ok(true)
 }
 
+/// Set how agents may act in the account `kind` `id` (seen in `browser`,
+/// for a site): the person only. Says whether it was listed.
+///
+/// # Errors
+///
+/// Returns `stopped` when an agent asks, `state` when the record is
+/// unknown, and file errors when it can't be written.
+pub fn set_level_in(
+    home: &Path,
+    kind: Kind,
+    id: &str,
+    browser: Option<&str>,
+    level: Level,
+    by_person: bool,
+) -> Result<bool> {
+    let _locked = locked(home, by_person)?;
+    let mut accounts = writable(home)?;
+    let Some(entry) = accounts
+        .iter_mut()
+        .find(|entry| entry.kind == kind && entry.id == id && entry.browser.as_deref() == browser)
+    else {
+        return Ok(false);
+    };
+    entry.level = level;
+    save(home, accounts)?;
+    Ok(true)
+}
+
 /// The account a password typed where Atlas `seen` it belongs to, added at
 /// `now`: the page's registrable domain in a browser, else the app.
 #[must_use]

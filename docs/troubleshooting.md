@@ -42,6 +42,10 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 `stopped` means the person stopped agents. Their Stop also ends background jobs. Ask them what they want next; only they resume agent work. Pausing the picture is different: the helper continues working while its displayed image is paused. See [Using Atlas](using-atlas.md#take-control-or-stop-agents).
 
+## An agent waits for you, or is told no
+
+When the helper is signed in to an account Atlas lists, Atlas asks you before an agent sends anything there: a message, a post, a merge, a payment or a deletion. Until you answer, the agent gets `waiting-for-person` and does other work, then runs the same command again; nothing was sent. Answer in the Atlas menu bar or the viewer. When you say no, or the account is Look Only, the agent gets `denied`, and nothing was sent. Change an account's level in **Settings › Accounts**.
+
 ## Several agents at once
 
 Several agents can use one helper. Their input and other changes take turns, one at a time; programs agents start with `atlas run` (up to 8) keep running beside them. Between one agent's commands another may bring its own window forward, so agents pass `--app NAME` to `type`, `key`, `scroll`, `drag` and coordinate `click`: Atlas then sends nothing and answers `focus-changed` when another app would get the input. `--app` checks the app, not the window; in an app two agents share, `--window NUMBER` checks the window too. Agents close only what they opened. Subagents share their parent's session, so each one beside its siblings runs every command, cleanup included, with its own `ATLAS_TASK=NAME`.

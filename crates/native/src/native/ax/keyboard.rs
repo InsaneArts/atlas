@@ -685,6 +685,158 @@ impl Ask for &mut ScriptedApp {
     }
 }
 
+/// What the ask-before-sending gate reads of the element an action aims at:
+/// its role, subrole and name, whether it is a password field, and the
+/// address of the web page it sits in. Nothing a field holds.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(in crate::native) struct Aimed {
+    pub(in crate::native) role: Option<String>,
+    pub(in crate::native) subrole: Option<String>,
+    /// Its title, else its description; none when it has neither.
+    pub(in crate::native) name: Option<String>,
+    /// The web page's address, when it sits in one and it reads.
+    pub(in crate::native) url: Option<String>,
+    /// Whether it sits in a web page at all.
+    pub(in crate::native) in_page: bool,
+}
+
+/// The roles a press goes to: a click on text inside one is a click on it.
+const PRESSABLE: [&str; 9] = [
+    "AXButton",
+    "AXLink",
+    "AXMenuItem",
+    "AXMenuButton",
+    "AXPopUpButton",
+    "AXCheckBox",
+    "AXRadioButton",
+    "AXDisclosureTriangle",
+    "AXTab",
+];
+
+/// How far up from the element under a point the gate looks for the
+/// control a press goes to.
+const PRESS_LEVELS: usize = 4;
+
+impl<A: Ask> Reader<A> {
+    /// [`Aimed`] for `element`: its own role and name, or, from the element
+    /// under a point (`pressing`), those of the nearest pressable element a
+    /// few levels up, and the page above it.
+    fn aimed(&mut self, element: A::Element, pressing: bool) -> Result<Aimed> {
+        let mut aimed = Aimed {
+            role: self.text(&element, "AXRole")?,
+            subrole: self.text(&element, "AXSubrole")?,
+            ..Aimed::default()
+        };
+        let mut named = element.clone();
+        if pressing && !PRESSABLE.contains(&aimed.role.as_deref().unwrap_or_default()) {
+            let mut current = element.clone();
+            for _ in 0..PRESS_LEVELS {
+                let Some(parent) = self.reference(&current, "AXParent")? else {
+                    break;
+                };
+                let role = self.text(&parent, "AXRole")?;
+                if PRESSABLE.contains(&role.as_deref().unwrap_or_default()) {
+                    aimed.role = role;
+                    aimed.subrole = self.text(&parent, "AXSubrole")?;
+                    named = parent;
+                    break;
+                }
+                current = parent;
+            }
+        }
+        let mut failed = false;
+        aimed.name = self
+            .name(&named, "AXTitle", &mut failed)?
+            .filter(|name| !name.is_empty());
+        if aimed.name.is_none() {
+            aimed.name = self
+                .name(&named, "AXDescription", &mut failed)?
+                .filter(|name| !name.is_empty());
+        }
+        let mut current = element;
+        for _ in 0..PARENTS {
+            match self.text(&current, "AXRole")?.as_deref() {
+                Some("AXWebArea") => {
+                    aimed.in_page = true;
+                    aimed.url = self.text(&current, "AXURL").ok().flatten();
+                    break;
+                }
+                Some("AXWindow" | "AXApplication") => break,
+                _ => {}
+            }
+            match self.reference(&current, "AXParent")? {
+                Some(parent) => current = parent,
+                None => break,
+            }
+        }
+        Ok(aimed)
+    }
+}
+
+/// [`Aimed`] for the element with keyboard focus inside the app whose
+/// element is `app`; none when nothing has focus.
+pub(super) fn focus_aimed<A: Ask>(
+    ask: A,
+    app: &A::Element,
+    deadline: Instant,
+) -> Result<Option<Aimed>> {
+    let mut reader = Reader { ask, deadline };
+    let Some(element) = reader.focused_element(app)? else {
+        return Ok(None);
+    };
+    reader.aimed(element, false).map(Some)
+}
+
+/// [`focus_aimed`] in app `pid`, waiting at most `timeout` in all.
+pub(in crate::native) fn focused_aim(pid: i64, timeout: Duration) -> Result<Option<Aimed>> {
+    let deadline = Instant::now() + timeout;
+    focus_aimed(Live, &app_element(pid)?, deadline)
+}
+
+/// [`Aimed`] for what lies at `x`, `y` in app `pid`, a press going to the
+/// nearest pressable element above it; none when nothing is there.
+pub(in crate::native) fn pointed_aim(
+    pid: i64,
+    x: f64,
+    y: f64,
+    timeout: Duration,
+) -> Result<Option<Aimed>> {
+    let deadline = Instant::now() + timeout;
+    let app = app_element(pid)?;
+    #[allow(clippy::cast_possible_truncation)]
+    let Some(element) = ffi::element_at(&app, x as f32, y as f32)
+        .map_err(|status| Unread::Failed.asking("AXUIElementCopyElementAtPosition", status))?
+    else {
+        return Ok(None);
+    };
+    Reader {
+        ask: Live,
+        deadline,
+    }
+    .aimed(element, true)
+    .map(Some)
+}
+
+/// The whole text of the focused, non-secure field in app `pid`, which a
+/// Return would send; none when it can't be read whole, or it is a password
+/// field. Only the gate reads it, for the person's question.
+pub(in crate::native) fn focused_text(pid: i64, timeout: Duration) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    let app = app_element(pid).ok()?;
+    let mut reader = Reader {
+        ask: Live,
+        deadline,
+    };
+    let element = reader.focused_element(&app).ok()??;
+    let subrole = reader.text(&element, "AXSubrole").ok()?;
+    if subrole.as_deref() == Some(crate::native::focus::SECURE) {
+        return None;
+    }
+    // A value longer than Atlas reads is cut, and refused here: it isn't
+    // the whole message.
+    reader.text(&element, "AXValue").ok()?
+}
+
 /// [`secure_page`] in app `pid`, waiting at most `timeout` in all.
 pub(in crate::native) fn password_page(
     pid: i64,

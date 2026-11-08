@@ -22,6 +22,18 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::MutexGuard;
 
+/// Whether the input service sent nothing for a request: only checked it
+/// before a command types, or refused it before its first event to ask the
+/// person, or for a Look Only account.
+fn gated(reply: &Value) -> bool {
+    reply["dry"] == true
+        || reply["ok"] == false
+            && matches!(
+                Code::of_reply(reply, Code::Native),
+                Code::WaitingForPerson | Code::Denied
+            )
+}
+
 /// One change to the helper. Its wire request, completion proof, destination
 /// and ownership all come from this one value, independently of the tolerant
 /// activity-log vocabulary, so they cannot disagree.
@@ -36,6 +48,9 @@ pub(crate) enum Mutation<'a> {
         /// An agent's command names the app it acted in.
         app: bool,
         expect: Option<&'a Expect>,
+        /// The accounts and grants an agent's input is judged by, while the
+        /// person lists any; none keeps the request as it always was.
+        asking: Option<Value>,
     },
     Run {
         argv: Vec<String>,
@@ -68,6 +83,7 @@ impl Mutation<'_> {
                 epoch,
                 app,
                 expect,
+                asking,
                 ..
             } => {
                 let mut request = json!({
@@ -79,6 +95,9 @@ impl Mutation<'_> {
                 });
                 if let Some(expect) = expect {
                     request["expect"] = json!(expect);
+                }
+                if let Some(asking) = asking {
+                    request["asking"] = asking.clone();
                 }
                 request
             }
@@ -287,11 +306,6 @@ impl Client {
         let mut claim = self.claim(&mutation, lease.is_some(), command)?;
         let request = mutation.request();
         let sent = self.send(connection, &request, claim.as_ref()).await?;
-        if let Some(picture) = picture
-            && let Mutation::Input { actions, epoch, .. } = &mutation
-        {
-            self.keep_picture(picture, actions.actions(), epoch);
-        }
 
         drop(authorization);
         // A command an agent started lets go of control once its request is
@@ -305,6 +319,20 @@ impl Client {
         } else {
             self.answer(sent).await?
         };
+        // A request the person must be asked about, or that a Look Only
+        // account refused, sent nothing: no picture is kept for it, and the
+        // attempt allowed after it takes its own.
+        if let Some(picture) = picture
+            && let Mutation::Input { actions, epoch, .. } = &mutation
+        {
+            if gated(&reply) {
+                if let Some(doing) = &self.doing {
+                    doing.before().reset();
+                }
+            } else {
+                self.keep_picture(picture, actions.actions(), epoch);
+            }
+        }
         mutation.validate(&reply)?;
 
         let mut reply = self

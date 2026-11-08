@@ -420,6 +420,12 @@ impl Client {
             .is_none()
             .then(|| self.controller.quarantine())
             .transpose()?;
+        // An agent's input is judged by the person's accounts while they
+        // list any; the person's own never is.
+        let asking = lease
+            .is_none()
+            .then(|| crate::asking::policy(self))
+            .flatten();
         let mutation = Mutation::Input {
             actions,
             owner,
@@ -427,6 +433,7 @@ impl Client {
             picture,
             app: self.doing.is_some(),
             expect: expect.as_ref(),
+            asking,
         };
         let result = self
             .mutate(mutation, lease, expected.map(|(_, at)| at), None)

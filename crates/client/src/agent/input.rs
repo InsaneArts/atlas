@@ -126,6 +126,17 @@ pub(super) fn type_parts(batch: &str) -> Vec<String> {
 /// follow earlier text chunks; retain uncertainty and do not replay the text.
 pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>) -> Result<Value> {
     let batches = type_batches(text)?;
+    crate::asking::after_asking(client, async || type_once(client, &batches, expected).await).await
+}
+
+/// [`type_text`] once. While the person lists any account, the input
+/// service first judges a stand-in for the whole text, sending nothing, so
+/// typing never stops halfway to ask.
+async fn type_once(
+    client: &Client,
+    batches: &[String],
+    expected: Option<&Expected>,
+) -> Result<Value> {
     let ownership = client.controller.acquire_beside_commands()?;
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
@@ -137,6 +148,25 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
     };
     let epoch = &verified.session().epoch;
 
+    if crate::asking::policy(client).is_some() {
+        // Decided as the whole text: a line break anywhere sends.
+        let probe = if batches.concat().contains(['\n', '\r']) {
+            "\n"
+        } else {
+            "x"
+        };
+        client.set_checking(true);
+        let checked = client
+            .input_owned(
+                &ownership,
+                atlas_core::actions::Batch::decode(&json!([{"type": "type", "text": probe}])),
+                Some((epoch, Instant::now())),
+                check.clone(),
+            )
+            .await;
+        client.set_checking(false);
+        checked?;
+    }
     let send = async |actions: &Value| {
         client
             .input_owned(
@@ -147,7 +177,7 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
             )
             .await
     };
-    Ok(type_recorded(client, &batches, interrupt, send).await)
+    Ok(type_recorded(client, batches, interrupt, send).await)
 }
 
 /// Send each of `batches` as `type` actions through `send`, stopping at

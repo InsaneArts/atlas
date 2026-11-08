@@ -285,6 +285,30 @@ impl Looks {
         Ok((name, read.snapshot))
     }
 
+    /// What the ask-before-sending gate reads of the element `reference`
+    /// names, as its look saw it in `epoch`: the process it is in, its role
+    /// and name, and whether it sat in a web page. None when that look is
+    /// gone or was taken elsewhere.
+    pub(in crate::native) fn described(
+        &self,
+        reference: Reference,
+        epoch: &InputEpoch,
+    ) -> Option<(i64, Option<String>, Option<String>, bool)> {
+        let found = self.find(reference, epoch, Instant::now()).ok()?;
+        let element = &found.chain.last()?.element;
+        let name = element
+            .title
+            .clone()
+            .filter(|title| !title.is_empty())
+            .or_else(|| element.description.clone().filter(|text| !text.is_empty()));
+        Some((
+            i64::from(found.instance.pid),
+            element.role.clone(),
+            name,
+            found.in_web_page(),
+        ))
+    }
+
     /// What the look `reference` names holds of its element at `now`,
     /// when that look is still kept and was taken in `epoch`.
     fn find(&self, reference: Reference, epoch: &InputEpoch, now: Instant) -> Result<Found> {

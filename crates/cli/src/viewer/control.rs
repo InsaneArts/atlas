@@ -43,6 +43,7 @@ impl From<Code> for LeaseRefusal {
             | Code::ConfigInvalid
             | Code::Credentials
             | Code::Daemon
+            | Code::Denied
             | Code::Elements
             | Code::Environment
             | Code::FocusChanged
@@ -80,6 +81,7 @@ impl From<Code> for LeaseRefusal {
             | Code::Uninstall
             | Code::Update
             | Code::Usage
+            | Code::WaitingForPerson
             | Code::WaitFailed
             | Code::Windows => Self::Failed,
         }

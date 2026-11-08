@@ -8,6 +8,7 @@
 //! Beside the lock and the marker it keeps labels for people and agents:
 //! which host session holds control, which waits, and which claimed each
 //! pending change. Nothing here decides anything by them.
+pub mod asks;
 mod busy;
 mod by_generation;
 mod commands;
@@ -226,6 +227,18 @@ pub struct Controller {
     /// The commands waiting for control, one note each, in the order they
     /// take it.
     waiting: PathBuf,
+}
+
+impl Controller {
+    /// The person's questions about this helper's agents, and what they
+    /// allowed, kept beside the Stop: a wait for an answer ends on Stop too.
+    pub fn asks(&self) -> asks::Asks {
+        asks::Asks::at(
+            self.directory.join(format!("{}.asks", self.name)),
+            self.directory.join(format!("{}.allowed.json", self.name)),
+            self.stopped.clone(),
+        )
+    }
 }
 
 impl Controller {

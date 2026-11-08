@@ -44,6 +44,8 @@ pub(crate) fn reason(row: &Row) -> Option<&'static str> {
         Code::Uncertain => "It may not have finished",
         Code::Job => "A background job was refused",
         Code::Collect => "A file could not be collected",
+        Code::WaitingForPerson => "Atlas asked you before sending",
+        Code::Denied => "You didn't let it send",
         Code::Transport | Code::Identity | Code::Native | Code::Daemon | Code::OnConsole => {
             "Atlas couldn't reach the helper"
         }
