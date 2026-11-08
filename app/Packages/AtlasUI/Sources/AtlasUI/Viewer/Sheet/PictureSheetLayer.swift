@@ -9,12 +9,9 @@ import SwiftUI
 struct PictureSheetLayer: View {
   /// The sheet; nil shows none.
   let sheet: ViewerPictureSheet?
-  /// Whether the sheet covers the window, so what is behind it takes no presses and no keyboard: it starts with the
-  /// sheet's coming and ends with the start of its going, each on the sheet's own animation, so the window behind
-  /// dims and comes back with the scrim rather than at once.
-  @Binding var covering: Bool
-  /// Whether the sheet stands over the window: from the moment it is asked for until its closing has finished, when
-  /// what opened it takes the keyboard back.
+  /// Whether the sheet stands over the window, so what is behind it takes no presses, no keyboard and no VoiceOver:
+  /// from its coming, on its animation, so the window behind dims with the scrim, until its going has finished, when
+  /// the window behind comes back on the same spring and what opened the sheet takes the keyboard back.
   @Binding var covers: Bool
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
@@ -30,17 +27,14 @@ struct PictureSheetLayer: View {
   ///
   /// - Parameters:
   ///   - sheet: The sheet; nil shows none.
-  ///   - covering: Whether the sheet covers the window, from its coming to the start of its going.
   ///   - covers: Whether the sheet stands over the window, until its closing has finished.
   ///   - send: Receives what the person does.
   init(
     sheet: ViewerPictureSheet?,
-    covering: Binding<Bool>,
     covers: Binding<Bool>,
     send: @escaping @MainActor (ViewerEvent) -> Void
   ) {
     self.sheet = sheet
-    _covering = covering
     _covers = covers
     self.send = send
     _presence = State(initialValue: sheet == nil ? .zero : 1)
@@ -102,26 +96,25 @@ struct PictureSheetLayer: View {
   /// Brings the sheet in from where it stands, the window behind dimming with it.
   private func open() {
     generation += 1
-    covers = true
     withAnimation(Self.motion(opening: true, reduceMotion: reduceMotion)) {
       presence = 1
-      covering = true
+      covers = true
     }
   }
 
-  /// Takes the sheet away from where it stands, the window behind coming back with it, and once it has gone, lets what
-  /// it covered have the keyboard back.
+  /// Takes the sheet away from where it stands, and once it has gone, gives the window behind back on the same spring,
+  /// so its controls brighten as one fade rather than at once, and what opened the sheet takes the keyboard back.
   private func close() {
     generation += 1
     let current = generation
-    withAnimation(Self.motion(opening: false, reduceMotion: reduceMotion)) {
+    let motion = Self.motion(opening: false, reduceMotion: reduceMotion)
+    withAnimation(motion) {
       presence = .zero
-      covering = false
     } completion: {
       // Only if nothing asked for the sheet again meanwhile.
       guard generation == current else { return }
       leaving = nil
-      covers = false
+      withAnimation(motion) { covers = false }
     }
   }
 }

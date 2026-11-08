@@ -36,8 +36,6 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   @State private var pictureInCorner: Bool
   /// Whether the picture sheet stands over the window, until its closing has finished.
   @State private var sheetCovers: Bool
-  /// Whether the picture sheet covers the window, from its coming to the start of its going, each on its animation.
-  @State private var sheetCovering: Bool
   /// The namespace the helper's screen moves in between the stage and the corner.
   @Namespace private var screenZoom
   @Environment(\.motionReduced) private var reduceMotion
@@ -64,7 +62,6 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     _miniCorner = State(initialValue: state.miniCorner)
     _pictureInCorner = State(initialValue: state.pane.place.keepsScreenInCorner)
     _sheetCovers = State(initialValue: Self.activity(of: state)?.sheet != nil)
-    _sheetCovering = State(initialValue: Self.activity(of: state)?.sheet != nil)
   }
 
   /// The sidebar beside the card, the toggle over them in the window buttons' band; the picture sheet, or a run
@@ -82,7 +79,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
       .environment(\.pictureSheetCovers, sheetCovers)
       .overlay {
         // An alert over the sheet or the replay takes the keyboard and VoiceOver from them, as from the window.
-        PictureSheetLayer(sheet: activity?.sheet, covering: $sheetCovering, covers: $sheetCovers, send: send)
+        PictureSheetLayer(sheet: activity?.sheet, covers: $sheetCovers, send: send)
           // As it goes, its scrim still takes the presses meant for the window coming back behind it.
           .allowsHitTesting((activity?.sheet != nil || sheetCovers) && state.alert == nil)
           .disabled(state.alert != nil)
@@ -326,10 +323,11 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     return activity
   }
 
-  /// Whether the picture sheet or a replay covers the window, which then takes no clicks or keyboard: the sheet from its
-  /// coming to the start of its going, on its own animation, so what is behind it dims and comes back with it.
+  /// Whether the picture sheet or a replay covers the window, which then takes no clicks, keyboard or VoiceOver: the
+  /// sheet from its coming until its going has finished, each change on its own spring, so what is behind it dims and
+  /// comes back as a fade.
   private var isCovered: Bool {
-    sheetCovering || activity?.replay != nil
+    sheetCovers || activity?.replay != nil
   }
 
   /// Settles the stage on a new place once its switch has begun, keeping whether the picture moved.
