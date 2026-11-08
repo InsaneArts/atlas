@@ -264,7 +264,8 @@ fn list(flags: &[&str], path: &Path) -> Result<String> {
 }
 
 /// The `ls` command for `flags` on `path`, in plain text: the person's
-/// colour settings would wrap names in escape codes even through a pipe.
+/// colour settings would wrap names in escape codes even through a pipe, and
+/// their language can spell a date in more than one word.
 fn ls(flags: &[&str], path: &Path) -> Command {
     let mut command = Command::new("/bin/ls");
     command
@@ -272,7 +273,8 @@ fn ls(flags: &[&str], path: &Path) -> Command {
         .arg(path)
         .env_remove("CLICOLOR")
         .env_remove("CLICOLOR_FORCE")
-        .env_remove("LSCOLORS");
+        .env_remove("LSCOLORS")
+        .env("LC_ALL", "C");
     command
 }
 

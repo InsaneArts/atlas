@@ -221,7 +221,7 @@ fn a_name_that_only_looks_like_the_home_folder_cannot_open_it() {
 }
 
 #[test]
-fn listings_are_read_without_the_persons_colours() {
+fn listings_are_read_without_the_persons_colours_or_language() {
     let command = ls(&["-laenb"], Path::new("/Users/someone"));
     let removed: Vec<_> = command
         .get_envs()
@@ -231,4 +231,9 @@ fn listings_are_read_without_the_persons_colours() {
     for name in ["CLICOLOR", "CLICOLOR_FORCE", "LSCOLORS"] {
         assert!(removed.iter().any(|removed| removed == name), "{name}");
     }
+    let locale = command.get_envs().find(|(name, _)| *name == "LC_ALL");
+    assert_eq!(
+        locale.and_then(|(_, value)| value),
+        Some(std::ffi::OsStr::new("C"))
+    );
 }
