@@ -48,11 +48,13 @@ extension OnboardingController {
   /// Makes the home folder private when the box is checked, else remembers that it was offered, unless an attempt
   /// failed: then it stays unoffered, so Atlas offers it again later.
   ///
-  /// - Returns: Whether Done goes on; false after a failed attempt, which says why and turns the box off.
+  /// - Returns: Whether Done goes on; false after a failed attempt, which says why and turns the box off, or once the
+  ///   window has closed.
   func keepHomePrivate() async -> Bool {
     guard snapshot.keepsHomePrivate else {
-      if !snapshot.homePrivacyFailed { _ = await commands.run(.homeOffered) }
-      return true
+      // Through `act`, so the switches wait while it runs; a failure to remember the offer only asks again later.
+      guard !snapshot.homePrivacyFailed else { return true }
+      return await act(.homeOffered, OnboardingWords.finishing) != nil
     }
     guard let made = await act(.makeHomePrivate, OnboardingWords.makingPrivate) else { return false }
     guard made.ok else {

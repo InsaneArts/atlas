@@ -202,6 +202,31 @@ struct OnboardingControllerFinishingTests {
     #expect(controller.closeRequested)
   }
 
+  @Test("while Done remembers the offer, the switches wait: a box ticked meanwhile isn't taken")
+  func theSwitchesWaitWhileTheOfferIsRemembered() async throws {
+    let gate = ReleaseSignal()
+    let commands = ScriptedCommands([
+      "onboarding login": #"{"ok": true}"#,
+      "onboarding files": Self.privateHome,
+      "menubar": #"{"ok": true}"#,
+    ])
+    commands.whileRunning { arguments in
+      if arguments == Action.homeOffered.arguments { await gate.wait() }
+    }
+    let controller = OnboardingController.scripted(commands)
+    controller.send(.setKeepHomePrivate(false))
+    let completing = Task { await controller.complete() }
+    try await settle("the offer was never remembered") { commands.ran.contains(Action.homeOffered.arguments) }
+    #expect(!OnboardingPresenter.done(controller.snapshot).isEnabled)
+    controller.send(.setKeepHomePrivate(true))
+    #expect(!controller.snapshot.keepsHomePrivate)
+    gate.open()
+    await completing.value
+    #expect(!controller.snapshot.keepsHomePrivate)
+    #expect(!commands.ran.contains(Action.makeHomePrivate.arguments))
+    #expect(controller.closeRequested)
+  }
+
   @Test("a home folder Atlas couldn't make private stops Done, saying why; the next Done finishes, still unoffered")
   func aFailedPrivacyStopsDoneOnce() async {
     let commands = ScriptedCommands([
