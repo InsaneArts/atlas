@@ -6,7 +6,8 @@ use crate::native::ax::{self, Aimed, Held, Looks};
 use atlas_core::{
     screen::{
         elements::{Element, Reference},
-        windows::Listed,
+        geometry::Bounds,
+        windows::{Dock, Listed, Screen, Window},
     },
     session::InputEpoch,
 };
@@ -75,12 +76,16 @@ impl OnScreen<'_> {
 
 impl Look for OnScreen<'_> {
     fn at_point(&mut self, x: f64, y: f64) -> Target {
-        // The front ordinary window there; the list goes front to back.
+        let display = Bounds::display(self.epoch.width, self.epoch.height);
         let Some((pid, number)) = crate::native::windows::windows().ok().and_then(|windows| {
-            windows
-                .into_iter()
-                .find(|window| window.layer == 0 && window.bounds.contains(x, y))
-                .map(|window| (window.pid, window.number))
+            let window = receiving(&windows, display, x, y)?;
+            // The menu bar's menus are the app's that owns it.
+            let pid = if window.is_menu_bar() {
+                ax::menu_bar_owner((x, y), self.deadline).ok()??
+            } else {
+                window.pid
+            };
+            Some((pid, window.number))
         }) else {
             return Target::default();
         };
@@ -153,6 +158,16 @@ impl Look for OnScreen<'_> {
                 .left()
                 .is_some_and(|left| ax::still_focused(&held, left))
     }
+}
+
+/// The window a pointer event at `x`, `y` goes to among `windows`, front
+/// to back, on a display of `display`: by the rule input itself is checked
+/// by, the one shown on top there at any layer, an app's open menu or
+/// floating panel included. The Dock only opens apps, so where it takes
+/// clicks isn't read: what lies under it is judged.
+pub(super) fn receiving(windows: &[Window], display: Bounds, x: f64, y: f64) -> Option<&Window> {
+    let screen = Screen::new(display, Dock::Icons(Vec::new()));
+    atlas_core::screen::windows::top_at(windows, x, y, &screen)
 }
 
 /// The number of app `pid`'s listed window that `window` is, read as
