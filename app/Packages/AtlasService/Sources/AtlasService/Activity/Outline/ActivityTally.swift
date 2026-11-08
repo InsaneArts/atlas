@@ -1,5 +1,6 @@
 /// What some lines of the Activity outline held: how many of each kind of action, in the order each kind was first
-/// done, how many actions, screenshots and problems, and the apps they acted in, most often first. A run's and a
+/// done, how many actions, screenshots and problems, and the apps they acted in, most often first. A line refused
+/// before anything was sent did nothing, so it counts only among the refused. A run's and a
 /// session's summaries say it, and a session's title reads its gist.
 public struct ActivityTally: Equatable, Sendable {
   /// How many lines did each kind of action.
@@ -12,6 +13,8 @@ public struct ActivityTally: Equatable, Sendable {
   public var screenshots: Int
   /// How many lines did not work.
   public var problems: Int
+  /// How many actions were refused before anything was sent.
+  public var refused: Int
   /// The apps the lines acted in, by name, the one acted in most often first.
   public var apps: [String]
   /// The verbs Atlas wrote for each kind's lines, such as `close` among the window's, so words never claim an app was
@@ -28,7 +31,12 @@ public struct ActivityTally: Equatable, Sendable {
     var appOrder: [String] = []
     var verbs: [ActivityAction: Set<String>] = [:]
     var actions = 0
+    var refused = 0
     for run in runs.reversed() {
+      guard run.entry.outcome != .notSent else {
+        refused = ActivityGrouping.addingActions(run.actions, to: refused)
+        continue
+      }
       let kind = ActivityAction(run.entry)
       if kinds[kind] == nil { order.append(kind) }
       kinds[kind, default: 0] += run.count
@@ -42,8 +50,11 @@ public struct ActivityTally: Equatable, Sendable {
     self.order = order
     self.verbs = verbs
     self.actions = actions
-    screenshots = runs.filter { $0.entry.operation == ActivityGrouping.screenshotOperation }
-      .reduce(0) { $0 + $1.count }
+    self.refused = refused
+    screenshots = runs.filter {
+      $0.entry.operation == ActivityGrouping.screenshotOperation && $0.entry.outcome != .notSent
+    }
+    .reduce(0) { $0 + $1.count }
     problems =
       runs.filter { $0.entry.outcome == .failed }
       .count

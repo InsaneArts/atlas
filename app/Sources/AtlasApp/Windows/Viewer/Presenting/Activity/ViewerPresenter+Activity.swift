@@ -38,7 +38,7 @@ extension ViewerPresenter {
       $0[$1] = moments.shown(filter: activityFilter($1), query: "")
         .reduce(0) { $0 + $1.runs.count }
     }
-    let days = activityDays(shown, moments: moments, snapshot)
+    let days = returningFocus(activityDays(shown, moments: moments, snapshot), snapshot)
     return ViewerActivityState(
       title: title,
       meta: log.entries.isEmpty ? "" : ViewerWords.actionsToday(rules.countToday(in: scope)),

@@ -18,6 +18,9 @@ public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
   public var hasPicture: Bool
   /// Whether the picture sheet shows its picture now, so its picture button takes focus back as the sheet closes.
   public var isCurrent: Bool
+  /// Whether it opened the sheet, whose picture the outline does not show now, so it takes focus back as the sheet
+  /// closes.
+  public var returnsFocus: Bool
   /// Why it did not work and what came next; nil for a step that worked or runs.
   public var problem: ViewerActivityProblem?
   /// Whether it is the action whose outcome is unknown while the helper needs the person: it offers Show Screen and
@@ -37,6 +40,7 @@ public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
   ///   - inPlace: The screenshot it took; none by default.
   ///   - hasPicture: Whether it kept a picture right before it; it did not by default.
   ///   - isCurrent: Whether the sheet shows its picture now; it does not by default.
+  ///   - returnsFocus: Whether it takes focus back as the sheet closes; it does not by default.
   ///   - problem: Why it did not work; none by default.
   ///   - offersRecovery: Whether it offers recovery; it does not by default.
   ///   - notKept: Whether it typed a password Atlas did not keep; it did not by default.
@@ -49,6 +53,7 @@ public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
     inPlace: ViewerPictureTile? = nil,
     hasPicture: Bool = false,
     isCurrent: Bool = false,
+    returnsFocus: Bool = false,
     problem: ViewerActivityProblem? = nil,
     offersRecovery: Bool = false,
     notKept: Bool = false
@@ -61,6 +66,7 @@ public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
     self.inPlace = inPlace
     self.hasPicture = hasPicture
     self.isCurrent = isCurrent
+    self.returnsFocus = returnsFocus
     self.problem = problem
     self.offersRecovery = offersRecovery
     self.notKept = notKept

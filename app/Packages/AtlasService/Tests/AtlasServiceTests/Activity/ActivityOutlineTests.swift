@@ -114,4 +114,27 @@ struct ActivityOutlineTests {
     )
     #expect(ActivityGist([refused]) == nil, "a row refused before anything was sent did nothing")
   }
+
+  @Test("a tally counts a line refused before anything was sent only among the refused")
+  func aTallyCountsRefusalsApart() {
+    let runs = ActivityFixtures.rules([
+      ActivityFixtures.row(
+        id: "n1",
+        says: "didn't type in Notes",
+        outcome: .notSent,
+        ageSeconds: 2,
+        session: "claude",
+        verb: "type",
+        app: "Notes"
+      ),
+      ActivityFixtures.row(id: "c1", says: "clicked", ageSeconds: 3, session: "claude", verb: "click", app: "Notes"),
+    ])
+    .runs(captures: [], first: 0) { _ in 0 }
+    .map(\.run)
+    let tally = ActivityTally(runs)
+    #expect(tally.order == [.pointer])
+    #expect(tally.actions == 1)
+    #expect(tally.refused == 1)
+    #expect(ActivityTally(Array(runs.prefix(1))).kinds.isEmpty)
+  }
 }

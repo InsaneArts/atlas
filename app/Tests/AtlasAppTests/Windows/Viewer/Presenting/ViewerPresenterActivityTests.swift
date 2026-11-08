@@ -725,4 +725,38 @@ struct ViewerPresenterActivityTests {
     #expect(fromStep.canGoForward && !fromStep.canGoBack)
     #expect(fromStep.run == "in this Commands run")
   }
+
+  @Test(
+    "stepping the sheet to a picture the folded run does not show gives focus back to the picture it was opened from"
+  )
+  func theOpenerTakesFocusBackWhenTheShownPictureIsHidden() throws {
+    let shots = (0..<5).map { "179266510\($0)000000000-capture.png" }
+    let log = shots.enumerated()
+      .map { index, shot in
+        ActivityFixtures.row(
+          id: "s\(index)",
+          says: "took a screenshot",
+          ageSeconds: Double(10 - index),
+          operation: "screenshot",
+          capture: shot
+        )
+      }
+    var snapshot = try ViewerActivityFixtures.onActivity(log.reversed(), sessions: [])
+    snapshot.panes.shots.shots = shots.map { Screenshot(name: $0) }
+    let run = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first)
+    let newest = shots[4]
+    snapshot.panes.activity.sheet = ViewerPictureFocus(
+      run: run.id,
+      item: .shot(newest),
+      everyStep: false,
+      opener: .shot(newest)
+    )
+    var tiles = ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).first?.strip?.tiles ?? []
+    #expect(tiles.filter(\.isCurrent).map(\.id) == [newest])
+    #expect(!tiles.contains { $0.returnsFocus }, "the picture shown takes focus back itself")
+    snapshot.panes.activity.sheet?.item = .shot(shots[0])
+    tiles = ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).first?.strip?.tiles ?? []
+    #expect(!tiles.contains { $0.isCurrent }, "the oldest is not among the three shown")
+    #expect(tiles.filter(\.returnsFocus).map(\.id) == [newest])
+  }
 }

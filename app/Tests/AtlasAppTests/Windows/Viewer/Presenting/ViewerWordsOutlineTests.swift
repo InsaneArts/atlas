@@ -76,5 +76,22 @@ struct ViewerWordsOutlineTests {
     let run = try #require(ActivityMoments(grouping, captures: [], scope: .all).moments.first)
     let closing = run.tally
     #expect(ViewerWords.runSummary(closing, app: "TextEdit") == "Moved the pointer and closed TextEdit · 2 actions")
+    let refusing = ActivityGrouping(
+      log: ActivityLog(entries: [
+        ActivityLog.Entry(
+          id: "n1",
+          says: "didn't type in Notes",
+          outcome: .notSent,
+          ageSeconds: 1,
+          verb: "type",
+          app: "Notes"
+        )
+      ]),
+      readAt: .now,
+      now: .now,
+      calendar: .current
+    )
+    let refused = try #require(ActivityMoments(refusing, captures: [], scope: .all).moments.first)
+    #expect(ViewerWords.runSummary(refused.tally, app: "Notes") == "1 action not sent", "nothing refused reads as done")
   }
 }

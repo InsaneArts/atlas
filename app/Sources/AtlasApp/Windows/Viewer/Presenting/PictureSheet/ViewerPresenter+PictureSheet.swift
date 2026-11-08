@@ -217,4 +217,35 @@ extension ViewerPresenter {
   static func clock(_ date: Date, _ snapshot: ViewerSnapshot) -> String {
     Words.clockTime(date, locale: snapshot.locale, calendar: snapshot.zonedCalendar, timeZone: snapshot.timeZone)
   }
+
+  /// The outline with the picture or the step that opened the sheet marked to take focus back as it closes, while the
+  /// picture the sheet shows now is nowhere in the outline, as when ‹ and › went past a run's few pictures shown.
+  ///
+  /// - Parameters:
+  ///   - days: The outline.
+  ///   - snapshot: What the controller holds.
+  /// - Returns: The outline.
+  static func returningFocus(_ days: [ViewerActivityDay], _ snapshot: ViewerSnapshot) -> [ViewerActivityDay] {
+    guard let opener = snapshot.panes.activity.sheet?.opener else { return days }
+    let runs = days.flatMap(\.sessions)
+      .flatMap(\.runs)
+    let steps = runs.flatMap { $0.steps + $0.problemSteps }
+    let tiles = runs.flatMap { ($0.strip?.tiles ?? []) + ($0.grid?.tiles ?? []) } + steps.compactMap(\.inPlace)
+    guard !tiles.contains(where: \.isCurrent), !steps.contains(where: \.isCurrent) else { return days }
+    var marked = days
+    for day in marked.indices {
+      for session in marked[day].sessions.indices {
+        marked[day].sessions[session].strip?.tiles.mark(opener)
+        for run in marked[day].sessions[session].runs.indices {
+          var outline = marked[day].sessions[session].runs[run]
+          outline.strip?.tiles.mark(opener)
+          outline.grid?.tiles.mark(opener)
+          outline.steps.mark(opener)
+          outline.problemSteps.mark(opener)
+          marked[day].sessions[session].runs[run] = outline
+        }
+      }
+    }
+    return marked
+  }
 }

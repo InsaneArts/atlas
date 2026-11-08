@@ -19,6 +19,9 @@ extension ViewerWords {
     let phrases = tally.order.compactMap {
       phrase($0, count: tally.kinds[$0] ?? 0, app: app, verbs: tally.verbs[$0] ?? [])
     }
+    guard !phrases.isEmpty || tally.refused == 0 else {
+      return "\(actions(tally.refused)) not sent"
+    }
     guard app != nil else {
       return Words.leadingCapital(phrases.joined(separator: ", "))
     }

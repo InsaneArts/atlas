@@ -44,7 +44,7 @@ final class ViewerPictureViews {
   /// - Parameter name: The screenshot's file name.
   func openShot(_ name: String) {
     guard let run = runs()?.first(where: { $0.runs.contains { $0.shot == name } }) else { return }
-    show(ViewerPictureFocus(run: run.id, item: .shot(name), everyStep: false))
+    show(ViewerPictureFocus(run: run.id, item: .shot(name), everyStep: false, opener: .shot(name)))
   }
 
   /// Opens the screen just before a step in the sheet, stepping through every step's picture in its run.
@@ -53,7 +53,8 @@ final class ViewerPictureViews {
   func openStep(_ step: String) {
     for run in runs() ?? [] {
       guard let line = run.runs.first(where: { $0.id == step }), let pictured = line.pictured else { continue }
-      return show(ViewerPictureFocus(run: run.id, item: .before(pictured.id), everyStep: true))
+      let item = ViewerPictureItem.before(pictured.id)
+      return show(ViewerPictureFocus(run: run.id, item: item, everyStep: true, opener: item))
     }
   }
 

@@ -23,7 +23,7 @@ struct ActivityPictureButton: View {
     .help("Open this picture")
     .accessibilityLabel(tile.label)
     .accessibilityHint(Text("Opens the picture"))
-    .takesFocusAfterSheet(isCurrent: tile.isCurrent)
+    .takesFocusAfterSheet(isCurrent: tile.isCurrent || tile.returnsFocus)
     .asksForThumbnail(tile.id, send: send)
   }
 }

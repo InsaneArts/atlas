@@ -45,7 +45,7 @@ struct ActivityStepRow: View {
         }
         if step.hasPicture {
           ActivityStepPictureButton { send(.openAction(step.id)) }
-            .takesFocusAfterSheet(isCurrent: step.isCurrent, voiceOver: false)
+            .takesFocusAfterSheet(isCurrent: step.isCurrent || step.returnsFocus, voiceOver: false)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,7 +65,7 @@ struct ActivityStepRow: View {
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(step.label)
-    .takesFocusAfterSheet(isCurrent: step.isCurrent, keys: false)
+    .takesFocusAfterSheet(isCurrent: step.isCurrent || step.returnsFocus, keys: false)
     .accessibilityActions {
       if step.hasPicture {
         Button("Show the screen before this step") { send(.openAction(step.id)) }
