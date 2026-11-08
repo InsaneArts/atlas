@@ -50,6 +50,7 @@ fn the_status_shows_a_question_but_never_what_would_be_sent() {
     let ask = atlas_control::asks::Ask {
         id: String::new(),
         session: "s1".to_owned(),
+        process: None,
         who: "Claude Code · atlas".to_owned(),
         task: None,
         account: "slack.com".to_owned(),
@@ -63,7 +64,7 @@ fn the_status_shows_a_question_but_never_what_would_be_sent() {
         .ask(ask, atlas_core::time::now_ms())
         .unwrap();
 
-    let (asks, allowed) = asks_for_status(&client, &json!([]));
+    let (asks, allowed) = asks_for_status(&client);
     assert_eq!(asks[0]["account"], "slack.com");
     assert_eq!(asks[0]["what"], "send-key");
     assert!(!asks.to_string().contains(canary), "{asks}");
@@ -101,16 +102,19 @@ fn an_answer_names_its_question_and_one_of_three_choices() {
 }
 
 #[test]
-fn what_the_person_allowed_a_task_ends_with_its_agent_session() {
+fn what_the_person_allowed_a_task_ends_with_its_host_process() {
     let dir = tempfile::tempdir().unwrap();
     let client = atlas_client::test_support::client(dir.path());
     let asks = client.controller.asks();
     let now = atlas_core::time::now_ms();
     let key = json!({"kind": "site", "id": "slack.com"});
-    for session in ["live1", "gone1"] {
+    let live = atlas_core::process::Instance::current().unwrap();
+    let gone = atlas_core::process::Instance::new(live.pid, [1, 0]);
+    for (session, process) in [("live1", live), ("gone1", gone)] {
         let ask = atlas_control::asks::Ask {
             id: String::new(),
             session: session.to_owned(),
+            process: Some(process),
             who: "Claude Code".to_owned(),
             task: None,
             account: "slack.com".to_owned(),
@@ -122,8 +126,7 @@ fn what_the_person_allowed_a_task_ends_with_its_agent_session() {
         asks.answer(&id, atlas_control::asks::Answer::Task, true, now)
             .unwrap();
     }
-    let sessions = json!([{"key": "live1", "ended": null}, {"key": "gone1", "ended": now}]);
-    let (_, allowed) = asks_for_status(&client, &sessions);
+    let (_, allowed) = asks_for_status(&client);
     let left: Vec<&str> = allowed
         .as_array()
         .unwrap()

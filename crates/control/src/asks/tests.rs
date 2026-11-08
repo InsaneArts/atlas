@@ -17,6 +17,7 @@ fn question(session: &str, batch: &str) -> Ask {
     Ask {
         id: String::new(),
         session: session.to_owned(),
+        process: None,
         who: "Claude Code · release".to_owned(),
         task: Some("post the release notes".to_owned()),
         account: "slack.com".to_owned(),
@@ -210,4 +211,53 @@ fn grants_and_ends_at_once_never_undo_one_another() {
         thread.join().unwrap();
     }
     assert!(asks.allowed(1_000).is_empty(), "every End kept");
+}
+
+#[test]
+fn just_this_once_goes_to_the_first_waiter_that_claims_it_and_to_no_other() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let id = asks.ask(question("s1", "b1"), 1_000).unwrap();
+    assert_eq!(
+        asks.claim_once(&id, 2_000).unwrap(),
+        None,
+        "not answered yet"
+    );
+    asks.answer(&id, Answer::Once, true, 2_000).unwrap();
+    let claims: Vec<bool> = std::thread::scope(|scope| {
+        let waiters: Vec<_> = (0..2)
+            .map(|_| scope.spawn(|| asks.claim_once(&id, 3_000).unwrap().is_some()))
+            .collect();
+        waiters
+            .into_iter()
+            .map(|waiter| waiter.join().unwrap())
+            .collect()
+    });
+    assert_eq!(claims.iter().filter(|claimed| **claimed).count(), 1);
+    assert!(
+        asks.open(3_000).is_empty(),
+        "the question came down with it"
+    );
+    assert_eq!(asks.answered(&id), None);
+}
+
+#[test]
+fn allow_for_this_task_is_kept_for_the_host_process_that_asked_and_ends_when_it_does() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let process = atlas_core::process::Instance::new(812, [1, 0]);
+    let id = asks
+        .ask(
+            Ask {
+                process: Some(process),
+                ..question("s1", "b1")
+            },
+            1_000,
+        )
+        .unwrap();
+    asks.answer(&id, Answer::Task, true, 2_000).unwrap();
+    assert_eq!(asks.allowed(3_000)[0].process, Some(process));
+    asks.end_unless(3_000, |grant| grant.process != Some(process))
+        .unwrap();
+    assert!(asks.allowed(3_000).is_empty());
 }

@@ -97,24 +97,14 @@ pub(super) fn asks(client: &atlas_client::client::Client) -> Value {
 }
 
 /// The status's part of them: the questions up, without what would be sent,
-/// and what the person allowed, once the grants of the agent sessions that
-/// ended among `sessions` are ended.
-pub(super) fn asks_for_status(
-    client: &atlas_client::client::Client,
-    sessions: &Value,
-) -> (Value, Value) {
+/// and what the person allowed, once the grants whose agent session or host
+/// process ended are ended.
+pub(super) fn asks_for_status(client: &atlas_client::client::Client) -> (Value, Value) {
     let now = atlas_core::time::now_ms();
     let asks = client.controller.asks();
-    // What the person allowed a task ends with its agent session.
-    for ended in sessions
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|session| !session["ended"].is_null())
-        .filter_map(|session| session["key"].as_str())
-    {
-        let _ = asks.end(None, Some(ended), true, now);
-    }
+    // What the person allowed a task ends with its agent session; a status
+    // that can't end it still never lets it cover anything.
+    let _ = asks.end_unless(now, |allowed| atlas_client::asking::lives(client, allowed));
     let open: Vec<Value> = asks
         .open(now)
         .into_iter()

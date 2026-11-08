@@ -36,12 +36,14 @@ fn policy_by(client: &Client, listed: crate::sign_ins::Listed) -> Option<Value> 
     use crate::sign_ins::Listed;
     let now = now_ms();
     let session = session(client);
+    let process = process(client);
     let mut grants: Vec<Value> = client
         .controller
         .asks()
         .allowed(now)
         .into_iter()
-        .filter(|allowed| allowed.session == session)
+        .filter(|allowed| allowed.session == session && allowed.process == process)
+        .filter(|allowed| lives(client, allowed))
         .map(|allowed| json!({"scope": "task", "account": allowed.account}))
         .collect();
     grants.extend(client.granted());
@@ -66,6 +68,32 @@ fn session(client: &Client) -> String {
         .host_session
         .as_ref()
         .map_or_else(|| "terminal".to_owned(), |host| host.key().to_string())
+}
+
+/// The host process the agent session runs in, when it is known.
+fn process(client: &Client) -> Option<atlas_core::process::Instance> {
+    client
+        .host_session
+        .as_ref()
+        .and_then(atlas_core::host::HostSession::process)
+}
+
+/// Whether Allow for This Task, `allowed`, still holds: the host process it
+/// was given in still runs, and its agent session's record, ended ones
+/// included, neither ended nor moved to another host process. A session key
+/// resumed in another process gets none of it.
+pub fn lives(client: &Client, allowed: &atlas_control::asks::Allowed) -> bool {
+    let record = atlas_core::host::Key::parse(&allowed.session).and_then(|key| {
+        let output = client.output_dir().ok()?;
+        crate::host_session::store::Store::at(output).read(&key)
+    });
+    allowed.process.is_none_or(|process| process.running())
+        && record.is_none_or(|record| {
+            record.ended_at().is_none()
+                && record
+                    .host_process
+                    .is_none_or(|recorded| Some(recorded) == allowed.process)
+        })
 }
 
 /// Who asks, as the person reads it: the agent, and the project it works
@@ -109,6 +137,7 @@ pub async fn after_asking(
         let ask = Ask {
             id: String::new(),
             session: session(client),
+            process: process(client),
             who: who(client),
             task: client
                 .task
@@ -133,9 +162,20 @@ pub async fn after_asking(
             Error::new(Code::State, "The wait for the person ended").with_source(cause)
         })??;
         // What the person saw is what they answered: the grant comes from
-        // the stored question, never from what a rerun read.
-        let Some(stored) = asks.open(now_ms()).into_iter().find(|ask| ask.id == id) else {
-            return private(outcome);
+        // the stored question, never from what a rerun read. Just This Once
+        // goes to the one command that claims it first; another joined to
+        // the same question asks again.
+        let stored = match waited {
+            Waited::Answered(Answer::Once) => match asks.claim_once(&id, now_ms())? {
+                Some(stored) => stored,
+                None => continue,
+            },
+            Waited::Answered(Answer::Task | Answer::Deny)
+            | Waited::Unanswered
+            | Waited::Stopped => match asks.open(now_ms()).into_iter().find(|ask| ask.id == id) {
+                Some(stored) => stored,
+                None => return private(outcome),
+            },
         };
         let question = stored.question;
         match waited {
@@ -156,7 +196,6 @@ pub async fn after_asking(
             // text, typed into the field it was asked about; a request's own
             // ask covers that request alone, where it was asked about.
             Waited::Answered(Answer::Once) if question["dry"] == true => {
-                asks.close(&id);
                 client.grant(json!({
                     "scope": "command",
                     "account": question["accountKey"],
@@ -165,7 +204,6 @@ pub async fn after_asking(
                 }));
             }
             Waited::Answered(Answer::Once) => {
-                asks.close(&id);
                 client.grant(json!({
                     "scope": "once",
                     "account": question["accountKey"],

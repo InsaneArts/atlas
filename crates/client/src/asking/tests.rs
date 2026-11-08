@@ -247,3 +247,107 @@ async fn just_this_once_for_typing_is_bound_to_its_field_and_all_of_its_text() {
         "spent by that one command's attempt"
     );
 }
+
+#[tokio::test]
+async fn one_just_this_once_runs_one_of_two_commands_waiting_on_the_same_question() {
+    let dir = tempfile::tempdir().unwrap();
+    let waiting_for = std::time::Duration::from_millis(1500);
+    let mut first = crate::test_support::client(dir.path());
+    first.controller = first.controller.clone().waiting(waiting_for);
+    let mut second = crate::test_support::client(dir.path());
+    second.controller = second.controller.clone().waiting(waiting_for);
+    let asks = first.controller.asks();
+    let joined = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let person = {
+        let joined = joined.clone();
+        std::thread::spawn(move || {
+            // Both commands are refused and wait on the one question first.
+            while joined.load(std::sync::atomic::Ordering::SeqCst) < 2 {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let ask = asks.open(now_ms()).into_iter().next().unwrap();
+            asks.answer(&ask.id, Answer::Once, true, now_ms()).unwrap();
+        })
+    };
+    let ran = std::sync::atomic::AtomicUsize::new(0);
+    let command = async |client: &Client| {
+        after_asking(client, async || {
+            if client.granted().is_empty() {
+                joined.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(waiting("b7"))
+            } else {
+                ran.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(json!({"ok": true}))
+            }
+        })
+        .await
+    };
+    let (one, two) = tokio::join!(command(&first), command(&second));
+    person.join().unwrap();
+    assert_eq!(
+        ran.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "exactly one ran"
+    );
+    assert_eq!(
+        [one.is_ok(), two.is_ok()].iter().filter(|ok| **ok).count(),
+        1,
+        "the other asks again and is still waiting"
+    );
+}
+
+#[test]
+fn allow_for_this_task_holds_only_in_the_host_process_it_was_given_in_while_its_session_lasts() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(dir.path());
+    let running = atlas_core::process::Instance::current().unwrap();
+    let session = atlas_core::host::HostSession::new(atlas_core::host::Host::Codex, "one")
+        .unwrap()
+        .run_by(Some(running));
+    client.host_session = Some(session.clone());
+    let asks = client.controller.asks();
+    let ask = Ask {
+        id: String::new(),
+        session: session.key().to_string(),
+        process: Some(running),
+        who: "Codex".to_owned(),
+        task: None,
+        account: "github.com".to_owned(),
+        question: json!({"accountKey": {"kind": "site", "id": "github.com"}, "bind": {"b": 1}}),
+        asked: 0,
+        ends: 0,
+    };
+    let id = asks.ask(ask, now_ms()).unwrap();
+    asks.answer(&id, Answer::Task, true, now_ms()).unwrap();
+    let tasks = |client: &Client| {
+        policy_by(client, Listed::Accounts(vec![github()])).unwrap()["grants"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    assert_eq!(tasks(&client), 1, "the process it was given in");
+
+    let mut resumed = crate::test_support::client(dir.path());
+    resumed.host_session = Some(
+        session
+            .clone()
+            .run_by(Some(atlas_core::process::Instance::new(
+                running.pid,
+                [1, 0],
+            ))),
+    );
+    assert_eq!(
+        tasks(&resumed),
+        0,
+        "the same session key in another process"
+    );
+
+    let now = now_ms();
+    crate::host_session::store::Store::at(client.output_dir().unwrap())
+        .update(&session, now, &client.controller, |record| {
+            record.ended = Some(now);
+        })
+        .unwrap();
+    assert_eq!(tasks(&client), 0, "its session ended");
+}

@@ -6,7 +6,8 @@
 //! the account, what would be sent and, for a message, its preview. It lives
 //! two minutes. The person's answer is `<id>.answer`, written only through
 //! their viewer. A task grant ("Allow for This Task") is kept in
-//! `allowed.json`: an agent session, an account and when it ends.
+//! `allowed.json`: an agent session, the host process it ran in, an account
+//! and when it ends. Just This Once is claimed by one waiting command alone.
 //!
 //! The session key a task grant names becomes an authority here: it is
 //! verified by the host's process ancestry, but an agent with the person's
@@ -43,6 +44,9 @@ pub struct Ask {
     pub id: String,
     /// The agent session asking, by its key.
     pub session: String,
+    /// The host process that session runs in, when it is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<atlas_core::process::Instance>,
     /// Who asks, as the person reads it, such as "Claude Code · release".
     pub who: String,
     /// The task, when the agent named one.
@@ -74,6 +78,11 @@ pub enum Answer {
 #[serde(rename_all = "camelCase")]
 pub struct Allowed {
     pub session: String,
+    /// The host process the session ran in when the person allowed it: the
+    /// grant is that process's alone, so a session key resumed in another
+    /// gets none of it.
+    #[serde(default)]
+    pub process: Option<atlas_core::process::Instance>,
     /// The account, as the input service names it: its kind, id and
     /// browser.
     pub account: Value,
@@ -168,7 +177,7 @@ impl Asks {
             return Err(Error::new(Code::Input, "That question is no longer open"));
         };
         if answer == Answer::Task {
-            self.allow_task(&ask.session, &ask.question["accountKey"], &ask.account, now)?;
+            self.allow_task(&ask, now)?;
         }
         let path = self.folder.join(format!("{id}.answer"));
         atlas_core::files::save_private(&path, serde_json::to_string(&answer)?.as_bytes())
@@ -179,6 +188,25 @@ impl Asks {
     pub fn answered(&self, id: &str) -> Option<Answer> {
         let bytes = fs::read(self.folder.join(format!("{id}.answer"))).ok()?;
         serde_json::from_slice(&bytes).ok()
+    }
+
+    /// Take Just This Once, the answer to ask `id`, for one waiter alone:
+    /// under the asks' lock, the ask and its answer are read and taken down
+    /// together, so of every command joined to it, across processes, only
+    /// the first to claim it gets it. None when another claimed it first,
+    /// or it isn't answered that way.
+    ///
+    /// # Errors
+    ///
+    /// Returns file errors when the lock can't be taken.
+    pub fn claim_once(&self, id: &str, now: u64) -> Result<Option<Ask>> {
+        let _locked = locked(&self.folder.join("claims.lock"))?;
+        if self.answered(id) != Some(Answer::Once) {
+            return Ok(None);
+        }
+        let claimed = self.open(now).into_iter().find(|ask| ask.id == id);
+        self.close(id);
+        Ok(claimed)
     }
 
     /// Take ask `id` down, with its answer.
@@ -219,34 +247,44 @@ impl Asks {
             .collect()
     }
 
-    /// Allow `session` the rest of its task in `account`, for an hour at most.
-    fn allow_task(&self, session: &str, account: &Value, name: &str, now: u64) -> Result<()> {
+    /// Allow the session that asked `ask` the rest of its task in its
+    /// account, in the host process it runs in, for an hour at most.
+    fn allow_task(&self, ask: &Ask, now: u64) -> Result<()> {
+        let account = &ask.question["accountKey"];
         let _locked = self.lock_allowed()?;
         let mut allowed = self.allowed(now);
-        allowed.retain(|grant| !(grant.session == session && &grant.account == account));
+        allowed.retain(|grant| !(grant.session == ask.session && &grant.account == account));
         allowed.push(Allowed {
-            session: session.to_owned(),
+            session: ask.session.clone(),
+            process: ask.process,
             account: account.clone(),
-            name: name.to_owned(),
+            name: ask.account.clone(),
             ends: now + millis(TASK_LIFE),
         });
+        self.save_allowed(&allowed)
+    }
+
+    /// End every task grant that `lives` says no longer holds: its agent
+    /// session or host process ended.
+    ///
+    /// # Errors
+    ///
+    /// Returns file errors.
+    pub fn end_unless(&self, now: u64, lives: impl Fn(&Allowed) -> bool) -> Result<()> {
+        let _locked = self.lock_allowed()?;
+        let mut allowed = self.allowed(now);
+        let before = allowed.len();
+        allowed.retain(|grant| lives(grant));
+        if allowed.len() == before {
+            return Ok(());
+        }
         self.save_allowed(&allowed)
     }
 
     /// The grants' lock, held across each read, change and write of them,
     /// so an End is never undone by another change at once.
     fn lock_allowed(&self) -> Result<atlas_core::files::LockFile> {
-        let path = self.allowed.with_extension("lock");
-        if let Some(parent) = path.parent() {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(parent)
-                .map_err(|error| Error::writing(parent, error))?;
-        }
-        let lock = atlas_core::files::open_lock(&path)?;
-        fs2::FileExt::lock_exclusive(&lock.0).map_err(|error| Error::writing(&path, error))?;
-        Ok(lock)
+        locked(&self.allowed.with_extension("lock"))
     }
 
     /// End every task grant in `account` (End in the panel), or every one of
@@ -355,6 +393,20 @@ impl Asks {
             }
         }
     }
+}
+
+/// The lock at `path`, held exclusively until it is dropped.
+fn locked(path: &Path) -> Result<atlas_core::files::LockFile> {
+    if let Some(parent) = path.parent() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|error| Error::writing(parent, error))?;
+    }
+    let lock = atlas_core::files::open_lock(path)?;
+    fs2::FileExt::lock_exclusive(&lock.0).map_err(|error| Error::writing(path, error))?;
+    Ok(lock)
 }
 
 /// `duration` in whole milliseconds.
