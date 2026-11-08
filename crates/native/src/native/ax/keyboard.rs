@@ -28,6 +28,10 @@ pub(super) const PARENTS: usize = 256;
 /// The longest one request to an app may take.
 pub(super) const REQUEST: Duration = Duration::from_millis(250);
 
+/// The pause before asking again an app that could not complete a request:
+/// it was busy, as TextEdit is while it lays out a long document.
+pub(super) const BUSY_PAUSE: Duration = Duration::from_millis(10);
+
 /// The element with keyboard focus in an app and the process that owns
 /// it, which for a panel another process draws is not the app's.
 #[derive(Debug, Clone)]
@@ -110,6 +114,22 @@ impl Unread {
         }
     }
 
+    /// Whether the request behind `error` failed because the app could not
+    /// complete it.
+    pub(super) fn busy(error: &Error) -> bool {
+        let mut cause = std::error::Error::source(error);
+        while let Some(current) = cause {
+            if let Some(asked) = current.downcast_ref::<Asked>() {
+                return asked.status == AXError::CannotComplete;
+            }
+            if let Some(Status(status)) = current.downcast_ref::<Status>() {
+                return *status == AXError::CannotComplete;
+            }
+            cause = current.source();
+        }
+        false
+    }
+
     /// Why `error` says it could not tell, when it says.
     pub(in crate::native) fn of(error: &Error) -> Option<Self> {
         Self::deserialize(error.details.get("unread")?).ok()
@@ -189,6 +209,10 @@ pub(super) trait Ask {
     /// An element of the app.
     type Element: Clone + PartialEq;
     fn now(&self) -> Instant;
+    /// Wait `duration` before asking again.
+    fn pause(&mut self, duration: Duration) {
+        std::thread::sleep(duration);
+    }
     /// Bound the next request to `element` by `timeout`; false when that
     /// could not be done.
     fn bound(&mut self, element: &Self::Element, timeout: Duration) -> bool;
@@ -259,18 +283,37 @@ impl<A: Ask> Reader<A> {
     }
 
     /// One attribute as the app answered it, its request bounded by what
-    /// is left just before it is sent. A request that could not be bounded,
-    /// or that ended past the deadline, is an error.
+    /// is left just before it is sent. An app too busy to complete it is
+    /// asked again, after [`BUSY_PAUSE`], while the read has time for
+    /// another. A request that could not be bounded, or that ended past the
+    /// deadline, is an error, which keeps the request and its status when
+    /// it failed.
     fn asked(
         &mut self,
         element: &A::Element,
         attribute: &'static str,
     ) -> Result<Answer<A::Element>> {
-        self.bound(element, REQUEST)?;
+        loop {
+            self.bound(element, REQUEST)?;
+            let answer = self.ask.ask(element, attribute);
+            let left = match (self.left(), &answer) {
+                (Ok(left), _) => left,
+                (Err(_), Answer::Failed(status)) => {
+                    return Err(Unread::Slow.asking(attribute, *status));
+                }
+                (Err(late), _) => return Err(late),
+            };
+            if answer != Answer::Failed(AXError::CannotComplete) || left <= BUSY_PAUSE {
+                return Ok(answer);
+            }
+            self.ask.pause(BUSY_PAUSE);
+        }
+    }
 
-        let answer = self.ask.ask(element, attribute);
-        self.left()?;
-        Ok(answer)
+    /// Whether the read has time to ask again a request the app could not
+    /// complete, behind `error`, once [`BUSY_PAUSE`] has passed.
+    pub(super) fn may_ask_again(&self, error: &Error) -> bool {
+        Unread::busy(error) && self.left().is_ok_and(|left| left > BUSY_PAUSE)
     }
 
     /// [`Reader::asked`], a failed request an error too.
