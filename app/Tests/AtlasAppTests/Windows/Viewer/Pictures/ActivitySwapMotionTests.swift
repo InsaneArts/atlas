@@ -21,36 +21,40 @@ struct ActivitySwapMotionTests {
 
   @Test("an action arriving in the same list still drops in at the top")
   func anArrivalStillDropsIn() throws {
-    let pose = try Self.pose("run-arrive")
-    let from = try Self.activity(pose.from)
-    let to = try Self.activity(pose.to)
-    #expect(from.list == to.list, "the new run arrives in the list already shown")
-    let before = Self.runs(from)
-    let arrived = try #require(
-      Self.runs(to)
-        .first { !before.contains($0) },
-      "the pose brings a new run"
-    )
-    let key = "run \(arrived)"
-    let settled = try #require(Self.settledFrames(of: pose.to)[key], "the new run is laid out")
+    let first = Self.oneSession(["old-0", "old-1", "old-2"])
+    let next = Self.oneSession(["new", "old-0", "old-1", "old-2"])
+    #expect(first.list == next.list, "the new run arrives in the list already shown")
     let previous = Motion.Pose.moment
     defer { Motion.Pose.hold(at: previous) }
-    let host = Self.settledHost(showing: pose.from)
-    host.show(pose.to, animatesArrivals: false)
+    let before = try #require(Self.settledFrames(of: ActivityArrivalScrollTests.state(first))["run old-0"])
+    let after = Self.settledFrames(of: ActivityArrivalScrollTests.state(next))
+    let made = try #require(after["run old-0"], "the run already shown is laid out below the new one")
+    let arrived = try #require(after["run new"], "the new run is laid out")
+    #expect(arrived.maxY <= made.minY + Self.drawnAlike, "the new run comes in at the top")
+    // Where the run already shown stands before the arrival, after it, and on its way between.
+    let path = before.union(made)
+    let host = Self.settledHost(showing: ActivityArrivalScrollTests.state(first))
+    let ink = try host.sampled(in: before)
+      .ink(in: before)
+    let start = try host.pixels(in: path)
+    host.show(ActivityArrivalScrollTests.state(next), animatesArrivals: false)
     host.render()
-    // Read every tick of its arrival, as the arrival's timing within its fade may differ from one macOS to another.
-    var highest = CGFloat.infinity
+    // Read every tick, as the arrival's timing within its fade may differ from one macOS to another.
+    var moved = false
     var held = TimeInterval.zero
     while held < Self.arrived / Motion.playbackRate {
       held += ViewerMotionPose.tick
       Self.advance(host, to: held)
-      if let middle = try Self.inkMiddle(of: settled, in: host) {
-        highest = min(highest, middle)
-      }
+      // The run already shown stays drawn as it makes room, never fading out: new work never swaps the list.
+      let drawn = try host.sampled(in: path)
+        .ink(in: path)
+      #expect(drawn > ink * Self.kept, "the run already shown faded at \(held) s")
+      moved = try moved || host.pixels(in: path) != start
     }
+    #expect(moved, "the runs make room for the new one as it comes in")
     Self.advance(host, to: Self.settledAt)
-    let landed = try #require(try Self.inkMiddle(of: settled, in: host), "the new run is drawn")
-    #expect(highest < landed - Self.drop, "it comes down from above its place")
+    #expect(host.frames["run old-0"] == made)
+    #expect(host.frames["run new"] == arrived)
   }
 
   @Test("scrolled down, a new session choice brings the list back to its top with nothing waiting")
@@ -145,15 +149,28 @@ struct ActivitySwapMotionTests {
     try #require({ if case .activity(let activity) = state.pane { activity } else { nil } }(), "it shows Activity")
   }
 
-  /// Every run's identity in `activity`, newest first.
+  /// Activity for one session, its runs at the first level, with no filters, so nothing stands above its first run.
   ///
-  /// - Parameter activity: The pane.
-  /// - Returns: The identities.
-  static func runs(_ activity: ViewerActivityState) -> [String] {
-    activity.days
-      .flatMap(\.sessions)
-      .flatMap(\.runs)
-      .map(\.id)
+  /// - Parameter runs: The runs' identities, newest first.
+  /// - Returns: The pane.
+  static func oneSession(_ runs: [String]) -> ViewerActivityState {
+    let session = ViewerOutlineSession(
+      id: "one session",
+      icon: nil,
+      agent: "You",
+      summary: "Ran commands",
+      time: "10:31",
+      showsHead: false,
+      runs: runs.map {
+        ViewerOutlineRun(id: $0, icon: .atlas, name: "Commands", summary: "Ran a command", time: "10:31")
+      }
+    )
+    return ViewerActivityState(
+      meta: "",
+      filters: PreviewStates.activityFilters(),
+      days: [ViewerActivityDay(id: "today", title: "", sessions: [session])],
+      showsFilters: false
+    )
   }
 
   /// Where each named element of `state` stands once settled.
@@ -258,8 +275,9 @@ struct ActivitySwapMotionTests {
   static let reach: CGFloat = 12
   /// 1: how much ink a band holds before anything counts as drawn there.
   static let least: CGFloat = 1
-  /// 0.5: how far apart two middles may stand and still be one place, for rounding as words fade.
+  /// 0.5: how far apart two middles or two edges may stand and still be one place, for rounding as words fade.
   static let drawnAlike: CGFloat = 0.5
-  /// 1: how far above its place a row half way through its drop at least stands.
-  static let drop: CGFloat = 1
+  /// 0.8: the share of its ink a row keeps while it only moves, past what rounding as it moves takes; a row fading out
+  /// with its list keeps less.
+  static let kept: CGFloat = 0.8
 }
