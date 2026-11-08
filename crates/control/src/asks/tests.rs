@@ -598,3 +598,32 @@ fn a_picture_write_cut_short_is_gone_with_its_ask() {
     assert!(!cut.exists(), "taken with the question's own");
     assert!(pictures_of(folder.path(), &id).is_empty());
 }
+
+#[test]
+fn a_picture_whose_question_is_gone_is_swept_at_the_next_read() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let now = atlas_core::time::now_ms();
+    let kept = asks.ask(question("s1", "b1"), now).unwrap();
+    asks.keep_picture(&kept, b"jpeg", &frame(10.0), (1280, 800))
+        .unwrap();
+    // A removal cut short after its record went: a picture and a write cut
+    // short of an ask no one names any more.
+    let gone = "0123456789abcdef0123456789abcdef";
+    let orphans = [
+        asks.folder().join(format!("{gone}-77aa.jpg")),
+        asks.folder().join(format!(".{gone}-77aa.jpg.88bb")),
+    ];
+    for orphan in &orphans {
+        fs::write(orphan, b"private").unwrap();
+    }
+    assert_eq!(asks.open(now).len(), 1);
+    for orphan in &orphans {
+        assert!(!orphan.exists(), "{}", orphan.display());
+    }
+    assert_eq!(
+        pictures_of(folder.path(), &kept).len(),
+        1,
+        "a question's own picture stays"
+    );
+}

@@ -460,6 +460,25 @@ impl Asks {
         Ok(())
     }
 
+    /// Remove every picture, and every picture write cut short, whose ask
+    /// is gone: left by a removal that didn't finish. Only under the asks'
+    /// lock, which every picture is written under.
+    fn sweep(&self) {
+        let Ok(entries) = fs::read_dir(&self.folder) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(id) = name.to_str().and_then(picture_of) else {
+                continue;
+            };
+            if !self.folder.join(format!("{id}.json")).exists() {
+                // One that can't be removed now is swept at the next read.
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+
     /// Remove ask `id`'s pictures but `keep`, whatever names they have.
     fn remove_pictures(&self, id: &str, keep: Option<&str>) {
         let Ok(entries) = fs::read_dir(&self.folder) else {
@@ -502,10 +521,12 @@ impl Asks {
     }
 
     fn remove(&self, id: &str) {
-        for ending in ["json", "answer"] {
+        // Its pictures first: the record that names them goes last, so a
+        // removal cut short still leaves them found.
+        self.remove_pictures(id, None);
+        for ending in ["answer", "json"] {
             let _ = fs::remove_file(self.folder.join(format!("{id}.{ending}")));
         }
-        self.remove_pictures(id, None);
     }
 
     /// Take down every ask whose time ran out by `now`.
@@ -513,7 +534,10 @@ impl Asks {
         let Ok(entries) = fs::read_dir(&self.folder) else {
             return;
         };
-        let _locked = self.lock().ok();
+        let locked = self.lock().ok();
+        if locked.is_some() {
+            self.sweep();
+        }
         for entry in entries.flatten() {
             let path = entry.path();
             if path
@@ -688,6 +712,18 @@ impl Asks {
             }
         }
     }
+}
+
+/// The ask whose picture, or picture write cut short, the file `name` is:
+/// `<id>-<token>.jpg`, `<id>.jpg`, or `.<id>-<token>.jpg.<token>`.
+fn picture_of(name: &str) -> Option<&str> {
+    if !name.contains(".jpg") {
+        return None;
+    }
+    let name = name.strip_prefix('.').unwrap_or(name);
+    let end = name.find(|letter: char| !letter.is_ascii_hexdigit())?;
+    let (id, rest) = name.split_at(end);
+    (!id.is_empty() && (rest.starts_with('-') || rest.starts_with(".jpg"))).then_some(id)
 }
 
 /// The lock at `path`, held exclusively until it is dropped.
