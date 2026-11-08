@@ -120,7 +120,6 @@ impl Asks {
     ///
     /// Returns file errors when the ask can't be written.
     pub fn ask(&self, mut ask: Ask, now: u64) -> Result<String> {
-        self.expire(now);
         // The same question: this session, account, request, target and
         // message. A changed message or target is a question of its own.
         let bind = &ask.question["bind"];
@@ -138,9 +137,11 @@ impl Asks {
         Ok(ask.id)
     }
 
-    /// The asks still up at `now`, oldest first.
+    /// The asks still up at `now`, oldest first. Each that ran out by then
+    /// is taken down first, message and all, whoever reads.
     #[must_use]
     pub fn open(&self, now: u64) -> Vec<Ask> {
+        self.expire(now);
         let Ok(entries) = fs::read_dir(&self.folder) else {
             return Vec::new();
         };
@@ -378,6 +379,8 @@ impl Asks {
             )
             .map_err(std::io::Error::from)?;
         loop {
+            // What ran out meanwhile is taken down at each wake.
+            self.expire(atlas_core::time::now_ms());
             if let Some(answer) = self.answered(id) {
                 return Ok(Waited::Answered(answer));
             }

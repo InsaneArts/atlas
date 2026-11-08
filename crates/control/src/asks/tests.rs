@@ -280,3 +280,28 @@ fn a_choice_a_question_doesnt_offer_cant_be_given() {
     assert!(asks.allowed(2_000).is_empty());
     asks.answer(&id, Answer::Deny, true, 2_000).unwrap();
 }
+
+#[test]
+fn an_ask_that_ran_out_is_gone_from_disk_at_the_next_read_whoever_reads() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let files = |id: &str| {
+        ["json", "answer"]
+            .map(|ending| folder.path().join(format!("h.asks/{id}.{ending}")).exists())
+    };
+    let ended = 1_000 + millis(LIFE);
+
+    let read = asks.ask(question("s1", "b1"), 1_000).unwrap();
+    assert_eq!(files(&read), [true, false]);
+    assert!(asks.open(ended).is_empty());
+    assert_eq!(files(&read), [false, false], "a read of the open asks");
+
+    let answered = asks.ask(question("s1", "b2"), 1_000).unwrap();
+    assert_eq!(
+        asks.answer(&answered, Answer::Deny, true, ended)
+            .unwrap_err()
+            .code,
+        Code::Input
+    );
+    assert_eq!(files(&answered), [false, false], "an answer that came late");
+}
