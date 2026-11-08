@@ -373,12 +373,19 @@ pub(crate) struct Recheck {
     /// The element keyboard focus was on when last read, which tells
     /// cheaply between two characters that it hasn't moved.
     pub(crate) held: Option<crate::native::ax::Held>,
+    /// The permit the action under way spent as it started, which covers
+    /// its further events and no other action.
+    spent: Option<Allowance>,
 }
 
 impl Recheck {
-    /// Before `action`, the next one: judged where it lands now.
+    /// Before `action`, the next one: judged where it lands now. A permit
+    /// that covers it is spent: another action like it asks again.
     pub(crate) fn check(&mut self, action: &Action, look: &mut impl Look) -> Decision {
-        let decision = judge(action, &self.asking, look, &self.batch, self.pressed);
+        let (decision, by) = judged(action, &self.asking, look, &self.batch, self.pressed);
+        self.spent = by
+            .filter(|at| matches!(self.asking.grants.get(*at), Some(Allowance::Permit { .. })))
+            .map(|at| self.asking.grants.remove(at));
         self.pressed = holds(action, self.pressed);
         self.current = Some(action.clone());
         decision
@@ -394,7 +401,14 @@ impl Recheck {
         if matches!(action, Action::Type { .. }) && look.unmoved() {
             return Decision::Free;
         }
-        judge(action, &self.asking, look, &self.batch, false)
+        match &self.spent {
+            Some(permit) => {
+                let mut asking = self.asking.clone();
+                asking.grants.push(permit.clone());
+                judge(action, &asking, look, &self.batch, false)
+            }
+            None => judge(action, &self.asking, look, &self.batch, false),
+        }
     }
 }
 
@@ -407,6 +421,7 @@ pub(crate) fn recheck(actions: &[Action], asking: &Asking) -> Recheck {
         pressed: false,
         current: None,
         held: None,
+        spent: None,
     }
 }
 
@@ -421,6 +436,17 @@ fn judge(
     batch: &str,
     pressed: bool,
 ) -> Decision {
+    judged(action, asking, look, batch, pressed).0
+}
+
+/// [`judge`], with which of `asking`'s grants, by its place, let it go.
+fn judged(
+    action: &Action,
+    asking: &Asking,
+    look: &mut impl Look,
+    batch: &str,
+    pressed: bool,
+) -> (Decision, Option<usize>) {
     let target = target(action, look);
     let drop = match action {
         Action::Drag { to_x, to_y, .. } => Some(look.at_point(*to_x, *to_y)),
@@ -441,12 +467,15 @@ fn judge(
     if let Some(strict) = found.iter().find(|found| found.level == Level::LookOnly)
         && changes_it
     {
-        return Decision::Deny {
-            account: strict.name.clone(),
-        };
+        return (
+            Decision::Deny {
+                account: strict.name.clone(),
+            },
+            None,
+        );
     }
     let Some(what) = asks(action, &target, pressed) else {
-        return Decision::Free;
+        return (Decision::Free, None);
     };
     // A task grant covers one account by name: never while the list can't
     // be read, when every app stands for any account.
@@ -464,7 +493,7 @@ fn judge(
         })
         .collect();
     let Some(first) = open.first() else {
-        return Decision::Free;
+        return (Decision::Free, None);
     };
     let known = open.iter().all(|found| found.known);
     let message = (what == "send-key" && target.editable && !target.secure).then(|| look.message());
@@ -476,10 +505,11 @@ fn judge(
         drop: drop.as_ref().map(|drop| Box::new(bound(drop))),
         ..bound(&target)
     };
-    if pinned && allowed(asking, action, &first.key, batch, &bound, message.as_ref()) {
-        return Decision::Free;
+    let by = allowed(asking, action, &first.key, batch, &bound, message.as_ref());
+    if pinned && by.is_some() {
+        return (Decision::Free, by);
     }
-    Decision::Ask(Box::new(Question {
+    let asked = Decision::Ask(Box::new(Question {
         once: pinned,
         task: tasks && known,
         typing: asking.typing.clone(),
@@ -492,7 +522,8 @@ fn judge(
             batch.to_owned(),
             message,
         )
-    }))
+    }));
+    (asked, None)
 }
 
 /// Whether a press is held after `action`, when one was before it as
@@ -709,7 +740,9 @@ fn by_key(key: &str, target: &Target) -> Option<&'static str> {
         return None;
     }
     // A character typed into a password field follows the password rule.
-    let character = base.chars().count() == 1 && (parts.len() == 1 || shift_only);
+    // Space types one too; Tab only moves.
+    let character =
+        (base.chars().count() == 1 || base == "space") && (parts.len() == 1 || shift_only);
     if target.secure && character {
         return Some("password");
     }
@@ -734,11 +767,11 @@ fn by_name(target: &Target) -> Option<&'static str> {
     }
 }
 
-/// Whether a once, permit or command grant in `asking` covers `action` of
-/// this request in `account`, landing where `target` binds: a once grant
-/// for this very request and message, a permit for this very action and
-/// message, or a command grant for this typing into this field. Task grants
-/// are each end's own, judged before.
+/// Which once, permit or command grant in `asking`, by its place, covers
+/// `action` of this request in `account`, landing where `target` binds: a
+/// once grant for this very request and message, a permit for this very
+/// action and message, or a command grant for this typing into this field.
+/// Task grants are each end's own, judged before.
 fn allowed(
     asking: &Asking,
     action: &Action,
@@ -746,8 +779,8 @@ fn allowed(
     batch: &str,
     target: &Bound,
     message: Option<&Message>,
-) -> bool {
-    asking.grants.iter().any(|grant| match grant {
+) -> Option<usize> {
+    asking.grants.iter().position(|grant| match grant {
         Allowance::Task { .. } => false,
         Allowance::Command {
             account: granted,

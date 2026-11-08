@@ -1173,3 +1173,47 @@ fn a_permit_covers_exactly_the_action_it_was_given_for() {
         "another message"
     );
 }
+
+#[test]
+fn a_permit_covers_one_action_once_however_many_like_it_a_request_holds() {
+    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let (field, _) = composer("");
+    let mut look = scripted(Target::default(), field);
+    let typed = actions(json!([{"type": "type", "text": "hello\n"}]));
+    let Decision::Ask(question) = decide(&typed, &asking, &mut look) else {
+        panic!("a line break asks");
+    };
+    asking.grants.push(permit(&question));
+    let resumed = actions(json!([
+        {"type": "type", "text": "hello\n"},
+        {"type": "type", "text": "hello\n"},
+    ]));
+    let mut each = recheck(&resumed, &asking);
+    assert_eq!(each.check(&resumed[0], &mut look), Decision::Free);
+    // Its own further characters stay covered, focus moved or not.
+    assert_eq!(each.event(&mut look), Decision::Free);
+    assert_eq!(
+        what(&each.check(&resumed[1], &mut look)),
+        Some("newline"),
+        "the second asks"
+    );
+}
+
+#[test]
+fn space_in_a_password_field_follows_the_password_rule_and_tab_only_moves() {
+    let asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let mut secure = page("app.slack.com", "AXTextField", Some("Password"));
+    secure.editable = true;
+    secure.secure = true;
+    let mut look = scripted(Target::default(), secure);
+    for key in ["space", "shift+space"] {
+        let decision = decide(
+            &actions(json!([{"type": "key", "key": key}])),
+            &asking,
+            &mut look,
+        );
+        assert_eq!(what(&decision), Some("password"), "{key}");
+    }
+    let tab = actions(json!([{"type": "key", "key": "tab"}]));
+    assert_eq!(decide(&tab, &asking, &mut look), Decision::Free);
+}
