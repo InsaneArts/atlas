@@ -9,6 +9,8 @@ import SwiftUI
 struct ActivitySessionBlock: View {
   /// The session.
   let session: ViewerOutlineSession
+  /// Whether another session stands above it, so a hairline parts them.
+  var separated = false
   /// Whether the person just asked for its day's other sessions, which this one is among.
   var revealing = false
   /// Receives what the person does.
@@ -25,20 +27,35 @@ struct ActivitySessionBlock: View {
   ///
   /// - Parameters:
   ///   - session: The session.
+  ///   - separated: Whether another session stands above it.
   ///   - revealing: Whether the person just asked for its day's other sessions.
   ///   - send: Receives what the person does.
-  init(session: ViewerOutlineSession, revealing: Bool = false, send: @escaping @MainActor (ViewerEvent) -> Void) {
+  init(
+    session: ViewerOutlineSession,
+    separated: Bool = false,
+    revealing: Bool = false,
+    send: @escaping @MainActor (ViewerEvent) -> Void
+  ) {
     self.session = session
+    self.separated = separated
     self.revealing = revealing
     self.send = send
     _drawnOpen = State(initialValue: session.isOpen)
     _drawnHead = State(initialValue: session.showsHead)
   }
 
-  /// The row and what shows under it, each its own row of the outline.
+  /// The hairline, the row and what shows under it, each its own element of the outline's stack.
   var body: some View {
-    Group {
-      if session.showsHead {
+    ForEach(parts, id: \.self) { part in
+      switch part {
+      case .separator:
+        SeparatorLine()
+          .padding(.leading, ViewerLayout.outlineText(level: 0))
+          .padding(.trailing, ViewerLayout.outlineInset)
+          .padding(.vertical, ViewerLayout.sessionSeparatorGap)
+          .outlineGround()
+          .id("separator.\(session.id)")
+      case .head:
         // The row stands first whether boxed or not, so it keeps its focus and its chevron's turn as the session opens.
         VStack(alignment: .leading, spacing: .zero) {
           ActivitySessionRow(session: session, send: send)
@@ -52,18 +69,26 @@ struct ActivitySessionBlock: View {
         .outlineBox(session.isBoxed)
         .id("session.\(session.id)")
         .transition(arrival)
-      }
-      if session.isOpen || !session.showsHead {
-        ForEach(Array(session.runs.enumerated()), id: \.element.id) { index, run in
-          ActivityRunBlock(run: run, level: session.showsHead ? 1 : 0, send: send)
+      case .run(let id):
+        if let index = session.runs.firstIndex(where: { $0.id == id }) {
+          ActivityRunBlock(run: session.runs[index], level: session.showsHead ? 1 : 0, send: send)
             .padding(.top, gap(above: index))
-            .id("run.\(run.id)")
+            .id("run.\(id)")
             .transition(runArrival)
         }
       }
     }
     .onChange(of: session.isOpen) { _, open in drawnOpen = open }
     .onChange(of: session.showsHead) { _, head in drawnHead = head }
+  }
+
+  /// The rows it stands as, top first: the hairline when another session stands above it, its row unless it is
+  /// chosen alone, and its runs while it is open or stands without its row.
+  private var parts: [ActivitySessionPart] {
+    var parts: [ActivitySessionPart] = separated ? [.separator] : []
+    if session.showsHead { parts.append(.head) }
+    if session.isOpen || !session.showsHead { parts += session.runs.map { .run($0.id) } }
+    return parts
   }
 
   /// The room above a run: 4 when it or what stands above it, the session's row or the run before, is a box; none

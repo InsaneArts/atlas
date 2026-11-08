@@ -101,17 +101,10 @@ struct ActivityListContent: View {
             .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
         }
         ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
-          if index > 0 {
-            SeparatorLine()
-              .padding(.leading, ViewerLayout.outlineText(level: 0))
-              .padding(.trailing, ViewerLayout.outlineInset)
-              .padding(.vertical, ViewerLayout.sessionSeparatorGap)
-              .outlineGround()
-              .id("separator.\(session.id)")
-          }
           // The block names and moves its own rows, which stand in this stack themselves.
           ActivitySessionBlock(
             session: session,
+            separated: index > 0,
             revealing: day.more == nil && drawnFolded.contains(day.id),
             send: send
           )
