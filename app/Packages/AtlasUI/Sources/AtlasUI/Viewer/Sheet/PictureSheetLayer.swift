@@ -3,17 +3,23 @@ import SwiftUI
 /// The picture sheet over the window: the window dims behind it, and the sheet comes in where it stands, growing from
 /// a touch smaller as it fades in on ``Motion/present``, and goes the same way back a little quicker on
 /// ``Motion/close``, with nothing travelling. Asked for again as it goes, or closed as it comes, it turns back from
-/// where it is. Under Reduce Motion it only fades. Pressing the dimmed window, Done, Return or Escape closes it; what it
-/// covers takes the keyboard back once it has gone.
+/// where it is; the scrim and the window behind dim and come back on the same animation. Under Reduce Motion it only
+/// fades. Pressing the dimmed window, Done, Return or Escape closes it; what it covers takes the keyboard back once it
+/// has gone.
 struct PictureSheetLayer: View {
   /// The sheet; nil shows none.
   let sheet: ViewerPictureSheet?
-  /// Whether the sheet stands over the window: from the moment it is asked for until its closing has finished.
+  /// Whether the sheet covers the window, so what is behind it takes no presses and no keyboard: it starts with the
+  /// sheet's coming and ends with the start of its going, each on the sheet's own animation, so the window behind
+  /// dims and comes back with the scrim rather than at once.
+  @Binding var covering: Bool
+  /// Whether the sheet stands over the window: from the moment it is asked for until its closing has finished, when
+  /// what opened it takes the keyboard back.
   @Binding var covers: Bool
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  /// The sheet drawn: the one asked for, or as it goes, the last one shown.
-  @State private var drawn: ViewerPictureSheet?
+  /// The sheet last shown, drawn while it goes; nil once it has gone.
+  @State private var leaving: ViewerPictureSheet?
   /// How far the sheet has come in, from 0 gone to 1 in place.
   @State private var presence: CGFloat
   /// Each opening or closing calls off what an earlier one left to finish.
@@ -24,13 +30,19 @@ struct PictureSheetLayer: View {
   ///
   /// - Parameters:
   ///   - sheet: The sheet; nil shows none.
+  ///   - covering: Whether the sheet covers the window, from its coming to the start of its going.
   ///   - covers: Whether the sheet stands over the window, until its closing has finished.
   ///   - send: Receives what the person does.
-  init(sheet: ViewerPictureSheet?, covers: Binding<Bool>, send: @escaping @MainActor (ViewerEvent) -> Void) {
+  init(
+    sheet: ViewerPictureSheet?,
+    covering: Binding<Bool>,
+    covers: Binding<Bool>,
+    send: @escaping @MainActor (ViewerEvent) -> Void
+  ) {
     self.sheet = sheet
+    _covering = covering
     _covers = covers
     self.send = send
-    _drawn = State(initialValue: sheet)
     _presence = State(initialValue: sheet == nil ? .zero : 1)
   }
 
@@ -38,13 +50,14 @@ struct PictureSheetLayer: View {
   var body: some View {
     GeometryReader { proxy in
       ZStack(alignment: .top) {
-        if let drawn {
+        // The sheet as it is now while it shows, so every change to it draws at once; as it goes, the last one shown.
+        if let shown = sheet ?? leaving {
           Color.scrim
             .opacity(presence)
             .contentShape(Rectangle())
             .onTapGesture { send(.closePicture) }
             .accessibilityHidden(true)
-          PictureSheetCard(sheet: drawn, window: proxy.size, send: send)
+          PictureSheetCard(sheet: shown, window: proxy.size, send: send)
             .layoutFrame("picture sheet")
             .scaleEffect(scale)
             .opacity(presence)
@@ -56,13 +69,12 @@ struct PictureSheetLayer: View {
       }
       .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
     }
-    .allowsHitTesting(sheet != nil)
-    .onChange(of: sheet) { _, shown in
-      // Stepping to another picture changes what it shows in place.
-      if let shown { drawn = shown }
-    }
     .onChange(of: sheet == nil) { _, gone in
       if gone { close() } else { open() }
+    }
+    .onChange(of: sheet) { last, now in
+      // Kept to draw as it goes.
+      if now == nil { leaving = last }
     }
     .accessibilityElement(children: .contain)
     .accessibilityAddTraits(sheet == nil ? [] : .isModal)
@@ -87,25 +99,28 @@ struct PictureSheetLayer: View {
     return opening ? Motion.present : Motion.close
   }
 
-  /// Brings the sheet in from where it stands.
+  /// Brings the sheet in from where it stands, the window behind dimming with it.
   private func open() {
     generation += 1
     covers = true
     withAnimation(Self.motion(opening: true, reduceMotion: reduceMotion)) {
       presence = 1
+      covering = true
     }
   }
 
-  /// Takes the sheet away from where it stands, and once it has gone, lets what it covered have the keyboard back.
+  /// Takes the sheet away from where it stands, the window behind coming back with it, and once it has gone, lets what
+  /// it covered have the keyboard back.
   private func close() {
     generation += 1
     let current = generation
     withAnimation(Self.motion(opening: false, reduceMotion: reduceMotion)) {
       presence = .zero
+      covering = false
     } completion: {
       // Only if nothing asked for the sheet again meanwhile.
       guard generation == current else { return }
-      drawn = nil
+      leaving = nil
       covers = false
     }
   }
