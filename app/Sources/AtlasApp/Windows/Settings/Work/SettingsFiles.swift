@@ -13,7 +13,7 @@ struct SettingsFiles: Equatable {
   var changingHome = false
   /// What the last change or reading said when it failed; nil for nothing.
   var problem: String?
-  /// Counts the changes started and ended, so a reading that a change overtook is dropped: its answer may be older
-  /// than the change's own.
+  /// Counts the readings started and the changes started and ended, so only the newest reading's answer is kept: one
+  /// a later reading or a change overtook may be older.
   var generation = 0
 }

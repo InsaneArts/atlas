@@ -4,9 +4,14 @@ import AtlasService
 /// The Helper pane's "Your files": the home folder is read when the pane opens and on Check Again; Make Private runs at
 /// once and Undo… asks first; letting agents copy sign-ins in asks first, stopping them runs at once.
 extension SettingsController {
-  /// Reads how the home folder stands for the helper, and whether agents may copy sign-ins in. A reading a change
-  /// overtook is dropped, as the change's own answer is newer; one that failed leaves both unknown, saying why.
-  func readFiles() async {
+  /// Reads how the home folder stands for the helper, and whether agents may copy sign-ins in. Only the newest reading
+  /// counts: one a later reading or a change overtook is dropped, as its answer may be older. One that failed leaves
+  /// both unknown, saying why.
+  ///
+  /// - Parameter failure: What a change that failed just said, kept under the section whatever the reading finds;
+  ///   nil for none.
+  func readFiles(after failure: String? = nil) async {
+    files.generation += 1
     let asked = files.generation
     let outcome = await dependencies.commands.run(.homeFiles)
     guard asked == files.generation else { return }
@@ -17,10 +22,12 @@ extension SettingsController {
       files.signInCopies = nil
       files.problem = Words.sentence(outcome.message)
     }
+    if let failure { files.problem = failure }
   }
 
   /// Makes the home folder private from the helper, or opens it again once the person said Let It Open. A failure
-  /// keeps what was known, saying why.
+  /// can come after the change took, as when the look that proves it fails, so the home folder turns unknown and is
+  /// read again, the failure staying under the section.
   ///
   /// - Parameter makePrivate: Whether to make it private.
   func changeHome(makePrivate: Bool) async {
@@ -30,7 +37,10 @@ extension SettingsController {
     if let home = HomeFiles.of(outcome) {
       keep(home)
     } else {
-      files.problem = Words.sentence(outcome.message)
+      let failure = Words.sentence(outcome.message)
+      files.home = nil
+      files.problem = failure
+      await readFiles(after: failure)
     }
   }
 

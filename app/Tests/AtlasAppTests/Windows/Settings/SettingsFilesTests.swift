@@ -38,20 +38,61 @@ struct SettingsFilesTests {
     #expect(commands.ran.contains(Action.makeHomePrivate.arguments))
   }
 
-  @Test("a change that failed says why under the section, keeping the row as it was")
-  func aFailedChangeSaysWhy() async {
+  @Test("a change that failed reads the home folder again, showing how it really stands, and keeps saying why")
+  func aFailedChangeReadsAgain() async {
+    let failure =
+      #"{"ok": false, "code": "io", "error": "Atlas couldn't open your home folder again. In Terminal, run: chmod -a"}"#
+    let commands = ScriptedCommands(["onboarding files": Self.privateHome])
+    commands.whileRunning { arguments in
+      // Undo took, then the look proving it failed; the next reading finds it open.
+      if arguments == Action.openHome.arguments { commands.answer("onboarding files", failure) }
+      if arguments == Action.homeFiles.arguments, commands.ran.contains(Action.openHome.arguments) {
+        commands.answer("onboarding files", Self.open)
+      }
+    }
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.readFiles()
+    #expect(controller.state.helper.files?.home?.isPrivate == true)
+    await controller.changeHome(makePrivate: false)
+    let files = controller.state.helper.files
+    #expect(files?.home?.isPrivate == false, "never still private once Undo may have taken")
+    #expect(files?.status?.kind == .problem)
+    #expect(files?.status?.text.contains("chmod -a") == true)
+    #expect(commands.ran.filter { $0 == Action.homeFiles.arguments }.count == 2)
+  }
+
+  @Test("a change that failed and can't be read again leaves the home folder unknown, saying why")
+  func aFailedChangeUnreadIsUnknown() async {
     let commands = ScriptedCommands(["onboarding files": Self.open])
     let controller = SettingsController.scripted(commands: commands)
     await controller.readFiles()
-    commands.answer(
-      "onboarding files",
-      #"{"ok": false, "code": "io", "error": "Atlas couldn't make your home folder private. In Terminal, run: chmod +a# 0 \"user:atlas deny list,search\" ~"}"#
-    )
+    commands.answer("onboarding files", #"{"ok": false, "code": "io", "error": "Atlas couldn't"}"#)
     await controller.changeHome(makePrivate: true)
     let files = controller.state.helper.files
-    #expect(files?.home?.isPrivate == false)
-    #expect(files?.status?.kind == .problem)
-    #expect(files?.status?.text.contains("chmod +a# 0") == true)
+    #expect(files?.home == nil)
+    #expect(files?.status == SettingsNote(text: "Atlas couldn't.", kind: .problem))
+  }
+
+  @Test("only the newest reading counts: an older one that ends later never hides what the newer found")
+  func onlyTheNewestReadingCounts() async throws {
+    let commands = ScriptedCommands(["onboarding files": Self.open])
+    let gate = ReleaseSignal()
+    var first = true
+    commands.whileRunning { arguments in
+      guard arguments == Action.homeFiles.arguments, first else { return }
+      first = false
+      await gate.wait()
+      commands.answer("onboarding files", #"{"ok": false, "code": "io", "error": "Atlas couldn't"}"#)
+    }
+    let controller = SettingsController.scripted(commands: commands)
+    let older = Task { await controller.readFiles() }
+    try await settle("the older reading never started") { commands.ran.contains(Action.homeFiles.arguments) }
+    await controller.readFiles()
+    #expect(controller.state.helper.files?.home?.isPrivate == false)
+    gate.open()
+    await older.value
+    #expect(controller.state.helper.files?.home?.isPrivate == false, "the older reading failed")
+    #expect(controller.state.helper.files?.status == nil)
   }
 
   @Test("a reading a change overtook is dropped, so an older answer never undoes the change's")
