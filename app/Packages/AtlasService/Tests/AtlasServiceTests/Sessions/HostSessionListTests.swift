@@ -65,7 +65,7 @@ struct HostSessionListTests {
     let record = try #require(reading.sessions.first)
     #expect(record.counts == ["type": 4, "key": 2])
     #expect(record.appCounts == ["TextEdit": 6])
-    #expect(record.gist == ActivityGist(kind: .typing, count: 6, app: "TextEdit"))
+    #expect(record.gist == ActivityGist(kind: .typing, count: 6, app: "TextEdit", verbs: ["type", "key"]))
     let older = try list(#"{"ok": true, "sessions": [{"key": "a1", "name": "Pi · notes-sync", "counts": [1]}]}"#)
     #expect(older.sessions.first?.counts.isEmpty == true)
     #expect(older.sessions.first?.gist == nil)

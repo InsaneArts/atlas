@@ -88,6 +88,7 @@ struct ActivityListContent: View {
           if index > 0 {
             SeparatorLine()
               .padding(.vertical, ViewerLayout.sessionSeparatorGap)
+              .id("separator.\(session.id)")
           }
           // The block names and moves its own rows, which stand in this stack themselves.
           ActivitySessionBlock(session: session, send: send)

@@ -45,6 +45,7 @@ struct ActivityStepRow: View {
         }
         if step.hasPicture {
           ActivityStepPictureButton { send(.openAction(step.id)) }
+            .takesFocusAfterSheet(isCurrent: step.isCurrent)
         }
       }
       .frame(maxWidth: .infinity, alignment: .leading)

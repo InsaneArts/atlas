@@ -313,6 +313,30 @@ struct ViewerPanesModelTests {
     #expect(copied == [service.shotData[Self.older]])
   }
 
+  @Test("Copy puts the picture on the clipboard though the screenshots' folder is not known")
+  func copyNeedsNoFolder() async throws {
+    let service = ScriptedService()
+    service.shotData = [Self.newer: png(width: 1, height: 1), Self.older: png(width: 2, height: 2)]
+    var copied: [Data] = []
+    let viewer = try await Self.onShots(service, shotOutlet: ShotOutlet(copy: { copied.append($0) }, reveal: { _ in }))
+    defer {
+      viewer.close()
+      service.resumeAllShots()
+    }
+    viewer.panesModel.panes.shots.folder = nil
+    viewer.send(.openShot(Self.newer))
+    let sheet = try #require(ViewerPresenter.activity(viewer.snapshot).sheet)
+    #expect(!sheet.canShowInFinder)
+    viewer.send(.copyPicture)
+    let copy = try #require(viewer.panesModel.pictures.copying)
+    try await settle("the Copy was never asked for") {
+      service.heldShots.filter { $0.name == Self.newer && $0.full }.count == 2
+    }
+    service.resumeAllShots()
+    try await Self.ended(copy, "the Copy's reply never came back")
+    #expect(copied == [service.shotData[Self.newer]])
+  }
+
   @Test("closing the sheet cancels a Copy still being read, so it never lands over what is copied next")
   func closingTheSheetCancelsItsCopy() async throws {
     let service = ScriptedService()

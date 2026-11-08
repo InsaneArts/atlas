@@ -183,8 +183,8 @@ struct ViewerPresenterActionTests {
     #expect(sheet.position == "1 of 1")
   }
 
-  @Test("Copy is offered without the screenshots' folder, and Show in Finder only with it")
-  func copyNeedsNoFolder() throws {
+  @Test("Show in Finder is offered only once the screenshots' folder is known")
+  func showInFinderNeedsTheFolder() throws {
     let click = ActionFacts(action: .click, display: Self.display, point: .init(x: 720, y: 450))
     var snapshot = try ViewerActivityFixtures.onActivity([Self.row("c1", "clicked in TextEdit", age: 5, facts: click)])
     snapshot.panes.shots.folder = nil

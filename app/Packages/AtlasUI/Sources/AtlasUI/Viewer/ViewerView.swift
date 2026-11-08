@@ -72,13 +72,19 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
       }
       .disabled(isCovered)
       .accessibilityHidden(isCovered)
+      .environment(\.pictureSheetShown, activity?.sheet != nil)
       .overlay {
+        // An alert over the sheet or the replay takes the keyboard and VoiceOver from them, as from the window.
         PictureSheetLayer(sheet: activity?.sheet, send: send)
-          .allowsHitTesting(activity?.sheet != nil)
+          .allowsHitTesting(activity?.sheet != nil && state.alert == nil)
+          .disabled(state.alert != nil)
+          .accessibilityHidden(state.alert != nil)
       }
       .overlay {
         ReplayLayer(replay: activity?.replay, send: send)
-          .allowsHitTesting(activity?.replay != nil)
+          .allowsHitTesting(activity?.replay != nil && state.alert == nil)
+          .disabled(state.alert != nil)
+          .accessibilityHidden(state.alert != nil)
       }
       .overlay {
         AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }

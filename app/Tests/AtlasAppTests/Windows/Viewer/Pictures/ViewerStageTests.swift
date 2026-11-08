@@ -52,9 +52,12 @@ struct ViewerStageTests {
     let list = try #require(host.scrollViews.first)
     list.contentView.scroll(to: NSPoint(x: 0, y: Self.scrolled))
     list.reflectScrolledClipView(list.contentView)
-    // SwiftUI hears a scroll on the run loop's next turn, as it would a wheel's: take that turn, waiting for nothing.
+    // SwiftUI hears a scroll on the run loop's later turns, as it would a wheel's, and only then knows the row it
+    // keeps in place: take a few, each waiting for nothing.
     let loop = RunLoop.main
-    loop.run(mode: .default, before: .distantPast)
+    for _ in 0..<Self.settlingTurns {
+      loop.run(mode: .default, before: .distantPast)
+    }
     host.show(try Self.activity(lines: 80))
     let before = list.contentView.bounds.origin.y
     #expect(before == Self.scrolled, "the scroll did not hold: \(before)")
@@ -67,16 +70,22 @@ struct ViewerStageTests {
       }
     )
     host.show(try Self.activity(lines: 81))
-    // The list keeps its place as SwiftUI hears the change, on the run loop's next turn: take it before measuring.
-    loop.run(mode: .default, before: .distantPast)
-    host.render()
+    // The list keeps its place as SwiftUI hears the change on the run loop's later turns, sooner or later as the Mac
+    // is busy: take a few, each without waiting, until the line has settled.
+    for _ in 0..<Self.settlingTurns where host.frames[read.key] != read.value {
+      loop.run(mode: .default, before: .distantPast)
+      host.render()
+    }
     // Scrolled down, the list moves on by the new session's height, so the line the person reads holds its place.
     #expect(list.contentView.bounds.origin.y > before, "the list moved on")
-    #expect(host.frames[read.key] == read.value, "\(read.key) moved")
+    #expect(host.frames[read.key] == read.value, "\(read.key) moved from \(read.value)")
   }
 
   /// In the card, under its header and clear of the small screen: where the panes draw.
   static let panes = CGRect(x: 260, y: 60, width: 840, height: 600)
+
+  /// 10: the most run loop turns a change takes to settle in the list before it is measured.
+  static let settlingTurns = 10
 
   /// How far the list is scrolled before the switches.
   static let scrolled: CGFloat = 240

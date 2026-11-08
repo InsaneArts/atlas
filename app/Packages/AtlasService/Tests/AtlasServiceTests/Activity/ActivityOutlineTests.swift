@@ -66,7 +66,8 @@ struct ActivityOutlineTests {
     #expect(tally.screenshots == 1)
     #expect(tally.problems == 1)
     #expect(tally.apps == ["TextEdit", "Google Chrome"])
-    #expect(tally.gist == ActivityGist(kind: .typing, count: 2, app: "TextEdit"))
+    #expect(tally.gist == ActivityGist(kind: .typing, count: 2, app: "TextEdit", verbs: ["type", "key"]))
+    #expect(tally.verbs[.pointer] == ["click"])
   }
 
   @Test("a gist counts keys as typing, leaves control out and prefers typing among equals")
@@ -84,7 +85,7 @@ struct ActivityOutlineTests {
   func aRecordsGistReadsItsVerbs() {
     #expect(
       ActivityGist(counts: ["click": 3, "type": 1, "environment": 9], apps: ["Google Chrome": 3, "Notes": 1])
-        == ActivityGist(kind: .pointer, count: 3, app: "Google Chrome")
+        == ActivityGist(kind: .pointer, count: 3, app: "Google Chrome", verbs: ["click"])
     )
     #expect(ActivityGist(counts: ["environment": 2], apps: [:]) == nil)
     #expect(ActivityGist(counts: ["click": .max, "drag": 1], apps: [:])?.count == .max, "huge counts saturate")
@@ -101,7 +102,7 @@ struct ActivityOutlineTests {
       ActivityFixtures.row(id: "y1", says: "clicked", actor: .you, verb: "click", app: "Notes"),
       ActivityFixtures.row(id: "y2", says: "clicked", actor: .you, verb: "click", app: "Notes"),
     ])
-    #expect(gist == ActivityGist(kind: .typing, count: 2, app: "TextEdit"))
+    #expect(gist == ActivityGist(kind: .typing, count: 2, app: "TextEdit", verbs: ["type", "key"]))
     #expect(ActivityGist([]) == nil)
     let refused = ActivityFixtures.row(
       id: "n1",

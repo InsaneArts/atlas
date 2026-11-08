@@ -16,7 +16,9 @@ extension ViewerWords {
   ///   - app: The app it was in; nil for a run in no app.
   /// - Returns: The summary.
   static func runSummary(_ tally: ActivityTally, app: String?) -> String {
-    let phrases = tally.order.compactMap { phrase($0, count: tally.kinds[$0] ?? 0, app: app) }
+    let phrases = tally.order.compactMap {
+      phrase($0, count: tally.kinds[$0] ?? 0, app: app, verbs: tally.verbs[$0] ?? [])
+    }
     guard app != nil else {
       return Words.leadingCapital(phrases.joined(separator: ", "))
     }
@@ -66,9 +68,9 @@ extension ViewerWords {
     let inApp = app.isEmpty ? "" : " in \(app)"
     switch gist.kind {
     case .typing, .keys: return (working ? "Typing" : "Typed") + inApp
-    case .pointer: return (working ? "Clicking" : "Clicked") + inApp
+    case .pointer: return Words.leadingCapital(pointer(gist.verbs, working: working)) + inApp
     case .scroll: return (working ? "Scrolling" : "Scrolled") + inApp
-    case .window: return (working ? "Opening " : "Opened ") + (app.isEmpty ? "apps" : app)
+    case .window: return Words.leadingCapital(window(gist.verbs, working: working, object: app))
     case .screenshot:
       if working { return count == 1 ? "Taking a screenshot" : "Taking screenshots" }
       return count == 1 ? "Took a screenshot" : "Took \(number(count)) screenshots"
@@ -149,19 +151,56 @@ extension ViewerWords {
   ///   - kind: The kind.
   ///   - count: How many lines did it.
   ///   - app: The run's app, which an app opened names.
+  ///   - verbs: The verbs Atlas wrote for that kind's lines.
   /// - Returns: The phrase, or nil for none.
-  private static func phrase(_ kind: ActivityAction, count: Int, app: String?) -> String? {
+  private static func phrase(_ kind: ActivityAction, count: Int, app: String?, verbs: Set<String>) -> String? {
     switch kind {
-    case .pointer: "clicked"
+    case .pointer: pointer(verbs, working: false)
     case .typing: "typed"
     case .keys: "pressed keys"
     case .scroll: "scrolled"
-    case .window: app.map { "opened \($0)" } ?? "opened apps"
+    case .window: window(verbs, working: false, object: app ?? "")
     case .control: "handed over control"
     case .screenshot: count == 1 ? "took a screenshot" : "took \(number(count)) screenshots"
     case .command: count == 1 ? "ran a command" : "ran \(number(count)) commands"
     }
   }
+
+  /// What the pointer did, by the verbs Atlas wrote: "clicked" for clicks and presses, "dragged", "moved the pointer",
+  /// or "used the pointer" for a mix; while working, "clicking" and so on.
+  ///
+  /// - Parameters:
+  ///   - verbs: The pointer's verbs.
+  ///   - working: Whether it is under way.
+  /// - Returns: The phrase.
+  static func pointer(_ verbs: Set<String>, working: Bool) -> String {
+    if verbs.isSubset(of: clicks) { return working ? "clicking" : "clicked" }
+    if verbs == ["drag"] { return working ? "dragging" : "dragged" }
+    if verbs == ["move"] { return working ? "moving the pointer" : "moved the pointer" }
+    return working ? "using the pointer" : "used the pointer"
+  }
+
+  /// What was done to apps, by the verbs Atlas wrote: "opened TextEdit", "closed apps", "installed apps", "cleaned up",
+  /// or "opened and closed apps" for a mix; while working, "opening TextEdit" and so on.
+  ///
+  /// - Parameters:
+  ///   - verbs: The window's verbs.
+  ///   - working: Whether it is under way.
+  ///   - object: The app's name; empty says "apps".
+  /// - Returns: The phrase.
+  static func window(_ verbs: Set<String>, working: Bool, object: String) -> String {
+    let apps = object.isEmpty ? "apps" : object
+    if verbs.isSubset(of: ["open", "open-link"]) { return (working ? "opening " : "opened ") + apps }
+    if verbs == ["close"] { return (working ? "closing " : "closed ") + apps }
+    if verbs == ["install"] { return (working ? "installing " : "installed ") + apps }
+    if verbs == ["cleanup"] { return working ? "cleaning up" : "cleaned up" }
+    return (working ? "opening and closing " : "opened and closed ") + apps
+  }
+
+  /// The pointer's verbs that click or press a control.
+  static let clicks: Set<String> = [
+    "click", "double-click", "right-click", "press", "check", "uncheck", "pick", "expand", "collapse",
+  ]
 
   /// Phrases as a list: "a", "a and b", "a, b and c".
   ///

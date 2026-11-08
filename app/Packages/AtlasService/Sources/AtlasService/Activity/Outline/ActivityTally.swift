@@ -14,6 +14,9 @@ public struct ActivityTally: Equatable, Sendable {
   public var problems: Int
   /// The apps the lines acted in, by name, the one acted in most often first.
   public var apps: [String]
+  /// The verbs Atlas wrote for each kind's lines, such as `close` among the window's, so words never claim an app was
+  /// opened when it was closed.
+  public var verbs: [ActivityAction: Set<String>]
 
   /// Counts `runs`.
   ///
@@ -23,11 +26,13 @@ public struct ActivityTally: Equatable, Sendable {
     var order: [ActivityAction] = []
     var apps: [String: Int] = [:]
     var appOrder: [String] = []
+    var verbs: [ActivityAction: Set<String>] = [:]
     var actions = 0
     for run in runs.reversed() {
       let kind = ActivityAction(run.entry)
       if kinds[kind] == nil { order.append(kind) }
       kinds[kind, default: 0] += run.count
+      if let verb = run.entry.verb { verbs[kind, default: []].insert(verb) }
       actions = ActivityGrouping.addingActions(run.actions, to: actions)
       guard let name = run.entry.app, !name.isEmpty else { continue }
       if apps[name] == nil { appOrder.append(name) }
@@ -35,6 +40,7 @@ public struct ActivityTally: Equatable, Sendable {
     }
     self.kinds = kinds
     self.order = order
+    self.verbs = verbs
     self.actions = actions
     screenshots = runs.filter { $0.entry.operation == ActivityGrouping.screenshotOperation }
       .reduce(0) { $0 + $1.count }
@@ -48,6 +54,6 @@ public struct ActivityTally: Equatable, Sendable {
 
   /// What the lines mostly did, and where: what a session's title says.
   public var gist: ActivityGist? {
-    ActivityGist(kinds: kinds, app: apps.first)
+    ActivityGist(kinds: kinds, app: apps.first, verbs: verbs)
   }
 }

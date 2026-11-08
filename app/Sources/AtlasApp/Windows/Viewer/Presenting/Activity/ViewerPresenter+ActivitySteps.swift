@@ -43,6 +43,7 @@ extension ViewerPresenter {
       time: run.startedAt.map { minute($0, snapshot) } ?? "",
       inPlace: pictureTile(run.shot, snapshot),
       hasPicture: run.firstBefore != nil,
+      isCurrent: isShown(run, in: moment, snapshot),
       problem: problem,
       offersRecovery: offersRecovery,
       notKept: entry.facts?.action == .type && entry.facts?.secure == true
@@ -179,5 +180,19 @@ extension ViewerPresenter {
     case .then(let next):
       ViewerWords.then(stepWords(next, in: moment).text, personal: next.entry.actor == .you)
     }
+  }
+
+  /// Whether the picture sheet shows a step's picture before it now, which its picture button takes focus back from.
+  ///
+  /// - Parameters:
+  ///   - line: The step's line.
+  ///   - run: Its run.
+  ///   - snapshot: What the controller holds.
+  /// - Returns: Whether it does.
+  static func isShown(_ line: ActivityRun, in run: ActivityMoment, _ snapshot: ViewerSnapshot) -> Bool {
+    guard let focus = snapshot.panes.activity.sheet, focus.run == run.id, let pictured = line.pictured else {
+      return false
+    }
+    return pictureItem(focus.item, in: run) == .before(pictured.id)
   }
 }
