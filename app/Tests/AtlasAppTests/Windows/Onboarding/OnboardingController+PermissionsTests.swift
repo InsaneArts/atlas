@@ -101,13 +101,13 @@ struct OnboardingControllerPermissionsTests {
         commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 3
       }
       // The reading's own pause, once it has begun, says the third reading has moved the panel on all it will.
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the third reading never paused")
-      #expect(clock.waiting.sorted() == [OnboardingController.tickShown, OnboardingController.readEvery])
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the third reading never paused")
+      #expect(clock.waiting.sorted() == [OnboardingController.tickShown, ReadingPace.minimumGap])
       #expect(controller.pending.isEmpty, "one tick however often the facts are read: no second one waits")
       let tick = try #require(controller.performing?.work, "the tick is under way")
       controller.send(.closePanel)
       controller.send(.openSettings(id: Permission.accessibility.id))
-      #expect(clock.waiting == [OnboardingController.readEvery], "Back ended the tick's wait")
+      #expect(clock.waiting == [ReadingPace.minimumGap], "Back ended the tick's wait")
       // The tick's own end is the sentinel: once it has ended, it has done all it ever will.
       try await tick.value("the stopped tick never ended")
       let accessibility = try #require(Permission.accessibility.settingsURL)

@@ -45,6 +45,8 @@ extension OnboardingFacts {
     struct Side: Decodable {
       /// Whether the chosen account still exists.
       let exists: Bool?
+      /// Its user ID.
+      let uid: Int?
       /// Its short name.
       let name: String?
       /// Its full name, when it has one.

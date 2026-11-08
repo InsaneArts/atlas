@@ -5,12 +5,13 @@ import AtlasUI
 import Foundation
 import Observation
 
-/// The setup window's one observed object: the facts `atlas onboarding status` reports (read again every moment
-/// while the window is open), the person's choices, and what is running now. Every action is an `atlas` command; the
+/// The setup window's one observed object: the facts `atlas onboarding status` reports (read again when something
+/// may have changed, and now and then while the window is open, as ``ReadingPace`` says), the person's choices, and
+/// what is running now. Every action is an `atlas` command; the
 /// window holds no policy of its own, and ``OnboardingPresenter`` decides what it shows.
 ///
-/// ``run()`` holds the window's two lanes: the reading loop (`+Reading`) and the queue (`+Queue`), which performs the
-/// window's requests one at a time. ``send(_:)`` applies a choice at once and queues an action as an
+/// ``run()`` holds the window's lanes: the reading loop (`+Reading`), the changes that may call for a reading, and the
+/// queue (`+Queue`), which performs the window's requests one at a time. ``send(_:)`` applies a choice at once and queues an action as an
 /// ``OnboardingRequest``. The rest is in its parts: the account (`+Account`), the check and Done (`+Finishing`), the
 /// agents (`+Agents`) and the helper's own screens (`+Permissions`).
 ///
@@ -18,20 +19,18 @@ import Observation
 /// through ``send(_:)`` and ``update(_:)``.
 @Observable
 final class OnboardingController {
-  /// How often the facts are read while the window is open: 1.5 s, soon enough that a switch turned on in System
-  /// Settings, or a log-in in the helper, shows without the person waiting.
-  static let readEvery: Duration = .seconds(1.5)
-  /// How many readings in a row must find this login on screen before the end-to-end check starts: it starts the
-  /// helper's input and captures its screen, work that must not land on a switch the person is still unlocking.
-  static let settledReadings = 2
+  /// How long this login must have been found on screen before the end-to-end check starts: 1.5 s, two readings at
+  /// the closest pace. The check starts the helper's input and captures its screen, work that must not land on a
+  /// switch the person is still unlocking.
+  static let settledFor: Duration = ReadingPace.minimumGap
   /// How long the window waits, once the person is back from being away, before it reads again.
   static let quietAfterSwitch: Duration = .seconds(3)
-  /// After `atlas agents status` failed, how many readings of the facts pass before it is asked again: 10, about 15
-  /// s, so a command that keeps failing is not run every moment while the person reads the screen.
-  static let agentsRetryReadings = 10
-  /// How many readings in a row a job may answer nothing before it counts as stopped: 20, about 30 s, longer than
-  /// launchd waits to bring a job back.
-  static let restartReadings = 20
+  /// After `atlas agents status` failed, how long before it is asked again: 15 s, so a command that keeps failing is
+  /// not run every moment while the person reads the screen.
+  static let agentsRetryAfter: Duration = .seconds(15)
+  /// How long a job may answer nothing before it counts as stopped: 30 s, longer than launchd waits to bring a job
+  /// back.
+  static let restartGrace: Duration = .seconds(30)
   /// How long a permission just turned on shows its tick before the next one is allowed: 1.2 s.
   static let tickShown: Duration = .milliseconds(1200)
   /// How long the passed check shows before its Continue lights up and takes presses: ``Motion/Duration/followUp``.
@@ -70,16 +69,22 @@ final class OnboardingController {
   @ObservationIgnored var markSettled: CheckedContinuation<Void, Never>?
   /// The reading loop's pause between readings, which a refresh or the window's close cuts short.
   @ObservationIgnored var resting: Task<Void, Never>?
-  /// A reading asked for since the last one began: done as soon as it ends.
-  @ObservationIgnored var readAgain = false
+  /// When the facts are read next.
+  @ObservationIgnored var pace = ReadingPace()
+  /// How long the window has been open, on its clock: the times the pace keeps.
+  @ObservationIgnored let opened: @Sendable () -> Duration
+  /// Says when something the window waits for may have changed.
+  @ObservationIgnored let changes: any SetupWatching
   /// Whether the helper's "set up here" notice was last told the window is open.
   @ObservationIgnored var markedOpen = false
-  /// Readings of the facts since `atlas agents status` last failed.
-  @ObservationIgnored var readingsSinceAgentsFailed = 0
-  /// Readings in a row whose permissions were unknown.
-  @ObservationIgnored var readingsUnknown = 0
-  /// How many readings in a row have found this login on screen; see ``settledReadings``.
-  @ObservationIgnored var readingsOnConsole = 0
+  /// When `atlas agents status` last failed; nil since it last answered or was asked again.
+  @ObservationIgnored var agentsFailedAt: Duration?
+  /// When the readings started finding the job's permissions unknown; nil while they are known.
+  @ObservationIgnored var unknownSince: Duration?
+  /// When the readings started finding this login on screen; nil once one did not, or this login left the screen.
+  @ObservationIgnored var onConsoleSince: Duration?
+  /// The console's departures as that stay began (``SessionConsole/departures``): another since breaks the stay.
+  @ObservationIgnored var departuresThen = 0
   /// Whether the reading loop is in its ``quietAfterSwitch`` pause, which a refresh does not cut short.
   @ObservationIgnored var settling = false
   /// In the helper: the account whose picture was read last, by its short name, so it is read once.
@@ -100,6 +105,8 @@ final class OnboardingController {
   /// - Parameter dependencies: The `atlas` command line and the system pieces it reaches.
   init(dependencies: OnboardingDependencies) {
     self.dependencies = dependencies
+    opened = Self.stopwatch(dependencies.clock)
+    changes = dependencies.changes()
     let (requests, queue) = AsyncStream.makeStream(of: Int.self)
     self.requests = requests
     self.queue = queue
@@ -159,8 +166,8 @@ final class OnboardingController {
     snapshot.form = form
   }
 
-  /// Reads the facts now and then every ``readEvery``, and performs the window's requests one at a time, until
-  /// ``close()``.
+  /// Reads the facts now and then as ``ReadingPace`` says, follows the changes that call for a reading, and performs
+  /// the window's requests one at a time, until ``close()``.
   ///
   /// The window runs this once, from when it is first shown; a second call returns at once, and so does one after the
   /// close. Its two lanes are the two children of one task group, so neither outlives it: the reading loop
@@ -175,8 +182,11 @@ final class OnboardingController {
     // Structured children, not tasks of their own: each runs its whole loop on the main actor.
     await withDiscardingTaskGroup { group in
       group.addTask { await self.readFacts() }
+      group.addTask { await self.followChanges() }
       group.addTask { await self.performRequests() }
     }
+    // However the lanes ended, closed or cancelled, nothing watches for the window any more.
+    changes.stop()
   }
 
   /// The window is closing: the queue stops, so nothing queued runs, and the reading loop stops, dropping a reading
@@ -188,6 +198,7 @@ final class OnboardingController {
     closed = true
     queue.finish()
     pending.removeAll()
+    changes.stop()
     resting?.cancel()
     if marking { await withCheckedContinuation { markSettled = $0 } }
     if snapshot.facts.role == .helper {

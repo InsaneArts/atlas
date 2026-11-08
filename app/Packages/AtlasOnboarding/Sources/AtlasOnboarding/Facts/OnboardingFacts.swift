@@ -62,6 +62,7 @@ public struct OnboardingFacts: Equatable, Sendable {
     switch role {
     case .controller:
       helper.exists = side.exists ?? false
+      helper.uid = side.uid ?? 0
       helper.name = side.name ?? ""
       helper.realName = side.realName
       helper.administrator = side.administrator

@@ -8,19 +8,23 @@ extension OnboardingController {
   func loadAgents() {
     guard !closed, !isQueued(.readAgents) else { return }
     if snapshot.agents.isEmpty { snapshot.agents = AgentChoice.all }
-    readingsSinceAgentsFailed = 0
+    agentsFailedAt = nil
+    pace.drop(.agentsRetry)
     enqueue(.readAgents)
   }
 
   /// Asks `atlas agents status`. A reading that fails keeps the agents listed, unchecked with their switches off, says
-  /// so and lets Continue skip the step; it is asked again every ``agentsRetryReadings`` readings. One that ends after
-  /// the window closed is dropped.
+  /// so and lets Continue skip the step; it is asked again ``agentsRetryAfter`` later, on the reading asked for then. One
+  /// that ends after the window closed is dropped.
   func readAgents() async {
     let outcome = await commands.run(.agentsStatus)
     guard !closed else { return }
     guard outcome.ok, let status = outcome.decode(AgentsStatus.self) else {
       snapshot.agentsFailed = true
       if snapshot.working == nil { snapshot.problem = OnboardingWords.agentsCheckFailed }
+      let now = opened()
+      agentsFailedAt = now
+      pace.read(.agentsRetry, at: now + Self.agentsRetryAfter)
       return
     }
     if snapshot.agentsFailed, snapshot.problem == OnboardingWords.agentsCheckFailed { snapshot.problem = nil }
@@ -29,11 +33,13 @@ extension OnboardingController {
     snapshot.agentsLoaded = true
   }
 
-  /// Counts a reading since `atlas agents status` failed, and asks it again once enough have passed.
+  /// Asks `atlas agents status` again once ``agentsRetryAfter`` has passed since it failed.
   func retryAgents() {
-    guard !isQueued(.readAgents) else { return }
-    readingsSinceAgentsFailed += 1
-    if readingsSinceAgentsFailed >= Self.agentsRetryReadings { loadAgents() }
+    guard !isQueued(.readAgents), let agentsFailedAt else { return }
+    let due = agentsFailedAt + Self.agentsRetryAfter
+    // Back on the step after leaving it, the reading that asks again is asked for once more.
+    guard opened() >= due else { return pace.read(.agentsRetry, at: due) }
+    loadAgents()
   }
 
   /// Turns an agent's switch on or off.

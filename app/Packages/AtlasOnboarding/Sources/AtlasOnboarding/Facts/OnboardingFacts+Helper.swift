@@ -3,6 +3,8 @@ extension OnboardingFacts {
   public struct Helper: Equatable, Sendable {
     /// Whether the chosen account still exists.
     var exists = false
+    /// Its user ID; 0 until a reading names it.
+    public var uid = 0
     /// Its short name.
     public var name = ""
     /// Its full name, when it has one.
