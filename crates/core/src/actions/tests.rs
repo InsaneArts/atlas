@@ -365,6 +365,11 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
     ));
     assert_eq!(decoded.actions()[0].target(), Target::Nothing);
     assert!(!Kind::Reference.personal());
+    check(&serde_json::json!([
+        {"type": "reference", "ref": "8123abc.12"},
+        {"type": "key", "key": "return"},
+    ]))
+    .unwrap();
 
     for (action, problem) in [
         (
@@ -372,12 +377,18 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
             "a click is 1 to 5 clicks",
         ),
         (
+            serde_json::json!({"type": "reference", "ref": "8123abc.12", "count": 6}),
+            "a click is 1 to 5 clicks",
+        ),
+        (
             serde_json::json!({"type": "reference", "ref": "8123abc.12", "modifiers": ["hyper"]}),
             "a modifier is one of cmd, ctrl, alt, shift and fn",
         ),
     ] {
+        let refused = check(&serde_json::json!([action])).unwrap_err();
+        assert_eq!(refused.code, Code::Input);
         assert_eq!(
-            check(&serde_json::json!([action])).unwrap_err().error,
+            refused.error,
             format!("Action 1 was refused and nothing was sent: {problem}")
         );
     }
@@ -411,6 +422,7 @@ fn a_referenced_click_is_checked_as_a_click_and_comes_first_in_its_batch() {
 
     for malformed in [
         serde_json::json!([{"type": "reference", "ref": "8123abc.012"}]),
+        serde_json::json!([{"type": "reference", "ref": "Save"}]),
         serde_json::json!([{"type": "reference"}]),
         serde_json::json!([{"type": "reference", "ref": "8123abc.1", "x": 1}]),
     ] {
@@ -504,19 +516,32 @@ fn an_action_on_an_element_is_typed_by_its_word_and_checked_with_its_whole_batch
             json!({"type": "pick", "ref": "8123abc.12", "option": "8123abc.12"}),
             "an option is another element of its control's listing",
         ),
+        (
+            json!({"type": "pick", "ref": "8123abc.12", "option": "9001abc.3"}),
+            "an option is another element of its control's listing",
+        ),
     ] {
+        let refused = check(&json!([action])).unwrap_err();
+        assert_eq!(refused.code, Code::Input);
         assert_eq!(
-            check(&json!([action])).unwrap_err().error,
+            refused.error,
             format!("Action 1 was refused and nothing was sent: {problem}")
         );
     }
-    assert_eq!(
+    let later =
         check(&json!([{"type": "key", "key": "tab"}, {"type": "check", "ref": "8123abc.12"}]))
-            .unwrap_err()
-            .error,
+            .unwrap_err();
+    assert_eq!(later.code, Code::Input);
+    assert_eq!(
+        later.error,
         "Action 2 was refused and nothing was sent: an action on a ref comes first in its batch"
     );
     check(&json!([{"type": "check", "ref": "8123abc.12"}, {"type": "key", "key": "tab"}])).unwrap();
+    check(&json!([
+        {"type": "set-value", "ref": "8123abc.12", "value": "draft"},
+        {"type": "key", "key": "return"},
+    ]))
+    .unwrap();
 
     for malformed in [
         json!([{"type": "press", "ref": "Save"}]),
