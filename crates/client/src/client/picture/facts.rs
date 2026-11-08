@@ -103,17 +103,15 @@ pub(in crate::client) fn of_input(actions: &[Action], epoch: &InputEpoch) -> Map
 }
 
 /// What a command found to act on before its first input: `element`, when
-/// it has a frame, and the title of the `window` it is in, when it has one.
-pub(in crate::client) fn found(element: &Element, window: Option<&str>) -> Map<String, Value> {
+/// it has a frame. A window's title is never kept: it may be a document's
+/// name.
+pub(in crate::client) fn found(element: &Element) -> Map<String, Value> {
     let mut found = Map::new();
     if let Some(frame) = &element.frame {
         found.insert(
             "element".into(),
             reached(frame, element.role.as_deref(), shown_name(element)),
         );
-    }
-    if let Some(title) = window.filter(|title| !title.is_empty()) {
-        found.insert("window".into(), json!(title));
     }
     found
 }

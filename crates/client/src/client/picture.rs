@@ -183,14 +183,13 @@ impl Client {
     }
 
     /// Note, for the facts of an agent's command's picture, the `element`
-    /// its first input acts on, found before it is sent, and the title of
-    /// the `window` it is in, when the command has one.
-    pub(crate) fn picture_found(&self, element: &Element, window: Option<&str>) {
+    /// its first input acts on, found before it is sent.
+    pub(crate) fn picture_found(&self, element: &Element) {
         if self.actor != Actor::Agent {
             return;
         }
         if let Some(doing) = &self.doing {
-            doing.before().found(facts::found(element, window));
+            doing.before().found(facts::found(element));
         }
     }
 

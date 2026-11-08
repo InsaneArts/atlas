@@ -163,8 +163,8 @@ struct ActivityLogEntryTests {
     #expect(facts[4] == nil && facts[5] == nil)
   }
 
-  @Test("an action's element, window and task read when given, and an odd one reads as none without the rest")
-  func actionFactsElementWindowAndTask() throws {
+  @Test("an action's element and task read when given, and an odd one reads as none without the rest")
+  func actionFactsElementAndTask() throws {
     let body = Data(
       #"""
       {"activity": [
@@ -195,16 +195,43 @@ struct ActivityLogEntryTests {
           name: "Message #general"
         )
     )
-    #expect(clicked.window == "general · InsaneArts")
     #expect(clicked.task == "Post the 0.1.1 release note")
 
     let odd = try #require(facts[1])
     #expect(odd.element == ActionFacts.Element(frame: ActionFacts.Frame(x: 1, y: 2, width: 3, height: 4)))
-    #expect(odd.window == nil && odd.task == nil, "an odd or empty window or task reads as none")
+    #expect(odd.task == nil, "an odd or empty task reads as none")
 
     #expect(facts[2]?.element == nil, "an empty frame marks nothing")
     #expect(facts[3]?.element == nil && facts[3]?.label == "Send", "an element with no frame reads as none")
-    #expect(facts[4]?.element == nil && facts[4]?.window == nil && facts[4]?.task == nil)
+    #expect(facts[4]?.element == nil && facts[4]?.task == nil)
+  }
+
+  @Test("a picture's facts as an earlier build wrote them, a window's title among them, still read in full")
+  func earlierFactsStillRead() throws {
+    let body = Data(
+      #"""
+      {"activity": [
+        {"id": "1", "facts": {
+          "action": "click", "outcome": "worked", "display": {"width": 1512, "height": 982},
+          "point": {"x": 120, "y": 340}, "button": "left", "clicks": 1, "label": "Send",
+          "element": {"frame": {"x": 100, "y": 330, "width": 40, "height": 20}, "role": "AXButton", "name": "Send"},
+          "window": "Draft · Notes", "task": "Send the note", "at": 1792665102000, "endedAt": 1792665102400
+        }}
+      ]}
+      """#.utf8
+    )
+    let facts = try #require(
+      try ViewerClient.activity(body, response: reply(200))
+        .entries
+        .first?
+        .facts
+    )
+    #expect(facts.action == .click)
+    #expect(facts.point == ActionFacts.Point(x: 120, y: 340))
+    #expect(facts.clicks == 1)
+    #expect(facts.element?.name == "Send")
+    #expect(facts.task == "Send the note")
+    #expect(facts.at == Date(timeIntervalSince1970: 1_792_665_102))
   }
 
   @Test("an activity row's verb, app, label, bundle and keys of the wrong type or missing read as none")

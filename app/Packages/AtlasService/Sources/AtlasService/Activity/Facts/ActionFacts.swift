@@ -34,8 +34,6 @@ public struct ActionFacts: Decodable, Equatable, Sendable {
   public var label: String?
   /// The element it went to, where it stands and what it is; nil when unknown.
   public var element: Element?
-  /// The title of the window it went to; nil when unknown.
-  public var window: String?
   /// The task the agent named for the command that sent it; nil when it named none.
   public var task: String?
   /// When the picture before it was taken.
@@ -61,7 +59,6 @@ public struct ActionFacts: Decodable, Equatable, Sendable {
   ///   - scroll: How far it scrolled.
   ///   - label: The control or field it named.
   ///   - element: The element it went to.
-  ///   - window: The title of the window it went to.
   ///   - task: The task the agent named.
   ///   - at: When the picture before it was taken.
   ///   - endedAt: When the action replied.
@@ -81,7 +78,6 @@ public struct ActionFacts: Decodable, Equatable, Sendable {
     scroll: Scroll? = nil,
     label: String? = nil,
     element: Element? = nil,
-    window: String? = nil,
     task: String? = nil,
     at: Date? = nil,
     endedAt: Date? = nil
@@ -101,7 +97,6 @@ public struct ActionFacts: Decodable, Equatable, Sendable {
     self.scroll = scroll
     self.label = label
     self.element = element
-    self.window = window
     self.task = task
     self.at = at
     self.endedAt = endedAt
@@ -112,7 +107,7 @@ public struct ActionFacts: Decodable, Equatable, Sendable {
     /// Each field by the name the service writes.
     case action, outcome, reason, display, point, to, clicks, button, keys, text, length, secure, scroll, label, element
     /// Each field by the name the service writes.
-    case window, task, at
+    case task, at
     /// When the action replied.
     case endedAt
   }
@@ -143,7 +138,6 @@ public struct ActionFacts: Decodable, Equatable, Sendable {
     scroll = try? container.decodeIfPresent(Scroll.self, forKey: .scroll)
     label = container.lenientText(.label)
     element = try? container.decodeIfPresent(Element.self, forKey: .element)
-    window = container.lenientText(.window)
     task = container.lenientText(.task)
     at = container.lenientDate(milliseconds: .at)
     endedAt = container.lenientDate(milliseconds: .endedAt)

@@ -176,14 +176,17 @@ async fn a_named_click_marks_its_element_window_and_task_and_its_reply_stays_as_
     );
     let facts = only_facts(&client);
     assert_eq!(
-        (&facts["element"], &facts["window"], &facts["task"]),
+        (&facts["element"], &facts["task"]),
         (
             &json!({"frame": {"x": 20.0, "y": 30.0, "width": 20.0, "height": 20.0},
                 "role": "AXButton", "name": "Save"}),
-            &json!("Draft"),
             &json!("probe")
         ),
         "{facts}"
+    );
+    assert!(
+        !facts.to_string().contains("Draft"),
+        "a window's title may name a document, so it is never kept: {facts}"
     );
 }
 

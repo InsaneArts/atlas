@@ -369,7 +369,6 @@ struct ViewerPresenterActionTests {
       display: Self.display,
       keys: [["⏎"]],
       element: ActionFacts.Element(frame: .init(x: 360, y: 711, width: 1066, height: 135), name: "Message"),
-      window: "Release notes",
       task: "Post the 0.1.1 release note"
     )
     let snapshot = try ViewerActivityFixtures.onActivity([

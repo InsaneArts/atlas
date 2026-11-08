@@ -250,15 +250,15 @@ fn frame() -> Bounds {
 }
 
 #[test]
-fn a_found_element_is_kept_by_its_frame_role_and_window_with_a_name_only_for_a_control() {
-    let button = found(&element("AXButton", "Save", Some(frame())), Some("Draft"));
+fn a_found_element_is_kept_by_its_frame_and_role_with_a_name_only_for_a_control() {
+    let button = found(&element("AXButton", "Save", Some(frame())));
     assert_eq!(
         Value::Object(button),
         json!({"element": {"frame": {"x": 20.0, "y": 30.0, "width": 80.0, "height": 24.0},
-            "role": "AXButton", "name": "Save"}, "window": "Draft"})
+            "role": "AXButton", "name": "Save"}})
     );
 
-    let text = found(&element("AXStaticText", "Dear Sam", Some(frame())), None);
+    let text = found(&element("AXStaticText", "Dear Sam", Some(frame())));
     assert_eq!(text["element"]["role"], "AXStaticText");
     assert!(
         text["element"].get("name").is_none(),
@@ -266,11 +266,8 @@ fn a_found_element_is_kept_by_its_frame_role_and_window_with_a_name_only_for_a_c
     );
     assert!(!Value::Object(text).to_string().contains("Dear Sam"));
 
-    let unframed = found(&element("AXButton", "Save", None), Some(""));
-    assert!(
-        unframed.is_empty(),
-        "no frame, and an empty title, say nothing"
-    );
+    let unframed = found(&element("AXButton", "Save", None));
+    assert!(unframed.is_empty(), "no frame says nothing");
 }
 
 #[test]
@@ -292,7 +289,7 @@ fn an_element_the_input_service_reached_is_kept_unless_the_command_found_one() {
     assert_eq!(facts["element"]["name"], "Wrap");
 
     let mut named = click.clone();
-    named.extend(found(&element("AXButton", "Save", Some(frame())), None));
+    named.extend(found(&element("AXButton", "Save", Some(frame()))));
     let facts = finished(named, &worked, &pressed, Typed::default(), None, 0);
     assert_eq!(
         facts["element"]["name"], "Save",
