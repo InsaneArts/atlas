@@ -23,8 +23,6 @@ actor ScriptedFramePipeBroker {
     case interleaved
     /// The source stops working: a state, then the credit expires unserved, as the service's own lapse does.
     case unavailable
-    /// The source works again: a state, then the picture.
-    case recover
     /// A picture whose pieces have the source's failing state between them.
     case unavailableMidPicture
     /// A picture whose commit comes too late: the credit is retired instead.
@@ -141,10 +139,6 @@ actor ScriptedFramePipeBroker {
     case .unavailable:
       state("unavailable")
       reply(.creditExpired, request, ["creditID": credit])
-    case .recover:
-      state("live")
-      sequence += 1
-      picture(credit: credit, request: request)
     case .staleCommit:
       retireCommit = true
       sequence += 1

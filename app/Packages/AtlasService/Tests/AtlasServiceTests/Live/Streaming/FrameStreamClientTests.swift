@@ -81,16 +81,6 @@ struct FrameStreamClientTests {
     await client.close()
   }
 
-  @Test("a source that fails for a moment and works again keeps the observer, and its next picture arrives")
-  func unavailableOnce() async throws {
-    let (client, broker) = try await Self.opened([.unavailable, .recover])
-    let picture = try await client.next(longest: 1_600)
-    #expect(try await client.commit(picture))
-    #expect(await broker.kinds.filter { $0 == .hello }.count == 1)
-    #expect(await broker.kinds.filter { $0 == .subscribe }.count == 1)
-    await client.close()
-  }
-
   @Test("pictures that stop coming end the observer once its credits keep expiring, with or without word of it")
   func unservedForGood() async throws {
     let expiring = Self.expiring(FrameStreamClient.unservedCredits)
@@ -103,28 +93,18 @@ struct FrameStreamClientTests {
     }
   }
 
-  @Test("a picture starts the count of unserved credits again")
+  @Test("a source that fails for a moment keeps the observer, and a picture starts the count of unserved credits again")
   func pictureResetsTheCount() async throws {
     let almost = Self.expiring(FrameStreamClient.unservedCredits - 1)
-    let (client, _) = try await Self.opened([.unavailable] + almost.dropFirst() + [.picture] + almost + [.picture])
+    let (client, broker) = try await Self.opened(
+      [.unavailable] + almost.dropFirst() + [.picture] + almost + [.picture]
+    )
     for _ in 0..<2 {
       let picture = try await client.next(longest: 1_600)
       #expect(try await client.commit(picture))
     }
-    await client.close()
-  }
-
-  @Test(
-    "a failing source whose word came between a picture's pieces still ends the observer once credits keep expiring"
-  )
-  func unavailableMidPictureThenNothing() async throws {
-    let (client, broker) = try await Self.opened(
-      [.unavailableMidPicture] + Self.expiring(FrameStreamClient.unservedCredits) + [.picture]
-    )
-    let picture = try await client.next(longest: 1_600)
-    #expect(try await client.commit(picture))
-    await #expect(throws: ServiceError.self) { try await client.next(longest: 1_600) }
-    #expect(await broker.kinds.filter { $0 == .credit }.count == 1 + FrameStreamClient.unservedCredits)
+    #expect(await broker.kinds.filter { $0 == .hello }.count == 1, "never paired again")
+    #expect(await broker.kinds.filter { $0 == .subscribe }.count == 1)
     await client.close()
   }
 

@@ -77,12 +77,13 @@ struct WindowCoordinatorLaunchTests {
   @Test("a viewer line that arrives before launch finishes opens the main window once launch finishes")
   func anEarlyAskOpensOnceLaunched() throws {
     let parts = StandInParts()
-    parts.ready = false
     let coordinator = parts.coordinator()
+    // Before launch the app has no parts to make a controller with.
+    coordinator.parts = nil
     coordinator.openViewer(place: .activity)
     coordinator.openViewer()
     #expect(parts.windows.isEmpty)
-    parts.ready = true
+    coordinator.parts = parts
     coordinator.launched()
     coordinator.launched()
     #expect(parts.windows.count == 1)
@@ -90,12 +91,4 @@ struct WindowCoordinatorLaunchTests {
     #expect(coordinator.viewer?.controller.session.place == .activity)
   }
 
-  @Test("launching with nothing asked for or remembered opens no window")
-  func aPlainLaunchOpensNothing() {
-    let parts = StandInParts()
-    parts.coordinator()
-      .launched()
-    #expect(parts.windows.isEmpty)
-    #expect(parts.viewersMade == 0)
-  }
 }

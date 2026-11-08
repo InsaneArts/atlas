@@ -24,8 +24,6 @@ public actor FrameStreamClient {
   private var observerID = ""
   /// The accepted profile's generations, and the barrier its subscription installed.
   private var generations: (stream: UInt64, geometry: UInt64, barrier: UInt64)?
-  /// How many credits in a row expired unserved since the last picture.
-  private var unserved = 0
 
   /// Creates an observer over two connected lanes; it reads them from now on.
   ///
@@ -152,6 +150,8 @@ public actor FrameStreamClient {
   /// - Returns: The picture, not yet committed.
   /// - Throws: ``FramePipeError`` or a lane failure, which end the observer.
   public func next(longest: Int) async throws -> FramePipePicture {
+    // The credits in a row this call gave that expired unserved: each call ends with a picture, or the observer.
+    var unserved = 0
     while true {
       if generations == nil { try await subscribe(reason: "reconfigure", longest: longest) }
       guard let generations else { throw FramePipeError.invalid }
@@ -198,7 +198,6 @@ public actor FrameStreamClient {
             default: throw FramePipeError.truncated
             }
           }
-          unserved = 0
           return try Self.picture(picture, rgb: rgb)
         default: throw FramePipeError.invalid
         }

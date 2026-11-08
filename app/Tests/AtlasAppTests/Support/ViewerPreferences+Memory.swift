@@ -9,28 +9,25 @@ extension ViewerPreferences {
   ///   - rate: The saved picture rate, in seconds; 0 for none.
   ///   - corner: The small screen's saved corner, by its name; nil for none.
   ///   - sidebarHidden: Whether the person left the sidebar hidden.
-  ///   - windowOpen: Whether the main window was open when Atlas last stopped.
   /// - Returns: The preferences.
   static func memory(
     rate: Double = 0,
     corner: String? = nil,
-    sidebarHidden: Bool = false,
-    windowOpen: Bool = false
+    sidebarHidden: Bool = false
   ) -> ViewerPreferences {
     final class Store {
       var rate: Double
       var corner: String?
       var sidebarHidden: Bool
-      var windowOpen: Bool
+      var windowOpen = false
 
-      init(rate: Double, corner: String?, sidebarHidden: Bool, windowOpen: Bool) {
+      init(rate: Double, corner: String?, sidebarHidden: Bool) {
         self.rate = rate
         self.corner = corner
         self.sidebarHidden = sidebarHidden
-        self.windowOpen = windowOpen
       }
     }
-    let store = Store(rate: rate, corner: corner, sidebarHidden: sidebarHidden, windowOpen: windowOpen)
+    let store = Store(rate: rate, corner: corner, sidebarHidden: sidebarHidden)
     return ViewerPreferences(
       loadRate: { store.rate },
       saveRate: { store.rate = $0 },
