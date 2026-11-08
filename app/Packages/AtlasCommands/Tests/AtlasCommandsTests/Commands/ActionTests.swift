@@ -46,6 +46,12 @@ struct ActionTests {
       (.helperSound, ["sound"]),
       (.setHelperSound(muted: true), ["sound", "off"]),
       (.setHelperSound(muted: false), ["sound", "on"]),
+      (.homeFiles, ["onboarding", "files"]),
+      (.makeHomePrivate, ["onboarding", "files", "private"]),
+      (.openHome, ["onboarding", "files", "open"]),
+      (.homeOffered, ["onboarding", "files", "offered"]),
+      (.copySignIns(true), ["onboarding", "sign-ins", "allow"]),
+      (.copySignIns(false), ["onboarding", "sign-ins", "refuse"]),
     ] as [(Action, [String])]
   )
   func arguments(action: Action, arguments: [String]) {

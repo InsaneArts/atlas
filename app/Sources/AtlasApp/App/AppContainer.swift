@@ -72,5 +72,7 @@ final class AppContainer {
     self.actions = actions
     startSignals()
     startPanel(actions: actions)
+    // Unstructured, as nothing at launch can wait: the offer reads once, and asks only while it should.
+    Task { await HomeOffer.offer(commands: commands) }
   }
 }

@@ -41,6 +41,12 @@
         next.alert = settingsSwitch.alert
       case .closeLeftovers, .closeHelper:
         next.helper.closeLogin = nil
+      case .makeHomePrivate:
+        next.helper.files = settingsFilesPrivate
+      case .askOpenHome:
+        next.helper.files = settingsFilesOpen
+      case .setSignInCopies(let on):
+        next.helper.files?.signInCopies = on
       case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile:
         break
       }

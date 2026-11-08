@@ -43,7 +43,8 @@ extension SettingsPresenter {
       ),
       waiting: waits ? HelperWords.running(running) : nil,
       readyNote: notice(snapshot, in: .helper, busy: false, fromCheck: true),
-      notice: notice(snapshot, in: .helper, busy: false)
+      notice: notice(snapshot, in: .helper, busy: false),
+      files: files(snapshot.files)
     )
   }
 

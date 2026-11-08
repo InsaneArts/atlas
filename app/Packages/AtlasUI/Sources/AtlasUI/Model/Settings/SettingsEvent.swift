@@ -19,6 +19,12 @@ public enum SettingsEvent: Equatable, Sendable {
   case closeLeftovers
   /// Logs out the helper whose Atlas is silent, as root; macOS asks to approve.
   case closeHelper
+  /// Makes the home folder private from the helper.
+  case makeHomePrivate
+  /// Asks to let the helper open the home folder again.
+  case askOpenHome
+  /// Lets agents copy sign-ins into the helper, asking first, or stops them at once.
+  case setSignInCopies(Bool)
   /// Connects the agent with this id.
   case connect(String)
   /// Disconnects every part of the agent with this id.

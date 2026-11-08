@@ -60,6 +60,16 @@ public enum Action: Sendable, Equatable {
   case helperSound
   /// Keep apps in the helper silent, or let them play.
   case setHelperSound(muted: Bool)
+  /// Read whether the person's home folder is private from the helper, and what it can open there.
+  case homeFiles
+  /// Make the person's home folder private from the helper.
+  case makeHomePrivate
+  /// Let the helper open the person's home folder again; the person confirmed.
+  case openHome
+  /// Remember that keeping the home folder private was offered, changing nothing.
+  case homeOffered
+  /// Let agents copy sign-ins and secrets into the helper, or stop them; the person confirmed turning it on.
+  case copySignIns(Bool)
 
   /// Recover as the viewer service's own Recover does: restart the helper while an action's outcome is unknown or
   /// under way, else start its input, which never needs the full restart.
@@ -112,6 +122,12 @@ public enum Action: Sendable, Equatable {
     case .update: ["update"]
     case .helperSound: ["sound"]
     case .setHelperSound(let muted): ["sound", muted ? "off" : "on"]
+    case .homeFiles: ["onboarding", "files"]
+    case .makeHomePrivate: ["onboarding", "files", "private"]
+    // The person confirmed in Settings.
+    case .openHome: ["onboarding", "files", "open"]
+    case .homeOffered: ["onboarding", "files", "offered"]
+    case .copySignIns(let allow): ["onboarding", "sign-ins", allow ? "allow" : "refuse"]
     }
   }
 }

@@ -112,9 +112,11 @@
         .map(\.value)
       #expect(Set(states.map(\.tabs.selected)) == Set(SettingsTab.allCases))
       #expect(
-        Set(states.compactMap { $0.alert?.title }).count == 6,
-        "Recover, Switch, Log Out, Log Out Anyway, Forget, Install"
+        Set(states.compactMap { $0.alert?.title }).count == 8,
+        "Recover, Switch, Log Out, Log Out Anyway, Forget, Install, Undo of a private home folder, sign-in copies"
       )
+      #expect(states.contains { $0.helper.files?.home?.isPrivate == false }, "a home folder open to the helper")
+      #expect(states.contains { $0.helper.files?.status?.isProblem == true }, "a change that failed")
       #expect(states.contains { $0.alert?.isBusy == true }, "an alert whose command runs")
       let updates = Set(
         states.map { state in

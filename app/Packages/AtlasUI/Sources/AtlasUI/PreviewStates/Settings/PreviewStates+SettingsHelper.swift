@@ -18,7 +18,8 @@
         canRecover: true,
         canLogOut: true,
         switchHelp: "Lock your screen so you can log in to the helper"
-      )
+      ),
+      files: settingsFilesPrivate
     )
 
     /// Mouse and keyboard stopped in the helper: its row says so in short and offers Recover… beside it, the one

@@ -155,6 +155,7 @@ extension OnboardingPresenter {
     OnboardingDoneScreenState(
       lede: OnboardingWords.doneLede(snapshot.facts.helper.title),
       opensAtLogin: snapshot.opensAtLogin,
+      keepsHomePrivate: snapshot.keepsHomePrivate,
       isEnabled: snapshot.working == nil
     )
   }

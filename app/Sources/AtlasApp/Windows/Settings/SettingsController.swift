@@ -16,6 +16,8 @@ final class SettingsController {
   private(set) var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   private(set) var notify = false
+  /// The person's files and the helper, as last read. Written only by the controller's own files.
+  var files = SettingsFiles()
   /// Counts the times the window came forward and a choice was kept where no other window shows it, so what the
   /// links read is read again then.
   private(set) var revision = 0
@@ -64,6 +66,7 @@ final class SettingsController {
       icons: icons,
       notify: notify,
       sound: actions.sound.button,
+      files: files,
       facts: SettingsFacts(
         status: helper.status,
         connecting: helper.connecting,
@@ -96,6 +99,9 @@ final class SettingsController {
     case .askLogOut: ask(.logOut)
     case .closeLeftovers: Task { await closeLogin(.closeLeftovers) }
     case .closeHelper: Task { await closeLogin(.closeHelper) }
+    case .makeHomePrivate: Task { await changeHome(makePrivate: true) }
+    case .askOpenHome: ask(.openHome)
+    case .setSignInCopies(let allow): askSignInCopies(allow)
     case .connect(let id): Task { await connect(id) }
     case .disconnect(let id): Task { await disconnect(id) }
     case .askForget(let path): askForget(path)
@@ -144,6 +150,7 @@ final class SettingsController {
     dependencies.preferences.saveTab(tab.rawValue)
     reshapeWindow()
     if tab == .agents { readAgents() }
+    if tab == .helper { Task { await readFiles() } }
   }
 
   /// The window came forward: what the links read is read again, and the agents, the projects and the helper's
@@ -152,6 +159,7 @@ final class SettingsController {
     revision += 1
     readAgents()
     Task { await readHelperSound() }
+    if session.tab == .helper { Task { await readFiles() } }
   }
 
   /// The window closed: the agents reading under way stops. A command it started, such as a check for updates or a

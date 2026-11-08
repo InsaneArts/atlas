@@ -36,6 +36,11 @@
       "26-claude-code-only",
       "27-claude-app-only",
       "28-claude-partly-connected",
+      "29-helper-home-open",
+      "30-helper-home-failed",
+      "31-helper-copies-allowed",
+      "32-open-home",
+      "33-allow-sign-ins",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.

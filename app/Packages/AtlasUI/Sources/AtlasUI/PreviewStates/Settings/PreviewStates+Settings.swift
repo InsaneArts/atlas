@@ -33,6 +33,11 @@
         PreviewState(name: "Claude Code only", value: settingsClaudeCode),
         PreviewState(name: "Claude app only", value: settingsClaudeApp),
         PreviewState(name: "Claude partly connected", value: settingsClaudePartial),
+        PreviewState(name: "Helper, home folder open", value: settingsHelperHomeOpen),
+        PreviewState(name: "Helper, home folder failed", value: settingsHelperHomeFailed),
+        PreviewState(name: "Helper, sign-in copies allowed", value: settingsHelperCopiesAllowed),
+        PreviewState(name: "Let the helper open the home folder", value: settingsOpenHome),
+        PreviewState(name: "Let agents copy sign-ins", value: settingsAllowSignIns),
       ]
     }
 

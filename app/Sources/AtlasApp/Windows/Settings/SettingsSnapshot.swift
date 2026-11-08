@@ -12,6 +12,8 @@ struct SettingsSnapshot {
   var notify = false
   /// The helper's sound, as every window shows it.
   var sound = HelperSoundButton()
+  /// The person's files and the helper, as last read.
+  var files = SettingsFiles()
   /// What the rest of the app says now.
   var facts = SettingsFacts()
 }

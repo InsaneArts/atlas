@@ -29,6 +29,13 @@ extension SettingsController {
     case .logOutAnyway: await run { await self.logOut(force: true) }
     case .forget(let path): await run { await self.forget(path) }
     case .install(let version): await install(version)
+    // The files' alerts close once their change ends; what it said shows under the section.
+    case .openHome:
+      await run { await self.changeHome(makePrivate: false) }
+      session.alert = nil
+    case .allowSignIns:
+      await run { await self.setSignInCopies(true) }
+      session.alert = nil
     }
   }
 

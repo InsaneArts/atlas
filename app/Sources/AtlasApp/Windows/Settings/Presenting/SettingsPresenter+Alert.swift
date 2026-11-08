@@ -38,6 +38,30 @@ extension SettingsPresenter {
           doneMessage: SettingsWords.forgetMessage
         )
       )
+    case .openHome:
+      HelperAlert.destructive(
+        SettingsWords.openHomeTitle,
+        SettingsWords.openHomeMessage,
+        SettingsWords.letItOpen,
+        cancel: SettingsWords.keepPrivate,
+        phase: progress.phase(
+          running: SettingsWords.changingFiles,
+          done: SettingsWords.letItOpen,
+          doneMessage: SettingsWords.openHomeMessage
+        )
+      )
+    case .allowSignIns:
+      HelperAlert.destructive(
+        SettingsWords.allowSignInsTitle,
+        SettingsWords.allowSignInsMessage,
+        SettingsWords.allow,
+        cancel: SettingsWords.dontAllow,
+        phase: progress.phase(
+          running: SettingsWords.changingFiles,
+          done: SettingsWords.allow,
+          doneMessage: SettingsWords.allowSignInsMessage
+        )
+      )
     case .install(let version):
       HelperAlert.plain(
         SettingsWords.installTitle(version),

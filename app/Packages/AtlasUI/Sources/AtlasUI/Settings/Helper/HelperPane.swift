@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The Helper pane: the helper as an account with its status and Switch, a login Atlas can close while there is
-/// one, whether it is ready to act with Check Again, and Recover and Log Out for when something goes wrong. While
+/// one, whether it is ready to act with Check Again, whether the person's files are private from it, and Recover and
+/// Log Out for when something goes wrong. While
 /// another action runs, the buttons wait and a line with a spinner names it. When Check Again ends, VoiceOver hears
 /// it once.
 struct HelperPane: View {
@@ -30,6 +31,9 @@ struct HelperPane: View {
       }
       // Check Again always lasts long enough to show, so its marks need no wait before their spinners.
       .environment(\.marksSwapAtOnce, true)
+      if let files = state.files {
+        HelperFilesSection(state: files, send: send)
+      }
       GroupedSection(HelperAction.allCases, title: "When something goes wrong", notes: notes) { action in
         actionRow(action)
       }

@@ -36,6 +36,8 @@ public enum OnboardingEvent: Hashable, Sendable {
   case connectAgents
   /// Open Atlas at login turned on or off.
   case setOpenAtLogin(Bool)
+  /// Keep my home folder private from the helper, checked or not.
+  case setKeepHomePrivate(Bool)
   /// Done.
   case complete
   /// Allow, in the helper.

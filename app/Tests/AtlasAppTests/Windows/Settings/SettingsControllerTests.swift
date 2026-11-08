@@ -114,7 +114,7 @@ struct SettingsControllerTests {
     try await clock.untilSleeping(for: least, "Check Again never held for its least time")
     clock.advance(by: least)
     await checking.value
-    #expect(commands.ran == [Action.doctor.arguments])
+    #expect(commands.ran == [Action.doctor.arguments, Action.homeFiles.arguments])
     #expect(
       controller.state.helper.readyNote
         == SettingsNote(text: "Start the helper: run atlas init (safe to run again).", kind: .problem)
@@ -131,7 +131,7 @@ struct SettingsControllerTests {
     let checking = Task { await controller.checkAgain() }
     let least = Duration.seconds(Motion.Duration.leastWork.seconds)
     try await clock.untilSleeping(for: least, "Check Again never held for its least time")
-    try await settle("the diagnosis never ran") { commands.ran == [Action.doctor.arguments] }
+    try await settle("the diagnosis never ran") { commands.ran.contains(Action.doctor.arguments) }
     #expect(controller.session.checking, "answered at once, yet still checking")
     clock.advance(by: least)
     await checking.value

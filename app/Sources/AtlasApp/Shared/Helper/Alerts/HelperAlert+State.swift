@@ -122,25 +122,27 @@ extension HelperAlert {
     )
   }
 
-  /// A destructive alert: Cancel the blue default, its action red.
+  /// A destructive alert: its way out the blue default, its action red.
   ///
   /// - Parameters:
   ///   - title: The question.
   ///   - message: What it means.
   ///   - action: The action's word.
+  ///   - cancel: The way out's word; Cancel by default.
   ///   - phase: Where its command stands.
   /// - Returns: The alert.
   static func destructive(
     _ title: String,
     _ message: String,
     _ action: String,
+    cancel: String = HelperWords.cancel,
     phase: AlertCardPhase
   ) -> AlertCardState<AlertChoice> {
     AlertCardState(
       title: title,
       message: message,
       buttons: [
-        AlertCardButton(id: .cancel, title: HelperWords.cancel, role: .safeCancel),
+        AlertCardButton(id: .cancel, title: cancel, role: .safeCancel),
         AlertCardButton(id: .confirm, title: action, role: .destructive),
       ],
       phase: phase
