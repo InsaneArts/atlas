@@ -237,8 +237,21 @@ impl Asks {
         if answer == Answer::Task {
             self.allow_task(&ask, now)?;
         }
+        // Answered, the card goes, and with it its picture, whether or not a
+        // command still waits.
+        let _locked = self.lock()?;
         let path = self.folder.join(format!("{id}.answer"));
-        atlas_core::files::save_private(&path, serde_json::to_string(&answer)?.as_bytes())
+        atlas_core::files::save_private(&path, serde_json::to_string(&answer)?.as_bytes())?;
+        if let Some(mut answered) = self.read(id)
+            && answered.picture.take().is_some()
+        {
+            let _ = fs::remove_file(self.folder.join(format!("{id}.jpg")));
+            atlas_core::files::save_private(
+                &self.folder.join(format!("{id}.json")),
+                &serde_json::to_vec(&answered)?,
+            )?;
+        }
+        Ok(())
     }
 
     /// The answer to ask `id`, once the person gave one.
@@ -392,18 +405,28 @@ impl Asks {
         atlas_core::files::save_private(&self.folder.join("permits"), &serde_json::to_vec(permits)?)
     }
 
-    /// Keep `jpeg` as ask `id`'s picture, private, while the ask is up: it
-    /// goes with the ask, however that ends.
+    /// Keep `jpeg` as ask `id`'s picture, private, while the ask is up and
+    /// unanswered at `now`: it goes with the ask, however that ends, and
+    /// with the person's answer.
     ///
     /// # Errors
     ///
     /// Returns file errors; the ask then has no picture.
-    pub fn keep_picture(&self, id: &str, jpeg: &[u8]) -> Result<()> {
+    pub fn keep_picture(&self, id: &str, jpeg: &[u8], now: u64) -> Result<()> {
         let name = format!("{id}.jpg");
         let _locked = self.lock()?;
         let Some(mut ask) = self.read(id) else {
             return Ok(());
         };
+        // One that ran out by now goes, and gets none.
+        if ask.ends <= now {
+            self.remove(id);
+            return Ok(());
+        }
+        // One the person answered has no card left to show it on.
+        if self.answered(id).is_some() {
+            return Ok(());
+        }
         atlas_core::files::save_private(&self.folder.join(&name), jpeg)?;
         ask.picture = Some(name);
         atlas_core::files::save_private(

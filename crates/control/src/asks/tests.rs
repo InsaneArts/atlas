@@ -394,31 +394,30 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
                 1_000,
             )
             .unwrap();
-        asks.keep_picture(&id, b"jpeg").unwrap();
+        asks.keep_picture(&id, b"jpeg", 1_000).unwrap();
         assert!(picture(&id).exists(), "while it is up");
         id
     };
 
-    let answered = pictured("b1", None);
-    use std::os::unix::fs::PermissionsExt;
-    let mode = fs::metadata(picture(&answered))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o600);
-    assert_eq!(
-        asks.open(2_000)[0].picture.as_deref(),
-        Some(format!("{answered}.jpg").as_str()),
-        "named for the person's app, beside the asks"
+    let mut answered = Vec::new();
+    for answer in [Answer::Once, Answer::Task, Answer::Deny] {
+        let id = pictured(&format!("{answer:?}"), None);
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(picture(&id)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        // Answered through the person's own route, with no command left to
+        // take the question down.
+        asks.answer(&id, answer, true, 2_000).unwrap();
+        assert!(!picture(&id).exists(), "{answer:?}");
+        answered.push(id);
+    }
+    let shown = asks.open(2_000);
+    assert!(
+        shown.iter().all(|ask| ask.picture.is_none()),
+        "no card names it"
     );
-    asks.answer(&answered, Answer::Once, true, 2_000).unwrap();
-    asks.claim_once(&answered, 2_000).unwrap();
-    assert!(!picture(&answered).exists(), "answered");
-
-    let denied = pictured("b2", None);
-    asks.answer(&denied, Answer::Deny, true, 2_000).unwrap();
-    asks.close(&denied);
-    assert!(!picture(&denied).exists(), "said no to");
+    asks.keep_picture(&answered[0], b"jpeg", 2_000).unwrap();
+    assert!(!picture(&answered[0]).exists(), "none for one answered");
 
     let expired = pictured("b3", None);
     assert!(asks.open(1_000 + millis(LIFE)).is_empty());
@@ -428,8 +427,22 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
     let ended = pictured("b4", Some(gone));
     asks.close_unless(2_000, |ask| ask.process != Some(gone));
     assert!(!picture(&ended).exists(), "its session ended");
-
-    asks.close(&ended);
-    asks.keep_picture(&ended, b"jpeg").unwrap();
+    asks.keep_picture(&ended, b"jpeg", 2_000).unwrap();
     assert!(!picture(&ended).exists(), "never kept for one that is down");
+}
+
+#[test]
+fn a_question_that_ran_out_between_joining_and_its_picture_goes_and_gets_none() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let id = asks.ask(question("s1", "b1"), 1_000).unwrap();
+    // A rerun joins it just before it ends; its picture comes after.
+    assert_eq!(asks.ask(question("s1", "b1"), millis(LIFE)).unwrap(), id);
+    asks.keep_picture(&id, b"jpeg", 1_000 + millis(LIFE))
+        .unwrap();
+    assert!(!folder.path().join(format!("h.asks/{id}.jpg")).exists());
+    assert!(
+        !folder.path().join(format!("h.asks/{id}.json")).exists(),
+        "and the question itself is gone"
+    );
 }
