@@ -30,6 +30,9 @@ pub(super) const WAIT: Duration = Duration::from_millis(150);
 /// The last part of [`WAIT`], kept for the daemon to answer the picture's
 /// cancel.
 const CANCEL: Duration = Duration::from_millis(50);
+/// The longest a question to the person waits for its picture: it is put
+/// up without one after that.
+const FOR_ASK: Duration = Duration::from_secs(1);
 /// The longest the picture after an action is waited for, once due: a
 /// helper that takes longer leaves the action without one, and its process
 /// ends.
@@ -104,6 +107,25 @@ impl Client {
             deadline,
             cancel: Some(cancel),
         })
+    }
+
+    /// A picture of the helper's screen now, in the session of `epoch`
+    /// whose daemon is `capture_pid`, for a question to the person: taken
+    /// whether or not the settings keep pictures of actions, and kept only
+    /// with that question. None when none comes within [`FOR_ASK`].
+    pub(super) async fn picture_for_ask(
+        &self,
+        epoch: &InputEpoch,
+        capture_pid: u32,
+    ) -> Option<Raw> {
+        let (_cancel, cancelled) = oneshot::channel();
+        let taking = frame(
+            self.transport.clone(),
+            epoch.clone(),
+            capture_pid,
+            cancelled,
+        );
+        tokio::time::timeout(FOR_ASK, taking).await.ok()?.ok()
     }
 
     /// Name `raw` on its command's rows from now on, with the facts of the

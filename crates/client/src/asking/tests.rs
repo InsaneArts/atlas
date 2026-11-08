@@ -324,6 +324,7 @@ fn allow_for_this_task_holds_only_in_the_host_process_it_was_given_in_while_its_
         question: json!({"accountKey": {"kind": "site", "id": "github.com"}, "bind": {"b": 1}}),
         asked: 0,
         ends: 0,
+        picture: None,
     };
     let id = asks.ask(ask, now_ms()).unwrap();
     asks.answer(&id, Answer::Task, true, now_ms()).unwrap();

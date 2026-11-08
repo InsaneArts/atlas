@@ -4,7 +4,8 @@
 //!
 //! An ask is one file, `<id>.json`, in the helper's asks folder: who asks,
 //! the account, what would be sent and, for a message, its preview. It lives
-//! two minutes. The preview lives only while a command waits on the ask: the
+//! two minutes; its picture, `<id>.jpg`, lives as long as it does, and goes
+//! too when its agent session ends. The preview lives only while a command waits on the ask: the
 //! command takes it off when its wait ends, however it ends, and a rerun
 //! that joins the ask writes it again. An ask whose command was killed is
 //! taken down at the next read of the folder, and the person's app, which
@@ -66,6 +67,10 @@ pub struct Ask {
     /// When it was asked and when it ends, in milliseconds since 1970.
     pub asked: u64,
     pub ends: u64,
+    /// Its picture of the helper's screen, a JPEG in the asks folder by
+    /// this name, for the person's card alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 /// What the person answered.
@@ -136,6 +141,13 @@ impl Asks {
             allowed,
             stop,
         }
+    }
+
+    /// The folder the asks are kept in.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn folder(&self) -> &Path {
+        &self.folder
     }
 
     /// Ask `ask`, or, when this session already asks the same request,
@@ -380,7 +392,37 @@ impl Asks {
         atlas_core::files::save_private(&self.folder.join("permits"), &serde_json::to_vec(permits)?)
     }
 
-    /// Take ask `id` down, with its answer.
+    /// Keep `jpeg` as ask `id`'s picture, private, while the ask is up: it
+    /// goes with the ask, however that ends.
+    ///
+    /// # Errors
+    ///
+    /// Returns file errors; the ask then has no picture.
+    pub fn keep_picture(&self, id: &str, jpeg: &[u8]) -> Result<()> {
+        let name = format!("{id}.jpg");
+        let _locked = self.lock()?;
+        let Some(mut ask) = self.read(id) else {
+            return Ok(());
+        };
+        atlas_core::files::save_private(&self.folder.join(&name), jpeg)?;
+        ask.picture = Some(name);
+        atlas_core::files::save_private(
+            &self.folder.join(format!("{id}.json")),
+            &serde_json::to_vec(&ask)?,
+        )
+    }
+
+    /// Take down every ask that `lives` says no longer has an agent session
+    /// waiting on it: its session or host process ended.
+    pub fn close_unless(&self, now: u64, lives: impl Fn(&Ask) -> bool) {
+        for ask in self.open(now) {
+            if !lives(&ask) {
+                self.close(&ask.id);
+            }
+        }
+    }
+
+    /// Take ask `id` down, with its answer and picture.
     pub fn close(&self, id: &str) {
         // Taken down either way; the lock only keeps a rewrite from
         // bringing it back.
@@ -389,7 +431,7 @@ impl Asks {
     }
 
     fn remove(&self, id: &str) {
-        for ending in ["json", "answer"] {
+        for ending in ["json", "answer", "jpg"] {
             let _ = fs::remove_file(self.folder.join(format!("{id}.{ending}")));
         }
     }

@@ -38,7 +38,7 @@ pub const FOLDER: &str = "before";
 /// The longest side a picture is taken at, and the JPEG quality it is kept
 /// at.
 pub(crate) const SIDE: u32 = 1280;
-const QUALITY: f64 = 0.6;
+pub(crate) const QUALITY: f64 = 0.6;
 /// The most bytes they take in all, whatever the days they are kept.
 const ROOM: u64 = 500 * 1024 * 1024;
 /// What a file's temporary name adds while it is written.

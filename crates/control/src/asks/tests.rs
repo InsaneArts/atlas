@@ -29,6 +29,7 @@ fn question(session: &str, batch: &str) -> Ask {
         }),
         asked: 0,
         ends: 0,
+        picture: None,
     }
 }
 
@@ -376,4 +377,59 @@ fn a_permit_is_taken_once_by_its_own_session_for_its_own_action() {
         take("s1", Some(process), "return", 1_000 + millis(LIFE)).is_empty(),
         "two minutes at most"
     );
+}
+
+#[test]
+fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let picture = |id: &str| folder.path().join(format!("h.asks/{id}.jpg"));
+    let pictured = |batch: &str, process| {
+        let id = asks
+            .ask(
+                Ask {
+                    process,
+                    ..question("s1", batch)
+                },
+                1_000,
+            )
+            .unwrap();
+        asks.keep_picture(&id, b"jpeg").unwrap();
+        assert!(picture(&id).exists(), "while it is up");
+        id
+    };
+
+    let answered = pictured("b1", None);
+    use std::os::unix::fs::PermissionsExt;
+    let mode = fs::metadata(picture(&answered))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+    assert_eq!(
+        asks.open(2_000)[0].picture.as_deref(),
+        Some(format!("{answered}.jpg").as_str()),
+        "named for the person's app, beside the asks"
+    );
+    asks.answer(&answered, Answer::Once, true, 2_000).unwrap();
+    asks.claim_once(&answered, 2_000).unwrap();
+    assert!(!picture(&answered).exists(), "answered");
+
+    let denied = pictured("b2", None);
+    asks.answer(&denied, Answer::Deny, true, 2_000).unwrap();
+    asks.close(&denied);
+    assert!(!picture(&denied).exists(), "said no to");
+
+    let expired = pictured("b3", None);
+    assert!(asks.open(1_000 + millis(LIFE)).is_empty());
+    assert!(!picture(&expired).exists(), "ran out");
+
+    let gone = atlas_core::process::Instance::new(812, [1, 0]);
+    let ended = pictured("b4", Some(gone));
+    asks.close_unless(2_000, |ask| ask.process != Some(gone));
+    assert!(!picture(&ended).exists(), "its session ended");
+
+    asks.close(&ended);
+    asks.keep_picture(&ended, b"jpeg").unwrap();
+    assert!(!picture(&ended).exists(), "never kept for one that is down");
 }

@@ -340,6 +340,11 @@ impl Client {
                 if let Some(doing) = &self.doing {
                     doing.before().reset();
                 }
+                // What the person is asked about shows it, in their question
+                // alone: never in activity.
+                if crate::asking::asks_person(&reply) {
+                    self.keep_for_ask(picture);
+                }
             } else {
                 self.keep_picture(picture, actions.actions(), epoch);
             }

@@ -4197,7 +4197,11 @@ fn answering_input(
             let mut peer = BufReader::new(peer);
             let mut line = String::new();
             peer.read_line(&mut line).await.unwrap();
-            let request = serde_json::from_str::<Value>(&line).unwrap();
+            // A picture for the person's question, asked of the daemon's
+            // socket this stand-in also is, isn't served.
+            let Ok(request) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             let released = request["op"] == "release";
             let reply = match request["op"].as_str() {
                 Some("input") => {

@@ -634,3 +634,51 @@ async fn a_lost_reply_keeps_its_picture_and_only_a_refusal_proven_to_send_nothin
         "no picture for what sent nothing"
     );
 }
+
+#[tokio::test]
+async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_whatever_the_setting()
+{
+    for keeping in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = agent(directory.path(), Pictures::Taken, "key");
+        client.config.activity.pictures_before_actions = keeping;
+        client.controller = client
+            .controller
+            .clone()
+            .waiting(Duration::from_millis(100));
+        let frame = json!({"x": 10.0, "y": 20.0, "width": 80.0, "height": 24.0});
+        let refused = json!({"ok": false, "code": "waiting-for-person",
+            "error": "github.com is signed in", "performed": 0, "partial": false,
+            "uncertain": false, "ask": {"account": "github.com", "what": "click",
+                "accountKey": {"kind": "site", "id": "github.com"}, "action": "a1",
+                "bind": {"action": "a1"}, "once": true, "task": true, "frame": frame}});
+        let outcome = helper
+            .serve(
+                crate::asking::after_asking(&client, async || {
+                    client.input(&key(), None, None).await
+                }),
+                |request| match request["op"].as_str() {
+                    Some("input") => Some(refused.clone()),
+                    _ => input_service(&client, false, request),
+                },
+            )
+            .await;
+
+        let asks = client.controller.asks();
+        let open = asks.open(atlas_core::time::now_ms());
+        let picture = open[0].picture.clone().expect("the question has a picture");
+        assert!(asks.folder().join(&picture).exists(), "keeping {keeping}");
+        assert_eq!(open[0].question["frame"], frame, "where the element is");
+        assert!(
+            pictures(&client).is_empty(),
+            "activity keeps none: {keeping}"
+        );
+        let told = match &outcome {
+            Ok(reply) => reply.to_string(),
+            Err(error) => serde_json::to_string(error).unwrap(),
+        };
+        for private in ["frame", &picture, ".jpg", "\"x\":10"] {
+            assert!(!told.contains(private), "{private} in {told}");
+        }
+    }
+}

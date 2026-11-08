@@ -57,6 +57,7 @@ fn the_status_shows_a_question_but_never_what_would_be_sent() {
         question: json!({"what": "send-key", "batch": "b1", "message": {"preview": canary, "digest": "d"}}),
         asked: 0,
         ends: 0,
+        picture: None,
     };
     client
         .controller
@@ -121,6 +122,7 @@ fn what_the_person_allowed_a_task_ends_with_its_host_process() {
             question: json!({"accountKey": key, "bind": {"session": session}}),
             asked: 0,
             ends: 0,
+            picture: None,
         };
         let id = asks.ask(ask, now).unwrap();
         asks.answer(&id, atlas_control::asks::Answer::Task, true, now)

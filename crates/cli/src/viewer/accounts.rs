@@ -105,6 +105,8 @@ pub(super) fn asks_for_status(client: &atlas_client::client::Client) -> (Value, 
     // What the person allowed a task ends with its agent session; a status
     // that can't end it still never lets it cover anything.
     let _ = asks.end_unless(now, |allowed| atlas_client::asking::lives(client, allowed));
+    // A question no agent session waits on any more goes, picture and all.
+    asks.close_unless(now, |ask| atlas_client::asking::asker_lives(client, ask));
     let open: Vec<Value> = asks
         .open(now)
         .into_iter()

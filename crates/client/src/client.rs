@@ -140,6 +140,9 @@ pub struct Client {
     /// The digest of the whole text this command types, which its check
     /// and each of its requests carry.
     typing: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// The picture of the screen a refusal to ask the person came with, for
+    /// the person's question alone.
+    for_ask: std::sync::Arc<std::sync::Mutex<Option<crate::before::Raw>>>,
 }
 
 impl Client {
@@ -174,6 +177,7 @@ impl Client {
             granted: std::sync::Arc::default(),
             checking: std::sync::Arc::default(),
             typing: std::sync::Arc::default(),
+            for_ask: std::sync::Arc::default(),
             config,
         })
     }
@@ -213,6 +217,24 @@ impl Client {
         if let Ok(mut typing) = self.typing.lock() {
             *typing = digest;
         }
+    }
+
+    /// Keep `raw` for the question the refusal just come back asks.
+    pub(crate) fn keep_for_ask(&self, raw: crate::before::Raw) {
+        if let Ok(mut kept) = self.for_ask.lock() {
+            *kept = Some(raw);
+        }
+    }
+
+    /// The picture kept for the question asked now, taken: none kept
+    /// stays.
+    pub(crate) fn take_for_ask(&self) -> Option<crate::before::Raw> {
+        self.for_ask.lock().ok()?.take()
+    }
+
+    /// Whether a picture is kept for the question asked now.
+    pub(crate) fn kept_for_ask(&self) -> bool {
+        self.for_ask.lock().is_ok_and(|kept| kept.is_some())
     }
 
     /// Spend what was allowed once: an attempt used it.

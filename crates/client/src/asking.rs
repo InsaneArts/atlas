@@ -209,6 +209,7 @@ pub async fn after_asking(
     let outcome = asking(client, attempt).await;
     // What the person allowed once was for this command alone.
     client.clear_granted();
+    drop(client.take_for_ask());
     outcome
 }
 
@@ -241,8 +242,13 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
             question,
             asked: 0,
             ends: 0,
+            picture: None,
         };
         let id = asks.ask(ask, now_ms())?;
+        if let Some(raw) = client.take_for_ask() {
+            // A question goes up without its picture when it can't be kept.
+            let _ = keep_picture(&asks, &id, &raw);
+        }
         let _shown = Shown {
             asks: asks.clone(),
             id: id.clone(),
@@ -481,6 +487,32 @@ fn asked(outcome: &Result<Value>) -> Option<(Value, bool)> {
         let later = came.performed > 0 || came.typed > 0 || came.partial;
         (came.ask, later)
     })
+}
+
+/// Whether `outcome` is a clean stop the person is asked about.
+pub(crate) fn asks_person(outcome: &Result<Value>) -> bool {
+    asked(outcome).is_some()
+}
+
+/// Keep `raw` as ask `id`'s picture, encoded as the action pictures are.
+fn keep_picture(
+    asks: &atlas_control::asks::Asks,
+    id: &str,
+    raw: &crate::before::Raw,
+) -> Result<()> {
+    let (width, height) = (raw.width as usize, raw.height as usize);
+    let (jpeg, _, _) = crate::helper_info::jpeg_rgb(
+        &raw.rgb,
+        (width, height, width.saturating_mul(3)),
+        (crate::before::SIDE, crate::before::QUALITY),
+    )?;
+    asks.keep_picture(id, &jpeg)
+}
+
+/// Whether the agent session that asked `ask` still waits on it: its host
+/// process runs and its session hasn't ended.
+pub fn asker_lives(client: &Client, ask: &Ask) -> bool {
+    session_lives(client, &ask.session, ask.process)
 }
 
 /// Whether `outcome` proves its request sent nothing: refused before its
