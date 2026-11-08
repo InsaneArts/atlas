@@ -338,13 +338,22 @@ pub(crate) fn decide(actions: &[Action], asking: &Asking, look: &mut impl Look) 
     let mut changed = false;
     // A pointer press decides; its release in the same request follows it.
     let mut pressed = false;
+    // Text typed may change what lies under a point (a live search), but
+    // not where more typing goes: drafts typed in turn stay free.
+    let mut typed = false;
     for action in actions {
-        let decision = judge(action, asking, look, &batch, (changed, pressed));
+        let pointed = matches!(
+            action,
+            Action::Pointer { .. } | Action::Click { .. } | Action::Drag { .. }
+        );
+        let unsure = changed || (typed && pointed);
+        let decision = judge(action, asking, look, &batch, (unsure, pressed));
         if decision != Decision::Free {
             return decision;
         }
         pressed = holds(action, pressed);
         changed |= changes(action);
+        typed |= matches!(action, Action::Type { .. });
     }
     Decision::Free
 }

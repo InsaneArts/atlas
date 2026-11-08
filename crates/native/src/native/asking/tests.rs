@@ -1045,3 +1045,69 @@ fn after_a_scroll_what_lies_under_a_point_cant_be_told_and_asks() {
     let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
     assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
 }
+
+#[test]
+fn a_floating_panel_or_menu_of_a_listed_app_over_another_app_is_judged_as_the_listed_app() {
+    let window = |number: i64, pid: i64, layer: i64| atlas_core::screen::windows::Window {
+        number,
+        pid,
+        owner: None,
+        title: None,
+        layer,
+        alpha: 1.0,
+        bounds: atlas_core::screen::geometry::Bounds {
+            x: 0.0,
+            y: 30.0,
+            width: 400.0,
+            height: 300.0,
+        },
+        system: None,
+    };
+    let display = atlas_core::screen::geometry::Bounds::display(800.0, 600.0);
+    // Front to back: the listed app's floating panel, then its open menu
+    // elsewhere, over an unlisted app's ordinary window.
+    let panel = vec![window(11, 812, 3), window(10, 900, 0)];
+    let received = live::receiving(&panel, display.clone(), 50.0, 50.0).unwrap();
+    assert_eq!((received.pid, received.number), (812, 11));
+    let menu = vec![window(12, 812, 101), window(10, 900, 0)];
+    assert_eq!(
+        live::receiving(&menu, display, 50.0, 50.0).unwrap().pid,
+        812
+    );
+
+    let asking = listing(Kind::App, SLACK, Level::LookOnly);
+    let slack = Target {
+        app: Some(SLACK.to_owned()),
+        window: Some(11),
+        name: Some("Open".to_owned()),
+        ..Target::default()
+    };
+    let mut look = scripted(slack, Target::default());
+    let click = actions(json!([{"type": "click", "x": 50, "y": 50}]));
+    assert!(matches!(
+        decide(&click, &asking, &mut look),
+        Decision::Deny { .. }
+    ));
+}
+
+#[test]
+fn after_typing_what_lies_under_a_point_cant_be_told_but_more_typing_stays_a_draft() {
+    let asking = listing(Kind::Site, "github.com", Level::Ask);
+    let mut look = scripted(
+        page("github.com", "AXButton", Some("Open")),
+        field("github.com", false),
+    );
+    let then_click = actions(json!([
+        {"type": "type", "text": "release"},
+        {"type": "click", "x": 1, "y": 1},
+    ]));
+    assert_eq!(
+        what(&decide(&then_click, &asking, &mut look)),
+        Some("unsure")
+    );
+    let drafts = actions(json!([
+        {"type": "type", "text": "release "},
+        {"type": "type", "text": "notes"},
+    ]));
+    assert_eq!(decide(&drafts, &asking, &mut look), Decision::Free);
+}
