@@ -9,7 +9,7 @@
     }
 
     /// The sidebar hiding, the Screen turning into Activity with the picture shrinking into its corner, Give Back
-    /// turning the footer back into Take Control, and Ended opening.
+    /// turning the footer back into Take Control and Take Control turning it into Give Back, and Ended opening.
     @MainActor private static var windowMotion: [ViewerMotionPose] {
       [
         ViewerMotionPose(
@@ -31,7 +31,14 @@
           from: viewerControl,
           to: viewer(viewerControl, applying: .giveBack),
           size: viewerSize,
-          lead: .spring(Motion.Springs.state)
+          lead: .list(Motion.Springs.state)
+        ),
+        ViewerMotionPose(
+          "take-control",
+          from: viewerWorking,
+          to: viewer(viewerWorking, applying: .takeControl),
+          size: viewerSize,
+          lead: .list(Motion.Springs.state)
         ),
         ViewerMotionPose(
           "ended-open",
