@@ -993,3 +993,55 @@ fn with_a_button_held_a_move_or_a_scroll_is_a_drag_where_it_lands() {
         );
     }
 }
+
+#[test]
+fn while_the_list_cant_be_read_no_task_grant_covers_anything_and_none_is_offered() {
+    let mut asking = Asking {
+        unknown: true,
+        ..Asking::default()
+    };
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    let send = page("app.slack.com", "AXButton", Some("Send"));
+    let mut look = scripted(send.clone(), Target::default());
+    let Decision::Ask(question) = decide(&click, &asking, &mut look) else {
+        panic!("asks");
+    };
+    assert_eq!(question.details()["task"], false, "no Allow for This Task");
+    assert_eq!(question.details()["once"], true);
+    asking.grants.push(Allowance::Task {
+        account: question.account_key.clone(),
+    });
+    assert!(
+        matches!(decide(&click, &asking, &mut look), Decision::Ask(_)),
+        "a task grant from before covers nothing"
+    );
+    asking.grants.push(once(&question));
+    assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
+    look.point = page("github.com", "AXButton", Some("Send"));
+    assert!(
+        matches!(decide(&click, &asking, &mut look), Decision::Ask(_)),
+        "once is bound to where it was asked about"
+    );
+}
+
+#[test]
+fn after_a_scroll_what_lies_under_a_point_cant_be_told_and_asks() {
+    let asking = listing(Kind::Site, "github.com", Level::Ask);
+    let mut look = scripted(
+        page("github.com", "AXButton", Some("Open")),
+        Target::default(),
+    );
+    for scroll in [
+        json!({"type": "scroll", "x": 1, "y": 1, "dy": 3}),
+        json!({"type": "scroll-into-view", "ref": "8123abc.12"}),
+    ] {
+        let request = actions(json!([scroll.clone(), {"type": "click", "x": 1, "y": 1}]));
+        assert_eq!(
+            what(&decide(&request, &asking, &mut look)),
+            Some("unsure"),
+            "{scroll}"
+        );
+    }
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
+}

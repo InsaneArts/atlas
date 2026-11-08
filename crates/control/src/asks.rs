@@ -164,8 +164,9 @@ impl Asks {
     ///
     /// # Errors
     ///
-    /// Returns `stopped` for an agent, `input` for an ask that is gone, and
-    /// file errors when the answer can't be written.
+    /// Returns `stopped` for an agent, `input` for an ask that is gone or a
+    /// choice it doesn't offer, and file errors when the answer can't be
+    /// written.
     pub fn answer(&self, id: &str, answer: Answer, by_person: bool, now: u64) -> Result<()> {
         if !by_person {
             return Err(Error::new(
@@ -176,6 +177,18 @@ impl Asks {
         let Some(ask) = self.open(now).into_iter().find(|ask| ask.id == id) else {
             return Err(Error::new(Code::Input, "That question is no longer open"));
         };
+        // A choice the question doesn't offer can't be given.
+        let offered = match answer {
+            Answer::Task => ask.question["task"] != false,
+            Answer::Once => ask.question["once"] != false,
+            Answer::Deny => true,
+        };
+        if !offered {
+            return Err(Error::new(
+                Code::Input,
+                "That choice isn't offered for this question",
+            ));
+        }
         if answer == Answer::Task {
             self.allow_task(&ask, now)?;
         }

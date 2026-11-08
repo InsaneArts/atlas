@@ -279,6 +279,9 @@ pub(crate) struct Question {
     /// Whether Just This Once can be offered: where it lands, and the
     /// message it would send, could be bound.
     pub(crate) once: bool,
+    /// Whether Allow for This Task can be offered: which account it is was
+    /// read, and the person's list too.
+    pub(crate) task: bool,
 }
 
 impl Question {
@@ -312,6 +315,7 @@ impl Question {
             "batch": self.batch,
             "typing": self.typing,
             "once": self.once,
+            "task": self.task,
         });
         if let Some(Message::Whole {
             digest,
@@ -446,12 +450,16 @@ fn judge(
     let Some(what) = asks(action, &target, changed, pressed) else {
         return Decision::Free;
     };
+    // A task grant covers one account by name: never while the list can't
+    // be read, when every app stands for any account.
+    let tasks = !asking.unknown;
     // The ends that ask, and that no task grant for their account covers.
     let open: Vec<&Found> = found
         .iter()
         .filter(|found| found.level == Level::Ask)
         .filter(|found| {
-            !(found.known
+            !(tasks
+                && found.known
                 && asking.grants.contains(&Allowance::Task {
                     account: found.key.clone(),
                 }))
@@ -460,8 +468,9 @@ fn judge(
     let Some(first) = open.first() else {
         return Decision::Free;
     };
+    let known = open.iter().all(|found| found.known);
     let message = (what == "send-key" && target.editable && !target.secure).then(|| look.message());
-    let pinned = open.iter().all(|found| found.known)
+    let pinned = known
         && pinned(action, &target)
         && drop.as_ref().is_none_or(|drop| drop.window.is_some())
         && !matches!(message, Some(Message::Unread));
@@ -474,6 +483,7 @@ fn judge(
     }
     Decision::Ask(Box::new(Question {
         once: pinned,
+        task: tasks && known,
         typing: asking.typing.clone(),
         bound,
         ..question(
@@ -650,12 +660,11 @@ fn mutates(action: &Action) -> bool {
 fn changes(action: &Action) -> bool {
     match action {
         Action::Pointer { phase, .. } => !matches!(phase, PointerPhase::Move),
-        Action::Move { .. }
-        | Action::Scroll { .. }
-        | Action::Wait { .. }
-        | Action::Type { .. }
-        | Action::ScrollIntoView { .. } => false,
-        Action::Click { .. }
+        Action::Move { .. } | Action::Wait { .. } | Action::Type { .. } => false,
+        // Scrolling moves what lies under every point.
+        Action::Scroll { .. }
+        | Action::ScrollIntoView { .. }
+        | Action::Click { .. }
         | Action::Drag { .. }
         | Action::Key { .. }
         | Action::Reference { .. }
@@ -852,6 +861,7 @@ fn question(
         message,
         typing: None,
         once: false,
+        task: false,
     }
 }
 

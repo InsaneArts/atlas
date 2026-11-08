@@ -261,3 +261,22 @@ fn allow_for_this_task_is_kept_for_the_host_process_that_asked_and_ends_when_it_
         .unwrap();
     assert!(asks.allowed(3_000).is_empty());
 }
+
+#[test]
+fn a_choice_a_question_doesnt_offer_cant_be_given() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let mut ask = question("s1", "b1");
+    ask.question["task"] = json!(false);
+    ask.question["once"] = json!(false);
+    let id = asks.ask(ask, 1_000).unwrap();
+    for answer in [Answer::Task, Answer::Once] {
+        assert_eq!(
+            asks.answer(&id, answer, true, 2_000).unwrap_err().code,
+            Code::Input,
+            "{answer:?}"
+        );
+    }
+    assert!(asks.allowed(2_000).is_empty());
+    asks.answer(&id, Answer::Deny, true, 2_000).unwrap();
+}
