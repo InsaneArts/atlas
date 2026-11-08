@@ -44,7 +44,7 @@ For `transport`, check whether the helper is logged in and read `doctor`. If the
 
 ## An agent waits for you, or is told no
 
-When the helper is signed in to an account Atlas lists, Atlas asks you before an agent sends anything there: a message, a post, a merge, a payment or a deletion. Until you answer, the agent gets `waiting-for-person` and does other work, then runs the same command again; nothing was sent. Answer in the Atlas menu bar or the viewer. When you say no, or the account is Look Only, the agent gets `denied`, and nothing was sent. Change an account's level in **Settings › Accounts**.
+When the helper is signed in to an account Atlas lists, Atlas asks you before an agent sends anything there: a message, a post, a merge, a payment or a deletion. Looking, clicking around and typing drafts never ask; Atlas asks at the step that sends, where it lands then. Until you answer, the agent gets `waiting-for-person` and does other work. When that step was the first of its command, nothing was sent, and the agent runs the same command again. When earlier steps already ran, the agent is told what ran and, once you allow the step, sends only the rest: Just This Once then covers that one step, once, for two minutes, and nothing is sent twice. If Atlas had to stop partway through typing, the agent is told to look at the field first. Answer in the Atlas menu bar or the viewer. When you say no, or the account is Look Only, the agent gets `denied`, and that step isn't sent. Change an account's level in **Settings › Accounts**.
 
 ## Several agents at once
 
