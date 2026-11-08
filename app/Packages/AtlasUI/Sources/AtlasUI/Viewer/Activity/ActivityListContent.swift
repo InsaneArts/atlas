@@ -8,6 +8,7 @@ struct ActivityListContent: View {
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.listIsAtTop) private var isAtTop
+  @Environment(\.cardScrollPlace) private var place
   /// The card's width as last measured, which the outline gives way to.
   @State private var width = CGFloat.infinity
   /// The days that held more sessions than they showed as last drawn, so the update that shows the rest tells them to
@@ -98,13 +99,22 @@ struct ActivityListContent: View {
             .accessibilityAddTraits(.isHeader)
             .outlineGround()
             .id("day.\(day.id)")
+            .listPlace("day.\(day.id)")
             .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
         }
         ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
+          if index > 0 {
+            SeparatorLine()
+              .padding(.leading, ViewerLayout.outlineText(level: 0))
+              .padding(.trailing, ViewerLayout.outlineInset)
+              .padding(.vertical, ViewerLayout.sessionSeparatorGap)
+              .outlineGround()
+              .id("separator.\(session.id)")
+              .listPlace("separator.\(session.id)")
+          }
           // The block names and moves its own rows, which stand in this stack themselves.
           ActivitySessionBlock(
             session: session,
-            separated: index > 0,
             revealing: day.more == nil && drawnFolded.contains(day.id),
             send: send
           )
@@ -113,11 +123,16 @@ struct ActivityListContent: View {
           ActivityMoreSessionsRow(more: more, send: send)
             .outlineGround()
             .id("more.\(more.day)")
+            .listPlace("more.\(more.day)")
         }
       }
     }
     .scrollTargetLayout()
     .onChange(of: foldedDays, initial: true) { _, days in drawnFolded = days }
+    // Work arriving at the top while the person reads further down leaves the row they read where it stands.
+    .onChange(of: state.newest) {
+      if !isAtTop { place?.hold() }
+    }
     .transaction(value: state.newest) { transaction in
       // A change the person made keeps the animation it was made in, so a filter's rows wait for those leaving.
       transaction.animation = Motion.layout(
