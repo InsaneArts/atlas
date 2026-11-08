@@ -333,7 +333,7 @@ impl Client {
         // account refused, sent nothing: no picture is kept for it, and the
         // attempt allowed after it takes its own. A lost reply may follow
         // input that was sent, so its picture is kept.
-        if let Some(picture) = picture
+        if let Some((picture, admitted)) = picture
             && let Mutation::Input {
                 actions,
                 epoch,
@@ -354,7 +354,7 @@ impl Client {
                         matches!(action, atlas_core::actions::Action::Reference { .. })
                     });
                 if crate::asking::asks_person(&reply) && !prepared {
-                    self.keep_for_ask(picture);
+                    self.keep_for_ask(picture, admitted);
                 }
             } else {
                 self.keep_picture(picture, actions.actions(), epoch);

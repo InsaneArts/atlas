@@ -169,6 +169,10 @@ Atlas never copies your sign-ins into the helper. It refuses to copy, or open th
 
 Anything the helper is signed in to, an agent can use: it can read, send, merge or delete there as you could. So sign in only to what the task needs, and prefer a test account or one with few rights. Your agent's own app may also ask you before it runs a command; that is separate from Atlas.
 
+**Sign In to a Site…** in **Settings › Accounts** opens the site in the helper's Google Chrome, or in Firefox when Chrome isn't installed, and gives you control there. Atlas starts it only when no agent's command or background job is running. Until you finish, agents are paused and can't see the helper's screen: their screenshots, element and window reads, the live picture in their apps and the pictures of their actions all answer `busy`, held by you. Sign in as usual; switching to your password manager or covering the viewer keeps control with you. Choose **Done** and the site joins your accounts, so agents ask you before sending there. **Cancel** adds nothing. Either way agents go on as before, and a Stop you chose meanwhile stays.
+
+An account's **Forget…** and **Reset…** work the same way. Forget opens the browser's settings for that site's data, and Reset its page for clearing all of its data. Delete it there and choose **Done**. Atlas can't see what you deleted, so it then asks whether to remove the account from the list too.
+
 Atlas checks where a file is, not what is in it: a renamed copy of a store, or a project folder copied whole with a `.env` inside, is not recognized.
 
 If you want agents to copy such files in anyway, turn on **Copy sign-ins into the helper** in **Settings › Helper › Your files**. It is off unless you turn it on, it asks first, and only you can turn it on; anyone can turn it off. Like Stop, it holds against agents using Atlas's commands, not against a shell that edits Atlas's files itself.

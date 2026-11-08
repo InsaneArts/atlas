@@ -5,7 +5,7 @@
 use super::{
     auth::Gate,
     broker::{
-        self, Witness,
+        self, Hidden, Witness,
         source::{self, Live},
     },
     endpoint::{self, Endpoint},
@@ -50,8 +50,8 @@ impl Service {
 
 /// Start the frame service for `client`'s helper, reading pictures at most
 /// `longest` pixels on their longest side, telling `witness` of each
-/// committed picture, and leaving a still screen's slower pace on each notice
-/// on `input`.
+/// committed picture, showing none to an observer `hidden` names, and
+/// leaving a still screen's slower pace on each notice on `input`.
 ///
 /// # Errors
 ///
@@ -61,6 +61,7 @@ pub(crate) async fn start(
     client: Arc<Client>,
     longest: u32,
     witness: Witness,
+    hidden: Hidden,
     input: Arc<Notify>,
 ) -> Result<Service> {
     let controller = nix::unistd::getuid().as_raw();
@@ -97,6 +98,7 @@ pub(crate) async fn start(
         gate,
         source,
         witness,
+        hidden,
         async {
             let _ = stopped.await;
         },

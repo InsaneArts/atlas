@@ -105,6 +105,10 @@ pub async fn monitor(
             "atlas monitor --terminal requires an interactive terminal for both input and output",
         ));
     }
+    // While the person signs the helper in to an account its screen is
+    // hidden here as from agents, from the start and at each picture.
+    client.controller.screen_visible()?;
+    let controller = client.controller.clone();
     let display = client.identity().await?.epoch.display;
     let points = (display.width, display.height);
     // With the menu bar running for this helper, the terminal shares its
@@ -121,13 +125,22 @@ pub async fn monitor(
             found: Discovery::of(&client),
             address: address.clone(),
         };
-        return connected(address, frames, read_only, max_dimension, points).await;
+        return connected(
+            address,
+            frames,
+            controller,
+            read_only,
+            max_dimension,
+            points,
+        )
+        .await;
     }
     let dimension = quality::current(max_dimension, points);
     let service = viewer::TerminalService::start(client, settings, dimension, backend).await?;
     let result = connected(
         Arc::new(std::sync::Mutex::new(service.url.clone())),
         Frames::Private(service.frames()),
+        controller,
         read_only,
         max_dimension,
         points,
@@ -275,6 +288,7 @@ type Address = Arc<std::sync::Mutex<String>>;
 async fn connected(
     url: Address,
     mut source: Frames,
+    controller: atlas_control::Controller,
     read_only: bool,
     max_dimension: Option<u32>,
     mut display: (f64, f64),
@@ -320,7 +334,7 @@ async fn connected(
                     .min(4096.0) as u32;
             }
             source.set_dimension(dimension);
-            let result = source.next().await;
+            let result = controller.shown(source.next()).await;
             next = started
                 + source.interval().max(Duration::from_millis(
                     render_budget.load(Ordering::Relaxed).min(500),

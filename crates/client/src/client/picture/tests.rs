@@ -708,3 +708,109 @@ async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_wh
         }
     }
 }
+
+/// The person's lease on `client`'s helper, hiding its screen for a
+/// sign-in to github.com.
+fn signing_in(client: &Client) -> atlas_control::Lease {
+    let mut lease = atlas_control::Lease::default();
+    let token = lease.acquire(&client.controller).unwrap();
+    let hold = atlas_control::PrivateHold {
+        site: "github.com".to_owned(),
+        kind: atlas_control::HoldKind::SignIn,
+    };
+    lease
+        .hide_screen(&client.controller, &token, &hold)
+        .unwrap();
+    lease
+}
+
+#[tokio::test]
+async fn no_picture_after_an_action_is_taken_while_the_person_signs_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let at = atlas_core::time::timestamp() - 5_000_000_000;
+    let first = before::name(at, None, None);
+    let ended = u64::try_from(at / 1_000_000).unwrap() + 100;
+    let mut lease = signing_in(&client);
+
+    helper
+        .serve(client.picture_after(&first, ended), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await
+        .unwrap();
+
+    assert!(!helper.log().iter().any(|op| op.starts_with("frame")));
+    let after = before::after_name(&first).unwrap();
+    assert!(!before::Listing::of(&client.config.output_dir).has(&after));
+    client.controller.end_private().unwrap();
+    lease.release();
+}
+
+#[tokio::test]
+async fn no_picture_for_a_question_is_taken_while_the_person_signs_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let mut lease = signing_in(&client);
+
+    let taken = helper
+        .serve(client.picture_for_ask(), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await;
+
+    assert!(taken.is_none());
+    assert!(!helper.log().iter().any(|op| op.starts_with("frame")));
+    client.controller.end_private().unwrap();
+    lease.release();
+    let (_, admitted) = helper
+        .serve(client.picture_for_ask(), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await
+        .expect("taken once the sign-in ended");
+    assert!(client.controller.still_visible(admitted).is_ok());
+}
+
+#[tokio::test]
+async fn a_question_never_shows_a_picture_taken_before_a_sign_in_began() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let (_, admitted) = helper
+        .serve(client.picture_for_ask(), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await
+        .unwrap();
+
+    let mut lease = signing_in(&client);
+    client.controller.end_private().unwrap();
+    lease.release();
+
+    assert_eq!(
+        client.controller.still_visible(admitted).unwrap_err().code,
+        Code::Busy,
+        "a hold began and ended since it was taken"
+    );
+}
+
+#[tokio::test]
+async fn an_agents_screenshot_is_refused_while_the_person_signs_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "screenshot");
+    let mut lease = signing_in(&client);
+
+    let refused = helper
+        .serve(
+            client.capture(crate::client::Size::Full, None, false),
+            |request| panic!("nothing else is asked: {request}"),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(refused.code, Code::Busy);
+    assert_eq!(refused.holder, Some(atlas_core::error::Holder::Person));
+    assert!(helper.log().is_empty(), "{:?}", helper.log());
+    client.controller.end_private().unwrap();
+    lease.release();
+}

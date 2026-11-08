@@ -47,6 +47,10 @@ const SOCKETS: usize = 4 * OBSERVERS_MAX as usize;
 /// aimed at it can be checked against the session and time it shows.
 pub(crate) type Witness = std::sync::Arc<dyn Fn(&str, &Epoch, Instant) + Send + Sync>;
 
+/// Whether the screen is hidden from an observer of this peer now, as while
+/// the person signs the helper in to an account: its credits wait, and lapse.
+pub(crate) type Hidden = std::sync::Arc<dyn Fn(&Peer) -> bool + Send + Sync>;
+
 /// One accepted socket.
 struct Connection {
     lane: Lane,
@@ -98,6 +102,7 @@ struct Broker {
     /// Whether the source's last answer was a failure.
     failing: bool,
     witness: Witness,
+    hidden: Hidden,
     connections: HashMap<Id, Connection>,
     observers: HashMap<Id, Observer>,
     events: mpsc::Sender<Event>,
@@ -105,14 +110,15 @@ struct Broker {
 }
 
 /// Serve `listeners` for `controller` until `shutdown`, pairing through
-/// `gate` and serving pictures from `source`, then end every observer and
-/// give the source back.
+/// `gate` and serving pictures from `source` to every observer `hidden`
+/// doesn't name, then end every observer and give the source back.
 pub(crate) async fn run(
     listeners: Listeners,
     controller: u32,
     gate: Gate,
     source: source::Handle,
     witness: Witness,
+    hidden: Hidden,
     shutdown: impl Future<Output = ()>,
 ) {
     let (events, mut incoming) = mpsc::channel(lane::QUEUE * SOCKETS);
@@ -128,6 +134,7 @@ pub(crate) async fn run(
         epoch: None,
         failing: false,
         witness,
+        hidden,
         connections: HashMap::new(),
         observers: HashMap::new(),
         events,
@@ -777,6 +784,10 @@ impl Broker {
         let Some(paired) = &observer.paired else {
             return;
         };
+        let peer = self.connections.get(&control).map(|held| held.peer);
+        if peer.is_none_or(|peer| (self.hidden)(&peer)) {
+            return;
+        }
         let metadata = FrameMetadata {
             service_instance: paired.pair.service_instance.clone(),
             observer_id: paired.pair.observer_id.clone(),

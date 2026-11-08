@@ -86,9 +86,12 @@ impl Server {
     /// one the view has (`since`), from a recent status read. The screen
     /// goes in the result's `_meta`, which the view reads and the model
     /// does not; `streaming` says it came from the menu bar's frame
-    /// service, which the view may read as often as it likes.
+    /// service, which the view may read as often as it likes. Refused with
+    /// `busy`, held by the person, while they sign the helper in to an
+    /// account, and when a sign-in began or ended while it was read.
     pub(super) async fn screen(&self, since: Option<&str>) -> Result<Value> {
         let status = self.recent_status().await?;
+        let admitted = self.client.controller.screen_visible()?;
         let (frame, shared, streaming) = match self.streamed().await {
             Some(streamed) => (
                 Some(streamed.frame),
@@ -106,6 +109,7 @@ impl Server {
                 (frame, shared, false)
             }
         };
+        self.client.controller.still_visible(admitted)?;
         if let Some((key, _)) = &shared {
             self.saw_frame(key.clone()).await;
         }

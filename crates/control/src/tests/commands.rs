@@ -96,7 +96,10 @@ fn a_command_whose_process_died_blocks_every_agent() {
         "uncertain"
     );
     assert_eq!(other.acquire(false).unwrap_err().code, "uncertain");
-    assert_eq!(other.acquire_for_person().unwrap_err().code, "uncertain");
+    assert_eq!(
+        other.acquire_for_person(Beside::Commands).unwrap_err().code,
+        "uncertain"
+    );
     drop(other.acquire(true).unwrap());
 }
 

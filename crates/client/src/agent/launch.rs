@@ -41,6 +41,45 @@ pub async fn open(
     open_in(client, app, targets, environment, Path::new(handoff::ROOT)).await
 }
 
+/// Open `url` in the browser `app` (by its name) for the person, under the
+/// control their lease holds (`ownership`): nothing is handed over and no
+/// task claims it. With `new_window`, the browser is started anew with the
+/// URL as its argument in a window of its own, as Chromium browsers pass it
+/// to the copy already running, so their own settings pages open too.
+///
+/// # Errors
+///
+/// Returns identity, launch and recording failures, and `spawn-failed` when
+/// macOS could not open it. A lost acknowledgement may follow a launch that
+/// went ahead; its outcome stays pending as any run's.
+pub async fn open_for_person(
+    client: &Client,
+    ownership: &Ownership,
+    app: &str,
+    url: &str,
+    new_window: bool,
+) -> Result<Value> {
+    let mut argv = vec!["/usr/bin/open".to_owned()];
+    if new_window {
+        argv.push("-n".to_owned());
+    }
+    argv.push("-a".to_owned());
+    let named_at = argv.len();
+    argv.push(app.to_owned());
+    if new_window {
+        argv.extend(["--args".to_owned(), "--new-window".to_owned()]);
+    } else {
+        argv.push("--".to_owned());
+    }
+    argv.push(url.to_owned());
+
+    let (finished, _) = launch(client, ownership, Some(app), argv, Some(named_at)).await?;
+    if !finished.succeeded {
+        return Err(not_opened(&finished, &[]));
+    }
+    Ok(json!({"ok": true, "opened": true}))
+}
+
 /// [`open`], pruning `open`'s old copies under `copies`.
 pub(super) async fn open_in(
     client: &Client,

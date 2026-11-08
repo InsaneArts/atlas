@@ -1064,3 +1064,87 @@ fn every_view_the_helper_sends_reads_back_as_it_was_sent() {
         assert_eq!(json!(typed), value, "{text}");
     }
 }
+
+/// What [`require_none`] says of a helper whose list holds `jobs`, for a
+/// helper running as this test's account.
+async fn sign_in_admits(jobs: Vec<Value>) -> Result<()> {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_in(dir.path());
+    client.config.helper_uid = nix::unistd::getuid().as_raw();
+    stand_in(&client.config.socket_path, move |_| {
+        Some(json!({"ok": true, "op": "job", "action": "show", "jobs": jobs}))
+    });
+    require_none(&client).await
+}
+
+fn ended(left: Value) -> Value {
+    let mut view = job_view(ID, "ended");
+    view["how"] = json!("leader-gone");
+    view["endedAt"] = json!(30);
+    view["left"] = left;
+    view
+}
+
+#[tokio::test]
+async fn a_sign_in_goes_ahead_when_every_job_ended_clean() {
+    sign_in_admits(vec![]).await.unwrap();
+    sign_in_admits(vec![ended(json!([]))]).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_sign_in_is_refused_while_a_job_may_still_run() {
+    let unreadable = json!({"id": ID, "state": "unknown", "error": "unreadable"});
+    let later = json!({"id": ID, "state": "paused", "shape": "later"});
+    for jobs in [
+        vec![job_view(ID, "starting")],
+        vec![job_view(ID, "launched")],
+        vec![job_view(ID, "running")],
+        vec![job_view(ID, "stopping")],
+        vec![ended(json!([])), unreadable],
+        vec![later],
+    ] {
+        let refused = sign_in_admits(jobs.clone()).await.unwrap_err();
+        assert_eq!(refused.code, Code::Busy, "{jobs:?}");
+        assert_eq!(
+            refused.error,
+            "An agent's background job is still running. Stop it, or try again when it ends."
+        );
+        assert_eq!(refused.holder, Some(atlas_core::error::Holder::Agent));
+        assert_eq!(refused.details["running"], "job");
+    }
+}
+
+#[tokio::test]
+async fn a_sign_in_waits_for_what_an_ended_job_left_running() {
+    let mut survivor =
+        atlas_core::spawn::spawn(std::process::Command::new("/bin/sleep").arg("30")).unwrap();
+    let left = json!([{"pid": survivor.id(), "name": "sleep"}]);
+
+    let refused = sign_in_admits(vec![ended(left.clone())]).await.unwrap_err();
+    assert_eq!(refused.details["running"], "job");
+
+    survivor.kill().unwrap();
+    survivor.wait().unwrap();
+    sign_in_admits(vec![ended(left)]).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_sign_in_is_refused_when_the_helpers_job_list_cant_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_in(dir.path());
+
+    let refused = require_none(&client).await.unwrap_err();
+    assert_eq!(refused.code, Code::Job);
+    assert_eq!(
+        refused.error,
+        "Atlas couldn't read the helper's background jobs. Try again."
+    );
+
+    stand_in(&client.config.socket_path, |_| {
+        Some(
+            json!({"ok": false, "code": "job", "reason": "unobserved", "uncertain": false,
+            "error": "The helper couldn't account for every job"}),
+        )
+    });
+    assert_eq!(require_none(&client).await.unwrap_err().code, Code::Job);
+}

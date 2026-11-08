@@ -3,7 +3,7 @@
 //! recovery and cleanup, which wait until no control is held.
 use super::{LEASE_SECONDS, Viewer, frames::Observation, unpoisoned};
 use atlas_client::client::Client;
-use atlas_control::ActionPermit;
+use atlas_control::{ActionPermit, Beside};
 use atlas_core::{
     error::{Code, Error, Result},
     session::Epoch,
@@ -97,6 +97,12 @@ impl Viewer {
             (lease.begin_release(owner)?, self.holder())
         };
 
+        // A sign-in under this lease ends with it: the screen is shown to
+        // agents again before control goes back.
+        if let Some(previous) = previous.as_deref() {
+            self.end_sign_in(&client, previous).await;
+        }
+
         let completion = match previous.as_deref() {
             Some(previous) => release_native(&client, previous, false).await,
             None => Ok(None),
@@ -153,6 +159,17 @@ impl Viewer {
     /// lease ended meanwhile, or the answer is unknown, control is ended
     /// again on that same helper.
     pub(super) async fn take_control(&self, client: &Arc<Client>, epoch: &Epoch) -> Result<String> {
+        self.take_control_beside(client, epoch, Beside::Commands)
+            .await
+    }
+
+    /// [`Viewer::take_control`], going on only beside what `beside` names.
+    pub(super) async fn take_control_beside(
+        &self,
+        client: &Arc<Client>,
+        epoch: &Epoch,
+        beside: Beside,
+    ) -> Result<String> {
         let token = {
             let mut lease = self.lease.lock().await;
 
@@ -161,7 +178,7 @@ impl Viewer {
                 return Err(Error::session_changed());
             }
 
-            let token = lease.acquire(&client.controller)?;
+            let token = lease.acquire_beside(&client.controller, beside)?;
             *unpoisoned(&self.lease_client) = Some(client.clone());
             *self.lease_epoch.lock().await = Some(epoch.clone());
             token

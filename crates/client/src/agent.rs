@@ -14,7 +14,7 @@ pub use crate::app_selection::Closing;
 pub use elements::{Asked, Form, click_element, click_reference, element, elements, screenshot};
 pub use expect::{Expected, act};
 pub use input::{click, drag, keys, move_to, scroll, type_text};
-pub use launch::open;
+pub use launch::{open, open_for_person};
 pub use quit::close;
 pub(crate) use quit::{QUIT_WAIT, Quitting, quit_until};
 pub use target::Target;

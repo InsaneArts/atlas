@@ -228,9 +228,9 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
         // The person's question shows the screen: the picture before a
         // request that sent nothing, or one taken now that nothing is held.
         if !client.kept_for_ask()
-            && let Some(raw) = client.picture_for_ask().await
+            && let Some((raw, admitted)) = client.picture_for_ask().await
         {
-            client.keep_for_ask(raw);
+            client.keep_for_ask(raw, admitted);
         }
         let asks = client.controller.asks();
         let ask = Ask {
@@ -253,8 +253,11 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
         };
         let frame = ask.question["frame"].clone();
         let id = asks.ask(ask, now_ms())?;
-        if let Some(raw) = client.take_for_ask() {
-            // A question goes up without its picture when it can't be kept.
+        // A question goes up without its picture when it can't be kept, or
+        // when the person began or ended a sign-in since it was taken.
+        if let Some((raw, admitted)) = client.take_for_ask()
+            && client.controller.still_visible(admitted).is_ok()
+        {
             let _ = keep_picture(&asks, &id, &raw, &frame);
         }
         let _shown = Shown {

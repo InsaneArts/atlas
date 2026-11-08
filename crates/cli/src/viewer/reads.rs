@@ -102,6 +102,12 @@ impl Viewer {
         let (asks, allowed) = super::accounts::asks_for_status(&client);
         status.value["overview"]["asks"] = asks;
         status.value["overview"]["allowed"] = allowed;
+        // While the person signs in, so the app keeps the lease through its
+        // window losing focus or being covered.
+        status.value["overview"]["signingIn"] = client
+            .controller
+            .private_hold()
+            .map_or(Value::Null, |hold| json!(hold));
 
         status.value
     }

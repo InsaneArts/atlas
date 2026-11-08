@@ -933,6 +933,13 @@ impl App {
         Ok(Self { child, writer })
     }
 
+    /// The app's process, as macOS names it, while it runs.
+    pub(crate) fn process(&self) -> Option<atlas_core::process::Instance> {
+        let pid = i32::try_from(self.child.id()?).ok()?;
+        let start = atlas_core::process::start(pid).ok()?;
+        Some(atlas_core::process::Instance::new(pid, start))
+    }
+
     /// Resolves when the person quits the app.
     pub(crate) async fn exited(&mut self) {
         let _ = self.child.wait().await;

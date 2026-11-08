@@ -834,3 +834,53 @@ fn setup_commands_refuse_to_run_as_root() {
     assert_eq!(error.error, "Run atlas update as yourself, not with sudo.");
     assert!(refuse_root("init", false).is_ok());
 }
+
+#[tokio::test]
+async fn every_look_at_the_screen_is_refused_while_the_person_signs_in() {
+    let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
+    let mut client = atlas_client::test_support::client_in(dir.path());
+    client.transport.peer_uid = nix::unistd::getuid().as_raw();
+    // No helper answers: a look that got as far as asking it would fail
+    // another way.
+    let mut lease = atlas_control::Lease::default();
+    let token = lease.acquire(&client.controller).unwrap();
+    let hold = atlas_control::PrivateHold {
+        site: "github.com".to_owned(),
+        kind: atlas_control::HoldKind::SignIn,
+    };
+    lease
+        .hide_screen(&client.controller, &token, &hold)
+        .unwrap();
+
+    for args in [
+        &["screenshot"][..],
+        &["elements", "--app", "Safari"],
+        &["windows"],
+        &["wait", "--app", "Safari", "--timeout", "1"],
+    ] {
+        let command = parse(args).unwrap().command.unwrap();
+        let made = client.clone();
+        let refused = carry_out(
+            Path::new("unused.toml"),
+            command,
+            &|| Ok(made.clone()),
+            None,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.code, Code::Busy, "{args:?}: {refused:?}");
+        assert_eq!(
+            refused.holder,
+            Some(atlas_core::error::Holder::Person),
+            "{args:?}"
+        );
+        assert_eq!(
+            refused.error,
+            "The person is signing in to an account in the helper; the screen is hidden until they finish."
+        );
+    }
+
+    client.controller.end_private().unwrap();
+    lease.release();
+}

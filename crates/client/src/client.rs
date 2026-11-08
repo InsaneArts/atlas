@@ -141,8 +141,9 @@ pub struct Client {
     /// and each of its requests carry.
     typing: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// The picture of the screen a refusal to ask the person came with, for
-    /// the person's question alone.
-    for_ask: std::sync::Arc<std::sync::Mutex<Option<crate::before::Raw>>>,
+    /// the person's question alone, and the screen's privacy when it was
+    /// taken: it goes up only while that is unchanged.
+    for_ask: std::sync::Arc<std::sync::Mutex<Option<(crate::before::Raw, atlas_control::Visible)>>>,
 }
 
 impl Client {
@@ -219,16 +220,17 @@ impl Client {
         }
     }
 
-    /// Keep `raw` for the question the refusal just come back asks.
-    pub(crate) fn keep_for_ask(&self, raw: crate::before::Raw) {
+    /// Keep `raw`, taken while the screen's privacy was `admitted`, for the
+    /// question the refusal just come back asks.
+    pub(crate) fn keep_for_ask(&self, raw: crate::before::Raw, admitted: atlas_control::Visible) {
         if let Ok(mut kept) = self.for_ask.lock() {
-            *kept = Some(raw);
+            *kept = Some((raw, admitted));
         }
     }
 
     /// The picture kept for the question asked now, taken: none kept
     /// stays.
-    pub(crate) fn take_for_ask(&self) -> Option<crate::before::Raw> {
+    pub(crate) fn take_for_ask(&self) -> Option<(crate::before::Raw, atlas_control::Visible)> {
         self.for_ask.lock().ok()?.take()
     }
 

@@ -327,13 +327,19 @@ async fn carry_out(
         Command::Monitor { port, .. } => {
             viewer::monitor(config, port, client()?.output_dir()?).await
         }
-        Command::Screenshot(args) => screenshot(&client()?, args).await,
+        Command::Screenshot(args) => {
+            let client = client()?;
+            client.controller.shown(screenshot(&client, args)).await
+        }
         Command::Apps { all } => Ok(atlas_client::app_selection::listed(
             client()?.apps().await?,
             all,
         )),
         Command::Click(args) => click(&client()?, args).await,
-        Command::Elements(args) => elements(&client()?, args).await,
+        Command::Elements(args) => {
+            let client = client()?;
+            client.controller.shown(elements(&client, args)).await
+        }
         Command::Element(args) => {
             let action = args.as_input()?;
             agent::element(&client()?, args.target.target().as_ref(), &action).await
@@ -347,7 +353,12 @@ async fn carry_out(
         Command::Type(args) => type_text(client, args).await,
         Command::Key(args) => press_keys(client, args).await,
         Command::Windows { app, title, all } => {
-            agent::list(&client()?, &agent::WindowFilter { app, title, all })
+            let client = client()?;
+            let filter = agent::WindowFilter { app, title, all };
+            let listed = agent::list(&client, &filter);
+            client
+                .controller
+                .shown(listed)
                 .await
                 .map(|windows| json!({"ok": true, "windows": windows}))
         }
@@ -355,7 +366,10 @@ async fn carry_out(
         Command::InstallApp { path } => atlas_client::install_app::install(&client()?, &path).await,
         Command::Cleanup(args) => cleanup(&client()?, &args).await,
         Command::Close { app, .. } => close(&client()?, app.as_deref()).await,
-        Command::Wait(args) => wait(&client()?, args).await,
+        Command::Wait(args) => {
+            let client = client()?;
+            client.controller.shown(wait(&client, args)).await
+        }
         Command::Input { actions, target } => input(&client()?, actions, target).await,
         Command::Job { command } => job(&client()?, command).await,
         Command::Collect { files, max_size } => {

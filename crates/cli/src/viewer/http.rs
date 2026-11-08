@@ -8,7 +8,7 @@ use super::{
 };
 use crate::menubar::Line;
 use atlas_client::{client::Client, helper_info};
-use atlas_control::Lease;
+use atlas_control::{HoldKind, Lease};
 use atlas_core::screen::frame::Frame;
 use atlas_core::{
     error::{Code, Error, Result},
@@ -103,6 +103,8 @@ pub(super) fn configured(
         app: std::sync::Mutex::new(None),
         account_name: std::sync::Mutex::new(None),
         accounts_home: std::sync::Mutex::new(atlas_core::config::home().ok()),
+        sign_in: Mutex::new(None),
+        app_process: std::sync::Mutex::new(None),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
         icons: helper_info::Icons::default(),
@@ -330,6 +332,15 @@ routes! {
         // The person's answer to a question, and the end of what they allowed.
         Answer => "asks/answer",
         EndAllowed => "allowed/end",
+        // Signing the helper in to a site, or deleting a site's data or the
+        // browser's in its own settings, with agents paused and the screen
+        // hidden from them; then renewing, finishing or giving up on it.
+        SignInStart => "sign-in/start",
+        ForgetStart => "forget/start",
+        ResetStart => "reset/start",
+        SignInRenew => "sign-in/renew",
+        SignInDone => "sign-in/done",
+        SignInCancel => "sign-in/cancel",
     }
 }
 
@@ -338,9 +349,16 @@ impl Route {
     /// own.
     fn urgent(self) -> bool {
         match self {
-            // The person's answer ends an agent's wait: it never waits behind
-            // other requests.
-            Self::Change(Change::Hold | Change::Release | Change::Revoke | Change::Answer) => true,
+            // The person's answer ends an agent's wait, and finishing a
+            // sign-in ends control: neither waits behind other requests.
+            Self::Change(
+                Change::Hold
+                | Change::Release
+                | Change::Revoke
+                | Change::Answer
+                | Change::SignInDone
+                | Change::SignInCancel,
+            ) => true,
             Self::Service
             | Self::Read(_)
             | Self::OpenViewer
@@ -353,7 +371,11 @@ impl Route {
                 | Change::AddAccount
                 | Change::RemoveAccount
                 | Change::SetLevel
-                | Change::EndAllowed,
+                | Change::EndAllowed
+                | Change::SignInStart
+                | Change::ForgetStart
+                | Change::ResetStart
+                | Change::SignInRenew,
             ) => false,
         }
     }
@@ -453,6 +475,12 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
         Change::SetLevel => super::accounts::set_level(&viewer.accounts_home(), body),
         Change::Answer => super::accounts::answer(&viewer.client(), body),
         Change::EndAllowed => super::accounts::end_allowed(&viewer.client(), body),
+        Change::SignInStart => viewer.sign_in_start(HoldKind::SignIn, body).await,
+        Change::ForgetStart => viewer.sign_in_start(HoldKind::Forget, body).await,
+        Change::ResetStart => viewer.sign_in_start(HoldKind::Reset, body).await,
+        Change::SignInRenew => viewer.sign_in_renew(lease).await,
+        Change::SignInDone => viewer.sign_in_done(lease).await,
+        Change::SignInCancel => viewer.sign_in_cancel(lease).await,
     };
 
     mutation_reply(viewer, owner, outcome).await

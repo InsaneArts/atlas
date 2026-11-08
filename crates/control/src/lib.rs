@@ -19,6 +19,7 @@ pub mod interrupt;
 mod lease;
 mod marker;
 mod notes;
+mod privacy;
 #[cfg(test)]
 mod tests;
 mod turns;
@@ -29,6 +30,7 @@ pub use executor::{ExecutorClaims, record_executor};
 pub use lease::Lease;
 pub use lease::{ActionPermit, SharedLease};
 pub use notes::Note;
+pub use privacy::{HoldKind, PrivateHold, Visible};
 #[cfg(any(test, feature = "test-support"))]
 pub use wait::WaitEvent;
 #[cfg(any(test, feature = "test-support"))]
@@ -155,6 +157,9 @@ pub struct Ownership {
     /// The note that the person holds this ownership through a viewer, gone
     /// with it.
     person: Option<PathBuf>,
+    /// The generation of the person's lease that note holds: a private hold
+    /// names it, and is honoured only while the note still does.
+    generation: Option<String>,
     /// The note naming the host session that holds it, gone before the lock
     /// is, so the lock is never free while a note still names its holder.
     holder: Option<PathBuf>,
@@ -196,6 +201,12 @@ pub struct Controller {
     /// Present while the person has stopped agents: kept on the person's
     /// side, so a Stop holds even while the helper's input service is down.
     stopped: PathBuf,
+    /// Present while the person signs the helper in to an account, beside
+    /// the person's note: the screen is hidden from agents meanwhile.
+    private: PathBuf,
+    /// How many times a private hold began or ended, never removed: a read
+    /// of the screen is kept only when it did not change meanwhile.
+    private_generation: PathBuf,
     name: String,
     /// How long [`Controller::acquire`] may keep trying, in all, while
     /// another controller has the lock, before answering busy. Zero
@@ -260,6 +271,8 @@ impl Controller {
             marker_lock: directory.join(format!("{name}.state.lock")),
             person: directory.join(format!("{name}.person")),
             stopped: directory.join(format!("{name}.stopped")),
+            private: directory.join(format!("{name}.signing-in")),
+            private_generation: directory.join(format!("{name}.private-gen")),
             name: name.to_owned(),
             wait: Duration::ZERO,
             until: None,
@@ -486,6 +499,7 @@ impl Controller {
         Ownership {
             _lock: lock,
             person: None,
+            generation: None,
             holder: self.note_holder(),
         }
     }
@@ -585,6 +599,12 @@ impl Controller {
         &self.holder
     }
 
+    /// Where the private hold's marker is kept, for tests that break it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn private_path(&self) -> &Path {
+        &self.private
+    }
+
     /// Where the marker of pending changes is kept, for tests that break it.
     #[cfg(any(test, feature = "test-support"))]
     pub fn marker_path(&self) -> &Path {
@@ -629,17 +649,22 @@ impl Controller {
     /// Refuses what [`Controller::acquire_for_person`] refuses.
     #[cfg(any(test, feature = "test-support"))]
     pub fn acquire_for_person_for_test(&self) -> Result<Ownership> {
-        self.acquire_for_person()
+        self.acquire_for_person(Beside::Commands)
     }
 
     /// [`Controller::acquire`] for the person's control through a viewer:
-    /// while it is held, others hear that the person has control. A command
-    /// an agent started keeps running beside it, as it does beside other
-    /// agents' actions.
-    pub(crate) fn acquire_for_person(&self) -> Result<Ownership> {
-        let mut ownership = self.acquire_beside_commands()?;
-        fs::write(&self.person, b"").map_err(|error| Error::writing(&self.directory, error))?;
+    /// while it is held, others hear that the person has control. Beside
+    /// [`Beside::Commands`], a command an agent started keeps running beside
+    /// it, as it does beside other agents' actions; beside
+    /// [`Beside::Nothing`], one still running refuses it. The person's note
+    /// holds a new lease generation, which a private hold names.
+    pub(crate) fn acquire_for_person(&self, beside: Beside) -> Result<Ownership> {
+        let mut ownership = self.acquire_for(Purpose::Change(beside))?;
+        let generation = atlas_core::files::token();
+        fs::write(&self.person, generation.as_bytes())
+            .map_err(|error| Error::writing(&self.directory, error))?;
         ownership.person = Some(self.person.clone());
+        ownership.generation = Some(generation);
         Ok(ownership)
     }
 

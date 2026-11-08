@@ -87,6 +87,8 @@ struct Running {
     source: Scripted,
     /// Every commit witnessed: its frame key and session.
     witnessed: Arc<Mutex<Vec<(String, u64)>>>,
+    /// Whether the screen is hidden from every observer, as during a sign-in.
+    hidden: Arc<AtomicBool>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -124,7 +126,10 @@ impl Running {
                 .unwrap()
                 .push((key.to_owned(), epoch.security_session_id));
         });
-        let task = tokio::spawn(run(listeners, uid, gate, handle, witness, async {
+        let hidden = Arc::new(AtomicBool::new(false));
+        let hiding = hidden.clone();
+        let hides: Hidden = Arc::new(move |_| hiding.load(Ordering::SeqCst));
+        let task = tokio::spawn(run(listeners, uid, gate, handle, witness, hides, async {
             let _ = stopped.await;
         }));
         Self {
@@ -135,6 +140,7 @@ impl Running {
             bootstrap,
             source,
             witnessed,
+            hidden,
             stop: Some(stop),
             task,
         }
@@ -430,6 +436,24 @@ async fn an_unserved_credit_expires_and_the_observer_may_credit_again() {
     let (expired, got): (CreditOnly, _) = client.control.expect(Kind::CreditExpired).await;
     assert_eq!((expired.credit_id.get(), got.head.request), (1, request));
     client.credit(&subscribed, 2, Barrier::Ordinary).await;
+    broker.shut().await;
+}
+
+#[tokio::test]
+async fn an_observer_the_screen_is_hidden_from_gets_no_picture_until_it_is_shown_again() {
+    let broker = Running::start(Scripted::default()).await;
+    let mut client = Client_::pair(&broker).await;
+    let subscribed = client.subscribe().await;
+    broker.hidden.store(true, Ordering::SeqCst);
+
+    let request = client.credit(&subscribed, 1, Barrier::Ordinary).await;
+    let (expired, got): (CreditOnly, _) = client.control.expect(Kind::CreditExpired).await;
+    assert_eq!((expired.credit_id.get(), got.head.request), (1, request));
+
+    broker.hidden.store(false, Ordering::SeqCst);
+    client.credit(&subscribed, 2, Barrier::Ordinary).await;
+    let (metadata, _, _) = client.picture().await;
+    assert_eq!(metadata.credit_id.get(), 2);
     broker.shut().await;
 }
 

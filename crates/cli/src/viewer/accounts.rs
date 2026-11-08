@@ -55,6 +55,21 @@ pub(super) fn add(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
     Ok(json!({"ok": true, "added": added}))
 }
 
+/// Add `site`, seen in the browser of bundle identifier `browser`: the
+/// person signed the helper in to it and said Done. Their word is the proof.
+pub(super) fn add_signed_in(home: &Option<PathBuf>, site: &str, browser: &str) -> Result<bool> {
+    let entry = Entry {
+        kind: Kind::Site,
+        id: site.to_owned(),
+        name: site.to_owned(),
+        browser: Some(browser.to_owned()),
+        added: atlas_core::time::now_ms(),
+        how: How::ByHand,
+        level: Level::default(),
+    };
+    sign_ins::add_in(known(home)?, entry, true)
+}
+
 /// Remove the account `body` names: its kind, id, and for a site the
 /// browser it was seen in.
 pub(super) fn remove(home: &Option<PathBuf>, body: &Value) -> Result<Value> {

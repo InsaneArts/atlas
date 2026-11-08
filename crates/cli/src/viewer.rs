@@ -11,6 +11,7 @@ mod local;
 mod origins;
 mod reads;
 mod settings;
+mod sign_in;
 mod terminal;
 
 pub(crate) use app::{launched_url, open_viewer};
@@ -107,6 +108,11 @@ struct Viewer {
     /// The home folder whose record of the helper's accounts this viewer
     /// shows and changes: the person's.
     accounts_home: std::sync::Mutex<Option<PathBuf>>,
+    /// The sign-in under way, while its lease holds; it ends with the lease.
+    sign_in: Mutex<Option<sign_in::SignIn>>,
+    /// The app this viewer serves, as macOS names its process once started:
+    /// the frame service shows it the screen while agents may not see it.
+    app_process: std::sync::Mutex<Option<atlas_core::process::Instance>>,
 }
 
 impl Viewer {
