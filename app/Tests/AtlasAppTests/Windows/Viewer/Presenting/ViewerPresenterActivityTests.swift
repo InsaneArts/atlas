@@ -759,4 +759,59 @@ struct ViewerPresenterActivityTests {
     #expect(!tiles.contains { $0.isCurrent }, "the oldest is not among the three shown")
     #expect(tiles.filter(\.returnsFocus).map(\.id) == [newest])
   }
+
+  @Test("the opener takes focus back by its step's line, or by its screenshot, and nothing else is marked")
+  func theOpenerIsMarkedByItsLine() {
+    var steps = [
+      ViewerActivityStep(id: "c1", kind: .scroll, words: ViewerStepWords("Scrolled"), hasPicture: true),
+      ViewerActivityStep(
+        id: "s1",
+        kind: .screenshot,
+        words: ViewerStepWords("Took a screenshot"),
+        inPlace: ViewerPictureTile(id: "a.png", label: "")
+      ),
+    ]
+    steps.mark(.before("c1"))
+    #expect(steps.map(\.returnsFocus) == [true, false])
+    steps.mark(.shot("a.png"))
+    #expect(steps.last?.inPlace?.returnsFocus == true)
+  }
+
+  @Test("a folded session's picture shown in the sheet keeps the opener from also claiming focus")
+  func aFoldedSessionsPictureCounts() throws {
+    let shots = (0..<2).map { "179266520\($0)000000000-capture.png" }
+    let log =
+      shots.enumerated()
+      .map { index, shot in
+        ActivityFixtures.row(
+          id: "s\(index)",
+          says: "took a screenshot",
+          ageSeconds: Double(10 - index),
+          operation: "screenshot",
+          session: ViewerActivityFixtures.codex,
+          capture: shot
+        )
+      } + [ActivityFixtures.row(id: "c9", says: "clicked", ageSeconds: 1, session: ViewerActivityFixtures.claude)]
+    var snapshot = try ViewerActivityFixtures.onActivity(log.reversed(), sessions: [])
+    snapshot.panes.shots.shots = shots.map { Screenshot(name: $0) }
+    let run = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first { $0.shots.count == 2 })
+    let codex = try #require(
+      ActivitySessionGroup.grouped(ViewerPresenter.activityMoments(snapshot)?.moments ?? []).first {
+        $0.stream == .session(ViewerActivityFixtures.codex)
+      }
+    )
+    snapshot.panes.activity.sessionChoices[codex.id] = false
+    snapshot.panes.activity.sheet = ViewerPictureFocus(
+      run: run.id,
+      item: .shot(shots[0]),
+      everyStep: false,
+      opener: .shot(shots[1])
+    )
+    let session = try #require(
+      ViewerActivityFixtures.sessions(ViewerPresenter.activity(snapshot)).first { !$0.isOpen && $0.strip != nil }
+    )
+    let tiles = session.strip?.tiles ?? []
+    #expect(tiles.filter(\.isCurrent).map(\.id) == [shots[0]])
+    #expect(!tiles.contains { $0.returnsFocus }, "only the picture shown takes focus back")
+  }
 }

@@ -227,10 +227,12 @@ extension ViewerPresenter {
   /// - Returns: The outline.
   static func returningFocus(_ days: [ViewerActivityDay], _ snapshot: ViewerSnapshot) -> [ViewerActivityDay] {
     guard let opener = snapshot.panes.activity.sheet?.opener else { return days }
-    let runs = days.flatMap(\.sessions)
-      .flatMap(\.runs)
+    let sessions = days.flatMap(\.sessions)
+    let runs = sessions.flatMap(\.runs)
     let steps = runs.flatMap { $0.steps + $0.problemSteps }
-    let tiles = runs.flatMap { ($0.strip?.tiles ?? []) + ($0.grid?.tiles ?? []) } + steps.compactMap(\.inPlace)
+    let tiles =
+      sessions.flatMap { $0.strip?.tiles ?? [] } + runs.flatMap { ($0.strip?.tiles ?? []) + ($0.grid?.tiles ?? []) }
+      + steps.compactMap(\.inPlace)
     guard !tiles.contains(where: \.isCurrent), !steps.contains(where: \.isCurrent) else { return days }
     var marked = days
     for day in marked.indices {

@@ -15,7 +15,7 @@ struct ActivityPictureStrip: View {
     Group {
       if strip.hasLink {
         HStack(spacing: ViewerLayout.pictureGap) {
-          tiles(Array(strip.tiles.prefix(ViewerLayout.stripCount(width: width))))
+          tiles(shown)
           Button(strip.link) {
             send(strip.opensSession ? .toggleSession(strip.run, opens: true) : .showRunPictures(strip.run))
           }
@@ -30,6 +30,16 @@ struct ActivityPictureStrip: View {
       }
     }
     .padding(.bottom, ViewerLayout.stripBelow)
+  }
+
+  /// The newest pictures that fit beside the link; the one the sheet shows, or takes focus back to, stands last among
+  /// them when it would not fit, so focus always has a picture to come back to.
+  private var shown: [ViewerPictureTile] {
+    var shown = Array(strip.tiles.prefix(ViewerLayout.stripCount(width: width)))
+    if let held = strip.tiles.first(where: { $0.isCurrent || $0.returnsFocus }), !shown.contains(held), !shown.isEmpty {
+      shown[shown.count - 1] = held
+    }
+    return shown
   }
 
   /// The pictures, each opening in the picture sheet.

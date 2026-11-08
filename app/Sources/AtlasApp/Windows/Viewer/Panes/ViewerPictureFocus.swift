@@ -12,7 +12,7 @@ struct ViewerPictureFocus: Equatable {
   var everyStep: Bool
   /// Which of a step's pictures shows.
   var side = ViewerPictureSide.before
-  /// The picture the sheet was opened from, which takes focus back as it closes while the one shown is not in the
-  /// outline; nil when not known.
+  /// What the sheet was opened from, which takes focus back as it closes while the picture shown is not in the
+  /// outline: a screenshot by its name, or a step by its line's identity; nil when not known.
   var opener: ViewerPictureItem?
 }

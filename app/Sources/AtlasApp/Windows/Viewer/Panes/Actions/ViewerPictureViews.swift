@@ -53,8 +53,9 @@ final class ViewerPictureViews {
   func openStep(_ step: String) {
     for run in runs() ?? [] {
       guard let line = run.runs.first(where: { $0.id == step }), let pictured = line.pictured else { continue }
-      let item = ViewerPictureItem.before(pictured.id)
-      return show(ViewerPictureFocus(run: run.id, item: item, everyStep: true, opener: item))
+      // The step is the opener, by its line's identity, which a repeat's picture may not share.
+      let opener = ViewerPictureItem.before(line.id)
+      return show(ViewerPictureFocus(run: run.id, item: .before(pictured.id), everyStep: true, opener: opener))
     }
   }
 

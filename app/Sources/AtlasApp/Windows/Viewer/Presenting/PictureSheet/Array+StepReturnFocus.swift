@@ -3,7 +3,7 @@ import AtlasUI
 extension [ViewerActivityStep] {
   /// Marks the step whose picture opened the sheet, or whose screenshot did, to take focus back as the sheet closes.
   ///
-  /// - Parameter opener: The picture opened.
+  /// - Parameter opener: What opened the sheet: a step by its line's identity, or a screenshot by its name.
   mutating func mark(_ opener: ViewerPictureItem) {
     for index in indices {
       switch opener {
