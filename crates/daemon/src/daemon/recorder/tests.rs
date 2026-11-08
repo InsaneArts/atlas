@@ -748,3 +748,129 @@ fn the_helper_coming_on_the_screen_while_captures_end_leaves_the_recorder_alone(
     assert_eq!((report.resets, report.reset_failures), (0, 0));
     assert_eq!(TOLD.get(), 0);
 }
+
+/// Where a daemon records its restart after an update, in a new folder.
+fn after_update() -> (tempfile::TempDir, PathBuf) {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("recorder-restarted-after-update");
+    (folder, path)
+}
+
+#[test]
+fn a_recorder_grown_under_an_earlier_version_is_restarted_once_after_the_update() {
+    FOUND.set(Some(replayd(700, HELPER, AFTER_UPDATE + 1)));
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let (_folder, path) = after_update();
+    let recorder = Recorder::new(fake(), Some(HELPER)).once_after_update(path.clone());
+    let start = Instant::now();
+    let report = recorder.report_at(&source(), start).unwrap();
+    assert_eq!(kills(), [700]);
+    assert_eq!(report.resets, 1);
+    assert!(report.reset_after_update);
+    assert!(path.exists(), "recorded");
+
+    FOUND.set(Some(replayd(701, HELPER, AFTER_UPDATE + 1)));
+    let again = Recorder::new(fake(), Some(HELPER))
+        .once_after_update(path)
+        .report_at(&source(), start)
+        .unwrap();
+    assert_eq!(kills(), [700], "once, and not again by a later daemon");
+    assert_eq!(again.resets, 0);
+    assert!(!again.reset_after_update);
+}
+
+#[test]
+fn a_recorder_under_the_threshold_after_an_update_is_left_and_never_restarted_for_it() {
+    let (_folder, path) = after_update();
+    FOUND.set(Some(replayd(700, HELPER, AFTER_UPDATE)));
+    let recorder = Recorder::new(fake(), Some(HELPER)).once_after_update(path.clone());
+    let start = Instant::now();
+    let report = recorder.report_at(&source(), start).unwrap();
+    assert_eq!(kills(), [] as [i32; 0]);
+    assert!(!report.reset_after_update);
+    assert!(path.exists(), "nothing was needed, and that is recorded");
+
+    FOUND.set(Some(replayd(700, HELPER, AFTER_UPDATE * 2)));
+    recorder.report_at(&source(), start + READING);
+    assert_eq!(
+        kills(),
+        [] as [i32; 0],
+        "grown later, it waits for the usual limit"
+    );
+}
+
+#[test]
+fn a_restart_after_an_update_already_recorded_is_not_done_again() {
+    let (_folder, path) = after_update();
+    std::fs::write(&path, "0.1.1").unwrap();
+    FOUND.set(Some(replayd(700, HELPER, AFTER_UPDATE * 2)));
+    let report = Recorder::new(fake(), Some(HELPER))
+        .once_after_update(path)
+        .report_at(&source(), Instant::now())
+        .unwrap();
+    assert_eq!(kills(), [] as [i32; 0]);
+    assert_eq!(report.resets, 0);
+}
+
+#[test]
+fn a_restart_after_an_update_waits_while_input_runs_and_stays_to_do() {
+    FOUND.set(Some(replayd(700, HELPER, AFTER_UPDATE + 1)));
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let (_input_folder, input) = input_stamped(QUIET * 2);
+    let (_folder, path) = after_update();
+    let recorder = Recorder::new(fake(), Some(HELPER))
+        .beside_input(input.clone())
+        .once_after_update(path.clone());
+    let start = Instant::now();
+    let acting = activity::acting(&input);
+    let held = recorder.report_at(&source(), start).unwrap();
+    assert_eq!(kills(), [] as [i32; 0], "nothing is ended under input");
+    assert_eq!((held.resets, held.reset_failures), (0, 0), "put off");
+    assert!(
+        path.exists(),
+        "recorded before it is done, so it never repeats"
+    );
+    drop(acting);
+    std::fs::File::options()
+        .write(true)
+        .open(&input)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - QUIET * 2)
+        .unwrap();
+
+    let report = recorder.report_at(&source(), start + RETRY).unwrap();
+    assert_eq!(kills(), [700], "done in the next pause of input");
+    assert!(report.reset_after_update);
+}
+
+#[test]
+fn a_restart_after_an_update_that_cannot_be_recorded_is_not_done() {
+    FOUND.set(Some(replayd(700, HELPER, AFTER_UPDATE + 1)));
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder
+        .path()
+        .join("missing")
+        .join("recorder-restarted-after-update");
+    let recorder = Recorder::new(fake(), Some(HELPER)).once_after_update(path);
+    let start = Instant::now();
+    let report = recorder.report_at(&source(), start).unwrap();
+    assert_eq!(kills(), [] as [i32; 0], "never without its record");
+    assert!(!report.reset_after_update);
+    recorder.report_at(&source(), start + READING);
+    assert_eq!(kills(), [] as [i32; 0], "nor later in this daemon");
+}
+
+#[test]
+fn a_recorder_not_measured_after_an_update_is_looked_at_again() {
+    let (_folder, path) = after_update();
+    FOUND.set(None);
+    let recorder = Recorder::new(fake(), Some(HELPER)).once_after_update(path.clone());
+    let start = Instant::now();
+    recorder.report_at(&source(), start);
+    assert!(!path.exists(), "nothing measured, nothing settled");
+    FOUND.set(Some(replayd(700, HELPER, AFTER_UPDATE + 1)));
+    REPLACEMENT.set(Some(replayd(701, HELPER, 13 << 20)));
+    let report = recorder.report_at(&source(), start + READING).unwrap();
+    assert_eq!(kills(), [700]);
+    assert!(report.reset_after_update);
+}

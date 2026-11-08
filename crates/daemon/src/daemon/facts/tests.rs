@@ -37,6 +37,7 @@ fn hello_reports_the_screen_recorders_memory_and_restarts_beside_its_own() {
         resets: 2,
         last_reset_at: Some(1_793_923_943_551),
         reset_failures: 0,
+        reset_after_update: true,
     };
     let reply = hello(&manager_name(), None, Some(recorder));
     let resources = &reply["daemon"]["resources"];
@@ -44,7 +45,8 @@ fn hello_reports_the_screen_recorders_memory_and_restarts_beside_its_own() {
     assert_eq!(
         resources["screenRecorder"],
         json!({"footprint": 6_u64 << 30, "peakFootprint": 7_u64 << 30, "resident": 2_u64 << 30,
-            "resets": 2, "lastResetAt": 1_793_923_943_551_u64, "resetFailures": 0})
+            "resets": 2, "lastResetAt": 1_793_923_943_551_u64, "resetFailures": 0,
+            "resetAfterUpdate": true})
     );
 }
 

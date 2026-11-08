@@ -5,6 +5,8 @@
 //! it, and only while no input runs or has for a moment and the helper is
 //! off the screen, where the person cannot be using it. launchd starts a
 //! fresh one for the next capture, and Screen Recording stays allowed.
+//! Once after an update, one already past [`AFTER_UPDATE`] is restarted the
+//! same way.
 use atlas_core::process::Instance;
 use atlas_native::native::{
     activity,
@@ -35,6 +37,12 @@ const READING: Duration = Duration::from_secs(60);
 
 /// Past this footprint the screen recorder is restarted.
 const LIMIT: u64 = 1 << 30;
+
+/// Past this footprint, the first time a daemon of a version that restarts
+/// the recorder reads it, the recorder is restarted once: one that grew
+/// under an earlier version gives its memory back now rather than at
+/// [`LIMIT`].
+const AFTER_UPDATE: u64 = 300 << 20;
 
 /// How long a restart waits for running captures to end; one still running
 /// then puts it off, which is not a failure.
@@ -126,6 +134,10 @@ pub(super) struct Report {
     /// or the recorder did not exit. One put off because a capture was
     /// running is not counted.
     pub(super) reset_failures: u64,
+    /// Whether this daemon restarted it once after an update, as it had
+    /// grown past [`AFTER_UPDATE`] under an earlier version.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) reset_after_update: bool,
 }
 
 impl Report {
@@ -158,6 +170,12 @@ pub(super) struct Recorder {
     /// The input service's activity file: a restart waits for a pause in
     /// the input it tells of. None has no input to wait for.
     input: Option<PathBuf>,
+    /// Where the restart once after an update is recorded, so it never
+    /// repeats. None has none to do.
+    after_update: Option<PathBuf>,
+    /// Whether that restart is still to do: none until the record was
+    /// looked at.
+    after_update_due: Mutex<Option<bool>>,
     /// The last reading and when the next is due. It is held while reading
     /// and restarting, so a reading asked for meanwhile waits for that one,
     /// not a second one.
@@ -175,6 +193,8 @@ impl Recorder {
             system,
             helper,
             input: None,
+            after_update: None,
+            after_update_due: Mutex::new(None),
             last: Mutex::new((None, Report::default())),
             shown: Mutex::new(None),
             reading: AtomicBool::new(false),
@@ -188,6 +208,59 @@ impl Recorder {
             input: Some(path),
             ..self
         }
+    }
+
+    /// This recorder, restarted once past [`AFTER_UPDATE`] unless `path`
+    /// records that this was done.
+    pub(super) fn once_after_update(self, path: PathBuf) -> Self {
+        Self {
+            after_update: Some(path),
+            ..self
+        }
+    }
+
+    /// Whether the restart once after an update is still to do: never once
+    /// it is recorded, here or by an earlier daemon.
+    fn after_update_due(&self) -> bool {
+        let Some(path) = &self.after_update else {
+            return false;
+        };
+        *self
+            .after_update_due
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(|| matches!(atlas_core::files::try_open_plain(path), Ok(None)))
+    }
+
+    /// Record that the restart once after an update is taken care of, before
+    /// it is done, so no later daemon does it again: one that cannot be
+    /// recorded is not done at all. Whether it was recorded.
+    fn after_update_record(&self) -> bool {
+        let Some(path) = &self.after_update else {
+            return false;
+        };
+        if matches!(atlas_core::files::try_open_plain(path), Ok(Some(_))) {
+            return true;
+        }
+        match atlas_core::files::write_private(path, env!("CARGO_PKG_VERSION").as_bytes()) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!(
+                    "The screen recorder's restart after an update could not be recorded, so it is not done: {}",
+                    error.error
+                );
+                self.after_update_settled();
+                false
+            }
+        }
+    }
+
+    /// The restart once after an update is no longer to do in this daemon.
+    fn after_update_settled(&self) {
+        *self
+            .after_update_due
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(false);
     }
 
     /// The screen recorder as last read; none when there is nothing to say.
@@ -237,18 +310,38 @@ impl Recorder {
     }
 
     /// A new reading after `report`, restarting the recorder first when it
-    /// has grown past [`LIMIT`], and how long until the next.
+    /// has grown past [`LIMIT`], or past [`AFTER_UPDATE`] at the first
+    /// reading after an update, and how long until the next.
     fn read(&self, source: &Source, mut report: Report) -> (Report, Duration) {
         let found = (self.system.find)();
         report.usage = found.as_ref().map(|(_, usage)| *usage);
-        let (Some(helper), Some((measured, usage))) = (self.helper, found) else {
+        let Some(helper) = self.helper else {
             report.reset_failures = 0;
             return (report, READING);
         };
-        if usage.footprint <= LIMIT {
+        // After an update, a recorder measured at or under the threshold
+        // needs no restart, and one over it is restarted once it is recorded
+        // that it was; one not found, or not measured, is looked at again at
+        // the next reading.
+        let mut after_update = self.after_update_due();
+        if after_update && let Some((_, usage)) = &found {
+            if usage.footprint <= AFTER_UPDATE {
+                self.after_update_record();
+                self.after_update_settled();
+                after_update = false;
+            } else if usage.footprint <= LIMIT {
+                after_update = self.after_update_record();
+            } else {
+                // Past the limit it is restarted anyway; the next reading
+                // finds it small and records that.
+                after_update = false;
+            }
+        }
+        let limit = if after_update { AFTER_UPDATE } else { LIMIT };
+        let Some((measured, _)) = found.filter(|(_, usage)| usage.footprint > limit) else {
             report.reset_failures = 0;
             return (report, READING);
-        }
+        };
         // The person may be using the helper, physical input announces
         // nothing, and its recorder may be theirs too: the next reading
         // tries again.
@@ -272,10 +365,14 @@ impl Recorder {
                 report.last_reset_at = Some(atlas_core::time::now_ms());
                 report.reset_failures = 0;
                 report.usage = (self.system.find)().map(|(_, usage)| usage);
+                if after_update {
+                    report.reset_after_update = true;
+                    self.after_update_settled();
+                }
             }
             Some(Restart::Refused) => {
                 report.usage = (self.system.find)().map(|(_, usage)| usage);
-                if report.usage.is_none_or(|usage| usage.footprint <= LIMIT) {
+                if report.usage.is_none_or(|usage| usage.footprint <= limit) {
                     report.reset_failures = 0;
                 }
             }

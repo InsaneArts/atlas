@@ -59,6 +59,10 @@ const SHUTDOWN: Duration = Duration::from_secs(2);
 /// How often a running command checks that the helper is still off screen.
 const CONSOLE_CHECK: Duration = Duration::from_secs(1);
 
+/// The file beside the socket that records the screen recorder's one
+/// restart after an update.
+const RESTARTED_AFTER_UPDATE: &str = "recorder-restarted-after-update";
+
 type Connections = HashMap<Id, watch::Receiver<ConnectionPhase>>;
 
 fn connection_outcome(
@@ -256,6 +260,11 @@ impl Daemon {
         if let Some(home) = std::env::var_os("HOME") {
             let input = crate::helper_setup::Layout::new(uid, PathBuf::from(home)).input_socket();
             recorder = recorder.beside_input(atlas_native::native::activity::beside(&input));
+        }
+        // A recorder grown under an earlier version is restarted once, early;
+        // that it was is kept beside the socket, so it never repeats.
+        if let Some(folder) = socket.parent() {
+            recorder = recorder.once_after_update(folder.join(RESTARTED_AFTER_UPDATE));
         }
         daemon.recorder = Arc::new(recorder);
         // Jobs are kept beside the socket; the jobs a daemon before this one
