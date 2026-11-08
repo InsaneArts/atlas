@@ -123,12 +123,21 @@ fn who(client: &Client) -> String {
 /// they stopped agents, and whatever the command itself returns.
 pub async fn after_asking(
     client: &Client,
-    mut attempt: impl AsyncFnMut() -> Result<Value>,
+    attempt: impl AsyncFnMut() -> Result<Value>,
 ) -> Result<Value> {
+    let outcome = asking(client, attempt).await;
+    // What the person allowed once was for this command alone.
+    client.clear_granted();
+    outcome
+}
+
+/// [`after_asking`]. What the person allowed once is kept across the
+/// attempts that sent nothing, so several places in one request can each
+/// be allowed; the command's end spends it.
+async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>) -> Result<Value> {
     let until = Instant::now() + client.controller.remaining();
     loop {
         let outcome = attempt().await;
-        client.clear_granted();
         // Only a refusal that sent nothing becomes a question.
         let Some(question) = asked(&outcome) else {
             return private(outcome);

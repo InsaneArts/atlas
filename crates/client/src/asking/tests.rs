@@ -351,3 +351,49 @@ fn allow_for_this_task_holds_only_in_the_host_process_it_was_given_in_while_its_
         .unwrap();
     assert_eq!(tasks(&client), 0, "its session ended");
 }
+
+#[tokio::test]
+async fn just_this_once_answers_gathered_in_one_command_all_hold_until_it_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(dir.path());
+    client.controller = client
+        .controller
+        .clone()
+        .waiting(std::time::Duration::from_secs(5));
+    let asks = client.controller.asks();
+    let person = std::thread::spawn(move || {
+        let mut answered = Vec::new();
+        while answered.len() < 2 {
+            if let Some(ask) = asks
+                .open(now_ms())
+                .into_iter()
+                .find(|ask| !answered.contains(&ask.id))
+            {
+                asks.answer(&ask.id, Answer::Once, true, now_ms()).unwrap();
+                answered.push(ask.id);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    });
+    let mut attempts = Vec::new();
+    // One request with two places that send: each asks in turn, sending nothing.
+    let reply = after_asking(&client, async || {
+        attempts.push(client.granted());
+        match attempts.len() {
+            1 => Err(waiting("c1")),
+            2 => Err(waiting("c2")),
+            _ => Ok(json!({"ok": true})),
+        }
+    })
+    .await
+    .unwrap();
+    person.join().unwrap();
+    assert_eq!(reply, json!({"ok": true}));
+    assert_eq!(attempts[1].len(), 1);
+    assert_eq!(
+        attempts[2].len(),
+        2,
+        "the first approval held for the second"
+    );
+    assert!(client.granted().is_empty(), "the command's end spends them");
+}
