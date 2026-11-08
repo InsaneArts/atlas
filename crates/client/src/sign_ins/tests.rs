@@ -138,3 +138,23 @@ fn what_the_helper_saw_carries_no_typed_text() {
     assert!(!record.contains(canary));
     assert!(!record.contains("login"));
 }
+
+#[test]
+fn changes_made_at_once_are_all_kept() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().to_owned();
+    let adders: Vec<_> = (0..16)
+        .map(|index| {
+            let home = path.clone();
+            std::thread::spawn(move || {
+                let mut entry = github(index);
+                entry.id = format!("site{index}.example");
+                add_in(&home, entry, true).unwrap()
+            })
+        })
+        .collect();
+    for adder in adders {
+        assert!(adder.join().unwrap());
+    }
+    assert!(matches!(listed_in(&path), Listed::Accounts(accounts) if accounts.len() == 16));
+}

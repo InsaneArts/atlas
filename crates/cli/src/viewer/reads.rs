@@ -96,7 +96,7 @@ impl Viewer {
 
         // The helper's accounts, for the person's app alone: an agent's
         // status never carries them.
-        let (accounts, note) = super::accounts::for_status();
+        let (accounts, note) = super::accounts::for_status(&self.accounts_home());
         status.value["overview"]["accounts"] = accounts;
         status.value["overview"]["accountNote"] = note;
 

@@ -46,7 +46,7 @@
       var state = selecting(.accounts)
       state.alert = AlertCardState(
         title: "Remove github.com from Accounts?",
-        message: "Atlas stops listing it. The helper stays signed in to it until you sign out there.",
+        message: "Atlas stops listing it. Removing it from the list doesn't sign the helper out.",
         buttons: [
           AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
           AlertCardButton(id: .confirm, title: "Remove", role: .destructive),

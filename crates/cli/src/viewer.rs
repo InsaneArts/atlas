@@ -104,6 +104,9 @@ struct Viewer {
     record: std::sync::Mutex<Option<(PathBuf, Value)>>,
     /// The helper's app icons, made once.
     icons: helper_info::Icons,
+    /// The home folder whose record of the helper's accounts this viewer
+    /// shows and changes: the person's.
+    accounts_home: std::sync::Mutex<Option<PathBuf>>,
 }
 
 impl Viewer {

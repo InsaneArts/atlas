@@ -154,7 +154,11 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
         {
             report["files"] = json!(files);
         }
-        if let atlas_client::sign_ins::Listed::Accounts(accounts) = atlas_client::sign_ins::listed()
+        // Account names are the person's: their terminal alone, never JSON an
+        // agent could read, verbose or not.
+        if ui::human()
+            && let atlas_client::sign_ins::Listed::Accounts(accounts) =
+                atlas_client::sign_ins::listed()
         {
             report["accounts"] =
                 json!(accounts.iter().map(|entry| &entry.name).collect::<Vec<_>>());

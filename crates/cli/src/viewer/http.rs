@@ -102,6 +102,7 @@ pub(super) fn configured(
         authority,
         app: std::sync::Mutex::new(None),
         account_name: std::sync::Mutex::new(None),
+        accounts_home: std::sync::Mutex::new(atlas_core::config::home().ok()),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
         icons: helper_info::Icons::default(),
@@ -436,8 +437,8 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
             .await
             .map(|()| json!({"ok": true})),
         Change::Revoke => viewer.revoke().await,
-        Change::AddAccount => super::accounts::add(body),
-        Change::RemoveAccount => super::accounts::remove(body),
+        Change::AddAccount => super::accounts::add(&viewer.accounts_home(), body),
+        Change::RemoveAccount => super::accounts::remove(&viewer.accounts_home(), body),
     };
 
     mutation_reply(viewer, owner, outcome).await

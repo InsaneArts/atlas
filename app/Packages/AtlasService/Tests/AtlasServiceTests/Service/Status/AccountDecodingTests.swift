@@ -34,5 +34,7 @@ struct AccountDecodingTests {
     #expect(try status(["overview": ["accounts": NSNull()]]).overview.accounts == nil)
     #expect(try status(["overview": [:] as [String: Any]]).overview.accounts == nil)
     #expect(try status(["overview": ["accounts": [] as [Any]]]).overview.accounts == [])
+    #expect(try status(["overview": ["accounts": [:] as [String: Any]]]).overview.accounts == nil, "not a list")
+    #expect(try status(["overview": ["accounts": ["x", 7] as [Any]]]).overview.accounts == nil, "nothing reads")
   }
 }

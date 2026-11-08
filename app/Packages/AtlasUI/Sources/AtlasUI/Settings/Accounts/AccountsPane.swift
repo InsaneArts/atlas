@@ -27,16 +27,22 @@ struct AccountsPane: View {
   @ViewBuilder private var content: some View {
     switch state.rows {
     case .none:
-      EmptyMessage(
-        state: EmptyMessageState(
-          headline: "Atlas can't read its accounts list",
-          message: "Nothing was changed. Try again in a moment."
-        ),
-        ground: .pane
-      )
+      VStack(alignment: .leading, spacing: Spacing.sPlus) {
+        EmptyMessage(
+          state: EmptyMessageState(
+            headline: "Atlas can't read its accounts list",
+            message: "Nothing was changed. Try again in a moment."
+          ),
+          ground: .pane
+        )
+        noteLines
+      }
     case .some(let rows) where rows.isEmpty:
-      EmptyMessage(state: state.empty, ground: .pane) { send(.addApp) }
-        .disabled(state.isWorking)
+      VStack(alignment: .leading, spacing: Spacing.sPlus) {
+        EmptyMessage(state: state.empty, ground: .pane) { send(.addApp) }
+          .disabled(state.isWorking)
+        noteLines
+      }
     case .some(let rows):
       VStack(alignment: .trailing, spacing: Spacing.m) {
         // The window's title already says Accounts, so the list needs no heading of its own.
@@ -51,7 +57,15 @@ struct AccountsPane: View {
     }
   }
 
-  /// What the last change said, under the list.
+  /// What the last change said, under the empty pane's message, inset as a section's notes are.
+  private var noteLines: some View {
+    ForEach(notes.indices, id: \.self) { index in
+      GroupedSectionNoteView(note: notes[index])
+        .padding(.horizontal, Spacing.m)
+    }
+  }
+
+  /// What the last change said, under the list or the message.
   private var notes: [GroupedSectionNote] {
     [state.notice?.sectionNote]
       .compactMap { $0 }

@@ -8,7 +8,7 @@ fn an_app_is_added_only_by_its_id_and_name() {
         json!({"id": " ", "name": "Slack"}),
         json!({"id": "x".repeat(201), "name": "Slack"}),
     ] {
-        assert_eq!(add(&body).unwrap_err().code, Code::Input, "{body}");
+        assert_eq!(add(&None, &body).unwrap_err().code, Code::Input, "{body}");
     }
 }
 
@@ -19,6 +19,10 @@ fn an_account_is_removed_only_by_its_kind_and_id() {
         json!({"kind": "page", "id": "github.com"}),
         json!({"kind": "site"}),
     ] {
-        assert_eq!(remove(&body).unwrap_err().code, Code::Input, "{body}");
+        assert_eq!(
+            remove(&None, &body).unwrap_err().code,
+            Code::Input,
+            "{body}"
+        );
     }
 }

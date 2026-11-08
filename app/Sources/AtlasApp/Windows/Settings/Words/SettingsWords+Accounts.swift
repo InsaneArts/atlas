@@ -65,8 +65,7 @@ extension SettingsWords {
   }
 
   /// What taking an account off the list does, and doesn't.
-  static let removeAccountMessage =
-    "Atlas stops listing it. The helper stays signed in to it until you sign out there."
+  static let removeAccountMessage = "Atlas stops listing it. Removing it from the list doesn't sign the helper out."
   /// The alert's button that takes it off the list.
   static let removeAccount = "Remove"
   /// While it is taken off.

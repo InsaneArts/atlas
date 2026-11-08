@@ -114,6 +114,10 @@ struct SettingsAccountsTests {
     let id = try #require(status.overview.accounts?.first?.id)
     controller.send(.askRemoveAccount(id))
     #expect(controller.state.alert?.title == "Remove github.com from Accounts?")
+    #expect(
+      controller.state.alert?.message
+        == "Atlas stops listing it. Removing it from the list doesn't sign the helper out."
+    )
     #expect(asked.count == 1, "nothing is removed before the person confirms")
     await controller.confirmAlert()
     #expect(asked.last == "remove github.com")

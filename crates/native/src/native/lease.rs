@@ -276,6 +276,13 @@ impl Grant {
         state.require_at(&self.owner, true, now)?;
         Ok(state)
     }
+
+    /// This grant's owner, while that same owner still holds control and is
+    /// the person: never another holder that came in since.
+    pub(super) fn person(&self) -> Option<&str> {
+        let state = self.authorize().ok()?;
+        (state.holder() == Some(Who::Person)).then_some(self.owner.as_str())
+    }
 }
 
 #[cfg(test)]

@@ -102,7 +102,7 @@ impl Viewer {
         // A password the person typed while they had control names the
         // account they signed in to: Atlas lists it.
         if let Ok(Some(seen)) = &completion {
-            note_sign_in(seen);
+            super::accounts::note_sign_in(&self.accounts_home(), seen);
         }
 
         // Native execution can end before its background recording does.
@@ -354,19 +354,6 @@ pub(super) async fn release_native(
                 .and_then(|mut reply| reply.get_mut("signedIn").map(Value::take)))
         }
     }
-}
-
-/// Add the account the person signed in to while they had control, as the
-/// helper saw it (`seen`): the app, and the page's host. A record that
-/// can't be written leaves it out; giving control back never fails for it.
-fn note_sign_in(seen: &Value) {
-    use atlas_client::sign_ins;
-    let Ok(seen) = serde_json::from_value::<sign_ins::Seen>(seen.clone()) else {
-        return;
-    };
-    let entry = sign_ins::account_of(&seen, atlas_core::time::now_ms());
-    // The person's lease proved it: only their typing is looked at.
-    let _ = sign_ins::add(entry, true);
 }
 
 /// The session a cleanup route names, by its key.

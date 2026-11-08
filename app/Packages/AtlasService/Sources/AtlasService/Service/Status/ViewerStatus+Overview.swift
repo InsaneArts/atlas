@@ -138,9 +138,12 @@ extension ViewerStatus {
       moreSessions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .moreSessions)) ?? 0)
       jobs = (try? container.decodeIfPresent(Jobs.self, forKey: .jobs)) ?? Jobs()
       sound = try? container.decodeIfPresent(Sound.self, forKey: .sound)
-      // A list that is there keeps each account that reads; a missing or null one is unknown, never empty.
-      if (try? container.decodeNil(forKey: .accounts)) == false {
-        accounts = container.lenientList(Account.self, forKey: .accounts)
+      // A list keeps each account that reads. One that is missing, null, not a list, or holds accounts none of which
+      // read is unknown: never empty, which would say there are none.
+      let listed = (try? container.nestedUnkeyedContainer(forKey: .accounts))?.count
+      if let listed {
+        let read = container.lenientList(Account.self, forKey: .accounts)
+        accounts = read.isEmpty && listed != 0 ? nil : read
       }
       accountNote = try? container.decodeIfPresent(AccountNote.self, forKey: .accountNote)
     }

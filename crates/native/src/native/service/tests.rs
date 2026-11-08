@@ -65,7 +65,7 @@ fn service(marker: &std::path::Path) -> super::Service {
         stopping: tokio::sync::Notify::new(),
         stop_marker: marker.to_owned(),
         activity: marker.with_extension("activity"),
-        seen: std::sync::Mutex::new(None),
+        seen: Arc::default(),
     }
 }
 
@@ -3898,7 +3898,7 @@ fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc
         stopping: tokio::sync::Notify::new(),
         stop_marker: directory.join("stopped"),
         activity: directory.join("input.activity"),
-        seen: std::sync::Mutex::new(None),
+        seen: Arc::default(),
     })
 }
 
@@ -4356,14 +4356,27 @@ fn a_pages_host_is_read_from_its_address_and_nothing_else() {
     assert_eq!(page_host("about:blank"), None);
 }
 
-#[tokio::test]
-async fn an_agents_typing_is_never_looked_at_for_a_password() {
-    let directory = tempfile::tempdir().unwrap();
-    let service = service(&directory.path().join("stopped"));
-    let owner = atlas_core::files::token();
-    let _grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
-    service.note_password(&owner).await;
-    assert!(service.seen.lock().unwrap().is_none());
+#[test]
+fn only_the_same_persons_grant_still_holding_control_is_looked_at_for_a_password() {
+    let gate = Arc::new(Gate::default());
+    let agent = atlas_core::files::token();
+    let grant = gate.acquire(&agent, super::Who::Agent).unwrap();
+    assert_eq!(grant.person(), None, "an agent's input is never looked at");
+    let seen = std::sync::Mutex::new(None);
+    super::note_password(Some(&grant), &seen);
+    assert!(seen.lock().unwrap().is_none());
+    gate.cancel(Some(&agent)).unwrap();
+    drop(grant);
+
+    let person = atlas_core::files::token();
+    let grant = gate.acquire(&person, super::Who::Person).unwrap();
+    assert_eq!(grant.person(), Some(person.as_str()));
+    gate.cancel(Some(&person)).unwrap();
+    assert_eq!(
+        grant.person(),
+        None,
+        "a grant that no longer holds control is not the person's now"
+    );
 }
 
 #[test]

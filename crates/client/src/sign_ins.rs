@@ -11,10 +11,13 @@
 //! changes it.
 use atlas_core::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize};
-use std::{io::ErrorKind, net::IpAddr, path::Path};
+use std::{io::ErrorKind, net::IpAddr, os::unix::fs::DirBuilderExt, path::Path};
 
 /// Where the record is kept, under the person's home folder.
 const RECORD: &str = "Library/Application Support/Atlas/sign-ins.json";
+/// The lock every change holds from reading the record to replacing it, so
+/// two changes at once never lose one another.
+const LOCK: &str = "Library/Application Support/Atlas/sign-ins.lock";
 
 /// The record's format; a file of a later one is unknown here.
 const VERSION: u32 = 1;
@@ -121,7 +124,8 @@ pub fn listed() -> Listed {
 }
 
 /// [`listed`] for the home folder `home`.
-pub(crate) fn listed_in(home: &Path) -> Listed {
+#[must_use]
+pub fn listed_in(home: &Path) -> Listed {
     let bytes = match std::fs::read(home.join(RECORD)) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == ErrorKind::NotFound => return Listed::Accounts(Vec::new()),
@@ -145,8 +149,13 @@ pub fn add(entry: Entry, by_person: bool) -> Result<bool> {
 }
 
 /// [`add`] for the home folder `home`.
-pub(crate) fn add_in(home: &Path, entry: Entry, by_person: bool) -> Result<bool> {
-    let mut accounts = writable(home, by_person)?;
+///
+/// # Errors
+///
+/// As [`add`].
+pub fn add_in(home: &Path, entry: Entry, by_person: bool) -> Result<bool> {
+    let _locked = locked(home, by_person)?;
+    let mut accounts = writable(home)?;
     if accounts.iter().any(|listed| listed.same(&entry)) {
         return Ok(false);
     }
@@ -173,14 +182,19 @@ pub fn remove(kind: Kind, id: &str, browser: Option<&str>, by_person: bool) -> R
 }
 
 /// [`remove`] for the home folder `home`.
-pub(crate) fn remove_in(
+///
+/// # Errors
+///
+/// As [`remove`].
+pub fn remove_in(
     home: &Path,
     kind: Kind,
     id: &str,
     browser: Option<&str>,
     by_person: bool,
 ) -> Result<bool> {
-    let mut accounts = writable(home, by_person)?;
+    let _locked = locked(home, by_person)?;
+    let mut accounts = writable(home)?;
     let before = accounts.len();
     accounts.retain(|entry| {
         !(entry.kind == kind && entry.id == id && entry.browser.as_deref() == browser)
@@ -232,15 +246,31 @@ pub fn site_key(host: &str) -> String {
     psl::domain_str(&host).map_or_else(|| host.clone(), str::to_owned)
 }
 
-/// The accounts, when the record may be written by this caller: the person
-/// only, and only over a record that was read.
-fn writable(home: &Path, by_person: bool) -> Result<Vec<Entry>> {
+/// The record's lock, held by this caller alone until it is dropped: the
+/// person only.
+fn locked(home: &Path, by_person: bool) -> Result<atlas_core::files::LockFile> {
     if !by_person {
         return Err(Error::new(
             Code::Stopped,
             "Only the person changes the helper's accounts, from Atlas › Settings › Accounts",
         ));
     }
+    let path = home.join(LOCK);
+    if let Some(parent) = path.parent() {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|error| Error::writing(parent, error))?;
+    }
+    let lock = atlas_core::files::open_lock(&path)?;
+    fs2::FileExt::lock_exclusive(&lock.0).map_err(|error| Error::writing(&path, error))?;
+    Ok(lock)
+}
+
+/// The accounts, when the record may be written over: only one that was
+/// read.
+fn writable(home: &Path) -> Result<Vec<Entry>> {
     match listed_in(home) {
         Listed::Accounts(accounts) => Ok(accounts),
         Listed::Unknown => Err(Error::new(

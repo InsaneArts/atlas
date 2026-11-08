@@ -2712,3 +2712,92 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
         }
     }
 }
+
+/// What the person typed while they had control never reaches the accounts
+/// Atlas records, the status it shows, or the activity log, even when the
+/// helper saw a password field: only the app and the page's host do.
+#[tokio::test]
+async fn a_password_the_person_typed_reaches_no_record_status_or_log() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    const CANARY: &str = "hunter2-canary-73a9";
+
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let home = base.join("home");
+    let socket = base.join("seen.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut stream = BufReader::new(stream);
+                let mut line = String::new();
+                stream.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                // The helper saw a password field in Chrome on github.com's sign-in page.
+                let reply = match request["op"].as_str() {
+                    Some("release") => json!({
+                        "ok": true,
+                        "released": true,
+                        "signedIn": {"app": "com.google.Chrome", "name": "Google Chrome", "host": "github.com"},
+                    }),
+                    _ => json!({"ok": true}),
+                };
+                let _ = stream
+                    .get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await;
+            });
+        }
+    });
+    let (_, viewer) = bind(client_with_input(&base, &socket), 0, None)
+        .await
+        .unwrap();
+    *viewer.accounts_home.lock().unwrap() = Some(home.clone());
+
+    viewer
+        .take_control(&viewer.client(), &epoch())
+        .await
+        .unwrap();
+    let taken = viewer.holder();
+    let output = taken.output_dir().unwrap().to_path_buf();
+    let typed = json!({"op": "input", "actions": [{"type": "type", "text": CANARY}, {"type": "key", "key": "return"}]});
+    taken.record_for_test(&typed, &json!({"ok": true}));
+    viewer.release(None).await.unwrap();
+
+    let record =
+        std::fs::read_to_string(home.join("Library/Application Support/Atlas/sign-ins.json"))
+            .unwrap();
+    assert!(record.contains("github.com"), "{record}");
+    assert!(!record.contains(CANARY));
+    let status = viewer.status().await.to_string();
+    assert!(
+        status.contains("github.com"),
+        "the status lists the account"
+    );
+    assert!(!status.contains(CANARY));
+    let rows = atlas_client::activity_log::recent(&output, 5);
+    assert!(!rows.is_empty(), "the person's input is logged");
+    assert!(!serde_json::to_string(&rows).unwrap().contains(CANARY));
+    for file in walk(&output) {
+        let text = String::from_utf8_lossy(&std::fs::read(&file).unwrap()).into_owned();
+        assert!(!text.contains(CANARY), "{}", file.display());
+    }
+}
+
+/// Every file under `folder`.
+fn walk(folder: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .flat_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path)
+            } else {
+                vec![path]
+            }
+        })
+        .collect()
+}

@@ -86,7 +86,7 @@ struct Service {
     /// Where the person typed into a password field while they held
     /// control, by their lease, until they give it back: the app and the
     /// page's host, never what was typed.
-    seen: std::sync::Mutex<Option<(String, Value)>>,
+    seen: Arc<std::sync::Mutex<Option<(String, Value)>>>,
 }
 
 /// A file by path and (device, inode).
@@ -329,32 +329,6 @@ impl Service {
         }
     }
 
-    /// After the person's keys or typing under lease `owner`: when keyboard
-    /// focus is in a password field, remember its app and page. One read of
-    /// the focused element, bounded; nothing typed is read, and an agent's
-    /// input is never looked at.
-    async fn note_password(&self, owner: &str) {
-        let Ok(Some(Holder::Person)) = self.gate.holder() else {
-            return;
-        };
-        let read = tokio::task::spawn_blocking(|| {
-            let pid = super::ax::focused_pid(PASSWORD_READ).ok()??;
-            let page = super::ax::password_page(pid, PASSWORD_READ).ok()??;
-            let app = super::apps::bundle_id(pid)?;
-            Some(json!({
-                "app": app,
-                "name": super::apps::name(pid),
-                "host": page.as_deref().and_then(page_host),
-            }))
-        })
-        .await
-        .ok()
-        .flatten();
-        if let (Some(value), Ok(mut seen)) = (read, self.seen.lock()) {
-            *seen = Some((owner.to_owned(), value));
-        }
-    }
-
     fn renew(&self, owner: String, phase: &watch::Sender<ConnectionPhase>) -> Result<Value> {
         self.gate.renew(&owner)?;
         phase.send_replace(ConnectionPhase::Mutation("renew"));
@@ -461,19 +435,15 @@ impl Service {
         let expect = expect?;
         agent_target(&self.gate, expect.as_ref(), &actions)?;
         phase.send_replace(ConnectionPhase::Mutation("input"));
-        let lease = owner.clone();
         let mut cancellation = Cancellation {
             gate: self.gate.clone(),
             owner: Some(owner),
         };
-        let (done, dock_pressed) = match self.execute(grant, actions, expect.clone()).await? {
+        let (done, dock_pressed) = match self.execute(grant, actions, expect.clone(), typed).await?
+        {
             Ok(done) => done,
             Err(failure) => return Ok(failure.reply()),
         };
-
-        if typed {
-            self.note_password(&lease).await;
-        }
 
         let acted = done.acted.as_ref();
         let landed = if report_app {
@@ -523,9 +493,11 @@ impl Service {
         grant: Grant,
         actions: Vec<Action>,
         expect: Option<Expect>,
+        typed: bool,
     ) -> Result<Performed> {
         let engine = self.engine.clone().lock_owned().await;
         let gate = self.gate.clone();
+        let seen = self.seen.clone();
         let runtime = tokio::runtime::Handle::current();
         let outcome = self
             .operations
@@ -542,6 +514,11 @@ impl Service {
                         .transpose()?;
                     engine.dock_pressed = false;
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
+                    // Part of the batch's own work, so giving control back
+                    // waits for it before it reads what was seen.
+                    if typed && result.is_ok() {
+                        note_password(engine.grant.as_ref(), &seen);
+                    }
                     engine.target = None;
                     engine.keep_while_held(acting);
                     Ok::<_, Error>(result.map(|done| (done, engine.dock_pressed)))
@@ -640,8 +617,35 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
     Ok(())
 }
 
-/// How long the look at a password field after the person's typing may take.
+/// How long the whole look at a password field after the person's typing
+/// may take.
 const PASSWORD_READ: Duration = Duration::from_millis(250);
+
+/// After keys or typing under `grant`: while that same grant is the person's
+/// and holds control, when keyboard focus is in a password field, remember
+/// its app and page for the grant's owner, in `seen`. One deadline covers
+/// every read; nothing typed is read, and an agent's input is never looked
+/// at.
+fn note_password(grant: Option<&Grant>, seen: &std::sync::Mutex<Option<(String, Value)>>) {
+    let Some(owner) = grant.and_then(Grant::person) else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + PASSWORD_READ;
+    let left = || super::ax::remaining(deadline, std::time::Instant::now()).ok();
+    let read = || {
+        let pid = super::ax::focused_pid(left()?).ok()??;
+        let page = super::ax::password_page(pid, left()?).ok()??;
+        let app = super::apps::bundle_id(pid)?;
+        Some(json!({
+            "app": app,
+            "name": super::apps::name(pid),
+            "host": page.as_deref().and_then(page_host),
+        }))
+    };
+    if let (Some(value), Ok(mut seen)) = (read(), seen.lock()) {
+        *seen = Some((owner.to_owned(), value));
+    }
+}
 
 /// The host of a web page's address, lowercased: only for `http` and
 /// `https`, with any user, port, path, query and fragment dropped.
@@ -727,7 +731,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         gate,
         stop_marker,
         activity,
-        seen: std::sync::Mutex::new(None),
+        seen: Arc::default(),
     });
     service.listen(&listener, controller_uid).await
 }
