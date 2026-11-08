@@ -144,7 +144,6 @@ impl Look for OnScreen<'_> {
             role,
             name,
             in_page,
-            frame,
         }) = self.looks.described(*reference, self.epoch)
         else {
             return Target::default();
@@ -163,7 +162,7 @@ impl Look for OnScreen<'_> {
             identifier: None,
             secure: false,
             window: None,
-            frame,
+            frame: None,
         }
     }
 

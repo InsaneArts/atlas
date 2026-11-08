@@ -496,7 +496,6 @@ fn the_gate_reads_a_referenced_element_by_its_own_role_and_name_not_its_windows(
         role,
         name,
         in_page,
-        ..
     } = looks.described(at(look, 1), &epoch()).unwrap();
     assert_eq!(pid, 812);
     assert_eq!(role.as_deref(), Some("AXButton"));

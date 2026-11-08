@@ -121,14 +121,13 @@ impl Default for Looks {
 }
 
 /// A referenced element as the ask-before-sending gate reads it: the
-/// process it is in, its role and name, whether it sat in a web page, and
-/// where it was on screen.
+/// process it is in, its role and name, and whether it sat in a web page.
+/// Not where it is: that is read when it is met again.
 pub(in crate::native) struct Described {
     pub(in crate::native) pid: i64,
     pub(in crate::native) role: Option<String>,
     pub(in crate::native) name: Option<String>,
     pub(in crate::native) in_page: bool,
-    pub(in crate::native) frame: Option<Bounds>,
 }
 
 /// One look as read, before it is kept.
@@ -228,6 +227,11 @@ pub(in crate::native) struct Reached {
 }
 
 impl Reached {
+    /// Where it was met.
+    pub(in crate::native) fn frame(&self) -> &Bounds {
+        &self.frame
+    }
+
     /// `element` as it was met, when it has a frame.
     pub(in crate::native) fn of(element: &Element) -> Option<Self> {
         Some(Self {
@@ -316,7 +320,6 @@ impl Looks {
             role: element.role.clone(),
             name,
             in_page: found.in_web_page(),
-            frame: element.frame.clone(),
         })
     }
 

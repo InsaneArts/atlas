@@ -1984,7 +1984,11 @@ impl Perform for Stand {
         }
     }
 
-    fn recheck(&mut self, _: &Action) -> Result<()> {
+    fn recheck(
+        &mut self,
+        _: &Action,
+        _: Option<&atlas_core::screen::geometry::Bounds>,
+    ) -> Result<()> {
         self.assert_locked();
         let index = self.logged("post");
         if self.script.get(index) == Some(&Step::Withheld) {
@@ -3027,7 +3031,11 @@ impl Perform for Blocked {
             reached: None,
         })
     }
-    fn recheck(&mut self, _: &Action) -> Result<()> {
+    fn recheck(
+        &mut self,
+        _: &Action,
+        _: Option<&atlas_core::screen::geometry::Bounds>,
+    ) -> Result<()> {
         Ok(())
     }
     async fn perform(&mut self, _: Action) -> Result<()> {

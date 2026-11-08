@@ -687,9 +687,16 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
 }
 
 /// Check `action`, the next of an agent's request, where it lands now: see
-/// [`recheck`].
-pub(super) fn recheck_action(engine: &mut Engine, action: &Action) -> Result<()> {
-    recheck(engine, |recheck, look| recheck.check(action, look))
+/// [`recheck`]. A referenced element's question shows it where it was just
+/// met, `met`, never where an older look saw it.
+pub(super) fn recheck_action(
+    engine: &mut Engine,
+    action: &Action,
+    met: Option<&atlas_core::screen::geometry::Bounds>,
+) -> Result<()> {
+    recheck(engine, |recheck, look| {
+        asking::met(recheck.check(action, look), action, met)
+    })
 }
 
 /// Check the next event of the action under way: see [`recheck`].

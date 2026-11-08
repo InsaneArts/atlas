@@ -418,6 +418,23 @@ impl Recheck {
     }
 }
 
+/// `decision` about `action`, its question showing a referenced element
+/// where it was just met, `met`, or nowhere: an older look's place for it
+/// may no longer hold.
+pub(crate) fn met(
+    decision: Decision,
+    action: &Action,
+    met: Option<&atlas_core::screen::geometry::Bounds>,
+) -> Decision {
+    match decision {
+        Decision::Ask(mut question) if action.reference().is_some() => {
+            question.frame = met.cloned();
+            Decision::Ask(question)
+        }
+        decision @ (Decision::Free | Decision::Ask(_) | Decision::Deny { .. }) => decision,
+    }
+}
+
 /// The check before each event of the request `actions`, judged by
 /// `asking`.
 pub(crate) fn recheck(actions: &[Action], asking: &Asking) -> Recheck {

@@ -1326,3 +1326,39 @@ fn the_question_says_where_the_element_is_for_the_persons_picture_alone() {
         "a grant isn't bound to where it is drawn"
     );
 }
+
+#[test]
+fn a_referenced_elements_question_shows_it_where_it_was_just_met_or_nowhere() {
+    let asking = listing(Kind::App, SLACK, Level::Ask);
+    let mut look = scripted(Target::default(), Target::default());
+    let stale = atlas_core::screen::geometry::Bounds {
+        x: 1.0,
+        y: 1.0,
+        width: 5.0,
+        height: 5.0,
+    };
+    look.referenced = Target {
+        app: Some(SLACK.to_owned()),
+        role: Some("AXButton".to_owned()),
+        name: Some("Send".to_owned()),
+        frame: Some(stale),
+        ..Target::default()
+    };
+    let click = actions(json!([{"type": "reference", "ref": "8123abc.12"}]));
+    let now = atlas_core::screen::geometry::Bounds {
+        x: 40.0,
+        y: 300.0,
+        width: 60.0,
+        height: 24.0,
+    };
+    let mut frame = |met| match super::met(decide(&click, &asking, &mut look), &click[0], met) {
+        Decision::Ask(question) => question.frame,
+        Decision::Free | Decision::Deny { .. } => panic!("asks"),
+    };
+    assert_eq!(
+        frame(Some(&now)),
+        Some(now.clone()),
+        "where it was just met"
+    );
+    assert_eq!(frame(None), None, "not where a look saw it");
+}

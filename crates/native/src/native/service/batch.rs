@@ -53,8 +53,9 @@ pub(super) trait Perform {
         window: Option<i64>,
     ) -> Result<Acted>;
     /// Refuse `action`, about to be sent, unless where it lands now still
-    /// passes the person's accounts by the grants its request brought.
-    fn recheck(&mut self, action: &Action) -> Result<()>;
+    /// passes the person's accounts by the grants its request brought; `met`
+    /// is where a referenced element was just met, for the person's picture.
+    fn recheck(&mut self, action: &Action, met: Option<&Bounds>) -> Result<()>;
     /// Carry out one action through posted events or a Dock AXPress.
     async fn perform(&mut self, action: Action) -> Result<()>;
     /// Events posted or AX presses acknowledged so far.
@@ -183,8 +184,8 @@ impl Perform for Engine {
         Ok(acted)
     }
 
-    fn recheck(&mut self, action: &Action) -> Result<()> {
-        super::recheck_action(self, action)
+    fn recheck(&mut self, action: &Action, met: Option<&Bounds>) -> Result<()> {
+        super::recheck_action(self, action, met)
     }
 
     async fn perform(&mut self, action: Action) -> Result<()> {
@@ -300,7 +301,7 @@ pub(super) async fn run(
         let prepare = !continuation && !engine.held_input();
 
         let outcome = match action.element_action() {
-            Some((reference, element)) => match engine.recheck(&action) {
+            Some((reference, element)) => match engine.recheck(&action, None) {
                 Ok(()) => engine
                     .act(reference, element, expected.and_then(Expect::window))
                     .await
@@ -390,7 +391,7 @@ async fn step(
                 }
                 None => None,
             };
-            engine.recheck(&judged)?;
+            engine.recheck(&judged, None)?;
             engine.perform(action).await?;
             return Ok((role, None));
         }
@@ -416,7 +417,7 @@ async fn step(
     engine.confirm(resolved).await?;
     // Whatever came in front meanwhile is seen by a check that only reads.
     require_within(engine, &expect, click.target(), budget, false).await?;
-    engine.recheck(&judged)?;
+    engine.recheck(&judged, Some(reached.frame()))?;
     engine.perform(click).await?;
     Ok((role, Some(reached)))
 }
