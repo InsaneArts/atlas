@@ -237,3 +237,55 @@ fn only_the_helper_s_own_answer_counts_as_answered() {
         assert!(!answered(&reply), "{reply}");
     }
 }
+
+/// One exit line of `target` at `at`, `HH:MM:SS` on Nov 8.
+fn exit_at(target: &str, at: &str) -> String {
+    format!(
+        "2026-11-08 {at}.302405 ({target} [4242]) <Notice>: exited due to exit(0), ran for 64ms\n"
+    )
+}
+
+/// `count` exits of `target` every ten seconds from `start`, in seconds of
+/// the day.
+fn exits_from(target: &str, start: i64, count: usize) -> String {
+    (0..count as i64)
+        .map(|index| {
+            let at = start + index * 10;
+            exit_at(
+                target,
+                &format!("{:02}:{:02}:{:02}", at / 3600, at / 60 % 60, at % 60),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_clock_set_forward_an_hour_does_not_cut_the_hour_short() {
+    // 25 minutes of runs, then the clock jumps from 02:00 to 03:00, then 25
+    // more minutes: 50 real minutes, all inside the hour.
+    let target = "gui/503/com.apple.example";
+    let log = exits_from(target, 3600 + 35 * 60, 150) + &exits_from(target, 3 * 3600, 150);
+
+    assert_eq!(restarting(&log, 503)[0].runs, 300);
+}
+
+#[test]
+fn a_clock_set_back_an_hour_does_not_count_the_repeated_hour_twice() {
+    // 01:00 to 02:00, then the clock goes back to 01:00 and runs half an
+    // hour more: only the last real hour counts.
+    let target = "gui/503/com.apple.example";
+    let log = exits_from(target, 3600, 360) + &exits_from(target, 3600, 180);
+
+    let runs = restarting(&log, 503)[0].runs;
+    assert!((360..=362).contains(&runs), "{runs}");
+}
+
+#[test]
+fn steps_back_and_summer_time_jumps_count_no_time() {
+    assert_eq!(step(100, 90), 0);
+    assert_eq!(step(0, HOUR), 0);
+    assert_eq!(step(0, HOUR + 30), 0);
+    assert_eq!(step(0, 10), 10);
+    assert_eq!(step(0, 2 * HOUR), 2 * HOUR);
+    assert_eq!(span(&exits_from("gui/503/com.apple.example", 0, 7)), 60);
+}

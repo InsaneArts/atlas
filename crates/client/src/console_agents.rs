@@ -31,6 +31,9 @@ const SHORT_RUN_MS: u64 = 1_000;
 const RUNS_AN_HOUR: usize = 30;
 /// One hour, in seconds.
 const HOUR: i64 = 60 * 60;
+/// How far from a whole hour a step forward may be and still be a clock set
+/// forward for summer time, in seconds.
+const CLOCK_SLACK: i64 = 2 * 60;
 /// How many times the logs are read while launchd keeps moving them aside.
 const READS: usize = 3;
 
@@ -85,12 +88,20 @@ pub fn restarting(log: &str, uid: u32) -> Vec<Restart> {
         .lines()
         .filter_map(|line| Some((seconds(line)?, line)))
         .collect();
-    let Some(newest) = lines.iter().map(|(at, _)| *at).max() else {
-        return Vec::new();
-    };
 
+    // The hour is counted back from the newest line, step by step, so a
+    // clock set back or forward does not stretch or cut it.
     let mut counts: HashMap<&str, usize> = HashMap::new();
-    for (_, line) in lines.iter().filter(|(at, _)| newest - at <= HOUR) {
+    let mut since = 0;
+    let mut later = None;
+    for &(at, line) in lines.iter().rev() {
+        if let Some(later) = later {
+            since += step(at, later);
+        }
+        if since > HOUR {
+            break;
+        }
+        later = Some(at);
         if let Some((label, ms)) = exit(line, &domains)
             && ms < SHORT_RUN_MS
             && label.starts_with("com.apple.")
@@ -141,13 +152,13 @@ fn read_logs(paths: &[PathBuf]) -> Option<String> {
     let mut alone = None;
     for _ in 0..READS {
         let (newest, file) = tail(newest_path, LOG_TAIL)?;
-        let end = last_time(&newest);
+        let mut held = span(&newest);
+        let mut oldest = first_time(&newest);
         let mut files = vec![file];
         let mut older = Vec::new();
         let mut moved = false;
-        let mut start = first_time(&newest);
         for path in older_paths {
-            if covers_hour(start, end) {
+            if held >= HOUR {
                 break;
             }
             let Some((text, file)) = tail(path, LOG_TAIL) else {
@@ -158,7 +169,11 @@ fn read_logs(paths: &[PathBuf]) -> Option<String> {
                 break;
             }
             files.push(file);
-            start = first_time(&text).or(start);
+            held += span(&text)
+                + last_time(&text)
+                    .zip(oldest)
+                    .map_or(0, |(end, start)| step(end, start));
+            oldest = first_time(&text).or(oldest);
             older.push(text);
         }
         if !moved {
@@ -171,11 +186,27 @@ fn read_logs(paths: &[PathBuf]) -> Option<String> {
     alone
 }
 
-/// Whether logs running from `start` to `end` hold an hour.
-fn covers_hour(start: Option<i64>, end: Option<i64>) -> bool {
-    start
-        .zip(end)
-        .is_some_and(|(start, end)| end - start >= HOUR)
+/// The time from one line to the next, `earlier` then `later`, in the
+/// log's local clock. launchd writes many lines a minute, so a step back is
+/// the clock set back and a step forward of about an hour is the clock set
+/// forward, as summer time does: neither counts.
+fn step(earlier: i64, later: i64) -> i64 {
+    let gap = later - earlier;
+    if gap < 0 || (HOUR - CLOCK_SLACK..=HOUR + CLOCK_SLACK).contains(&gap) {
+        0
+    } else {
+        gap
+    }
+}
+
+/// The time `log`'s lines span, step by step.
+fn span(log: &str) -> i64 {
+    let times: Vec<i64> = log.lines().filter_map(seconds).collect();
+    times
+        .iter()
+        .zip(times.iter().skip(1))
+        .map(|(earlier, later)| step(*earlier, *later))
+        .sum()
 }
 
 /// The time of the first line of `log` that has one.
