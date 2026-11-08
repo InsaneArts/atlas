@@ -25,6 +25,8 @@ struct SettingsDependencies {
   var clock: any Clock<Duration>
   /// Shows a file or an app in the Finder, by its path, such as Atlas itself for Show in Finder.
   var revealFile: @MainActor (String) -> Void = { _ in }
+  /// Lets the person choose an app, in a panel that lists only apps; nil when they cancel.
+  var chooseApp: @MainActor () async -> ChosenApp? = { nil }
 
   /// The icon a file or an app shows: the agents' apps' icons come from here, never from the workspace directly.
   ///

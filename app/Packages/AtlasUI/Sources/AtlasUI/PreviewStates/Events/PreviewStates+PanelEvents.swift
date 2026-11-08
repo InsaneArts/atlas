@@ -27,6 +27,7 @@
         return next
       case .openAtlas, .openScreen, .openActivity, .openSession, .showAllSessions, .askRecover, .askSwitch,
         .openSettings,
+        .openAccounts,
         .showMore:
         return state
       }

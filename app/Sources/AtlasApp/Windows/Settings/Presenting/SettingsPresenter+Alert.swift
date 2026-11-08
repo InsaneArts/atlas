@@ -63,6 +63,17 @@ extension SettingsPresenter {
           doneMessage: SettingsWords.deletePicturesMessage(nil)
         )
       )
+    case .removeAccount(let id):
+      HelperAlert.destructive(
+        SettingsWords.removeAccountTitle(accountName(id, snapshot)),
+        SettingsWords.removeAccountMessage,
+        SettingsWords.removeAccount,
+        phase: progress.phase(
+          running: SettingsWords.removingAccount,
+          done: SettingsWords.removeAccount,
+          doneMessage: SettingsWords.removeAccountMessage
+        )
+      )
     case .install(let version):
       HelperAlert.plain(
         SettingsWords.installTitle(version),
@@ -76,5 +87,17 @@ extension SettingsPresenter {
         )
       )
     }
+  }
+
+  /// The name of the account with `id`, as the list shows it; "this account" once it is gone.
+  ///
+  /// - Parameters:
+  ///   - id: The account, as the service names it.
+  ///   - snapshot: What the controller holds and reads.
+  /// - Returns: Its name.
+  static func accountName(_ id: String, _ snapshot: SettingsSnapshot) -> String {
+    snapshot.facts.status.overview.accounts?
+      .first { $0.id == id }?
+      .name ?? "this account"
   }
 }

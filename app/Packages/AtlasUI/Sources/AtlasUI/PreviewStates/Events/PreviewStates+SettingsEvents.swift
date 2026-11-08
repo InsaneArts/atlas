@@ -36,6 +36,7 @@
       case .alertConfirm:
         if next.alert == settingsForget.alert { next.agents.projects.removeFirst() }
         if next.alert == settingsInstall.alert { next.about = settingsAbout.about }
+        if next.alert == settingsRemoveAccount.alert { next.accounts.rows?.removeFirst() }
         if next.alert == settingsDeletePictures.alert {
           next.general.storedPictures = "No pictures"
           next.general.canDeletePictures = false
@@ -53,7 +54,11 @@
         next.helper.files = settingsFilesOpen
       case .setSignInCopies(let on):
         next.helper.files?.signInCopies = on
-      case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile:
+      case .askRemoveAccount:
+        next.alert = settingsRemoveAccount.alert
+      case .dismissAccountNote:
+        next.accounts.note = nil
+      case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile, .addApp:
         break
       }
       return next

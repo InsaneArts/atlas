@@ -94,6 +94,12 @@ impl Viewer {
             status.value["overview"]["accountName"] = json!(title);
         }
 
+        // The helper's accounts, for the person's app alone: an agent's
+        // status never carries them.
+        let (accounts, note) = super::accounts::for_status();
+        status.value["overview"]["accounts"] = accounts;
+        status.value["overview"]["accountNote"] = note;
+
         status.value
     }
 

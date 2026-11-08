@@ -30,7 +30,8 @@ pub(crate) use atlas_core::screen::geometry::Bounds;
 pub(super) use bring::{bring, check_application, described, target_application, title_bar};
 pub(super) use ffi::act;
 pub(super) use keyboard::{
-    Asked, Focused, Judged, Keyboard, Status, Unread, Within, frontmost, keyboard, remaining,
+    Asked, Focused, Judged, Keyboard, Status, Unread, Within, frontmost, keyboard, password_page,
+    remaining,
 };
 pub(super) use references::{Looks, Reached, Resolved, confirm, read, resolve};
 pub(super) use system::dock_item;

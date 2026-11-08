@@ -22,7 +22,7 @@ public struct PanelView: View {
     self.send = send
   }
 
-  /// The header, the service note while it shows, the picture, Sessions while there are any, else Recent when there is any, then the buttons.
+  /// The header, the service note while it shows, the picture, Sessions while there are any, else Recent when there is any, the accounts line while Atlas lists any, then the buttons.
   public var body: some View {
     VStack(alignment: .leading, spacing: PanelLayout.gap) {
       PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
@@ -35,6 +35,9 @@ public struct PanelView: View {
         PanelSessions(entries: state.sessions, more: state.moreSessions, send: send)
       } else if !state.recent.isEmpty {
         PanelRecent(entries: state.recent, send: send)
+      }
+      if let accounts = state.accounts {
+        PanelAccountsLine(line: accounts, send: send)
       }
       PanelControlRow(controls: state.controls, send: send)
         .animation(PanelLayout.change, value: state.controls.main)

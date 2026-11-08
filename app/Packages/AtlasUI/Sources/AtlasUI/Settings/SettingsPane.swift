@@ -36,6 +36,10 @@ struct SettingsPane: View {
       FormColumn(insets: SettingsLayout.swapInsets, fits: fits(.helper)) {
         HelperPane(state: state.helper, send: send)
       }
+    case .accounts:
+      FormColumn(insets: SettingsLayout.swapInsets, fits: fits(.accounts)) {
+        AccountsPane(state: state.accounts, send: send)
+      }
     case .agents:
       FormColumn(insets: SettingsLayout.swapInsets, fits: fits(.agents)) {
         AgentsPane(state: state.agents, send: send)

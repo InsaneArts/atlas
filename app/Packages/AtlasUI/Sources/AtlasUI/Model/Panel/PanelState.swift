@@ -21,6 +21,8 @@ public struct PanelState: Equatable, Sendable {
   /// The row under the sessions that opens every one, such as "+2 more", while there are more than the rows show;
   /// nil for none.
   public var moreSessions: String?
+  /// The line of the accounts Atlas lists for the helper, such as "Accounts: github.com and Slack"; nil hides it.
+  public var accounts: String?
   /// The row of buttons at the foot: Stop while an agent works, and the main action.
   public var controls: PanelControls
   /// What VoiceOver should say about the helper now: a state that asks something of the person, once it has held;
@@ -42,6 +44,7 @@ public struct PanelState: Equatable, Sendable {
   ///   - recent: The newest actions, newest first, at most three; empty hides Recent.
   ///   - sessions: The live host sessions, at most ``mostSessions``; none by default, which shows Recent.
   ///   - moreSessions: The row that opens every session; none by default.
+  ///   - accounts: The line of the accounts Atlas lists; none by default.
   ///   - controls: The row of buttons at the foot.
   ///   - announcement: What VoiceOver should say about the helper now; nil by default.
   public init(
@@ -53,6 +56,7 @@ public struct PanelState: Equatable, Sendable {
     recent: [PanelRecentEntry],
     sessions: [PanelSessionEntry] = [],
     moreSessions: String? = nil,
+    accounts: String? = nil,
     controls: PanelControls,
     announcement: String? = nil
   ) {
@@ -64,6 +68,7 @@ public struct PanelState: Equatable, Sendable {
     self.recent = recent
     self.sessions = sessions
     self.moreSessions = moreSessions
+    self.accounts = accounts
     self.controls = controls
     self.announcement = announcement
   }

@@ -2,6 +2,7 @@
 //! interface that answers status, pictures of the helper, control and input
 //! for one menu bar, and keeps a private record of itself in the output
 //! directory so `atlas monitor` and the login item can find it.
+mod accounts;
 mod app;
 mod control;
 mod frames;

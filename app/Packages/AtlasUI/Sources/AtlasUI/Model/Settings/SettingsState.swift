@@ -1,4 +1,4 @@
-/// The Settings window: its tab row, its four panes and the alert over it. The selected pane lives only in the tabs.
+/// The Settings window: its tab row, its five panes and the alert over it. The selected pane lives only in the tabs.
 public struct SettingsState: Equatable, Sendable {
   /// The tab row, each tab its symbol over its word, with the pane shown selected.
   public var tabs: CapsuleTabsState<SettingsTab>
@@ -6,6 +6,8 @@ public struct SettingsState: Equatable, Sendable {
   public var general: SettingsGeneralState
   /// The Helper pane.
   public var helper: SettingsHelperState
+  /// The Accounts pane.
+  public var accounts: SettingsAccountsState
   /// The Agents pane.
   public var agents: SettingsAgentsState
   /// The About pane.
@@ -19,6 +21,7 @@ public struct SettingsState: Equatable, Sendable {
   ///   - tabs: The tab row, with the pane shown selected.
   ///   - general: The General pane.
   ///   - helper: The Helper pane.
+  ///   - accounts: The Accounts pane.
   ///   - agents: The Agents pane.
   ///   - about: The About pane.
   ///   - alert: The alert over the whole window, if one is asked.
@@ -26,6 +29,7 @@ public struct SettingsState: Equatable, Sendable {
     tabs: CapsuleTabsState<SettingsTab>,
     general: SettingsGeneralState,
     helper: SettingsHelperState,
+    accounts: SettingsAccountsState,
     agents: SettingsAgentsState,
     about: SettingsAboutState,
     alert: AlertCardState<AlertChoice>? = nil
@@ -33,6 +37,7 @@ public struct SettingsState: Equatable, Sendable {
     self.tabs = tabs
     self.general = general
     self.helper = helper
+    self.accounts = accounts
     self.agents = agents
     self.about = about
     self.alert = alert

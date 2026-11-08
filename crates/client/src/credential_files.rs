@@ -118,7 +118,12 @@ const ENV_EXAMPLES: &[&str] = &[".env.example", ".env.sample", ".env.template"];
 /// Returns a `credentials` refusal naming the store and the selection's file
 /// name, never its full path.
 pub(crate) fn refuse<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<()> {
-    refuse_at(paths, atlas_core::config::home().ok().as_deref())
+    let home = atlas_core::config::home().ok();
+    // Tests prove the refusals whatever the person chose on the Mac running them; the choice has a test of its own.
+    if cfg!(test) {
+        return refuse_in(paths, home.as_deref());
+    }
+    refuse_at(paths, home.as_deref())
 }
 
 /// [`refuse`] for the person whose home folder is `home`: nothing is refused

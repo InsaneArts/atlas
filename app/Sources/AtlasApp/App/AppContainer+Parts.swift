@@ -61,7 +61,8 @@ extension AppContainer: WindowParts {
         revealFile: { path in
           let workspace = NSWorkspace.shared
           workspace.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-        }
+        },
+        chooseApp: { await AppChooser.choose() }
       )
     )
   }

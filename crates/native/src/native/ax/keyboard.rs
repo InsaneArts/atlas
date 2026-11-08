@@ -14,7 +14,7 @@ use atlas_core::{
     screen::{elements::Element, geometry::Bounds},
 };
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
-use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};
+use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType, CFURL};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -579,6 +579,50 @@ pub(super) fn read<A: Ask>(
     Ok(keyboard)
 }
 
+/// Whether the element with keyboard focus inside the app whose element is
+/// `app` is a password field, and if so, the address of the web page it sits
+/// in, when it sits in one: the nearest web area above it. `None` for any
+/// other field, or none. Nothing a field holds is read.
+pub(super) fn secure_page<A: Ask>(
+    ask: A,
+    app: &A::Element,
+    deadline: Instant,
+) -> Result<Option<Option<String>>> {
+    let mut reader = Reader { ask, deadline };
+    let Some(element) = reader.focused_element(app)? else {
+        return Ok(None);
+    };
+    let role = reader.text(&element, "AXRole")?;
+    let subrole = reader.text(&element, "AXSubrole")?;
+    if crate::native::focus::field_of(role.as_deref(), subrole.as_deref())
+        != Some(crate::native::focus::SECURE)
+    {
+        return Ok(None);
+    }
+    let mut current = element;
+    for _ in 0..PARENTS {
+        match reader.text(&current, "AXRole")?.as_deref() {
+            Some("AXWebArea") => return Ok(Some(reader.text(&current, "AXURL")?)),
+            Some("AXWindow" | "AXApplication") => return Ok(Some(None)),
+            _ => {}
+        }
+        match reader.reference(&current, "AXParent")? {
+            Some(parent) => current = parent,
+            None => return Ok(Some(None)),
+        }
+    }
+    Ok(Some(None))
+}
+
+/// [`secure_page`] in app `pid`, waiting at most `timeout` in all.
+pub(in crate::native) fn password_page(
+    pid: i64,
+    timeout: Duration,
+) -> Result<Option<Option<String>>> {
+    let deadline = Instant::now() + timeout;
+    secure_page(Live, &app_element(pid)?, deadline)
+}
+
 /// Where keyboard focus is inside app `pid`, as far as what is `judged`
 /// needs, waiting at most `timeout` in all. Any read that fails, answers
 /// something else, is cut short or ends past the deadline makes the whole
@@ -703,6 +747,14 @@ fn answer(value: CFRetained<CFType>) -> Answer<CFRetained<AXUIElement>> {
     }
     if let Some(flag) = value.downcast_ref::<CFBoolean>() {
         return Answer::Flag(flag.as_bool());
+    }
+    // A web page's address, as `AXURL` holds it.
+    if let Some(url) = value.downcast_ref::<CFURL>() {
+        return match bounded_string(&url.string()) {
+            Some((text, false)) => Answer::Text(text),
+            Some((_, true)) => Answer::Cut,
+            None => Answer::Other,
+        };
     }
     if let Some(geometry) = value.downcast_ref::<AXValue>() {
         return geometric(geometry);

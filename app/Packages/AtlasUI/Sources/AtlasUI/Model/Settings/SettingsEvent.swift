@@ -25,6 +25,12 @@ public enum SettingsEvent: Equatable, Sendable {
   case askOpenHome
   /// Lets agents copy sign-ins into the helper, asking first, or stops them at once.
   case setSignInCopies(Bool)
+  /// Asks to add an app to the accounts, choosing it in a panel.
+  case addApp
+  /// Asks to take the account with this id off the list.
+  case askRemoveAccount(String)
+  /// The person read the note that Atlas added an account.
+  case dismissAccountNote
   /// Connects the agent with this id.
   case connect(String)
   /// Disconnects every part of the agent with this id.

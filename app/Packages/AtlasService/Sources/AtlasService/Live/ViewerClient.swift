@@ -203,6 +203,43 @@ public struct ViewerClient: ViewerService {
     return outcome
   }
 
+  /// Posts to `accounts/add`.
+  ///
+  /// - Parameters:
+  ///   - app: The app's bundle identifier.
+  ///   - name: The app's name.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  public func addAccount(app: String, name: String) async throws {
+    /// The request: the app by its bundle identifier and name.
+    struct Body: Encodable {
+      /// The app's bundle identifier.
+      let id: String
+      /// The app's name.
+      let name: String
+    }
+    _ = try await post("accounts/add", Body(id: app, name: name))
+  }
+
+  /// Posts to `accounts/remove`.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  public func removeAccount(_ account: ViewerStatus.Account) async throws {
+    /// The request: the account by its kind, key and browser.
+    struct Body: Encodable {
+      /// `site` or `app`.
+      let kind: String
+      /// The site's domain, or the app's bundle identifier.
+      let id: String
+      /// For a site, the browser it was seen in.
+      let browser: String?
+    }
+    _ = try await post(
+      "accounts/remove",
+      Body(kind: account.kind.rawValue, id: account.key, browser: account.browser)
+    )
+  }
+
   /// Posts to `input`.
   ///
   /// - Parameters:

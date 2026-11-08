@@ -23,6 +23,11 @@ extension WindowCoordinator {
         self?.openSettings()
         self?.settings?.controller.selectTab(.helper)
       },
+      openAccounts: { [weak self] in
+        self?.parts?.closePanel()
+        self?.openSettings()
+        self?.settings?.controller.selectTab(.accounts)
+      },
       showAlert: { [weak self] alert in
         self?.parts?.closePanel()
         self?.showAlert(alert)
@@ -63,7 +68,15 @@ extension WindowCoordinator {
         SettingsLinkRules.choose(choice, viewer: self?.openViewerController, preferences: preferences)
       },
       switchToHelper: viewerSwitch(),
-      gettingStarted: { [weak self] in self?.showOnboarding() }
+      gettingStarted: { [weak self] in self?.showOnboarding() },
+      addAccount: { [weak self] app, name in
+        guard let service = self?.parts?.panel?.service else { throw ServiceError(SettingsWords.noService) }
+        try await service.addAccount(app: app, name: name)
+      },
+      removeAccount: { [weak self] account in
+        guard let service = self?.parts?.panel?.service else { throw ServiceError(SettingsWords.noService) }
+        try await service.removeAccount(account)
+      }
     )
   }
 

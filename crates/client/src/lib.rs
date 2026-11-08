@@ -36,6 +36,7 @@ pub mod readiness;
 pub mod session_view;
 pub mod setup;
 pub mod sign_in_copies;
+pub mod sign_ins;
 pub mod sound;
 pub mod switch;
 pub mod task;

@@ -1,4 +1,5 @@
 import AtlasUI
+import Foundation
 
 /// Everything the Settings controller holds and reads, as one value, for the presenter.
 struct SettingsSnapshot {
@@ -18,4 +19,10 @@ struct SettingsSnapshot {
   var pictures = SettingsPictures()
   /// What the rest of the app says now.
   var facts = SettingsFacts()
+  /// When the account whose note the person read was added, in milliseconds since 1970.
+  var accountNoteRead: Double = 0
+  /// Now, which tells the day an account was added.
+  var now = Date()
+  /// The calendar days are told in.
+  var calendar = Calendar.current
 }

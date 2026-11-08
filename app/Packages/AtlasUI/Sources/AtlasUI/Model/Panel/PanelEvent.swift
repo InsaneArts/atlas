@@ -24,6 +24,8 @@ public enum PanelEvent: Equatable, Sendable {
   case askRecover
   /// Switch to the Helper…: ask before switching this Mac's screen to it.
   case askSwitch
+  /// Opens Settings › Accounts, from the accounts line.
+  case openAccounts
   /// Open Settings: the Settings window, which shows what the helper needs.
   case openSettings
   /// The pause button on the picture: stop or start the panel's picture. Work in the helper goes on either way.

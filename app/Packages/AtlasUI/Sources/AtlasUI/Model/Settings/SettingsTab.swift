@@ -4,6 +4,8 @@ public enum SettingsTab: String, CaseIterable, Hashable, Sendable {
   case general
   /// The helper: its account, whether it is ready to act, and what to do when something goes wrong.
   case helper
+  /// The accounts the helper is signed in to, as Atlas lists them.
+  case accounts
   /// The agents connected to Atlas and the projects taught.
   case agents
   /// The app's version, updates and the setup window.

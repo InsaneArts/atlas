@@ -28,6 +28,7 @@ enum PanelPresenter {
       recent: hidesRecent(mode) || !sessions.isEmpty ? [] : recent(reading, mode: mode, icons: snapshot.icons),
       sessions: sessions,
       moreSessions: moreSessions(reading, rows: sessions),
+      accounts: PanelWords.accountsLine(snapshot.status.overview.accounts?.map(\.name) ?? []),
       controls: controls(snapshot, mode: mode),
       announcement: snapshot.session.announcement
     )

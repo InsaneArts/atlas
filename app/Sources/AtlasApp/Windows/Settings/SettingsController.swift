@@ -21,6 +21,9 @@ final class SettingsController {
   var pictures = SettingsPictures()
   /// The person's files and the helper, as last read. Written only by the controller's own files.
   var files = SettingsFiles()
+  /// When the account whose note the person read was added, in milliseconds since 1970. Written only by the
+  /// controller's own files.
+  var accountNoteRead: Double = 0
   /// Counts the times the window came forward and a choice was kept where no other window shows it, so what the
   /// links read is read again then.
   private(set) var revision = 0
@@ -49,6 +52,7 @@ final class SettingsController {
       preferences.loadTab()
       .flatMap(SettingsTab.init(rawValue:)) ?? .general
     notify = preferences.loadNotify()
+    accountNoteRead = preferences.loadAccountNoteRead()
     icons = AgentRowIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
       dependencies.icon(forFile: path)
     }
@@ -82,7 +86,8 @@ final class SettingsController {
         installing: dependencies.installs.installing,
         isRemoving: dependencies.installs.isRemoving,
         version: dependencies.version
-      )
+      ),
+      accountNoteRead: accountNoteRead
     )
   }
 
@@ -112,6 +117,9 @@ final class SettingsController {
     case .checkForUpdates: Task { await checkForUpdates() }
     case .askInstall: askInstall()
     case .askDeletePictures: ask(.deletePictures)
+    case .addApp: Task { await addApp() }
+    case .askRemoveAccount(let id): ask(.removeAccount(id))
+    case .dismissAccountNote: dismissAccountNote()
     case .gettingStarted: dependencies.links.gettingStarted()
     case .showAppInFinder: dependencies.revealFile(Bundle.main.bundlePath)
     case .showAgentFile(let id): showAgentFile(id)

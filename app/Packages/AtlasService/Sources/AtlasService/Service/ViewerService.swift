@@ -57,6 +57,20 @@ public protocol ViewerService: Sendable {
   @discardableResult
   func setStopped(_ stopped: Bool) async throws -> StopOutcome
 
+  /// Adds an app to the helper's accounts, by its bundle identifier and name: the person chose it.
+  ///
+  /// - Parameters:
+  ///   - app: The app's bundle identifier.
+  ///   - name: The app's name.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func addAccount(app: String, name: String) async throws
+
+  /// Takes an account off the helper's list.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func removeAccount(_ account: ViewerStatus.Account) async throws
+
   /// Sends input to the helper under a lease.
   ///
   /// - Parameters:

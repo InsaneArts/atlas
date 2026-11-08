@@ -38,13 +38,19 @@
         PreviewState(name: "Helper, sign-in copies allowed", value: settingsHelperCopiesAllowed),
         PreviewState(name: "Let the helper open the home folder", value: settingsOpenHome),
         PreviewState(name: "Let agents copy sign-ins", value: settingsAllowSignIns),
+        PreviewState(name: "Accounts", value: settingsAccounts),
+        PreviewState(name: "Accounts, none", value: settingsAccountsEmpty),
+        PreviewState(name: "Accounts, one added", value: settingsAccountsAdded),
+        PreviewState(name: "Accounts, unread", value: settingsAccountsUnread),
+        PreviewState(name: "Remove an account", value: settingsRemoveAccount),
       ]
     }
 
-    /// The four tabs, each its symbol over its word.
+    /// The five tabs, each its symbol over its word.
     static let settingsTabs = [
       CapsuleTab(id: SettingsTab.general, title: "General", symbol: .gear),
       CapsuleTab(id: SettingsTab.helper, title: "Helper", symbol: .display),
+      CapsuleTab(id: SettingsTab.accounts, title: "Accounts", symbol: .key),
       CapsuleTab(id: SettingsTab.agents, title: "Agents", symbol: .sparkles),
       CapsuleTab(id: SettingsTab.about, title: "About", symbol: .info),
     ]
@@ -69,6 +75,7 @@
         notify: true
       ),
       helper: settingsHelperPane,
+      accounts: settingsAccountsPane,
       agents: settingsAgentsPane,
       about: SettingsAboutState(version: "Version 0.1.0", update: .check)
     )

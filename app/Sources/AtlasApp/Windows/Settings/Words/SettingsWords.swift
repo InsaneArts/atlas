@@ -11,11 +11,12 @@ enum SettingsWords {
   /// A tab's word.
   ///
   /// - Parameter tab: The tab.
-  /// - Returns: "General", "Helper", "Agents" or "About".
+  /// - Returns: "General", "Helper", "Accounts", "Agents" or "About".
   static func tab(_ tab: SettingsTab) -> String {
     switch tab {
     case .general: "General"
     case .helper: "Helper"
+    case .accounts: "Accounts"
     case .agents: "Agents"
     case .about: "About"
     }

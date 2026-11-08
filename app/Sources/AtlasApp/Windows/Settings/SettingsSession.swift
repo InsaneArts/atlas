@@ -16,6 +16,8 @@ struct SettingsSession: Equatable {
   var checking = false
   /// Whether Atlas closes a login now, under the person's approval.
   var closing = false
+  /// Whether a change to the accounts list runs now.
+  var accountsWorking = false
   /// Where a check for updates stands.
   var update = SettingsUpdate.idle
   /// What the last command said, in the pane that ran it.

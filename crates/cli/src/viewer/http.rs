@@ -319,6 +319,9 @@ routes! {
         Renew => "control/renew",
         Release => "control/release",
         Revoke => "control/revoke",
+        // The person's own list of the helper's accounts.
+        AddAccount => "accounts/add",
+        RemoveAccount => "accounts/remove",
     }
 }
 
@@ -332,7 +335,13 @@ impl Route {
             | Self::Read(_)
             | Self::OpenViewer
             | Self::Change(
-                Change::Recover | Change::Cleanup | Change::Input | Change::Acquire | Change::Renew,
+                Change::Recover
+                | Change::Cleanup
+                | Change::Input
+                | Change::Acquire
+                | Change::Renew
+                | Change::AddAccount
+                | Change::RemoveAccount,
             ) => false,
         }
     }
@@ -427,6 +436,8 @@ async fn apply(viewer: &Arc<Viewer>, change: Change, body: &Value) -> Response {
             .await
             .map(|()| json!({"ok": true})),
         Change::Revoke => viewer.revoke().await,
+        Change::AddAccount => super::accounts::add(body),
+        Change::RemoveAccount => super::accounts::remove(body),
     };
 
     mutation_reply(viewer, owner, outcome).await

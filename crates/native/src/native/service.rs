@@ -83,6 +83,10 @@ struct Service {
     /// Where a read of an app's elements is told to the helper's other
     /// processes, as the engine tells of input.
     activity: PathBuf,
+    /// Where the person typed into a password field while they held
+    /// control, by their lease, until they give it back: the app and the
+    /// page's host, never what was typed.
+    seen: std::sync::Mutex<Option<(String, Value)>>,
 }
 
 /// A file by path and (device, inode).
@@ -306,7 +310,49 @@ impl Service {
         self.gate.cancel(Some(&owner))?;
         phase.send_replace(ConnectionPhase::Mutation("release"));
         drain_and_release(&self.operations, &self.engine, &self.gate).await?;
-        Ok(json!({ "ok": true, "released": true }))
+        let mut reply = json!({ "ok": true, "released": true });
+        if let Some(seen) = self.take_seen(&owner) {
+            reply["signedIn"] = seen;
+        }
+        Ok(reply)
+    }
+
+    /// What the person's lease `owner` typed a password into, taken once.
+    fn take_seen(&self, owner: &str) -> Option<Value> {
+        let mut seen = self.seen.lock().ok()?;
+        match seen.take() {
+            Some((holder, value)) if holder == owner => Some(value),
+            other => {
+                *seen = other;
+                None
+            }
+        }
+    }
+
+    /// After the person's keys or typing under lease `owner`: when keyboard
+    /// focus is in a password field, remember its app and page. One read of
+    /// the focused element, bounded; nothing typed is read, and an agent's
+    /// input is never looked at.
+    async fn note_password(&self, owner: &str) {
+        let Ok(Some(Holder::Person)) = self.gate.holder() else {
+            return;
+        };
+        let read = tokio::task::spawn_blocking(|| {
+            let pid = super::ax::focused_pid(PASSWORD_READ).ok()??;
+            let page = super::ax::password_page(pid, PASSWORD_READ).ok()??;
+            let app = super::apps::bundle_id(pid)?;
+            Some(json!({
+                "app": app,
+                "name": super::apps::name(pid),
+                "host": page.as_deref().and_then(page_host),
+            }))
+        })
+        .await
+        .ok()
+        .flatten();
+        if let (Some(value), Ok(mut seen)) = (read, self.seen.lock()) {
+            *seen = Some((owner.to_owned(), value));
+        }
     }
 
     fn renew(&self, owner: String, phase: &watch::Sender<ConnectionPhase>) -> Result<Value> {
@@ -409,9 +455,13 @@ impl Service {
             },
         )?;
         let count = actions.len();
+        let typed = actions
+            .iter()
+            .any(|action| matches!(action, Action::Type { .. } | Action::Key { .. }));
         let expect = expect?;
         agent_target(&self.gate, expect.as_ref(), &actions)?;
         phase.send_replace(ConnectionPhase::Mutation("input"));
+        let lease = owner.clone();
         let mut cancellation = Cancellation {
             gate: self.gate.clone(),
             owner: Some(owner),
@@ -420,6 +470,10 @@ impl Service {
             Ok(done) => done,
             Err(failure) => return Ok(failure.reply()),
         };
+
+        if typed {
+            self.note_password(&lease).await;
+        }
 
         let acted = done.acted.as_ref();
         let landed = if report_app {
@@ -586,6 +640,30 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
     Ok(())
 }
 
+/// How long the look at a password field after the person's typing may take.
+const PASSWORD_READ: Duration = Duration::from_millis(250);
+
+/// The host of a web page's address, lowercased: only for `http` and
+/// `https`, with any user, port, path, query and fragment dropped.
+fn page_host(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if !["http", "https"]
+        .iter()
+        .any(|web| scheme.eq_ignore_ascii_case(web))
+    {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']')?.0,
+        None => host.split(':').next()?,
+    };
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
 /// How often the service looks for its desktop, and how many looks in a
 /// row must miss it before the service exits.
 const SESSION_CHECK: Duration = Duration::from_secs(1);
@@ -649,6 +727,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         gate,
         stop_marker,
         activity,
+        seen: std::sync::Mutex::new(None),
     });
     service.listen(&listener, controller_uid).await
 }

@@ -112,9 +112,12 @@
         .map(\.value)
       #expect(Set(states.map(\.tabs.selected)) == Set(SettingsTab.allCases))
       #expect(
-        Set(states.compactMap { $0.alert?.title }).count == 8,
-        "Recover, Switch, Log Out, Log Out Anyway, Forget, Install, Undo of a private home folder, sign-in copies"
+        Set(states.compactMap { $0.alert?.title }).count == 9,
+        "Recover, Switch, Log Out, Log Out Anyway, Forget, Install, home folder Undo, sign-in copies, remove an account"
       )
+      #expect(states.contains { $0.accounts.rows == [] }, "no accounts")
+      #expect(states.contains { $0.accounts.rows == nil }, "a list Atlas can't read")
+      #expect(states.contains { $0.accounts.note != nil }, "the note that Atlas added one")
       #expect(states.contains { $0.helper.files?.home?.isPrivate == false }, "a home folder open to the helper")
       #expect(states.contains { $0.helper.files?.status?.kind == .problem }, "a change that failed")
       #expect(states.contains { $0.alert?.isBusy == true }, "an alert whose command runs")

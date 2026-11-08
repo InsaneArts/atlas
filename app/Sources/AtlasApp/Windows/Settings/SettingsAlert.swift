@@ -12,4 +12,6 @@ enum SettingsAlert: Equatable {
   case allowSignIns
   /// Delete every picture of agent actions?
   case deletePictures
+  /// Take the account with this id off the list?
+  case removeAccount(String)
 }

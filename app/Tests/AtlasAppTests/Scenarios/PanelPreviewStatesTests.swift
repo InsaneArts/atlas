@@ -63,6 +63,11 @@
       needsYouCommand.status.overview.commands = 1
       var serviceNote = try snapshot("observing", state: "idle")
       serviceNote.status.restartingService = .restarting
+      var accounts = try snapshot("observing", state: "idle")
+      accounts.status.overview.accounts = [
+        ViewerStatus.Account(kind: .site, key: "github.com", name: "github.com", added: 1),
+        ViewerStatus.Account(kind: .app, key: "com.tinyspeck.slackmacgap", name: "Slack", added: 1),
+      ]
       let presented: [String: PanelSnapshot] = [
         "Idle": try snapshot("observing", state: "idle"),
         "Working": try snapshot("agent", state: "working"),
@@ -79,6 +84,7 @@
         "You have control, a command runs": controlCommand,
         "Needs you, a command runs": needsYouCommand,
         "Service note": serviceNote,
+        "Accounts": accounts,
         "Sessions": try SessionReplies.snapshot([SessionReplies.claudeActing, SessionReplies.cursorIdle]),
         "Sessions waiting": try SessionReplies.snapshot([
           SessionReplies.claudeActing, SessionReplies.codexWaiting(), SessionReplies.cursorIdle,

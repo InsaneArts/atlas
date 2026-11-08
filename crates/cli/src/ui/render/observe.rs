@@ -139,6 +139,7 @@ pub(super) fn doctor(value: &Value, verbose: bool) -> String {
         }
     }
 
+    lines.extend(accounts(&value["accounts"]));
     lines.extend(warnings(value));
     lines.extend(open_files(&value["files"]));
 
@@ -155,6 +156,15 @@ pub(super) fn doctor(value: &Value, verbose: bool) -> String {
 pub(super) fn warnings(value: &Value) -> impl Iterator<Item = String> {
     strings(&value["warnings"])
         .map(|warning| format!("{} {}", style::warn(), text::printable(warning)))
+}
+
+/// The accounts Atlas lists for the helper, by name: the person's terminal
+/// only, never an agent's reply.
+fn accounts(names: &Value) -> Option<String> {
+    let names: Vec<String> = strings(names)
+        .map(|name| text::printable(name).into_owned())
+        .collect();
+    (!names.is_empty()).then(|| format!("{} Accounts: {}", style::ok(), names.join(", ")))
 }
 
 /// What the helper can open in the person's home folder, while it isn't

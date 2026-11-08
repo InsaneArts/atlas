@@ -37,6 +37,9 @@ extension SettingsController {
       await run { await self.setSignInCopies(true) }
       session.alert = nil
     case .deletePictures: await run { await self.deletePictures() }
+    case .removeAccount(let id):
+      await run { await self.removeAccount(id) }
+      session.alert = nil
     }
   }
 

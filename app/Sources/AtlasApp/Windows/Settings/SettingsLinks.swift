@@ -25,4 +25,8 @@ struct SettingsLinks {
   var switchToHelper: @MainActor () async -> String
   /// Opens the setup window.
   var gettingStarted: @MainActor () -> Void
+  /// Adds an app to the helper's accounts, by its bundle identifier and name, through the viewer service.
+  var addAccount: @MainActor (_ app: String, _ name: String) async throws -> Void = { _, _ in }
+  /// Takes an account off the helper's list, through the viewer service.
+  var removeAccount: @MainActor (ViewerStatus.Account) async throws -> Void = { _ in }
 }

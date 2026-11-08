@@ -41,6 +41,11 @@
       "31-helper-copies-allowed",
       "32-open-home",
       "33-allow-sign-ins",
+      "34-accounts",
+      "35-accounts-none",
+      "36-accounts-added",
+      "37-accounts-unread",
+      "38-remove-account",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.

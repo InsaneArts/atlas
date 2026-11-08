@@ -156,6 +156,7 @@ final class PanelController {
     case .askRecover: links.showAlert(.recover)
     case .askSwitch: links.showAlert(.switchToHelper)
     case .openSettings: links.openSettings()
+    case .openAccounts: links.openAccounts()
     case .togglePause: togglePause()
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }

@@ -129,6 +129,30 @@ fn a_doctor_in_the_terminal_says_what_the_helper_can_open_in_the_home_folder() {
 }
 
 #[test]
+fn a_doctor_in_the_terminal_lists_the_helpers_accounts() {
+    let report = |accounts: Value| {
+        json!({
+            "ok": true, "ready": true, "checks": [], "nextSteps": [], "warnings": [],
+            "helper": {"name": "atlas", "uid": 502},
+            "accounts": accounts,
+        })
+    };
+    let listed = show(
+        View::Doctor { verbose: false },
+        report(json!(["github.com", "Slack"])),
+    )
+    .out;
+    assert_eq!(
+        listed,
+        "✓ Atlas is ready  helper atlas\n✓ Accounts: github.com, Slack"
+    );
+    for none in [json!([]), Value::Null] {
+        let out = show(View::Doctor { verbose: false }, report(none)).out;
+        assert_eq!(out, "✓ Atlas is ready  helper atlas");
+    }
+}
+
+#[test]
 fn a_doctor_that_is_not_ready_lists_checks_and_fixes() {
     let report = json!({
         "ok": true, "ready": false,

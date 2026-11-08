@@ -154,6 +154,11 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
         {
             report["files"] = json!(files);
         }
+        if let atlas_client::sign_ins::Listed::Accounts(accounts) = atlas_client::sign_ins::listed()
+        {
+            report["accounts"] =
+                json!(accounts.iter().map(|entry| &entry.name).collect::<Vec<_>>());
+        }
         report
     } else {
         atlas_client::capability::summary(report)

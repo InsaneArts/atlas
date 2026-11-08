@@ -243,6 +243,28 @@ public final class ScriptedService: ViewerService {
     leaseHeld = false
   }
 
+  /// Records adding an app to the accounts, unless held or failed.
+  ///
+  /// - Parameters:
+  ///   - app: The app's bundle identifier.
+  ///   - name: The app's name.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func addAccount(app: String, name: String) async throws {
+    log.append("add account \(app)")
+    try await pause("accounts/add")
+  }
+
+  /// Records taking an account off the list, unless held or failed.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func removeAccount(_ account: ViewerStatus.Account) async throws {
+    log.append("remove account \(account.key)")
+    try await pause("accounts/remove")
+  }
+
   /// Records stopping or resuming agents, unless held or failed.
   ///
   /// - Parameter stopped: Whether agents stop.

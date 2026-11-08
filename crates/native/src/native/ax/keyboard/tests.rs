@@ -677,3 +677,45 @@ fn only_a_request_the_app_could_not_complete_is_asked_again() {
         assert!(fake.pauses.is_empty());
     }
 }
+
+/// [`secure_page`] of `fake`, with the usual budget.
+fn page_of(fake: &mut Fake) -> Result<Option<Option<String>>> {
+    let deadline = fake.started + budget();
+    secure_page(&mut *fake, &APP, deadline)
+}
+
+#[test]
+fn a_field_that_is_not_a_password_says_nothing() {
+    let mut fake = Fake::app();
+    assert_eq!(page_of(&mut fake).unwrap(), None);
+}
+
+#[test]
+fn a_password_field_in_a_web_page_gives_the_pages_address_and_never_its_value() {
+    let mut fake = Fake::app();
+    let text = |text: &str| Answer::Text(text.to_owned());
+    fake.set(FIELD, "AXSubrole", text("AXSecureTextField"));
+    fake.set(GROUP, "AXRole", text("AXWebArea"));
+    fake.set(GROUP, "AXURL", text("https://github.com/login?return_to=x"));
+    assert_eq!(
+        page_of(&mut fake).unwrap(),
+        Some(Some("https://github.com/login?return_to=x".to_owned()))
+    );
+    assert!(
+        !fake
+            .asked
+            .iter()
+            .any(|(_, attribute)| *attribute == "AXValue")
+    );
+}
+
+#[test]
+fn a_password_field_in_an_app_window_gives_no_page() {
+    let mut fake = Fake::app();
+    fake.set(
+        FIELD,
+        "AXSubrole",
+        Answer::Text("AXSecureTextField".to_owned()),
+    );
+    assert_eq!(page_of(&mut fake).unwrap(), Some(None));
+}

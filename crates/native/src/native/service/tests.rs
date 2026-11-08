@@ -1,6 +1,6 @@
 use super::{
     Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Perform, Request, Result,
-    admitted, hold, read_request,
+    admitted, hold, page_host, read_request,
 };
 use crate::native::{
     ax::{Acted, Reached, Resolved},
@@ -65,6 +65,7 @@ fn service(marker: &std::path::Path) -> super::Service {
         stopping: tokio::sync::Notify::new(),
         stop_marker: marker.to_owned(),
         activity: marker.with_extension("activity"),
+        seen: std::sync::Mutex::new(None),
     }
 }
 
@@ -3897,6 +3898,7 @@ fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc
         stopping: tokio::sync::Notify::new(),
         stop_marker: directory.join("stopped"),
         activity: directory.join("input.activity"),
+        seen: std::sync::Mutex::new(None),
     })
 }
 
@@ -4333,4 +4335,45 @@ async fn input_held_between_requests_keeps_quiet_work_out_until_it_is_let_go() {
     assert_eq!(quiet(), None, "the button is still held");
     service.release(owner, &phase).await.unwrap();
     assert_eq!(quiet(), Some(()), "let go");
+}
+
+#[test]
+fn a_pages_host_is_read_from_its_address_and_nothing_else() {
+    assert_eq!(
+        page_host("https://GitHub.com/login?x=1#y").as_deref(),
+        Some("github.com")
+    );
+    assert_eq!(
+        page_host("http://user:pw@example.org:8080/a").as_deref(),
+        Some("example.org")
+    );
+    assert_eq!(page_host("http://[::1]:3000/").as_deref(), Some("::1"));
+    assert_eq!(
+        page_host("http://localhost:3000").as_deref(),
+        Some("localhost")
+    );
+    assert_eq!(page_host("file:///Users/someone/a.html"), None);
+    assert_eq!(page_host("about:blank"), None);
+}
+
+#[tokio::test]
+async fn an_agents_typing_is_never_looked_at_for_a_password() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = service(&directory.path().join("stopped"));
+    let owner = atlas_core::files::token();
+    let _grant = service.gate.acquire(&owner, super::Who::Agent).unwrap();
+    service.note_password(&owner).await;
+    assert!(service.seen.lock().unwrap().is_none());
+}
+
+#[test]
+fn what_the_person_typed_a_password_into_is_given_back_once_to_their_lease_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = service(&directory.path().join("stopped"));
+    let seen = serde_json::json!({"app": "com.google.Chrome", "host": "github.com"});
+    *service.seen.lock().unwrap() = Some(("person-lease".to_owned(), seen.clone()));
+
+    assert_eq!(service.take_seen("another-lease"), None);
+    assert_eq!(service.take_seen("person-lease"), Some(seen));
+    assert_eq!(service.take_seen("person-lease"), None);
 }
