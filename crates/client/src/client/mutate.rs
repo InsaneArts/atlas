@@ -325,17 +325,18 @@ impl Client {
 
         let reply = if agent_command {
             self.run_to_its_end(sent, &request, command, &mut claim, started)
-                .await?
+                .await
         } else {
-            self.answer(sent).await?
+            self.answer(sent).await
         };
         // A request the person must be asked about, or that a Look Only
         // account refused, sent nothing: no picture is kept for it, and the
-        // attempt allowed after it takes its own.
+        // attempt allowed after it takes its own. A lost reply may follow
+        // input that was sent, so its picture is kept.
         if let Some(picture) = picture
             && let Mutation::Input { actions, epoch, .. } = &mutation
         {
-            if gated(&reply) {
+            if reply.as_ref().is_ok_and(gated) {
                 if let Some(doing) = &self.doing {
                     doing.before().reset();
                 }
@@ -343,6 +344,7 @@ impl Client {
                 self.keep_picture(picture, actions.actions(), epoch);
             }
         }
+        let reply = reply?;
         mutation.validate(&reply)?;
 
         let mut reply = self

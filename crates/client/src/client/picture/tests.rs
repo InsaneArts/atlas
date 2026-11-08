@@ -586,3 +586,51 @@ fn epoch() -> InputEpoch {
         process_id: 456,
     }
 }
+
+/// The pictures `client` saved, once it saved `count`, or as they are in
+/// five seconds.
+fn saved(client: &Client, count: usize) -> Vec<String> {
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let pictures = pictures(client);
+        if pictures.len() >= count || Instant::now() >= until {
+            return pictures;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[tokio::test]
+async fn a_lost_reply_keeps_its_picture_and_only_a_refusal_proven_to_send_nothing_drops_it() {
+    // The reply never comes: the input may have been sent.
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let lost = helper
+        .serve(client.input(&key(), None, None), |request| {
+            if request["op"] == "input" {
+                return None;
+            }
+            input_service(&client, false, request)
+        })
+        .await;
+    assert!(lost.is_err());
+    assert_eq!(saved(&client, 1).len(), 1, "its picture is kept");
+
+    // Refused to ask the person before its first event: nothing was sent.
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let _ = helper
+        .serve(client.input(&key(), None, None), |request| {
+            if request["op"] == "input" {
+                return Some(json!({"ok": false, "code": "waiting-for-person",
+                    "error": "Atlas asked the person", "performed": 0}));
+            }
+            input_service(&client, false, request)
+        })
+        .await;
+    // Nothing was kept to be saved, so none can come later either.
+    assert!(
+        pictures(&client).is_empty(),
+        "no picture for what sent nothing"
+    );
+}
