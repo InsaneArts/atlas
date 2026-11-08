@@ -19,6 +19,7 @@ extension ViewerPreferences {
       var rate: Double
       var corner: String?
       var sidebarHidden: Bool
+      var windowOpen = false
 
       init(rate: Double, corner: String?, sidebarHidden: Bool) {
         self.rate = rate
@@ -33,7 +34,9 @@ extension ViewerPreferences {
       loadCorner: { store.corner },
       saveCorner: { store.corner = $0 },
       loadSidebarHidden: { store.sidebarHidden },
-      saveSidebarHidden: { store.sidebarHidden = $0 }
+      saveSidebarHidden: { store.sidebarHidden = $0 },
+      loadWindowOpen: { store.windowOpen },
+      saveWindowOpen: { store.windowOpen = $0 }
     )
   }
 }

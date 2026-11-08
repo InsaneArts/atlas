@@ -60,7 +60,8 @@ final class AppContainer {
     coordinator.parts = self
   }
 
-  /// Builds the app's control work, the signals and the menu bar panel, once the app has launched.
+  /// Builds the app's control work, the signals and the menu bar panel, once the app has launched, then opens the main
+  /// window if it was asked for meanwhile or left open when Atlas last stopped.
   func start() {
     // The app's control work outlives any one main window: a release a closed window sent is still awaited by the
     // next command, and Take Control in a reopened window waits for it. Before a switch, a log-out or a restart, the
@@ -72,5 +73,6 @@ final class AppContainer {
     self.actions = actions
     startSignals()
     startPanel(actions: actions)
+    coordinator.launched()
   }
 }

@@ -284,8 +284,10 @@ final class ViewerController {
     session.keyboardConnected = connected
   }
 
-  /// The window is closing: give control back and stop reading.
+  /// The window is closing: give control back, stop reading, and forget that it was open, at once, as Atlas may quit
+  /// before the close settles.
   func close() {
+    dependencies.preferences.saveWindowOpen(false)
     shown = false
     control.releaseControl()
     readingLoop.watch(false)

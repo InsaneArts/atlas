@@ -9,7 +9,7 @@ Atlas.app's viewer window, the terminal viewer and the screen view agent apps dr
 - **Verified pictures only.** Every picture is bracketed by the helper's session proofs, as before, and is refused once it is older than half a second.
 - **Committed pictures name input.** A viewer acknowledges each picture it shows. Only those can be named by Take Control and input, which go through the menu bar viewer's guarded routes with the same leases, frame keys and session checks as before.
 
-When the frame service is unavailable, the app reads pictures over the viewer's address as before, and tries the pipe again after a pause. Agents' screenshots and the menu bar panel keep their own reads.
+When the frame service is unavailable, the app reads pictures over the viewer's address as before, and tries the pipe again after a pause. A moment when the helper's pictures are unavailable keeps the app's stream open: it falls back only when they stay unavailable for about two seconds. Agents' screenshots and the menu bar panel keep their own reads.
 
 ## The agent apps' screen view
 
