@@ -386,6 +386,7 @@ impl<'a> Entry<'a> {
 fn readable_in(listing: &str, uid: u32, groups: &[u32]) -> (u32, Vec<String>) {
     let mut lines = listing.lines().skip(1).peekable();
     let mut home_open = false;
+    let mut seen_home = false;
     let mut names = Vec::new();
     while let Some(line) = lines.next() {
         let Some(item) = Item::parse(line) else {
@@ -395,7 +396,11 @@ fn readable_in(listing: &str, uid: u32, groups: &[u32]) -> (u32, Vec<String>) {
             .peek()
             .is_some_and(|next| Entry::parse(next).is_some());
         match item.name {
-            "." => home_open = item.opens_for(uid, groups),
+            // `ls -a` lists the home folder itself first, as `.`.
+            "." if !seen_home => {
+                seen_home = true;
+                home_open = item.opens_for(uid, groups);
+            }
             ".." => {}
             name if item.folder && !has_entries && item.opens_for(uid, groups) => {
                 names.push(unescaped(name));
@@ -443,7 +448,8 @@ impl<'a> Item<'a> {
             mode,
             owner: fields[2].parse().ok()?,
             group: fields[3].parse().ok()?,
-            name: rest.trim_start(),
+            // One space parts the date from the name; the name keeps its own.
+            name: rest.strip_prefix(' ')?,
         })
     }
 

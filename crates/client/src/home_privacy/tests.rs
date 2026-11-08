@@ -199,3 +199,23 @@ fn escaped_names_read_as_they_are() {
     assert_eq!(unescaped(r"\303\251t\303\251"), "été");
     assert_eq!(unescaped("plain name"), "plain name");
 }
+
+#[test]
+fn a_name_that_only_looks_like_the_home_folder_cannot_open_it() {
+    let text = home_listing(
+        "drwx------+",
+        &[
+            "drwxr-xr-x   2 501  20    64 Nov  8 18:28 \u{2000}.",
+            "drwxr-xr-x   2 501  20    64 Nov  8 18:28  dev",
+        ],
+    );
+    assert_eq!(readable_in(&text, HELPER, &[STAFF]), (0, Vec::new()));
+    let open = home_listing(
+        "drwxr-x---+",
+        &["drwxr-xr-x   2 501  20    64 Nov  8 18:28  dev"],
+    );
+    assert_eq!(
+        readable_in(&open, HELPER, &[STAFF]),
+        (1, vec![" dev".to_owned()])
+    );
+}
