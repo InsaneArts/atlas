@@ -159,3 +159,50 @@ async fn a_refusal_that_may_have_sent_something_is_never_asked_about_or_run_agai
     assert_eq!(attempts, 1);
     assert!(client.controller.asks().open(now_ms()).is_empty());
 }
+
+#[tokio::test]
+async fn the_person_can_take_control_while_an_agent_waits_and_an_allow_later_runs_with_a_fresh_look()
+ {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(dir.path());
+    client.controller = client
+        .controller
+        .clone()
+        .waiting(std::time::Duration::from_secs(5));
+    let asks = client.controller.asks();
+    let controller = client.controller.clone();
+    let person = std::thread::spawn(move || {
+        let ask = loop {
+            if let Some(ask) = asks.open(now_ms()).into_iter().next() {
+                break ask;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        // Nothing of the agent's command holds control while it waits.
+        let taken = controller.acquire(false).map(drop).is_ok();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let answered = Instant::now();
+        asks.answer(&ask.id, Answer::Task, true, now_ms()).unwrap();
+        (taken, answered)
+    });
+    let mut looked = Vec::new();
+    let reply = after_asking(&client, async || {
+        // Each attempt takes control and looks at its target itself.
+        let _ownership = client.controller.acquire(false)?;
+        looked.push(Instant::now());
+        if looked.len() == 1 {
+            Err(waiting("b5"))
+        } else {
+            Ok(json!({"ok": true}))
+        }
+    })
+    .await
+    .unwrap();
+    let (taken, answered) = person.join().unwrap();
+    assert!(taken, "the person took control during the wait");
+    assert_eq!(reply, json!({"ok": true}));
+    assert!(
+        looked[1] >= answered,
+        "the allowed attempt looked again after the answer, however late it came"
+    );
+}
