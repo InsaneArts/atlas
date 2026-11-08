@@ -1,28 +1,33 @@
 import SwiftUI
 
-/// The Activity outline's measures. Sessions, app runs and steps share one row: an indent per level, a disclosure
-/// column, a lead column, the text, an accessory and the time, which lines up at every level. Pictures take one of
-/// three framed 16:10 sizes.
+/// The Activity outline's measures. Sessions, app runs and steps share one row whose highlight spans the list's width,
+/// on the filters' and the header's leading edge, with its content 12 inside it on each side: an indent per level, a
+/// disclosure column, a lead column, the text, an accessory and the time, which lines up at every level. A folded row
+/// and its key items are one box. Pictures take one of three framed 16:10 sizes.
 extension ViewerLayout {
-  /// 14: above the filters at the top of the list, the inset Apps keeps above its summary.
-  static let activityTop = appsSummaryTop
+  /// 12: above and below the filters' track.
+  static let filtersAround = Spacing.m
 
-  /// 16: the disclosure's column, before every session's and run's lead.
-  static let outlineDisclosure = IconSize.s
+  /// 12: how far a row's content stands inside its highlight, on each side.
+  static let outlineInset = Spacing.m
+  /// 12: the disclosure's column, before every session's and run's lead.
+  static let outlineDisclosure = IconSize.xs
   /// 8: between the disclosure and the lead.
   static let outlineDisclosureGap = Spacing.s
   /// 24: the lead's column, with its icon centred in it.
   static let outlineLead = IconSize.m
   /// 10: between the lead and the text.
   static let outlineLeadGap = Spacing.sPlus
-  /// 28: each level's indent, so a child's disclosure stands centred under its parent's lead.
+  /// 26: each level's indent, so a child's disclosure stands centred under its parent's lead.
   static let outlineIndent = outlineDisclosure + outlineDisclosureGap + (outlineLead - outlineDisclosure) / 2
   /// 12: between the text or the accessory and the time.
   static let outlineTimeGap = Spacing.m
-  /// 8: how far a row's highlight reaches past its content on each side.
-  static let outlineReach = Spacing.s
-  /// 8: a row highlight's corner.
-  static let outlineRowRadius = Radius.small
+  /// 10: a row's highlight's corner, and a box's.
+  static let outlineRowRadius = Radius.medium
+  /// 4: between a box and what stands next to it, and between a box's row and its pictures.
+  static let boxGap = Spacing.xs
+  /// 12: under a box's last item.
+  static let boxBelow = Spacing.m
   /// 44: a session's row, two lines.
   static let sessionRowHeight = ControlHeight.xl
   /// 32: a run's row.
@@ -55,7 +60,8 @@ extension ViewerLayout {
   static let linkHeight = ControlHeight.xs
   /// 6: a link's side padding, so its words stand 6 inside its capsule.
   static let linkInset = Spacing.xsPlus
-  /// 4: above and below the hairline between two sessions of a day.
+  /// 4: above and below the hairline between two sessions of a day, which runs from the text's edge to 12 short of the
+  /// list's end.
   static let sessionSeparatorGap = Spacing.xs
   /// 8: under an opened run's last step.
   static let stepsBelow = Spacing.s
@@ -70,12 +76,13 @@ extension ViewerLayout {
   /// 560: the card width at and under which a run's summary hides and two pictures show beside a link.
   static let outlineNarrow: CGFloat = 560
 
-  /// The text's leading edge at an outline level: 58 for the first level, then 28 more each level.
+  /// The text's leading edge at an outline level: 66 for the first level, then 26 more each level.
   ///
   /// - Parameter level: The level, 0 at the list's edge.
   /// - Returns: The edge, from the list's leading edge.
   static func outlineText(level: Int) -> CGFloat {
-    CGFloat(level) * outlineIndent + outlineDisclosure + outlineDisclosureGap + outlineLead + outlineLeadGap
+    outlineInset + CGFloat(level) * outlineIndent + outlineDisclosure + outlineDisclosureGap + outlineLead
+      + outlineLeadGap
   }
 
   /// 80 × 50: a folded run's and an ended session's pictures.
@@ -84,18 +91,12 @@ extension ViewerLayout {
   static let pictureGrid = CGSize(width: 128, height: 80)
   /// 176 × 110: a screenshot under its step.
   static let pictureInPlace = CGSize(width: 176, height: 110)
-  /// 4: how far a window capture stands inside a folded frame.
-  static let pictureFoldedInset = Spacing.xs
-  /// 6: how far a window capture stands inside a grid frame.
-  static let pictureGridInset = Spacing.xsPlus
-  /// 8: how far a window capture stands inside an in-place frame.
-  static let pictureInPlaceInset = Spacing.s
   /// 6: every picture frame's corner.
   static let pictureRadius = Radius.extraSmall
   /// 8: between two pictures, in a strip or a grid.
   static let pictureGap = Spacing.s
-  /// 12: under a strip of pictures.
-  static let stripBelow = Spacing.m
+  /// 12: under a run's pictures opened in place.
+  static let gridBelow = Spacing.m
   /// 4: between a grid and its links.
   static let gridLinksAbove = Spacing.xs
   /// 6: the most pictures a grid row holds.

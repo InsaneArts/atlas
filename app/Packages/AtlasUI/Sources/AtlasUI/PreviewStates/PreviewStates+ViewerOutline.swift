@@ -20,7 +20,6 @@
       ViewerPictureTile(
         id: name,
         thumbnail: SampleDesktop.thumbnail(name, display: fills ? helperDisplay : windowCapture),
-        fillsFrame: fills,
         isCurrent: isCurrent,
         label: "Screenshot, \(time)"
       )

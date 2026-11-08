@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// An app run as one piece: its row, then while folded its problem lines and its newest pictures, or its pictures
-/// opened in place; while open, its steps oldest first, packed, with 8 after the last.
+/// An app run as one piece: its row, then while folded its problem lines and its newest pictures in one box with the
+/// row, or its pictures opened in place; while open, its steps oldest first, packed, with 8 after the last. The row
+/// stands first in every case, so it keeps its focus and its chevron's turn as the run opens or folds.
 struct ActivityRunBlock: View {
   /// The run.
   let run: ViewerOutlineRun
@@ -34,15 +35,17 @@ struct ActivityRunBlock: View {
         .transition(.opacity)
       }
     }
+    .outlineBox(run.isBoxed)
     .accessibilityElement(children: .contain)
   }
 
-  /// The run's pictures opened in place, or its newest few with their link.
+  /// The run's pictures opened in place, or its newest few with their link, 4 under what stands above them in its box.
   @ViewBuilder private var pictures: some View {
     if let grid = run.grid {
       ActivityPictureGrid(grid: grid, send: send)
     } else if let strip = run.strip {
       ActivityPictureStrip(strip: strip, send: send)
+        .padding(.top, ViewerLayout.boxGap)
     }
   }
 }

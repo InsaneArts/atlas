@@ -7,14 +7,12 @@ struct OutlinePictureStyle: ButtonStyle {
   let tile: ViewerPictureTile
   /// The frame's size.
   let size: CGSize
-  /// How far a window capture stands inside the frame.
-  let inset: CGFloat
 
   /// The picture in its frame.
   ///
   /// - Parameter configuration: Unused but for its label's place.
   /// - Returns: The picture.
   func makeBody(configuration: Configuration) -> some View {
-    OutlinePictureBody(tile: tile, size: size, inset: inset)
+    OutlinePictureBody(tile: tile, size: size)
   }
 }

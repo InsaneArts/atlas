@@ -79,6 +79,11 @@ public struct ViewerOutlineRun: Equatable, Sendable, Identifiable {
     self.steps = steps
   }
 
+  /// Whether it stands in one box with its key items: folded, with problem lines or pictures under its row.
+  public var isBoxed: Bool {
+    !isOpen && grid == nil && (!problemSteps.isEmpty || strip != nil)
+  }
+
   /// What VoiceOver reads for it: "TextEdit, Typed and clicked · 9 actions, 1 problem, 10:21–10:24".
   public var label: String {
     [name, summary, problems, time]

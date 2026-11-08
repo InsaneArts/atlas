@@ -70,6 +70,11 @@ public struct ViewerOutlineSession: Equatable, Sendable, Identifiable {
     self.strip = strip
   }
 
+  /// Whether it stands in one box with its pictures: its row shows, folded, with pictures under it.
+  public var isBoxed: Bool {
+    showsHead && !isOpen && strip != nil
+  }
+
   /// What VoiceOver reads for it: "Claude Code, atlas, TextEdit · 9 actions, 1 problem, 10:21–now".
   public var label: String {
     [agent, project, summary, problems, time]

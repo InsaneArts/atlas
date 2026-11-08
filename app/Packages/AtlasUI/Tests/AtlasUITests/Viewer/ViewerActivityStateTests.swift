@@ -60,4 +60,17 @@ struct ViewerActivityStateTests {
     sheet.hasAfter = true
     #expect(sheet.shownSide == .after)
   }
+
+  @MainActor
+  @Test("a folded run with problem lines or pictures is a box with them, and an open or bare one a plain row")
+  func foldedRunsWithKeyItemsAreBoxes() {
+    #expect(PreviewStates.typingRun.isBoxed, "pictures under its row")
+    #expect(PreviewStates.chromeRun.isBoxed, "a problem line and a picture")
+    #expect(!PreviewStates.chromeRunOpen.isBoxed, "an open run is a plain row")
+    var bare = PreviewStates.typingRun
+    bare.strip = nil
+    #expect(!bare.isBoxed, "nothing under its row")
+    #expect(PreviewStates.terminalSession.isBoxed, "an ended session folded to its picture")
+    #expect(!PreviewStates.claudeSession.isBoxed, "an open session")
+  }
 }

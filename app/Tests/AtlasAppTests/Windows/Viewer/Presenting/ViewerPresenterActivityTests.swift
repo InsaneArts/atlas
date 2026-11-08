@@ -730,7 +730,8 @@ struct ViewerPresenterActivityTests {
     "stepping the sheet to a picture the folded run does not show gives focus back to the picture it was opened from"
   )
   func theOpenerTakesFocusBackWhenTheShownPictureIsHidden() throws {
-    let shots = (0..<5).map { "179266510\($0)000000000-capture.png" }
+    let shots = (0..<5)
+      .map { "179266510\($0)000000000-capture.png" }
     let log = shots.enumerated()
       .map { index, shot in
         ActivityFixtures.row(
@@ -779,7 +780,8 @@ struct ViewerPresenterActivityTests {
 
   @Test("a folded session's picture shown in the sheet keeps the opener from also claiming focus")
   func aFoldedSessionsPictureCounts() throws {
-    let shots = (0..<2).map { "179266520\($0)000000000-capture.png" }
+    let shots = (0..<2)
+      .map { "179266520\($0)000000000-capture.png" }
     let log =
       shots.enumerated()
       .map { index, shot in

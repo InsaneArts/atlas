@@ -25,7 +25,6 @@ struct ActivityStepRow: View {
         ActivityPictureButton(
           tile: shot,
           size: ViewerLayout.pictureInPlace,
-          inset: ViewerLayout.pictureInPlaceInset,
           send: send
         )
         .padding(.leading, ViewerLayout.outlineText(level: level))
@@ -54,6 +53,7 @@ struct ActivityStepRow: View {
       }
     }
     .padding(.leading, ViewerLayout.outlineText(level: level))
+    .padding(.trailing, ViewerLayout.outlineInset)
     .frame(height: ViewerLayout.stepRowHeight)
     .overlay(alignment: .leading) {
       glyph

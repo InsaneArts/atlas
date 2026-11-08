@@ -231,8 +231,7 @@ extension ViewerPresenter {
     }
   }
 
-  /// A screenshot as the outline frames it: its thumbnail once read, whether it shows the whole screen, and whether
-  /// the sheet shows it now.
+  /// A screenshot as the outline frames it: its thumbnail once read, and whether the sheet shows it now.
   ///
   /// - Parameters:
   ///   - name: The screenshot's file name; nil for none.
@@ -247,10 +246,6 @@ extension ViewerPresenter {
     return ViewerPictureTile(
       id: name,
       thumbnail: snapshot.panes.thumbnails[name],
-      fillsFrame: ScreenshotShape.fillsFrame(
-        listed.first { $0.name == name },
-        display: snapshot.reading.status.overview.display.map { CGSize(width: $0.width, height: $0.height) }
-      ),
       isCurrent: snapshot.panes.activity.sheet?.item == .shot(name),
       label: ViewerWords.dotted([ViewerWords.screenshotWord, time])
     )

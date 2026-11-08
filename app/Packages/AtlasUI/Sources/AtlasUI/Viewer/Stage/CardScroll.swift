@@ -52,6 +52,9 @@ struct CardScroll<Content: View>: View {
       }
       .scrollIndicators(paneSettled ? .automatic : .hidden)
       .scrollPosition(id: anchor, anchor: .top)
+      // Measured on the room the list is given, not on the scroll view, which grows to rows wider than that room: the
+      // rows take their width from this, so measuring the scroll view would keep them at any wider width they once had.
+      .frame(minWidth: .zero, maxWidth: .infinity, minHeight: .zero, maxHeight: .infinity, alignment: .topLeading)
       .onGeometryChange(for: CGSize.self) { proxy in
         proxy.size
       } action: { size in

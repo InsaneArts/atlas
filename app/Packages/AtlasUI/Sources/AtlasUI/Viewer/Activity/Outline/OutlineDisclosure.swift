@@ -1,13 +1,13 @@
 import SwiftUI
 
-/// A session's or a run's disclosure: a chevron in its column that turns down as the row opens, as the sidebar's
-/// Ended heading does; under Reduce Motion it swaps rather than turns.
+/// A session's or a run's disclosure: a chevron at its column's leading edge that turns down as the row opens, as the
+/// sidebar's Ended heading does; under Reduce Motion it swaps rather than turns.
 struct OutlineDisclosure: View {
   /// Whether the row is open.
   let isOpen: Bool
   @Environment(\.motionReduced) private var reduceMotion
 
-  /// The chevron, centred in the disclosure column.
+  /// The chevron, at the disclosure column's leading edge.
   var body: some View {
     Group {
       if reduceMotion {
@@ -21,8 +21,9 @@ struct OutlineDisclosure: View {
     }
     .font(Typography.font(size: ViewerLayout.headingChevron, weight: .semibold))
     .foregroundStyle(Color.textTertiary)
-    .frame(width: ViewerLayout.headingChevron, height: ViewerLayout.headingChevron)
-    .frame(width: ViewerLayout.outlineDisclosure)
+    // At the column's leading edge, so its ink stands a point inside the row's content edge, as the day heading's
+    // text does.
+    .frame(width: ViewerLayout.outlineDisclosure, alignment: .leading)
     .accessibilityHidden(true)
   }
 }

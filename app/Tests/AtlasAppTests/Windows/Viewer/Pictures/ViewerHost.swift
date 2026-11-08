@@ -19,6 +19,8 @@ final class ViewerHost {
   private let reduceMotion: Bool
   private let placement: CardScrollPlacement
   private var frameReport: LayoutFrameReport?
+  /// The window's size.
+  private var size = PreviewStates.viewerSize
   /// The latest real layout frames reported by named elements.
   private(set) var frames: [String: CGRect] = [:]
 
@@ -79,9 +81,22 @@ final class ViewerHost {
       animatesArrivals: animatesArrivals,
       reduceMotion: reduceMotion,
       placement: placement,
-      frameReport: frameReport
+      frameReport: frameReport,
+      size: size
     )
     hosting.layoutSubtreeIfNeeded()
+  }
+
+  /// Resizes the window to `size`, showing `state` in it, and lays it out once, as a person dragging its edge.
+  ///
+  /// - Parameters:
+  ///   - size: The window's new size.
+  ///   - state: What the window shows.
+  func resize(to size: CGSize, showing state: ViewerState) {
+    self.size = size
+    window.setContentSize(size)
+    hosting.frame = NSRect(origin: .zero, size: size)
+    show(state)
   }
 
   /// Advances the real SwiftUI renderer while animation time remains explicitly held by the test.
@@ -240,6 +255,12 @@ final class ViewerHost {
   var scrollViews: [NSScrollView] {
     Self.scrollViews(in: hosting)
       .filter { $0.convert($0.bounds, to: hosting).minX >= Self.cardEdge }
+  }
+
+  /// Where every scroll view AppKit holds stands, in the window's points from its top left, in tree order.
+  var scrollFrames: [CGRect] {
+    Self.scrollViews(in: hosting)
+      .map { frameFromTop(of: $0) }
   }
 
   /// The scroll views AppKit holds in the sidebar, whose sessions scroll in their own room.

@@ -53,8 +53,8 @@ struct ActivityListContent: View {
       }
       .scrollIndicators(.visible)
     }
-    .frame(maxWidth: .infinity, minHeight: ViewerLayout.filtersHeight, alignment: .leading)
-    .padding(.top, ViewerLayout.activityTop)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.vertical, ViewerLayout.filtersAround)
   }
 
   /// The filters' track.
@@ -72,14 +72,16 @@ struct ActivityListContent: View {
   /// so the list holds the place of whichever the person scrolled to.
   private var rows: some View {
     LazyVStack(alignment: .leading, spacing: .zero) {
-      ForEach(state.days) { day in
+      ForEach(Array(state.days.enumerated()), id: \.element.id) { place, day in
         if !day.title.isEmpty {
+          // On the rows' content edge, so it lines up with their chevrons; directly under the filters it needs no room.
           Text(verbatim: day.title)
             .font(Typography.font(.body, weight: .semibold))
             .foregroundStyle(Color.textSecondary)
             .lineLimit(1)
             .frame(height: ViewerLayout.dayHeight)
-            .padding(.top, ViewerLayout.dayAbove)
+            .padding(.leading, ViewerLayout.outlineInset)
+            .padding(.top, place == 0 && state.showsFilters ? .zero : ViewerLayout.dayAbove)
             .accessibilityAddTraits(.isHeader)
             .id("day.\(day.id)")
             .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
@@ -87,6 +89,8 @@ struct ActivityListContent: View {
         ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
           if index > 0 {
             SeparatorLine()
+              .padding(.leading, ViewerLayout.outlineText(level: 0))
+              .padding(.trailing, ViewerLayout.outlineInset)
               .padding(.vertical, ViewerLayout.sessionSeparatorGap)
               .id("separator.\(session.id)")
           }

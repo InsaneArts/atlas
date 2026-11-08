@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// How a session's or a run's row answers the pointer and the keyboard: no box at rest; under the pointer a soft
-/// highlight the row's full height, reaching ``ViewerLayout/outlineReach`` past its content on each side; pressed, a
-/// firmer one; with keyboard focus, a ring inside the same shape.
+/// highlight the row's full height and the list's full width; pressed, a firmer one; with keyboard focus, a ring inside
+/// the same shape. In a box with its key items, the box answers for both (``OutlineBox``).
 struct OutlineRowStyle: ButtonStyle {
   /// The row's height.
   let height: CGFloat

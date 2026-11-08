@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A folded run's or an ended session's newest pictures under its row, at its text's edge, then "120 pictures ›" while
-/// it holds more, which opens them in place. Beside the link only as many as fit on one line show, so the link never
+/// A folded run's or an ended session's newest pictures under its row, in its box, at its text's edge, then "120
+/// pictures ›" while it holds more, which opens them in place. Beside the link only as many as fit on one line show, so the link never
 /// wraps; with no link every picture shows and the strip may wrap.
 struct ActivityPictureStrip: View {
   /// The strip.
@@ -32,7 +32,6 @@ struct ActivityPictureStrip: View {
         }
       }
     }
-    .padding(.bottom, ViewerLayout.stripBelow)
     .onChange(of: strip.tiles.first { $0.isCurrent || $0.returnsFocus }?.id, initial: true) { _, held in
       // Kept through the sheet's closing; the next picture the sheet shows here takes its place.
       if let held { pinned = held }
@@ -59,7 +58,6 @@ struct ActivityPictureStrip: View {
       ActivityPictureButton(
         tile: tile,
         size: ViewerLayout.pictureFolded,
-        inset: ViewerLayout.pictureFoldedInset,
         send: send
       )
     }

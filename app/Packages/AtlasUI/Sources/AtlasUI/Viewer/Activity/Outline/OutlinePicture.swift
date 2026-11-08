@@ -1,15 +1,13 @@
 import SwiftUI
 
-/// One picture of the outline in its frame: 16:10 on the recessed ground with a hairline rim drawn over it, a window
-/// capture fitted inside with a soft shadow, a whole-screen capture filling the frame. The thumbnail it draws is read
+/// One picture of the outline in its frame: 16:10 on the recessed ground with a hairline rim drawn over it, the
+/// picture filling the frame from its top, a window and the whole screen alike. The thumbnail it draws is read
 /// at the frame's size, so the picture stays sharp; nothing shows until it is read.
 struct OutlinePicture: View {
   /// The picture.
   let tile: ViewerPictureTile
   /// The frame's size.
   let size: CGSize
-  /// How far a window capture stands inside the frame.
-  let inset: CGFloat
   /// Whether the pointer is over it, which strengthens its rim.
   var isHovered = false
   @Environment(\.motionReduced) private var reduceMotion
@@ -47,20 +45,16 @@ struct OutlinePicture: View {
       }
   }
 
-  /// The picture: filling the frame for the whole screen, else fitted inside it with a soft shadow.
+  /// The picture filling its frame, anchored at its top, so a window and the whole screen read alike; the frame's
+  /// corner cuts what is past it.
   ///
   /// - Parameter thumbnail: The picture as read.
   /// - Returns: The picture.
-  @ViewBuilder private func picture(_ thumbnail: DesktopPicture) -> some View {
-    let image = Image(decorative: thumbnail.image, scale: 1)
+  private func picture(_ thumbnail: DesktopPicture) -> some View {
+    Image(decorative: thumbnail.image, scale: 1)
       .resizable()
       .interpolation(.high)
-    if tile.fillsFrame {
-      image.aspectRatio(contentMode: .fill)
-    } else {
-      image.aspectRatio(contentMode: .fit)
-        .elevation(.selection)
-        .padding(inset)
-    }
+      .aspectRatio(contentMode: .fill)
+      .frame(width: size.width, height: size.height, alignment: .top)
   }
 }

@@ -17,7 +17,6 @@ struct ActivityPictureGrid: View {
           ActivityPictureButton(
             tile: tile,
             size: ViewerLayout.pictureGrid,
-            inset: ViewerLayout.pictureGridInset,
             send: send
           )
         }
@@ -38,7 +37,7 @@ struct ActivityPictureGrid: View {
       // The links' words stand on the grid's edge, their capsules reaching past it.
       .padding(.leading, -ViewerLayout.linkInset)
     }
-    .padding(.bottom, ViewerLayout.stripBelow)
+    .padding(.bottom, ViewerLayout.gridBelow)
   }
 
   /// As many fixed columns as fit, at most ``ViewerLayout/pictureGridColumns``.

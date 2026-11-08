@@ -6,15 +6,13 @@ struct OutlinePictureBody: View {
   let tile: ViewerPictureTile
   /// The frame's size.
   let size: CGSize
-  /// How far a window capture stands inside the frame.
-  let inset: CGFloat
   @State private var isHovered = false
   @Environment(\.isFocused) private var isFocused
   @Environment(\.hoverPaused) private var hoverPaused
 
   /// The picture, its rim lit under the pointer, and its focus ring.
   var body: some View {
-    OutlinePicture(tile: tile, size: size, inset: inset, isHovered: isHovered && !hoverPaused)
+    OutlinePicture(tile: tile, size: size, isHovered: isHovered && !hoverPaused)
       .overlay {
         if isFocused {
           RoundedRectangle(cornerRadius: ViewerLayout.pictureRadius + OutlinePicture.ringReach, style: .continuous)

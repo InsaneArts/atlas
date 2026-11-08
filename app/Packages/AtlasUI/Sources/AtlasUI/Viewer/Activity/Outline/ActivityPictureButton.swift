@@ -6,8 +6,6 @@ struct ActivityPictureButton: View {
   let tile: ViewerPictureTile
   /// The frame's size.
   let size: CGSize
-  /// How far a window capture stands inside the frame.
-  let inset: CGFloat
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
 
@@ -19,7 +17,7 @@ struct ActivityPictureButton: View {
       Color.clear
         .frame(width: size.width, height: size.height)
     }
-    .buttonStyle(OutlinePictureStyle(tile: tile, size: size, inset: inset))
+    .buttonStyle(OutlinePictureStyle(tile: tile, size: size))
     .help("Open this picture")
     .accessibilityLabel(tile.label)
     .accessibilityHint(Text("Opens the picture"))
