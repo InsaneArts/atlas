@@ -949,3 +949,47 @@ fn a_drag_between_two_accounts_needs_each_of_them_to_allow_it() {
         "another place to drop"
     );
 }
+
+#[test]
+fn with_a_button_held_a_move_or_a_scroll_is_a_drag_where_it_lands() {
+    let mut look = TwoPlaces {
+        from: Target {
+            app: Some("com.apple.finder".to_owned()),
+            ..Target::default()
+        },
+        to: Target {
+            app: Some(SLACK.to_owned()),
+            window: Some(7),
+            ..Target::default()
+        },
+    };
+    let press_then = |action: serde_json::Value| {
+        actions(json!([
+            {"type": "pointer", "phase": "down", "x": 1, "y": 1},
+            action,
+        ]))
+    };
+    let moves = [
+        json!({"type": "move", "x": 9, "y": 1}),
+        json!({"type": "scroll", "x": 9, "y": 1, "dy": 3}),
+    ];
+    let look_only = listing(Kind::App, SLACK, Level::LookOnly);
+    let asks = listing(Kind::App, SLACK, Level::Ask);
+    for moved in moves {
+        let held = press_then(moved.clone());
+        assert!(
+            matches!(decide(&held, &look_only, &mut look), Decision::Deny { .. }),
+            "{moved} into Look Only"
+        );
+        assert_eq!(
+            what(&decide(&held, &asks, &mut look)),
+            Some("drag"),
+            "{moved}"
+        );
+        assert_eq!(
+            decide(&actions(json!([moved.clone()])), &look_only, &mut look),
+            Decision::Free,
+            "{moved} with no button held only looks"
+        );
+    }
+}

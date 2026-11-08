@@ -428,8 +428,14 @@ fn judge(
         .chain(drop.as_ref())
         .filter_map(|landing| account(landing, asking))
         .collect();
-    // A move with a button held is a drag: a change.
-    let changes_it = mutates(action) || (pressed && matches!(action, Action::Pointer { .. }));
+    // A move with a button held, a scroll's own move included, is a drag:
+    // a change where it lands.
+    let changes_it = mutates(action)
+        || (pressed
+            && matches!(
+                action,
+                Action::Pointer { .. } | Action::Move { .. } | Action::Scroll { .. }
+            ));
     if let Some(strict) = found.iter().find(|found| found.level == Level::LookOnly)
         && changes_it
     {
@@ -675,6 +681,7 @@ fn asks(action: &Action, target: &Target, changed: bool, pressed: bool) -> Optio
             PointerPhase::Up if pressed => None,
             PointerPhase::Down | PointerPhase::Up => by_name(target, changed),
         },
+        Action::Move { .. } | Action::Scroll { .. } if pressed => Some("drag"),
         Action::Move { .. }
         | Action::Scroll { .. }
         | Action::Wait { .. }
