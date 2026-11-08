@@ -75,13 +75,8 @@ Install the pinned dependency checker once with
 `cargo install cargo-machete --version 0.9.2 --locked`.
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo machete --skip-target-dir .
-cargo test --workspace --locked
-npm run format:check
-npm test
-node scripts/check-swift.mjs   # swift test and swift format lint, app/ and app/Packages/*
+scripts/check.sh   # Rust formatting, lints and tests, Node checks, swift test and swift format lint
 ```
 
 Passing tests are not enough for anything that changes input, windows,

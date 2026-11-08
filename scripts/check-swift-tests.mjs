@@ -1,7 +1,7 @@
 // Fails on a test that crashes instead of failing, or that exists only to
 // exist, in app/Tests, every local package's Tests and the `…Testing` targets
 // every test target shares (their `sleep` waits are the tests' too):
-// node scripts/check-swift-tests.mjs [FOLDER...].
+// node scripts/check-swift-rules.mjs --rule tests [FOLDER...].
 //
 // Rules, each named for the allow list:
 // - `force`: a force unwrap, a force cast, a force try or an implicitly
@@ -22,10 +22,7 @@
 // A text heuristic over Swift, with comments and string contents blanked
 // first: it catches the spellings its fixtures show. Other spellings may
 // need additional patterns to enforce the same rules.
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { codeOnly, lineOf, packageFolders, repository, run } from './swift-source.mjs';
+import { codeOnly, lineOf } from './swift-source.mjs';
 
 const CRASHES = 'which takes every test in its process down when';
 const EXCEPTION =
@@ -280,20 +277,4 @@ export function violations(text, file = '') {
     found.push({ line: line(sleep.index), rule: 'sleep', message: SLEEP });
   }
   return found.sort((a, b) => a.line - b.line);
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
-  // Each package's Testing targets: `app/Packages/<name>/Sources/<target>Testing`.
-  const testing = packageFolders('Sources').flatMap((sources) =>
-    fs
-      .readdirSync(path.join(repository, sources), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && entry.name.endsWith('Testing'))
-      .map((entry) => `${sources}/${entry.name}`),
-  );
-  run(
-    'tests',
-    folders.length ? folders : ['app/Tests', ...packageFolders('Tests'), ...testing],
-    violations,
-  );
 }

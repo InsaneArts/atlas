@@ -1,6 +1,6 @@
 // Fails on a declaration other code can reach that has no `///` doc comment,
 // in app/Sources and every local package's Sources:
-// node scripts/check-swift-docs.mjs [FOLDER...].
+// node scripts/check-swift-rules.mjs --rule docs [FOLDER...].
 //
 // swift-format's `AllPublicDeclarationsHaveDocumentation` sees only `public`
 // declarations, which only the local packages have; the rest are `package` or
@@ -16,8 +16,7 @@
 // read, with its members, as a wire type's `Body` and `Reply` are: other
 // local declarations are never read. An `extension` is not a declaration. A
 // heuristic over source text, with comments and strings blanked first.
-import { fileURLToPath } from 'node:url';
-import { codeOnly, packageFolders, run } from './swift-source.mjs';
+import { codeOnly } from './swift-source.mjs';
 
 const MODIFIER = String.raw`(?:@\w+(?:\([^)]*\))?\s+|(?:public|package|internal|open|private|fileprivate)(?:\(set\))?\s+|(?:static|class|final|override|mutating|nonmutating|nonisolated(?:\(unsafe\))?|lazy|weak|unowned|indirect|convenience|required|dynamic|isolated|consuming|borrowing)\s+)*`;
 const DECLARATION = new RegExp(
@@ -84,9 +83,4 @@ export function violations(text) {
     }
   }
   return found;
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
-  run('docs', folders.length ? folders : ['app/Sources', ...packageFolders('Sources')], violations);
 }
