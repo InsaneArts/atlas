@@ -586,7 +586,7 @@ fn request(error: &Error) -> (Option<&'static str>, Option<i32>) {
 
 /// Whether the request behind `error` could not complete, rather than
 /// being refused or answering wrongly.
-fn incomplete(error: &Error) -> bool {
+pub(in crate::native) fn incomplete(error: &Error) -> bool {
     request(error).1 == Some(AXError::CannotComplete.0)
 }
 

@@ -35,6 +35,9 @@ struct Fake {
     count_reads: usize,
     pauses: Vec<Duration>,
     hit: Option<usize>,
+    /// Attributes and lists the app is busy for: each answers that it could
+    /// not complete, as many times as it is busy.
+    busy: HashMap<(usize, &'static str), usize>,
 }
 
 impl Fake {
@@ -76,6 +79,7 @@ impl Fake {
             count_reads: 0,
             pauses: Vec::new(),
             hit: None,
+            busy: HashMap::new(),
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -118,6 +122,17 @@ impl Fake {
         self.answers.insert((sheet, "AXModal"), Answer::Flag(true));
         self.lists.insert((parent, "AXSheets"), vec![sheet]);
     }
+    /// Whether the app is still busy for `name` of `element`, counting this
+    /// time.
+    fn busied(&mut self, element: usize, name: &'static str) -> bool {
+        match self.busy.get_mut(&(element, name)) {
+            Some(busy) if *busy > 0 => {
+                *busy -= 1;
+                true
+            }
+            _ => false,
+        }
+    }
     fn run(&mut self, expect: &Expect) -> Result<()> {
         let deadline = self.now.get() + Duration::from_millis(450);
         prepare(self, expect, Need::Keys, deadline, &|| Ok(()), &mut |_| {
@@ -144,6 +159,11 @@ impl Ask for &mut Fake {
     fn now(&self) -> Instant {
         self.now.get()
     }
+    fn pause(&mut self, duration: Duration) {
+        assert!(!duration.is_zero());
+        self.pauses.push(duration);
+        self.now.set(self.now.get() + duration);
+    }
     fn bound(&mut self, _: &usize, timeout: Duration) -> bool {
         self.bounds.push(timeout);
         true
@@ -155,6 +175,9 @@ impl Ask for &mut Fake {
             on_ask(self, *element, name);
         }
         self.now.set(self.now.get() + self.delay);
+        if self.busied(*element, name) {
+            return Answer::Failed(AXError::CannotComplete);
+        }
         self.answers
             .get(&(*element, name))
             .cloned()
@@ -165,11 +188,6 @@ impl Ask for &mut Fake {
     }
 }
 impl Backend for &mut Fake {
-    fn pause(&mut self, duration: Duration) {
-        assert!(!duration.is_zero());
-        self.pauses.push(duration);
-        self.now.set(self.now.get() + duration);
-    }
     fn app(&mut self, _: i64) -> Result<usize> {
         self.present
             .then_some(APP)
@@ -196,6 +214,9 @@ impl Backend for &mut Fake {
         }
         if self.malformed {
             return Err(Unread::Malformed.error());
+        }
+        if self.busied(*element, name) {
+            return Err(Unread::Malformed.asking(name, AXError::CannotComplete));
         }
         Ok(self
             .lists
@@ -3069,6 +3090,28 @@ fn a_move_proven_in_preparation_is_proven_again_before_any_input() {
         "a check reusing the earlier proof lets it through"
     );
     assert_eq!(posted, 3, "and the drag would be sent outside the app");
+}
+
+fn app_only() -> Expect {
+    Expect::new(812).unwrap()
+}
+
+#[test]
+fn an_app_only_preparation_asks_again_a_focused_window_the_app_was_too_busy_to_give() {
+    let mut fake = Fake::new();
+    fake.busy.insert((APP, "AXFocusedWindow"), 2);
+    fake.run(&app_only()).unwrap();
+    assert_eq!(fake.busy[&(APP, "AXFocusedWindow")], 0);
+    assert_eq!(fake.pauses, vec![BUSY_PAUSE; 2]);
+}
+
+#[test]
+fn a_window_list_the_app_was_too_busy_to_give_is_listed_again_whole() {
+    let mut fake = Fake::new();
+    fake.busy.insert((APP, "AXWindows"), 1);
+    fake.run(&app_only()).unwrap();
+    assert_eq!(fake.busy[&(APP, "AXWindows")], 0);
+    assert_eq!(fake.pauses, vec![BUSY_PAUSE]);
 }
 
 /// What preparing and settling keys for the app alone, as `fake` answers,

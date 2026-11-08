@@ -4,7 +4,7 @@
 //! retained elements identify the destination but never replace fresh admission.
 use super::{
     Status, Unread, Within, absent, ffi,
-    keyboard::{Ask, Live, PARENTS, REQUEST, Reader, UnknownNames, remaining},
+    keyboard::{Ask, BUSY_PAUSE, Live, PARENTS, REQUEST, Reader, UnknownNames, remaining},
 };
 use crate::native::focus::{CHECK_BUDGET, FIELDS, Need, Reason, field_of, refused};
 use atlas_core::{
@@ -31,9 +31,6 @@ const ELEMENTS: usize = 1500;
 const DEPTH: usize = 14;
 
 pub(super) trait Backend: Ask {
-    fn pause(&mut self, duration: Duration) {
-        std::thread::sleep(duration);
-    }
     fn app(&mut self, pid: i64) -> Result<Self::Element>;
     fn windows(&mut self) -> Result<Vec<Window>>;
     /// A complete, typed list, or an error. Never a truncated prefix.
@@ -427,14 +424,28 @@ impl<A: Backend> Reader<A> {
         Ok(refs)
     }
 
+    /// Ask `app` its role once, whatever it answers, never again however
+    /// busy it is: the read only wakes a browser's page tree.
+    fn wake(&mut self, app: &A::Element) {
+        if self.bound(app, REQUEST).is_ok() {
+            let _ = self.ask.ask(app, "AXRole");
+        }
+    }
+
     fn list(
         &mut self,
         element: &A::Element,
         name: &'static str,
         limit: usize,
     ) -> Result<Vec<A::Element>> {
-        self.left()?;
-        let result = self.ask.list(element, name, limit, self.deadline)?;
+        // A list the app was too busy to give is a whole fresh list again.
+        let result = loop {
+            self.left()?;
+            match self.ask.list(element, name, limit, self.deadline) {
+                Err(error) if self.may_ask_again(&error) => self.ask.pause(BUSY_PAUSE),
+                listed => break listed?,
+            }
+        };
         self.left()?;
         if result.len() > limit {
             return Err(Unread::Malformed.error());
@@ -767,8 +778,7 @@ impl<A: Backend> Target<A> {
         reader.left()?;
         reader.owned(&app, pid)?;
         if expect.field().is_some() {
-            // Ignore the result because this read only wakes the browser's page tree.
-            let _ = reader.text(&app, "AXRole");
+            reader.wake(&app);
         }
         let point = match need {
             Need::Point(x, y) | Need::Pointer(x, y) => Some((x, y)),
