@@ -109,7 +109,7 @@ pub async fn monitor(
     let points = (display.width, display.height);
     // With the menu bar running for this helper, the terminal shares its
     // frame service and its control routes, so no second capture runs.
-    if backend == CaptureBackend::CoreGraphics
+    if backend == CaptureBackend::ScreenCaptureKit
         && max_dimension.is_none()
         && let Some((url, descriptor)) = shared(&client).await
     {

@@ -19,6 +19,7 @@ pub mod capability;
 pub mod cleanup;
 pub mod client;
 pub mod collect;
+pub mod console_agents;
 pub mod doing;
 pub mod environment;
 pub mod handoff;

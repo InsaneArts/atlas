@@ -25,7 +25,7 @@ const IDLE: Duration = Duration::from_secs(10);
 /// The shortest gap between CoreGraphics capture starts.
 const CADENCE: Duration = Duration::from_nanos(1_000_000_000 / 30);
 /// The shortest gap between ScreenCaptureKit capture starts.
-const NATIVE_CADENCE: Duration = Duration::from_nanos(1_000_000_000 / 60);
+const NATIVE_CADENCE: Duration = Duration::from_nanos(1_000_000_000 / 30);
 const MAX_HEADER: usize = 4096;
 
 /// The connection's ownership of the live source. Dropping it gives the
@@ -72,6 +72,30 @@ impl Drop for Producer {
             Ok(runtime) if native => drop(runtime.spawn_blocking(stop)),
             _ => stop(),
         }
+    }
+}
+
+/// How long the stream the capture source keeps for one-shot pictures stays
+/// open after the last of them: an agent's next step usually comes within
+/// it, and its picture then needs no new stream, which takes up to a second
+/// to show its first.
+const KEPT: Duration = Duration::from_secs(600);
+/// How often the kept stream is looked at.
+const KEPT_CHECK: Duration = Duration::from_secs(10);
+
+/// Stop the stream the capture source keeps for one-shot pictures once none
+/// was taken for [`KEPT`], until the daemon stops. A viewer's stream is never
+/// touched.
+pub(super) async fn release_kept_pictures(daemon: Arc<Daemon>) {
+    loop {
+        tokio::select! {
+            () = daemon.stopped() => return,
+            () = tokio::time::sleep(KEPT_CHECK) => {}
+        }
+        let source = daemon.source.clone();
+        // A stop that fails leaves the source quarantined; the next capture
+        // asks it to stop again.
+        let _ = tokio::task::spawn_blocking(move || source.release_kept(KEPT)).await;
     }
 }
 
@@ -143,11 +167,14 @@ fn guard(daemon: &Daemon, expected: &InputEpoch) -> Result<Value> {
     Ok(proof)
 }
 
+/// One frame, asked for at `asked`: a stream's wait for its picture is
+/// counted from then, so a frame held back meanwhile still answers in time.
 fn capture(
     daemon: &Daemon,
     expected: &InputEpoch,
     side: u32,
     backend: CaptureBackend,
+    asked: std::time::Instant,
 ) -> Result<(RawShot, Value, &'static str, f64)> {
     guard(daemon, expected)?;
     let capturing = std::time::Instant::now();
@@ -158,7 +185,7 @@ fn capture(
         ),
         CaptureBackend::ScreenCaptureKit => {
             let (shot, streamed) =
-                capture::stream_display_rgb(expected.display_id as u32, Some(side))?;
+                capture::stream_display_rgb(expected.display_id as u32, Some(side), asked)?;
             (shot, if streamed { "sck" } else { "cg-fallback" })
         }
     };
@@ -294,9 +321,15 @@ pub(super) async fn serve(
         let worker_daemon = daemon.clone();
         let worker_expected = expected.clone();
         let held = producer.clone();
+        let asked = std::time::Instant::now();
+        // The frame holds the source's fence, so nothing that must run
+        // between captures starts under it.
         let mut worker = tokio::task::spawn_blocking(move || {
             let _held = held;
-            capture(&worker_daemon, &worker_expected, side, backend)
+            worker_daemon
+                .source
+                .frame(|| capture(&worker_daemon, &worker_expected, side, backend, asked))
+                .and_then(std::convert::identity)
         });
         // A blocking framework capture cannot be interrupted safely. On
         // departure or shutdown its result is discarded, and its task is

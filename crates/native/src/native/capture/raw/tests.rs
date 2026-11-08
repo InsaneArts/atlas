@@ -189,3 +189,66 @@ fn benchmark_raw_bitmap_against_png_encoding() {
         started.elapsed()
     );
 }
+
+/// Two rows of two opaque BGRA pixels, the rows 16 bytes apart.
+fn two_by_two() -> Vec<u8> {
+    let mut bytes = vec![0; 32];
+    for (index, [blue, green, red]) in [[10, 20, 30], [40, 50, 60], [70, 80, 90], [100, 110, 120]]
+        .into_iter()
+        .enumerate()
+    {
+        let at = (index / 2) * 16 + (index % 2) * 4;
+        bytes[at..at + 4].copy_from_slice(&[blue, green, red, 255]);
+    }
+    bytes
+}
+
+#[test]
+fn the_whole_picture_at_its_own_size_is_repacked_exactly() {
+    let shape = Shape::whole((2, 2), None);
+    assert_eq!(
+        shaped(&two_by_two(), (2, 2, 16), shape).unwrap().as_ref(),
+        [30, 20, 10, 60, 50, 40, 90, 80, 70, 120, 110, 100]
+    );
+}
+
+#[test]
+fn an_area_is_cut_from_the_picture_at_its_own_pixels() {
+    let shape = Shape {
+        area: Some(Area {
+            x: 1,
+            y: 1,
+            width: 1,
+            height: 1,
+        }),
+        width: 1,
+        height: 1,
+    };
+    assert_eq!(
+        shaped(&two_by_two(), (2, 2, 16), shape).unwrap().as_ref(),
+        [120, 110, 100]
+    );
+}
+
+#[test]
+fn a_smaller_shape_is_drawn_at_the_size_asked_for() {
+    let shape = Shape::whole((2, 2), Some(1));
+    assert_eq!((shape.width, shape.height), (1, 1));
+    assert_eq!(shaped(&two_by_two(), (2, 2, 16), shape).unwrap().len(), 3);
+}
+
+#[test]
+fn an_area_or_layout_that_does_not_fit_the_bytes_is_refused() {
+    let past = Shape {
+        area: Some(Area {
+            x: 1,
+            y: 1,
+            width: 2,
+            height: 1,
+        }),
+        width: 2,
+        height: 1,
+    };
+    assert!(shaped(&two_by_two(), (2, 2, 16), past).is_err());
+    assert!(shaped(&two_by_two(), (2, 3, 16), Shape::whole((2, 3), Some(1))).is_err());
+}

@@ -63,6 +63,13 @@ impl Instance {
         self.state().running()
     }
 
+    /// Whether this very process is known to have ended, whichever
+    /// account's it was: its PID is free, or waits to be reaped, or is
+    /// another process's. One the kernel would not describe has not.
+    pub fn ended(&self) -> bool {
+        ended(self, info(self.pid))
+    }
+
     /// When it started, in milliseconds since 1970.
     pub fn started_ms(&self) -> u64 {
         let [seconds, micros] = self.start;
@@ -118,6 +125,16 @@ impl State {
             Self::Running | Self::Stopped => true,
             Self::Gone | Self::Unknown => false,
         }
+    }
+}
+
+/// Whether `instance` has ended, as `found`, the kernel's word on its PID,
+/// says.
+fn ended(instance: &Instance, found: Result<Option<Info>>) -> bool {
+    match found {
+        Ok(Some(info)) => info.zombie || info.instance != *instance,
+        Ok(None) => true,
+        Err(_) => false,
     }
 }
 

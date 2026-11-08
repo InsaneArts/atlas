@@ -109,7 +109,11 @@ impl Running {
             vec![Right::Observe],
             vec![UpdateKind::Full],
         );
-        let handle = source::spawn(source.clone(), Budget::new(BROKER_PIXELS));
+        let handle = source::spawn(
+            source.clone(),
+            Budget::new(BROKER_PIXELS),
+            Arc::new(tokio::sync::Notify::new()),
+        );
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let uid = nix::unistd::getuid().as_raw();
         let witnessed = Arc::new(Mutex::new(Vec::new()));

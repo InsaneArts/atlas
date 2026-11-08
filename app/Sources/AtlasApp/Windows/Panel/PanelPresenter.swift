@@ -22,6 +22,7 @@ enum PanelPresenter {
     return PanelState(
       status: status,
       notice: snapshot.session.notice,
+      showsServiceNote: SlowServiceNote.shows(snapshot.status, dismissed: snapshot.serviceNoteDismissed),
       isMoreOpen: snapshot.session.moreOpen,
       picture: picture(snapshot, mode: mode, reading: reading),
       recent: hidesRecent(mode) || !sessions.isEmpty ? [] : recent(reading, mode: mode, icons: snapshot.icons),
