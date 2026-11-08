@@ -132,6 +132,32 @@ pub const CONFIGURED_UID: u32 = 60001;
 pub const SETTINGS: &str = "helper_uid = 60001\nsocket_path = \"c.sock\"\noutput_dir = \"out\"\n\
                                    identity_probe = \"probe\"\ninput_socket = \"i.sock\"\n";
 
+/// The reply-cost fixtures in `source`, each one written out or given as a
+/// count of rows that `input` builds.
+pub fn reply_cost_fixtures(
+    source: &str,
+    input: impl Fn(usize) -> serde_json::Value,
+) -> Vec<serde_json::Value> {
+    let mut fixtures: Vec<serde_json::Value> = serde_json::from_str(source).unwrap();
+    for fixture in &mut fixtures {
+        if let Some(rows) = fixture["inputRows"].as_u64() {
+            fixture["input"] = input(usize::try_from(rows).unwrap());
+        }
+    }
+    fixtures
+}
+
+/// The text a reply-cost row carries, with escapes and multi-byte
+/// characters: once in an even row, six times over in an odd one.
+pub fn reply_cost_text(row: usize) -> String {
+    const TEXT: &str = "Éditeur 東京 🦀 \"draft\" \\ folder\nnext\tline";
+    if row % 2 == 1 {
+        TEXT.repeat(6)
+    } else {
+        TEXT.to_owned()
+    }
+}
+
 /// Exact compact JSON, including the line delimiter when the transport sends one.
 pub fn reply_cost(value: &serde_json::Value, baseline: &serde_json::Value) {
     let mut serialized = value.to_string();

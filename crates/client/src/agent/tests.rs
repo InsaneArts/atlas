@@ -3409,13 +3409,34 @@ async fn looks_and_window_lists_fail_when_window_memory_cannot_be_replaced() {
     }
 }
 
+/// A listing of `rows` buttons, as the element reply-cost fixtures read it.
+fn element_rows(rows: usize) -> Value {
+    let elements: Vec<Value> = (0..rows)
+        .map(|index| {
+            json!({
+                "index": index,
+                "depth": 1,
+                "role": "AXButton",
+                "title": atlas_core::test_support::reply_cost_text(index),
+                "enabled": true,
+                "frame": {"x": 10 + index, "y": 20, "width": 100, "height": 30},
+                "window": {"x": 0, "y": 0, "width": 640, "height": 480},
+            })
+        })
+        .collect();
+    json!({"ok": true, "elements": elements, "truncated": false, "look": "8123abc"})
+}
+
+fn element_fixtures() -> Vec<Value> {
+    atlas_core::test_support::reply_cost_fixtures(
+        include_str!("../../../../tests/fixtures/reply-cost/elements.json"),
+        element_rows,
+    )
+}
+
 #[test]
 fn element_reply_cost_preserves_listing_and_refusal_words() {
-    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../../tests/fixtures/reply-cost/elements.json"
-    ))
-    .unwrap();
-    for fixture in fixtures {
+    for fixture in element_fixtures() {
         let scanned = Scanned::from_reply(fixture["input"].clone()).unwrap();
         let listed = listing(
             812,
@@ -3442,11 +3463,7 @@ async fn representative_element_reads_keep_their_helper_request_counts() {
     use crate::test_support::Helper;
     use atlas_core::test_support::UID;
 
-    let fixtures: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../../tests/fixtures/reply-cost/elements.json"
-    ))
-    .unwrap();
-    for fixture in fixtures {
+    for fixture in element_fixtures() {
         let dir = tempfile::tempdir().unwrap();
         let (client, helper) = Helper::client(dir.path(), UID);
         let helper = helper.serving_input(&client, &[LOOKS]);
