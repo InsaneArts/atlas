@@ -54,6 +54,7 @@ pub(super) fn reason(row: &Row) -> Option<&'static str> {
         | Code::Cleanup
         | Code::Config
         | Code::ConfigInvalid
+        | Code::Credentials
         | Code::Environment
         | Code::Init
         | Code::Install

@@ -19,6 +19,7 @@ pub mod capability;
 pub mod cleanup;
 pub mod client;
 pub mod collect;
+mod credential_files;
 pub mod doing;
 pub mod environment;
 pub mod handoff;

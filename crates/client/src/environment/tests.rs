@@ -3898,3 +3898,137 @@ fn the_transaction_replies_keep_their_wire_shape() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_manifest_that_selects_a_secret_is_refused_before_the_helper_is_asked_and_nothing_is_staged()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let manifest = directory.path().join("manifest.toml");
+    fs::write(&manifest, b"").unwrap();
+    let secret = directory.path().join(".env");
+    fs::write(&secret, b"TOKEN=1").unwrap();
+    let selections = vec![Selection {
+        source: ".env".into(),
+        target: ".config/probe/.env".into(),
+        executable: false,
+    }];
+    let error = freeze(&client, &manifest, selections, false)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+    assert!(
+        !directory.path().join("output").exists(),
+        "a stage was made"
+    );
+}
+
+#[tokio::test]
+async fn a_profile_whose_file_or_reference_is_a_store_is_refused_before_the_helper_is_asked() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let store = directory.path().join("cookies.sqlite");
+    fs::write(&store, b"").unwrap();
+    for (name, body) in [
+        (
+            "file.toml",
+            "version = 2\n[[files]]\nsource = \"cookies.sqlite\"\ntarget = \"cookies.sqlite\"\n"
+                .to_owned(),
+        ),
+        (
+            "reference.toml",
+            format!(
+                "version = 2\n[[references]]\npath = \"{}\"\n",
+                store.display()
+            ),
+        ),
+    ] {
+        let profile = directory.path().join(name);
+        fs::write(&profile, body).unwrap();
+        let error = profile::sync(&client, &profile, false).await.unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{name}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn a_manifest_source_that_is_a_link_named_like_a_secret_is_refused_though_it_leads_elsewhere()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let manifest = directory.path().join("manifest.toml");
+    fs::write(&manifest, b"").unwrap();
+    let settings = directory.path().join("settings");
+    fs::write(&settings, b"TOKEN=1").unwrap();
+    symlink(&settings, directory.path().join(".npmrc")).unwrap();
+    let selections = vec![Selection {
+        source: ".npmrc".into(),
+        target: ".npmrc".into(),
+        executable: false,
+    }];
+    let error = freeze(&client, &manifest, selections, false)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+}
+
+#[tokio::test]
+async fn a_source_that_became_a_link_to_a_store_after_the_first_check_is_refused_as_it_is_read() {
+    let sandbox = Sandbox::new();
+    let (client, helper, _task) = tasked(&sandbox.root);
+    let store = sandbox.root.join("cookies.sqlite");
+    fs::write(&store, b"").unwrap();
+    // Passed the first check as a plain file, then turned into a link before it was read.
+    let source = sandbox.root.join("settings.toml");
+    symlink(&store, &source).unwrap();
+    let selections = vec![Selection {
+        source,
+        target: ".config/probe/settings.toml".into(),
+        executable: false,
+    }];
+    let error = helper
+        .serve(
+            freeze_as(
+                &client,
+                &account(),
+                &sandbox.root.join("manifest.toml"),
+                selections,
+                false,
+            ),
+            |_| panic!("the helper was asked to preview a store"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+}
+
+#[tokio::test]
+async fn a_source_that_became_a_link_through_a_store_named_link_is_refused_as_it_is_read() {
+    let sandbox = Sandbox::new();
+    let (client, helper, _task) = tasked(&sandbox.root);
+    let plain = sandbox.root.join("plain.txt");
+    fs::write(&plain, b"TOKEN=1").unwrap();
+    // Two links: the source to a `.npmrc`, which leads on to an ordinary-looking file.
+    let npmrc = sandbox.root.join(".npmrc");
+    symlink(&plain, &npmrc).unwrap();
+    let source = sandbox.root.join("settings.toml");
+    symlink(&npmrc, &source).unwrap();
+    let selections = vec![Selection {
+        source,
+        target: ".config/probe/settings.toml".into(),
+        executable: false,
+    }];
+    let error = helper
+        .serve(
+            freeze_as(
+                &client,
+                &account(),
+                &sandbox.root.join("manifest.toml"),
+                selections,
+                false,
+            ),
+            |_| panic!("the helper was asked to preview a store"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+}

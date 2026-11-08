@@ -57,6 +57,11 @@ pub(super) async fn open_in(
     }
 
     let mut argv = open_argv(environment)?;
+    let wanted = wanted(app, targets);
+    // Before the helper is asked anything: the person's sign-ins and secrets never reach it, by the path given (a link
+    // named like a store) or the one it leads to.
+    crate::credential_files::refuse(given_paths(app, targets, &wanted))?;
+    handoff::refuse_targets(&wanted)?;
     let started = Instant::now();
 
     // Copying, launching and pruning happen under one ownership, so no other
@@ -68,7 +73,7 @@ pub(super) async fn open_in(
     let running = listed.rows();
     task::settle_copies_gone(client, handoff::prune_in(copies, running));
 
-    let handed = handoff::hand_over(client, &ownership, wanted(app, targets), running).await?;
+    let handed = handoff::hand_over(client, &ownership, wanted, running).await?;
     let copied = handed.copied;
     // Web pages for a browser already running get a window of their own:
     // the app as the helper opens it, by its name or the path handed over.
@@ -195,6 +200,27 @@ fn web_page(target: &str) -> bool {
             .get(..scheme.len())
             .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
     })
+}
+
+/// The arguments of `open` to check as given, beside `wanted`, what they resolved to: each file named, whether or
+/// not it exists (a missing `.env` is no URL), and whatever exists here, however it looks. An app given by name is
+/// the helper's to look up.
+fn given_paths<'a>(
+    app: Option<&'a str>,
+    targets: &'a [String],
+    wanted: &[handoff::Target],
+) -> Vec<&'a Path> {
+    app.into_iter()
+        .map(|app| (app, app.contains('/')))
+        .chain(
+            targets
+                .iter()
+                .map(|target| (target.as_str(), !handoff::has_scheme(target))),
+        )
+        .zip(wanted)
+        .filter(|((_, file), target)| *file || matches!(target, handoff::Target::Path(_)))
+        .map(|((given, _), _)| Path::new(given))
+        .collect()
 }
 
 /// What `open` hands over to the helper: the app first, then each file or

@@ -146,6 +146,14 @@ Atlas still opens builds from a private folder: it copies them for the helper.
 
 Atlas limits what the helper's apps can see. Your agent itself runs in your account and can read what you can, as it does without Atlas.
 
+### Signing the helper into accounts
+
+Atlas never copies your sign-ins into the helper. It refuses to copy, or open there, browser profiles and cookies, keychains, the sign-in storage of apps such as Slack and Discord, SSH, GPG and cloud keys, `.env` and `.npmrc`. The refusal says what the file is. When a task needs an account, sign the helper in to it yourself.
+
+Anything the helper is signed in to, an agent can use: it can read, send, merge or delete there as you could. So sign in only to what the task needs, and prefer a test account or one with few rights. Your agent's own app may also ask you before it runs a command; that is separate from Atlas.
+
+Atlas checks where a file is, not what is in it: a renamed copy of a store, or a project folder copied whole with a `.env` inside, is not recognized.
+
 ## Settings and practical limits
 
 Open **Settings** to change picture behavior in **General**, check the account and readiness in **Helper**, manage connections in **Agents**, or view version information in **About**.

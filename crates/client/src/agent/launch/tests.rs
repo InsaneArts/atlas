@@ -149,3 +149,131 @@ fn a_running_app_is_found_by_its_name_or_by_its_bundles_path() {
         "a path it only begins with"
     );
 }
+
+#[tokio::test]
+async fn opening_a_store_or_a_file_url_to_one_is_refused_before_control_is_taken_or_the_helper_asked()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let copies = directory.path().join("copies");
+    let store = directory.path().join("logins.json");
+    std::fs::write(&store, b"{}").unwrap();
+    let url = format!("file://{}", directory.path().join(".npm%72c").display());
+    let escaped_host = format!(
+        "file://%6cocalhost{}",
+        directory.path().join(".env").display()
+    );
+    let numeric_host = format!(
+        "file://127.0.0.1{}",
+        directory.path().join(".npmrc").display()
+    );
+    let lone_percent = format!("file://{}", directory.path().join("100%/.env").display());
+    for target in [
+        store.display().to_string(),
+        url,
+        escaped_host,
+        numeric_host,
+        lone_percent,
+    ] {
+        let error = open_in(&client, None, std::slice::from_ref(&target), &[], &copies)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{target}: {error}");
+    }
+    assert!(!copies.exists(), "old copies were pruned");
+    assert!(
+        !directory.path().join("state").exists(),
+        "control was taken"
+    );
+}
+
+#[tokio::test]
+async fn opening_a_link_named_like_a_store_is_refused_though_it_leads_elsewhere() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let settings = directory.path().join("settings");
+    std::fs::write(&settings, b"").unwrap();
+    let link = directory.path().join("cookies.sqlite");
+    std::os::unix::fs::symlink(&settings, &link).unwrap();
+    let error = open_in(
+        &client,
+        None,
+        &[link.display().to_string()],
+        &[],
+        &directory.path().join("copies"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+}
+
+#[tokio::test]
+async fn opening_a_file_reference_url_is_refused_before_the_helper_is_asked() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let reference = "file:///.file/id=6571367.1234".to_owned();
+    let error = open_in(
+        &client,
+        None,
+        std::slice::from_ref(&reference),
+        &[],
+        &directory.path().join("copies"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, Code::Usage, "{error}");
+    assert!(
+        !directory.path().join("state").exists(),
+        "control was taken"
+    );
+}
+
+#[tokio::test]
+async fn opening_a_path_named_like_a_store_that_does_not_exist_is_refused_before_control_is_taken()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    for missing in [
+        directory.path().join("missing/.env"),
+        directory.path().join("odd://missing/.env"),
+        PathBuf::from(".env-missing-here/.npmrc"),
+        PathBuf::from(".npmrc"),
+    ] {
+        let missing = missing.display().to_string();
+        let error = open_in(
+            &client,
+            None,
+            std::slice::from_ref(&missing),
+            &[],
+            &directory.path().join("copies"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{missing}: {error}");
+    }
+    assert!(
+        !directory.path().join("state").exists(),
+        "control was taken"
+    );
+}
+
+#[test]
+fn every_file_named_and_every_path_that_exists_is_checked_as_given() {
+    let targets = ["odd:/.env", "https://example.com", ".npmrc"].map(str::to_owned);
+    let wanted = [
+        handoff::Target::Path(PathBuf::from("/real/settings")),
+        handoff::Target::Name("https://example.com".into()),
+        handoff::Target::Name(".npmrc".into()),
+    ];
+    let given = given_paths(None, &targets, &wanted);
+    assert_eq!(
+        given,
+        [Path::new("odd:/.env"), Path::new(".npmrc")],
+        "a URL is no file"
+    );
+    let app = [handoff::Target::Name("Safari".into())];
+    assert!(
+        given_paths(Some("Safari"), &[], &app).is_empty(),
+        "an app's name is the helper's"
+    );
+}

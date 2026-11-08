@@ -182,6 +182,7 @@ fn every_code_keeps_its_word() {
         (Code::Collect, "collect"),
         (Code::Config, "config"),
         (Code::ConfigInvalid, "config-invalid"),
+        (Code::Credentials, "credentials"),
         (Code::Daemon, "daemon"),
         (Code::Elements, "elements"),
         (Code::Environment, "environment"),

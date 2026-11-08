@@ -1014,3 +1014,81 @@ fn a_failed_handoff_cleans_earlier_copies_before_releasing_ownership() {
     assert!(!left[0].join("a.txt").exists());
     assert_eq!(states(&output, &task), [State::Gone, State::Intent]);
 }
+
+#[test]
+fn a_file_url_names_its_path_on_this_mac_with_escapes_decoded() {
+    assert_eq!(
+        local_file("file:///tmp/a%20b/.env"),
+        Some(PathBuf::from("/tmp/a b/.env"))
+    );
+    assert_eq!(
+        local_file("FILE://localhost/tmp/x?y#z"),
+        Some(PathBuf::from("/tmp/x"))
+    );
+    assert_eq!(local_file("file:/tmp/x"), Some(PathBuf::from("/tmp/x")));
+    // macOS opens a file URL's path on this Mac whatever host it names.
+    assert_eq!(
+        local_file("file://other-mac/tmp/x"),
+        Some(PathBuf::from("/tmp/x"))
+    );
+    assert_eq!(
+        local_file("file://127.0.0.1/tmp/.env"),
+        Some(PathBuf::from("/tmp/.env"))
+    );
+    assert_eq!(
+        local_file("file://%6cocalhost/tmp/.env"),
+        Some(PathBuf::from("/tmp/.env")),
+        "an escaped host"
+    );
+    assert_eq!(local_file("https://example.com/.env"), None);
+    assert_eq!(
+        local_file("file:///tmp/100%/.env"),
+        Some(PathBuf::from("/tmp/100%/.env")),
+        "a lone % stays, as macOS reads it"
+    );
+    assert_eq!(local_file("file://host-without-path"), None);
+}
+
+#[test]
+fn a_source_replaced_by_a_link_to_a_store_is_refused_as_it_is_copied_and_leaves_no_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = directory.path().join(".env");
+    fs::write(&store, b"TOKEN=1").unwrap();
+    let source = directory.path().join("notes.txt");
+    std::os::unix::fs::symlink(&store, &source).unwrap();
+    let root = directory.path().join("copies");
+    fs::create_dir(&root).unwrap();
+    let token = Token::new();
+    let error = copy(&source, &root, &token).unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+    assert!(
+        !root.join(token.as_str()).exists(),
+        "the copy's folder was left"
+    );
+}
+
+#[test]
+fn a_file_url_naming_no_file_is_refused_rather_than_handed_on() {
+    let error = refuse_targets(&[Target::Name("file://host-without-path".into())]).unwrap_err();
+    assert_eq!(error.code, Code::Usage);
+    assert!(refuse_targets(&[Target::Name("https://example.com".into())]).is_ok());
+}
+
+#[test]
+fn a_file_url_with_an_escaped_slash_in_a_name_is_refused_rather_than_judged_as_another_file() {
+    assert_eq!(
+        local_file("file:///Users/person/.ssh/key%2F..%2Fconfig"),
+        None
+    );
+    let error = refuse_targets(&[Target::Name("file:///tmp/a%2Fb".into())]).unwrap_err();
+    assert_eq!(error.code, Code::Usage);
+}
+
+#[test]
+fn only_a_scheme_at_the_start_makes_a_url() {
+    assert!(has_scheme("https://example.com"));
+    assert!(has_scheme("file:///tmp/x"));
+    assert!(!has_scheme("/tmp/odd://missing/.env"));
+    assert!(!has_scheme("dir/notes.txt"));
+    assert!(!has_scheme("2x:thing"));
+}

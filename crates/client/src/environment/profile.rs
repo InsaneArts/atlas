@@ -108,6 +108,24 @@ fn selected_environment(profile: &Profile) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Refuses `profile`, read from `path`, when a file it copies or a folder it lets the helper read is one of the
+/// person's stores of sign-ins or secrets, before the helper is asked anything.
+fn refuse_credentials(path: &Path, profile: &Profile) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| problem("Missing profile parent"))?;
+    // An absolute source replaces the profile's folder as it is joined.
+    let files = profile.files.iter().map(|file| parent.join(&file.source));
+    // A relative reference is refused as such by discovery, as before.
+    let references = profile
+        .references
+        .iter()
+        .filter(|reference| reference.path.is_absolute())
+        .map(|reference| reference.path.clone());
+    let selected: Vec<PathBuf> = files.chain(references).collect();
+    crate::credential_files::refuse(selected.iter().map(PathBuf::as_path))
+}
+
 /// What the helper offers of `profile`'s selections, before anything is
 /// copied: a reference it cannot use as selected is refused.
 async fn readiness(client: &Client, profile: &Profile) -> Result<Value> {
@@ -156,6 +174,7 @@ async fn readiness(client: &Client, profile: &Profile) -> Result<Value> {
 pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
     let path = fs::canonicalize(path)?;
     let profile = load(&path)?;
+    refuse_credentials(&path, &profile)?;
     let bytes = selected_environment(&profile)?;
     let readiness = readiness(client, &profile).await?;
 

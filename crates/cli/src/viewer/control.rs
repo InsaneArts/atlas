@@ -41,6 +41,7 @@ impl From<Code> for LeaseRefusal {
             | Code::Collect
             | Code::Config
             | Code::ConfigInvalid
+            | Code::Credentials
             | Code::Daemon
             | Code::Elements
             | Code::Environment

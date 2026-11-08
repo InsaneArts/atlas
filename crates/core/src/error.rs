@@ -224,6 +224,7 @@ codes! {
     Collect => ("collect", LOCAL),
     Config => ("config", LOCAL),
     ConfigInvalid => ("config-invalid", LOCAL),
+    Credentials => ("credentials", LOCAL),
     Daemon => ("daemon", LOCAL),
     Elements => ("elements", LOCAL),
     Environment => ("environment", LOCAL),

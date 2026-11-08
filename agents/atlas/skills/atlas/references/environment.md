@@ -9,7 +9,8 @@ never ask the person to do it:
    `target` (a plain ASCII path inside the helper's home, like
    `.config/opie/rings.toml`) and `executable = true` for tools (put them in
    `.local/bin`, where `atlas run -- TOOL ARGS` finds them). Copy only what
-   the app needs, never credentials, keychains or tokens.
+   the app needs, never credentials, keychains or tokens: Atlas refuses
+   sign-ins and secrets (`credentials`); don't copy them another way.
 2. Quit the app in the helper first (`atlas close --app NAME`), so it does not
    overwrite the files while they arrive, but only when you alone use it. If
    another agent has windows in it, stop and tell the person instead.

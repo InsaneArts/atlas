@@ -105,6 +105,9 @@ pub fn next(code: Code, holder: Option<Holder>) -> &'static str {
         }
         (Code::Init, _) => "Ask the person to run atlas init again. It picks up where it stopped.",
         (Code::ConfigInvalid | Code::Uninstall, _) => "Show the error to the person.",
+        (Code::Credentials, _) => {
+            "Don't copy it another way. If the task needs an account, ask the person to sign the helper in; copy only what the test needs, without secrets."
+        }
         (Code::Onboarding, _) => "Show the error to the person. They open Atlas again to carry on.",
         (Code::Install, _) => "Ask the person to move Atlas.app to /Applications.",
         (Code::Logout, _) => {
@@ -272,6 +275,9 @@ pub fn fix(code: Code) -> Option<&'static str> {
         Code::Cancelled | Code::Terminal => return None,
         Code::Config | Code::Setup => "Run atlas init to finish setting up.",
         Code::ConfigInvalid => "Fix that file, or move it aside and run atlas init.",
+        Code::Credentials => {
+            "Sign the helper in to the account instead, and select only files without secrets."
+        }
         Code::Daemon | Code::State => "Run atlas restart.",
         Code::Elements => {
             "Check the app is running with a window (atlas windows), then narrow it with --name or --role, or click the point from a screenshot instead."
