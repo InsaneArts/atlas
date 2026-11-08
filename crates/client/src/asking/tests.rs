@@ -491,7 +491,7 @@ async fn a_typed_step_the_person_allowed_after_a_stop_is_typed_once_without_aski
     let helper = helper.serving_input(&client, &[FOCUS_APP, TYPED_FIELDS, ASKS]);
     // The person allowed, just this once, the line break that stopped a request.
     let stopped = atlas_core::actions::Action::Type {
-        text: "\n".to_owned(),
+        text: "hello\n".to_owned(),
     };
     let asks = client.controller.asks();
     asks.permit(
@@ -511,7 +511,7 @@ async fn a_typed_step_the_person_allowed_after_a_stop_is_typed_once_without_aski
     let mut inputs = Vec::new();
     let typed = helper
         .serve(
-            crate::agent::type_text(&client, "\n", None),
+            crate::agent::type_text(&client, "hello\n", None),
             |request| match request["op"].as_str() {
                 Some("input") => {
                     inputs.push(request["asking"].clone());
@@ -527,17 +527,21 @@ async fn a_typed_step_the_person_allowed_after_a_stop_is_typed_once_without_aski
         .await
         .unwrap();
     assert_eq!(typed["ok"], true, "{typed}");
-    assert_eq!(inputs.len(), 2, "the check, then the text");
-    for asking in &inputs {
-        assert!(
-            asking["grants"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|grant| grant["scope"] == "permit"),
-            "the permit goes with the check and with the text: {asking}"
-        );
-    }
+    assert_eq!(
+        inputs.len(),
+        1,
+        "no check asks about what the person allowed: only the text goes"
+    );
+    assert_eq!(inputs[0]["dry"], Value::Null);
+    assert!(
+        inputs[0]["grants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|grant| grant["scope"] == "permit"),
+        "the permit goes with the text: {}",
+        inputs[0]
+    );
     assert!(
         asks.take_permits("terminal", None, &[stopped.digest()], now_ms())
             .unwrap()

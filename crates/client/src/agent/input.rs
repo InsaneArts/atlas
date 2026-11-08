@@ -137,7 +137,8 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
 
 /// [`type_text`] once. While the person lists any account, the input
 /// service first judges a stand-in for the whole text, sending nothing, so
-/// typing never stops halfway to ask.
+/// typing never stops halfway to ask; parts the person already allowed
+/// after a stop aren't judged again.
 async fn type_once(
     client: &Client,
     batches: &[String],
@@ -154,9 +155,20 @@ async fn type_once(
     };
     let epoch = &verified.session().epoch;
 
-    if crate::asking::policy(client).is_some() {
+    // The parts the person already allowed, each just this once, after
+    // they stopped typing: those are typed under their permits, and only
+    // the rest is judged here.
+    let parts: Vec<String> = batches.iter().flat_map(|batch| type_parts(batch)).collect();
+    let left: Vec<&String> = {
+        let allowed = crate::asking::permitted(client, &parts);
+        parts
+            .iter()
+            .filter(|part| !allowed.contains(part))
+            .collect()
+    };
+    if !left.is_empty() && crate::asking::policy(client).is_some() {
         // Decided as the whole text: a line break anywhere sends.
-        let probe = if batches.concat().contains(['\n', '\r']) {
+        let probe = if left.iter().any(|part| part.contains(['\n', '\r'])) {
             "\n"
         } else {
             "x"

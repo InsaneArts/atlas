@@ -98,6 +98,29 @@ fn policy_by(
     (Some(policy), permits)
 }
 
+/// Which of `parts`, text a command types, the person already allowed just
+/// this once after typing stopped there: each has a live permit for that
+/// very typing, which its own request then takes. Nothing is taken here.
+pub(crate) fn permitted(client: &Client, parts: &[String]) -> Vec<String> {
+    let now = now_ms();
+    let session = session(client);
+    let process = process(client);
+    let permits = client.controller.asks().permits_of(&session, process, now);
+    parts
+        .iter()
+        .filter(|part| {
+            let digest = Action::Type {
+                text: (*part).clone(),
+            }
+            .digest();
+            permits.iter().any(|permit| {
+                permit.action == digest && session_lives(client, &permit.session, permit.process)
+            })
+        })
+        .cloned()
+        .collect()
+}
+
 /// Give `permits` back for a later request: the one that took them was
 /// proven, by `outcome`, to have sent nothing, a typing command's check
 /// included, which only judges.

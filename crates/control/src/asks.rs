@@ -349,6 +349,21 @@ impl Asks {
         self.save_permits(&kept)
     }
 
+    /// The permits of `session` in host `process` still in force at `now`,
+    /// left in the store.
+    #[must_use]
+    pub fn permits_of(
+        &self,
+        session: &str,
+        process: Option<atlas_core::process::Instance>,
+        now: u64,
+    ) -> Vec<Permit> {
+        self.permits(now)
+            .into_iter()
+            .filter(|permit| permit.session == session && permit.process == process)
+            .collect()
+    }
+
     /// The permits still in force at `now`.
     fn permits(&self, now: u64) -> Vec<Permit> {
         fs::read(self.folder.join("permits"))
