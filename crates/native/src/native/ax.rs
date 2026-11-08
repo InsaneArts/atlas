@@ -29,6 +29,8 @@ pub(crate) use atlas_core::screen::elements::{Element, Limits};
 pub(crate) use atlas_core::screen::geometry::Bounds;
 pub(super) use bring::{bring, check_application, described, target_application, title_bar};
 pub(super) use ffi::act;
+#[cfg(test)]
+pub(super) use keyboard::ScriptedApp;
 pub(super) use keyboard::{
     Asked, Focused, Judged, Keyboard, Status, Unread, Within, frontmost, keyboard, password_page,
     remaining,

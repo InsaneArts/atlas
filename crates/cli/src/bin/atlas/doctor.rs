@@ -7,6 +7,7 @@ use atlas_client::{
 };
 use atlas_core::host::{HostSession, Key};
 use serde_json::{Value, json};
+use std::io::IsTerminal;
 
 /// Doctor's check that no change's outcome is unknown: while one is, Atlas
 /// refuses every agent's action until the helper is recovered.
@@ -154,9 +155,9 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
         {
             report["files"] = json!(files);
         }
-        // Account names are the person's: their terminal alone, never JSON an
-        // agent could read, verbose or not.
-        if ui::human()
+        // Account names are the person's: only when the person asks, in
+        // text on a terminal, never in output an agent could read.
+        if shows_accounts(asking, ui::human(), std::io::stdout().is_terminal())
             && let atlas_client::sign_ins::Listed::Accounts(accounts) =
                 atlas_client::sign_ins::listed()
         {
@@ -281,6 +282,12 @@ fn pending_report(
 /// Who asks doctor: the person from Atlas, or at a terminal they type in
 /// with no host session; otherwise an agent, of `session` when it has one.
 /// How the output is printed says nothing of who reads it.
+/// Whether doctor lists the helper's accounts: for the person asking, in
+/// text, on a terminal, and never otherwise.
+fn shows_accounts(asking: Asker<'_>, text: bool, terminal: bool) -> bool {
+    asking == Asker::Person && text && terminal
+}
+
 fn asker(actor: Actor, session: Option<&Key>, interactive: bool) -> Asker<'_> {
     match (actor, session) {
         (Actor::Viewer, _) => Asker::Person,

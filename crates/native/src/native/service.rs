@@ -87,6 +87,9 @@ struct Service {
     /// control, by their lease, until they give it back: the app and the
     /// page's host, never what was typed.
     seen: Arc<std::sync::Mutex<Option<(String, Value)>>>,
+    /// How a password field is looked for: the Mac's Accessibility, or a
+    /// test's script.
+    look: Arc<dyn PasswordLook>,
 }
 
 /// A file by path and (device, inode).
@@ -498,6 +501,10 @@ impl Service {
         let engine = self.engine.clone().lock_owned().await;
         let gate = self.gate.clone();
         let seen = self.seen.clone();
+        let look = self.look.clone();
+        // Who the batch was admitted for, kept with it: a Give Back that
+        // lands while it ends still finds what the person typed into.
+        let person = grant.person().map(str::to_owned);
         let runtime = tokio::runtime::Handle::current();
         let outcome = self
             .operations
@@ -517,7 +524,7 @@ impl Service {
                     // Part of the batch's own work, so giving control back
                     // waits for it before it reads what was seen.
                     if typed && result.is_ok() {
-                        note_password(engine.grant.as_ref(), &seen);
+                        note_password(person.as_deref(), &*look, &seen);
                     }
                     engine.target = None;
                     engine.keep_while_held(acting);
@@ -621,30 +628,56 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
 /// may take.
 const PASSWORD_READ: Duration = Duration::from_millis(250);
 
-/// After keys or typing under `grant`: while that same grant is the person's
-/// and holds control, when keyboard focus is in a password field, remember
-/// its app and page for the grant's owner, in `seen`. One deadline covers
-/// every read; nothing typed is read, and an agent's input is never looked
-/// at.
-fn note_password(grant: Option<&Grant>, seen: &std::sync::Mutex<Option<(String, Value)>>) {
-    let Some(owner) = grant.and_then(Grant::person) else {
+/// After the person's keys or typing, admitted for their lease `person`
+/// (none for an agent's batch, which is never looked at): when keyboard
+/// focus is in a password field, remember its app and page for that lease,
+/// in `seen`. One deadline covers the whole look, and nothing typed is read.
+fn note_password(
+    person: Option<&str>,
+    look: &dyn PasswordLook,
+    seen: &std::sync::Mutex<Option<(String, Value)>>,
+) {
+    let Some(owner) = person else {
         return;
     };
     let deadline = std::time::Instant::now() + PASSWORD_READ;
-    let left = || super::ax::remaining(deadline, std::time::Instant::now()).ok();
-    let read = || {
-        let pid = super::ax::focused_pid(left()?).ok()??;
-        let page = super::ax::password_page(pid, left()?).ok()??;
-        let app = super::apps::bundle_id(pid)?;
-        Some(json!({
-            "app": app,
-            "name": super::apps::name(pid),
-            "host": page.as_deref().and_then(page_host),
-        }))
-    };
-    if let (Some(value), Ok(mut seen)) = (read(), seen.lock()) {
+    if let (Some(value), Ok(mut seen)) = (look.look(deadline), seen.lock()) {
         *seen = Some((owner.to_owned(), value));
     }
+}
+
+/// Where a password field is looked for: the app with keyboard focus, and
+/// the page its focused password field sits in.
+pub(super) trait PasswordLook: Send + Sync {
+    /// The app and page of the focused password field, by `deadline`; none
+    /// when focus is elsewhere or the look doesn't finish in time.
+    fn look(&self, deadline: std::time::Instant) -> Option<Value>;
+}
+
+/// The Mac's own Accessibility.
+pub(super) struct LiveLook;
+
+impl PasswordLook for LiveLook {
+    fn look(&self, deadline: std::time::Instant) -> Option<Value> {
+        let left = || super::ax::remaining(deadline, std::time::Instant::now()).ok();
+        let pid = super::ax::focused_pid(left()?).ok()??;
+        let page = super::ax::password_page(pid, left()?).ok()??;
+        Some(seen_at(
+            &super::apps::bundle_id(pid)?,
+            super::apps::name(pid),
+            page.as_deref(),
+        ))
+    }
+}
+
+/// What the helper saw: the app by its bundle identifier and name, and the
+/// host of the page's `address`, never the address itself.
+pub(super) fn seen_at(app: &str, name: Option<String>, address: Option<&str>) -> Value {
+    json!({
+        "app": app,
+        "name": name,
+        "host": address.and_then(page_host),
+    })
 }
 
 /// The host of a web page's address, lowercased: only for `http` and
@@ -732,6 +765,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         stop_marker,
         activity,
         seen: Arc::default(),
+        look: Arc::new(LiveLook),
     });
     service.listen(&listener, controller_uid).await
 }

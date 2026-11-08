@@ -66,6 +66,7 @@ fn service(marker: &std::path::Path) -> super::Service {
         stop_marker: marker.to_owned(),
         activity: marker.with_extension("activity"),
         seen: Arc::default(),
+        look: Arc::new(super::LiveLook),
     }
 }
 
@@ -3884,6 +3885,16 @@ fn display_epoch() -> atlas_core::session::InputEpoch {
 
 /// A service whose engine journals into `directory` and posts only to `tap`.
 fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc<super::Service> {
+    looking_service(directory, tap, gate, Arc::new(super::LiveLook))
+}
+
+/// [`tapped_service`], looking for password fields through `look`.
+fn looking_service(
+    directory: &std::path::Path,
+    tap: Tap,
+    gate: Arc<Gate>,
+    look: Arc<dyn super::PasswordLook>,
+) -> Arc<super::Service> {
     let epoch = display_epoch();
     let mut engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
     engine.activity = Some(directory.join("input.activity"));
@@ -3899,6 +3910,7 @@ fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc
         stop_marker: directory.join("stopped"),
         activity: directory.join("input.activity"),
         seen: Arc::default(),
+        look,
     })
 }
 
@@ -4357,29 +4369,6 @@ fn a_pages_host_is_read_from_its_address_and_nothing_else() {
 }
 
 #[test]
-fn only_the_same_persons_grant_still_holding_control_is_looked_at_for_a_password() {
-    let gate = Arc::new(Gate::default());
-    let agent = atlas_core::files::token();
-    let grant = gate.acquire(&agent, super::Who::Agent).unwrap();
-    assert_eq!(grant.person(), None, "an agent's input is never looked at");
-    let seen = std::sync::Mutex::new(None);
-    super::note_password(Some(&grant), &seen);
-    assert!(seen.lock().unwrap().is_none());
-    gate.cancel(Some(&agent)).unwrap();
-    drop(grant);
-
-    let person = atlas_core::files::token();
-    let grant = gate.acquire(&person, super::Who::Person).unwrap();
-    assert_eq!(grant.person(), Some(person.as_str()));
-    gate.cancel(Some(&person)).unwrap();
-    assert_eq!(
-        grant.person(),
-        None,
-        "a grant that no longer holds control is not the person's now"
-    );
-}
-
-#[test]
 fn what_the_person_typed_a_password_into_is_given_back_once_to_their_lease_only() {
     let directory = tempfile::tempdir().unwrap();
     let service = service(&directory.path().join("stopped"));
@@ -4389,4 +4378,138 @@ fn what_the_person_typed_a_password_into_is_given_back_once_to_their_lease_only(
     assert_eq!(service.take_seen("another-lease"), None);
     assert_eq!(service.take_seen("person-lease"), Some(seen));
     assert_eq!(service.take_seen("person-lease"), None);
+}
+
+/// The password the person types in the tests below, which must reach no reply.
+const CANARY: &str = "hunter2-canary-73a9";
+
+/// A scripted Mac where keyboard focus is in a password field holding [`CANARY`], on a page in Chrome whose address
+/// carries it too; `before` runs as the look starts.
+struct ScriptedLook {
+    app: std::sync::Mutex<crate::native::ax::ScriptedApp>,
+    before: Box<dyn Fn() + Send + Sync>,
+}
+
+impl ScriptedLook {
+    fn new(before: impl Fn() + Send + Sync + 'static) -> Self {
+        let app = crate::native::ax::ScriptedApp::default()
+            .names(0, "AXFocusedUIElement", 4)
+            .text(4, "AXRole", "AXTextField")
+            .text(4, "AXSubrole", "AXSecureTextField")
+            .text(4, "AXValue", CANARY)
+            .names(4, "AXParent", 3)
+            .text(3, "AXRole", "AXWebArea")
+            .text(
+                3,
+                "AXURL",
+                &format!("https://github.com/login?password={CANARY}"),
+            );
+        Self {
+            app: std::sync::Mutex::new(app),
+            before: Box::new(before),
+        }
+    }
+}
+
+impl super::PasswordLook for ScriptedLook {
+    fn look(&self, deadline: std::time::Instant) -> Option<Value> {
+        (self.before)();
+        let page = self.app.lock().unwrap().password_page(deadline).ok()??;
+        Some(super::seen_at(
+            "com.google.Chrome",
+            Some("Google Chrome".to_owned()),
+            page.as_deref(),
+        ))
+    }
+}
+
+/// The person types [`CANARY`] under their lease and gives control back; `before` runs as the look starts. The
+/// input's reply, the release's reply and what the look asked for.
+async fn type_the_canary_and_give_back(cancel_first: bool) -> (Value, Value, Vec<&'static str>) {
+    let owner = "b".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, _posted) = Tap::new();
+    let gate = Arc::new(Gate::default());
+    // A Give Back landing between the typing and the look: the grant is cancelled before the look starts.
+    let cancelled = gate.clone();
+    let token = owner.clone();
+    let look = Arc::new(ScriptedLook::new(move || {
+        if cancel_first {
+            cancelled.cancel(Some(&token)).unwrap();
+        }
+    }));
+    let service = looking_service(directory.path(), tap, gate, look.clone());
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Person, LASTING)
+        .unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let typed = vec![serde_json::from_value(json!({"type": "type", "text": CANARY})).unwrap()];
+    let input = service
+        .input(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(typed),
+            Ok(None),
+            false,
+            &phase,
+        )
+        .await
+        .unwrap();
+    let released = service.release(owner, &phase).await.unwrap();
+    let asked = look.app.lock().unwrap().asked.clone();
+    (input, released, asked)
+}
+
+#[tokio::test]
+async fn a_password_the_person_types_reaches_no_reply_and_only_the_pages_host_is_given_back() {
+    let (input, released, asked) = type_the_canary_and_give_back(false).await;
+    assert_eq!(input["ok"], true);
+    assert_eq!(released["signedIn"]["app"], "com.google.Chrome");
+    assert_eq!(released["signedIn"]["host"], "github.com");
+    for reply in [&input, &released] {
+        assert!(!reply.to_string().contains(CANARY), "{reply}");
+    }
+    assert!(
+        !asked.contains(&"AXValue"),
+        "the field's value is never read"
+    );
+}
+
+#[tokio::test]
+async fn a_give_back_landing_as_the_batch_ends_still_finds_what_the_person_typed_into() {
+    let (_, released, _) = type_the_canary_and_give_back(true).await;
+    assert_eq!(released["signedIn"]["host"], "github.com");
+    assert!(!released.to_string().contains(CANARY));
+}
+
+#[tokio::test]
+async fn an_agents_typing_is_never_looked_at_for_a_password() {
+    let owner = "a".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, _posted) = Tap::new();
+    let look = Arc::new(ScriptedLook::new(|| {
+        panic!("an agent's batch was looked at")
+    }));
+    let service = looking_service(directory.path(), tap, Arc::default(), look);
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let typed = vec![serde_json::from_value(json!({"type": "type", "text": "hello"})).unwrap()];
+    let input = service
+        .input(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(typed),
+            Ok(None),
+            false,
+            &phase,
+        )
+        .await
+        .unwrap();
+    assert_eq!(input["ok"], true);
+    let released = service.release(owner, &phase).await.unwrap();
+    assert_eq!(released.get("signedIn"), None);
 }

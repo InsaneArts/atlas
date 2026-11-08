@@ -309,3 +309,18 @@ fn an_agent_is_not_told_to_log_the_helper_out_but_keeps_the_details() {
         );
     }
 }
+
+#[test]
+fn account_names_show_only_to_the_person_in_text_on_a_terminal() {
+    let own = Key::of(Host::Claude, "own");
+    assert!(shows_accounts(Asker::Person, true, true));
+    assert!(
+        !shows_accounts(Asker::Person, true, false),
+        "piped, where an agent may read it"
+    );
+    assert!(!shows_accounts(Asker::Person, false, true), "JSON");
+    assert!(
+        !shows_accounts(Asker::Agent(Some(&own)), true, true),
+        "an agent asking"
+    );
+}

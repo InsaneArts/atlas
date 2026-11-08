@@ -614,6 +614,77 @@ pub(super) fn secure_page<A: Ask>(
     Ok(Some(None))
 }
 
+/// A scripted app for tests elsewhere in the native layer: element 0 is the
+/// app, and each element answers its attributes as scripted, absent
+/// otherwise. It keeps every attribute asked for, so a test can prove what
+/// was never read.
+#[cfg(test)]
+#[derive(Default)]
+pub(in crate::native) struct ScriptedApp {
+    answers: std::collections::HashMap<(usize, &'static str), Answer<usize>>,
+    pub(in crate::native) asked: Vec<&'static str>,
+}
+
+#[cfg(test)]
+impl ScriptedApp {
+    /// `element`'s `attribute` holds `text`.
+    pub(in crate::native) fn text(
+        mut self,
+        element: usize,
+        attribute: &'static str,
+        text: &str,
+    ) -> Self {
+        self.answers
+            .insert((element, attribute), Answer::Text(text.to_owned()));
+        self
+    }
+
+    /// `element`'s `attribute` names element `other`.
+    pub(in crate::native) fn names(
+        mut self,
+        element: usize,
+        attribute: &'static str,
+        other: usize,
+    ) -> Self {
+        self.answers
+            .insert((element, attribute), Answer::Element(other));
+        self
+    }
+
+    /// [`secure_page`] in this app, by `deadline`.
+    pub(in crate::native) fn password_page(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<Option<Option<String>>> {
+        secure_page(&mut *self, &0, deadline)
+    }
+}
+
+#[cfg(test)]
+impl Ask for &mut ScriptedApp {
+    type Element = usize;
+
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn bound(&mut self, _: &usize, _: Duration) -> bool {
+        true
+    }
+
+    fn ask(&mut self, element: &usize, attribute: &'static str) -> Answer<usize> {
+        self.asked.push(attribute);
+        self.answers
+            .get(&(*element, attribute))
+            .cloned()
+            .unwrap_or(Answer::Absent)
+    }
+
+    fn owner(&mut self, _: &usize) -> Option<i64> {
+        Some(812)
+    }
+}
+
 /// [`secure_page`] in app `pid`, waiting at most `timeout` in all.
 pub(in crate::native) fn password_page(
     pid: i64,
