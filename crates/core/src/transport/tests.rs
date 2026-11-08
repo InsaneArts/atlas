@@ -132,7 +132,7 @@ async fn other_identity_failures_keep_their_context_and_cause_without_retrying()
 #[tokio::test(start_paused = true)]
 async fn connection_failures_are_never_retried_as_identity_failures() {
     let transport = endpoint();
-    for errno in [libc::ENOTCONN, libc::EACCES, libc::ECONNREFUSED] {
+    for errno in [libc::ENOTCONN, libc::ENOENT, libc::ECONNREFUSED] {
         let attempts = Cell::new(0);
         let error = timeout(
             Duration::from_secs(1),
@@ -156,6 +156,228 @@ async fn connection_failures_are_never_retried_as_identity_failures() {
         assert!(error.error.contains(transport.path.to_str().unwrap()));
         assert_eq!(io_cause(&error).raw_os_error(), Some(errno));
     }
+}
+
+/// A transport whose deadline leaves room for every pause after a denied
+/// connection.
+fn patient() -> Transport {
+    Transport {
+        timeout: Duration::from_secs(5),
+        ..endpoint()
+    }
+}
+
+/// A connector that the kernel denies `denials` times before it connects.
+fn denied(
+    attempts: &Cell<usize>,
+    denials: usize,
+) -> impl FnMut() -> std::future::Ready<io::Result<()>> {
+    move || {
+        attempts.set(attempts.get() + 1);
+        std::future::ready(if attempts.get() > denials {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(libc::EACCES))
+        })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_denied_connection_that_then_succeeds_connects() {
+    let transport = patient();
+    let started = Instant::now();
+    let attempts = Cell::new(0);
+    timeout(
+        Duration::from_secs(1),
+        transport.connect_verified(started + transport.timeout, denied(&attempts, 1), |()| {
+            Ok(transport.peer_uid)
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(started.elapsed(), super::DENIED_PAUSES[0]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_connection_denied_throughout_fails_with_the_same_error_after_the_bounded_wait() {
+    let transport = patient();
+    let started = Instant::now();
+    let attempts = Cell::new(0);
+    let error = timeout(
+        Duration::from_secs(1),
+        transport.connect_verified(
+            started + transport.timeout,
+            denied(&attempts, usize::MAX),
+            |()| panic!("a denied connection has no peer to verify"),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+
+    let waited: Duration = super::DENIED_PAUSES.iter().sum();
+    assert_eq!(attempts.get(), super::DENIED_PAUSES.len() + 1);
+    assert_eq!(started.elapsed(), waited);
+    assert!(waited <= Duration::from_millis(200));
+    let unchanged = refused(&transport.path, io::Error::from_raw_os_error(libc::EACCES));
+    assert_eq!(
+        (error.code, error.error.as_str()),
+        (unchanged.code, unchanged.error.as_str())
+    );
+    assert_eq!(
+        error.error,
+        "Could not connect to socket /tmp/atlas-test.sock: Permission denied (os error 13)"
+    );
+    assert!(!error.uncertain);
+    assert_eq!(io_cause(&error).raw_os_error(), Some(libc::EACCES));
+}
+
+#[tokio::test(start_paused = true)]
+async fn other_connection_failures_are_returned_at_once_without_a_retry() {
+    let transport = patient();
+    for (errno, code) in [
+        (libc::ENOENT, Code::Io),
+        (libc::ECONNREFUSED, Code::Io),
+        (libc::ENOTCONN, Code::Io),
+        (libc::EPERM, Code::Blocked),
+    ] {
+        let started = Instant::now();
+        let attempts = Cell::new(0);
+        let error = timeout(
+            Duration::from_secs(1),
+            transport.connect_verified(
+                started + transport.timeout,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    std::future::ready(Err::<(), _>(io::Error::from_raw_os_error(errno)))
+                },
+                |()| panic!("a failed connection has no peer to verify"),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(started.elapsed(), Duration::ZERO);
+        assert_eq!(error.code, code);
+        assert_eq!(io_cause(&error).raw_os_error(), Some(errno));
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_denied_retry_never_runs_past_the_deadline() {
+    for (budget, tries) in [(25, 1), (60, 2), (100, 3), (175, 3), (176, 4)] {
+        let transport = Transport {
+            timeout: Duration::from_millis(budget),
+            ..endpoint()
+        };
+        let started = Instant::now();
+        let deadline = started + transport.timeout;
+        let attempts = Cell::new(0);
+        let error = timeout(
+            Duration::from_secs(1),
+            transport.connect_verified(deadline, denied(&attempts, usize::MAX), |()| {
+                panic!("a denied connection has no peer to verify")
+            }),
+        )
+        .await
+        .unwrap()
+        .unwrap_err();
+
+        assert_eq!(attempts.get(), tries, "with {budget} ms");
+        assert!(Instant::now() < deadline, "with {budget} ms");
+        assert_eq!(error.code, Code::Io);
+        assert!(error.error.starts_with("Could not connect to socket"));
+        assert_eq!(io_cause(&error).raw_os_error(), Some(libc::EACCES));
+    }
+}
+
+#[tokio::test]
+async fn no_write_happens_before_a_successful_connect() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let (_dir, listener, transport) = listening();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut peer = BufReader::new(stream);
+        let mut request = String::new();
+        peer.read_line(&mut request).await.unwrap();
+        peer.get_mut().write_all(b"{\"ok\":true}\n").await.unwrap();
+        let mut rest = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut peer, &mut rest)
+            .await
+            .unwrap();
+        let again = tokio::time::timeout(Duration::from_millis(50), listener.accept()).await;
+        (request, rest, again.is_err())
+    });
+    let attempts = Cell::new(0);
+    let started = Instant::now();
+    let deadline = started + transport.timeout;
+    let stream = transport
+        .connect_verified(
+            deadline,
+            || {
+                attempts.set(attempts.get() + 1);
+                let denied = attempts.get() == 1;
+                let path = transport.path.clone();
+                async move {
+                    if denied {
+                        return Err(io::Error::from_raw_os_error(libc::EACCES));
+                    }
+                    tokio::net::UnixStream::connect(&path).await
+                }
+            },
+            |stream| stream.peer_cred().map(|cred| cred.uid()),
+        )
+        .await
+        .unwrap();
+    let reply = super::Pending {
+        stream,
+        deadline,
+        started,
+    }
+    .dispatch(&json!({"op": "status"}))
+    .await
+    .unwrap()
+    .finish()
+    .await
+    .unwrap();
+    let (request, rest, alone) = server.await.unwrap();
+
+    assert_eq!(attempts.get(), 2);
+    assert_eq!(reply["ok"], true);
+    assert_eq!(request, "{\"op\":\"status\"}\n");
+    assert!(rest.is_empty(), "the request was sent once");
+    assert!(alone, "only the successful connection reached the peer");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pause_that_wakes_after_the_deadline_never_connects_again() {
+    let started = Instant::now();
+    let deadline = started + Duration::from_millis(30);
+    let attempts = Cell::new(0);
+    let mut pauses = super::DENIED_PAUSES.into_iter();
+    let mut connect = denied(&attempts, usize::MAX);
+    let retrying = super::retry_denied(deadline, &mut pauses, &mut connect);
+    // A loaded runtime runs the first pause late, past the deadline it
+    // ended before.
+    let load = async {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::advance(Duration::from_millis(20)).await;
+    };
+    let (error, ()) = timeout(Duration::from_secs(1), async {
+        tokio::join!(retrying, load)
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(attempts.get(), 1);
+    assert!(started.elapsed() > deadline - started);
+    assert_eq!(error.unwrap_err().raw_os_error(), Some(libc::EACCES));
 }
 
 #[tokio::test(start_paused = true)]
