@@ -322,7 +322,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
     ));
     say("");
 
-    let linked = setup::link_command()?;
+    let linked = setup::installed_app::link_installed_command()?;
     done(
         "Atlas.app",
         &atlas_core::config::tilde(atlas_core::app_bundle::installed_app()?),
