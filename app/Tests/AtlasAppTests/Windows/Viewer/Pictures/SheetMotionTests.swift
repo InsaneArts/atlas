@@ -79,7 +79,8 @@ struct SheetMotionTests {
       host.show(state, animatesArrivals: false)
       host.render()
       var last = try Self.behind(host)
-      let end = held + Self.settledAfter
+      // Past the close and the window's coming back after it.
+      let end = held + Self.settledAfter * 2
       while held < end {
         await afterQueuedWork()
         held += Self.sampleEvery
