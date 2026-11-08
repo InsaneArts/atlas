@@ -243,13 +243,15 @@ pub fn facts(output: &Path, before: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Packed RGB pixels of the helper's screen, three bytes each, and when
-/// they were taken, in nanoseconds since 1970.
+/// Packed RGB pixels of the helper's screen, three bytes each, when they
+/// were taken, in nanoseconds since 1970, and the display they show, in
+/// the points elements are placed in.
 pub(crate) struct Raw {
     pub(crate) rgb: Vec<u8>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) at: u128,
+    pub(crate) display: (f64, f64),
 }
 
 /// How many pictures this process is saving, and the signal that one ended.

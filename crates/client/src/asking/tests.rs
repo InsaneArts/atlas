@@ -550,3 +550,16 @@ async fn a_typed_step_the_person_allowed_after_a_stop_is_typed_once_without_aski
         "spent by the text it covered"
     );
 }
+
+#[test]
+fn a_frame_on_a_display_wider_than_its_picture_is_drawn_in_the_pictures_pixels() {
+    let frame = json!({"x": 1500.0, "y": 300.0, "width": 60.0, "height": 30.0});
+    assert_eq!(
+        in_picture(&frame, (1920.0, 1080.0), (1280, 720)),
+        json!({"x": 1000.0, "y": 200.0, "width": 40.0, "height": 20.0})
+    );
+    assert_eq!(
+        in_picture(&Value::Null, (1920.0, 1080.0), (1280, 720)),
+        Value::Null
+    );
+}

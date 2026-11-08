@@ -511,12 +511,32 @@ fn keep_picture(
     frame: &Value,
 ) -> Result<()> {
     let (width, height) = (raw.width as usize, raw.height as usize);
-    let (jpeg, _, _) = crate::helper_info::jpeg_rgb(
+    let (jpeg, shown_width, shown_height) = crate::helper_info::jpeg_rgb(
         &raw.rgb,
         (width, height, width.saturating_mul(3)),
         (crate::before::SIDE, crate::before::QUALITY),
     )?;
-    asks.keep_picture(id, &jpeg, frame)
+    let size = (shown_width, shown_height);
+    asks.keep_picture(id, &jpeg, &in_picture(frame, raw.display, size), size)
+}
+
+/// `frame`, in the points of a display of `display` size, in the pixels of
+/// its picture of `picture` size, as the person's app draws it there.
+fn in_picture(frame: &Value, display: (f64, f64), picture: (u32, u32)) -> Value {
+    let (Some(x), Some(y), Some(width), Some(height)) = (
+        frame["x"].as_f64(),
+        frame["y"].as_f64(),
+        frame["width"].as_f64(),
+        frame["height"].as_f64(),
+    ) else {
+        return Value::Null;
+    };
+    if display.0 <= 0.0 || display.1 <= 0.0 {
+        return Value::Null;
+    }
+    let across = f64::from(picture.0) / display.0;
+    let down = f64::from(picture.1) / display.1;
+    json!({"x": x * across, "y": y * down, "width": width * across, "height": height * down})
 }
 
 /// Whether the agent session that asked `ask` still waits on it: its host

@@ -413,8 +413,10 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
             )
             .unwrap();
         // A rerun's newer one too.
-        asks.keep_picture(&id, b"jpeg", &frame(10.0)).unwrap();
-        asks.keep_picture(&id, b"jpeg", &frame(20.0)).unwrap();
+        asks.keep_picture(&id, b"jpeg", &frame(10.0), (1280, 800))
+            .unwrap();
+        asks.keep_picture(&id, b"jpeg", &frame(20.0), (1280, 800))
+            .unwrap();
         let named = asks
             .open(now)
             .into_iter()
@@ -449,7 +451,7 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
         asks.open(now).iter().all(|ask| ask.picture.is_none()),
         "no card names it"
     );
-    asks.keep_picture(&answered[0], b"jpeg", &frame(10.0))
+    asks.keep_picture(&answered[0], b"jpeg", &frame(10.0), (1280, 800))
         .unwrap();
     assert!(
         pictures_of(folder.path(), &answered[0]).is_empty(),
@@ -467,7 +469,8 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
         pictures_of(folder.path(), &ended).is_empty(),
         "its session ended"
     );
-    asks.keep_picture(&ended, b"jpeg", &frame(10.0)).unwrap();
+    asks.keep_picture(&ended, b"jpeg", &frame(10.0), (1280, 800))
+        .unwrap();
     assert!(
         pictures_of(folder.path(), &ended).is_empty(),
         "never kept for one that is down"
@@ -485,7 +488,7 @@ fn a_reader_never_finds_a_picture_beside_a_frame_that_isnt_its_own() {
         scope.spawn(|| {
             for n in 0..200 {
                 let x = f64::from(n);
-                asks.keep_picture(&id, x.to_string().as_bytes(), &frame(x))
+                asks.keep_picture(&id, x.to_string().as_bytes(), &frame(x), (1280, 800))
                     .unwrap();
             }
             done.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -526,7 +529,8 @@ fn a_rerun_that_joins_replaces_the_picture_and_its_frame_together() {
         asks.ask(ask, now).unwrap()
     };
     let id = asked(10.0);
-    asks.keep_picture(&id, b"first", &frame(10.0)).unwrap();
+    asks.keep_picture(&id, b"first", &frame(10.0), (1280, 800))
+        .unwrap();
     // The element moved; the rerun that joins brings both anew.
     assert_eq!(asked(300.0), id);
     assert_eq!(
@@ -534,7 +538,8 @@ fn a_rerun_that_joins_replaces_the_picture_and_its_frame_together() {
         frame(10.0),
         "not one alone"
     );
-    asks.keep_picture(&id, b"second", &frame(300.0)).unwrap();
+    asks.keep_picture(&id, b"second", &frame(300.0), (1280, 800))
+        .unwrap();
     assert_eq!(asks.open(now)[0].question["frame"], frame(300.0));
     let name = asks.open(now)[0].picture.clone().unwrap();
     assert_eq!(fs::read(asks.folder().join(name)).unwrap(), b"second");
@@ -560,7 +565,10 @@ fn a_question_that_runs_out_while_its_picture_waits_for_the_lock_goes_and_gets_n
     let publishing = std::thread::spawn({
         let asks = asks.clone();
         let id = id.clone();
-        move || asks.keep_picture(&id, b"jpeg", &frame(10.0)).unwrap()
+        move || {
+            asks.keep_picture(&id, b"jpeg", &frame(10.0), (1280, 800))
+                .unwrap()
+        }
     });
     // It runs out while the publication waits.
     std::thread::sleep(std::time::Duration::from_millis(300));
@@ -571,4 +579,22 @@ fn a_question_that_runs_out_while_its_picture_waits_for_the_lock_goes_and_gets_n
         !folder.path().join(format!("h.asks/{id}.json")).exists(),
         "and the question itself is gone"
     );
+}
+
+#[test]
+fn a_picture_write_cut_short_is_gone_with_its_ask() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let now = atlas_core::time::now_ms();
+    let id = asks.ask(question("s1", "b1"), now).unwrap();
+    asks.keep_picture(&id, b"jpeg", &frame(10.0), (1280, 800))
+        .unwrap();
+    let shown = &asks.open(now)[0].question;
+    assert_eq!(shown["pictureSize"], json!({"width": 1280, "height": 800}));
+    // A writer killed between writing and placing its picture.
+    let cut = asks.folder().join(format!(".{id}-0123abcd.jpg.4567ef"));
+    fs::write(&cut, b"private").unwrap();
+    asks.answer(&id, Answer::Deny, true, now).unwrap();
+    assert!(!cut.exists(), "taken with the question's own");
+    assert!(pictures_of(folder.path(), &id).is_empty());
 }

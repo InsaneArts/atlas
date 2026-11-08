@@ -319,6 +319,7 @@ async fn frame(
         width,
         height,
         at,
+        display: (epoch.width, epoch.height),
     })
 }
 

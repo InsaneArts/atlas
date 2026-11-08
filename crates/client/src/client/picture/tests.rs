@@ -685,7 +685,16 @@ async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_wh
         let open = asks.open(atlas_core::time::now_ms());
         let picture = open[0].picture.clone().expect("the question has a picture");
         assert!(asks.folder().join(&picture).exists(), "keeping {keeping}");
-        assert_eq!(open[0].question["frame"], frame, "where the element is");
+        // Where the element is, in the picture's own pixels: the display
+        // here is 100 points across.
+        let size = &open[0].question["pictureSize"];
+        let across = size["width"].as_f64().unwrap() / 100.0;
+        assert!(across > 0.0, "{size}");
+        assert_eq!(
+            open[0].question["frame"]["x"].as_f64(),
+            Some(10.0 * across),
+            "where the element is"
+        );
         assert!(
             pictures(&client).is_empty(),
             "activity keeps none: {keeping}"

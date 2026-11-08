@@ -406,14 +406,21 @@ impl Asks {
     }
 
     /// Keep `jpeg` as ask `id`'s picture, private, with `frame`, where its
-    /// element is in it, both at once, while the ask is up and unanswered:
+    /// element is in it in the picture's pixels, and the picture's size in
+    /// them, all at once, while the ask is up and unanswered:
     /// it goes with the ask, however that ends, and with the person's
     /// answer.
     ///
     /// # Errors
     ///
     /// Returns file errors; the ask then has no picture.
-    pub fn keep_picture(&self, id: &str, jpeg: &[u8], frame: &Value) -> Result<()> {
+    pub fn keep_picture(
+        &self,
+        id: &str,
+        jpeg: &[u8],
+        frame: &Value,
+        (width, height): (u32, u32),
+    ) -> Result<()> {
         let _locked = self.lock()?;
         // Read once the lock is held: a wait for it may outlast the ask.
         let now = atlas_core::time::now_ms();
@@ -437,6 +444,7 @@ impl Asks {
         atlas_core::files::save_private(&path, jpeg)?;
         let before = ask.picture.replace(name.clone());
         ask.question["frame"] = frame.clone();
+        ask.question["pictureSize"] = serde_json::json!({"width": width, "height": height});
         let published = atlas_core::files::save_private(
             &self.folder.join(format!("{id}.json")),
             &serde_json::to_vec(&ask)?,
@@ -458,13 +466,16 @@ impl Asks {
             return;
         };
         let prefix = format!("{id}-");
+        // A write cut short leaves its temporary file, `.<name>.<token>`.
+        let cut = format!(".{id}-");
         for entry in entries.flatten() {
             let name = entry.file_name();
             let Some(name) = name.to_str() else {
                 continue;
             };
-            let its = name.ends_with(".jpg")
-                && (name.starts_with(&prefix) || name == format!("{id}.jpg"));
+            let its = (name.ends_with(".jpg")
+                && (name.starts_with(&prefix) || name == format!("{id}.jpg")))
+                || (name.starts_with(&cut) && name.contains(".jpg."));
             if its && Some(name) != keep {
                 // One that can't be removed now goes at its ask's next cleanup.
                 let _ = fs::remove_file(entry.path());
