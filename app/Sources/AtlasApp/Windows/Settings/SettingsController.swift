@@ -69,8 +69,8 @@ final class SettingsController {
       icons: icons,
       notify: notify,
       sound: actions.sound.button,
-      pictures: pictures,
       files: files,
+      pictures: pictures,
       facts: SettingsFacts(
         status: helper.status,
         connecting: helper.connecting,
