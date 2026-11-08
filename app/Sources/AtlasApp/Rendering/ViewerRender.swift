@@ -63,6 +63,8 @@
         sample("72-activity-replay", PreviewStates.viewerActivityReplay),
         sample("73-picture-sheet", PreviewStates.viewerPictureSheet),
         sample("74-step-picture-sheet", PreviewStates.viewerStepPicture),
+        sample("75-sidebar-realistic", PreviewStates.viewerSidebarRealistic),
+        sample("76-activity-realistic", PreviewStates.viewerActivityRealistic),
       ]
     }
 
@@ -167,6 +169,7 @@
           ("overlay", PreviewStates.viewerSidebarOverlay, Self.shortWidths.hidden),
           ("many", PreviewStates.viewerSidebarMany, Self.shortWidths.whole),
           ("many-overlay", Self.overlaid(PreviewStates.viewerSidebarMany), Self.shortWidths.hidden),
+          ("realistic", PreviewStates.viewerActivityRealistic, Self.shortWidths.whole),
         ]
         .map { name, state, width -> PreviewState<ViewerState> in
           let size = CGSize(width: width, height: height)

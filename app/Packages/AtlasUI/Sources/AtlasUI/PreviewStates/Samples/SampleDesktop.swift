@@ -49,6 +49,14 @@
       drawn(id, key: "sign-in", scene: SampleSignInScene())
     }
 
+    /// A blank picture, black from edge to edge, as a screenshot of a locked or asleep display comes out, named `id`.
+    ///
+    /// - Parameter id: The picture's id, such as its file name.
+    /// - Returns: The picture, or nil should drawing it fail.
+    @MainActor public static func blank(_ id: String) -> DesktopPicture? {
+      drawn(id, key: "blank", scene: Color.black.frame(width: 576, height: 360))
+    }
+
     /// A scene drawn one pixel a point and kept under `key`, named `id`.
     ///
     /// - Parameters:
