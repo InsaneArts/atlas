@@ -9,7 +9,7 @@ use atlas_core::{
     actions::{self, Expect},
     error::{Code, Error, Holder, Result},
     session::{
-        ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
+        ASKS, ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
         NativeObservation, Observation, Session, TYPED_FIELDS,
     },
     transport::Transport,
@@ -364,6 +364,18 @@ impl Client {
         }
 
         let actions = actions?;
+        // An older input service would ignore the accounts and send without
+        // asking: while the person lists any, it must ask.
+        if lease.is_none()
+            && !observation.native.has_capability(ASKS)
+            && crate::asking::policy(self).is_some()
+        {
+            return Err(Error::new(
+                Code::Startup,
+                "The helper's input service can't ask the person before sending: run atlas \
+                 start-input, then try again",
+            ));
+        }
         if actions
             .actions()
             .iter()

@@ -23,6 +23,10 @@ use std::time::Instant;
 /// What an agent's input carries for the input service to judge it by:
 /// none while the person lists no account.
 pub(crate) fn policy(client: &Client) -> Option<Value> {
+    // Tests never read the person's own accounts on the Mac running them.
+    if cfg!(test) {
+        return None;
+    }
     policy_by(client, crate::sign_ins::listed())
 }
 
