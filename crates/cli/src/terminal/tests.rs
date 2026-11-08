@@ -4,6 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 mod focus;
 mod frame_health;
 mod scroll;
+mod service;
 mod shared;
 mod view;
 
@@ -361,6 +362,23 @@ fn mouse_phases_and_scroll_directions_match_native_input() {
         )
         .unwrap();
     }
+}
+
+/// Controlling, with no picture yet.
+fn controlling() -> watch::Sender<State> {
+    watch::channel(State {
+        revision: 0,
+        frame: None,
+        controlling: true,
+        paused: false,
+        phase: ControlPhase::Controlling,
+        view: viewport::Viewport::default(),
+        diagnostics: 0,
+        input_ack_ms: None,
+        last_frame_error: None,
+        message: String::new(),
+    })
+    .0
 }
 
 fn states() -> watch::Sender<State> {
