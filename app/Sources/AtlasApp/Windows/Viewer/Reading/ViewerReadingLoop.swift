@@ -270,7 +270,6 @@ final class ViewerReadingLoop {
       control.releaseControl(ViewerWords.releasedElsewhere)
     }
     viewer.forgetRecoveryOnceNoneNeeded()
-    viewer.noteActivitySeen()
     // Discover and refresh session history; the pane model decides when live sessions also need polling.
     viewer.panesModel.followSessions()
   }

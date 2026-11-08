@@ -2,12 +2,12 @@ import SwiftUI
 
 /// The helper's health, last in the sidebar: a dot in its tone and a few words, such as "Helper ready · atlas", every
 /// fact about the helper in its tooltip. A click opens the helper's commands: Check Again, Open Settings on Helper…,
-/// Recover…, Switch… and Log Out…; a faint capsule fills under the pointer. At the end of the Library folded into a
-/// row, the dot stands alone in a circle. VoiceOver reads the words, and offers the menu as a pop-up button's.
+/// Recover…, Switch… and Log Out…; a faint capsule fills under the pointer. In a short window the dot stands alone in a
+/// circle. VoiceOver reads the words, and offers the menu as a pop-up button's.
 struct SidebarHelperLine: View {
   /// The helper's health.
   let helper: ViewerHelperLine
-  /// Whether the dot stands alone in a circle, at the end of the Library folded into a row.
+  /// Whether the dot stands alone in a circle, as a short window leaves it.
   var isCompact = false
   /// Receives the command chosen.
   let send: @MainActor (ViewerEvent) -> Void
@@ -21,7 +21,7 @@ struct SidebarHelperLine: View {
     }
     .menuStyle(.button)
     .menuIndicator(.hidden)
-    .buttonStyle(.row(corner: isCompact ? ViewerLayout.libraryCircle / 2 : ViewerLayout.helperCorner))
+    .buttonStyle(.row(corner: isCompact ? ViewerLayout.helperCircle / 2 : ViewerLayout.helperCorner))
     .fixedSize()
     .help(Text(verbatim: helper.help.isEmpty ? helper.words : "\(helper.words)\n\(helper.help)"))
     .accessibilityLabel(Text(helper.words))
@@ -31,7 +31,7 @@ struct SidebarHelperLine: View {
   @ViewBuilder private var line: some View {
     if isCompact {
       dot
-        .frame(width: ViewerLayout.libraryCircle, height: ViewerLayout.libraryCircle)
+        .frame(width: ViewerLayout.helperCircle, height: ViewerLayout.helperCircle)
         .contentShape(Circle())
     } else {
       words

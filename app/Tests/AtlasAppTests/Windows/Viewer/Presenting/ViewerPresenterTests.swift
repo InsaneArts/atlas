@@ -230,14 +230,11 @@ struct ViewerPresenterTests {
     #expect(ViewerPresenter.state(snapshot).footer.latest.id == typing.id, "a longer composition updates in place")
   }
 
-  @Test(
-    "the screen in the corner of every list reads paused while the picture is",
-    arguments: [ViewerPlace.activity, .apps]
-  )
-  func theMiniScreenFollowsThePause(place: ViewerPlace) throws {
+  @Test("the screen in Activity's corner reads paused while the picture is")
+  func theMiniScreenFollowsThePause() throws {
     var snapshot = watching(try status(["overview": ["mode": "observing", "state": "idle"]]))
     snapshot.reading.picture = SampleDesktop.picture
-    snapshot.session.place = place
+    snapshot.session.place = .activity
     snapshot.session.paused = true
     #expect(ViewerPresenter.state(snapshot).mini?.isPaused == true)
     snapshot.session.paused = false

@@ -30,8 +30,6 @@
     case activityGlyphs = "activity-glyphs"
     /// Soft keycaps alone and in chords.
     case keycapsSoft = "keycaps-soft"
-    /// The Apps sample's cards in a grid, the front one raised, with their pictures, maps and tags.
-    case appCards = "app-cards"
     /// Activity's steps of every kind and mark.
     case activitySteps = "activity-steps"
     /// Activity's runs, folded with their problems and pictures, and open.

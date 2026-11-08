@@ -69,12 +69,9 @@
       var state = viewerSessionChosen
       state.header = viewerSessions.header
       state.sidebar.sessions = allSessions
-      state.sidebar.sessions.chosen = .one(SessionSamples.piKey)
       // Ended stays folded, its one chosen session still listed under it.
       state.sidebar.sessions.groups.append(ViewerSessionGroup(.ended, rows: [piEndedRow]))
       state.sidebar.sessions.endedCount = 1
-      // Claude Code opened the one app open, so Pi's Apps holds none.
-      state.sidebar.library = viewerLibrary(counts: [.apps: 0])
       return state
     }()
 

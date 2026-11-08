@@ -148,11 +148,8 @@ extension Color {
   static let groundSelected = Color(light: .white(1), dark: .rgb(0x343436))
   /// A row under the pointer: black at 0.035, or white at 0.035.
   static let fillRowHover = Color(light: .black(0.035), dark: .white(0.035))
-  /// A tile resting on the card, such as an open app's: black at 0.035, or white at 0.045.
+  /// A tile resting on the card, such as the panel's service note: black at 0.035, or white at 0.045.
   static let fillTile = Color(light: .black(0.035), dark: .white(0.045))
-  /// A tile raised off the card in place, such as the app in front: white under ``Elevation/selection``'s shadow, or
-  /// white at 0.10 with none.
-  static let fillTileRaised = Color(light: .white(1), dark: .white(0.1))
   /// A control's fill, such as a secondary capsule, a symbol tile or a hovered menu row: black at 0.05, or white at
   /// 0.08.
   static let fillControl = Color(light: .black(0.05), dark: .white(0.08))

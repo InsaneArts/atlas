@@ -1,8 +1,8 @@
 import AtlasService
 import Foundation
 
-/// Finds apps' icons on the person's side, in order: from the app itself while it is open, then from the icons kept
-/// between launches, then where its app is installed by bundle identifier, or for an app known only by name, as
+/// Finds apps' icons on the person's side, in order: from the icons kept between launches, then where its app is
+/// installed by bundle identifier, or for an app known only by name, as
 /// `<Name>.app` where apps are installed. Every icon read from an app is kept, a changed one replacing the old; what
 /// is not found is none, and its app draws its tile. A copy only the helper can read is found by its bundle
 /// identifier where the person has the same app installed, and is otherwise its tile.
@@ -11,15 +11,12 @@ nonisolated struct AppIconSource: Sendable {
   var store: AppIconStore
   /// The workspace's reads.
   var lookup: AppIconLookup
-  /// The person's home folder, for their own Applications folder.
-  var home: String
 
   /// Finds an icon, off the main actor.
   ///
   /// - Parameter want: The app whose icon is wanted.
   /// - Returns: The icon, or nil when none is found.
   @concurrent func find(_ want: AppIconWant) async -> AppIconFound? {
-    if let live = await live(want) { return live }
     var nameKey: String?
     if case .name(let name)? = AppIconKey(name: want.name) { nameKey = name }
     var id = want.bundleId
@@ -36,18 +33,6 @@ nonisolated struct AppIconSource: Sendable {
       guard want.bundleId == nil else { return nil }
     }
     return await installed(name: want.name, nameKey: nameKey)
-  }
-
-  /// The icon of an app open now, from its bundle where it is installed, else as the service sent it, kept under its
-  /// bundle identifier.
-  ///
-  /// - Parameter want: The app.
-  /// - Returns: The icon, or nil when the app is not open or neither reads.
-  private func live(_ want: AppIconWant) async -> AppIconFound? {
-    var png: Data?
-    if let bundle = want.bundle { png = await lookup.icon(bundle) }
-    guard let png = png ?? want.served else { return nil }
-    return await kept(png, id: want.bundleId, name: want.name)
   }
 
   /// The icon of the app installed under a bundle identifier, kept.

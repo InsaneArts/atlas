@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The main window: the sidebar of sessions, the Library and the helper's health at its leading edge, shown or hidden,
+/// The main window: the sidebar of sessions and the helper's health at its leading edge, shown or hidden,
 /// and beside it one solid content card with a slim header saying who has the helper, the stage, and a footer with the
 /// latest action and the controls; and an alert over everything when one is asked. It draws its state and sends what
 /// the person does; it decides nothing. The shell supplies `input`, the surface over the screen that takes the mouse
@@ -19,7 +19,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   @State private var settledPlace: ViewerPlace
   /// Whether the last switch moved the picture between the stage and the corner, from ``ScreenZoom``.
   @State private var settledZoom = false
-  /// Activity and Apps as each last showed, kept built once shown, so a switch back fades the pane
+  /// Activity as it last showed, kept built once shown, so a switch back fades the pane
   /// already there instead of building it again (``KeptPaneShift``).
   @State private var kept: [ViewerPlace: ViewerPane] = [:]
   /// Sequences list departures and arrivals, cancelling superseded destinations.
@@ -132,7 +132,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     }
   }
 
-  /// The width Activity and Apps are laid out at, the whole card's: as it stands once the sidebar has
+  /// The width Activity is laid out at, the whole card's: as it stands once the sidebar has
   /// settled, so a list is laid out once as the sidebar hides or shows, pinned to the card's trailing edge, which does
   /// not move, and uncovered or covered as the card's leading edge travels rather than laid out again at every
   /// frame. The small screen is sized from it too, so it keeps its size through the slide.
@@ -148,7 +148,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   /// The stage: the Screen or the chosen list's pane in the card's body, with the small screen in its corner over a
   /// list. The Screen sits inside the stage's inset; the lists reach the card's edges, which frame them, as their rows
   /// keep their own insets. The Screen is built as it shows and goes as it is left, so its picture and the surface that
-  /// takes input exist only while it shows; Activity and Apps are kept once shown and only fade as the
+  /// takes input exist only while it shows; Activity is kept once shown and only fades as the
   /// place changes, the new one over the old, rising in from the Screen and sinking back to it (``ListRise``). A switch
   /// between the Screen and a list moves the picture between the two on ``Motion/zoom``, the one thing that travels,
   /// its corners rounding with it; every other switch only crossfades.
@@ -179,7 +179,6 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
             .frame(minWidth: .zero, maxWidth: .infinity, alignment: .trailing)
             .modifier(
               KeptPaneShift(isShown: paneHandoff.shown == place, rises: listRises) {
-                forgetPictures(of: place)
                 paneHandoff.departed(place)
               }
             )
@@ -303,7 +302,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
 
   /// A kept place's pane as it shows now, or as it last showed while another place shows; nil until it has shown.
   ///
-  /// - Parameter place: Activity or Apps.
+  /// - Parameter place: Activity.
   /// - Returns: Its pane, or nil.
   private func pane(for place: ViewerPlace) -> ViewerPane? {
     state.pane.place == place ? state.pane : kept[place]
@@ -345,21 +344,12 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     withAnimation(ScreenZoom.animation(zooms: zooms)) { pictureInCorner = inCorner }
   }
 
-  /// Keeps Activity or Apps as it shows now, to draw while another place shows.
+  /// Keeps Activity as it shows now, to draw while the Screen shows.
   ///
   /// - Parameter pane: The pane shown.
   private func keep(_ pane: ViewerPane) {
     guard pane.place.isKept, kept[pane.place] != pane else { return }
     kept[pane.place] = pane
-  }
-
-  /// Forgets the pictures of the helper's screen a kept place drew, once it has faded out, so none outlives the place
-  /// showing; it draws them anew from the next state as it shows again.
-  ///
-  /// - Parameter place: The place that faded out.
-  private func forgetPictures(of place: ViewerPlace) {
-    guard place != state.pane.place, let pane = kept[place], pane.forgettingPictures != pane else { return }
-    kept[place] = pane.forgettingPictures
   }
 
   /// VoiceOver says what changed.
@@ -421,16 +411,6 @@ extension ViewerView where Input == EmptyView, LivePicture == StillPicture {
 
   #Preview("Activity") {
     ViewerView(state: PreviewStates.viewerActivity) { _ in }
-      .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
-  }
-
-  #Preview("Apps") {
-    ViewerView(state: PreviewStates.viewerApps) { _ in }
-      .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
-  }
-
-  #Preview("Show on screen") {
-    ViewerView(state: PreviewStates.viewerShowOnScreen) { _ in }
       .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
   }
 

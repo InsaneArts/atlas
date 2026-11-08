@@ -36,15 +36,14 @@ extension ViewerWords {
   /// The Helper menu's item while this window holds control.
   static let giveBackItem = HelperActionNames.giveBack
 
-  /// A place's word, in the Library and the View menu.
+  /// A place's word, in the View menu.
   ///
   /// - Parameter place: The place.
-  /// - Returns: "Screen", "Activity" or "Apps".
+  /// - Returns: "Screen" or "Activity".
   static func place(_ place: ViewerPlace) -> String {
     switch place {
     case .screen: "Screen"
     case .activity: "Activity"
-    case .apps: "Apps"
     }
   }
 }

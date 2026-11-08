@@ -1,7 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// Stand-in app icons for the Apps samples: a rounded tile in an app's colours with a symbol on it, on a real icon's
+  /// Stand-in app icons for the samples: a rounded tile in an app's colours with a symbol on it, on a real icon's
   /// grid (a body of 824 of the canvas's 1024 points), drawn once. Their colours and sizes are a sample's, not the
   /// app's, so they are not tokens.
   public enum SampleAppIcons {

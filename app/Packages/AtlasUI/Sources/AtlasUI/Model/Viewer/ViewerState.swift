@@ -6,15 +6,15 @@ public struct ViewerState: Equatable, Sendable {
   public var screen: ViewerScreenState
   /// The content card's footer: the newest thing to know and the buttons.
   public var footer: ViewerFooterState
-  /// The sidebar at the leading edge: the sessions, the Library and the helper's health.
+  /// The sidebar at the leading edge: the sessions and the helper's health.
   public var sidebar: ViewerSidebarState
   /// The alert over the whole window; nil shows none.
   public var alert: AlertCardState<AlertChoice>?
-  /// The helper's screen, small and live in the corner, over Activity or Apps; nil shows none.
+  /// The helper's screen, small and live in the corner, over Activity; nil shows none.
   public var mini: MiniScreenState?
   /// The corner the small screen keeps to, as the person last left it.
   public var miniCorner: MiniCorner
-  /// What the card shows between its header and footer: the screen, or a list from the Library.
+  /// What the card shows between its header and footer: the screen, or Activity.
   public var pane: ViewerPane
   /// What VoiceOver says about the helper's state: only a state that asks something of the person, in the window that
   /// has the keyboard, once it has held for a moment; nil says nothing.

@@ -6,6 +6,8 @@ import Foundation
 extension ViewerWords {
   /// 5: the most sessions a day lists before the row for the rest.
   static let mostSessions = 5
+  /// An app the service gives no name for.
+  static let unnamedApp = "Unnamed app"
 
   /// What a run did: its kinds of action in the order first done, then how many actions, such as "Typed, pressed keys
   /// and clicked · 1,212 actions"; for a run in no app, how many commands and screenshots, such as "Ran 3 commands,

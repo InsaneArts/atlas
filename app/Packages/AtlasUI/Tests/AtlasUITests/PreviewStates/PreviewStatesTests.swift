@@ -98,12 +98,10 @@
           case .screen: "screen"
           case .activity(let activity):
             activity.sheet != nil ? "sheet" : activity.empty == nil ? "activity" : "activity, empty"
-          case .apps: "apps"
           }
         }
       )
-      #expect(panes == ["screen", "activity", "activity, empty", "sheet", "apps"])
-      #expect(states.contains { $0.screen.outline != nil })
+      #expect(panes == ["screen", "activity", "activity, empty", "sheet"])
     }
 
     @Test("the settings previews show every pane, alert and update step")

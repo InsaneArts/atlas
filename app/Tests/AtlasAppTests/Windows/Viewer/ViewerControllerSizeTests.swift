@@ -66,7 +66,7 @@ struct ViewerControllerSizeTests {
     #expect(!viewer.state.sidebar.overlay)
     // A choice in it, or Escape or a click on the card, puts it away.
     viewer.send(.toggleSidebar)
-    viewer.send(.chooseLibrary(.activity))
+    viewer.send(.chooseSession(.all))
     #expect(!viewer.state.sidebar.overlay)
     viewer.send(.toggleSidebar)
     viewer.send(.dismissSidebarOverlay)
@@ -104,8 +104,8 @@ struct ViewerControllerSizeTests {
     #expect(!preferences.loadSidebarHidden())
   }
 
-  @Test("the Library folds into a row of icons below 420 high")
-  func theLibraryFoldsInAShortWindow() {
+  @Test("the helper's health folds into its dot below 420 high")
+  func theHelperLineFoldsInAShortWindow() {
     let viewer = ViewerController.scripted(ScriptedService())
     defer { viewer.close() }
     viewer.fitWindow(to: CGSize(width: 1200, height: 300))

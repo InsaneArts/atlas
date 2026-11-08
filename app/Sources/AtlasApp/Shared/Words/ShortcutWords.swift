@@ -17,14 +17,6 @@ enum ShortcutWords {
   /// Give Back Control (⌃⇧⎋).
   static let giveBack = help(ViewerWords.giveBackItem, KeyMap.releaseSymbols)
 
-  /// A place's tooltip: its word and its View menu shortcut.
-  ///
-  /// - Parameter place: The place.
-  /// - Returns: "Screen (⌘1)".
-  static func place(_ place: ViewerPlace) -> String {
-    help(ViewerWords.place(place), "⌘\(place.menuTag + 1)")
-  }
-
   /// A menu item's title with its shortcut after it.
   ///
   /// - Parameters:

@@ -1,7 +1,7 @@
 extension ViewerState {
   /// The window as it is drawn at `fit`: the sidebar as the width leaves it, unless the person hid it, and shown over
   /// the card only while the width keeps it from showing whole; the header with or without what its holder does; the
-  /// footer's capsules or circles; and the Library whole or folded into a row.
+  /// footer's capsules or circles; and the helper's health whole or folded into its dot.
   ///
   /// - Parameter fit: How the content gives way to the window's size.
   /// - Returns: The state, fitted.

@@ -67,11 +67,7 @@ extension ViewerPresenter {
   /// - Returns: The status.
   static func status(_ snapshot: ViewerSnapshot) -> StatusSummary {
     let reading = snapshot.reading.statusReading
-    var summary = snapshot.mode.windowSummary(
-      reading,
-      showing: snapshot.panes.apps.shown?.app,
-      reconnecting: snapshot.reading.lastPicture != nil
-    )
+    var summary = snapshot.mode.windowSummary(reading, reconnecting: snapshot.reading.lastPicture != nil)
     if snapshot.mode.kind == .needsYou, let line = reading.causerLine { summary.line = line }
     return summary
   }

@@ -17,7 +17,6 @@ struct AppearanceTests {
     ("textAttention", .textAttention), ("textLink", .textLink), ("textOnModal", .textOnModal),
     ("textDestructive", .textDestructive), ("fillQuiet", .fillQuiet), ("fillCard", .fillCard),
     ("fillGroup", .fillGroup), ("fillRowHover", .fillRowHover), ("fillTile", .fillTile),
-    ("fillTileRaised", .fillTileRaised),
     ("fillControl", .fillControl), ("fillControlHover", .fillControlHover), ("fillControlOn", .fillControlOn),
     ("fillControlRaised", .fillControlRaised), ("fillPrimaryHover", .fillPrimaryHover),
     ("fillPrimaryPressed", .fillPrimaryPressed), ("fillPill", .fillPill), ("fillAvatar", .fillAvatar),

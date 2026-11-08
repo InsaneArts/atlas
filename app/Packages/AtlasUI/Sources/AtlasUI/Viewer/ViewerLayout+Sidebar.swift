@@ -23,8 +23,6 @@ extension ViewerLayout {
   static let toggleClearance = Spacing.s
   /// 44: a session's row, its 28-point icon and 8 above and below it.
   static let sidebarRowHeight = ControlHeight.xl
-  /// 32: a row of the Library.
-  static let libraryRowHeight = ControlHeight.m
   /// 2: between the sidebar's rows.
   static let sidebarRowGap = Spacing.half
   /// 10: a row's content inset inside its capsule, before the icon and after the words or the count.
@@ -65,7 +63,7 @@ extension ViewerLayout {
     bottom: Spacing.xsPlus,
     trailing: Spacing.sPlus
   )
-  /// 12: between the sessions' room and the Library under it, the gap a section's heading keeps above it.
+  /// 12: between the sessions' room and the foot under it, the gap a section's heading keeps above it.
   static let footGap = headingInset.top
   /// 16: how far the sessions fade out at their room's lower edge; their last row ends that far up, so scrolled to the
   /// end it stands clear of the fade.
@@ -82,8 +80,6 @@ extension ViewerLayout {
   static let endedHeadingCorner = endedHeadingHeight / 2
   /// Ended's inset round its button: 6 above and 2 under, so its line stands where another heading's does.
   static let endedHeadingInset = EdgeInsets(top: Spacing.xsPlus, leading: .zero, bottom: Spacing.half, trailing: .zero)
-  /// 18: the room a Library row's symbol takes, so the words start in line.
-  static let librarySymbol = IconSize.sPlus
   /// 8: above and below the helper's line.
   static let helperInset = Spacing.s
   /// 8: the helper's dot.
@@ -102,16 +98,10 @@ extension ViewerLayout {
   /// leaves the card 456 at 700 and 444 at 688, room for the footer's widest buttons beside a latest line of about
   /// 120, so the card is never cramped beside it.
   static let wholeSidebar = ViewerThreshold(risesAt: 700, room: fitRoom)
-  /// 420: the window's height under which the Library folds into a row of circles, opening again only at 432.
+  /// 420: the window's height under which the helper's health folds into its dot, opening again only at 432.
   static let tallSidebar = ViewerThreshold(fallsUnder: 420, room: fitRoom)
-  /// 8: above and below the Library folded into a row, so the row stands 44 high.
-  static let libraryRowInset = Spacing.s
-  /// 4: between the circles of the Library folded into a row.
-  static let libraryCircleGap = Spacing.xs
-  /// 28: each circle of the Library folded into a row, and the helper's dot's at its end.
-  static let libraryCircle = ControlHeight.s
-  /// The Library's unseen dot's inset in a circle's top-trailing corner, where a badge stands.
-  static let libraryCircleDot = Spacing.xs
+  /// 28: the circle the helper's dot stands alone in, in a short window.
+  static let helperCircle = ControlHeight.s
 
   /// The room the sidebar takes at the window's leading edge: its width, or none while hidden. Its content keeps its
   /// width as it hides, so its rows are cut off by its narrowing edge rather than laid out again.

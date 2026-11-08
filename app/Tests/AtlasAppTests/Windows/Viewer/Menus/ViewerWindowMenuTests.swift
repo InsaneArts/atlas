@@ -52,13 +52,13 @@ struct ViewerWindowMenuTests {
     #expect(size.state == .on)
   }
 
-  @Test("Screen, Activity and Apps take ⌘1 to ⌘3 in the sidebar's order")
-  func placesTakeTheirNumbersInTheSidebarsOrder() throws {
+  @Test("Screen and Activity take ⌘1 and ⌘2")
+  func placesTakeTheirNumbers() throws {
     let places = MainMenu.view().items
       .filter { $0.action == #selector(ViewerMenuActions.showPlace(_:)) }
-    #expect(places.map(\.title) == ["Screen", "Activity", "Apps"])
-    #expect(places.map(\.keyEquivalent) == ["1", "2", "3"])
-    #expect(places.compactMap { ViewerPlace(menuTag: $0.tag) } == [.screen, .activity, .apps])
+    #expect(places.map(\.title) == ["Screen", "Activity"])
+    #expect(places.map(\.keyEquivalent) == ["1", "2"])
+    #expect(places.compactMap { ViewerPlace(menuTag: $0.tag) } == [.screen, .activity])
     #expect(places.allSatisfy { $0.keyEquivalentModifierMask == .command })
   }
 

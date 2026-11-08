@@ -38,15 +38,6 @@
         PreviewState(name: "Activity, a run's pictures", value: viewerActivityShots),
         PreviewState(name: "A picture", value: viewerPictureSheet),
         PreviewState(name: "A step's picture", value: viewerStepPicture),
-        PreviewState(name: "Apps", value: viewerApps),
-        PreviewState(name: "Apps, paused", value: viewerAppsPaused),
-        PreviewState(name: "Apps, one session", value: viewerAppsOneSession),
-        PreviewState(name: "Apps, one session, none yet", value: viewerAppsOneSessionEmpty),
-        PreviewState(name: "Apps, a copy", value: viewerAppsCopy),
-        PreviewState(name: "Apps, hidden", value: viewerAppsHidden),
-        PreviewState(name: "Apps, many", value: viewerAppsMany),
-        PreviewState(name: "Show on screen", value: viewerShowOnScreen),
-        PreviewState(name: "Show on screen, at the right edge", value: viewerShowOnScreenRightEdge),
         PreviewState(name: "Sessions", value: viewerSessions),
         PreviewState(name: "Sessions, one ended", value: viewerSessionsEnded),
         PreviewState(name: "Activity by session", value: viewerActivityBySession),
@@ -173,35 +164,6 @@
       ViewerLatestLine(id: "control", words: words, tone: .link)
     }
 
-    /// The Library's rows, one of them chosen while its list shows, each with how many its list holds once read.
-    ///
-    /// - Parameters:
-    ///   - place: The place shown; the Screen by default, which chooses none.
-    ///   - unseen: What Activity holds unseen; nothing by default.
-    ///   - counts: How many each list holds, by its place; none read by default.
-    /// - Returns: The rows.
-    static func viewerLibrary(
-      _ place: ViewerPlace = .screen,
-      unseen: ViewerUnseen = .none,
-      counts: [ViewerPlace: Int] = [:]
-    ) -> [ViewerLibraryRow] {
-      let rows = [
-        ViewerLibraryRow(
-          place: .activity,
-          title: "Activity",
-          help: "Activity (⌘2)",
-          unseen: unseen,
-          isChosen: place == .activity
-        ),
-        ViewerLibraryRow(place: .apps, title: "Apps", help: "Apps (⌘3)", isChosen: place == .apps),
-      ]
-      return rows.map { row in
-        var counted = row
-        counted.count = counts[row.place]
-        return counted
-      }
-    }
-
     /// The sidebar while no host session is listed: All sessions alone.
     static let viewerNoSessions = ViewerSessionsState(icons: [], liveCount: 0, groups: [])
 
@@ -235,17 +197,13 @@
     ///
     /// - Parameters:
     ///   - sessions: The sessions; none listed by default.
-    ///   - place: The place shown, whose Library row is chosen; the Screen by default.
-    ///   - unseen: What Activity holds unseen; nothing by default.
     ///   - helper: The helper's health.
     /// - Returns: The sidebar.
     static func viewerSidebar(
       _ sessions: ViewerSessionsState = viewerNoSessions,
-      place: ViewerPlace = .screen,
-      unseen: ViewerUnseen = .none,
       helper: ViewerHelperLine
     ) -> ViewerSidebarState {
-      ViewerSidebarState(sessions: sessions, library: viewerLibrary(place, unseen: unseen), helper: helper)
+      ViewerSidebarState(sessions: sessions, helper: helper)
     }
 
     /// What a right click on the picture offers while this window holds no control.

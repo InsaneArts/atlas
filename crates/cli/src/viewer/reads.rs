@@ -1,6 +1,6 @@
 //! What the viewer reads for the app without changing anything: the
-//! status and overview, recent activity, host sessions, the helper's apps
-//! and the screenshots agents took, and what a cleanup would do.
+//! status and overview, recent activity, host sessions and the screenshots
+//! agents took, and what a cleanup would do.
 use super::{
     Viewer,
     control::cleanup_session,
@@ -9,7 +9,7 @@ use super::{
 };
 use atlas_client::{
     before,
-    client::{AppList, Client},
+    client::Client,
     helper_info::{self, Capture},
     host_session::{
         names::{name_of, names},
@@ -23,12 +23,11 @@ use atlas_core::host::Key;
 use atlas_core::{
     account::{Title, asked_real_name},
     error::{Code, Error, Result},
-    screen::windows::Window,
 };
 use axum::{body::Body, response::Response};
 use serde_json::{Map, Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::Arc,
 };
@@ -224,52 +223,6 @@ impl Viewer {
         .unwrap_or_default();
 
         Ok(json!({"ok": true, "sessions": history, "live": live}))
-    }
-
-    /// The apps open in the helper with their windows, front to back, the
-    /// icons of those installed where apps go, and which agent's session
-    /// opened each, with those sessions' names. It only reads: nothing is
-    /// recorded and no control is taken.
-    pub(super) async fn apps(&self) -> Result<Value> {
-        let client = self.client();
-        let read = async {
-            let running = client.running_apps().await?;
-            let filter = atlas_client::agent::WindowFilter::default();
-            let windows = atlas_client::agent::list(&client, &filter).await?;
-            let listed = listed_apps(&running, &windows)?;
-            Ok::<_, Error>((listed, running))
-        };
-        let (mut apps, running) = tokio::time::timeout(READ_DEADLINE, read)
-            .await
-            .map_err(|_| late())??;
-
-        let reading_client = client.clone();
-        let opened = tokio::task::spawn_blocking(move || {
-            let Ok(output) = reading_client.output_dir() else {
-                return (HashMap::new(), Arc::from([]));
-            };
-            let tasks = atlas_client::task::store::Store::at(output).recent();
-            let rows = atlas_client::activity_log::recent(output, ACTIVITY_ROWS);
-            let copies = Path::new(atlas_client::handoff::ROOT);
-            let origins = super::origins::origins(&running, &tasks, &rows, copies);
-            (origins, Store::at(output).recent())
-        });
-        let (origins, records) = opened
-            .await
-            .unwrap_or_else(|_| (HashMap::new(), Arc::from([])));
-        for app in &mut apps {
-            let origin = app["pid"].as_u64().and_then(|pid| origins.get(&pid));
-            app["origin"] = json!(origin);
-        }
-        let opened_by: Vec<Value> = origins
-            .values()
-            .map(|origin| json!(origin.session))
-            .collect();
-        let sessions = sessions_named(&client, &records, opened_by.iter()).await;
-
-        self.icons.add(&mut apps, helper_info::ICON_CACHE).await;
-
-        Ok(json!({"ok": true, "apps": apps, "sessions": sessions}))
     }
 
     /// The screenshots agents took, newest first: each one's name, when it
@@ -560,20 +513,6 @@ fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
         }
     }
     taken_by
-}
-
-/// The helper's regular apps as the app lists them, front to back, each
-/// with its bundle identifier, whether it is hidden, when it was launched
-/// and its windows front to back. A window's id is its window number, and
-/// its order its place among every app's windows, front to back.
-pub(super) fn listed_apps(apps: &AppList, windows: &[Window]) -> Result<Vec<Value>> {
-    Ok(helper_info::open_apps(apps, windows)?
-        .into_iter()
-        .map(|mut app| {
-            rename(&mut app, "active", "front");
-            app
-        })
-        .collect())
 }
 
 #[cfg(test)]

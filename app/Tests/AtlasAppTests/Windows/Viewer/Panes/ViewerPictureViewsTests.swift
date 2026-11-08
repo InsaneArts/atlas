@@ -157,7 +157,7 @@ struct ViewerPictureViewsTests {
     #expect(viewer.panes.activity.replay?.index == 0, "never before the first")
     viewer.send(.togglePlay)
     #expect(viewer.panesModel.pictures.playing != nil)
-    viewer.send(.show(.apps))
+    viewer.send(.show(.screen))
     #expect(viewer.panesModel.pictures.playing == nil)
     #expect(viewer.panesModel.pictures.loads.isEmpty)
   }
