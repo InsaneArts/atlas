@@ -14,9 +14,6 @@ pub(super) enum Captured {
     /// The stream gave it, proven current by a sample after it was asked
     /// for.
     Stream,
-    /// The stream gave its newest picture, a moment old, as nothing proved
-    /// one current in time.
-    Late,
     /// CoreGraphics took it, as the stream could not.
     CoreGraphics(Unserved),
 }
@@ -24,7 +21,6 @@ pub(super) enum Captured {
 #[derive(Default)]
 pub(super) struct Counts {
     streamed: AtomicU64,
-    late: AtomicU64,
     core_graphics: AtomicU64,
     last: Mutex<Option<&'static str>>,
 }
@@ -34,10 +30,6 @@ impl Counts {
         let why = match captured {
             Captured::Stream => {
                 self.streamed.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-            Captured::Late => {
-                self.late.fetch_add(1, Ordering::Relaxed);
                 return;
             }
             Captured::CoreGraphics(why) => why.name(),
@@ -50,7 +42,6 @@ impl Counts {
         let last = *self.last.lock().unwrap_or_else(|p| p.into_inner());
         json!({
             "streamed": self.streamed.load(Ordering::Relaxed),
-            "late": self.late.load(Ordering::Relaxed),
             "coreGraphics": self.core_graphics.load(Ordering::Relaxed),
             "lastCoreGraphics": last.unwrap_or("none"),
         })

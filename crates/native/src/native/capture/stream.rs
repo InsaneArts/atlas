@@ -126,9 +126,9 @@ const OPEN_AGAIN: Duration = Duration::from_millis(100);
 /// measured, slower on a busy window server).
 const OPEN_WAIT: Duration = Duration::from_secs(3);
 /// How old the stream's newest picture may be, before the time it was asked
-/// for, to answer a request nothing proved in time: a stream whose samples
-/// arrive late (a window server under load) still shows the screen as it
-/// was a moment ago.
+/// for, to answer a live-view frame nothing proved in time: a stream whose
+/// samples arrive late (a window server under load) still shows the screen
+/// as it was a moment ago, which is all a person watching needs.
 const LATE: Duration = Duration::from_millis(500);
 /// How often a one-shot picture asked of an open stream looks again.
 const PICTURE_CHECK: Duration = Duration::from_millis(5);
@@ -539,7 +539,7 @@ pub(super) enum Unserved {
     Unavailable,
     /// The stream shows another session or display.
     Elsewhere,
-    /// Nothing proved a picture current, and the newest is too old.
+    /// Nothing proved a picture current in time.
     Unproven,
 }
 
@@ -647,11 +647,12 @@ pub(super) fn may_open() -> bool {
 /// for [`NUDGE_AFTER`] is asked for one, once, and a stream quiet for
 /// [`RENEW_QUIET`] that still proved nothing after [`RENEW_AFTER`] is
 /// replaced, at most once every [`RENEW_EVERY`], waiting up to [`OPEN_WAIT`]
-/// for the new stream's first sample. A capture the source admitted (see [`opening`]) opens the stream when none is open and
-/// waits up to [`OPEN_WAIT`] for its first picture. With nothing proven by
-/// then, a picture only a person reads may be the newest when it is at most
-/// [`LATE`] older than the call; one an agent reads never is. The copy is
-/// bracketed by session, display and consent checks.
+/// for the new stream's first sample. A capture the source admitted (see
+/// [`opening`]) opens the stream when none is open and waits up to
+/// [`OPEN_WAIT`] for its first picture. A picture nothing proved current by
+/// then is never given: an older one could show an action as done or not
+/// done when it was the other way. The copy is bracketed by session,
+/// display and consent checks.
 ///
 /// # Errors
 ///
@@ -661,8 +662,7 @@ pub(super) fn streamed_display_rgb(
     display: u32,
     area: Option<CGRect>,
     limit: Option<u32>,
-    reader: Reader,
-) -> std::result::Result<(RawShot, Currency), Unserved> {
+) -> std::result::Result<RawShot, Unserved> {
     let epoch = native::session_info()
         .and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
         .map_err(|_| Unserved::Elsewhere)?;
@@ -710,7 +710,6 @@ pub(super) fn streamed_display_rgb(
     let mut nudged = false;
     // When this picture last asked the worker to open a stream.
     let mut asked_open: Option<Instant> = None;
-    let mut newest: Option<Arc<Callback>> = None;
     loop {
         // Another picture had the stream replaced, or a viewer's is starting:
         // its first sample is waited for, as this picture's own would be.
@@ -722,7 +721,7 @@ pub(super) fn streamed_display_rgb(
         match state {
             Some(state) => {
                 match state.picture_after(asked, shape) {
-                    Proof::Proven(Ok(shot)) => return Ok((shot, Currency::Proven)),
+                    Proof::Proven(Ok(shot)) => return Ok(shot),
                     Proof::Waiting => {}
                     // The stream was replaced meanwhile: the new one's first
                     // sample is waited for. A stream still current that
@@ -752,7 +751,6 @@ pub(super) fn streamed_display_rgb(
                     worker.slot.nudge.store(true, Ordering::Release);
                     nudged = true;
                 }
-                newest = Some(state);
             }
             // The stream this picture had replaced is starting again.
             None if starting && !opened => {}
@@ -771,7 +769,7 @@ pub(super) fn streamed_display_rgb(
         }
         std::thread::sleep(PICTURE_CHECK);
     }
-    unproven(newest.as_deref(), reader, asked, shape)
+    Err(Unserved::Unproven)
 }
 
 /// Marks a picture's ask to open a stream void once the picture ends.
@@ -780,46 +778,6 @@ impl Drop for Ended {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
-}
-
-/// The answer to a one-shot picture nothing proved current by its deadline:
-/// for a person, the stream's newest picture when stamped at most [`LATE`]
-/// before `asked`; for an agent, none.
-fn unproven(
-    newest: Option<&Callback>,
-    reader: Reader,
-    asked: u64,
-    shape: Shape,
-) -> std::result::Result<(RawShot, Currency), Unserved> {
-    if reader == Reader::Agent {
-        return Err(Unserved::Unproven);
-    }
-    newest
-        .and_then(|state| state.late(asked.saturating_sub(ticks(LATE)), shape))
-        .ok_or(Unserved::Unproven)?
-        .map(|shot| (shot, Currency::Late))
-        .map_err(|_| Unserved::Unproven)
-}
-
-/// Who reads a one-shot picture, which decides what may answer it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Reader {
-    /// An agent, or anything that checks what an action did: only a picture
-    /// proven current, as an older one could show an action as done or not
-    /// done when it was the other way.
-    Agent,
-    /// Only a person, beside an agent's action: a picture a moment old may
-    /// answer, and says so.
-    Person,
-}
-
-/// How a one-shot picture from the stream is known to show the screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Currency {
-    /// A sample stamped after the ask says it is current.
-    Proven,
-    /// Nothing proved it in time; it is the newest, at most [`LATE`] old.
-    Late,
 }
 
 /// What an open stream says of a one-shot picture asked for at a moment.

@@ -1382,41 +1382,6 @@ fn a_frame_request_counts_as_waiting_only_while_it_is_alive_and_has_waited() {
 }
 
 #[test]
-fn a_picture_an_agent_reads_is_never_answered_by_an_unproven_one() {
-    let slot = Arc::new(Slot::default());
-    let (callback, t) = streaming(&slot, 0);
-    callback.sample(&stamped(SCFrameStatus::Complete, t + 10));
-    assert!(
-        matches!(
-            unproven(Some(&callback), Reader::Agent, t + 10, whole()),
-            Err(Unserved::Unproven)
-        ),
-        "however recent, it waits for CoreGraphics"
-    );
-}
-
-#[test]
-fn a_picture_only_a_person_reads_may_be_a_moment_old_and_says_so() {
-    let slot = Arc::new(Slot::default());
-    let (callback, t) = streaming(&slot, 0);
-    callback.sample(&stamped(SCFrameStatus::Complete, t + 10));
-    let Ok((shot, currency)) = unproven(Some(&callback), Reader::Person, t + 10, whole()) else {
-        panic!("not answered");
-    };
-    assert_eq!(shot.rgb.as_ref(), picture());
-    assert_eq!(currency, Currency::Late);
-    let long_after = t + 10 + ticks(LATE) + ticks(Duration::from_millis(1));
-    assert!(
-        matches!(
-            unproven(Some(&callback), Reader::Person, long_after, whole()),
-            Err(Unserved::Unproven)
-        ),
-        "never older than the bound"
-    );
-    assert!(unproven(None, Reader::Person, t, whole()).is_err());
-}
-
-#[test]
 fn an_ask_to_open_a_stream_holds_only_while_its_picture_runs_and_no_stop_is_under_way() {
     let slot = Slot::default();
     let wanted = Arc::new(AtomicBool::new(true));
