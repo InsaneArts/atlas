@@ -482,7 +482,7 @@ impl Service {
                 .and_then(|expect| super::apps::bundle_id(expect.pid()));
             return tokio::task::spawn_blocking(move || {
                 gate_request(&engine, &actions, &asking, intended)
-                    .map(|_| json!({"ok": true, "performed": 0, "dry": true}))
+                    .map(|()| json!({"ok": true, "performed": 0, "dry": true}))
             })
             .await
             .map_err(|cause| worker_failed().with_source(cause))?;
@@ -579,10 +579,7 @@ impl Service {
                     if let Some(asking) = &asking
                         && person.is_none()
                     {
-                        let intended = expect
-                            .as_ref()
-                            .and_then(|expect| super::apps::bundle_id(expect.pid()));
-                        engine.recheck = Some(gate_request(engine, &actions, asking, intended)?);
+                        engine.recheck = Some(asking::recheck(&actions, asking));
                     }
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
                     engine.recheck = None;
@@ -689,8 +686,8 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
     Ok(())
 }
 
-/// Check `action`, the next of an agent's request the person's accounts
-/// passed, where it lands now: see [`recheck`].
+/// Check `action`, the next of an agent's request, where it lands now: see
+/// [`recheck`].
 pub(super) fn recheck_action(engine: &mut Engine, action: &Action) -> Result<()> {
     recheck(engine, |recheck, look| recheck.check(action, look))
 }
@@ -700,9 +697,9 @@ pub(super) fn recheck_event(engine: &mut Engine) -> Result<()> {
     recheck(engine, |recheck, look| recheck.event(look))
 }
 
-/// Judge the next of an agent's request the person's accounts passed again
-/// where it lands now, by `judge`: what the grants it brought don't cover
-/// stops there, with the rest of the request, as any refused action does.
+/// Judge the next of an agent's request where it lands now, by `judge`:
+/// what the grants it brought don't cover stops there, with the rest of the
+/// request, as any refused action does.
 fn recheck(
     engine: &mut Engine,
     judge: impl FnOnce(&mut asking::Recheck, &mut asking::live::OnScreen<'_>) -> asking::Decision,
@@ -711,7 +708,7 @@ fn recheck(
         return Ok(());
     };
     // What it lands in now, as found: the app the request named stands in
-    // for what is in front only before its first event.
+    // for what is in front only in a typing command's check.
     let mut look = asking::live::OnScreen::observing(
         &engine.looks,
         &engine.epoch,
@@ -721,52 +718,44 @@ fn recheck(
     let decision = judge(&mut recheck, &mut look);
     recheck.held = look.held;
     engine.recheck = Some(recheck);
-    match decision {
-        asking::Decision::Free => Ok(()),
-        asking::Decision::Ask(question) => Err(Error::new(
-            Code::WaitingForPerson,
-            format!(
-                "The rest would have gone where {} asks the person first; it wasn't sent.",
-                question.account
-            ),
-        )
-        .with("ask", question.details())),
-        asking::Decision::Deny { account } => Err(Error::new(
-            Code::Denied,
-            format!("The rest would have gone into {account}, which is Look Only; it wasn't sent."),
-        )),
-    }
+    refusal(decision, false)
 }
 
 /// How long the gate may take to read where a request lands, in all.
 const ASK_BUDGET: Duration = Duration::from_millis(300);
 
-/// Judge `actions` by `asking` on the helper's screen as it is now: refused
-/// with `waiting-for-person` while the person must be asked, or `denied` in
-/// a Look Only account. Nothing is sent either way.
+/// Judge `actions` by `asking` on the helper's screen as it is now, a
+/// typing command's check before its first character: refused with
+/// `waiting-for-person` while the person must be asked, or `denied` in a
+/// Look Only account. Nothing is sent either way.
 fn gate_request(
     engine: &Engine,
     actions: &[Action],
     asking: &asking::Asking,
     intended: Option<String>,
-) -> Result<asking::Recheck> {
+) -> Result<()> {
     let mut look = asking::live::OnScreen {
         looks: &engine.looks,
         epoch: &engine.epoch,
         deadline: std::time::Instant::now() + ASK_BUDGET,
-        intended: intended.clone(),
+        intended,
         held: None,
     };
-    let (decision, recheck) = asking::recheck(actions, asking, &mut look);
+    refusal(asking::decide(actions, asking, &mut look), asking.dry)
+}
+
+/// The refusal `decision` is, when it isn't free; `dry` for a typing
+/// command's check.
+fn refusal(decision: asking::Decision, dry: bool) -> Result<()> {
     match decision {
-        asking::Decision::Free => Ok(recheck),
+        asking::Decision::Free => Ok(()),
         asking::Decision::Ask(question) => {
             let mut details = question.details();
-            details["dry"] = json!(asking.dry);
+            details["dry"] = json!(dry);
             Err(Error::new(
                 Code::WaitingForPerson,
                 format!(
-                    "{} is signed in; Atlas asked the person before sending and they haven't answered.",
+                    "{} is signed in: Atlas asked the person before sending this, and it wasn't sent.",
                     question.account
                 ),
             )
@@ -776,7 +765,7 @@ fn gate_request(
             Code::Denied,
             format!(
                 "{account} is Look Only: the person lets agents read it, not click or type there. \
-                 Nothing was sent."
+                 It wasn't sent."
             ),
         )),
     }

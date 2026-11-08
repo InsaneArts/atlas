@@ -1,6 +1,6 @@
 //! Ask before sending: whether an agent's request may go into an account the
-//! person listed, decided for the whole request before its first event and
-//! judged again just before each event.
+//! person listed, decided for each action just before its first event, where
+//! it lands then, and again before each further event.
 //!
 //! Each account has a level. Look Only lets agents look and scroll, never
 //! click or type. Ask Before Sending lets them look, click around and type
@@ -154,6 +154,17 @@ pub(crate) enum Allowance {
         target: Bound,
         typing: String,
     },
+    /// One action the person allowed after it stopped a request, landing
+    /// where it was asked about: its whole payload's digest, the receiving
+    /// window and element, and the digest of the message it would send.
+    /// The client takes it from the person's store for one request only.
+    Permit {
+        account: AccountKey,
+        action: String,
+        target: Bound,
+        #[serde(default)]
+        value: Option<String>,
+    },
     /// This very request, landing where it was asked about: its actions'
     /// digest, the receiving window and element, and the digest of the
     /// message a Return would send when there is one.
@@ -272,6 +283,8 @@ pub(crate) struct Question {
     pub(crate) typed: usize,
     /// The digest of the request's actions.
     pub(crate) batch: String,
+    /// The digest of the action it asks about.
+    pub(crate) action: String,
     /// The message a Return would send, read whole or not.
     pub(crate) message: Option<Message>,
     /// The digest of the whole text of the typing command it is part of.
@@ -297,10 +310,10 @@ impl Question {
             "accountKey": self.account_key,
             "bound": self.bound,
             // What makes it this question, which a rerun joins: the account,
-            // the request, where it lands and the message it would send.
+            // the action, where it lands and the message it would send.
             "bind": {
                 "accountKey": self.account_key,
-                "batch": self.batch,
+                "action": self.action,
                 "bound": self.bound,
                 "value": digest,
                 "typing": self.typing,
@@ -313,6 +326,7 @@ impl Question {
             "key": self.key,
             "typed": self.typed,
             "batch": self.batch,
+            "action": self.action,
             "typing": self.typing,
             "once": self.once,
             "task": self.task,
@@ -329,38 +343,26 @@ impl Question {
     }
 }
 
-/// Decide the whole request `actions` against `asking`, reading where each
-/// action lands through `look` before anything is sent.
+/// Decide `actions` against `asking` as the screen is now, sending nothing:
+/// a typing command's check before its first character.
 pub(crate) fn decide(actions: &[Action], asking: &Asking, look: &mut impl Look) -> Decision {
     let batch = digest(actions);
-    // An earlier action may move focus or what lies under a point, so what
-    // was read for later ones may not hold: those are "can't tell".
-    let mut changed = false;
     // A pointer press decides; its release in the same request follows it.
     let mut pressed = false;
-    // Text typed may change what lies under a point (a live search), but
-    // not where more typing goes: drafts typed in turn stay free.
-    let mut typed = false;
     for action in actions {
-        let pointed = matches!(
-            action,
-            Action::Pointer { .. } | Action::Click { .. } | Action::Drag { .. }
-        );
-        let unsure = changed || (typed && pointed);
-        let decision = judge(action, asking, look, &batch, (unsure, pressed));
+        let decision = judge(action, asking, look, &batch, pressed);
         if decision != Decision::Free {
             return decision;
         }
         pressed = holds(action, pressed);
-        changed |= changes(action);
-        typed |= matches!(action, Action::Type { .. });
     }
     Decision::Free
 }
 
-/// The check before each event of a request that passed: what each action
-/// would do is judged again where it lands just before it is sent, by the
-/// grants the request brought, and one they don't cover stops the rest.
+/// The check before each event of a request: what each action would do is
+/// judged where it lands just before its first event, and again before each
+/// further one, by the grants the request brought. One they don't cover
+/// stops the request there.
 pub(crate) struct Recheck {
     asking: Asking,
     batch: String,
@@ -374,15 +376,9 @@ pub(crate) struct Recheck {
 }
 
 impl Recheck {
-    /// Before `action`, the next one: judged again where it lands now.
+    /// Before `action`, the next one: judged where it lands now.
     pub(crate) fn check(&mut self, action: &Action, look: &mut impl Look) -> Decision {
-        let decision = judge(
-            action,
-            &self.asking,
-            look,
-            &self.batch,
-            (false, self.pressed),
-        );
+        let decision = judge(action, &self.asking, look, &self.batch, self.pressed);
         self.pressed = holds(action, self.pressed);
         self.current = Some(action.clone());
         decision
@@ -398,58 +394,42 @@ impl Recheck {
         if matches!(action, Action::Type { .. }) && look.unmoved() {
             return Decision::Free;
         }
-        judge(action, &self.asking, look, &self.batch, (false, false))
+        judge(action, &self.asking, look, &self.batch, false)
     }
 }
 
-/// [`decide`], with the check before each event of a request that passed.
-pub(crate) fn recheck(
-    actions: &[Action],
-    asking: &Asking,
-    look: &mut impl Look,
-) -> (Decision, Recheck) {
-    let recheck = Recheck {
+/// The check before each event of the request `actions`, judged by
+/// `asking`.
+pub(crate) fn recheck(actions: &[Action], asking: &Asking) -> Recheck {
+    Recheck {
         asking: asking.clone(),
         batch: digest(actions),
         pressed: false,
         current: None,
         held: None,
-    };
-    (decide(actions, asking, look), recheck)
+    }
 }
 
 /// What `action` of the request whose digest is `batch` comes to where it
-/// lands, read through `look`. `changed` says an earlier action may have
-/// moved what was read; `pressed` that a press before it holds the button.
-/// A drag lands at both its ends, and the account at each must allow it.
+/// lands, read through `look`; `pressed` says a press before it holds the
+/// button. A drag lands at both its ends, and the account at each must
+/// allow it.
 fn judge(
     action: &Action,
     asking: &Asking,
     look: &mut impl Look,
     batch: &str,
-    (changed, pressed): (bool, bool),
+    pressed: bool,
 ) -> Decision {
     let target = target(action, look);
     let drop = match action {
         Action::Drag { to_x, to_y, .. } => Some(look.at_point(*to_x, *to_y)),
         _ => None,
     };
-    let mut found: Vec<Found> = std::iter::once(&target)
+    let found: Vec<Found> = std::iter::once(&target)
         .chain(drop.as_ref())
         .filter_map(|landing| account(landing, asking))
         .collect();
-    if changed {
-        // Where an earlier action may have moved things, which account this
-        // lands in can't be told either: it asks, and only once, unless what
-        // was read is already Look Only.
-        found.retain(|found| found.level == Level::LookOnly);
-        found.push(Found {
-            key: AccountKey::unread(),
-            name: "this account".to_owned(),
-            level: Level::Ask,
-            known: false,
-        });
-    }
     // A move with a button held, a scroll's own move included, is a drag:
     // a change where it lands.
     let changes_it = mutates(action)
@@ -465,7 +445,7 @@ fn judge(
             account: strict.name.clone(),
         };
     }
-    let Some(what) = asks(action, &target, changed, pressed) else {
+    let Some(what) = asks(action, &target, pressed) else {
         return Decision::Free;
     };
     // A task grant covers one account by name: never while the list can't
@@ -488,9 +468,7 @@ fn judge(
     };
     let known = open.iter().all(|found| found.known);
     let message = (what == "send-key" && target.editable && !target.secure).then(|| look.message());
-    // Allowed once, a request whose later part can't be told runs again;
-    // the check before each event then judges where each part lands.
-    let pinned = (known || changed)
+    let pinned = known
         && pinned(action, &target)
         && drop.as_ref().is_none_or(|drop| drop.window.is_some())
         && !matches!(message, Some(Message::Unread));
@@ -675,56 +653,30 @@ fn mutates(action: &Action) -> bool {
     }
 }
 
-/// Whether `action` may move focus or change what lies under a point, so
-/// what was read for the actions after it may no longer hold.
-fn changes(action: &Action) -> bool {
-    match action {
-        Action::Pointer { phase, .. } => !matches!(phase, PointerPhase::Move),
-        Action::Move { .. } | Action::Wait { .. } | Action::Type { .. } => false,
-        // Scrolling moves what lies under every point.
-        Action::Scroll { .. }
-        | Action::ScrollIntoView { .. }
-        | Action::Click { .. }
-        | Action::Drag { .. }
-        | Action::Key { .. }
-        | Action::Reference { .. }
-        | Action::Press { .. }
-        | Action::SetValue { .. }
-        | Action::Check { .. }
-        | Action::Uncheck { .. }
-        | Action::Pick { .. }
-        | Action::Expand { .. }
-        | Action::Collapse { .. } => true,
-    }
-}
-
 /// Why `action` asks in an account that asks before sending, or none when
-/// it is free there. `changed` says an earlier action may have moved what
-/// was read; `pressed` that a press in this request already decided for its
-/// release.
-fn asks(action: &Action, target: &Target, changed: bool, pressed: bool) -> Option<&'static str> {
+/// it is free there; `pressed` says a press in this request already decided
+/// for its release.
+fn asks(action: &Action, target: &Target, pressed: bool) -> Option<&'static str> {
     match action {
         Action::Pointer { phase, .. } => match phase {
             PointerPhase::Move if pressed => Some("drag"),
             PointerPhase::Move => None,
             PointerPhase::Up if pressed => None,
-            PointerPhase::Down | PointerPhase::Up => by_name(target, changed),
+            PointerPhase::Down | PointerPhase::Up => by_name(target),
         },
         Action::Move { .. } | Action::Scroll { .. } if pressed => Some("drag"),
         Action::Move { .. }
         | Action::Scroll { .. }
         | Action::Wait { .. }
         | Action::ScrollIntoView { .. } => None,
-        Action::Click { .. } | Action::Reference { .. } | Action::Press { .. } => {
-            by_name(target, changed)
-        }
+        Action::Click { .. } | Action::Reference { .. } | Action::Press { .. } => by_name(target),
         Action::Drag { .. } => Some("drag"),
         Action::Type { text } => {
             if text.contains(['\n', '\r']) {
                 Some("newline")
             } else if target.secure {
                 Some("password")
-            } else if changed || !target.editable {
+            } else if !target.editable {
                 // Typing that lands outside a text field may be a shortcut.
                 Some("unsure")
             } else {
@@ -739,8 +691,8 @@ fn asks(action: &Action, target: &Target, changed: bool, pressed: bool) -> Optio
         | Action::Uncheck { .. }
         | Action::Pick { .. }
         | Action::Expand { .. }
-        | Action::Collapse { .. } => by_name(target, changed),
-        Action::Key { key } => by_key(key, target, changed),
+        | Action::Collapse { .. } => by_name(target),
+        Action::Key { key } => by_key(key, target),
     }
 }
 
@@ -748,16 +700,13 @@ fn asks(action: &Action, target: &Target, changed: bool, pressed: bool) -> Optio
 /// (Shift+Return only breaks a line in one that takes several), Return or
 /// Space on a control goes by its name, and anything else with no text
 /// field focused may be a shortcut that sends, so it asks.
-fn by_key(key: &str, target: &Target, changed: bool) -> Option<&'static str> {
+fn by_key(key: &str, target: &Target) -> Option<&'static str> {
     let lowered = key.to_ascii_lowercase();
     let parts: Vec<&str> = lowered.split('+').collect();
     let base = parts.last().copied().unwrap_or_default();
     let shift_only = parts.len() == 2 && parts[0] == "shift";
     if words::NAVIGATION.contains(&base) {
         return None;
-    }
-    if changed {
-        return Some("unsure");
     }
     // A character typed into a password field follows the password rule.
     let character = base.chars().count() == 1 && (parts.len() == 1 || shift_only);
@@ -768,7 +717,7 @@ fn by_key(key: &str, target: &Target, changed: bool) -> Option<&'static str> {
         "return" | "enter" if target.editable => {
             (!(shift_only && target.multiline)).then_some("send-key")
         }
-        "return" | "enter" | "space" => by_name(target, false),
+        "return" | "enter" | "space" => by_name(target),
         _ if target.editable && parts.len() == 1 => None,
         _ if target.editable && shift_only => None,
         _ => Some("unsure"),
@@ -777,10 +726,7 @@ fn by_key(key: &str, target: &Target, changed: bool) -> Option<&'static str> {
 
 /// A control's verdict by its name: one named like a sending verb asks, an
 /// unnamed or unread one asks, and any other is free.
-fn by_name(target: &Target, changed: bool) -> Option<&'static str> {
-    if changed {
-        return Some("unsure");
-    }
+fn by_name(target: &Target) -> Option<&'static str> {
     match target.name.as_deref() {
         None => Some("unnamed"),
         Some(name) if words::sends(name) => Some("click"),
@@ -788,10 +734,11 @@ fn by_name(target: &Target, changed: bool) -> Option<&'static str> {
     }
 }
 
-/// Whether a once or a command grant in `asking` covers `action` of this
-/// request in `account`, landing where `target` binds: a once grant for
-/// this very request and message, or a command grant for this typing into
-/// this field. Task grants are each end's own, judged before.
+/// Whether a once, permit or command grant in `asking` covers `action` of
+/// this request in `account`, landing where `target` binds: a once grant
+/// for this very request and message, a permit for this very action and
+/// message, or a command grant for this typing into this field. Task grants
+/// are each end's own, judged before.
 fn allowed(
     asking: &Asking,
     action: &Action,
@@ -812,20 +759,39 @@ fn allowed(
                 && granted == account
                 && target == approved
         }
+        Allowance::Permit {
+            account: granted,
+            action: allowed,
+            target: approved,
+            value,
+        } => {
+            granted == account
+                && *allowed == action.digest()
+                && target == approved
+                && same_message(message, value.as_deref())
+        }
         Allowance::Once {
             account: granted,
             batch: allowed,
             target: approved,
             value,
         } => {
-            let same_message = match message {
-                None => true,
-                Some(Message::Whole { digest, .. }) => value.as_deref() == Some(digest),
-                Some(Message::Unread) => false,
-            };
-            granted == account && allowed == batch && target == approved && same_message
+            granted == account
+                && allowed == batch
+                && target == approved
+                && same_message(message, value.as_deref())
         }
     })
+}
+
+/// Whether `message`, what an action would send, is the one whose digest a
+/// grant names as `value`: always, for an action that sends none.
+fn same_message(message: Option<&Message>, value: Option<&str>) -> bool {
+    match message {
+        None => true,
+        Some(Message::Whole { digest, .. }) => value == Some(digest.as_str()),
+        Some(Message::Unread) => false,
+    }
 }
 
 /// Where `target` lands, as a once grant is bound to it.
@@ -878,6 +844,7 @@ fn question(
         key,
         typed,
         batch,
+        action: action.digest(),
         message,
         typing: None,
         once: false,

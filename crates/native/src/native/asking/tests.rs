@@ -214,27 +214,6 @@ fn every_pointer_phase_is_judged_and_the_press_decides_for_its_release() {
 }
 
 #[test]
-fn a_later_action_after_one_that_may_move_focus_cant_be_told_and_asks() {
-    let asking = listing(Kind::Site, "slack.com", Level::Ask);
-    let mut look = scripted(
-        page("app.slack.com", "AXGroup", Some("Message #general")),
-        field("app.slack.com", true),
-    );
-    let whole = actions(json!([
-        {"type": "click", "x": 1, "y": 1},
-        {"type": "type", "text": "hello"},
-        {"type": "key", "key": "return"},
-    ]));
-    let Decision::Ask(question) = decide(&whole, &asking, &mut look) else {
-        panic!("the request asks before its first event");
-    };
-    assert_eq!(
-        question.what, "unsure",
-        "after the click, focus can't be told"
-    );
-}
-
-#[test]
 fn text_with_a_line_break_or_into_a_password_field_asks_without_its_text() {
     let asking = listing(Kind::Site, "slack.com", Level::Ask);
     let mut look = scripted(Target::default(), field("app.slack.com", false));
@@ -516,8 +495,7 @@ fn an_action_that_would_now_land_somewhere_stricter_stops_the_rest() {
     };
     let mut look = scripted(notes.clone(), notes);
     let keys = actions(json!([{"type": "type", "text": "a"}, {"type": "type", "text": "b"}]));
-    let (decision, mut recheck) = recheck(&keys, &asking, &mut look);
-    assert_eq!(decision, Decision::Free, "judged in an app not listed");
+    let mut recheck = recheck(&keys, &asking);
     assert_eq!(recheck.check(&keys[0], &mut look), Decision::Free);
     // Before the second key, Slack, kept Look Only, has come to the front.
     look.focus = Target {
@@ -687,8 +665,7 @@ fn an_action_judged_again_stops_when_the_same_account_now_has_a_control_that_sen
         page("github.com", "AXButton", Some("Open")),
         Target::default(),
     );
-    let (decision, mut again) = recheck(&click, &asking, &mut look);
-    assert_eq!(decision, Decision::Free);
+    let mut again = recheck(&click, &asking);
     look.point = page("github.com", "AXButton", Some("Send"));
     assert_eq!(
         what(&again.check(&click[0], &mut look)),
@@ -715,8 +692,7 @@ fn an_action_judged_again_keeps_each_grant_to_its_own_account_window_and_element
     task.grants.push(Allowance::Task {
         account: site("slack.com"),
     });
-    let (decision, mut again) = recheck(&click, &task, &mut look);
-    assert_eq!(decision, Decision::Free);
+    let mut again = recheck(&click, &task);
     look.point = page("github.com", "AXButton", Some("Send"));
     assert!(
         matches!(again.check(&click[0], &mut look), Decision::Ask(_)),
@@ -728,8 +704,7 @@ fn an_action_judged_again_keeps_each_grant_to_its_own_account_window_and_element
         panic!("asks");
     };
     asking.grants.push(once(&question));
-    let (decision, mut again) = recheck(&click, &asking, &mut look);
-    assert_eq!(decision, Decision::Free);
+    let mut again = recheck(&click, &asking);
     assert_eq!(again.check(&click[0], &mut look), Decision::Free);
     look.point = Target {
         window: Some(8),
@@ -754,8 +729,7 @@ fn between_characters_focus_that_stayed_is_not_read_again_and_focus_that_moved_i
     let asking = listing(Kind::Site, "slack.com", Level::Ask);
     let typing = actions(json!([{"type": "type", "text": "hunter2"}]));
     let mut look = scripted(Target::default(), field("app.slack.com", true));
-    let (decision, mut again) = recheck(&typing, &asking, &mut look);
-    assert_eq!(decision, Decision::Free);
+    let mut again = recheck(&typing, &asking);
     assert_eq!(again.check(&typing[0], &mut look), Decision::Free);
     let reads = look.focus_reads;
     look.unmoved = true;
@@ -776,7 +750,7 @@ fn between_characters_focus_that_stayed_is_not_read_again_and_focus_that_moved_i
     let mut bank = asking.clone();
     bank.accounts[0].id = "bank.example".to_owned();
     bank.accounts[0].level = Level::LookOnly;
-    let (_, mut again) = recheck(&typing, &bank, &mut look);
+    let mut again = recheck(&typing, &bank);
     let _ = again.check(&typing[0], &mut look);
     assert!(
         matches!(again.event(&mut look), Decision::Deny { .. }),
@@ -1025,28 +999,6 @@ fn while_the_list_cant_be_read_no_task_grant_covers_anything_and_none_is_offered
 }
 
 #[test]
-fn after_a_scroll_what_lies_under_a_point_cant_be_told_and_asks() {
-    let asking = listing(Kind::Site, "github.com", Level::Ask);
-    let mut look = scripted(
-        page("github.com", "AXButton", Some("Open")),
-        Target::default(),
-    );
-    for scroll in [
-        json!({"type": "scroll", "x": 1, "y": 1, "dy": 3}),
-        json!({"type": "scroll-into-view", "ref": "8123abc.12"}),
-    ] {
-        let request = actions(json!([scroll.clone(), {"type": "click", "x": 1, "y": 1}]));
-        assert_eq!(
-            what(&decide(&request, &asking, &mut look)),
-            Some("unsure"),
-            "{scroll}"
-        );
-    }
-    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
-    assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
-}
-
-#[test]
 fn a_floating_panel_or_menu_of_a_listed_app_over_another_app_is_judged_as_the_listed_app() {
     let window = |number: i64, pid: i64, layer: i64| atlas_core::screen::windows::Window {
         number,
@@ -1091,58 +1043,6 @@ fn a_floating_panel_or_menu_of_a_listed_app_over_another_app_is_judged_as_the_li
 }
 
 #[test]
-fn after_typing_what_lies_under_a_point_cant_be_told_but_more_typing_stays_a_draft() {
-    let asking = listing(Kind::Site, "github.com", Level::Ask);
-    let mut look = scripted(
-        page("github.com", "AXButton", Some("Open")),
-        field("github.com", false),
-    );
-    let then_click = actions(json!([
-        {"type": "type", "text": "release"},
-        {"type": "click", "x": 1, "y": 1},
-    ]));
-    assert_eq!(
-        what(&decide(&then_click, &asking, &mut look)),
-        Some("unsure")
-    );
-    let drafts = actions(json!([
-        {"type": "type", "text": "release "},
-        {"type": "type", "text": "notes"},
-    ]));
-    assert_eq!(decide(&drafts, &asking, &mut look), Decision::Free);
-}
-
-#[test]
-fn after_a_click_which_account_a_key_lands_in_cant_be_told_so_it_asks_first() {
-    let asking = listing(Kind::Site, "slack.com", Level::Ask);
-    // The click lands in the listed page's draft field; the focus read
-    // before it is an unlisted page.
-    let mut look = scripted(
-        Target {
-            editable: true,
-            ..page("app.slack.com", "AXTextArea", Some("Message"))
-        },
-        field("gitlab.com", false),
-    );
-    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
-    assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
-    let then_return = actions(json!([
-        {"type": "click", "x": 1, "y": 1},
-        {"type": "key", "key": "return"},
-    ]));
-    let Decision::Ask(question) = decide(&then_return, &asking, &mut look) else {
-        panic!("asks before the click is sent");
-    };
-    assert_eq!(question.what, "unsure");
-    assert_eq!(
-        question.details()["task"],
-        false,
-        "no account to allow it in"
-    );
-    assert_eq!(question.details()["once"], true);
-}
-
-#[test]
 fn a_check_before_an_event_judges_the_app_it_finds_not_the_one_the_request_named() {
     let looks = crate::native::ax::Looks::default();
     let epoch = atlas_core::session::InputEpoch {
@@ -1173,9 +1073,103 @@ fn a_check_before_an_event_judges_the_app_it_finds_not_the_one_the_request_named
             ..Target::default()
         },
     );
-    let (decision, mut again) = recheck(&typing, &asking, &mut look);
-    assert_eq!(decision, Decision::Free);
+    let mut again = recheck(&typing, &asking);
     assert_eq!(again.check(&typing[0], &mut look), Decision::Free);
     look.focus = slack;
     assert!(matches!(again.event(&mut look), Decision::Deny { .. }));
+}
+
+/// The permit the person's Allow gives for the action `question` stopped.
+fn permit(question: &Question) -> Allowance {
+    let value = match &question.message {
+        Some(Message::Whole { digest, .. }) => Some(digest.clone()),
+        Some(Message::Unread) | None => None,
+    };
+    Allowance::Permit {
+        account: question.account_key.clone(),
+        action: question.action.clone(),
+        target: question.bound.clone(),
+        value,
+    }
+}
+
+/// Slack's message field, in its window 7, with the draft `typed` in it.
+fn composer(typed: &str) -> (Target, Message) {
+    let field = Target {
+        editable: true,
+        multiline: false,
+        ..page("app.slack.com", "AXTextField", Some("Message"))
+    };
+    (field, Message::whole(typed))
+}
+
+#[test]
+fn a_draft_clicked_and_typed_never_asks_and_return_asks_once_about_the_typed_message() {
+    let asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let (field, _) = composer("");
+    let mut look = scripted(field.clone(), field);
+    let request = actions(json!([
+        {"type": "click", "x": 1, "y": 1},
+        {"type": "type", "text": "hello team"},
+        {"type": "key", "key": "return"},
+    ]));
+    assert_eq!(
+        decide(&request[..2], &asking, &mut look),
+        Decision::Free,
+        "a draft"
+    );
+    let mut each = recheck(&request, &asking);
+    assert_eq!(each.check(&request[0], &mut look), Decision::Free);
+    assert_eq!(each.check(&request[1], &mut look), Decision::Free);
+    // What Return would send is read as it is when Return is reached.
+    look.message = Message::whole("hello team");
+    let Decision::Ask(question) = each.check(&request[2], &mut look) else {
+        panic!("Return in the field sends");
+    };
+    assert_eq!(question.what, "send-key");
+    assert_eq!(question.details()["message"]["preview"], "hello team");
+    assert_eq!(look.messages, 1, "asked once, at the step that sends");
+}
+
+#[test]
+fn a_permit_covers_exactly_the_action_it_was_given_for() {
+    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let (field, message) = composer("hello team");
+    let mut look = scripted(page("app.slack.com", "AXButton", Some("Send")), field);
+    look.message = message;
+    let send = actions(json!([{"type": "key", "key": "return"}]));
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    let typed = actions(json!([{"type": "type", "text": "hunter2\n"}]));
+    for stopped in [&send, &click, &typed] {
+        let Decision::Ask(question) = decide(stopped, &asking, &mut look) else {
+            panic!("asks");
+        };
+        asking.grants.push(permit(&question));
+        assert_eq!(decide(stopped, &asking, &mut look), Decision::Free);
+    }
+    // Another request holding the same action is covered too: it's the
+    // action, not the request, that was allowed.
+    let after = actions(json!([
+        {"type": "key", "key": "down"},
+        {"type": "key", "key": "return"},
+    ]));
+    assert_eq!(decide(&after, &asking, &mut look), Decision::Free);
+    for other in [
+        json!({"type": "key", "key": "enter"}),
+        json!({"type": "click", "x": 1, "y": 1, "count": 2}),
+        json!({"type": "type", "text": "hunter3\n"}),
+    ] {
+        assert!(
+            matches!(
+                decide(&actions(json!([other.clone()])), &asking, &mut look),
+                Decision::Ask(_)
+            ),
+            "{other}"
+        );
+    }
+    look.message = Message::whole("hello everyone");
+    assert!(
+        matches!(decide(&send, &asking, &mut look), Decision::Ask(_)),
+        "another message"
+    );
 }

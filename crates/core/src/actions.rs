@@ -240,6 +240,13 @@ impl Action {
         }
     }
 
+    /// The digest of this action's whole payload: its kind, text, keys,
+    /// modifiers, button, count, points and element. A permit the person
+    /// gives for one stopped action is bound to it.
+    pub fn digest(&self) -> String {
+        crate::digest::bytes_sha256(format!("{self:?}").as_bytes())
+    }
+
     /// The element it acts on through Accessibility and what it does to
     /// it; None for an action that sends events.
     pub fn element_action(&self) -> Option<(Reference, ElementAction)> {

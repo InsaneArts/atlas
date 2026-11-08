@@ -4613,9 +4613,14 @@ async fn gated_click(asking: Value) -> (Result<Value>, usize) {
 #[tokio::test]
 async fn a_request_the_person_must_be_asked_about_sends_nothing() {
     let (reply, posted) = gated_click(json!({"unknown": true})).await;
-    let error = reply.unwrap_err();
-    assert_eq!(error.code, Code::WaitingForPerson);
-    assert_eq!(error.details["ask"]["what"], "unnamed");
+    // Judged just before its first event: a refusal that sent nothing.
+    let reply = reply.unwrap();
+    assert_eq!(reply["code"], "waiting-for-person");
+    assert_eq!(reply["ask"]["what"], "unnamed");
+    assert_eq!(
+        (&reply["performed"], &reply["partial"], &reply["uncertain"]),
+        (&json!(0), &json!(false), &json!(false))
+    );
     assert_eq!(posted, 0, "nothing was sent");
 }
 
@@ -4626,7 +4631,7 @@ async fn an_app_that_cant_be_told_takes_the_strictest_level_and_look_only_sends_
         {"kind": "app", "id": "com.example.chat", "name": "Chat", "level": "ask"},
     ]});
     let (reply, posted) = gated_click(asking).await;
-    assert_eq!(reply.unwrap_err().code, Code::Denied);
+    assert_eq!(reply.unwrap()["code"], "denied");
     assert_eq!(posted, 0, "nothing was sent");
 }
 
