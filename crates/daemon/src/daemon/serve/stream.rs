@@ -75,6 +75,30 @@ impl Drop for Producer {
     }
 }
 
+/// How long the stream the capture source keeps for one-shot pictures stays
+/// open after the last of them: an agent's next step usually comes within
+/// it, and its picture then needs no new stream, which takes up to a second
+/// to show its first.
+const KEPT: Duration = Duration::from_secs(600);
+/// How often the kept stream is looked at.
+const KEPT_CHECK: Duration = Duration::from_secs(10);
+
+/// Stop the stream the capture source keeps for one-shot pictures once none
+/// was taken for [`KEPT`], until the daemon stops. A viewer's stream is never
+/// touched.
+pub(super) async fn release_kept_pictures(daemon: Arc<Daemon>) {
+    loop {
+        tokio::select! {
+            () = daemon.stopped() => return,
+            () = tokio::time::sleep(KEPT_CHECK) => {}
+        }
+        let source = daemon.source.clone();
+        // A stop that fails leaves the source quarantined; the next capture
+        // asks it to stop again.
+        let _ = tokio::task::spawn_blocking(move || source.release_kept(KEPT)).await;
+    }
+}
+
 /// What the source knows of `generation` of daemon `daemon_pid`, for a
 /// controller settling a stream whose stop it never heard confirmed. A stop
 /// request is echoed only when this source recorded that very request.

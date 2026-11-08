@@ -393,6 +393,7 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
     let recording = tokio::spawn(consent::restart_for_recording(move || {
         watcher.restarting.notify_one();
     }));
+    let releasing = tokio::spawn(stream::release_kept_pictures(daemon.clone()));
     let mut serving = Serving {
         supervision: daemon.supervision(uid),
         daemon: daemon.clone(),
@@ -416,6 +417,7 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
 
     asking.abort();
     recording.abort();
+    releasing.abort();
     if let Some(supervision) = serving.supervision {
         let supervised = drain_supervision(supervision, deadline).await;
         if supervised.is_err() {

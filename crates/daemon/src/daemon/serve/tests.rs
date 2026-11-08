@@ -876,7 +876,7 @@ async fn replies_keep_their_shapes() {
     );
     assert_eq!(
         keys(&hello["daemon"]["pictureStats"]),
-        ["coreGraphics", "lastCoreGraphics", "streamed"]
+        ["coreGraphics", "lastCoreGraphics", "late", "streamed"]
     );
     assert_eq!(keys(&hello["display"]), ["height", "scale", "width"]);
     assert_eq!(keys(&hello["user"]), ["home", "name", "uid"]);

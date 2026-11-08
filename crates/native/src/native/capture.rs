@@ -24,11 +24,15 @@ use objc2_image_io::{
 
 mod pictures;
 mod raw;
+mod shape;
 pub mod source;
 mod stream;
 
 pub use raw::RawShot;
-pub use stream::{recorder_restarted, stop_display_stream, stream_diagnostics, stream_display_rgb};
+pub use stream::{
+    Currency, Reader, recorder_restarted, stop_display_stream, stream_diagnostics,
+    stream_display_rgb,
+};
 
 /// premultipliedFirst | byteOrder32Little: the native BGRA layout.
 const BGRA: u32 = CGImageAlphaInfo::PremultipliedFirst.0 | CGImageByteOrderInfo::Order32Little.0;
@@ -330,9 +334,9 @@ fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
 }
 
 /// The checked main display, or only `area` of it (in global display
-/// points), at most `limit` pixels on its longest side. The whole display
-/// comes from the open stream when it has the pixels asked for; otherwise,
-/// and for an area, from CoreGraphics. Each is counted, with why.
+/// points), at most `limit` pixels on its longest side, from the stream,
+/// proven current, as an agent reads it. CoreGraphics takes it only when the
+/// stream gives none; each is counted, with why.
 ///
 /// # Errors
 ///
@@ -340,15 +344,9 @@ fn banded(width: usize, height: usize, rows: usize) -> CFRetained<CGImage> {
 /// be captured.
 pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> Result<Shot> {
     consented()?;
-    let (image, scale) = match area {
-        None => match streamed(display, limit) {
-            Ok(shot) => (rgb_image(&shot)?, shot.scale),
-            Err(()) => display_image(display, None)?,
-        },
-        Some(area) => {
-            pictures::COUNTS.captured(pictures::Captured::Area);
-            display_image(display, Some(area))?
-        }
+    let (image, scale) = match streamed(display, area, limit, Reader::Agent) {
+        Ok((shot, _)) => (rgb_image(&shot)?, shot.scale),
+        Err(()) => display_image(display, area)?,
     };
     let (image, target_width, target_height) = resized(image, limit)?;
 
@@ -360,49 +358,73 @@ pub fn main_display(display: u32, area: Option<CGRect>, limit: Option<u32>) -> R
     })
 }
 
-/// The checked whole display as packed sRGB pixels, without image encoding:
-/// from the open stream when it has the pixels asked for, otherwise from
-/// CoreGraphics, each counted, with why. Session and display-epoch checks
-/// belong to the caller, around each capture.
+/// The checked whole display as packed sRGB pixels, without image encoding,
+/// from the stream, proven current, as an agent reads it; CoreGraphics only
+/// when the stream gives none, counted with why. Session and display-epoch
+/// checks belong to the caller, around each capture.
 ///
 /// # Errors
 ///
 /// Returns an error when Screen Recording is not allowed or the display can't
 /// be captured or read.
 pub fn main_display_rgb(display: u32, limit: Option<u32>) -> Result<RawShot> {
-    consented()?;
-    match streamed(display, limit) {
-        Ok(shot)
-            if fit(shot.width as usize, shot.height as usize, limit)
-                == (shot.width as usize, shot.height as usize) =>
-        {
-            Ok(shot)
-        }
-        Ok(shot) => raw::from_image(&*rgb_image(&shot)?, limit, shot.scale),
-        Err(()) => core_graphics_rgb(display, limit),
-    }
+    person_or_agent_rgb(display, limit, Reader::Agent).map(|(shot, _)| shot)
 }
 
-/// The checked whole display as packed sRGB pixels from CoreGraphics alone,
-/// for the stream's own fallback.
+/// The checked whole display as packed sRGB pixels, as [`main_display_rgb`],
+/// for a picture only a person reads beside an agent's action: when nothing
+/// proves the stream's newest picture current in time, it answers if it is a
+/// moment old, and says so with [`Currency::Late`], before any CoreGraphics
+/// capture. A CoreGraphics capture is current.
 ///
 /// # Errors
 ///
 /// Returns an error when Screen Recording is not allowed or the display can't
 /// be captured or read.
-pub(crate) fn core_graphics_rgb(display: u32, limit: Option<u32>) -> Result<RawShot> {
+pub fn person_display_rgb(display: u32, limit: Option<u32>) -> Result<(RawShot, Currency)> {
+    person_or_agent_rgb(display, limit, Reader::Person)
+}
+
+fn person_or_agent_rgb(
+    display: u32,
+    limit: Option<u32>,
+    reader: Reader,
+) -> Result<(RawShot, Currency)> {
+    consented()?;
+    match streamed(display, None, limit, reader) {
+        Ok(picture) => Ok(picture),
+        Err(()) => Ok((core_graphics_rgb(display, limit)?, Currency::Proven)),
+    }
+}
+
+/// The checked whole display as packed sRGB pixels from CoreGraphics alone,
+/// for the stream's own last resort and the CoreGraphics live view.
+///
+/// # Errors
+///
+/// Returns an error when Screen Recording is not allowed or the display can't
+/// be captured or read.
+pub fn core_graphics_rgb(display: u32, limit: Option<u32>) -> Result<RawShot> {
     let (image, scale) = display_image(display, None)?;
     raw::from_image(&image, limit, scale)
 }
 
-/// The whole display from the open stream, counted either way: macOS's
-/// screen recorder keeps part of every CoreGraphics capture, but nothing
-/// measurable of a stream's pictures.
-fn streamed(display: u32, limit: Option<u32>) -> std::result::Result<RawShot, ()> {
-    match stream::streamed_display_rgb(display, limit) {
-        Ok(shot) => {
-            pictures::COUNTS.captured(pictures::Captured::Stream);
-            Ok(shot)
+/// `area` of the display, or all of it, from the stream, counted either
+/// way: macOS's screen recorder keeps part of every CoreGraphics capture,
+/// but nothing measurable of a stream's pictures.
+fn streamed(
+    display: u32,
+    area: Option<CGRect>,
+    limit: Option<u32>,
+    reader: Reader,
+) -> std::result::Result<(RawShot, Currency), ()> {
+    match stream::streamed_display_rgb(display, area, limit, reader) {
+        Ok((shot, currency)) => {
+            pictures::COUNTS.captured(match currency {
+                Currency::Proven => pictures::Captured::Stream,
+                Currency::Late => pictures::Captured::Late,
+            });
+            Ok((shot, currency))
         }
         Err(why) => {
             pictures::COUNTS.captured(pictures::Captured::CoreGraphics(why));

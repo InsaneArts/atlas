@@ -12,7 +12,7 @@
     unsafe_code,
     reason = "FFI: ScreenCaptureKit callbacks, CoreMedia clocks and locked pixel buffers"
 )]
-use super::{RawShot, fit, permitted, raw::pack};
+use super::{RawShot, permitted, raw::shaped, shape::Shape};
 use crate::native;
 use atlas_core::{
     buffer::Buffer,
@@ -28,9 +28,10 @@ use objc2::{
     sel,
 };
 use objc2_core_foundation::{
-    CFArray, CFDictionary, CFNumber, CFRetained, CFRunLoop, CFString, CFType, kCFRunLoopDefaultMode,
+    CFArray, CFDictionary, CFNumber, CFRetained, CFRunLoop, CFString, CFType, CGRect,
+    kCFRunLoopDefaultMode,
 };
-use objc2_core_graphics::{CGDisplayCopyDisplayMode, CGDisplayMode};
+use objc2_core_graphics::{CGDisplayBounds, CGDisplayCopyDisplayMode, CGDisplayMode};
 use objc2_core_media::{CMClock, CMSampleBuffer, CMTime};
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
@@ -49,7 +50,7 @@ use std::{
     cell::RefCell,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
     time::{Duration, Instant},
@@ -59,8 +60,9 @@ use std::{
 /// picture in about 120 ms, and the caller refuses a frame half a second old
 /// anyway.
 const WAIT: Duration = Duration::from_millis(250);
-/// How long the first request after macOS's screen recorder was restarted
-/// waits: a stream on a new recorder sends its first picture in 200–350 ms.
+/// How long the first request after macOS's screen recorder was restarted,
+/// or the stream was replaced for a picture, waits: a stream on a new
+/// recorder sends its first picture in 200–350 ms, a new stream in 60–250.
 /// A picture still has to reach the caller within its half second, even a
 /// CoreGraphics one taken after this wait.
 const RESTARTED_WAIT: Duration = Duration::from_millis(400);
@@ -70,6 +72,27 @@ const RESTARTED_WAIT: Duration = Duration::from_millis(400);
 const SILENCE: Duration = Duration::from_millis(100);
 /// How often a request still waiting after [`SILENCE`] asks again.
 const SILENCE_CHECK: Duration = Duration::from_millis(20);
+/// How long a stream must have sent nothing before a picture asks it for a
+/// sample: a changing screen sends one more often than this.
+const NUDGE_AFTER: Duration = Duration::from_millis(50);
+/// How long a picture asks a still stream for a sample before it asks for
+/// a new stream instead: a stream's first sample is the screen as it is
+/// when it starts. Asks bring a sample about one time in three on a still
+/// screen, nearly always within 35 ms; a new stream's first takes 60–250 ms (up to about
+/// a second on a busy window server).
+const RENEW_AFTER: Duration = Duration::from_millis(40);
+/// How long the stream must have sent nothing before a picture has it
+/// replaced: a screen that changes now and then, a ticking clock, sends a
+/// sample sooner, which proves the picture without a new stream.
+const RENEW_QUIET: Duration = Duration::from_millis(300);
+/// The least time between two replacements of the stream for pictures. A
+/// picture of a still screen in between is proven by the new stream's
+/// samples, or taken another way.
+const RENEW_EVERY: Duration = Duration::from_secs(2);
+/// The most a stream's samples may lag the screen for its silence to say
+/// anything: a change before a request then arrives well within
+/// [`SILENCE`]. A stream lagging more proves pictures only by its samples.
+const TIMELY: Duration = Duration::from_millis(50);
 /// How long the session check before a CoreGraphics capture may take before
 /// it says WindowServer stalled the whole session; it takes well under a
 /// millisecond otherwise.
@@ -87,14 +110,26 @@ const SILENT_RENEW: Duration = Duration::from_secs(60);
 /// 170–200 ms here. A stop not confirmed in time leaves the source stopping,
 /// and the owner's frames are refused until its own stop settles it.
 const STOP_WAIT: Duration = Duration::from_millis(500);
+/// The longest side of a display the stream reads, in pixels.
+const MOST_PIXELS: usize = 16_384;
 /// The most samples a second the stream makes. Each one is a composite the
 /// window server makes for it, and no viewer reads more than this.
 const PICTURES_A_SECOND: i32 = 30;
 /// How long a one-shot picture waits for the open stream to prove its
-/// picture current: a few refreshes, as a screen that changes, or changed in
-/// the last few seconds, sends a sample at each. A still screen sends none,
-/// and its picture is taken another way.
-const PICTURE_WAIT: Duration = Duration::from_millis(50);
+/// picture current: a sample after it comes within a refresh or two on a
+/// changing screen, and a still one is proven by [`SILENCE`].
+const PICTURE_WAIT: Duration = Duration::from_millis(300);
+/// How often a one-shot picture waiting for a stream to open asks again.
+const OPEN_AGAIN: Duration = Duration::from_millis(100);
+/// How long a one-shot picture waits when the stream must open first: a new
+/// stream's first picture comes within a second of the ask (70 ms to 1.2 s
+/// measured, slower on a busy window server).
+const OPEN_WAIT: Duration = Duration::from_secs(3);
+/// How old the stream's newest picture may be, before the time it was asked
+/// for, to answer a request nothing proved in time: a stream whose samples
+/// arrive late (a window server under load) still shows the screen as it
+/// was a moment ago.
+const LATE: Duration = Duration::from_millis(500);
 /// How often a one-shot picture asked of an open stream looks again.
 const PICTURE_CHECK: Duration = Duration::from_millis(5);
 /// How far ahead of its callback a sample may be stamped. Its display time
@@ -107,6 +142,14 @@ struct Diagnostics {
     requests: AtomicU64,
     native_frames: AtomicU64,
     reused_frames: AtomicU64,
+    /// Requests nothing proved in time, answered with the stream's newest
+    /// picture a moment old.
+    late_frames: AtomicU64,
+    /// Times the open stream was asked for a sample while the screen was
+    /// still.
+    nudges: AtomicU64,
+    /// Streams replaced for a one-shot picture of a still screen.
+    picture_renewals: AtomicU64,
     renewals: AtomicU64,
     fallbacks: AtomicU64,
     idle_hints: AtomicU64,
@@ -155,7 +198,9 @@ impl Diagnostics {
         let value = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         let last_error = *self.last_error.lock().unwrap_or_else(|p| p.into_inner());
         json!({"requests":value(&self.requests),"nativeFrames":value(&self.native_frames),
-            "reusedFrames":value(&self.reused_frames),"renewals":value(&self.renewals),
+            "reusedFrames":value(&self.reused_frames),"lateFrames":value(&self.late_frames),
+            "nudges":value(&self.nudges),
+            "pictureRenewals":value(&self.picture_renewals),"renewals":value(&self.renewals),
             "fallbacks":value(&self.fallbacks),"idleHints":value(&self.idle_hints),
             "timeouts":value(&self.timeouts),"stalls":value(&self.stalls),
             "callbacks":value(&self.callbacks),
@@ -230,6 +275,27 @@ fn latest() -> u64 {
     checkpoint().saturating_add(ticks(LEAD))
 }
 
+/// The stream for `display` in the session of `epoch`: always at the
+/// display's own pixels, so every caller's picture, any part of it at any
+/// size, comes from the one stream.
+fn display_key(display: u32, epoch: &InputEpoch) -> Result<Key> {
+    let mode = CGDisplayCopyDisplayMode(display)
+        .ok_or_else(|| capture_error("The stream display has no mode"))?;
+    let (width, height) = (
+        CGDisplayMode::pixel_width(Some(&mode)),
+        CGDisplayMode::pixel_height(Some(&mode)),
+    );
+    if width == 0 || height == 0 || width.max(height) > MOST_PIXELS || epoch.width <= 0.0 {
+        return Err(capture_error("Invalid native stream dimensions"));
+    }
+    Ok(Key {
+        epoch: epoch.clone(),
+        width,
+        height,
+        scale: width as f64 / epoch.width,
+    })
+}
+
 #[derive(Clone, PartialEq)]
 struct Key {
     epoch: InputEpoch,
@@ -239,6 +305,8 @@ struct Key {
 }
 struct Pending {
     made: Instant,
+    /// The part of the stream's picture it gets, and its size.
+    shape: Shape,
     /// When the stream's silence was last asked to answer it.
     hushed: Option<Instant>,
     id: u64,
@@ -253,25 +321,43 @@ struct Slot {
     generation: AtomicU64,
     stopping: AtomicBool,
     preparing: AtomicBool,
-    /// Whether the screen recorder was restarted since the last request.
+    /// Whether the screen recorder was restarted, or the stream replaced for
+    /// a picture, since the last request.
     restarted: AtomicBool,
-    /// The open stream's state, for one-shot pictures to read without a
-    /// request of their own.
+    /// The open stream, for one-shot pictures to read without a request of
+    /// their own.
     serving: Mutex<Option<Arc<Callback>>>,
+    /// Whether an ask to open a stream waits in the worker's queue. At most
+    /// one does, so a frame request always finds room.
+    opening: AtomicBool,
+    /// Whether a one-shot picture asks the open stream for a sample.
+    nudge: AtomicBool,
+    /// A one-shot picture's ask for the open stream of this key to be
+    /// replaced, so the new stream's first sample proves its picture; void
+    /// once the picture ends.
+    renew: Mutex<Option<(Key, Arc<AtomicBool>)>>,
+    /// When the stream was last replaced for a picture.
+    renewed: Mutex<Option<Instant>>,
+    /// Whether the worker is replacing the stream: set before the old one is
+    /// ended, so a picture that finds none waits for the new one.
+    replacing: AtomicBool,
+    /// Frame requests sent to the worker and not yet taken by it.
+    queued: AtomicUsize,
     failure: Mutex<Option<(Code, String)>>,
     diagnostics: Diagnostics,
 }
 impl Slot {
-    /// How long the next request, asked for at `asked`, still waits for its
-    /// picture: longer once, for the first one after the screen recorder was
-    /// restarted, and counted from `asked`.
-    fn wait(&self, asked: Instant) -> Duration {
-        let wait = if self.restarted.swap(false, Ordering::AcqRel) {
-            RESTARTED_WAIT
-        } else {
-            WAIT
-        };
+    /// How long a request asked for at `asked` still waits, longer when
+    /// `restarted`.
+    fn wait_after(asked: Instant, restarted: bool) -> Duration {
+        let wait = if restarted { RESTARTED_WAIT } else { WAIT };
         wait.saturating_sub(asked.elapsed())
+    }
+    /// Whether the next request waits longer; it is taken once. A request
+    /// takes it after it is counted as queued and before it is sent, so a
+    /// replacement either sees it queued or leaves it this.
+    fn take_restarted(&self) -> bool {
+        self.restarted.swap(false, Ordering::SeqCst)
     }
     fn quiescent(&self, running: bool) -> bool {
         !running
@@ -348,6 +434,56 @@ impl Slot {
         }
         true
     }
+    /// A picture's ask for the stream to be replaced, taken only while no
+    /// frame request waits, so none is left without a stream to answer it;
+    /// none once the picture has ended or a stop is under way.
+    fn renewal(&self) -> Option<Key> {
+        let mut renew = self.renew.lock().unwrap_or_else(|p| p.into_inner());
+        if renew
+            .as_ref()
+            .is_some_and(|(_, wanted)| !self.opens_for(wanted) || !self.may_renew())
+        {
+            *renew = None;
+        }
+        renew.as_ref()?;
+        // A frame request sent from now on waits for the new stream's first
+        // picture; one sent before is seen here and puts the replacement off.
+        self.restarted.store(true, Ordering::SeqCst);
+        if self.queued.load(Ordering::SeqCst) > 0 || self.waiting(Duration::ZERO) {
+            return None;
+        }
+        let (key, _) = renew.take()?;
+        *self.renewed.lock().unwrap_or_else(|p| p.into_inner()) = Some(Instant::now());
+        Some(key)
+    }
+    /// Whether the stream is being replaced or started, so a picture that
+    /// finds none current waits for the new one.
+    fn restarting(&self) -> bool {
+        self.replacing.load(Ordering::SeqCst) || self.preparing.load(Ordering::SeqCst)
+    }
+    /// Whether the stream may be replaced for a picture: at most once every
+    /// [`RENEW_EVERY`].
+    fn may_renew(&self) -> bool {
+        self.renewed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .is_none_or(|at| at.elapsed() >= RENEW_EVERY)
+    }
+    /// Whether an ask to open a stream for a picture still holds: the
+    /// picture has not ended, and no stop is under way.
+    fn opens_for(&self, wanted: &AtomicBool) -> bool {
+        wanted.load(Ordering::Acquire) && !self.stopping.load(Ordering::Acquire)
+    }
+    /// Whether a request has waited `span` unanswered.
+    fn waiting(&self, span: Duration) -> bool {
+        self.pending
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .is_some_and(|request| {
+                request.alive.load(Ordering::Acquire) && request.made.elapsed() >= span
+            })
+    }
     /// The pending request still unanswered after [`SILENCE`], at most
     /// once every [`SILENCE_CHECK`].
     fn overdue(&self) -> Option<u64> {
@@ -394,17 +530,16 @@ impl Slot {
         }
     }
 }
-/// Why an open stream did not give a one-shot picture.
+/// Why the stream gave no one-shot picture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Unserved {
-    /// No stream is open.
+    /// No stream is open, and this picture may not open one.
     Closed,
-    /// The open stream shows another session or display.
+    /// The stream could not be opened or gave no picture at all.
+    Unavailable,
+    /// The stream shows another session or display.
     Elsewhere,
-    /// The open stream's pictures have fewer pixels than asked for.
-    Smaller,
-    /// The stream proved no picture current in time: the screen is still,
-    /// or the stream has no picture.
+    /// Nothing proved a picture current, and the newest is too old.
     Unproven,
 }
 
@@ -412,8 +547,8 @@ impl Unserved {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Closed => "no-stream",
+            Self::Unavailable => "unavailable",
             Self::Elsewhere => "other-display",
-            Self::Smaller => "smaller",
             Self::Unproven => "unproven",
         }
     }
@@ -421,12 +556,34 @@ impl Unserved {
 
 enum Message {
     Capture(Pending),
+    /// Open a stream of this key for a picture, unless one is open or
+    /// opening, or the picture has ended: a picture holds its capture
+    /// source while it runs, so no stop comes in between.
+    Open(Key, Arc<AtomicBool>),
     Stop(SyncSender<Result<()>>),
 }
 #[derive(Clone)]
 struct Worker {
     messages: SyncSender<Message>,
     slot: Arc<Slot>,
+}
+impl Worker {
+    /// Ask for a stream of `key` to be opened for a picture while `wanted`,
+    /// unless an ask waits already; whether one waits now. Nothing waits on
+    /// its answer.
+    fn open(&self, key: &Key, wanted: &Arc<AtomicBool>) -> bool {
+        if self.slot.opening.swap(true, Ordering::AcqRel) {
+            return true;
+        }
+        let sent = self
+            .messages
+            .try_send(Message::Open(key.clone(), wanted.clone()))
+            .is_ok();
+        if !sent {
+            self.slot.opening.store(false, Ordering::Release);
+        }
+        sent
+    }
 }
 static WORKER: OnceLock<Mutex<Option<Worker>>> = OnceLock::new();
 thread_local! { static RUNNING: RefCell<Option<Running>> = const { RefCell::new(None) }; }
@@ -439,7 +596,8 @@ fn worker() -> Result<Worker> {
     if let Some(worker) = &*cached {
         return Ok(worker.clone());
     }
-    let (messages, incoming) = mpsc::sync_channel(1);
+    // Room for one frame request and one ask to open a stream.
+    let (messages, incoming) = mpsc::sync_channel(2);
     let slot = Arc::new(Slot::default());
     let shared = slot.clone();
     std::thread::Builder::new()
@@ -456,82 +614,228 @@ pub fn stream_diagnostics() -> Option<Value> {
     Some(cached.as_ref()?.slot.diagnostics.snapshot())
 }
 
-/// The display as the open stream shows it now, for a one-shot picture of
-/// at most `limit` pixels on its longer side, without a request of its own,
-/// so the stream's own requests go on as they were: the stream's newest
-/// picture, once a valid sample stamped after this call began says it is
-/// current. The copy is bracketed by session, display and consent checks.
-/// This never opens a stream, waits up to [`PICTURE_WAIT`], and never waits
-/// on the stream's sample queue.
+thread_local! {
+    /// Whether the capture running on this thread is a picture the capture
+    /// source admitted, which may open the stream.
+    static OPENING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `capture`, a one-shot picture the capture source keeps the native
+/// source for, so that it may open the stream when none is open.
+pub(super) fn opening<T>(capture: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            OPENING.with(|opening| opening.set(self.0));
+        }
+    }
+    let _reset = Reset(OPENING.with(|opening| opening.replace(true)));
+    capture()
+}
+
+/// Whether the capture running on this thread may open the stream.
+pub(super) fn may_open() -> bool {
+    OPENING.with(std::cell::Cell::get)
+}
+
+/// `area` (global display points) of `display`, or all of it, at most
+/// `limit` pixels on its longer side, as the stream shows it after this call
+/// began, without a request in the stream's own queue, so a viewer's frames
+/// go on as they were. The picture is the stream's newest once a valid
+/// sample stamped and received after this call says it is current, within
+/// [`PICTURE_WAIT`]. A still screen sends none by itself, so a stream quiet
+/// for [`NUDGE_AFTER`] is asked for one, once, and a stream quiet for
+/// [`RENEW_QUIET`] that still proved nothing after [`RENEW_AFTER`] is
+/// replaced, at most once every [`RENEW_EVERY`], waiting up to [`OPEN_WAIT`]
+/// for the new stream's first sample. A capture the source admitted (see [`opening`]) opens the stream when none is open and
+/// waits up to [`OPEN_WAIT`] for its first picture. With nothing proven by
+/// then, a picture only a person reads may be the newest when it is at most
+/// [`LATE`] older than the call; one an agent reads never is. The copy is
+/// bracketed by session, display and consent checks.
 ///
 /// # Errors
 ///
 /// Returns why the stream gave no picture; the caller then captures it
-/// another way.
+/// another way, and counts it.
 pub(super) fn streamed_display_rgb(
     display: u32,
+    area: Option<CGRect>,
     limit: Option<u32>,
-) -> std::result::Result<RawShot, Unserved> {
-    let state = WORKER
-        .get()
-        .and_then(|cached| {
-            cached
-                .lock()
-                .ok()?
-                .as_ref()
-                .map(|worker| worker.slot.clone())
-        })
-        .and_then(|slot| {
-            slot.serving
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone()
-        })
-        .filter(|state| state.current())
-        .ok_or(Unserved::Closed)?;
+    reader: Reader,
+) -> std::result::Result<(RawShot, Currency), Unserved> {
     let epoch = native::session_info()
         .and_then(|proof| InputEpoch::from_proof(&proof, std::process::id()))
         .map_err(|_| Unserved::Elsewhere)?;
-    let mode = CGDisplayCopyDisplayMode(display).ok_or(Unserved::Elsewhere)?;
-    let pixels = (
-        CGDisplayMode::pixel_width(Some(&mode)),
-        CGDisplayMode::pixel_height(Some(&mode)),
-    );
-    // The display's backing scale is part of what the stream shows: a mode
-    // change of the same display and points makes its pictures obsolete.
-    if epoch != state.key.epoch
-        || epoch.display_id != u64::from(display)
-        || pixels.0 as f64 / epoch.width != state.key.scale
-    {
+    if epoch.display_id != u64::from(display) {
         return Err(Unserved::Elsewhere);
     }
-    let (width, height) = fit(pixels.0, pixels.1, limit);
-    if width > state.key.width || height > state.key.height {
-        return Err(Unserved::Smaller);
-    }
+    let key = display_key(display, &epoch).map_err(|_| Unserved::Elsewhere)?;
+    let shape = match area {
+        None => Shape::whole((key.width, key.height), limit),
+        Some(area) => Shape::of(
+            area,
+            CGDisplayBounds(display),
+            (key.width, key.height),
+            limit,
+        )
+        .ok_or(Unserved::Elsewhere)?,
+    };
     let asked = checkpoint();
     let started = Instant::now();
-    loop {
-        match state.picture_after(asked) {
-            Proof::Proven(picture) => return picture.map_err(|_| Unserved::Unproven),
-            Proof::Never => return Err(Unserved::Unproven),
-            Proof::Waiting if started.elapsed() >= PICTURE_WAIT => {
-                return Err(Unserved::Unproven);
-            }
-            Proof::Waiting => std::thread::sleep(PICTURE_CHECK),
-        }
+    let open = |slot: &Slot| {
+        slot.serving
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .filter(|state| state.current() && state.key == key)
+    };
+    let worker = if may_open() {
+        worker().map_err(|_| Unserved::Unavailable)?
+    } else {
+        cached_worker().ok_or(Unserved::Closed)?
+    };
+    let opened = open(&worker.slot).is_none();
+    if opened && !may_open() {
+        return Err(Unserved::Closed);
     }
+    let mut wait = if opened { OPEN_WAIT } else { PICTURE_WAIT };
+    // Whether this picture waits for a stream it asked to be opened or
+    // replaced.
+    let mut starting = opened;
+    // An ask to open a stream holds only while this picture runs.
+    let wanted = Arc::new(AtomicBool::new(true));
+    let _ended = Ended(wanted.clone());
+    // Whether this picture asked the stream for a sample: once, as asking
+    // again seldom brings one.
+    let mut nudged = false;
+    // When this picture last asked the worker to open a stream.
+    let mut asked_open: Option<Instant> = None;
+    let mut newest: Option<Arc<Callback>> = None;
+    loop {
+        // Another picture had the stream replaced, or a viewer's is starting:
+        // its first sample is waited for, as this picture's own would be.
+        let state = open(&worker.slot);
+        if !starting && worker.slot.restarting() {
+            starting = true;
+            wait = OPEN_WAIT;
+        }
+        match state {
+            Some(state) => {
+                match state.picture_after(asked, shape) {
+                    Proof::Proven(Ok(shot)) => return Ok((shot, Currency::Proven)),
+                    Proof::Waiting => {}
+                    // The stream was replaced meanwhile: the new one's first
+                    // sample is waited for. A stream still current that
+                    // cannot give the picture leaves it to another way now.
+                    Proof::Never | Proof::Proven(Err(_)) => {
+                        let newer =
+                            open(&worker.slot).is_some_and(|newer| !Arc::ptr_eq(&newer, &state));
+                        if state.current() || !(starting || worker.slot.restarting() || newer) {
+                            return Err(Unserved::Unproven);
+                        }
+                        starting = true;
+                        wait = OPEN_WAIT;
+                    }
+                }
+                // A still screen sends no sample by itself: ask for one,
+                // and failing that for a new stream.
+                if !starting
+                    && started.elapsed() >= RENEW_AFTER
+                    && state.quiet(RENEW_QUIET)
+                    && worker.slot.may_renew()
+                {
+                    *worker.slot.renew.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some((key.clone(), wanted.clone()));
+                    starting = true;
+                    wait = OPEN_WAIT;
+                } else if !nudged && state.quiet(NUDGE_AFTER) {
+                    worker.slot.nudge.store(true, Ordering::Release);
+                    nudged = true;
+                }
+                newest = Some(state);
+            }
+            // The stream this picture had replaced is starting again.
+            None if starting && !opened => {}
+            // The worker may have been busy, or unable to open it then: the
+            // ask is sent again while none is open.
+            None if opened => {
+                if asked_open.is_none_or(|at| at.elapsed() >= OPEN_AGAIN) {
+                    worker.open(&key, &wanted);
+                    asked_open = Some(Instant::now());
+                }
+            }
+            None => return Err(Unserved::Unproven),
+        }
+        if started.elapsed() >= wait {
+            break;
+        }
+        std::thread::sleep(PICTURE_CHECK);
+    }
+    unproven(newest.as_deref(), reader, asked, shape)
+}
+
+/// Marks a picture's ask to open a stream void once the picture ends.
+struct Ended(Arc<AtomicBool>);
+impl Drop for Ended {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// The answer to a one-shot picture nothing proved current by its deadline:
+/// for a person, the stream's newest picture when stamped at most [`LATE`]
+/// before `asked`; for an agent, none.
+fn unproven(
+    newest: Option<&Callback>,
+    reader: Reader,
+    asked: u64,
+    shape: Shape,
+) -> std::result::Result<(RawShot, Currency), Unserved> {
+    if reader == Reader::Agent {
+        return Err(Unserved::Unproven);
+    }
+    newest
+        .and_then(|state| state.late(asked.saturating_sub(ticks(LATE)), shape))
+        .ok_or(Unserved::Unproven)?
+        .map(|shot| (shot, Currency::Late))
+        .map_err(|_| Unserved::Unproven)
+}
+
+/// Who reads a one-shot picture, which decides what may answer it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Reader {
+    /// An agent, or anything that checks what an action did: only a picture
+    /// proven current, as an older one could show an action as done or not
+    /// done when it was the other way.
+    Agent,
+    /// Only a person, beside an agent's action: a picture a moment old may
+    /// answer, and says so.
+    Person,
+}
+
+/// How a one-shot picture from the stream is known to show the screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Currency {
+    /// A sample stamped after the ask says it is current.
+    Proven,
+    /// Nothing proved it in time; it is the newest, at most [`LATE`] old.
+    Late,
 }
 
 /// What an open stream says of a one-shot picture asked for at a moment.
 enum Proof {
-    /// A valid sample stamped after it says the newest picture is current;
-    /// here is its copy.
+    /// The newest picture is proven current; here is its copy.
     Proven(Result<RawShot>),
-    /// None has yet, or the stream's sample queue holds the picture now.
+    /// Nothing proves it yet, or the stream's sample queue holds the picture
+    /// now.
     Waiting,
     /// The stream was replaced or stopped, or is due for renewal.
     Never,
+}
+
+/// The stream worker, when one was started; this never starts one.
+fn cached_worker() -> Option<Worker> {
+    WORKER.get()?.lock().ok()?.as_ref().cloned()
 }
 
 /// The display as the stream shows it after this call began: a picture
@@ -560,22 +864,8 @@ pub fn stream_display_rgb(
     }
     guard(&epoch)?;
     let tick = checkpoint();
-    let mode = CGDisplayCopyDisplayMode(display)
-        .ok_or_else(|| capture_error("The stream display has no mode"))?;
-    let (source_width, source_height) = (
-        CGDisplayMode::pixel_width(Some(&mode)),
-        CGDisplayMode::pixel_height(Some(&mode)),
-    );
-    let (width, height) = fit(source_width, source_height, limit);
-    if width == 0 || height == 0 || width.max(height) > 4096 {
-        return Err(capture_error("Invalid native stream dimensions"));
-    }
-    let key = Key {
-        epoch: epoch.clone(),
-        width,
-        height,
-        scale: source_width as f64 / epoch.width,
-    };
+    let key = display_key(display, &epoch)?;
+    let shape = Shape::whole((key.width, key.height), limit);
     let worker = worker()?;
     worker
         .slot
@@ -590,17 +880,26 @@ pub fn stream_display_rgb(
     static SEQUENCE: AtomicU64 = AtomicU64::new(1);
     let request = Pending {
         made: Instant::now(),
+        shape,
         hushed: None,
         id: SEQUENCE.fetch_add(1, Ordering::Relaxed),
         checkpoint: tick,
-        key,
+        key: key.clone(),
         alive: alive.clone(),
         reply: send,
     };
+    worker.slot.queued.fetch_add(1, Ordering::SeqCst);
+    let restarted = worker.slot.take_restarted();
     let sent = !worker.slot.stopping.load(Ordering::Acquire)
         && worker.messages.try_send(Message::Capture(request)).is_ok();
+    if !sent {
+        worker.slot.queued.fetch_sub(1, Ordering::SeqCst);
+        if restarted {
+            worker.slot.restarted.store(true, Ordering::SeqCst);
+        }
+    }
     let waiting = Instant::now();
-    let wait = worker.slot.wait(asked);
+    let wait = Slot::wait_after(asked, restarted);
     let mut outcome = sent
         .then(|| receive.recv_timeout(wait))
         .and_then(std::result::Result::ok);
@@ -639,6 +938,25 @@ pub fn stream_display_rgb(
         outcome => {
             if worker.slot.stopping.load(Ordering::Acquire) {
                 return Err(worker.slot.failure().unwrap_or_else(cancelled));
+            }
+            // A stream whose samples arrive late still has the screen as it
+            // was a moment ago: that answers before any CoreGraphics capture.
+            let late = worker
+                .slot
+                .serving
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .filter(|state| state.key == key)
+                .and_then(|state| state.late(tick.saturating_sub(ticks(LATE)), shape));
+            if let Some(Ok(shot)) = late {
+                guard(&epoch)?;
+                worker
+                    .slot
+                    .diagnostics
+                    .late_frames
+                    .fetch_add(1, Ordering::Relaxed);
+                return Ok((shot, true));
             }
             guard(&epoch)?;
             let shot = super::core_graphics_rgb(display, limit)?;
@@ -762,6 +1080,7 @@ fn run(incoming: Receiver<Message>, slot: Arc<Slot>) {
     };
     let mut preparing: Option<Key> = None;
     let mut watchdog = Watchdog(Instant::now());
+    let mut nudged: Option<Instant> = None;
     loop {
         // SAFETY: the default mode constant is a valid, immutable CFString.
         let Some(mode) = (unsafe { kCFRunLoopDefaultMode }) else {
@@ -790,6 +1109,44 @@ fn run(incoming: Receiver<Message>, slot: Arc<Slot>) {
             && !slot.stopping.load(Ordering::Acquire)
         {
             slot.diagnostics.renewals.fetch_add(1, Ordering::Relaxed);
+            if replace(&key, &slot, &run_loop) {
+                preparing = Some(key);
+            }
+        }
+        // A still screen sends nothing: a picture waiting on it asks the
+        // stream for a sample, which comes unchanged and proves it. A frame
+        // request has its own answer, the stream's silence.
+        if slot.nudge.swap(false, Ordering::AcqRel)
+            && nudged.is_none_or(|at| at.elapsed() >= NUDGE_AFTER)
+            && !slot.stopping.load(Ordering::Acquire)
+        {
+            RUNNING.with(|running| {
+                if let Some(source) = running.borrow().as_ref()
+                    && source.state.current()
+                    && source.state.quiet(NUDGE_AFTER)
+                    && guard(&source.key.epoch).is_ok()
+                {
+                    source.nudge();
+                    slot.diagnostics.nudges.fetch_add(1, Ordering::Relaxed);
+                    nudged = Some(Instant::now());
+                }
+            });
+        }
+        // A still stream that brought no sample when asked is replaced: the
+        // new stream's first sample proves the picture.
+        if let Some(key) = slot.renewal()
+            && !slot.preparing.load(Ordering::Acquire)
+            && RUNNING.with(|running| {
+                running
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|source| source.key == key && source.state.current())
+            })
+            && guard(&key.epoch).is_ok()
+        {
+            slot.diagnostics
+                .picture_renewals
+                .fetch_add(1, Ordering::Relaxed);
             if replace(&key, &slot, &run_loop) {
                 preparing = Some(key);
             }
@@ -824,7 +1181,32 @@ fn run(incoming: Receiver<Message>, slot: Arc<Slot>) {
                 }
                 let _ = reply.try_send(result);
             }
+            Ok(Message::Open(key, wanted)) => {
+                // A stream for one-shot pictures; a running or opening one of
+                // this key stays, and nothing waits on this message.
+                slot.opening.store(false, Ordering::Release);
+                if !slot.opens_for(&wanted) {
+                    continue;
+                }
+                let running = RUNNING.with(|running| {
+                    running
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|source| source.key == key)
+                });
+                let opening =
+                    preparing.as_ref() == Some(&key) && slot.preparing.load(Ordering::Acquire);
+                if aqua
+                    && !running
+                    && !opening
+                    && guard(&key.epoch).is_ok()
+                    && replace(&key, &slot, &run_loop)
+                {
+                    preparing = Some(key);
+                }
+            }
             Ok(Message::Capture(request)) => {
+                slot.queued.fetch_sub(1, Ordering::SeqCst);
                 if !request.alive.load(Ordering::Acquire) {
                     continue;
                 }
@@ -894,14 +1276,18 @@ unsafe impl Send for Newest {}
 /// Stop any stream and its callbacks, then start one for `key`. False while
 /// the old stream's stop is still unconfirmed; it then stays draining.
 fn replace(key: &Key, slot: &Arc<Slot>, run_loop: &CFRetained<CFRunLoop>) -> bool {
+    slot.replacing.store(true, Ordering::SeqCst);
     slot.invalidate();
-    if !stop_native(slot, true).is_ok_and(|done| done) {
+    let replaced = if stop_native(slot, true).is_ok_and(|done| done) {
+        *slot.failure.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        prepare(key.clone(), slot.clone(), run_loop.clone());
+        true
+    } else {
         slot.stopping.store(true, Ordering::Release);
-        return false;
-    }
-    *slot.failure.lock().unwrap_or_else(|p| p.into_inner()) = None;
-    prepare(key.clone(), slot.clone(), run_loop.clone());
-    true
+        false
+    };
+    slot.replacing.store(false, Ordering::SeqCst);
+    replaced
 }
 
 struct Callback {
@@ -922,6 +1308,8 @@ struct Callback {
     /// When that sample's callback began, in mach ticks, before it waited for
     /// anything; 0 before the first. Written under `newest`, with `stamped`.
     received: AtomicU64,
+    /// How long after its display time that sample arrived, in mach ticks.
+    lag: AtomicU64,
     /// The session, display and consent check around every copy.
     guard: fn(&InputEpoch) -> Result<()>,
 }
@@ -936,6 +1324,7 @@ impl Callback {
             heard: AtomicU64::new(checkpoint()),
             stamped: AtomicU64::new(checkpoint()),
             received: AtomicU64::new(0),
+            lag: AtomicU64::new(0),
             guard,
         }
     }
@@ -948,6 +1337,12 @@ impl Callback {
     /// Whether this stream has delivered nothing at all for `span`.
     fn quiet(&self, span: Duration) -> bool {
         checkpoint().saturating_sub(self.heard.load(Ordering::Acquire)) > ticks(span)
+    }
+
+    /// Whether this stream's last valid sample arrived within [`TIMELY`] of
+    /// its display time, so that its silence says the screen is unchanged.
+    fn timely(&self) -> bool {
+        self.lag.load(Ordering::Acquire) <= ticks(TIMELY)
     }
 
     /// Whether this stream has delivered no valid sample for `span`.
@@ -969,10 +1364,10 @@ impl Callback {
                     .is_none())
     }
 
-    /// The newest picture, copied, once a valid sample stamped and received
-    /// after `asked` says it is current. Never blocks on the sample queue: while it
-    /// holds the picture, this is still waiting.
-    fn picture_after(&self, asked: u64) -> Proof {
+    /// The newest picture in `shape`, copied, once a valid sample stamped
+    /// and received after `asked` says it is current. Never blocks on the
+    /// sample queue: while it holds the picture, this is still waiting.
+    fn picture_after(&self, asked: u64, shape: Shape) -> Proof {
         if !self.current() || self.stale(SILENT_RENEW) {
             return Proof::Never;
         }
@@ -990,10 +1385,32 @@ impl Callback {
             return Proof::Waiting;
         }
         match newest.as_ref() {
-            Some(Newest(buffer)) => Proof::Proven(self.copy(buffer, false)),
+            Some(Newest(buffer)) => Proof::Proven(self.copy(buffer, false, shape)),
             // The last sample proved nothing, or no picture came yet.
             None => Proof::Waiting,
         }
+    }
+
+    /// The newest picture in `shape`, copied, when its last valid sample was
+    /// stamped no earlier than `since`: a picture a moment old, for a request
+    /// nothing proved in time. None when there is none, it is older, or the
+    /// sample queue holds it now.
+    fn late(&self, since: u64, shape: Shape) -> Option<Result<RawShot>> {
+        if !self.current() {
+            return None;
+        }
+        // Never waits on the sample queue: while it holds the picture, there
+        // is none to give.
+        let newest = match self.newest.try_lock() {
+            Ok(newest) => newest,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        };
+        if self.stamped.load(Ordering::Acquire) < since {
+            return None;
+        }
+        let Newest(buffer) = newest.as_ref()?;
+        Some(self.copy(buffer, false, shape))
     }
 
     fn stopped(&self, check: impl FnOnce() -> Result<()>) {
@@ -1042,21 +1459,22 @@ impl Callback {
     /// newest picture once the stream has delivered nothing at all for
     /// [`SILENCE`]. This runs on the stream's sample queue, after every
     /// sample it delivered: the stream saw no change since that picture,
-    /// as it sends a sample within a refresh of any. A stream without a
-    /// picture yet leaves the request waiting for its first, and one due for
-    /// renewal leaves it to the replacement.
+    /// as it sends a sample within a refresh of any, when its samples are
+    /// timely. A stream without a picture yet leaves the request waiting for
+    /// its first, one lagging leaves it to a sample, and one due for renewal
+    /// leaves it to the replacement.
     fn silent(&self, id: u64) {
-        if !self.current() || !self.quiet(SILENCE) || self.due() {
+        if !self.current() || !self.quiet(SILENCE) || !self.timely() || self.due() {
             return;
         }
         let newest = self.newest.lock().unwrap_or_else(|p| p.into_inner());
         let Some(Newest(buffer)) = newest.as_ref() else {
             return;
         };
-        if self.asking().is_none_or(|(asking, _)| asking != id) {
+        let Some((_, _, shape)) = self.asking().filter(|(asking, _, _)| *asking == id) else {
             return;
-        }
-        let answer = self.copy(buffer, true).map(|shot| Some((id, shot)));
+        };
+        let answer = self.copy(buffer, true, shape).map(|shot| Some((id, shot)));
         self.settle(answer);
     }
 
@@ -1073,13 +1491,14 @@ impl Callback {
         }
     }
 
-    /// The pending request for this stream, and its checkpoint.
-    fn asking(&self) -> Option<(u64, u64)> {
+    /// The pending request for this stream, its checkpoint and the shape
+    /// of its picture.
+    fn asking(&self) -> Option<(u64, u64, Shape)> {
         let pending = self.slot.pending.lock().unwrap_or_else(|p| p.into_inner());
         pending
             .as_ref()
             .filter(|r| r.key == self.key && r.alive.load(Ordering::Acquire))
-            .map(|request| (request.id, request.checkpoint))
+            .map(|request| (request.id, request.checkpoint, request.shape))
     }
 
     /// Note what `sample` says of the screen, then the picture it answers
@@ -1108,14 +1527,18 @@ impl Callback {
                 *newest = unsafe { sample.image_buffer() }.map(Newest);
                 self.stamped.store(time, Ordering::Release);
                 self.received.store(arrived, Ordering::Release);
+                self.lag
+                    .store(arrived.saturating_sub(time), Ordering::Release);
             }
             Some((status, time)) if status == SCFrameStatus::Idle.0 as i64 => {
                 self.stamped.store(time, Ordering::Release);
                 self.received.store(arrived, Ordering::Release);
+                self.lag
+                    .store(arrived.saturating_sub(time), Ordering::Release);
             }
             _ => *newest = None,
         }
-        let Some((id, after)) = self.asking() else {
+        let Some((id, after, shape)) = self.asking() else {
             self.slot
                 .diagnostics
                 .no_request
@@ -1173,13 +1596,14 @@ impl Callback {
             return Err(capture_error("Native frame has no pixels")
                 .with("nativeReason", "format-layout".into()));
         };
-        self.copy(buffer, reused).map(|shot| Some((id, shot)))
+        self.copy(buffer, reused, shape)
+            .map(|shot| Some((id, shot)))
     }
 
     /// `buffer`'s pixels, bracketed by fresh session, display and consent
     /// checks, while this stream is still the current one. `reused` says it
     /// is the newest picture served again.
-    fn copy(&self, buffer: &CVPixelBuffer, reused: bool) -> Result<RawShot> {
+    fn copy(&self, buffer: &CVPixelBuffer, reused: bool, shape: Shape) -> Result<RawShot> {
         let before = Instant::now();
         let guarded = (self.guard)(&self.key.epoch);
         self.slot
@@ -1194,7 +1618,7 @@ impl Callback {
             return Err(error.with("nativeReason", "guard".into()));
         }
         let copying = Instant::now();
-        let rgb = pixels(buffer, self.key.width, self.key.height);
+        let rgb = pixels(buffer, self.key.width, self.key.height, shape);
         self.slot
             .diagnostics
             .copy_us
@@ -1228,10 +1652,13 @@ impl Callback {
                 .reused_frames
                 .fetch_add(1, Ordering::Relaxed);
         }
+        let side = |side: usize| {
+            u32::try_from(side).map_err(|_| capture_error("The stream picture is too large"))
+        };
         Ok(RawShot {
             rgb,
-            width: self.key.width as u32,
-            height: self.key.height as u32,
+            width: side(shape.width)?,
+            height: side(shape.height)?,
             scale: self.key.scale,
         })
     }
@@ -1266,7 +1693,7 @@ struct Running {
     key: Key,
     stream: Retained<SCStream>,
     _output: Retained<Output>,
-    _filter: Retained<SCContentFilter>,
+    filter: Retained<SCContentFilter>,
     _configuration: Retained<SCStreamConfiguration>,
     _color_space: CFRetained<CFString>,
     queue: DispatchRetained<DispatchQueue>,
@@ -1275,6 +1702,18 @@ struct Running {
     stop_error: Option<String>,
 }
 impl Running {
+    /// Ask the stream for a sample by giving it its own filter again. On a
+    /// still screen about one ask in three brings an unchanged sample,
+    /// stamped after the ask, within 35 ms; the rest bring nothing.
+    fn nudge(&self) {
+        // SAFETY: a live stream and the filter it was made with, both owned
+        // by this worker; no completion handler is given.
+        unsafe {
+            self.stream
+                .updateContentFilter_completionHandler(&self.filter, None);
+        }
+    }
+
     fn start(
         content: &SCShareableContent,
         key: Key,
@@ -1380,7 +1819,7 @@ impl Running {
             key,
             stream,
             _output: output,
-            _filter: filter,
+            filter,
             _configuration: configuration,
             _color_space: color_space,
             queue,
@@ -1416,8 +1855,8 @@ fn prepare(key: Key, slot: Arc<Slot>, run_loop: CFRetained<CFRunLoop>) {
             let slot = slot.clone();
             let key = key.clone();
             let scheduled = RcBlock::new(move || {
-                slot.preparing.store(false, Ordering::Release);
                 if slot.generation.load(Ordering::Acquire) != generation {
+                    slot.preparing.store(false, Ordering::Release);
                     return;
                 }
                 let result = content
@@ -1451,6 +1890,9 @@ fn prepare(key: Key, slot: Arc<Slot>, run_loop: CFRetained<CFRunLoop>) {
                         }
                     }
                 }
+                // Marked until the new stream is published or failed, so a
+                // picture that finds none meanwhile waits for it.
+                slot.preparing.store(false, Ordering::Release);
             });
             // SAFETY: CFRunLoop copies this block and runs it only on its owner.
             // The retained immutable SCK content is handed off once to that worker;
@@ -1627,7 +2069,7 @@ fn metadata(sample: &CMSampleBuffer) -> Result<Option<Metadata>> {
     Ok(Some(Metadata { status, time }))
 }
 
-fn pixels(buffer: &CVPixelBuffer, width: usize, height: usize) -> Result<Buffer> {
+fn pixels(buffer: &CVPixelBuffer, width: usize, height: usize, shape: Shape) -> Result<Buffer> {
     if CVPixelBufferGetPixelFormatType(buffer) != kCVPixelFormatType_32BGRA
         || CVPixelBufferIsPlanar(buffer)
         || CVPixelBufferGetWidth(buffer) != width
@@ -1663,7 +2105,7 @@ fn pixels(buffer: &CVPixelBuffer, width: usize, height: usize) -> Result<Buffer>
     // SAFETY: read-only locked, retained buffer; checked allocation and slice
     // bounds. This borrow ends before Unlock releases the buffer lock.
     let bytes = unsafe { std::slice::from_raw_parts(data, length) };
-    pack(bytes, width, height, stride, "Invalid native bitmap stride")
+    shaped(bytes, (width, height, stride), shape)
 }
 
 #[cfg(test)]

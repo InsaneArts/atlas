@@ -1,4 +1,5 @@
 use super::*;
+use crate::native::capture::shape::Area;
 
 /// Resource-only probe: no Capture message, source, pixels, or input is created.
 /// Run alone with --ignored --exact --nocapture to avoid unrelated test CPU.
@@ -169,11 +170,17 @@ fn key() -> Key {
     }
 }
 
+/// The whole of the test stream's picture, at its own size.
+fn whole() -> Shape {
+    Shape::whole((4, 2), None)
+}
+
 fn request(id: u64) -> (Pending, Receiver<Result<RawShot>>) {
     let (reply, receive) = mpsc::sync_channel(1);
     (
         Pending {
             made: Instant::now(),
+            shape: whole(),
             hushed: None,
             id,
             checkpoint: 500,
@@ -598,16 +605,16 @@ fn locked_corevideo_pixels_keep_exact_synthetic_colors_and_orientation() {
     let sample = sample();
     // SAFETY: the synthetic sample holds its retained image buffer.
     let buffer = unsafe { sample.image_buffer() }.unwrap();
-    let rgb = pixels(&buffer, 4, 2).unwrap();
+    let rgb = pixels(&buffer, 4, 2, whole()).unwrap();
     let mut expected = [255, 0, 0].repeat(4);
     expected.extend([0, 0, 255].repeat(4));
     assert_eq!(rgb, expected);
     assert!(
-        pixels(&buffer, 3, 2).is_err(),
+        pixels(&buffer, 3, 2, Shape::whole((3, 2), None)).is_err(),
         "dimension changes cannot reinterpret pixel storage"
     );
     // Re-reading proves the read-only lock was released symmetrically.
-    assert_eq!(pixels(&buffer, 4, 2).unwrap(), expected);
+    assert_eq!(pixels(&buffer, 4, 2, whole()).unwrap(), expected);
 }
 
 #[test]
@@ -1042,10 +1049,10 @@ fn only_the_first_request_after_a_recorder_restart_waits_longer() {
             "{wait:?}"
         );
     };
-    roughly(slot.wait(now), WAIT);
+    roughly(Slot::wait_after(now, slot.take_restarted()), WAIT);
     slot.restarted.store(true, Ordering::Release);
-    roughly(slot.wait(now), RESTARTED_WAIT);
-    roughly(slot.wait(now), WAIT);
+    roughly(Slot::wait_after(now, slot.take_restarted()), RESTARTED_WAIT);
+    roughly(Slot::wait_after(now, slot.take_restarted()), WAIT);
 }
 
 #[test]
@@ -1053,10 +1060,13 @@ fn a_request_held_back_before_it_waits_only_for_what_is_left_of_its_time() {
     let slot = Slot::default();
     slot.restarted.store(true, Ordering::Release);
     let asked = Instant::now() - Duration::from_millis(300);
-    assert!(slot.wait(asked) <= RESTARTED_WAIT - Duration::from_millis(300));
+    assert!(
+        Slot::wait_after(asked, slot.take_restarted())
+            <= RESTARTED_WAIT - Duration::from_millis(300)
+    );
     let long_ago = Instant::now() - Duration::from_secs(1);
     assert_eq!(
-        slot.wait(long_ago),
+        Slot::wait_after(long_ago, slot.take_restarted()),
         Duration::ZERO,
         "the stream is not waited for"
     );
@@ -1121,14 +1131,14 @@ fn a_one_shot_picture_is_given_only_by_a_sample_stamped_after_it_was_asked() {
     let slot = Arc::new(Slot::default());
     let (callback, t) = streaming(&slot, 0);
     callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
-    assert!(waiting(&callback.picture_after(t + 2)));
+    assert!(waiting(&callback.picture_after(t + 2, whole())));
     callback.sample(&stamped(SCFrameStatus::Idle, t + 2));
     assert!(
-        waiting(&callback.picture_after(t + 2)),
+        waiting(&callback.picture_after(t + 2, whole())),
         "stamped at the moment asked, not after"
     );
     callback.sample(&stamped(SCFrameStatus::Idle, t + 3));
-    assert_eq!(proven(callback.picture_after(t + 2)), picture());
+    assert_eq!(proven(callback.picture_after(t + 2, whole())), picture());
     assert_eq!(slot.diagnostics.snapshot()["reusedFrames"], 0);
 }
 
@@ -1138,7 +1148,7 @@ fn a_still_screens_silence_never_proves_a_one_shot_picture() {
     let (callback, t) = streaming(&slot, 0);
     callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
     heard_long_ago(&callback, RENEW);
-    assert!(waiting(&callback.picture_after(checkpoint())));
+    assert!(waiting(&callback.picture_after(checkpoint(), whole())));
 }
 
 #[test]
@@ -1146,9 +1156,9 @@ fn a_one_shot_picture_waits_while_the_stream_has_no_picture() {
     let slot = Arc::new(Slot::default());
     let (callback, t) = streaming(&slot, 0);
     callback.sample(&marked(SCFrameStatus::Blank, Some(t + 1)));
-    assert!(waiting(&callback.picture_after(t)));
+    assert!(waiting(&callback.picture_after(t, whole())));
     callback.sample(&stamped(SCFrameStatus::Complete, t + 2));
-    assert_eq!(proven(callback.picture_after(t)), picture());
+    assert_eq!(proven(callback.picture_after(t, whole())), picture());
 }
 
 #[test]
@@ -1158,9 +1168,9 @@ fn a_one_shot_picture_never_waits_on_the_sample_queue() {
     callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
     callback.sample(&stamped(SCFrameStatus::Idle, t + 3));
     let holding = callback.newest.lock().unwrap();
-    assert!(waiting(&callback.picture_after(t + 2)));
+    assert!(waiting(&callback.picture_after(t + 2, whole())));
     drop(holding);
-    assert_eq!(proven(callback.picture_after(t + 2)), picture());
+    assert_eq!(proven(callback.picture_after(t + 2, whole())), picture());
 }
 
 #[test]
@@ -1169,13 +1179,13 @@ fn a_replaced_or_stale_stream_gives_no_one_shot_picture() {
     let (callback, t) = streaming(&slot, 0);
     callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
     proven_long_ago(&callback, SILENT_RENEW);
-    assert!(matches!(callback.picture_after(t), Proof::Never));
+    assert!(matches!(callback.picture_after(t, whole()), Proof::Never));
 
     let slot = Arc::new(Slot::default());
     let (callback, t) = streaming(&slot, 0);
     callback.sample(&stamped(SCFrameStatus::Complete, t + 2));
     slot.invalidate();
-    assert!(matches!(callback.picture_after(t), Proof::Never));
+    assert!(matches!(callback.picture_after(t, whole()), Proof::Never));
 }
 
 #[test]
@@ -1185,7 +1195,7 @@ fn a_one_shot_picture_leaves_the_streams_own_request_waiting() {
     callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
     let reply = asked(&slot, 1, t + 5);
     callback.sample(&stamped(SCFrameStatus::Idle, t + 3));
-    assert_eq!(proven(callback.picture_after(t + 2)), picture());
+    assert_eq!(proven(callback.picture_after(t + 2, whole())), picture());
     assert!(unanswered(&reply));
     assert!(slot.pending.lock().unwrap().is_some());
     callback.sample(&stamped(SCFrameStatus::Idle, t + 6));
@@ -1202,11 +1212,11 @@ fn a_sample_stamped_ahead_but_received_before_the_ask_proves_no_one_shot_picture
     callback.stamped.store(asked + 1_000, Ordering::Release);
     callback.received.store(asked - 1, Ordering::Release);
     assert!(
-        waiting(&callback.picture_after(asked)),
+        waiting(&callback.picture_after(asked, whole())),
         "the screen may have changed since it came"
     );
     callback.received.store(asked + 1, Ordering::Release);
-    assert_eq!(proven(callback.picture_after(asked)), picture());
+    assert_eq!(proven(callback.picture_after(asked, whole())), picture());
 }
 
 #[test]
@@ -1220,7 +1230,7 @@ fn a_sample_that_came_before_the_ask_proves_no_one_shot_picture_however_late_it_
     // until after it; its display time is a moment ahead of the ask.
     let late = stamped(SCFrameStatus::Idle, asked + 1);
     let _ = callback.answer(&late, came);
-    assert!(waiting(&callback.picture_after(asked)));
+    assert!(waiting(&callback.picture_after(asked, whole())));
 }
 
 #[test]
@@ -1233,4 +1243,240 @@ fn a_stop_screencapturekit_confirms_in_its_usual_time_is_confirmed() {
     });
     assert!(confirmed_stop(&receive, &mut None, true).unwrap());
     confirming.join().unwrap();
+}
+
+#[test]
+fn a_one_shot_picture_is_cut_from_the_streams_own_pixels() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let bottom = Shape {
+        area: Some(Area {
+            x: 0,
+            y: 1,
+            width: 4,
+            height: 1,
+        }),
+        width: 4,
+        height: 1,
+    };
+    match callback.picture_after(t, bottom) {
+        Proof::Proven(shot) => {
+            let shot = shot.unwrap();
+            assert_eq!((shot.width, shot.height), (4, 1));
+            assert_eq!(shot.rgb.as_ref(), [0, 0, 255].repeat(4));
+            assert_eq!(shot.scale, 2.0, "the display's own pixels per point");
+        }
+        _ => panic!("not proven"),
+    }
+}
+
+#[test]
+fn a_still_streams_picture_is_not_given_without_a_sample_after_it_was_asked() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    let asked = checkpoint();
+    heard_long_ago(&callback, SILENCE);
+    assert!(
+        waiting(&callback.picture_after(asked, whole())),
+        "silence alone proves nothing"
+    );
+    // An unchanged sample after the ask, as a nudge brings, proves it.
+    callback.sample(&stamped(SCFrameStatus::Idle, asked + 1));
+    assert_eq!(proven(callback.picture_after(asked, whole())), picture());
+}
+
+#[test]
+fn a_lagging_streams_silence_answers_no_request() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 1));
+    callback.lag.store(
+        ticks(TIMELY) + ticks(Duration::from_millis(1)),
+        Ordering::Release,
+    );
+    heard_long_ago(&callback, SILENCE);
+    let reply = asked(&slot, 1, t + 1);
+    callback.silent(1);
+    assert!(unanswered(&reply), "left to a sample");
+}
+
+#[test]
+fn the_late_picture_never_waits_on_the_sample_queue() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 10));
+    let held = callback.newest.lock().unwrap();
+    assert!(callback.late(t + 5, whole()).is_none());
+    drop(held);
+    assert!(callback.late(t + 5, whole()).is_some());
+}
+
+#[test]
+fn the_late_newest_picture_answers_only_when_it_is_at_most_a_moment_old() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 10));
+    assert!(
+        callback.late(t + 20, whole()).is_none(),
+        "stamped before the bound"
+    );
+    assert_eq!(
+        callback.late(t + 5, whole()).unwrap().unwrap().rgb.as_ref(),
+        picture()
+    );
+    slot.invalidate();
+    assert!(
+        callback.late(t + 5, whole()).is_none(),
+        "never from a replaced stream"
+    );
+}
+
+#[test]
+fn only_a_picture_the_source_admitted_may_open_the_stream_and_only_while_it_runs() {
+    assert!(!may_open());
+    assert!(opening(may_open));
+    assert!(!may_open(), "the permission ends with the picture");
+    assert!(opening(|| opening(may_open)), "a nested picture keeps it");
+    assert!(!may_open());
+}
+
+#[test]
+fn only_one_ask_to_open_a_stream_waits_at_a_time_beside_a_frame_request() {
+    let (messages, incoming) = mpsc::sync_channel(2);
+    let worker = Worker {
+        messages,
+        slot: Arc::new(Slot::default()),
+    };
+    let wanted = Arc::new(AtomicBool::new(true));
+    assert!(worker.open(&key(), &wanted));
+    assert!(worker.open(&key(), &wanted), "one waits already");
+    let (frame, _reply) = request(1);
+    assert!(
+        worker.messages.try_send(Message::Capture(frame)).is_ok(),
+        "a frame request still finds room"
+    );
+    assert!(matches!(incoming.try_recv(), Ok(Message::Open(..))));
+    assert!(matches!(incoming.try_recv(), Ok(Message::Capture(_))));
+    assert!(incoming.try_recv().is_err());
+    worker.slot.opening.store(false, Ordering::Release);
+    assert!(
+        worker.open(&key(), &wanted),
+        "asked again once the worker took it"
+    );
+    assert!(matches!(incoming.try_recv(), Ok(Message::Open(..))));
+}
+
+#[test]
+fn a_frame_request_counts_as_waiting_only_while_it_is_alive_and_has_waited() {
+    let slot = Slot::default();
+    assert!(!slot.waiting(NUDGE_AFTER), "nothing asked");
+    let (mut pending, _reply) = request(1);
+    pending.made = Instant::now() - NUDGE_AFTER;
+    slot.begin(pending);
+    assert!(slot.waiting(NUDGE_AFTER));
+    assert!(!slot.waiting(NUDGE_AFTER * 4), "not that long yet");
+    slot.cancel();
+    assert!(!slot.waiting(NUDGE_AFTER));
+}
+
+#[test]
+fn a_picture_an_agent_reads_is_never_answered_by_an_unproven_one() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 10));
+    assert!(
+        matches!(
+            unproven(Some(&callback), Reader::Agent, t + 10, whole()),
+            Err(Unserved::Unproven)
+        ),
+        "however recent, it waits for CoreGraphics"
+    );
+}
+
+#[test]
+fn a_picture_only_a_person_reads_may_be_a_moment_old_and_says_so() {
+    let slot = Arc::new(Slot::default());
+    let (callback, t) = streaming(&slot, 0);
+    callback.sample(&stamped(SCFrameStatus::Complete, t + 10));
+    let Ok((shot, currency)) = unproven(Some(&callback), Reader::Person, t + 10, whole()) else {
+        panic!("not answered");
+    };
+    assert_eq!(shot.rgb.as_ref(), picture());
+    assert_eq!(currency, Currency::Late);
+    let long_after = t + 10 + ticks(LATE) + ticks(Duration::from_millis(1));
+    assert!(
+        matches!(
+            unproven(Some(&callback), Reader::Person, long_after, whole()),
+            Err(Unserved::Unproven)
+        ),
+        "never older than the bound"
+    );
+    assert!(unproven(None, Reader::Person, t, whole()).is_err());
+}
+
+#[test]
+fn an_ask_to_open_a_stream_holds_only_while_its_picture_runs_and_no_stop_is_under_way() {
+    let slot = Slot::default();
+    let wanted = Arc::new(AtomicBool::new(true));
+    assert!(slot.opens_for(&wanted));
+    slot.stop();
+    assert!(!slot.opens_for(&wanted), "a stop is under way");
+    slot.stopping.store(false, Ordering::Release);
+    assert!(slot.opens_for(&wanted));
+    drop(Ended(wanted.clone()));
+    assert!(
+        !slot.opens_for(&wanted),
+        "the picture ended: a stop may have come and gone since"
+    );
+}
+
+#[test]
+fn a_pictures_ask_to_replace_the_stream_waits_for_frame_requests_and_its_interval() {
+    let slot = Slot::default();
+    let wanted = Arc::new(AtomicBool::new(true));
+    *slot.renew.lock().unwrap() = Some((key(), wanted.clone()));
+    let (pending, _reply) = request(1);
+    slot.begin(pending);
+    assert!(slot.renewal().is_none(), "a frame request waits");
+    assert!(slot.renew.lock().unwrap().is_some(), "the ask is kept");
+    slot.cancel();
+    assert!(slot.renewal() == Some(key()));
+    assert!(slot.renew.lock().unwrap().is_none(), "taken once");
+    assert!(!slot.may_renew());
+    *slot.renew.lock().unwrap() = Some((key(), wanted.clone()));
+    assert!(slot.renewal().is_none(), "not again within its interval");
+    *slot.renewed.lock().unwrap() = Some(Instant::now() - RENEW_EVERY);
+    assert!(slot.may_renew());
+    *slot.renew.lock().unwrap() = Some((key(), wanted.clone()));
+    drop(Ended(wanted));
+    assert!(slot.renewal().is_none(), "its picture has ended");
+}
+
+#[test]
+fn a_frame_request_already_sent_puts_a_replacement_off_and_one_sent_after_waits_longer() {
+    let slot = Slot::default();
+    let wanted = Arc::new(AtomicBool::new(true));
+    *slot.renew.lock().unwrap() = Some((key(), wanted.clone()));
+    slot.queued.fetch_add(1, Ordering::SeqCst);
+    assert!(slot.renewal().is_none(), "a frame request is on its way");
+    assert!(slot.renew.lock().unwrap().is_some(), "the ask is kept");
+    slot.queued.fetch_sub(1, Ordering::SeqCst);
+    assert!(slot.renewal() == Some(key()));
+    assert!(
+        slot.take_restarted(),
+        "the next frame waits for the new stream's first picture"
+    );
+}
+
+#[test]
+fn a_stream_being_replaced_or_started_is_waited_for() {
+    let slot = Slot::default();
+    assert!(!slot.restarting());
+    slot.replacing.store(true, Ordering::SeqCst);
+    assert!(slot.restarting());
+    slot.replacing.store(false, Ordering::SeqCst);
+    slot.preparing.store(true, Ordering::SeqCst);
+    assert!(slot.restarting());
 }

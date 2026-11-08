@@ -372,3 +372,160 @@ fn no_capture_begins_until_a_process_told_to_end_is_gone() {
     );
     source.stop(owner, None).unwrap();
 }
+
+#[test]
+fn a_picture_with_nobody_owning_the_source_keeps_the_native_source_for_the_next() {
+    let source = Source::new(stopped);
+    source.one_shot(|| ()).unwrap();
+    assert_eq!(source.lifecycle(), Lifecycle::Active);
+    assert_eq!(source.drain(1), Drain::Held(Lifecycle::Active));
+    source.one_shot(|| ()).unwrap();
+    assert_eq!(
+        source.drain(1),
+        Drain::Held(Lifecycle::Active),
+        "kept, not admitted again"
+    );
+}
+
+#[test]
+fn a_native_viewer_takes_over_the_kept_source_without_stopping_it() {
+    static STOPS: AtomicUsize = AtomicUsize::new(0);
+    fn counted() -> Result<()> {
+        STOPS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    let source = Source::new(counted);
+    source.one_shot(|| ()).unwrap();
+    let viewer = source.admit(CaptureBackend::ScreenCaptureKit).unwrap();
+    assert_eq!(viewer.generation(), 2);
+    assert_eq!(STOPS.load(Ordering::SeqCst), 0, "the open stream goes on");
+    source.release_kept(Duration::ZERO).unwrap();
+    assert_eq!(
+        source.lifecycle(),
+        Lifecycle::Active,
+        "a viewer's source is never released"
+    );
+    assert_eq!(STOPS.load(Ordering::SeqCst), 0);
+    source.stop(viewer, None).unwrap();
+    assert_eq!(STOPS.load(Ordering::SeqCst), 1);
+    assert_eq!(source.lifecycle(), Lifecycle::Stopped);
+}
+
+#[test]
+fn a_core_graphics_viewer_stops_the_kept_source_first() {
+    static STOPS: AtomicUsize = AtomicUsize::new(0);
+    fn counted() -> Result<()> {
+        STOPS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    let source = Source::new(counted);
+    source.one_shot(|| ()).unwrap();
+    let viewer = source.admit(CaptureBackend::CoreGraphics).unwrap();
+    assert_eq!(STOPS.load(Ordering::SeqCst), 1);
+    assert_eq!(viewer.backend(), CaptureBackend::CoreGraphics);
+    assert_eq!(source.drain(1), Drain::Drained { stop_request: None });
+}
+
+#[test]
+fn the_kept_source_is_stopped_only_once_no_picture_was_taken_for_its_wait() {
+    static STOPS: AtomicUsize = AtomicUsize::new(0);
+    fn counted() -> Result<()> {
+        STOPS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    let source = Source::new(counted);
+    source.release_kept(Duration::ZERO).unwrap();
+    assert_eq!(
+        STOPS.load(Ordering::SeqCst),
+        0,
+        "nothing kept, nothing stopped"
+    );
+    source.one_shot(|| ()).unwrap();
+    source.release_kept(Duration::from_secs(3600)).unwrap();
+    assert_eq!(
+        source.lifecycle(),
+        Lifecycle::Active,
+        "a recent picture keeps it"
+    );
+    source.release_kept(Duration::ZERO).unwrap();
+    assert_eq!(STOPS.load(Ordering::SeqCst), 1);
+    assert_eq!(source.lifecycle(), Lifecycle::Stopped);
+    assert_eq!(source.drain(1), Drain::Drained { stop_request: None });
+}
+
+#[test]
+fn a_kept_source_whose_stop_fails_is_quarantined_like_any_other() {
+    let source = Source::new(never_stops);
+    source.one_shot(|| ()).unwrap();
+    assert!(source.release_kept(Duration::ZERO).is_err());
+    assert_eq!(source.lifecycle(), Lifecycle::Quarantined);
+    assert_eq!(
+        source
+            .admit(CaptureBackend::ScreenCaptureKit)
+            .unwrap_err()
+            .code,
+        Code::Busy
+    );
+}
+
+#[test]
+fn a_kept_source_is_given_back_between_captures_and_the_next_picture_keeps_a_new_one() {
+    static STOPS: AtomicUsize = AtomicUsize::new(0);
+    fn counted() -> Result<()> {
+        STOPS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    let source = Source::new(counted);
+    source.one_shot(|| ()).unwrap();
+    assert_eq!(source.between_captures(WAIT, || 1), Some(1));
+    assert_eq!(STOPS.load(Ordering::SeqCst), 1);
+    assert_eq!(source.lifecycle(), Lifecycle::Stopped);
+    assert_eq!(source.drain(1), Drain::Drained { stop_request: None });
+    source.one_shot(|| ()).unwrap();
+    assert_eq!(source.lifecycle(), Lifecycle::Active);
+    assert_eq!(source.drain(2), Drain::Held(Lifecycle::Active));
+}
+
+#[test]
+fn a_kept_source_whose_pause_fails_is_stopped_again_by_the_next_picture() {
+    static CONFIRMS: AtomicBool = AtomicBool::new(false);
+    fn later() -> Result<()> {
+        if CONFIRMS.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            never_stops()
+        }
+    }
+    let source = Source::new(later);
+    source.one_shot(|| ()).unwrap();
+    assert_eq!(source.between_captures(WAIT, || ()), None);
+    assert_eq!(source.lifecycle(), Lifecycle::Quarantined);
+    assert_eq!(source.one_shot(|| ()).unwrap_err().code, Code::Busy);
+    CONFIRMS.store(true, Ordering::SeqCst);
+    assert_eq!(source.one_shot(|| 1).unwrap(), 1);
+    assert_eq!(source.drain(1), Drain::Drained { stop_request: None });
+    assert_eq!(source.lifecycle(), Lifecycle::Active);
+    assert_eq!(source.between_captures(WAIT, || 2), Some(2));
+}
+
+#[test]
+fn only_a_picture_under_a_native_owner_may_open_the_stream() {
+    let source = Source::new(stopped);
+    assert!(source.one_shot(super::super::stream::may_open).unwrap());
+    let kept = Source::new(stopped);
+    let viewer = kept.admit(CaptureBackend::ScreenCaptureKit).unwrap();
+    assert!(kept.one_shot(super::super::stream::may_open).unwrap());
+    kept.stop(viewer, None).unwrap();
+    let core_graphics = Source::new(stopped);
+    let owner = core_graphics.admit(CaptureBackend::CoreGraphics).unwrap();
+    assert!(
+        !core_graphics
+            .one_shot(super::super::stream::may_open)
+            .unwrap()
+    );
+    core_graphics.stop(owner, None).unwrap();
+    assert!(
+        !super::super::stream::may_open(),
+        "outside a picture, never"
+    );
+}
