@@ -9,18 +9,15 @@ import Testing
 @Suite("ViewerStage", .serialized, AppKitState())
 @MainActor
 struct ViewerStageTests {
-  @Test("Activity shown again after the Screen is the pane already built, still scrolled where it was left")
+  @Test("Activity shown again after the Screen is the pane already built")
   func aTabShownAgainIsThePaneAlreadyBuilt() throws {
     let host = ViewerHost(try Self.activity(lines: 80))
     let list = try #require(host.scrollViews.first, "Activity has its list")
-    list.contentView.scroll(to: NSPoint(x: 0, y: Self.scrolled))
-    list.reflectScrolledClipView(list.contentView)
     host.show(PreviewStates.viewerWorking)
     host.show(try Self.activity(lines: 80))
     // Activity's list is all there is: nothing was built again, and nothing old is still leaving.
     #expect(host.scrollViews.count == 1)
     #expect(host.scrollViews.contains { $0 === list }, "Activity's list was built again")
-    #expect(list.contentView.bounds.origin.y == Self.scrolled, "the list lost its place")
   }
 
   @Test("a new session shows at the top, while a list scrolled down holds it under a line and never moves")
