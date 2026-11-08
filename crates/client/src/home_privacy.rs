@@ -52,7 +52,7 @@ pub fn status(helper_uid: u32) -> Result<Files> {
     let (readable, examples) = if denies_search(&entries) {
         (0, Vec::new())
     } else {
-        readable_in(&list(&["-laen"], &home)?, helper_uid, &helper.groups()?)
+        readable_in(&list(&["-laenb"], &home)?, helper_uid, &helper.groups()?)
     };
     Ok(Files {
         private: false,
@@ -379,7 +379,7 @@ impl<'a> Entry<'a> {
     }
 }
 
-/// The folders in an `ls -laen` listing of the home folder that the helper
+/// The folders in an `ls -laenb` listing of the home folder that the helper
 /// `uid`, in `groups`, can list and go into by their permissions, counted,
 /// and the first two by name. None when the home folder itself keeps the
 /// helper out; a folder with its own access entries isn't counted.
@@ -398,7 +398,7 @@ fn readable_in(listing: &str, uid: u32, groups: &[u32]) -> (u32, Vec<String>) {
             "." => home_open = item.opens_for(uid, groups),
             ".." => {}
             name if item.folder && !has_entries && item.opens_for(uid, groups) => {
-                names.push(name.to_owned());
+                names.push(unescaped(name));
             }
             _ => {}
         }
@@ -413,7 +413,7 @@ fn readable_in(listing: &str, uid: u32, groups: &[u32]) -> (u32, Vec<String>) {
     (count, names)
 }
 
-/// One item of an `ls -laen` listing: `drwxr-xr-x+ 4 501 20 128 Jul 7 09:23
+/// One item of an `ls -laenb` listing, its name escaped so it takes one line: `drwxr-xr-x+ 4 501 20 128 Jul 7 09:23
 /// name`.
 struct Item<'a> {
     folder: bool,
@@ -460,6 +460,49 @@ impl<'a> Item<'a> {
         };
         class[0] == b'r' && matches!(class[2], b'x' | b's' | b't')
     }
+}
+
+/// A name as `ls -b` escaped it, as it is: `\\n`, `\\\\` and the other C
+/// escapes, and `\\ooo` for any other byte it couldn't print.
+fn unescaped(name: &str) -> String {
+    let mut bytes = Vec::with_capacity(name.len());
+    let mut rest = name.as_bytes();
+    while let [first, tail @ ..] = rest {
+        rest = tail;
+        if *first != b'\\' {
+            bytes.push(*first);
+            continue;
+        }
+        let digits = rest
+            .iter()
+            .take(3)
+            .take_while(|byte| (b'0'..=b'7').contains(byte))
+            .count();
+        if digits == 3 {
+            let value = rest[..3]
+                .iter()
+                .fold(0u32, |value, digit| value * 8 + u32::from(digit - b'0'));
+            bytes.push(u8::try_from(value).unwrap_or(b'?'));
+            rest = &rest[3..];
+            continue;
+        }
+        let Some((escape, tail)) = rest.split_first() else {
+            bytes.push(b'\\');
+            break;
+        };
+        rest = tail;
+        bytes.push(match escape {
+            b'n' => b'\n',
+            b't' => b'\t',
+            b'r' => b'\r',
+            b'a' => 0x07,
+            b'b' => 0x08,
+            b'f' => 0x0c,
+            b'v' => 0x0b,
+            other => *other,
+        });
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 #[cfg(test)]

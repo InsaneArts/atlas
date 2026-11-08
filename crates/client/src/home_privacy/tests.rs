@@ -179,3 +179,23 @@ fn a_home_that_may_keep_the_helper_out_hides_its_folders() {
         "group:everyone deny delete"
     ])));
 }
+
+#[test]
+fn a_name_with_a_line_break_cannot_add_a_folder() {
+    // `ls -b` keeps each name on its line; without it, this name would read as a second, open folder.
+    let text = home_listing(
+        "drwxr-x---+",
+        &[
+            r"drwx------   2 501  20    64 Nov  8 18:28 work\ndrwxr-xr-x 2 501 20 64 Nov 8 18:28 phantom",
+        ],
+    );
+    assert_eq!(readable_in(&text, HELPER, &[STAFF]), (0, Vec::new()));
+}
+
+#[test]
+fn escaped_names_read_as_they_are() {
+    assert_eq!(unescaped(r"a\nb\\c é"), "a\nb\\c é");
+    assert_eq!(unescaped(r"tab\there"), "tab\there");
+    assert_eq!(unescaped(r"\303\251t\303\251"), "été");
+    assert_eq!(unescaped("plain name"), "plain name");
+}
