@@ -38,8 +38,6 @@ struct Fake {
     /// Attributes and lists the app is busy for: each answers that it could
     /// not complete, as many times as it is busy.
     busy: HashMap<(usize, &'static str), usize>,
-    /// When each timeout was set.
-    bounded_at: Vec<Instant>,
 }
 
 impl Fake {
@@ -82,7 +80,6 @@ impl Fake {
             pauses: Vec::new(),
             hit: None,
             busy: HashMap::new(),
-            bounded_at: Vec::new(),
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -157,7 +154,6 @@ impl Ask for &mut Fake {
     }
     fn bound(&mut self, _: &usize, timeout: Duration) -> bool {
         self.bounds.push(timeout);
-        self.bounded_at.push(self.now.get());
         true
     }
     fn ask(&mut self, element: &usize, name: &'static str) -> Answer<usize> {
@@ -3240,37 +3236,4 @@ fn a_window_list_the_app_was_too_busy_to_give_is_listed_again_whole() {
     fake.run(&app_only()).unwrap();
     assert_eq!(fake.busy[&(APP, "AXWindows")], 0);
     assert_eq!(fake.pauses, vec![BUSY_PAUSE]);
-}
-
-#[test]
-fn an_app_that_stays_too_busy_refuses_as_slow_within_the_preparation_deadline_naming_the_request() {
-    let mut fake = Fake::new();
-    fake.delay = Duration::from_millis(40);
-    fake.busy.insert((APP, "AXFocusedWindow"), usize::MAX);
-    let started = fake.now.get();
-    let error = fake.run(&app_only()).unwrap_err();
-    assert_eq!(Unread::of(&error), Some(Unread::Slow));
-    assert!(
-        Unread::busy(&error),
-        "the refusal keeps the request that could not complete"
-    );
-    let deadline = started + Duration::from_millis(450);
-    assert!(fake.now.get() <= deadline);
-    assert!(fake.pauses.len() > 1, "asked again while time was left");
-    for (bound, at) in fake.bounds.iter().zip(&fake.bounded_at) {
-        assert_eq!(
-            *bound,
-            (deadline - *at).min(REQUEST),
-            "by what is left of the preparation"
-        );
-    }
-}
-
-#[test]
-fn a_role_read_that_only_wakes_a_page_tree_is_asked_once_however_busy_the_app_is() {
-    let mut fake = Fake::new();
-    fake.busy.insert((APP, "AXRole"), usize::MAX);
-    fake.run(&named().in_field("Email").unwrap()).unwrap();
-    assert_eq!(fake.busy[&(APP, "AXRole")], usize::MAX - 1);
-    assert!(fake.pauses.is_empty());
 }

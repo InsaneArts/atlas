@@ -114,22 +114,6 @@ impl Unread {
         }
     }
 
-    /// Whether the request behind `error` failed because the app could not
-    /// complete it.
-    pub(super) fn busy(error: &Error) -> bool {
-        let mut cause = std::error::Error::source(error);
-        while let Some(current) = cause {
-            if let Some(asked) = current.downcast_ref::<Asked>() {
-                return asked.status == AXError::CannotComplete;
-            }
-            if let Some(Status(status)) = current.downcast_ref::<Status>() {
-                return *status == AXError::CannotComplete;
-            }
-            cause = current.source();
-        }
-        false
-    }
-
     /// Why `error` says it could not tell, when it says.
     pub(in crate::native) fn of(error: &Error) -> Option<Self> {
         Self::deserialize(error.details.get("unread")?).ok()
@@ -313,7 +297,7 @@ impl<A: Ask> Reader<A> {
     /// Whether the read has time to ask again a request the app could not
     /// complete, behind `error`, once [`BUSY_PAUSE`] has passed.
     pub(super) fn may_ask_again(&self, error: &Error) -> bool {
-        Unread::busy(error) && self.left().is_ok_and(|left| left > BUSY_PAUSE)
+        crate::native::focus::incomplete(error) && self.left().is_ok_and(|left| left > BUSY_PAUSE)
     }
 
     /// [`Reader::asked`], a failed request an error too.

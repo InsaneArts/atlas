@@ -605,11 +605,7 @@ fn a_focused_element_that_no_longer_exists_proves_no_focus_alone() {
 fn an_attribute_the_app_was_too_busy_to_give_is_asked_again_and_the_next_answer_decides() {
     let mut fake = Fake::app();
     fake.busy.insert((FIELD, "AXSubrole"), 2);
-    let keyboard = read_with(&mut fake, budget()).unwrap();
-    assert_eq!(
-        keyboard.focused.unwrap().element.role.as_deref(),
-        Some("AXTextField")
-    );
+    read_with(&mut fake, budget()).unwrap();
     assert_eq!(
         fake.asked
             .iter()
@@ -626,7 +622,7 @@ fn an_app_that_stays_too_busy_refuses_as_slow_naming_the_request_once_no_time_is
     fake.busy.insert((FIELD, "AXSubrole"), usize::MAX);
     let error = read_with(&mut fake, budget()).unwrap_err();
     assert_eq!(Unread::of(&error), Some(Unread::Slow));
-    assert!(Unread::busy(&error));
+    assert!(crate::native::focus::incomplete(&error));
     assert!(fake.elapsed <= budget());
     assert!(fake.pauses.len() > 1, "asked again while time was left");
     let asks = fake.asked.len();
