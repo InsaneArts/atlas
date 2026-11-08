@@ -254,16 +254,26 @@ impl Helper {
 
 /// `ls` with `flags` on `path`, under a time limit.
 fn list(flags: &[&str], path: &Path) -> Result<String> {
-    let output = atlas_core::bounded::output(
-        Command::new("/bin/ls").args(flags).arg(path),
-        atlas_core::bounded::FILE,
-    )?;
+    let output = atlas_core::bounded::output(&mut ls(flags, path), atlas_core::bounded::FILE)?;
     if !output.status.success() {
         return Err(problem(
             "Atlas couldn't read your home folder's permissions",
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The `ls` command for `flags` on `path`, in plain text: the person's
+/// colour settings would wrap names in escape codes even through a pipe.
+fn ls(flags: &[&str], path: &Path) -> Command {
+    let mut command = Command::new("/bin/ls");
+    command
+        .args(flags)
+        .arg(path)
+        .env_remove("CLICOLOR")
+        .env_remove("CLICOLOR_FORCE")
+        .env_remove("LSCOLORS");
+    command
 }
 
 /// `chmod` with `args` on `path`, under a time limit.

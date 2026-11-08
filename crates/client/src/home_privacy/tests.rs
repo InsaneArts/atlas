@@ -219,3 +219,16 @@ fn a_name_that_only_looks_like_the_home_folder_cannot_open_it() {
         (1, vec![" dev".to_owned()])
     );
 }
+
+#[test]
+fn listings_are_read_without_the_persons_colours() {
+    let command = ls(&["-laenb"], Path::new("/Users/someone"));
+    let removed: Vec<_> = command
+        .get_envs()
+        .filter(|(_, value)| value.is_none())
+        .map(|(name, _)| name.to_owned())
+        .collect();
+    for name in ["CLICOLOR", "CLICOLOR_FORCE", "LSCOLORS"] {
+        assert!(removed.iter().any(|removed| removed == name), "{name}");
+    }
+}
