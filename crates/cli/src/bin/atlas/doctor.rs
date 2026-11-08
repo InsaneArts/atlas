@@ -2,6 +2,7 @@
 use atlas_cli::ui;
 use atlas_client::{
     client::{Actor, Client},
+    console_agents::{self, Restarting},
     host_session::{Asker, Recovery},
 };
 use atlas_core::host::{HostSession, Key};
@@ -10,6 +11,13 @@ use serde_json::{Value, json};
 /// Doctor's check that no change's outcome is unknown: while one is, Atlas
 /// refuses every agent's action until the helper is recovered.
 const NO_UNKNOWN_OUTCOME: &str = "No action of unknown outcome";
+/// Doctor's warning while a macOS service that slows the Mac keeps
+/// restarting in the helper: Atlas can't stop it, and a log-out clears what
+/// it has built up.
+const SLOWING: &str = "A macOS service in the helper restarts every 10 seconds, and a macOS \
+                       bug makes the restarts slowly slow your whole Mac. Atlas can't turn it \
+                       off. Log the helper out and back in every few days to clear it: run \
+                       atlas logout, then log in to the helper and switch back.";
 
 const GIGABYTE: u64 = 1 << 30;
 
@@ -36,6 +44,16 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
 
     let shell_blocked = status["code"] == "blocked";
     let sound = sound_warning(&status);
+    // Apple jobs restarting in the helper, from launchd's log; only when
+    // the helper itself answered, as a logged-out helper runs none.
+    let restarts = if !console_agents::answered(&status) {
+        None
+    } else {
+        tokio::task::spawn_blocking(move || console_agents::read_restarting(uid))
+            .await
+            .ok()
+            .flatten()
+    };
     let mut report = atlas_client::capability::doctor(status, uid);
     if let Some(warning) = sound
         && let Some(warnings) = report["warnings"].as_array_mut()
@@ -126,6 +144,7 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     let session = client.host_session.as_ref().map(HostSession::key);
     let asking = asker(client.actor, session, ui::interactive());
     recorder_report(&mut report, asking);
+    restarting_report(&mut report, restarts.as_deref(), asking, verbose);
     pending_report(&mut report, causes, asking);
     if verbose || ui::human() {
         report
@@ -171,6 +190,27 @@ fn recorder_report(report: &mut Value, asking: Asker<'_>) {
     );
     if let Some(warnings) = report["warnings"].as_array_mut() {
         warnings.push(json!(warning));
+    }
+}
+
+/// Doctor's warning while a macOS service that slows the Mac restarts in
+/// the helper, and, with `verbose`, every Apple job restarting there. It
+/// slows the Mac, not agents, so the helper stays ready; only the person
+/// can log the helper out, so an agent is not told.
+fn restarting_report(
+    report: &mut Value,
+    restarts: Option<&[console_agents::Restart]>,
+    asking: Asker<'_>,
+    verbose: bool,
+) {
+    if asking == Asker::Person
+        && Restarting::of(restarts) == Restarting::Restarting
+        && let Some(warnings) = report["warnings"].as_array_mut()
+    {
+        warnings.push(json!(SLOWING));
+    }
+    if verbose && let Some(restarts) = restarts {
+        report["restartingJobs"] = json!(restarts);
     }
 }
 
