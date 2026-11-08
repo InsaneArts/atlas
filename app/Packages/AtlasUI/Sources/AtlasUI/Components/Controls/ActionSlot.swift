@@ -27,8 +27,8 @@ struct ActionSlot: ViewModifier {
   /// as it fades out before they close the gap.
   private var beats: AnyTransition {
     .asymmetric(
-      insertion: growing.animation(Self.arrival),
-      removal: growing.animation(Self.departure)
+      insertion: growing.animation(Motion.listIn),
+      removal: growing.animation(Motion.swapOut)
     )
   }
 
@@ -37,12 +37,6 @@ struct ActionSlot: ViewModifier {
     AnyTransition.scale(scale: Self.arrivingScale, anchor: .leading)
       .combined(with: .opacity)
   }
-
-  /// How a control comes into its slot: once its neighbours have moved aside, ``Motion/listIn``.
-  nonisolated static var arrival: Animation { Motion.listIn }
-
-  /// How a control leaves its slot: before its neighbours move in, ``Motion/swapOut``.
-  nonisolated static var departure: Animation { Motion.swapOut }
 
   /// How a row moves its controls as its slots' controls come or go.
   ///
