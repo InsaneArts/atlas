@@ -868,3 +868,84 @@ fn a_keyboard_once_grant_is_bound_to_the_window_the_focused_field_is_in() {
         "a field whose window can't be told can't be allowed just once"
     );
 }
+
+/// The person lists slack.com and github.com in Chrome, both asking.
+fn two_sites() -> Asking {
+    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
+    asking.accounts.push(Listed {
+        kind: Kind::Site,
+        id: "github.com".to_owned(),
+        name: "github.com".to_owned(),
+        browser: Some(CHROME.to_owned()),
+        level: Level::Ask,
+    });
+    asking
+}
+
+#[test]
+fn a_page_that_cant_be_read_is_no_one_sites_so_no_grant_for_a_site_covers_it() {
+    let mut asking = two_sites();
+    asking.grants.push(Allowance::Task {
+        account: site("slack.com"),
+    });
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    let unread = Target {
+        site: Site::Unread,
+        ..page("app.slack.com", "AXButton", Some("Send"))
+    };
+    let mut look = scripted(unread, Target::default());
+    let Decision::Ask(question) = decide(&click, &asking, &mut look) else {
+        panic!("slack.com's grant doesn't cover a page that could be github.com");
+    };
+    assert_eq!(
+        question.details()["once"],
+        false,
+        "nor can it be allowed once"
+    );
+    asking.grants.push(once(&question));
+    asking.grants.push(Allowance::Task {
+        account: question.account_key.clone(),
+    });
+    assert!(
+        matches!(decide(&click, &asking, &mut look), Decision::Ask(_)),
+        "it asks until the page is read"
+    );
+    look.point = page("app.slack.com", "AXButton", Some("Send"));
+    assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
+}
+
+#[test]
+fn a_drag_between_two_accounts_needs_each_of_them_to_allow_it() {
+    let asking = two_sites();
+    let mut look = TwoPlaces {
+        from: page("app.slack.com", "AXGroup", Some("Message")),
+        to: page("github.com", "AXGroup", Some("Comment")),
+    };
+    let drag = actions(json!([{"type": "drag", "fromX": 1, "fromY": 1, "toX": 9, "toY": 1}]));
+
+    let mut source = asking.clone();
+    source.grants.push(Allowance::Task {
+        account: site("slack.com"),
+    });
+    let Decision::Ask(question) = decide(&drag, &source, &mut look) else {
+        panic!("the source's grant doesn't cover where it drops");
+    };
+    assert_eq!(question.account, "github.com");
+    source.grants.push(Allowance::Task {
+        account: site("github.com"),
+    });
+    assert_eq!(decide(&drag, &source, &mut look), Decision::Free);
+
+    let mut once_only = asking;
+    let Decision::Ask(question) = decide(&drag, &once_only, &mut look) else {
+        panic!("asks");
+    };
+    assert!(question.bound.drop.is_some(), "bound where it drops too");
+    once_only.grants.push(once(&question));
+    assert_eq!(decide(&drag, &once_only, &mut look), Decision::Free);
+    look.to = page("github.com", "AXButton", Some("Delete branch"));
+    assert!(
+        matches!(decide(&drag, &once_only, &mut look), Decision::Ask(_)),
+        "another place to drop"
+    );
+}

@@ -82,7 +82,7 @@ pub(crate) struct AccountKey {
 }
 
 impl AccountKey {
-    /// Any account: the one an unreadable list or app stands for.
+    /// Any account: the one an unreadable list stands for.
     fn any() -> Self {
         Self {
             kind: Kind::App,
@@ -90,6 +90,25 @@ impl AccountKey {
             browser: None,
         }
     }
+
+    /// An account that can't be told: an app or a page that doesn't read.
+    fn unread() -> Self {
+        Self {
+            kind: Kind::App,
+            id: "?".to_owned(),
+            browser: None,
+        }
+    }
+}
+
+/// The listed account a target is in.
+struct Found {
+    key: AccountKey,
+    name: String,
+    level: Level,
+    /// Whether which account it is was read. An app or page that can't be
+    /// told could be any listed one, and no grant for one account covers it.
+    known: bool,
 }
 
 /// What a once grant is bound to where the request lands: the app, page,
@@ -104,6 +123,9 @@ pub(crate) struct Bound {
     pub(crate) name: Option<String>,
     #[serde(default)]
     pub(crate) identifier: Option<String>,
+    /// Where a drag drops, bound as where it starts is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) drop: Option<Box<Bound>>,
 }
 
 /// How agents may act in an account, strictest first.
@@ -386,18 +408,10 @@ pub(crate) fn recheck(
     (decide(actions, asking, look), recheck)
 }
 
-/// How strict an account's level is, where none is free.
-fn rank(level: Option<Level>) -> u8 {
-    match level {
-        None | Some(Level::Trusted) => 0,
-        Some(Level::Ask) => 1,
-        Some(Level::LookOnly) => 2,
-    }
-}
-
 /// What `action` of the request whose digest is `batch` comes to where it
 /// lands, read through `look`. `changed` says an earlier action may have
 /// moved what was read; `pressed` that a press before it holds the button.
+/// A drag lands at both its ends, and the account at each must allow it.
 fn judge(
     action: &Action,
     asking: &Asking,
@@ -406,64 +420,65 @@ fn judge(
     (changed, pressed): (bool, bool),
 ) -> Decision {
     let target = target(action, look);
-    let found = match action {
-        // A drag goes by the stricter of where it starts and where it drops.
-        Action::Drag { to_x, to_y, .. } => {
-            let drop = look.at_point(*to_x, *to_y);
-            let from = account(&target, asking);
-            let to = account(&drop, asking);
-            if rank(to.as_ref().map(|found| found.2)) > rank(from.as_ref().map(|found| found.2)) {
-                to
-            } else {
-                from
-            }
-        }
-        _ => account(&target, asking),
+    let drop = match action {
+        Action::Drag { to_x, to_y, .. } => Some(look.at_point(*to_x, *to_y)),
+        _ => None,
     };
-    let Some((key, account, level)) = found else {
+    let found: Vec<Found> = std::iter::once(&target)
+        .chain(drop.as_ref())
+        .filter_map(|landing| account(landing, asking))
+        .collect();
+    // A move with a button held is a drag: a change.
+    let changes_it = mutates(action) || (pressed && matches!(action, Action::Pointer { .. }));
+    if let Some(strict) = found.iter().find(|found| found.level == Level::LookOnly)
+        && changes_it
+    {
+        return Decision::Deny {
+            account: strict.name.clone(),
+        };
+    }
+    let Some(what) = asks(action, &target, changed, pressed) else {
         return Decision::Free;
     };
-    match level {
-        Level::Trusted => Decision::Free,
-        // A move with a button held is a drag: a change.
-        Level::LookOnly
-            if mutates(action) || (pressed && matches!(action, Action::Pointer { .. })) =>
-        {
-            Decision::Deny { account }
-        }
-        Level::LookOnly => Decision::Free,
-        Level::Ask => {
-            let Some(what) = asks(action, &target, changed, pressed) else {
-                return Decision::Free;
-            };
-            let message =
-                (what == "send-key" && target.editable && !target.secure).then(|| look.message());
-            let pinned = pinned(action, &target) && !matches!(message, Some(Message::Unread));
-            let bound = pinned.then(|| bound(&target));
-            if allowed(
-                asking,
-                action,
-                &key,
-                batch,
-                bound.as_ref(),
-                message.as_ref(),
-            ) {
-                return Decision::Free;
-            }
-            Decision::Ask(Box::new(Question {
-                once: pinned,
-                typing: asking.typing.clone(),
-                ..question(
-                    action,
-                    &target,
-                    what,
-                    (key, account),
-                    batch.to_owned(),
-                    message,
-                )
-            }))
-        }
+    // The ends that ask, and that no task grant for their account covers.
+    let open: Vec<&Found> = found
+        .iter()
+        .filter(|found| found.level == Level::Ask)
+        .filter(|found| {
+            !(found.known
+                && asking.grants.contains(&Allowance::Task {
+                    account: found.key.clone(),
+                }))
+        })
+        .collect();
+    let Some(first) = open.first() else {
+        return Decision::Free;
+    };
+    let message = (what == "send-key" && target.editable && !target.secure).then(|| look.message());
+    let pinned = open.iter().all(|found| found.known)
+        && pinned(action, &target)
+        && drop.as_ref().is_none_or(|drop| drop.window.is_some())
+        && !matches!(message, Some(Message::Unread));
+    let bound = Bound {
+        drop: drop.as_ref().map(|drop| Box::new(bound(drop))),
+        ..bound(&target)
+    };
+    if pinned && allowed(asking, action, &first.key, batch, &bound, message.as_ref()) {
+        return Decision::Free;
     }
+    Decision::Ask(Box::new(Question {
+        once: pinned,
+        typing: asking.typing.clone(),
+        bound,
+        ..question(
+            action,
+            &target,
+            what,
+            (first.key.clone(), first.name.clone()),
+            batch.to_owned(),
+            message,
+        )
+    }))
 }
 
 /// Whether a press is held after `action`, when one was before it as
@@ -530,18 +545,30 @@ fn target(action: &Action, look: &mut impl Look) -> Target {
 /// The listed account `target` is in, by name, and its level; none when it
 /// is in none. A site counts before its browser app. A browser page whose
 /// address can't be read takes the strictest level of the sites listed for
-/// that browser, so Look Only is never weakened to asking.
-fn account(target: &Target, asking: &Asking) -> Option<(AccountKey, String, Level)> {
+/// that browser, so Look Only is never weakened to asking, and which of
+/// them it is stays unknown.
+fn account(target: &Target, asking: &Asking) -> Option<Found> {
+    let unknown = |level| Found {
+        key: AccountKey::unread(),
+        name: "this account".to_owned(),
+        level,
+        known: false,
+    };
     if asking.unknown {
-        return Some((AccountKey::any(), "this account".to_owned(), Level::Ask));
+        return Some(Found {
+            key: AccountKey::any(),
+            known: true,
+            ..unknown(Level::Ask)
+        });
     }
     // An app that can't be read could be any listed account: the strictest.
     let Some(app) = target.app.as_deref() else {
         return asking
             .accounts
             .iter()
-            .min_by_key(|listed| listed.level)
-            .map(|listed| (AccountKey::any(), "this account".to_owned(), listed.level));
+            .map(|listed| listed.level)
+            .min()
+            .map(unknown);
     };
     let app = Some(app);
     let in_browser =
@@ -555,7 +582,10 @@ fn account(target: &Target, asking: &Asking) -> Option<(AccountKey, String, Leve
         Site::Host(host) => sites
             .filter(|listed| host == &listed.id || host.ends_with(&format!(".{}", listed.id)))
             .min_by_key(|listed| listed.level),
-        Site::Unread => sites.min_by_key(|listed| listed.level),
+        Site::Unread => match sites.map(|listed| listed.level).min() {
+            Some(level) => return Some(unknown(level)),
+            None => None,
+        },
         Site::None => None,
     };
     let app_listed = || {
@@ -565,13 +595,15 @@ fn account(target: &Target, asking: &Asking) -> Option<(AccountKey, String, Leve
             .filter(|listed| listed.kind == Kind::App && Some(listed.id.as_str()) == app)
             .min_by_key(|listed| listed.level)
     };
-    site.or_else(app_listed).map(|listed| {
-        let key = AccountKey {
+    site.or_else(app_listed).map(|listed| Found {
+        key: AccountKey {
             kind: listed.kind,
             id: listed.id.clone(),
             browser: listed.browser.clone(),
-        };
-        (key, display(listed), listed.level)
+        },
+        name: display(listed),
+        level: listed.level,
+        known: true,
     })
 }
 
@@ -720,20 +752,20 @@ fn by_name(target: &Target, changed: bool) -> Option<&'static str> {
     }
 }
 
-/// Whether a grant in `asking` covers `action` of this request in
-/// `account`: a task grant there, or, where it lands as `target` binds when
-/// it can be bound, a once grant for this very request and message, or a
-/// command grant for this typing into this field.
+/// Whether a once or a command grant in `asking` covers `action` of this
+/// request in `account`, landing where `target` binds: a once grant for
+/// this very request and message, or a command grant for this typing into
+/// this field. Task grants are each end's own, judged before.
 fn allowed(
     asking: &Asking,
     action: &Action,
     account: &AccountKey,
     batch: &str,
-    target: Option<&Bound>,
+    target: &Bound,
     message: Option<&Message>,
 ) -> bool {
     asking.grants.iter().any(|grant| match grant {
-        Allowance::Task { account: granted } => granted == account,
+        Allowance::Task { .. } => false,
         Allowance::Command {
             account: granted,
             target: approved,
@@ -742,7 +774,7 @@ fn allowed(
             matches!(action, Action::Type { .. })
                 && asking.typing.as_ref() == Some(typing)
                 && granted == account
-                && target == Some(approved)
+                && target == approved
         }
         Allowance::Once {
             account: granted,
@@ -755,7 +787,7 @@ fn allowed(
                 Some(Message::Whole { digest, .. }) => value.as_deref() == Some(digest),
                 Some(Message::Unread) => false,
             };
-            granted == account && allowed == batch && target == Some(approved) && same_message
+            granted == account && allowed == batch && target == approved && same_message
         }
     })
 }
@@ -772,6 +804,7 @@ fn bound(target: &Target) -> Bound {
         role: target.role.clone(),
         name: target.name.clone(),
         identifier: target.identifier.clone(),
+        drop: None,
     }
 }
 
