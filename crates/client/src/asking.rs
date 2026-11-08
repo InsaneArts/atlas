@@ -161,6 +161,10 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
             ends: 0,
         };
         let id = asks.ask(ask, now_ms())?;
+        let _shown = Shown {
+            asks: asks.clone(),
+            id: id.clone(),
+        };
         let waited = tokio::task::spawn_blocking({
             let asks = asks.clone();
             let id = id.clone();
@@ -222,6 +226,21 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
                 }));
             }
         }
+    }
+}
+
+/// The message preview of the ask a command waits on, taken off it when
+/// the wait ends however it ends: answered, out of time, stopped or
+/// interrupted. Only the person reads it, and only while it is waited on.
+struct Shown {
+    asks: atlas_control::asks::Asks,
+    id: String,
+}
+
+impl Drop for Shown {
+    fn drop(&mut self) {
+        // One that can't be taken off goes with its ask at two minutes.
+        let _ = self.asks.forget_preview(&self.id);
     }
 }
 

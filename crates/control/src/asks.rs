@@ -4,7 +4,11 @@
 //!
 //! An ask is one file, `<id>.json`, in the helper's asks folder: who asks,
 //! the account, what would be sent and, for a message, its preview. It lives
-//! two minutes. The person's answer is `<id>.answer`, written only through
+//! two minutes. The preview lives only while a command waits on the ask: the
+//! command takes it off when its wait ends, however it ends, and a rerun
+//! that joins the ask writes it again. An ask whose command was killed is
+//! taken down at the next read of the folder, and the person's app, which
+//! watches the folder, also takes each down when its two minutes end. The person's answer is `<id>.answer`, written only through
 //! their viewer. A task grant ("Allow for This Task") is kept in
 //! `allowed.json`: an agent session, the host process it ran in, an account
 //! and when it ends. Just This Once is claimed by one waiting command alone.
@@ -126,6 +130,13 @@ impl Asks {
         if let Some(open) = self.open(now).into_iter().find(|open| {
             open.session == ask.session && !bind.is_null() && &open.question["bind"] == bind
         }) {
+            // The command joining it waits on it now: its message shows again.
+            let message = &ask.question["message"];
+            if !message.is_null() {
+                self.rewrite(&open.id, |joined| {
+                    joined.question["message"] = message.clone();
+                })?;
+            }
             return Ok(open.id);
         }
         ask.id = atlas_core::files::token();
@@ -214,17 +225,62 @@ impl Asks {
     ///
     /// Returns file errors when the lock can't be taken.
     pub fn claim_once(&self, id: &str, now: u64) -> Result<Option<Ask>> {
-        let _locked = locked(&self.folder.join("claims.lock"))?;
+        let _locked = self.lock()?;
         if self.answered(id) != Some(Answer::Once) {
             return Ok(None);
         }
-        let claimed = self.open(now).into_iter().find(|ask| ask.id == id);
-        self.close(id);
+        let claimed = self.read(id).filter(|ask| ask.ends > now);
+        self.remove(id);
         Ok(claimed)
+    }
+
+    /// Take the message preview off ask `id`: its waiting command's wait
+    /// ended. The ask stays up for a rerun to join.
+    ///
+    /// # Errors
+    ///
+    /// Returns file errors; the ask then still ends with its two minutes.
+    pub fn forget_preview(&self, id: &str) -> Result<()> {
+        self.rewrite(id, |ask| {
+            if let Some(message) = ask.question["message"].as_object_mut() {
+                message.remove("preview");
+            }
+        })
+    }
+
+    /// Change ask `id` as `change` says, under the asks' lock, when it is
+    /// still up: one taken down meanwhile is never written back.
+    fn rewrite(&self, id: &str, change: impl FnOnce(&mut Ask)) -> Result<()> {
+        let _locked = self.lock()?;
+        let Some(mut ask) = self.read(id) else {
+            return Ok(());
+        };
+        change(&mut ask);
+        let path = self.folder.join(format!("{id}.json"));
+        atlas_core::files::save_private(&path, &serde_json::to_vec(&ask)?)
+    }
+
+    /// Ask `id` as it is on disk.
+    fn read(&self, id: &str) -> Option<Ask> {
+        let bytes = fs::read(self.folder.join(format!("{id}.json"))).ok()?;
+        serde_json::from_slice(&bytes).ok()
+    }
+
+    /// The asks' lock, held across a change that reads an ask and writes or
+    /// removes it, so none undoes another.
+    fn lock(&self) -> Result<atlas_core::files::LockFile> {
+        locked(&self.folder.join("asks.lock"))
     }
 
     /// Take ask `id` down, with its answer.
     pub fn close(&self, id: &str) {
+        // Taken down either way; the lock only keeps a rewrite from
+        // bringing it back.
+        let _locked = self.lock().ok();
+        self.remove(id);
+    }
+
+    fn remove(&self, id: &str) {
         for ending in ["json", "answer"] {
             let _ = fs::remove_file(self.folder.join(format!("{id}.{ending}")));
         }
@@ -235,6 +291,7 @@ impl Asks {
         let Ok(entries) = fs::read_dir(&self.folder) else {
             return;
         };
+        let _locked = self.lock().ok();
         for entry in entries.flatten() {
             let path = entry.path();
             if path
@@ -244,7 +301,7 @@ impl Asks {
                 && serde_json::from_slice::<Ask>(&bytes).is_ok_and(|ask| ask.ends <= now)
                 && let Some(id) = path.file_stem().and_then(|stem| stem.to_str())
             {
-                self.close(id);
+                self.remove(id);
             }
         }
     }

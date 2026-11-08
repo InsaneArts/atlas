@@ -305,3 +305,24 @@ fn an_ask_that_ran_out_is_gone_from_disk_at_the_next_read_whoever_reads() {
     );
     assert_eq!(files(&answered), [false, false], "an answer that came late");
 }
+
+#[test]
+fn a_preview_taken_off_when_its_wait_ends_shows_again_when_a_rerun_joins() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let waiting = || {
+        let mut ask = question("s1", "b1");
+        ask.question["message"] = json!({"preview": "canary", "digest": "m1"});
+        ask
+    };
+    let id = asks.ask(waiting(), 1_000).unwrap();
+    asks.forget_preview(&id).unwrap();
+    let on_disk = fs::read_to_string(folder.path().join(format!("h.asks/{id}.json"))).unwrap();
+    assert!(!on_disk.contains("canary"), "{on_disk}");
+    assert_eq!(asks.ask(waiting(), 2_000).unwrap(), id);
+    assert_eq!(asks.open(2_000)[0].question["message"]["preview"], "canary");
+
+    asks.close(&id);
+    asks.forget_preview(&id).unwrap();
+    assert!(asks.open(2_000).is_empty(), "never written back once down");
+}

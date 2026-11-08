@@ -4228,6 +4228,18 @@ async fn a_refusal_to_ask_through_the_real_input_path_waits_and_tells_the_agent_
         ..client
     };
     let service = answering_input(listener, vec![refusal_to_ask(CANARY)]);
+    let asks = client.controller.asks();
+    // What the person's card reads while the command waits.
+    let person = std::thread::spawn(move || {
+        let until = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < until {
+            if let Some(ask) = asks.open(atlas_core::time::now_ms()).into_iter().next() {
+                return ask.question["message"]["preview"].clone();
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Value::Null
+    });
     let outcome = crate::asking::after_asking(&client, async || {
         let _ownership = client.controller.acquire(false)?;
         let actions = json!([{"type": "key", "key": "return"}]);
@@ -4257,11 +4269,16 @@ async fn a_refusal_to_ask_through_the_real_input_path_waits_and_tells_the_agent_
         !shown.contains("app.slack.com"),
         "nor where it lands: {shown}"
     );
-    let asks = client.controller.asks().open(atlas_core::time::now_ms());
-    assert_eq!(asks.len(), 1, "the question went up for the person");
     assert_eq!(
-        asks[0].question["message"]["preview"], CANARY,
-        "the person sees the message"
+        person.join().unwrap(),
+        CANARY,
+        "the person sees the message while the command waits"
+    );
+    let asks = client.controller.asks().open(atlas_core::time::now_ms());
+    assert_eq!(asks.len(), 1, "the question stays up for a rerun");
+    assert!(
+        asks[0].question["message"]["preview"].is_null(),
+        "its message doesn't outlive the wait"
     );
 }
 

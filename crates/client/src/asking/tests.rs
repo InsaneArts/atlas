@@ -397,3 +397,77 @@ async fn just_this_once_answers_gathered_in_one_command_all_hold_until_it_ends()
     );
     assert!(client.granted().is_empty(), "the command's end spends them");
 }
+
+/// A refusal to ask about sending `preview`, as the input service gives it.
+fn waiting_to_send(batch: &str, preview: &str) -> Error {
+    let mut error = waiting(batch);
+    error.details["ask"]["message"] = json!({"preview": preview, "digest": "d", "length": 7});
+    error
+}
+
+/// The previews on disk among the asks still up in `client`'s store.
+fn previews(client: &Client) -> Vec<Value> {
+    client
+        .controller
+        .asks()
+        .open(now_ms())
+        .into_iter()
+        .map(|ask| ask.question["message"]["preview"].clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_message_preview_is_gone_from_disk_once_its_wait_ends_however_it_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(dir.path());
+    client.controller = client
+        .controller
+        .clone()
+        .waiting(std::time::Duration::from_millis(100));
+
+    // Out of time: the question stays up for a rerun, its preview doesn't.
+    let unanswered = after_asking(&client, async || Err(waiting_to_send("p1", "canary one")))
+        .await
+        .unwrap_err();
+    assert_eq!(unanswered.code, Code::WaitingForPerson);
+    assert_eq!(previews(&client), [Value::Null]);
+
+    // Stopped.
+    client.controller.note_stop(true).unwrap();
+    let stopped = after_asking(&client, async || Err(waiting_to_send("p2", "canary two")))
+        .await
+        .unwrap_err();
+    assert_eq!(stopped.code, Code::Stopped);
+    client.controller.note_stop(false).unwrap();
+    assert!(previews(&client).iter().all(Value::is_null));
+
+    // Interrupted: the command is dropped while it waits.
+    client.controller = client
+        .controller
+        .clone()
+        .waiting(std::time::Duration::from_secs(1));
+    let interrupted = tokio::time::timeout(
+        std::time::Duration::from_millis(200),
+        after_asking(&client, async || Err(waiting_to_send("p3", "canary three"))),
+    )
+    .await;
+    assert!(interrupted.is_err(), "still waiting when it was dropped");
+    assert!(previews(&client).iter().all(Value::is_null));
+
+    // Answered: the question comes down with it.
+    let asks = client.controller.asks();
+    for ask in asks.open(now_ms()) {
+        asks.close(&ask.id);
+    }
+    let answering = answer_soon(&client, Answer::Deny);
+    let denied = after_asking(&client, async || Err(waiting_to_send("p4", "canary four")))
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, Code::Denied);
+    answering.join().unwrap();
+    let left = client.controller.asks().open(now_ms());
+    assert!(
+        !serde_json::to_string(&left).unwrap().contains("canary"),
+        "{left:?}"
+    );
+}
