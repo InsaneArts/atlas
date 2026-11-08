@@ -1816,6 +1816,8 @@ enum Step {
     Break,
     UnacknowledgedPress,
     DockRefusal,
+    /// The person's accounts refuse it where it lands now.
+    Withheld,
 }
 
 /// An engine that logs each check and post, and does at each action
@@ -1982,6 +1984,19 @@ impl Perform for Stand {
         }
     }
 
+    fn recheck(&mut self, _: &Action) -> Result<()> {
+        self.assert_locked();
+        let index = self.logged("post");
+        if self.script.get(index) == Some(&Step::Withheld) {
+            self.log.push(format!("withheld {index}"));
+            return Err(Error::new(
+                Code::WaitingForPerson,
+                "The rest would have gone where the person must be asked first",
+            ));
+        }
+        Ok(())
+    }
+
     async fn perform(&mut self, action: Action) -> Result<()> {
         self.assert_locked();
         let index = self.logged("post");
@@ -2083,6 +2098,24 @@ async fn a_mismatch_posts_nothing_and_is_not_uncertain() {
     let stand = stand.lock().await;
     assert_eq!(stand.log, ["check 0"], "nothing was performed");
     assert_eq!(stand.posted, 0);
+    assert_eq!(stand.releases, 1, "what was held is released");
+}
+
+#[tokio::test]
+async fn an_action_the_accounts_now_refuse_stops_there_with_what_ran_and_sends_nothing_more() {
+    let (outcome, stand) = ran(&[Step::Post, Step::Withheld, Step::Post], 3, app()).await;
+    let reply = outcome.unwrap_err();
+    assert_eq!(reply["code"], "waiting-for-person");
+    assert_eq!(reply["performed"], 1);
+    assert_eq!(reply["partial"], false);
+    assert_eq!(reply["uncertain"], false);
+    let stand = stand.lock().await;
+    assert_eq!(
+        stand.log,
+        ["check 0", "post 0", "check 1", "withheld 1"],
+        "judged just before it would be sent, after its own check"
+    );
+    assert_eq!(stand.posted, 1);
     assert_eq!(stand.releases, 1, "what was held is released");
 }
 
@@ -2993,6 +3026,9 @@ impl Perform for Blocked {
             changed: true,
             reached: None,
         })
+    }
+    fn recheck(&mut self, _: &Action) -> Result<()> {
+        Ok(())
     }
     async fn perform(&mut self, _: Action) -> Result<()> {
         self.posted += 1;

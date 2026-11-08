@@ -16,7 +16,7 @@ use std::time::Duration;
 /// for malformed fields that must retain their later admission order.
 macro_rules! actions {
     ($($kind:ident { $($(#[$attr:meta])* $field:ident: $ty:ty),* $(,)? } => $personal:expr),* $(,)?) => {
-        #[derive(Debug, Deserialize)]
+        #[derive(Debug, Clone, Deserialize)]
         #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
         pub enum Action {
             $($kind { $($(#[$attr])* $field: $ty),* }),*

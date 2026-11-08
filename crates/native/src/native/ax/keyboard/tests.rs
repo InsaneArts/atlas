@@ -719,3 +719,35 @@ fn a_password_field_in_an_app_window_gives_no_page() {
     );
     assert_eq!(page_of(&mut fake).unwrap(), Some(None));
 }
+
+#[test]
+fn the_focused_element_is_aimed_at_with_its_window_and_page_id_and_never_its_value() {
+    let mut fake = Fake::app();
+    let text = |text: &str| Answer::Text(text.to_owned());
+    fake.set(FIELD, "AXWindow", Answer::Element(WINDOW));
+    fake.set(FIELD, "AXDOMIdentifier", text("composer"));
+    fake.set(GROUP, "AXRole", text("AXWebArea"));
+    fake.set(GROUP, "AXURL", text("https://app.slack.com/client"));
+    let deadline = fake.started + budget();
+    let mut reader = Reader {
+        ask: &mut fake,
+        deadline,
+    };
+    let element = reader.focused_element(&APP).unwrap().unwrap();
+    let aimed = reader.aimed(element, false).unwrap();
+    let window = aimed.window.unwrap();
+    assert_eq!(window.title.as_deref(), Some("Letter.txt"));
+    assert!(
+        window.frame.is_some(),
+        "its frame tells which listed window"
+    );
+    assert_eq!(aimed.identifier.as_deref(), Some("composer"));
+    assert_eq!(aimed.name.as_deref(), Some("Email"));
+    assert!(aimed.in_page);
+    assert!(
+        !fake
+            .asked
+            .iter()
+            .any(|(_, attribute)| *attribute == "AXValue")
+    );
+}

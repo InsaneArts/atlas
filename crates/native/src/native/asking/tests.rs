@@ -10,6 +10,10 @@ struct Scripted {
     message: Message,
     /// How many times the message was read.
     messages: usize,
+    /// Whether focus stays on the element last read.
+    unmoved: bool,
+    /// How many times focus was read whole.
+    focus_reads: usize,
 }
 
 impl Look for Scripted {
@@ -17,6 +21,7 @@ impl Look for Scripted {
         self.point.clone()
     }
     fn focused(&mut self) -> Target {
+        self.focus_reads += 1;
         self.focus.clone()
     }
     fn referenced(&mut self, _: &Reference) -> Target {
@@ -26,16 +31,21 @@ impl Look for Scripted {
         self.messages += 1;
         self.message.clone()
     }
+    fn unmoved(&mut self) -> bool {
+        self.unmoved
+    }
 }
 
 const CHROME: &str = "com.google.Chrome";
 const SLACK: &str = "com.tinyspeck.slackmacgap";
 
-/// A page on `host` in Chrome, with an element of `role` named `name` there.
+/// A page on `host` in Chrome's window 7, with an element of `role` named
+/// `name` there.
 fn page(host: &str, role: &str, name: Option<&str>) -> Target {
     Target {
         app: Some(CHROME.to_owned()),
         site: Site::Host(host.to_owned()),
+        window: Some(7),
         role: Some(role.to_owned()),
         name: name.map(str::to_owned),
         ..Target::default()
@@ -75,6 +85,8 @@ fn scripted(point: Target, focus: Target) -> Scripted {
         referenced: Target::default(),
         message: Message::whole("Atlas 0.1.1 is out"),
         messages: 0,
+        unmoved: false,
+        focus_reads: 0,
     }
 }
 
@@ -506,13 +518,18 @@ fn an_action_that_would_now_land_somewhere_stricter_stops_the_rest() {
     let keys = actions(json!([{"type": "key", "key": "a"}, {"type": "key", "key": "b"}]));
     let (decision, mut recheck) = recheck(&keys, &asking, &mut look, None);
     assert_eq!(decision, Decision::Free, "judged in an app not listed");
-    assert_eq!(recheck.check(&keys[0], &mut look), Ok(()));
+    assert_eq!(recheck.check(&keys[0], &mut look), Decision::Free);
     // Before the second key, Slack, kept Look Only, has come to the front.
     look.focus = Target {
         app: Some(SLACK.to_owned()),
         ..Target::default()
     };
-    assert_eq!(recheck.check(&keys[1], &mut look), Err(SLACK.to_owned()));
+    assert_eq!(
+        recheck.check(&keys[1], &mut look),
+        Decision::Deny {
+            account: SLACK.to_owned()
+        }
+    );
 }
 
 #[test]
@@ -531,6 +548,7 @@ fn a_request_naming_an_app_not_yet_in_front_is_judged_as_that_app() {
         epoch: &epoch,
         deadline: std::time::Instant::now(),
         intended: Some(SLACK.to_owned()),
+        held: None,
     };
     let front = Target {
         app: Some("com.apple.TextEdit".to_owned()),
@@ -596,6 +614,9 @@ impl Look for TwoPlaces {
     fn message(&mut self) -> Message {
         Message::Unread
     }
+    fn unmoved(&mut self) -> bool {
+        false
+    }
 }
 
 #[test]
@@ -642,4 +663,208 @@ fn a_character_key_into_a_password_field_follows_the_password_rule() {
         assert_eq!(what(&decision), Some("password"), "{key}");
     }
     assert_eq!(look.messages, 0, "the field is never read");
+}
+
+/// The once grant `question` offers, as the person's Just This Once gives it.
+fn once(question: &Question) -> Allowance {
+    let value = match &question.message {
+        Some(Message::Whole { digest, .. }) => Some(digest.clone()),
+        Some(Message::Unread) | None => None,
+    };
+    Allowance::Once {
+        account: question.account_key.clone(),
+        batch: question.batch.clone(),
+        target: question.bound.clone(),
+        value,
+    }
+}
+
+#[test]
+fn an_action_judged_again_stops_when_the_same_account_now_has_a_control_that_sends_there() {
+    let asking = listing(Kind::Site, "github.com", Level::Ask);
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    let mut look = scripted(
+        page("github.com", "AXButton", Some("Open")),
+        Target::default(),
+    );
+    let (decision, mut again) = recheck(&click, &asking, &mut look, None);
+    assert_eq!(decision, Decision::Free);
+    look.point = page("github.com", "AXButton", Some("Send"));
+    assert_eq!(
+        what(&again.check(&click[0], &mut look)),
+        Some("click"),
+        "Open became Send at the same level"
+    );
+}
+
+#[test]
+fn an_action_judged_again_keeps_each_grant_to_its_own_account_window_and_element() {
+    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
+    asking.accounts.push(Listed {
+        kind: Kind::Site,
+        id: "github.com".to_owned(),
+        name: "github.com".to_owned(),
+        browser: Some(CHROME.to_owned()),
+        level: Level::Ask,
+    });
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    let send = page("app.slack.com", "AXButton", Some("Send"));
+    let mut look = scripted(send.clone(), Target::default());
+
+    let mut task = asking.clone();
+    task.grants.push(Allowance::Task {
+        account: site("slack.com"),
+    });
+    let (decision, mut again) = recheck(&click, &task, &mut look, None);
+    assert_eq!(decision, Decision::Free);
+    look.point = page("github.com", "AXButton", Some("Send"));
+    assert!(
+        matches!(again.check(&click[0], &mut look), Decision::Ask(_)),
+        "another account at the same level"
+    );
+
+    look.point = send.clone();
+    let Decision::Ask(question) = decide(&click, &asking, &mut look) else {
+        panic!("asks");
+    };
+    asking.grants.push(once(&question));
+    let (decision, mut again) = recheck(&click, &asking, &mut look, None);
+    assert_eq!(decision, Decision::Free);
+    assert_eq!(again.check(&click[0], &mut look), Decision::Free);
+    look.point = Target {
+        window: Some(8),
+        ..send.clone()
+    };
+    assert!(
+        matches!(again.check(&click[0], &mut look), Decision::Ask(_)),
+        "the same control in another window"
+    );
+    look.point = Target {
+        identifier: Some("delete".to_owned()),
+        ..send
+    };
+    assert!(
+        matches!(again.check(&click[0], &mut look), Decision::Ask(_)),
+        "another element by the same name"
+    );
+}
+
+#[test]
+fn between_characters_focus_that_stayed_is_not_read_again_and_focus_that_moved_is_judged_again() {
+    let asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let typing = actions(json!([{"type": "type", "text": "hunter2"}]));
+    let mut look = scripted(Target::default(), field("app.slack.com", true));
+    let (decision, mut again) = recheck(&typing, &asking, &mut look, None);
+    assert_eq!(decision, Decision::Free);
+    assert_eq!(again.check(&typing[0], &mut look), Decision::Free);
+    let reads = look.focus_reads;
+    look.unmoved = true;
+    assert_eq!(again.event(&mut look), Decision::Free);
+    assert_eq!(
+        look.focus_reads, reads,
+        "focus that stayed is not read again"
+    );
+
+    look.unmoved = false;
+    look.focus.secure = true;
+    assert_eq!(
+        what(&again.event(&mut look)),
+        Some("password"),
+        "focus moved to a password field after a character"
+    );
+    look.focus = field("bank.example", false);
+    let mut bank = asking.clone();
+    bank.accounts[0].id = "bank.example".to_owned();
+    bank.accounts[0].level = Level::LookOnly;
+    let (_, mut again) = recheck(&typing, &bank, &mut look, None);
+    let _ = again.check(&typing[0], &mut look);
+    assert!(
+        matches!(again.event(&mut look), Decision::Deny { .. }),
+        "the page is now a Look Only site"
+    );
+}
+
+#[test]
+fn a_typing_commands_grant_covers_only_its_own_text_into_the_field_and_window_it_was_asked_about() {
+    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
+    asking.typing = Some("whole text".to_owned());
+    asking.dry = true;
+    let mut secure = field("app.slack.com", false);
+    secure.secure = true;
+    let mut look = scripted(Target::default(), secure.clone());
+    let probe = actions(json!([{"type": "type", "text": "x"}]));
+    let Decision::Ask(question) = decide(&probe, &asking, &mut look) else {
+        panic!("a password field asks");
+    };
+    assert_eq!(question.details()["typing"], "whole text");
+    assert_eq!(question.details()["bind"]["typing"], "whole text");
+    asking.dry = false;
+    asking.grants.push(Allowance::Command {
+        account: question.account_key.clone(),
+        target: question.bound.clone(),
+        typing: "whole text".to_owned(),
+    });
+    let part = actions(json!([{"type": "type", "text": "hunter2"}]));
+    assert_eq!(
+        decide(&part, &asking, &mut look),
+        Decision::Free,
+        "its own text, into that field"
+    );
+
+    let mut other = asking.clone();
+    other.typing = Some("other text".to_owned());
+    assert!(
+        matches!(decide(&part, &other, &mut look), Decision::Ask(_)),
+        "another command's text"
+    );
+    for moved in [
+        Target {
+            window: Some(8),
+            ..secure.clone()
+        },
+        Target {
+            name: Some("Search".to_owned()),
+            ..secure.clone()
+        },
+    ] {
+        look.focus = moved;
+        assert!(
+            matches!(decide(&part, &asking, &mut look), Decision::Ask(_)),
+            "another field or window"
+        );
+    }
+    look.focus = secure;
+    let key = actions(json!([{"type": "key", "key": "a"}]));
+    assert!(
+        matches!(decide(&key, &asking, &mut look), Decision::Ask(_)),
+        "never a key"
+    );
+}
+
+#[test]
+fn a_keyboard_once_grant_is_bound_to_the_window_the_focused_field_is_in() {
+    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let mut look = scripted(Target::default(), field("app.slack.com", true));
+    let send = actions(json!([{"type": "key", "key": "return"}]));
+    let Decision::Ask(question) = decide(&send, &asking, &mut look) else {
+        panic!("asks");
+    };
+    assert_eq!(question.bound.window, Some(7));
+    asking.grants.push(once(&question));
+    assert_eq!(decide(&send, &asking, &mut look), Decision::Free);
+
+    look.focus.window = Some(8);
+    assert!(
+        matches!(decide(&send, &asking, &mut look), Decision::Ask(_)),
+        "the same field, name and message in another window"
+    );
+    look.focus.window = None;
+    let Decision::Ask(question) = decide(&send, &asking, &mut look) else {
+        panic!("asks");
+    };
+    assert_eq!(
+        question.details()["once"],
+        false,
+        "a field whose window can't be told can't be allowed just once"
+    );
 }

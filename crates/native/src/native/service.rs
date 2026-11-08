@@ -690,31 +690,51 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
 }
 
 /// Check `action`, the next of an agent's request the person's accounts
-/// passed, by where it lands now: one landing in a stricter account than the
-/// request was judged by is refused, and with it the rest of the request.
+/// passed, where it lands now: see [`recheck`].
 pub(super) fn recheck_action(engine: &mut Engine, action: &Action) -> Result<()> {
+    recheck(engine, |recheck, look| recheck.check(action, look))
+}
+
+/// Check the next event of the action under way: see [`recheck`].
+pub(super) fn recheck_event(engine: &mut Engine) -> Result<()> {
+    recheck(engine, |recheck, look| recheck.event(look))
+}
+
+/// Judge the next of an agent's request the person's accounts passed again
+/// where it lands now, by `judge`: what the grants it brought don't cover
+/// stops there, with the rest of the request, as any refused action does.
+fn recheck(
+    engine: &mut Engine,
+    judge: impl FnOnce(&mut asking::Recheck, &mut asking::live::OnScreen<'_>) -> asking::Decision,
+) -> Result<()> {
     let Some(mut recheck) = engine.recheck.take() else {
         return Ok(());
     };
-    let stricter = {
-        let mut look = asking::live::OnScreen {
-            looks: &engine.looks,
-            epoch: &engine.epoch,
-            deadline: std::time::Instant::now() + ASK_BUDGET,
-            intended: recheck.intended.clone(),
-        };
-        recheck.check(action, &mut look)
+    let mut look = asking::live::OnScreen {
+        looks: &engine.looks,
+        epoch: &engine.epoch,
+        deadline: std::time::Instant::now() + ASK_BUDGET,
+        intended: recheck.intended.clone(),
+        held: recheck.held.take(),
     };
+    let decision = judge(&mut recheck, &mut look);
+    recheck.held = look.held;
     engine.recheck = Some(recheck);
-    stricter.map_err(|account| {
-        Error::new(
+    match decision {
+        asking::Decision::Free => Ok(()),
+        asking::Decision::Ask(question) => Err(Error::new(
             Code::WaitingForPerson,
             format!(
-                "The next action would have landed in {account}, which the person keeps closer than \
-                 where this began; it and the rest weren't sent."
+                "The rest would have gone where {} asks the person first; it wasn't sent.",
+                question.account
             ),
         )
-    })
+        .with("ask", question.details())),
+        asking::Decision::Deny { account } => Err(Error::new(
+            Code::Denied,
+            format!("The rest would have gone into {account}, which is Look Only; it wasn't sent."),
+        )),
+    }
 }
 
 /// How long the gate may take to read where a request lands, in all.
@@ -734,6 +754,7 @@ fn gate_request(
         epoch: &engine.epoch,
         deadline: std::time::Instant::now() + ASK_BUDGET,
         intended: intended.clone(),
+        held: None,
     };
     let (decision, recheck) = asking::recheck(actions, asking, &mut look, intended);
     match decision {

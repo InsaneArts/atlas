@@ -694,6 +694,10 @@ pub(in crate::native) struct Aimed {
     pub(in crate::native) subrole: Option<String>,
     /// Its title, else its description; none when it has neither.
     pub(in crate::native) name: Option<String>,
+    /// Its identifier: in a web page, its DOM id.
+    pub(in crate::native) identifier: Option<String>,
+    /// The window it is in, read for the element with keyboard focus.
+    pub(in crate::native) window: Option<Element>,
     /// The web page's address, when it sits in one and it reads.
     pub(in crate::native) url: Option<String>,
     /// Whether it sits in a web page at all.
@@ -753,6 +757,9 @@ impl<A: Ask> Reader<A> {
                 .name(&named, "AXDescription", &mut failed)?
                 .filter(|name| !name.is_empty());
         }
+        if !pressing && let Some(window) = self.reference(&element, "AXWindow")? {
+            aimed.window = Some(self.window(&window)?);
+        }
         let mut current = element;
         for _ in 0..PARENTS {
             match self.text(&current, "AXRole")?.as_deref() {
@@ -769,28 +776,62 @@ impl<A: Ask> Reader<A> {
                 None => break,
             }
         }
+        let identifier = if aimed.in_page {
+            "AXDOMIdentifier"
+        } else {
+            "AXIdentifier"
+        };
+        aimed.identifier = self
+            .name(&named, identifier, &mut failed)?
+            .filter(|identifier| !identifier.is_empty());
         Ok(aimed)
     }
 }
 
-/// [`Aimed`] for the element with keyboard focus inside the app whose
-/// element is `app`; none when nothing has focus.
-pub(super) fn focus_aimed<A: Ask>(
-    ask: A,
-    app: &A::Element,
-    deadline: Instant,
-) -> Result<Option<Aimed>> {
-    let mut reader = Reader { ask, deadline };
-    let Some(element) = reader.focused_element(app)? else {
-        return Ok(None);
-    };
-    reader.aimed(element, false).map(Some)
+/// The element keyboard focus was on in an app, kept only to tell later
+/// whether it still is: compared with what has focus then, never asked
+/// anything.
+#[derive(Clone)]
+pub(in crate::native) struct Held {
+    pub(in crate::native) pid: i64,
+    element: ffi::Kept,
 }
 
-/// [`focus_aimed`] in app `pid`, waiting at most `timeout` in all.
-pub(in crate::native) fn focused_aim(pid: i64, timeout: Duration) -> Result<Option<Aimed>> {
+/// Whether keyboard focus in the app `held` names is still on the element
+/// it keeps, waiting at most `timeout`: the app is asked only which element
+/// has focus.
+pub(in crate::native) fn still_focused(held: &Held, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
-    focus_aimed(Live, &app_element(pid)?, deadline)
+    let Ok(app) = app_element(held.pid) else {
+        return false;
+    };
+    let mut reader = Reader {
+        ask: Live,
+        deadline,
+    };
+    matches!(reader.focused_element(&app), Ok(Some(element)) if *element == *held.element.0)
+}
+
+/// [`Aimed`] for the element with keyboard focus in app `pid`, and that
+/// element, held; none when nothing has focus. Waits at most `timeout` in
+/// all.
+pub(in crate::native) fn focused_aim(pid: i64, timeout: Duration) -> Result<Option<(Held, Aimed)>> {
+    let deadline = Instant::now() + timeout;
+    let app = app_element(pid)?;
+    let mut reader = Reader {
+        ask: Live,
+        deadline,
+    };
+    let Some(element) = reader.focused_element(&app)? else {
+        return Ok(None);
+    };
+    let held = Held {
+        pid,
+        element: ffi::Kept(element.clone()),
+    };
+    reader
+        .aimed(element, false)
+        .map(|aimed| Some((held, aimed)))
 }
 
 /// [`Aimed`] for what lies at `x`, `y` in app `pid`, a press going to the

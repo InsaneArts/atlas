@@ -2,8 +2,14 @@
 //! list, read under one deadline before a request runs, never anything a
 //! field holds but the message a Return would send.
 use super::{Look, Message, Site, Target};
-use crate::native::ax::{self, Aimed, Looks};
-use atlas_core::{screen::elements::Reference, session::InputEpoch};
+use crate::native::ax::{self, Aimed, Held, Looks};
+use atlas_core::{
+    screen::{
+        elements::{Element, Reference},
+        windows::Listed,
+    },
+    session::InputEpoch,
+};
 use std::time::{Duration, Instant};
 
 /// The browsers whose pages are accounts: a page in one that can't be read
@@ -32,6 +38,8 @@ pub(crate) struct OnScreen<'a> {
     /// The app the request names (`--app`, `--pid`, `--window`), which its
     /// preparation brings forward before the first event: what it lands in.
     pub(crate) intended: Option<String>,
+    /// The element keyboard focus was on when last read.
+    pub(crate) held: Option<Held>,
 }
 
 impl OnScreen<'_> {
@@ -86,13 +94,25 @@ impl Look for OnScreen<'_> {
     }
 
     fn focused(&mut self) -> Target {
+        self.held = None;
         let Some(pid) = self.focused_pid() else {
             return self.as_intended(Target::default());
         };
-        let aimed = self
+        let Some((held, aimed)) = self
             .left()
-            .and_then(|left| ax::focused_aim(pid, left).ok().flatten());
-        self.as_intended(target(pid, aimed))
+            .and_then(|left| ax::focused_aim(pid, left).ok().flatten())
+        else {
+            return self.as_intended(target(pid, None));
+        };
+        self.held = Some(held);
+        let window = aimed
+            .window
+            .as_ref()
+            .and_then(|window| window_number(pid, window));
+        self.as_intended(Target {
+            window,
+            ..target(pid, Some(aimed))
+        })
     }
 
     fn referenced(&mut self, reference: &Reference) -> Target {
@@ -110,6 +130,7 @@ impl Look for OnScreen<'_> {
             multiline: role.as_deref() == Some("AXTextArea"),
             role,
             name,
+            identifier: None,
             secure: false,
             window: None,
         }
@@ -121,6 +142,26 @@ impl Look for OnScreen<'_> {
             .zip(self.left())
             .and_then(|(pid, left)| ax::focused_text(pid, left));
         text.map_or(Message::Unread, |text| Message::whole(&text))
+    }
+
+    fn unmoved(&mut self) -> bool {
+        let Some(held) = self.held.clone() else {
+            return false;
+        };
+        self.focused_pid() == Some(held.pid)
+            && self
+                .left()
+                .is_some_and(|left| ax::still_focused(&held, left))
+    }
+}
+
+/// The number of app `pid`'s listed window that `window` is, read as
+/// Accessibility gave it; none when no one window is it.
+fn window_number(pid: i64, window: &Element) -> Option<i64> {
+    let listed = crate::native::windows::windows().ok()?;
+    match ax::described(window, window.frame.as_ref()?, pid, &listed) {
+        Listed::One(number) => Some(number),
+        Listed::Missing | Listed::Several => None,
     }
 }
 
@@ -153,6 +194,7 @@ pub(super) fn target(pid: i64, aimed: Option<Aimed>) -> Target {
         secure,
         role: aimed.role,
         name: aimed.name,
+        identifier: aimed.identifier,
         window: None,
     }
 }
