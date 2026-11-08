@@ -140,4 +140,10 @@ public enum ViewerEvent: Equatable, Sendable {
   ///
   /// - Parameter name: The screenshot's file name.
   case thumbnailNeeded(String)
+  /// An answer to the question over the Screen.
+  ///
+  /// - Parameters:
+  ///   - id: The question's id.
+  ///   - choice: The answer.
+  case answerAsk(id: String, choice: AskChoice)
 }

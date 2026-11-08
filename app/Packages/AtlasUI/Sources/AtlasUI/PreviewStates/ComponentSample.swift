@@ -74,5 +74,12 @@
     case lineSwapLines = "line-swap-lines"
     /// A session icon's badge, acting, waiting, needing the person and none.
     case stateBadgeStates = "state-badge-states"
+    /// The panel asking before an agent sends: a message, a named click, a click with no name, a password, a
+    /// question offering Allow for This Task and Deny alone, and what the person allowed.
+    case panelAsks = "panel-asks"
+    /// The question over the viewer's Screen, wide and narrow.
+    case askBanner = "ask-banner"
+    /// An account's level, as three segments at each level, and as the popup where they don't fit.
+    case accountLevels = "account-levels"
   }
 #endif

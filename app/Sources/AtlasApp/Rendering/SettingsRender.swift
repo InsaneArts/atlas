@@ -46,6 +46,7 @@
       "36-accounts-added",
       "37-accounts-unread",
       "38-remove-account",
+      "39-accounts-look-only",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.

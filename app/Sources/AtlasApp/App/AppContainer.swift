@@ -38,6 +38,8 @@ final class AppContainer {
   var menuBar: PanelPopover?
   /// The notification for when Atlas needs the person; made at launch.
   var signals: AttentionSignals?
+  /// The notifications of the questions Atlas asks the person; made at launch.
+  var askSignals: AskSignals?
 
   /// An app that runs `commands` and reads `service`. Nothing runs until ``start()``.
   ///
@@ -67,9 +69,13 @@ final class AppContainer {
     // next command, and Take Control in a reopened window waits for it. Before a switch, a log-out or a restart, the
     // main window's control ends and its release joins the barrier.
     let barrier = ControlBarrier(service: service, clock: clock)
-    let actions = HelperActions(commands: commands, service: service, barrier: barrier) { [weak coordinator] in
-      coordinator?.releaseViewerControl()
-    }
+    let actions = HelperActions(
+      commands: commands,
+      service: service,
+      barrier: barrier,
+      endControl: { [weak coordinator] in coordinator?.releaseViewerControl() },
+      asks: AskStore(service: service, clock: clock)
+    )
     self.actions = actions
     startSignals()
     startPanel(actions: actions)

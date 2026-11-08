@@ -48,12 +48,26 @@ extension SettingsWords {
     return account.kind == .app ? "App · added \(day)" : "Added \(day)"
   }
 
-  /// The note Atlas shows once after it added an account.
+  /// The note Atlas shows once after it added an account, with what its level lets agents do there.
   ///
-  /// - Parameter name: The account's name.
-  /// - Returns: "Added github.com after you typed a password there."
-  static func accountAdded(_ name: String) -> String {
-    "Added \(name) after you typed a password there."
+  /// - Parameters:
+  ///   - name: The account's name.
+  ///   - level: Its level; Ask Before Sending, a new account's, by default.
+  /// - Returns: "Added github.com after you typed a password there. Agents ask you before sending there."
+  static func accountAdded(_ name: String, level: AccountLevel = .ask) -> String {
+    "Added \(name) after you typed a password there. \(levelLine(level))"
+  }
+
+  /// What an account's level lets agents do, as the note says it.
+  ///
+  /// - Parameter level: The level.
+  /// - Returns: "Agents ask you before sending there.", say.
+  static func levelLine(_ level: AccountLevel) -> String {
+    switch level {
+    case .lookOnly: "Agents only look there."
+    case .ask: "Agents ask you before sending there."
+    case .trusted: "Agents act there without asking."
+    }
   }
 
   /// The question before an account is taken off the list.

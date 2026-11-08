@@ -1,3 +1,4 @@
+import AtlasService
 import Foundation
 import UserNotifications
 
@@ -14,6 +15,12 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
     case open
     /// Recover the helper.
     case recover
+    /// Answer a question Atlas asks the person.
+    ///
+    /// - Parameters:
+    ///   - id: The question's id.
+    ///   - answer: The answer.
+    case answer(String, AskAnswer)
     /// Nothing: the person dismissed it.
     case none
   }
@@ -24,6 +31,8 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
   private let recover: @MainActor @Sendable () async -> Void
   /// Whether the main window is on screen now.
   private let viewerShows: @MainActor @Sendable () -> Bool
+  /// Answers a question as the person.
+  private let answerAsk: @MainActor @Sendable (String, AskAnswer) async -> Void
 
   /// A delegate that opens the main window on a click and recovers the helper on Recover.
   ///
@@ -31,23 +40,29 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
   ///   - open: Opens the main window.
   ///   - recover: Recovers the helper.
   ///   - viewerShows: Whether the main window is on screen now; never, by default.
+  ///   - answer: Answers a question as the person; nothing by default.
   init(
     open: @escaping @MainActor @Sendable () -> Void,
     recover: @escaping @MainActor @Sendable () async -> Void,
-    viewerShows: @escaping @MainActor @Sendable () -> Bool = { false }
+    viewerShows: @escaping @MainActor @Sendable () -> Bool = { false },
+    answer: @escaping @MainActor @Sendable (String, AskAnswer) async -> Void = { _, _ in }
   ) {
     self.open = open
     self.recover = recover
     self.viewerShows = viewerShows
+    self.answerAsk = answer
   }
 
-  /// What a response's action asks for: Recover recovers; a dismissal does nothing; a click, or any other action,
-  /// opens Atlas.
+  /// What a response's action asks for: Recover recovers; a question's answer, on the question it carries, answers it;
+  /// a dismissal does nothing; a click, or any other action, opens Atlas.
   ///
-  /// - Parameter action: The response's action identifier.
+  /// - Parameters:
+  ///   - action: The response's action identifier.
+  ///   - ask: The id of the question the notification carries, if it is one.
   /// - Returns: What to do.
-  static func answer(to action: String) -> Answer {
-    switch action {
+  static func answer(to action: String, ask: String? = nil) -> Answer {
+    if let ask, let answer = AskNotifications.answer(of: action) { return .answer(ask, answer) }
+    return switch action {
     case NotificationWords.recoverAction: .recover
     case UNNotificationDismissActionIdentifier: .none
     default: .open
@@ -55,14 +70,16 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
   }
 
   /// The person clicked a notification or chose one of its actions: the main window opens on Screen, where Needs you
-  /// shows its Recover alert, or Recover starts. Notification Center is answered at once; Recover runs on.
+  /// shows its Recover alert, Recover starts, or a question is answered. Notification Center is answered at once; Recover runs on.
   ///
   /// - Parameters:
   ///   - center: The notification center.
   ///   - response: What the person did.
   func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-    switch Self.answer(to: response.actionIdentifier) {
+    let ask = response.notification.request.content.userInfo[AskNotifications.idKey] as? String
+    switch Self.answer(to: response.actionIdentifier, ask: ask) {
     case .open: await open()
+    case .answer(let id, let answer): await answerAsk(id, answer)
     case .recover:
       // Unstructured, so Notification Center is answered at once while the recovery, which may take a while, runs on.
       Task { await recover() }

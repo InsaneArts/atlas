@@ -12,7 +12,13 @@
       rows: [
         SettingsAccountRow(id: "site\u{1F}github.com", letter: "G", title: "github.com", detail: "Added today"),
         SettingsAccountRow(id: "app\u{1F}slack", letter: "S", title: "Slack", detail: "App · added Nov 5"),
-        SettingsAccountRow(id: "site\u{1F}acme.dev", letter: "A", title: "acme.dev", detail: "Added Nov 3"),
+        SettingsAccountRow(
+          id: "site\u{1F}staging.acme.dev",
+          letter: "S",
+          title: "staging.acme.dev",
+          detail: "Added Nov 3",
+          level: .trusted
+        ),
       ],
       empty: settingsAccountsNone
     )
@@ -30,7 +36,24 @@
     /// The Accounts pane just after Atlas added an account the person typed a password in.
     @MainActor static let settingsAccountsAdded: SettingsState = {
       var state = selecting(.accounts)
-      state.accounts.note = "Added github.com after you typed a password there."
+      state.accounts.note = "Added github.com after you typed a password there. Agents ask you before sending there."
+      state.accounts.noteAccount = "site\u{1F}github.com"
+      return state
+    }()
+
+    /// The Accounts pane with a bank agents may only look at.
+    @MainActor static let settingsAccountsLookOnly: SettingsState = {
+      var state = selecting(.accounts)
+      state.accounts.rows = [
+        SettingsAccountRow(id: "site\u{1F}github.com", letter: "G", title: "github.com", detail: "Added today"),
+        SettingsAccountRow(
+          id: "site\u{1F}mybank.com",
+          letter: "M",
+          title: "mybank.com",
+          detail: "Added Nov 2",
+          level: .lookOnly
+        ),
+      ]
       return state
     }()
 

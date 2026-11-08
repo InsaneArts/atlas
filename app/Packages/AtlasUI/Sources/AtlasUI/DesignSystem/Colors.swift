@@ -106,6 +106,9 @@ extension Color {
   static let textSuccess = Color(light: .rgb(0x1F7A36), dark: .rgb(0x32D74B))
   /// Glyphs on ``success``, such as a check: #0B2410.
   static let onSuccess = Color(red: 0x0B / 255, green: 0x24 / 255, blue: 0x10 / 255)
+  /// A soft success ground under a row, such as what the person allowed for a task: #34C759 at 0.12, or #30D158 at
+  /// 0.14.
+  static let fillSuccessSoft = Color(light: .rgb(0x34C759, alpha: 0.12), dark: .rgb(0x30D158, alpha: 0.14))
   /// What needs the person: system orange, #FF9500, or #FF9F0A.
   static let attention = Color(light: .rgb(0xFF9500), dark: .rgb(0xFF9F0A))
   /// The attention colour laid under a flagged field, as a wash: attention at 0.09.

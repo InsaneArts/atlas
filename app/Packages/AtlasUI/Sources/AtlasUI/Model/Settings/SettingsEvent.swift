@@ -29,6 +29,12 @@ public enum SettingsEvent: Equatable, Sendable {
   case addApp
   /// Asks to take the account with this id off the list.
   case askRemoveAccount(String)
+  /// Sets how freely agents act in the account with this id.
+  ///
+  /// - Parameters:
+  ///   - id: The account's id.
+  ///   - level: The level.
+  case setAccountLevel(String, AccountLevelChoice)
   /// The person read the note that Atlas added an account.
   case dismissAccountNote
   /// Connects the agent with this id.

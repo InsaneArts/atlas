@@ -1,3 +1,4 @@
+import AtlasService
 import AtlasStatus
 import Foundation
 import UserNotifications
@@ -34,18 +35,21 @@ struct Notifier {
   ///   - open: Opens the main window.
   ///   - recover: Recovers the helper as the alert's Recover does.
   ///   - viewerShows: Whether the main window is on screen now.
+  ///   - answer: Answers a question Atlas asks the person, from its notification's actions
+  ///     (``AskNotifications``).
   /// - Returns: The notifier.
   static func live(
     open: @escaping @MainActor @Sendable () -> Void,
     recover: @escaping @MainActor @Sendable () async -> Void,
-    viewerShows: @escaping @MainActor @Sendable () -> Bool
+    viewerShows: @escaping @MainActor @Sendable () -> Bool,
+    answer: @escaping @MainActor @Sendable (String, AskAnswer) async -> Void = { _, _ in }
   ) -> Notifier {
     let bundle = Bundle.main
     guard bundle.bundlePath.hasSuffix(".app"), bundle.bundleIdentifier != nil else { return silent }
-    let clicks = NotificationClicks(open: open, recover: recover, viewerShows: viewerShows)
+    let clicks = NotificationClicks(open: open, recover: recover, viewerShows: viewerShows, answer: answer)
     let center = UNUserNotificationCenter.current()
     center.delegate = clicks
-    center.setNotificationCategories([attentionCategory()])
+    center.setNotificationCategories(Set([attentionCategory()] + AskNotifications.categories()))
     return Notifier(
       requestAuthorization: {
         UNUserNotificationCenter.current()

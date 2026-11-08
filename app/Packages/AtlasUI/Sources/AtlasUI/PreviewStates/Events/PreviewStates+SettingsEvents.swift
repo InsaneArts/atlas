@@ -56,6 +56,10 @@
         next.helper.files?.signInCopies = on
       case .askRemoveAccount:
         next.alert = settingsRemoveAccount.alert
+      case .setAccountLevel(let id, let level):
+        if let index = next.accounts.rows?.firstIndex(where: { $0.id == id }) {
+          next.accounts.rows?[index].level = level
+        }
       case .dismissAccountNote:
         next.accounts.note = nil
       case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile, .addApp:

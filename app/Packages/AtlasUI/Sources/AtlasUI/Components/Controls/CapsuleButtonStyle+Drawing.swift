@@ -4,7 +4,7 @@ extension CapsuleButtonStyle {
   /// The label's size: a step larger on a large capsule.
   var textStyle: TextStyle {
     switch size {
-    case .mini, .compact, .small, .regular: .body
+    case .mini, .compact, .small, .medium, .regular: .body
     case .large: .headline
     }
   }
@@ -32,6 +32,7 @@ extension CapsuleButtonStyle {
     case .mini: ControlHeight.xsPlus
     case .compact: ControlHeight.s
     case .small: ControlHeight.sPlus
+    case .medium: ControlHeight.m
     case .regular: ControlHeight.mPlus
     case .large: ControlHeight.xl
     }
@@ -43,7 +44,7 @@ extension CapsuleButtonStyle {
     if size == .large { return Layout.largeInset }
     // An alert's buttons share a narrow row and hold a mark beside their word. No extra space is reserved
     // beside the mark, so the button's label stays centred.
-    if size == .compact { return .zero }
+    if size == .compact, fill { return .zero }
     if look == .plain { return Spacing.m }
     return fill ? Spacing.sPlus : Layout.regularInset
   }

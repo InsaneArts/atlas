@@ -3,7 +3,8 @@ import AppKit
 /// What Atlas shows outside its windows when it needs the person: the notification (``AttentionSignals``), fed by
 /// the panel's readings and the choices in Settings.
 extension AppContainer {
-  /// Makes the signals at launch. Nothing asks for consent here: Settings asks when the person turns Notify me on.
+  /// Makes the signals at launch. Nothing asks for consent here: Settings asks when the person turns Notify me on, and
+  /// the questions' signals when an account joins the list.
   /// Clicking a notification opens the main window on Screen; its Recover recovers the helper.
   func startSignals() {
     signals = AttentionSignals(
@@ -14,10 +15,30 @@ extension AppContainer {
         viewerShows: { [weak coordinator] in
           guard let window = coordinator?.viewer?.window as? NSWindow else { return false }
           return WindowVisibility.shows(isVisible: window.isVisible, occlusionState: window.occlusionState)
-        }
+        },
+        answer: { [weak self] id, answer in await self?.actions?.asks.answer(id, with: answer) }
       ),
       preferences: settingsPreferences
     )
+    startAskSignals()
+  }
+
+  /// Makes the questions' signals at launch and starts watching the asks folders, so a question posts its
+  /// notification at once with the panel closed. macOS is asked whether Atlas may notify the person only once an
+  /// account joins the list (``AskSignals/statusRead(_:)``).
+  func startAskSignals() {
+    guard let store = actions?.asks else { return }
+    let signals = AskSignals(
+      notifications: .live(),
+      preferences: settingsPreferences,
+      store: store,
+      panelOpen: { [weak self] in self?.menuBar?.popover.isShown == true }
+    )
+    askSignals = signals
+    store.changed = { [weak signals] list in signals?.asksChanged(list) }
+    store.watch(.live(home: FileManager.default.homeDirectoryForCurrentUser))
+    // Unstructured, as nothing at launch can wait: the badge follows what macOS last said.
+    Task { await signals.readConsent() }
   }
 
   /// Atlas needs you's Recover: the alert's own recovery (``NotificationRecovery``) while Needs you still holds and

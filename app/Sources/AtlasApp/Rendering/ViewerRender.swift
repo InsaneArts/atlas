@@ -11,6 +11,7 @@
     static var renders: [PreviewState<ViewerState>] {
       [
         sample("01-working", PreviewStates.viewerWorking),
+        sample("75-waiting-for-you", PreviewStates.viewerAsk),
         sample("02-idle", PreviewStates.viewerIdle),
         sample("03-control", PreviewStates.viewerControl),
         sample("04-needs-you", PreviewStates.viewerNeedsYou),

@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// The Accounts pane: the note Atlas shows once after it added an account, then the accounts it lists for the helper,
-/// each with Remove…, and Add an App… under them. With none, it says so and offers Add an App…; when Atlas can't read
-/// its list, it says that instead. The note grows in and leaves in place, and the list below moves with it.
+/// each with its level and Remove…, and Add an App… under them. With none, it says so and offers Add an App…; when
+/// Atlas can't read its list, it says that instead. The note grows in and leaves in place, and the list below moves
+/// with it.
 struct AccountsPane: View {
   /// What the pane shows.
   let state: SettingsAccountsState
@@ -14,8 +15,16 @@ struct AccountsPane: View {
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
       if let note = state.note {
-        AccountNoteCard(text: note) { send(.dismissAccountNote) }
-          .transition(Motion.transition(AccountsPane.arrival, reduceMotion: reduceMotion))
+        AccountNoteCard(
+          text: note,
+          level: notedLevel,
+          pick: { level in
+            if let id = state.noteAccount { send(.setAccountLevel(id, level)) }
+            send(.dismissAccountNote)
+          },
+          dismiss: { send(.dismissAccountNote) }
+        )
+        .transition(Motion.transition(AccountsPane.arrival, reduceMotion: reduceMotion))
       }
       content
     }
@@ -47,7 +56,12 @@ struct AccountsPane: View {
       VStack(alignment: .trailing, spacing: Spacing.m) {
         // The window's title already says Accounts, so the list needs no heading of its own.
         GroupedSection(rows, notes: notes) { row in
-          AccountRow(row: row, isEnabled: !state.isWorking) { send(.askRemoveAccount(row.id)) }
+          AccountRow(
+            row: row,
+            isEnabled: !state.isWorking,
+            pick: { send(.setAccountLevel(row.id, $0)) },
+            remove: { send(.askRemoveAccount(row.id)) }
+          )
         }
         Button("Add an App…") { send(.addApp) }
           .buttonStyle(.capsule(.secondary, size: .mini))
@@ -55,6 +69,11 @@ struct AccountsPane: View {
           .padding(.trailing, Spacing.m)
       }
     }
+  }
+
+  /// The level of the account the note is about, which its Change… opens on; nil when the note names none listed.
+  private var notedLevel: AccountLevelChoice? {
+    state.rows?.first { $0.id == state.noteAccount }?.level
   }
 
   /// What the last change said, under the empty pane's message, inset as a section's notes are.
@@ -80,6 +99,14 @@ struct AccountsPane: View {
   #Preview("Accounts") {
     FormColumn(insets: SettingsLayout.swapInsets) {
       AccountsPane(state: PreviewStates.settingsAccounts.accounts) { _ in }
+    }
+    .frame(width: SettingsLayout.width)
+    .sampleSurface()
+  }
+
+  #Preview("Accounts, look only") {
+    FormColumn(insets: SettingsLayout.swapInsets) {
+      AccountsPane(state: PreviewStates.settingsAccountsLookOnly.accounts) { _ in }
     }
     .frame(width: SettingsLayout.width)
     .sampleSurface()

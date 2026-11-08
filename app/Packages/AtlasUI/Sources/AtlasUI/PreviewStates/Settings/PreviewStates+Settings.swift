@@ -43,6 +43,7 @@
         PreviewState(name: "Accounts, one added", value: settingsAccountsAdded),
         PreviewState(name: "Accounts, unread", value: settingsAccountsUnread),
         PreviewState(name: "Remove an account", value: settingsRemoveAccount),
+        PreviewState(name: "Accounts, look only", value: settingsAccountsLookOnly),
       ]
     }
 

@@ -1,8 +1,8 @@
 #if DEBUG
   extension PreviewStates {
     /// The panel sample an event leads to, so the Interactive preview answers clicks as the app would: Stop stops,
-    /// Resume and Give Back go back to idle, the pause button pauses or resumes the picture, and OK takes the service
-    /// note away. What opens a window,
+    /// Resume and Give Back go back to idle, the pause button pauses or resumes the picture, OK takes the service
+    /// note away, an answer takes the question away and End what the person allowed. What opens a window,
     /// an alert or a menu changes nothing here.
     ///
     /// - Parameters:
@@ -24,6 +24,14 @@
       case .dismissServiceNote:
         var next = state
         next.showsServiceNote = false
+        return next
+      case .answerAsk:
+        var next = state
+        next.ask = nil
+        return next
+      case .endAllowed(let id):
+        var next = state
+        next.allowed.removeAll { $0.id == id }
         return next
       case .openAtlas, .openScreen, .openActivity, .openSession, .showAllSessions, .askRecover, .askSwitch,
         .openSettings,

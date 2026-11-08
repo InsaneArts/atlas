@@ -10,6 +10,9 @@ struct SettingsPreferences {
   static let notifyKey = "settings.notify"
   /// The defaults key of the account note the person read. Shipped, so it never changes.
   static let accountNoteKey = "settings.accountNoteRead"
+  /// The defaults key of whether macOS was asked to let Atlas notify the person of its questions. Shipped, so it
+  /// never changes.
+  static let askConsentKey = "asks.consentAsked"
 
   /// The pane last shown, by its raw value; nil when none is saved.
   var loadTab: @MainActor () -> String?
@@ -24,6 +27,10 @@ struct SettingsPreferences {
   var loadAccountNoteRead: @MainActor () -> Double = { 0 }
   /// Saves when the account whose note the person read was added.
   var saveAccountNoteRead: @MainActor (Double) -> Void = { _ in }
+  /// Whether macOS was asked, once, to let Atlas notify the person of its questions.
+  var loadAskConsentAsked: @MainActor () -> Bool = { false }
+  /// Saves that macOS was asked.
+  var saveAskConsentAsked: @MainActor () -> Void = {}
 
   /// Preferences kept in `defaults` under the shipped keys.
   ///
@@ -36,7 +43,9 @@ struct SettingsPreferences {
       loadNotify: { defaults.bool(forKey: notifyKey) },
       saveNotify: { defaults.set($0, forKey: notifyKey) },
       loadAccountNoteRead: { defaults.double(forKey: accountNoteKey) },
-      saveAccountNoteRead: { defaults.set($0, forKey: accountNoteKey) }
+      saveAccountNoteRead: { defaults.set($0, forKey: accountNoteKey) },
+      loadAskConsentAsked: { defaults.bool(forKey: askConsentKey) },
+      saveAskConsentAsked: { defaults.set(true, forKey: askConsentKey) }
     )
   }
 }

@@ -29,4 +29,6 @@ struct SettingsLinks {
   var addAccount: @MainActor (_ app: String, _ name: String) async throws -> Void = { _, _ in }
   /// Takes an account off the helper's list, through the viewer service.
   var removeAccount: @MainActor (ViewerStatus.Account) async throws -> Void = { _ in }
+  /// Sets how freely agents act in an account, through the viewer service.
+  var setLevel: @MainActor (AccountLevel, ViewerStatus.Account) async throws -> Void = { _, _ in }
 }

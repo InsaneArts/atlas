@@ -67,7 +67,8 @@ final class ViewerController {
       agents: helperFacts.agents,
       loggedInAt: helperFacts.loggedInAt,
       panes: panesModel.panes,
-      date: dependencies.wallClock()
+      date: dependencies.wallClock(),
+      asks: actions.asks.list
     )
   }
 
@@ -108,6 +109,9 @@ final class ViewerController {
       setOverlayShown(false)
       chooseLibrary(place)
     case .menu(let command): perform(command)
+    case .answerAsk(let id, let choice):
+      // The store takes the question away at once, here and in the panel, then answers.
+      Task { await actions.asks.answer(id, with: AskAnswer(choice)) }
     case .togglePause: togglePause()
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }

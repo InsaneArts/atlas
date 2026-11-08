@@ -26,6 +26,12 @@
         PreviewState(name: "Needs you, a command runs", value: panelNeedsYouCommandRuns),
         PreviewState(name: "Service note", value: panelServiceNote),
         PreviewState(name: "Accounts", value: panelAccounts),
+        PreviewState(name: "Waiting, a message", value: panelAskTyped),
+        PreviewState(name: "Waiting, a click", value: panelAskNamedClick),
+        PreviewState(name: "Waiting, a click with no name", value: panelAskUnnamedClick),
+        PreviewState(name: "Waiting, a password", value: panelAskPassword),
+        PreviewState(name: "Waiting, for this task or not", value: panelAskTaskOnly),
+        PreviewState(name: "Allowed for a task", value: panelAllowed),
       ]
     }
 

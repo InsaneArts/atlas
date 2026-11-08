@@ -1,3 +1,4 @@
+import AtlasService
 import AtlasUI
 import Foundation
 import Observation
@@ -119,6 +120,7 @@ final class SettingsController {
     case .askDeletePictures: ask(.deletePictures)
     case .addApp: Task { await addApp() }
     case .askRemoveAccount(let id): ask(.removeAccount(id))
+    case .setAccountLevel(let id, let level): Task { await setLevel(AccountLevel(level), of: id) }
     case .dismissAccountNote: dismissAccountNote()
     case .gettingStarted: dependencies.links.gettingStarted()
     case .showAppInFinder: dependencies.revealFile(Bundle.main.bundlePath)

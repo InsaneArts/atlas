@@ -20,6 +20,8 @@ final class PanelController {
   /// Between status readings with the panel closed: 5 s, often enough for the menu bar glyph to follow the helper's
   /// mode, rarely enough to cost nothing.
   static let closedEvery: Duration = .seconds(5)
+  /// Between the ticks of how long a question has waited, while the panel is open: 1 s.
+  static let askEvery: Duration = .seconds(1)
   /// The latest status the service reported: every field at its safe default, as a service that cannot be reached
   /// reads, before the first reading ends and after one that fails, which the panel shows alike.
   var status = ViewerStatus()
@@ -39,6 +41,10 @@ final class PanelController {
   var icons: [String: IconImage] = [:]
   /// Whether the person said OK to the note that a macOS service in the helper slowly slows their Mac, as saved.
   var serviceNoteDismissed: Bool
+  /// Counts the seconds while the panel is open and a question waits, so how long it has waited moves on.
+  var askTick = 0
+  /// The count of those seconds, while it runs.
+  @ObservationIgnored var askTicking: Task<Void, Never>?
 
   /// The viewer service it reads and asks.
   @ObservationIgnored let service: any ViewerService
@@ -107,10 +113,18 @@ final class PanelController {
       agentRequests: actions.agentRequests,
       sound: actions.sound.button,
       opensAtLogin: opensAtLogin,
-      date: wallClock(),
+      date: now,
       icons: icons,
-      serviceNoteDismissed: serviceNoteDismissed
+      serviceNoteDismissed: serviceNoteDismissed,
+      asks: actions.asks.list,
+      askPictures: actions.asks.pictures
     )
+  }
+
+  /// The time now, read with the seconds' tick, so the panel is drawn again each second a question waits.
+  var now: Date {
+    _ = askTick
+    return wallClock()
   }
 
   /// Whether the panel waits for the service: before its first answer, and again after a reading that failed, until it
@@ -139,6 +153,20 @@ final class PanelController {
     )
   }
 
+  /// What the menu bar glyph shows: the helper's mode, or, while a question waits and the person refused Atlas's
+  /// notifications, Needs you's badge saying Waiting for you, so the question is not missed.
+  var glyph: PanelGlyph {
+    let mode = mode
+    let store = actions.asks
+    let waits =
+      store.notificationsRefused
+      && PanelPresenter.waitsForYou(
+        PanelSnapshot(status: status, date: wallClock(), asks: store.list),
+        mode: mode
+      )
+    return waits ? PanelGlyph(kind: .needsYou, word: AskWords.waiting) : PanelGlyph(kind: mode.kind, word: mode.word)
+  }
+
   /// Applies one of the panel's events. ⋯ is opened by the panel's shell, which builds its menu.
   ///
   /// - Parameter event: What the person did.
@@ -157,6 +185,10 @@ final class PanelController {
     case .askSwitch: links.showAlert(.switchToHelper)
     case .openSettings: links.openSettings()
     case .openAccounts: links.openAccounts()
+    case .answerAsk(let id, let choice):
+      // Unstructured, as `send` is the view's synchronous callback; the store takes the question away at once.
+      Task { await actions.asks.answer(id, with: AskAnswer(choice)) }
+    case .endAllowed(let id): Task { await actions.asks.end(id) }
     case .togglePause: togglePause()
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }

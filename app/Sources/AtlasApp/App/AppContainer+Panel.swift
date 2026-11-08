@@ -69,5 +69,8 @@ extension AppContainer {
   /// - Parameter status: The reading, or nil when it failed.
   func read(_ status: ViewerStatus?) {
     signals?.read(status)
+    guard let status, let askSignals else { return }
+    // Unstructured, as a reading is handed on synchronously; macOS is asked once, while the reading goes on.
+    Task { await askSignals.statusRead(status) }
   }
 }

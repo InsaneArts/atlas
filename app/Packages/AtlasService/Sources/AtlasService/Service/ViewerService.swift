@@ -71,6 +71,36 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service refuses.
   func removeAccount(_ account: ViewerStatus.Account) async throws
 
+  /// Sets how freely agents act in an account.
+  ///
+  /// - Parameters:
+  ///   - level: The level.
+  ///   - account: The account.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func setLevel(_ level: AccountLevel, of account: ViewerStatus.Account) async throws
+
+  /// Reads the questions Atlas asks the person now, with what each would send, and what they allowed. Reading takes
+  /// down the questions whose time ran out.
+  ///
+  /// - Returns: The questions, oldest first, and the grants.
+  /// - Throws: ``ServiceError/notOffered`` from an older service that asks nothing; else ``ServiceError`` when the
+  ///   service cannot be read or refuses.
+  func asks() async throws(ServiceError) -> AskList
+
+  /// Answers a question as the person.
+  ///
+  /// - Parameters:
+  ///   - ask: The question's id.
+  ///   - answer: The answer.
+  /// - Throws: ``ServiceError`` when the service refuses, as for a question that has ended.
+  func answer(_ ask: String, with answer: AskAnswer) async throws
+
+  /// Ends what the person allowed for a task in an account.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func endAllowed(in account: AccountKey) async throws
+
   /// Sends input to the helper under a lease.
   ///
   /// - Parameters:

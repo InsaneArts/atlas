@@ -11,6 +11,10 @@ public struct PanelState: Equatable, Sendable {
   public var showsServiceNote: Bool
   /// Whether the ⋯ menu is open, which draws its button in the header pressed.
   public var isMoreOpen: Bool
+  /// The question Atlas asks the person now, at the top of the panel's content, oldest first; nil for none.
+  public var ask: AskCardState?
+  /// What the person allowed for a task, while it holds.
+  public var allowed: [AllowedRowState]
   /// The helper's screen and how it looks, or why there is none.
   public var picture: PanelPictureState
   /// The newest actions, newest first, at most three; empty hides Recent.
@@ -40,6 +44,8 @@ public struct PanelState: Equatable, Sendable {
   ///   - showsServiceNote: Whether the note that a macOS service in the helper slowly slows the Mac shows; not by
   ///     default.
   ///   - isMoreOpen: Whether the ⋯ menu is open.
+  ///   - ask: The question Atlas asks the person now; none by default.
+  ///   - allowed: What the person allowed for a task; nothing by default.
   ///   - picture: The helper's screen and how it looks, or why there is none.
   ///   - recent: The newest actions, newest first, at most three; empty hides Recent.
   ///   - sessions: The live host sessions, at most ``mostSessions``; none by default, which shows Recent.
@@ -52,6 +58,8 @@ public struct PanelState: Equatable, Sendable {
     notice: String? = nil,
     showsServiceNote: Bool = false,
     isMoreOpen: Bool = false,
+    ask: AskCardState? = nil,
+    allowed: [AllowedRowState] = [],
     picture: PanelPictureState,
     recent: [PanelRecentEntry],
     sessions: [PanelSessionEntry] = [],
@@ -64,6 +72,8 @@ public struct PanelState: Equatable, Sendable {
     self.notice = notice
     self.showsServiceNote = showsServiceNote
     self.isMoreOpen = isMoreOpen
+    self.ask = ask
+    self.allowed = allowed
     self.picture = picture
     self.recent = recent
     self.sessions = sessions

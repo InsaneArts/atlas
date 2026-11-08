@@ -1,8 +1,8 @@
 import AtlasService
 import AtlasUI
 
-/// The Accounts pane's work: adding an app the person chooses, taking an account off the list once they confirm, and
-/// the note read once. Each change goes through the viewer service, then the helper's status every window shares is
+/// The Accounts pane's work: adding an app the person chooses, setting an account's level, taking an account off the
+/// list once they confirm, and the note read once. Each change goes through the viewer service, then the helper's status every window shares is
 /// read again, so the list shows what Atlas now holds; a failure says why under the list.
 extension SettingsController {
   /// Lets the person choose an app, then adds it to the accounts.
@@ -23,6 +23,22 @@ extension SettingsController {
     else { return }
     await changeAccounts {
       try await self.dependencies.links.removeAccount(account)
+    }
+  }
+
+  /// Sets how freely agents act in the account with `id`. One no longer listed is left alone.
+  ///
+  /// - Parameters:
+  ///   - level: The level.
+  ///   - id: The account, as the service names it.
+  func setLevel(_ level: AccountLevel, of id: String) async {
+    guard
+      let account = dependencies.links.status().status.overview.accounts?
+        .first(where: { $0.id == id }),
+      account.level != level
+    else { return }
+    await changeAccounts {
+      try await self.dependencies.links.setLevel(level, account)
     }
   }
 

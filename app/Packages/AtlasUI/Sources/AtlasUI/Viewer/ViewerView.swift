@@ -169,6 +169,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
           zooms: screenZooms
         )
         .padding(ViewerLayout.stageInset)
+        .overlay(alignment: .bottom) { askBanner }
         .transition(PaneShift.transition(isScreen: true))
         .zIndex(1)
       }
@@ -193,6 +194,20 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     .overlay { corner(pip) }
     .environment(\.screenZooms, screenZooms)
     .animation(ScreenZoom.animation(zooms: screenZooms), value: state.pane.place)
+  }
+
+  /// The question Atlas asks the person, over the Screen, 10 from its bottom and sides, coming and going in one move
+  /// in place (``AskMotion``).
+  private var askBanner: some View {
+    ZStack {
+      if let ask = state.screen.ask {
+        ScreenAskBanner(ask: ask, send: send)
+          .id(ask.id)
+          .transition(AskMotion.transition(reduceMotion: reduceMotion))
+      }
+    }
+    .padding(AskBannerLayout.edge)
+    .animation(AskMotion.room(shown: state.screen.ask != nil, reduceMotion: reduceMotion), value: state.screen.ask?.id)
   }
 
   /// The helper's screen, small and live in a corner of the card's body over every list, clear of the footer: the same

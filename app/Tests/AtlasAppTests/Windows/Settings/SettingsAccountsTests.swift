@@ -86,7 +86,11 @@ struct SettingsAccountsTests {
       dependencies.preferences.loadAccountNoteRead = { saved }
       dependencies.preferences.saveAccountNoteRead = { saved = $0 }
     }
-    #expect(Self.pane(controller).note == "Added github.com after you typed a password there.")
+    #expect(
+      Self.pane(controller).note
+        == "Added github.com after you typed a password there. Agents ask you before sending there."
+    )
+    #expect(Self.pane(controller).noteAccount == "site\u{1F}github.com\u{1F}", "Change… sets that account's level")
 
     controller.send(.dismissAccountNote)
     #expect(Self.pane(controller).note == nil)
@@ -122,6 +126,25 @@ struct SettingsAccountsTests {
     await controller.confirmAlert()
     #expect(asked.last == "remove github.com")
     #expect(controller.state.alert == nil)
+  }
+
+  @Test("each row shows its level, and picking one sends that level for that account")
+  @MainActor func theLevelControlSendsTheLevel() async throws {
+    var trusted = Self.account("site", "staging.acme.dev", "staging.acme.dev", added: Self.today)
+    trusted["level"] = "trusted"
+    let status = try Self.reading([
+      Self.account("app", "com.tinyspeck.slackmacgap", "Slack", added: Self.today), trusted,
+    ])
+    var sent: [String] = []
+    let controller = SettingsController.scripted(commands: ScriptedCommands([:]), status: status) { dependencies in
+      dependencies.links.setLevel = { level, account in sent.append("\(account.key) \(level.rawValue)") }
+    }
+    #expect(Self.pane(controller).rows?.map(\.level) == [.ask, .trusted], "Ask Before Sending unless chosen")
+    let slack = try #require(status.overview.accounts?.first?.id)
+    await controller.setLevel(.lookOnly, of: slack)
+    #expect(sent == ["com.tinyspeck.slackmacgap lookOnly"])
+    await controller.setLevel(.ask, of: slack)
+    #expect(sent.count == 1, "the level it has already is not sent again")
   }
 
   @Test("a change that failed says why under the list")

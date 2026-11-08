@@ -76,6 +76,10 @@ extension WindowCoordinator {
       removeAccount: { [weak self] account in
         guard let service = self?.parts?.panel?.service else { throw ServiceError(SettingsWords.noService) }
         try await service.removeAccount(account)
+      },
+      setLevel: { [weak self] level, account in
+        guard let service = self?.parts?.panel?.service else { throw ServiceError(SettingsWords.noService) }
+        try await service.setLevel(level, of: account)
       }
     )
   }

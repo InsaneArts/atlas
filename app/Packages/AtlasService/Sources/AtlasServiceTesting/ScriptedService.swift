@@ -89,6 +89,12 @@ public final class ScriptedService: ViewerService {
   public var cleanups: [String] = []
   /// Apps requests made.
   public var appsCalls = 0
+  /// What `asks.json` answers.
+  public var askList = AskList()
+  /// `asks.json` requests made.
+  public var asksCalls = 0
+  /// The answers given, in order, as "ID choice".
+  public var answers: [String] = []
 
   /// A service that answers every request at once, ready and observing.
   public init() {}
@@ -263,6 +269,53 @@ public final class ScriptedService: ViewerService {
   public func removeAccount(_ account: ViewerStatus.Account) async throws {
     log.append("remove account \(account.key)")
     try await pause("accounts/remove")
+  }
+
+  /// Records setting an account's level, unless held or failed.
+  ///
+  /// - Parameters:
+  ///   - level: The level.
+  ///   - account: The account.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func setLevel(_ level: AccountLevel, of account: ViewerStatus.Account) async throws {
+    log.append("level \(account.key) \(level.rawValue)")
+    try await pause("accounts/level")
+  }
+
+  /// Answers `askList`, unless held or failed.
+  ///
+  /// - Returns: The scripted questions and grants.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func asks() async throws(ServiceError) -> AskList {
+    asksCalls += 1
+    try await pause("asks.json")
+    return askList
+  }
+
+  /// Records an answer and takes its question off `askList`, unless held or failed.
+  ///
+  /// - Parameters:
+  ///   - ask: The question's id.
+  ///   - answer: The answer.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func answer(_ ask: String, with answer: AskAnswer) async throws {
+    answers.append("\(ask) \(answer.rawValue)")
+    try await pause("asks/answer")
+    askList.asks.removeAll { $0.id == ask }
+  }
+
+  /// Records ending what was allowed in an account and takes its grants off `askList`, unless held or failed.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func endAllowed(in account: AccountKey) async throws {
+    log.append("end allowed \(account.id)")
+    try await pause("allowed/end")
+    askList.allowed.removeAll { $0.account == account }
   }
 
   /// Records stopping or resuming agents, unless held or failed.

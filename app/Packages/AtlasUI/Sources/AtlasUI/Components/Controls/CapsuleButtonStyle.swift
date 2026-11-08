@@ -43,6 +43,8 @@ struct CapsuleButtonStyle: ButtonStyle {
     case compact
     /// 30 high, 13-point text: in the panel, an alert and an empty message; a circle 30 across.
     case small
+    /// 32 high, 13-point text: a question's answers in the panel, one under another.
+    case medium
     /// 34 high, 13-point text: in a footer, a card or the top row; a circle 34 across.
     case regular
     /// 44 high, 14-point text: a screen's one main action.

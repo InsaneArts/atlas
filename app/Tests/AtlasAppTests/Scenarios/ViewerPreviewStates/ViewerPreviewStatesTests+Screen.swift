@@ -30,6 +30,21 @@
       let gone = "Atlas isn't answering in the helper."
       return [
         "Working": shown(try reported("agent", state: "working", activity: Self.working)),
+        "Waiting for you": shown(try reported("agent", state: "working", activity: Self.working)) { snapshot in
+          let asked = snapshot.date - 18
+          snapshot.asks = AskList(asks: [
+            Ask(
+              id: "v1",
+              who: "Claude Code · release",
+              task: "ship the setup fix",
+              account: "github.com",
+              kind: .click,
+              element: "Merge pull request",
+              asked: asked,
+              ends: asked + 120
+            )
+          ])
+        },
         "Idle": shown(idle),
         "You have control": shown(try reported("controlling", state: "control")) { $0.lease = "lease" },
         "Needs you": shown(try reported("recovering", state: "needsYou")),

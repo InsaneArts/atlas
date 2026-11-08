@@ -1,5 +1,6 @@
 import AtlasCommands
 import AtlasService
+import AtlasStatus
 import AtlasUI
 
 /// The readings: the status at the open or closed rate, the picture while the panel is open and not paused, Open at
@@ -25,8 +26,29 @@ extension PanelController {
     if open && !session.paused { polling.append(repeating(every: Self.openEvery) { await $0.readFrame() }) }
   }
 
+  /// Whether a question waits for the person now.
+  var asked: Bool {
+    StatusReading(status)
+      .waitsForYou(from: actions.asks.list, at: wallClock())
+  }
+
+  /// Counts the seconds while the panel is open and a question waits, so its card's time moves on; the count stops by
+  /// itself once none waits, and with the panel closing.
+  func tickWhileAsked() {
+    guard isOpen, asked, askTicking == nil else { return }
+    askTicking = Task { [weak self, clock] in
+      while !Task.isCancelled, self?.isOpen == true, self?.asked == true {
+        try? await clock.sleep(for: Self.askEvery)
+        self?.askTick += 1
+      }
+      if !Task.isCancelled { self?.askTicking = nil }
+    }
+  }
+
   /// Stops every reading under way.
   private func stop() {
+    askTicking?.cancel()
+    askTicking = nil
     for task in polling {
       task.cancel()
     }
@@ -90,6 +112,8 @@ extension PanelController {
     answered = latest != nil
     actions.sound.adopt(latest?.overview.sound.flatMap(HelperSound.init), asked: soundAsked)
     links.read(latest)
+    if let latest { actions.asks.statusRead(latest) }
+    tickWhileAsked()
     wantRecentIcons()
   }
 

@@ -23,9 +23,11 @@
       #expect(
         Set(states.map(\.status.label)) == [
           "Idle", "Working", "You have control", "Needs you", "Stopped", "Logged out", "Not ready", "Connecting",
-          "In use elsewhere",
+          "In use elsewhere", "Waiting for you",
         ]
       )
+      #expect(states.contains { $0.ask?.choices == [.task, .deny] }, "a question offering Allow for This Task alone")
+      #expect(states.contains { !$0.allowed.isEmpty }, "what the person allowed for a task")
       let looks = Set(
         states.map { state -> String in
           switch state.picture.look {
