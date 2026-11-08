@@ -178,7 +178,8 @@ final class AskStore {
     }
   }
 
-  /// Reads again once the earliest question or grant in `shown` ends, so it goes on time.
+  /// Once the earliest question or grant in `shown` ends, takes it away here at once, its notification with it, waits
+  /// for the next, and reads again; the next end is waited for whether that reading works or not.
   ///
   /// - Parameter shown: What shows now.
   private func waitForEnd(of shown: AskList) {
@@ -196,7 +197,24 @@ final class AskStore {
       } catch {
         return
       }
-      await self?.read()
+      self?.expire()
     }
+  }
+
+  /// Takes away every question and grant that has ended, tells the notifications, waits for the next end and reads
+  /// again, which the service answers with the ended ones taken down.
+  private func expire() {
+    // This wait is over; waiting for the next must not cancel the reading that follows.
+    wake = nil
+    let now = wallClock()
+    if var shown = list {
+      shown.asks.removeAll { $0.ends <= now }
+      shown.allowed.removeAll { $0.ends <= now }
+      list = shown
+      keepPictures()
+      changed(shown)
+      waitForEnd(of: shown)
+    }
+    askRead()
   }
 }

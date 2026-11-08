@@ -18,6 +18,9 @@ final class AskSignals {
   private(set) var posted: Set<String> = []
   /// Whether macOS is being asked now, so it is asked once.
   private var asking = false
+  /// Whether the notifications an earlier launch left were matched with the questions up, which the first reading
+  /// does.
+  private var reconciled = false
 
   /// Signals that have posted nothing yet.
   ///
@@ -43,11 +46,17 @@ final class AskSignals {
     store.notificationsRefused = await notifications.consent() == false
   }
 
-  /// The questions changed: each new one posts while the panel is closed, and each gone is taken away.
+  /// The questions changed: each new one posts while the panel is closed, and each gone is taken away. The first time,
+  /// after the first reading, any notification an earlier launch left whose question is no longer up goes too.
   ///
   /// - Parameter list: The questions up now.
   func asksChanged(_ list: AskList) {
     let ids = Set(list.asks.map(\.id))
+    if !reconciled {
+      reconciled = true
+      // Unstructured, as Notification Center answers later; questions answered meanwhile are withdrawn as they go.
+      Task { await withdrawLeftovers() }
+    }
     let gone = posted.subtracting(ids)
     if !gone.isEmpty { notifications.withdraw(gone.sorted()) }
     posted.formIntersection(ids)
@@ -56,6 +65,14 @@ final class AskSignals {
       notifications.post(AskNotifications.note(ask))
       posted.insert(ask.id)
     }
+  }
+
+  /// Takes away every notification Notification Center still shows whose question is not up now.
+  func withdrawLeftovers() async {
+    let delivered = await notifications.delivered()
+    let open = Set(store.list?.asks.map(\.id) ?? Array(posted))
+    let leftovers = delivered.filter { !open.contains($0) }
+    if !leftovers.isEmpty { notifications.withdraw(leftovers) }
   }
 
   /// A status was read: the first time it lists an account, macOS is asked, once, whether Atlas may notify the

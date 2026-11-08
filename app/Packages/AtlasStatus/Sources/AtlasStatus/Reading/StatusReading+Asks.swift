@@ -38,13 +38,14 @@ extension StatusReading {
       .filter { $0.ends > date }
   }
 
-  /// Whether `asks.json` should be read again: the status lists other questions than `list` holds, as when one came
-  /// or went while the asks folder's watch was not looking.
+  /// Whether `asks.json` should be read again: the status lists other questions or grants than `list` holds, as when
+  /// one came or went while the watch was not looking, or a grant ended with its agent session.
   ///
   /// - Parameter list: What `asks.json` last said; nil before it was read.
   /// - Returns: Whether the two disagree.
   public func asksChanged(since list: AskList?) -> Bool {
     guard let list else { return true }
     return Set(status.overview.asks.map(\.id)) != Set(list.asks.map(\.id))
+      || Set(status.overview.allowed.map(\.id)) != Set(list.allowed.map(\.id))
   }
 }

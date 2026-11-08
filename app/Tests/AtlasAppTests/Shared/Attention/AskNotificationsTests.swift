@@ -1,6 +1,8 @@
+import AsyncSupportTesting
 import AtlasService
 import AtlasServiceTesting
 import Foundation
+import Observation
 import Testing
 import UserNotifications
 
@@ -9,7 +11,8 @@ import UserNotifications
 @Suite("AskNotifications")
 @MainActor
 struct AskNotificationsTests {
-  /// What the stand-in notifications were asked to do.
+  /// What the stand-in notifications were asked to do, observable, so a test waits on it.
+  @Observable
   final class Recorded {
     /// The notes posted.
     var posted: [AskNote] = []
@@ -102,6 +105,29 @@ struct AskNotificationsTests {
     #expect(recorded.posted.map(\.id) == ["a1"], "the open panel shows it")
     signals.asksChanged(AskList())
     #expect(recorded.withdrawn == ["a1"])
+  }
+
+  @Test("after the first reading, a notification an earlier launch left whose question is gone is withdrawn")
+  func leftoverNotificationsAreWithdrawn() async throws {
+    let recorded = Recorded()
+    let service = ScriptedService()
+    service.askList = AskList(asks: [Self.ask("a2")])
+    let store = AskStore(service: service)
+    await store.read()
+    var notifications = recorded.notifications
+    notifications.delivered = { ["a1", "a2"] }
+    let signals = AskSignals(
+      notifications: notifications,
+      preferences: SettingsPreferences(
+        loadTab: { nil },
+        saveTab: { _ in },
+        loadNotify: { false },
+        saveNotify: { _ in }
+      ),
+      store: store
+    ) { false }
+    signals.asksChanged(try #require(store.list))
+    try await settle("the leftover was never withdrawn") { recorded.withdrawn == ["a1"] }
   }
 
   @Test("macOS is asked once, when the first account joins the list, and a no badges the menu bar")

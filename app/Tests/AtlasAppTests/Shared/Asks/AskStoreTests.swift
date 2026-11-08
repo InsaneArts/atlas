@@ -114,13 +114,33 @@ struct AskStoreTests {
     let store = AskStore(service: service)
     await store.read()
     service.hold.insert("asks.json")
-    let late = Task { await store.read() }
-    try await settle("the reading never started") { service.held["asks.json"] != nil }
-    service.fail.insert("asks/answer")
-    service.askList = AskList(asks: [Self.ask("a1")])
+    // A reading that takes its reply, with the question still up, before the answer.
+    let stale = Task { await store.read() }
+    try await settle("the stale reading never started") { service.held["asks.json"] != nil }
     await store.answer("a1", with: .deny)
+    #expect(service.answers == ["a1 deny"])
+    #expect(store.list?.asks.isEmpty == true)
     service.resume("asks.json")
-    await late.value
-    #expect(store.list?.asks.map(\.id) == ["a1"], "a refused answer shows the question as the service has it")
+    await stale.value
+    #expect(store.list?.asks.isEmpty == true, "the stale reply never brings the answered question back")
+  }
+
+  @Test("a question that ends goes at once with its notification, and the next end is waited for though the read fails")
+  func anEndedQuestionGoesThoughTheReadFails() async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let store = AskStore(service: service, clock: clock) { Self.start + clock.seconds }
+    var told: [[String]] = []
+    store.changed = { told.append($0.asks.map(\.id)) }
+    service.askList = AskList(asks: [Self.ask("a1", endsAfter: 30), Self.ask("a2", endsAfter: 60)])
+    await store.read()
+    service.fail.insert("asks.json")
+    try await clock.untilSleeping(for: .seconds(30), "nothing waited for the first end")
+    clock.advance(by: .seconds(30))
+    try await settle("the ended question stayed") { store.list?.asks.map(\.id) == ["a2"] }
+    #expect(told.last == ["a2"], "the notifications hear it before any reading")
+    try await clock.untilSleeping(for: .seconds(30), "the next end was not waited for after the read failed")
+    clock.advance(by: .seconds(30))
+    try await settle("the last question stayed") { store.list?.asks.isEmpty == true }
   }
 }

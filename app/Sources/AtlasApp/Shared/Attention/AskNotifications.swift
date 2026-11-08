@@ -17,6 +17,8 @@ struct AskNotifications {
   var post: @MainActor (AskNote) -> Void
   /// Takes the questions with these ids out of Notification Center.
   var withdraw: @MainActor ([String]) -> Void
+  /// The ids of the questions whose notifications Notification Center still shows, from this launch or an earlier one.
+  var delivered: @MainActor () async -> [String] = { [] }
 
   /// One that does nothing, where Notification Center can't be reached.
   static var silent: AskNotifications {
@@ -63,6 +65,13 @@ struct AskNotifications {
         let center = UNUserNotificationCenter.current()
         center.removeDeliveredNotifications(withIdentifiers: ids.map(identifier))
         center.removePendingNotificationRequests(withIdentifiers: ids.map(identifier))
+      },
+      delivered: {
+        await UNUserNotificationCenter.current()
+          .deliveredNotifications()
+          .map(\.request.identifier)
+          .filter { $0.hasPrefix(prefix) }
+          .map { String($0.dropFirst(prefix.count)) }
       }
     )
   }

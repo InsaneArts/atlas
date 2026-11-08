@@ -283,15 +283,16 @@ public final class ScriptedService: ViewerService {
     try await pause("accounts/level")
   }
 
-  /// Answers `askList`, unless held or failed.
+  /// Answers `askList` as it was when asked, as a live reply is read before it travels, unless held or failed.
   ///
   /// - Returns: The scripted questions and grants.
   /// - Throws: A ``ServiceError`` when the route fails.
   @MainActor
   public func asks() async throws(ServiceError) -> AskList {
     asksCalls += 1
+    let reply = askList
     try await pause("asks.json")
-    return askList
+    return reply
   }
 
   /// Records an answer and takes its question off `askList`, unless held or failed.

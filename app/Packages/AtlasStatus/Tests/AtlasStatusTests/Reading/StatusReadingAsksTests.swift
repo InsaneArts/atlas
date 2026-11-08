@@ -33,6 +33,19 @@ struct StatusReadingAsksTests {
     #expect(!reading.waitsForYou(from: AskList(), at: now), "an answered question clears before the status says so")
   }
 
+  @Test("a grant the status no longer lists reads asks.json again, as when its agent session ended")
+  func anEndedGrantReadsAgain() {
+    let grant = AllowedGrant(
+      session: "k",
+      account: AccountKey(kind: .site, id: "github.com"),
+      name: "GitHub",
+      ends: now + 600
+    )
+    let reading = StatusReading(ViewerStatus())
+    #expect(reading.asksChanged(since: AskList(allowed: [grant])))
+    #expect(!reading.asksChanged(since: AskList()))
+  }
+
   @Test("only what the person allowed that still holds is shown")
   func onlyGrantsThatHold() {
     let reading = StatusReading(ViewerStatus())
