@@ -38,11 +38,19 @@ struct ActivitySwapMotionTests {
     let host = Self.settledHost(showing: pose.from)
     host.show(pose.to, animatesArrivals: false)
     host.render()
-    Self.advance(host, to: Self.dropping / Motion.playbackRate)
-    let dropping = try #require(try Self.inkMiddle(of: settled, in: host), "the new run is drawn as it fades in")
+    // Read every tick of its arrival, as the arrival's timing within its fade may differ from one macOS to another.
+    var highest = CGFloat.infinity
+    var held = TimeInterval.zero
+    while held < Self.arrived / Motion.playbackRate {
+      held += ViewerMotionPose.tick
+      Self.advance(host, to: held)
+      if let middle = try Self.inkMiddle(of: settled, in: host) {
+        highest = min(highest, middle)
+      }
+    }
     Self.advance(host, to: Self.settledAt)
     let landed = try #require(try Self.inkMiddle(of: settled, in: host), "the new run is drawn")
-    #expect(dropping < landed - Self.drop, "it comes down from above its place")
+    #expect(highest < landed - Self.drop, "it comes down from above its place")
   }
 
   @Test("scrolled down, a new session choice brings the list back to its top with nothing waiting")
@@ -235,9 +243,9 @@ struct ActivitySwapMotionTests {
   static let list = CGRect(x: 260, y: 90, width: 740, height: 560)
   /// 0.25 s: the old list's fade out and the new one's fade in after it.
   static let swapEnd = Motion.Duration.swapOut.seconds + Motion.Duration.swapIn.seconds
-  /// Half way through a new row's fade in, once the rows below have made room for it.
-  static let dropping =
-    Motion.Duration.swapOut.seconds + Motion.Duration.makeRoom.seconds + Motion.Duration.swapIn.seconds / 2
+  /// The end of a new row's fade in, once the rows below have made room for it.
+  static let arrived =
+    Motion.Duration.swapOut.seconds + Motion.Duration.makeRoom.seconds + Motion.Duration.swapIn.seconds
   /// 50 ms: the old list half way through its fade out.
   static let clockFadingOut = ViewerMotionPose.clockMoments[1]
   /// 100 ms: the old list gone and the new one not yet come.
