@@ -206,3 +206,44 @@ async fn the_person_can_take_control_while_an_agent_waits_and_an_allow_later_run
         "the allowed attempt looked again after the answer, however late it came"
     );
 }
+
+#[tokio::test]
+async fn just_this_once_for_typing_is_bound_to_its_field_and_all_of_its_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(dir.path());
+    client.controller = client
+        .controller
+        .clone()
+        .waiting(std::time::Duration::from_secs(5));
+    client.set_typing(Some("whole text".to_owned()));
+    let policy = policy_by(&client, Listed::Accounts(vec![github()])).unwrap();
+    assert_eq!(policy["typing"], "whole text", "each request carries it");
+
+    let answering = answer_soon(&client, Answer::Once);
+    let mut attempts = Vec::new();
+    after_asking(&client, async || {
+        attempts.push(client.granted());
+        if attempts.len() == 1 {
+            let mut error = waiting("b6");
+            error.details["ask"]["dry"] = json!(true);
+            error.details["ask"]["typing"] = json!("whole text");
+            Err(error)
+        } else {
+            Ok(json!({"ok": true}))
+        }
+    })
+    .await
+    .unwrap();
+    answering.join().unwrap();
+    let grant = &attempts[1][0];
+    assert_eq!(grant["scope"], "command");
+    assert_eq!(
+        grant["target"]["name"], "Merge",
+        "the field it was asked about"
+    );
+    assert_eq!(grant["typing"], "whole text", "and all of its text");
+    assert!(
+        client.granted().is_empty(),
+        "spent by that one command's attempt"
+    );
+}

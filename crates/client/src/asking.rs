@@ -54,6 +54,9 @@ fn policy_by(client: &Client, listed: crate::sign_ins::Listed) -> Option<Value> 
     if client.checking() {
         policy["dry"] = json!(true);
     }
+    if let Some(typing) = client.typing() {
+        policy["typing"] = json!(typing);
+    }
     Some(policy)
 }
 
@@ -149,12 +152,17 @@ pub async fn after_asking(
                 ));
             }
             Waited::Answered(Answer::Task) => asks.close(&id),
-            // A command's check before typing covers the rest of that one
-            // command; a request's own ask covers that request alone, where
-            // it was asked about.
+            // A command's check before typing covers that command's own
+            // text, typed into the field it was asked about; a request's own
+            // ask covers that request alone, where it was asked about.
             Waited::Answered(Answer::Once) if question["dry"] == true => {
                 asks.close(&id);
-                client.grant(json!({"scope": "command", "account": question["accountKey"]}));
+                client.grant(json!({
+                    "scope": "command",
+                    "account": question["accountKey"],
+                    "target": question["bound"],
+                    "typing": question["typing"],
+                }));
             }
             Waited::Answered(Answer::Once) => {
                 asks.close(&id);

@@ -126,7 +126,13 @@ pub(super) fn type_parts(batch: &str) -> Vec<String> {
 /// follow earlier text chunks; retain uncertainty and do not replay the text.
 pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>) -> Result<Value> {
     let batches = type_batches(text)?;
-    crate::asking::after_asking(client, async || type_once(client, &batches, expected).await).await
+    // A grant the person gives this command is bound to all of its text.
+    client.set_typing(Some(atlas_core::digest::bytes_sha256(text.as_bytes())));
+    let typed =
+        crate::asking::after_asking(client, async || type_once(client, &batches, expected).await)
+            .await;
+    client.set_typing(None);
+    typed
 }
 
 /// [`type_text`] once. While the person lists any account, the input

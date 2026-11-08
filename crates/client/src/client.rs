@@ -133,6 +133,9 @@ pub struct Client {
     /// Whether this command's next input is only its check before typing:
     /// judged, nothing sent.
     checking: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The digest of the whole text this command types, which its check
+    /// and each of its requests carry.
+    typing: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl Client {
@@ -164,6 +167,7 @@ impl Client {
             person_input: None,
             granted: std::sync::Arc::default(),
             checking: std::sync::Arc::default(),
+            typing: std::sync::Arc::default(),
             config,
         })
     }
@@ -191,6 +195,18 @@ impl Client {
     /// Make this command's next inputs only its check, or real again.
     pub(crate) fn set_checking(&self, on: bool) {
         self.checking.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The digest of the whole text this command types, while it types.
+    pub(crate) fn typing(&self) -> Option<String> {
+        self.typing.lock().ok().and_then(|typing| typing.clone())
+    }
+
+    /// Say this command types the text `digest` names, or no longer types.
+    pub(crate) fn set_typing(&self, digest: Option<String>) {
+        if let Ok(mut typing) = self.typing.lock() {
+            *typing = digest;
+        }
     }
 
     /// Spend what was allowed once: an attempt used it.
