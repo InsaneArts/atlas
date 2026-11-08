@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Atlas's orbit on its white tile, a session's icon's size, with a dot in the helper's tone on its bottom trailing
-/// corner, where a session's badge stands, cut out of the tile by a ring in the ground's colour. The tile keeps a
+/// Atlas's orbit on its white tile, the size of the plate a session's app icon draws, with a dot in the helper's tone
+/// where a session's badge stands, cut out of the tile by a ring in the ground's colour. The tile keeps a
 /// hairline edge on the light ground, and the orbit dims while the window connects. VoiceOver skips it; the row's words
 /// say the same.
 struct SidebarHelperMark: View {
@@ -13,6 +13,7 @@ struct SidebarHelperMark: View {
   /// The tile, its orbit and the dot.
   var body: some View {
     tile
+      .frame(width: ViewerLayout.sidebarIcon, height: ViewerLayout.sidebarIcon)
       .overlay(alignment: .bottomTrailing) {
         dot
           .offset(x: ViewerLayout.badgeReach, y: ViewerLayout.badgeReach)

@@ -35,20 +35,14 @@ extension ViewerLayout {
   static let sidebarLineGap = Spacing.hairline
   /// 22: each of the icons All sessions stacks.
   static let stackIcon: CGFloat = 22
-  /// 4: how far each icon behind the first peeks out past the one in front of it, so the first stands whole and the
-  /// others show only their edge, as a deck of cards does.
-  static let stackStep = Spacing.xs
+  /// 3: how far each icon behind the first peeks out past the one in front of it, so the first stands whole and the
+  /// others show only their edge, as a deck of cards does; a deck of three reaches a session's icon's width, so the
+  /// words beside it start where a session's do.
+  static let stackStep = (sidebarIcon - stackIcon) / 2
   /// 2: the soft shadow's blur each stacked icon casts on the one behind it.
   static let stackShadowRadius: CGFloat = 2
   /// 1: how far that shadow falls towards the icons behind.
   static let stackShadowOffset = Spacing.hairline
-  /// The room All sessions' icons take: a session's icon's, or the stack's reach where three stand wider.
-  ///
-  /// - Parameter count: How many icons stand in the stack.
-  /// - Returns: The width.
-  static func stackWidth(count: Int) -> CGFloat {
-    max(sidebarIcon, stackIcon + stackStep * CGFloat(max(count - 1, 0)))
-  }
   /// 5: how far a badge's frame reaches past its icon's bottom and trailing edges, so its dot stands 3 past them, its
   /// 2-point ring the rest.
   static let badgeReach: CGFloat = 5
@@ -80,12 +74,13 @@ extension ViewerLayout {
   static let endedHeadingCorner = endedHeadingHeight / 2
   /// Ended's inset round its button: 6 above and 2 under, so its line stands where another heading's does.
   static let endedHeadingInset = EdgeInsets(top: Spacing.xsPlus, leading: .zero, bottom: Spacing.half, trailing: .zero)
-  /// 28: the helper row's tile, a session's icon's side, so its words start where a session's do.
-  static let helperTile = sidebarIcon
-  /// 7: the helper tile's corner, a quarter of its side, as a session's tile rounds.
-  static let helperTileCorner = sidebarIcon / 4
-  /// 18: Atlas's orbit across its tile.
-  static let helperMark = IconSize.sPlus
+  /// About 22.5: the helper row's tile, the plate an app's icon draws in a session's icon's 28, so the tile stands the
+  /// size of the session icons above it and its words start where theirs do.
+  static let helperTile = SessionIcon.plate(sidebarIcon)
+  /// About 5.6: the helper tile's corner, a quarter of its side, as a session's tile rounds.
+  static let helperTileCorner = helperTile / 4
+  /// 14: Atlas's orbit across its tile.
+  static let helperMark = IconSize.xsPlus
   /// 4: between the helper row's words and the ellipsis after them.
   static let helperMoreGap = Spacing.xs
   /// 12: how far the helper row's ellipsis stands into the row's trailing inset, past its words' room, so a title
