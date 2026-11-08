@@ -17,12 +17,17 @@ fn github() -> Entry {
 fn with_no_account_listed_the_request_carries_nothing_new() {
     let dir = tempfile::tempdir().unwrap();
     let client = crate::test_support::client(dir.path());
-    assert_eq!(policy_by(&client, Listed::Accounts(Vec::new())), None);
-    let listed = policy_by(&client, Listed::Accounts(vec![github()])).unwrap();
+    assert_eq!(
+        policy_by(&client, Listed::Accounts(Vec::new()), &[]).0,
+        None
+    );
+    let listed = policy_by(&client, Listed::Accounts(vec![github()]), &[])
+        .0
+        .unwrap();
     assert_eq!(listed["accounts"][0]["id"], "github.com");
     assert_eq!(listed["accounts"][0]["level"], "ask");
     assert_eq!(
-        policy_by(&client, Listed::Unknown).unwrap()["unknown"],
+        policy_by(&client, Listed::Unknown, &[]).0.unwrap()["unknown"],
         true,
         "never read as none"
     );
@@ -216,7 +221,9 @@ async fn just_this_once_for_typing_is_bound_to_its_field_and_all_of_its_text() {
         .clone()
         .waiting(std::time::Duration::from_secs(5));
     client.set_typing(Some("whole text".to_owned()));
-    let policy = policy_by(&client, Listed::Accounts(vec![github()])).unwrap();
+    let policy = policy_by(&client, Listed::Accounts(vec![github()]), &[])
+        .0
+        .unwrap();
     assert_eq!(policy["typing"], "whole text", "each request carries it");
 
     let answering = answer_soon(&client, Answer::Once);
@@ -321,7 +328,9 @@ fn allow_for_this_task_holds_only_in_the_host_process_it_was_given_in_while_its_
     let id = asks.ask(ask, now_ms()).unwrap();
     asks.answer(&id, Answer::Task, true, now_ms()).unwrap();
     let tasks = |client: &Client| {
-        policy_by(client, Listed::Accounts(vec![github()])).unwrap()["grants"]
+        policy_by(client, Listed::Accounts(vec![github()]), &[])
+            .0
+            .unwrap()["grants"]
             .as_array()
             .unwrap()
             .len()

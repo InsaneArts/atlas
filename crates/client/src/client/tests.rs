@@ -4174,7 +4174,8 @@ fn refusal_to_ask(canary: &str) -> Value {
             "what": "send-key",
             "batch": "b1",
             "bound": {"app": "com.google.Chrome", "site": "app.slack.com"},
-            "bind": {"accountKey": key, "batch": "b1", "value": "d1"},
+            "action": "a1",
+            "bind": {"accountKey": key, "action": "a1", "value": "d1"},
             "message": {"preview": canary, "digest": "d1", "length": canary.len()},
             "once": true,
         },
@@ -4282,12 +4283,33 @@ async fn a_refusal_to_ask_through_the_real_input_path_waits_and_tells_the_agent_
     );
 }
 
-#[tokio::test]
-async fn a_request_that_sent_part_of_itself_is_never_asked_about_or_sent_again() {
-    let (_dir, client, listener, session) = native_client();
-    let mut partial = refusal_to_ask("partial");
-    partial["performed"] = json!(1);
-    let service = answering_input(listener, vec![partial]);
+/// Run a request of a key and Return through the real input path, the
+/// input service answering it with `reply`, while the person answers what
+/// is asked with `answer`.
+async fn stopped_partway(
+    reply: Value,
+    answer: Option<atlas_control::asks::Answer>,
+) -> (Result<Value>, usize, Client, tempfile::TempDir) {
+    let (dir, client, listener, session) = native_client();
+    let client = Client {
+        controller: client.controller.clone().waiting(Duration::from_secs(5)),
+        ..client
+    };
+    let service = answering_input(listener, vec![reply]);
+    let asks = client.controller.asks();
+    let person = std::thread::spawn(move || {
+        let Some(answer) = answer else {
+            return;
+        };
+        for _ in 0..500 {
+            if let Some(ask) = asks.open(atlas_core::time::now_ms()).into_iter().next() {
+                asks.answer(&ask.id, answer, true, atlas_core::time::now_ms())
+                    .unwrap();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
     let mut attempts = 0;
     let outcome = crate::asking::after_asking(&client, async || {
         attempts += 1;
@@ -4304,22 +4326,62 @@ async fn a_request_that_sent_part_of_itself_is_never_asked_about_or_sent_again()
             .await
     })
     .await;
+    person.join().unwrap();
     service.abort();
-    assert_eq!(attempts, 1, "never resubmitted");
-    assert!(
-        client
-            .controller
-            .asks()
-            .open(atlas_core::time::now_ms())
-            .is_empty()
-    );
-    let shown = match &outcome {
+    (outcome, attempts, client, dir)
+}
+
+fn shown(outcome: &Result<Value>) -> String {
+    match outcome {
         Ok(reply) => reply.to_string(),
         Err(error) => serde_json::to_string(error).unwrap(),
-    };
+    }
+}
+
+#[tokio::test]
+async fn a_request_stopped_before_a_later_action_asks_about_it_alone_and_never_runs_again() {
+    let mut stopped = refusal_to_ask("the stopped message");
+    stopped["performed"] = json!(1);
+    stopped["partial"] = json!(false);
+    stopped["uncertain"] = json!(false);
+    let (outcome, attempts, client, _dir) =
+        stopped_partway(stopped, Some(atlas_control::asks::Answer::Once)).await;
+    assert_eq!(attempts, 1, "never resubmitted");
+    let shown = shown(&outcome);
+    assert!(shown.contains("\"performed\":1"), "{shown}");
     assert!(
-        shown.contains("\"performed\":1") || shown.contains("waiting-for-person"),
+        shown.contains("send only the actions after the first 1"),
         "{shown}"
+    );
+    assert!(!shown.contains("the stopped message"), "{shown}");
+    let asks = client.controller.asks();
+    let now = atlas_core::time::now_ms();
+    assert!(asks.open(now).is_empty(), "the question came down");
+    let taken = asks
+        .take_permits("terminal", None, &["a1".to_owned()], now)
+        .unwrap();
+    assert_eq!(taken.len(), 1, "a permit for the stopped action");
+    assert_eq!(taken[0].value.as_deref(), Some("d1"), "and its message");
+}
+
+#[tokio::test]
+async fn a_stop_inside_an_action_that_sent_part_of_itself_asks_nothing_and_says_to_look() {
+    let mut inside = refusal_to_ask("partial");
+    inside["performed"] = json!(0);
+    inside["partial"] = json!(true);
+    inside["uncertain"] = json!(true);
+    let (outcome, attempts, client, _dir) = stopped_partway(inside, None).await;
+    assert_eq!(attempts, 1);
+    let shown = shown(&outcome);
+    assert!(shown.contains("Look at the field"), "{shown}");
+    let asks = client.controller.asks();
+    let now = atlas_core::time::now_ms();
+    assert!(asks.open(now).is_empty(), "no question");
+    assert!(
+        asks.take_permits("terminal", None, &["a1".to_owned()], now)
+            .unwrap()
+            .is_empty(),
+        "no permit"
     );
 }
 

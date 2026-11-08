@@ -12,8 +12,9 @@
 //! control taken again, the accounts and grants read again, the target
 //! looked at afresh, and the reply is the ordinary one.
 use crate::client::Client;
-use atlas_control::asks::{Answer, Ask, Waited};
+use atlas_control::asks::{Answer, Ask, Permit, Waited};
 use atlas_core::{
+    actions::Action,
     error::{Code, Error, Result},
     time::now_ms,
 };
@@ -23,20 +24,44 @@ use std::time::Instant;
 /// What an agent's input carries for the input service to judge it by:
 /// none while the person lists no account.
 pub(crate) fn policy(client: &Client) -> Option<Value> {
+    policy_for(client, &[]).0
+}
+
+/// [`policy`] for a request of `actions`, with the permits the person gave
+/// for any of them, taken from their store for this request alone.
+pub(crate) fn policy_for(client: &Client, actions: &[Action]) -> (Option<Value>, Vec<Permit>) {
     // Tests never read the person's own accounts on the Mac running them,
     // this crate's or any crate's built with its test support.
     if cfg!(any(test, feature = "test-support")) {
-        return None;
+        return (None, Vec::new());
     }
-    policy_by(client, crate::sign_ins::listed())
+    policy_by(client, crate::sign_ins::listed(), actions)
 }
 
-/// [`policy`] with the person's list as `listed` says it.
-fn policy_by(client: &Client, listed: crate::sign_ins::Listed) -> Option<Value> {
+/// [`policy_for`] with the person's list as `listed` says it.
+fn policy_by(
+    client: &Client,
+    listed: crate::sign_ins::Listed,
+    actions: &[Action],
+) -> (Option<Value>, Vec<Permit>) {
     use crate::sign_ins::Listed;
+    if matches!(&listed, Listed::Accounts(accounts) if accounts.is_empty()) {
+        return (None, Vec::new());
+    }
     let now = now_ms();
     let session = session(client);
     let process = process(client);
+    let digests: Vec<String> = actions.iter().map(Action::digest).collect();
+    // Taken, they are spent whatever the request comes to; one whose
+    // session ended is spent unused.
+    let permits: Vec<Permit> = client
+        .controller
+        .asks()
+        .take_permits(&session, process, &digests, now)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|permit| session_lives(client, &permit.session, permit.process))
+        .collect();
     let mut grants: Vec<Value> = client
         .controller
         .asks()
@@ -47,8 +72,16 @@ fn policy_by(client: &Client, listed: crate::sign_ins::Listed) -> Option<Value> 
         .map(|allowed| json!({"scope": "task", "account": allowed.account}))
         .collect();
     grants.extend(client.granted());
+    grants.extend(permits.iter().map(|permit| {
+        json!({
+            "scope": "permit",
+            "account": permit.account,
+            "action": permit.action,
+            "target": permit.target,
+            "value": permit.value,
+        })
+    }));
     let mut policy = match listed {
-        Listed::Accounts(accounts) if accounts.is_empty() => return None,
         Listed::Accounts(accounts) => json!({"accounts": accounts, "grants": grants}),
         // A list that can't be read never reads as none: every app asks.
         Listed::Unknown => json!({"unknown": true, "grants": grants}),
@@ -59,7 +92,16 @@ fn policy_by(client: &Client, listed: crate::sign_ins::Listed) -> Option<Value> 
     if let Some(typing) = client.typing() {
         policy["typing"] = json!(typing);
     }
-    Some(policy)
+    (Some(policy), permits)
+}
+
+/// Give `permits` back for a later request: the one that took them was
+/// proven, by `outcome`, to have sent nothing.
+pub(crate) fn return_permits(client: &Client, permits: Vec<Permit>, outcome: &Result<Value>) {
+    if !permits.is_empty() && sent_nothing(outcome) {
+        // One that can't be given back is spent: the person is asked again.
+        let _ = client.controller.asks().return_permits(permits, now_ms());
+    }
 }
 
 /// The agent session asking, by its key; `terminal` for none.
@@ -83,16 +125,25 @@ fn process(client: &Client) -> Option<atlas_core::process::Instance> {
 /// included, neither ended nor moved to another host process. A session key
 /// resumed in another process gets none of it.
 pub fn lives(client: &Client, allowed: &atlas_control::asks::Allowed) -> bool {
-    let record = atlas_core::host::Key::parse(&allowed.session).and_then(|key| {
+    session_lives(client, &allowed.session, allowed.process)
+}
+
+/// [`lives`], for what the person allowed `session` in host `process`.
+fn session_lives(
+    client: &Client,
+    session: &str,
+    process: Option<atlas_core::process::Instance>,
+) -> bool {
+    let record = atlas_core::host::Key::parse(session).and_then(|key| {
         let output = client.output_dir().ok()?;
         crate::host_session::store::Store::at(output).read(&key)
     });
-    allowed.process.is_none_or(|process| process.running())
+    process.is_none_or(|process| process.running())
         && record.is_none_or(|record| {
             record.ended_at().is_none()
                 && record
                     .host_process
-                    .is_none_or(|recorded| Some(recorded) == allowed.process)
+                    .is_none_or(|recorded| Some(recorded) == process)
         })
 }
 
@@ -138,9 +189,10 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
     let until = Instant::now() + client.controller.remaining();
     loop {
         let outcome = attempt().await;
-        // Only a refusal that sent nothing becomes a question.
-        let Some(question) = asked(&outcome) else {
-            return private(outcome);
+        // Only a clean stop becomes a question: one that sent nothing, or
+        // that stopped before an action that sends, which sent none of it.
+        let Some((question, later)) = asked(&outcome) else {
+            return private(looked_at(outcome));
         };
         let asks = client.controller.asks();
         let ask = Ask {
@@ -192,10 +244,14 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
         };
         let question = stored.question;
         match waited {
+            Waited::Unanswered if later => return private(went(outcome, &Went::Asked)),
             Waited::Unanswered => return private(outcome),
             Waited::Stopped => return Err(Error::stopped()),
             Waited::Answered(Answer::Deny) => {
                 asks.close(&id);
+                if later {
+                    return private(went(outcome, &Went::Denied(stored.account)));
+                }
                 return Err(Error::new(
                     Code::Denied,
                     format!(
@@ -204,7 +260,29 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
                     ),
                 ));
             }
-            Waited::Answered(Answer::Task) => asks.close(&id),
+            // What ran isn't sent again: the agent sends only the rest,
+            // which meets what the person allowed.
+            Waited::Answered(Answer::Task) => {
+                asks.close(&id);
+                if later {
+                    return private(went(outcome, &Went::Allowed));
+                }
+            }
+            Waited::Answered(Answer::Once) if later => {
+                asks.permit(
+                    Permit {
+                        session: stored.session,
+                        process: stored.process,
+                        account: question["accountKey"].clone(),
+                        action: question["action"].as_str().unwrap_or_default().to_owned(),
+                        target: question["bound"].clone(),
+                        value: question["message"]["digest"].as_str().map(str::to_owned),
+                        ends: u64::MAX,
+                    },
+                    now_ms(),
+                )?;
+                return private(went(outcome, &Went::Allowed));
+            }
             // A command's check before typing covers that command's own
             // text, typed into the field it was asked about; a request's own
             // ask covers that request alone, where it was asked about.
@@ -229,6 +307,94 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
     }
 }
 
+/// How the question about the action that stopped a request partway went.
+enum Went {
+    /// It is still up.
+    Asked,
+    /// The person allowed it.
+    Allowed,
+    /// The person said no, in this account.
+    Denied(String),
+}
+
+/// `outcome`, a request stopped before an action that sends after some of
+/// it ran, with what the agent does next: once allowed, send only the
+/// rest. It is never sent again whole.
+fn went(outcome: Result<Value>, how: &Went) -> Result<Value> {
+    let next = |field: &dyn Fn(&str) -> Option<u64>| {
+        let (ran, rest) = match field("typed") {
+            Some(typed) => (
+                format!("{typed} characters went in"),
+                format!(
+                    "type only the rest of the text, from character {}",
+                    typed + 1
+                ),
+            ),
+            None => {
+                let performed = field("performed").unwrap_or(0);
+                (
+                    format!("The first {performed} actions ran"),
+                    format!("send only the actions after the first {performed}"),
+                )
+            }
+        };
+        match how {
+            Went::Asked => format!(
+                "{ran} before one that sends, which Atlas asked the person about. Do other work, then {rest}."
+            ),
+            Went::Allowed => format!("{ran}, and the person allowed the next one. Now {rest}."),
+            Went::Denied(_) => format!(
+                "{ran}, and the person said no to the next one. Don't try another way: ask them what they want."
+            ),
+        }
+    };
+    let denied = match how {
+        Went::Denied(account) => Some(format!(
+            "The person said no to sending this in {account}. The rest wasn't sent."
+        )),
+        Went::Asked | Went::Allowed => None,
+    };
+    match outcome {
+        Ok(mut reply) => {
+            reply["next"] = json!(next(&|key| reply[key].as_u64()));
+            if let Some(said) = denied {
+                reply["code"] = json!(Code::Denied);
+                reply["error"] = json!(said);
+            }
+            Ok(reply)
+        }
+        Err(mut error) => {
+            let said = next(&|key| error.details.get(key).and_then(Value::as_u64));
+            error = error.with("next", json!(said));
+            if let Some(said) = denied {
+                error.code = Code::Denied;
+                error.error = said;
+            }
+            Err(error)
+        }
+    }
+}
+
+/// `outcome`, with the step for a request stopped inside an action that
+/// had sent part of itself: some of it went in, and only a look at the
+/// field tells how much.
+fn looked_at(outcome: Result<Value>) -> Result<Value> {
+    const LOOK: &str = "Part of the last action went in before Atlas had to ask the person. Look at the field before doing anything else.";
+    let stopped = |code| matches!(code, Code::WaitingForPerson | Code::Denied);
+    match outcome {
+        Ok(mut reply)
+            if reply["uncertain"] == true && stopped(Code::of_reply(&reply, Code::Native)) =>
+        {
+            reply["next"] = json!(LOOK);
+            Ok(reply)
+        }
+        Err(error) if error.uncertain && stopped(error.code) => {
+            Err(error.with("next", json!(LOOK)))
+        }
+        outcome => outcome,
+    }
+}
+
 /// The message preview of the ask a command waits on, taken off it when
 /// the wait ends however it ends: answered, out of time, stopped or
 /// interrupted. Only the person reads it, and only while it is waited on.
@@ -244,30 +410,59 @@ impl Drop for Shown {
     }
 }
 
-/// The question in `outcome` when it is a refusal to ask the person that
-/// sent nothing, whether it came back as an error or as a reply saying so.
-fn asked(outcome: &Result<Value>) -> Option<Value> {
-    let (code, uncertain, performed, ask) = match outcome {
-        Ok(reply) if reply["ok"] == false => (
-            Code::of_reply(reply, Code::Native),
-            reply["uncertain"] == true,
-            reply["performed"].as_u64().unwrap_or(0),
-            reply["ask"].clone(),
-        ),
+/// What a request's refused `outcome` says it came to.
+struct Came {
+    code: Code,
+    uncertain: bool,
+    /// Actions it performed in full.
+    performed: u64,
+    /// Whether part of it was sent.
+    partial: bool,
+    /// Characters a typing command typed.
+    typed: u64,
+    ask: Value,
+}
+
+/// [`Came`], for an `outcome` that isn't a success, whether it came back as
+/// an error or as a reply saying so.
+fn came(outcome: &Result<Value>) -> Option<Came> {
+    let reply = match outcome {
+        Ok(reply) if reply["ok"] == false => reply.clone(),
         Ok(_) => return None,
-        Err(error) => (
-            error.code,
-            error.uncertain,
-            error
-                .details
-                .get("performed")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-            error.details.get("ask").cloned().unwrap_or(Value::Null),
-        ),
+        Err(error) => serde_json::to_value(error).ok()?,
     };
-    (code == Code::WaitingForPerson && !uncertain && performed == 0 && ask.is_object())
-        .then_some(ask)
+    Some(Came {
+        code: Code::of_reply(&reply, Code::Native),
+        uncertain: reply["uncertain"] == true,
+        performed: reply["performed"].as_u64().unwrap_or(0),
+        partial: reply["partial"] == true,
+        typed: reply["typed"].as_u64().unwrap_or(0),
+        ask: reply["ask"].clone(),
+    })
+}
+
+/// The question in `outcome`, when it is a clean stop to ask the person,
+/// and whether some of the request ran before it. Clean: the action it
+/// stopped at sent nothing and letting go of what was held went well, so
+/// the outcome is certain.
+fn asked(outcome: &Result<Value>) -> Option<(Value, bool)> {
+    let came = came(outcome)?;
+    (came.code == Code::WaitingForPerson && !came.uncertain && came.ask.is_object()).then(|| {
+        let later = came.performed > 0 || came.typed > 0 || came.partial;
+        (came.ask, later)
+    })
+}
+
+/// Whether `outcome` proves its request sent nothing: refused before its
+/// first event, to ask the person or for a Look Only account.
+pub(crate) fn sent_nothing(outcome: &Result<Value>) -> bool {
+    came(outcome).is_some_and(|came| {
+        matches!(came.code, Code::WaitingForPerson | Code::Denied)
+            && !came.uncertain
+            && came.performed == 0
+            && !came.partial
+            && came.typed == 0
+    })
 }
 
 /// `outcome` as the agent may see it: of a question, only the account and

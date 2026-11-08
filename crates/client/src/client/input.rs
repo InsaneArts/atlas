@@ -434,10 +434,11 @@ impl Client {
             .transpose()?;
         // An agent's input is judged by the person's accounts while they
         // list any; the person's own never is.
-        let asking = lease
-            .is_none()
-            .then(|| crate::asking::policy(self))
-            .flatten();
+        let (asking, permits) = if lease.is_none() {
+            crate::asking::policy_for(self, actions.actions())
+        } else {
+            (None, Vec::new())
+        };
         let mutation = Mutation::Input {
             actions,
             owner,
@@ -450,6 +451,9 @@ impl Client {
         let result = self
             .mutate(mutation, lease, expected.map(|(_, at)| at), None)
             .await;
+        // A permit is spent by the request that took it, unless that request
+        // is proven to have sent nothing.
+        crate::asking::return_permits(self, permits, &result);
 
         match &generation {
             Some(generation) => self.release_input(owner, generation, result).await,

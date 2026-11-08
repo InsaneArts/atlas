@@ -4449,3 +4449,54 @@ fn a_window_filter_refuses_an_element_whose_frame_could_be_another_window() {
         assert_eq!(kept.elements.len(), 1, "only window 5's own element");
     }
 }
+
+#[tokio::test]
+async fn typing_stopped_at_a_later_batch_reports_how_far_it_got_and_is_never_typed_again_whole() {
+    let ask = json!({
+        "account": "slack.com",
+        "accountKey": {"kind": "site", "id": "slack.com", "browser": "com.google.Chrome"},
+        "what": "newline",
+        "action": "part",
+        "bind": {"action": "part"},
+        "once": true,
+    });
+    let stopped = json!({"ok": false, "code": "waiting-for-person",
+        "error": "slack.com is signed in", "ask": ask,
+        "performed": 1, "partial": false, "uncertain": false});
+    let report = stopped_at(3, 1, Ok(stopped)).await;
+    assert_eq!(report["typed"], 64 + 16, "the confirmed offset");
+    assert_eq!(
+        report["ask"]["what"], "newline",
+        "the question goes with it"
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.controller = client
+        .controller
+        .clone()
+        .waiting(Duration::from_millis(100));
+    let mut attempts = 0;
+    let outcome = crate::asking::after_asking(&client, async || {
+        attempts += 1;
+        Ok(report.clone())
+    })
+    .await
+    .unwrap();
+    assert_eq!(attempts, 1, "what was typed is never typed again");
+    assert!(
+        outcome["next"]
+            .as_str()
+            .unwrap()
+            .contains("from character 81"),
+        "{outcome}"
+    );
+    assert_eq!(
+        client
+            .controller
+            .asks()
+            .open(atlas_core::time::now_ms())
+            .len(),
+        1
+    );
+}

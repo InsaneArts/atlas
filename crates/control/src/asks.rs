@@ -12,6 +12,8 @@
 //! their viewer. A task grant ("Allow for This Task") is kept in
 //! `allowed.json`: an agent session, the host process it ran in, an account
 //! and when it ends. Just This Once is claimed by one waiting command alone.
+//! Allowed for an action that stopped a request partway, it is a permit in
+//! `permits`, which one later request takes, once, within two minutes.
 //!
 //! The session key a task grant names becomes an authority here: it is
 //! verified by the host's process ancestry, but an agent with the person's
@@ -92,6 +94,25 @@ pub struct Allowed {
     pub account: Value,
     /// The account as the person reads it.
     pub name: String,
+    /// When it ends, in milliseconds since 1970.
+    pub ends: u64,
+}
+
+/// One action the person allowed after it stopped an agent's request: the
+/// session and host process that may send it, its account, the digest of
+/// its whole payload, where it lands and the digest of the message it
+/// sends. One request takes it, once, within two minutes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Permit {
+    pub session: String,
+    #[serde(default)]
+    pub process: Option<atlas_core::process::Instance>,
+    pub account: Value,
+    pub action: String,
+    pub target: Value,
+    #[serde(default)]
+    pub value: Option<String>,
     /// When it ends, in milliseconds since 1970.
     pub ends: u64,
 }
@@ -270,6 +291,78 @@ impl Asks {
     /// removes it, so none undoes another.
     fn lock(&self) -> Result<atlas_core::files::LockFile> {
         locked(&self.folder.join("asks.lock"))
+    }
+
+    /// Keep `permit` for the one request that sends its action, for two
+    /// minutes at most.
+    ///
+    /// # Errors
+    ///
+    /// Returns file errors when it can't be kept.
+    pub fn permit(&self, mut permit: Permit, now: u64) -> Result<()> {
+        permit.ends = permit.ends.min(now + millis(LIFE));
+        let _locked = self.lock()?;
+        let mut permits = self.permits(now);
+        permits.push(permit);
+        self.save_permits(&permits)
+    }
+
+    /// Take, for one request alone, the permits of `session` in host
+    /// `process` for any of the actions whose digests are `actions`: they
+    /// are gone from the store once taken, whatever the request comes to.
+    ///
+    /// # Errors
+    ///
+    /// Returns file errors; nothing is taken then.
+    pub fn take_permits(
+        &self,
+        session: &str,
+        process: Option<atlas_core::process::Instance>,
+        actions: &[String],
+        now: u64,
+    ) -> Result<Vec<Permit>> {
+        let _locked = self.lock()?;
+        let (taken, kept): (Vec<Permit>, Vec<Permit>) =
+            self.permits(now).into_iter().partition(|permit| {
+                permit.session == session
+                    && permit.process == process
+                    && actions.contains(&permit.action)
+            });
+        if !taken.is_empty() {
+            self.save_permits(&kept)?;
+        }
+        Ok(taken)
+    }
+
+    /// Keep `permits` again: the request that took them sent nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns file errors; they are spent then.
+    pub fn return_permits(&self, permits: Vec<Permit>, now: u64) -> Result<()> {
+        if permits.is_empty() {
+            return Ok(());
+        }
+        let _locked = self.lock()?;
+        let mut kept = self.permits(now);
+        kept.extend(permits.into_iter().filter(|permit| permit.ends > now));
+        self.save_permits(&kept)
+    }
+
+    /// The permits still in force at `now`.
+    fn permits(&self, now: u64) -> Vec<Permit> {
+        fs::read(self.folder.join("permits"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Vec<Permit>>(&bytes).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|permit| permit.ends > now)
+            .collect()
+    }
+
+    fn save_permits(&self, permits: &[Permit]) -> Result<()> {
+        self.make_folder()?;
+        atlas_core::files::save_private(&self.folder.join("permits"), &serde_json::to_vec(permits)?)
     }
 
     /// Take ask `id` down, with its answer.

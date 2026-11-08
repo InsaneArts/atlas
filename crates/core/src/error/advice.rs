@@ -109,7 +109,7 @@ pub fn next(code: Code, holder: Option<Holder>) -> &'static str {
             "Don't copy it another way. If the task needs an account, ask the person to sign the helper in; copy only what the test needs, without secrets."
         }
         (Code::WaitingForPerson, _) => {
-            "Do other work, then run the same command again. Never send it another way."
+            "Do other work, then run the same command again; if some of it ran, follow next. Never send it another way."
         }
         (Code::Denied, _) => "Don't try another way. Ask the person what they want instead.",
         (Code::Onboarding, _) => "Show the error to the person. They open Atlas again to carry on.",

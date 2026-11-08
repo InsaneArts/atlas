@@ -326,3 +326,54 @@ fn a_preview_taken_off_when_its_wait_ends_shows_again_when_a_rerun_joins() {
     asks.forget_preview(&id).unwrap();
     assert!(asks.open(2_000).is_empty(), "never written back once down");
 }
+
+#[test]
+fn a_permit_is_taken_once_by_its_own_session_for_its_own_action() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let process = atlas_core::process::Instance::new(812, [1, 0]);
+    let permit = Permit {
+        session: "s1".to_owned(),
+        process: Some(process),
+        account: slack(),
+        action: "return".to_owned(),
+        target: json!({"window": 7}),
+        value: Some("m1".to_owned()),
+        ends: u64::MAX,
+    };
+    asks.permit(permit.clone(), 1_000).unwrap();
+    let take = |session: &str, process, action: &str, now| {
+        asks.take_permits(session, process, &[action.to_owned()], now)
+            .unwrap()
+    };
+    assert!(
+        take("s2", Some(process), "return", 2_000).is_empty(),
+        "another session"
+    );
+    assert!(
+        take("s1", None, "return", 2_000).is_empty(),
+        "another process"
+    );
+    assert!(
+        take("s1", Some(process), "click", 2_000).is_empty(),
+        "another action"
+    );
+    let taken = take("s1", Some(process), "return", 2_000);
+    assert_eq!(taken.len(), 1);
+    assert!(
+        take("s1", Some(process), "return", 2_000).is_empty(),
+        "only once"
+    );
+
+    asks.return_permits(taken, 3_000).unwrap();
+    assert_eq!(
+        take("s1", Some(process), "return", 3_000).len(),
+        1,
+        "given back"
+    );
+    asks.permit(permit, 1_000).unwrap();
+    assert!(
+        take("s1", Some(process), "return", 1_000 + millis(LIFE)).is_empty(),
+        "two minutes at most"
+    );
+}

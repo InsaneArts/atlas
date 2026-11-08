@@ -327,7 +327,8 @@ fn unconfirmed(reply: &Value) -> Error {
     if let Some(holder) = reply["holder"].as_str().and_then(Holder::parse) {
         error = error.held_by(holder);
     }
-    for kept in ["reason", "unread", "found"] {
+    // The question a stop before a later batch's text asks the person.
+    for kept in ["reason", "unread", "found", "ask"] {
         if !reply[kept].is_null() {
             error = error.with(kept, reply[kept].clone());
         }
