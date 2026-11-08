@@ -60,17 +60,17 @@
       let terminal = SessionSamples.terminalIcon
       let pi = SessionSamples.piIcon
       let live: [(String, RowIcon, String, String, SessionBadge?)] = [
-        ("codex-b", codex, "Codex · B", "Clicked Save · 11:08", .waiting),
-        ("claude-docs", claude, "Claude Code · docs", "Typing in Notes · 12 s", .waiting),
-        ("cursor-site", cursor, "Cursor · site", "Opened Safari · 2 min ago", nil),
-        ("claude-api", claude, "Claude Code · api", "Took a screenshot · 5 min ago", nil),
-        ("codex-c", codex, "Codex · C", "Scrolled in Opie · 9 min ago", nil),
-        ("terminal-2", terminal, "Terminal", "Pressed ⌘S · 12 min ago", nil),
+        ("codex-b", codex, "billing", "Waiting for the helper · 4 s", .waiting),
+        ("claude-docs", claude, "docs", "Waiting for the helper · 12 s", .waiting),
+        ("cursor-site", cursor, "site", "Cursor · 11:02", nil),
+        ("claude-api", claude, "api", "Claude Code · 10:51", nil),
+        ("codex-c", codex, "checkout", "Codex · 10:40", nil),
+        ("terminal-2", terminal, "Terminal", "10:31", nil),
       ]
       let ended: [(String, RowIcon, String, String)] = [
-        ("pi-2", pi, "Pi · notes", "Ended 25 min ago"),
-        ("codex-d", codex, "Codex · D", "Ended 40 min ago"),
-        ("cursor-old", cursor, "Cursor · old", "Ended 1 h ago"),
+        ("pi-2", pi, "notes", "Pi · 09:12"),
+        ("codex-d", codex, "dashboard", "Codex · 08:50"),
+        ("cursor-old", cursor, "old-site", "Cursor · Wed 17:20"),
       ]
       let row = { (sample: (String, RowIcon, String, String, SessionBadge?)) in
         viewerSessionRow(sample.0, icon: sample.1, name: sample.2, line: sample.3, badge: sample.4, facts: [])

@@ -75,9 +75,19 @@ public struct ViewerOutlineSession: Equatable, Sendable, Identifiable {
     showsHead && !isOpen && strip != nil
   }
 
-  /// What VoiceOver reads for it: "Claude Code, atlas, TextEdit · 9 actions, 1 problem, 10:21–now".
+  /// Its title: the project, such as "atlas", else the agent, such as "Claude Code".
+  public var title: String {
+    project.isEmpty ? agent : project
+  }
+
+  /// What follows its title: the agent while the title is the project; empty otherwise.
+  public var byline: String {
+    project.isEmpty ? "" : agent
+  }
+
+  /// What VoiceOver reads for it: "atlas, Claude Code, TextEdit · 9 actions, 1 problem, 10:21–now".
   public var label: String {
-    [agent, project, summary, problems, time]
+    [title, byline, summary, problems, time]
       .filter { !$0.isEmpty }
       .joined(separator: ", ")
   }

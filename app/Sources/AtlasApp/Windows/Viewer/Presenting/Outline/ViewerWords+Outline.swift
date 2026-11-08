@@ -58,31 +58,6 @@ extension ViewerWords {
     "\(number(count)) \(counted(count, "action"))"
   }
 
-  /// A session's title from what it mostly did and where: "Typing in TextEdit" while it works, "Typed in TextEdit"
-  /// once it ends, "Opened TextEdit", or with no app "Took 2 screenshots" or "Ran a command".
-  ///
-  /// - Parameters:
-  ///   - gist: What it mostly did.
-  ///   - working: Whether it works now.
-  /// - Returns: The title.
-  static func sessionTitle(_ gist: ActivityGist, working: Bool) -> String {
-    let count = gist.count
-    let app = gist.app ?? ""
-    let inApp = app.isEmpty ? "" : " in \(app)"
-    switch gist.kind {
-    case .typing, .keys: return (working ? "Typing" : "Typed") + inApp
-    case .pointer: return Words.leadingCapital(pointer(gist.verbs, working: working)) + inApp
-    case .scroll: return (working ? "Scrolling" : "Scrolled") + inApp
-    case .window: return Words.leadingCapital(window(gist.verbs, working: working, object: app))
-    case .screenshot:
-      if working { return count == 1 ? "Taking a screenshot" : "Taking screenshots" }
-      return count == 1 ? "Took a screenshot" : "Took \(number(count)) screenshots"
-    case .command, .control:
-      if working { return count == 1 ? "Running a command" : "Running commands" }
-      return count == 1 ? "Ran a command" : "Ran \(number(count)) commands"
-    }
-  }
-
   /// The time column's span: "01:08–now" while under way, "01:49–01:50", or "01:50" within one minute.
   ///
   /// - Parameters:
@@ -158,11 +133,11 @@ extension ViewerWords {
   /// - Returns: The phrase, or nil for none.
   private static func phrase(_ kind: ActivityAction, count: Int, app: String?, verbs: Set<String>) -> String? {
     switch kind {
-    case .pointer: pointer(verbs, working: false)
+    case .pointer: pointer(verbs)
     case .typing: "typed"
     case .keys: "pressed keys"
     case .scroll: "scrolled"
-    case .window: window(verbs, working: false, object: app ?? "")
+    case .window: window(verbs, object: app ?? "")
     case .control: "handed over control"
     case .screenshot: count == 1 ? "took a screenshot" : "took \(number(count)) screenshots"
     case .command: count == 1 ? "ran a command" : "ran \(number(count)) commands"
@@ -170,46 +145,39 @@ extension ViewerWords {
   }
 
   /// What the pointer did, by the verbs Atlas wrote: "clicked" for clicks and presses, "dragged", "moved the pointer",
-  /// or "used the pointer" for a mix or verbs not known; while working, "clicking" and so on.
+  /// or "used the pointer" for a mix or verbs not known.
   ///
-  /// - Parameters:
-  ///   - verbs: The pointer's verbs.
-  ///   - working: Whether it is under way.
+  /// - Parameter verbs: The pointer's verbs.
   /// - Returns: The phrase.
-  static func pointer(_ verbs: Set<String>, working: Bool) -> String {
-    if !verbs.isEmpty, verbs.isSubset(of: clicks) { return working ? "clicking" : "clicked" }
-    if verbs == ["drag"] { return working ? "dragging" : "dragged" }
-    if verbs == ["move"] { return working ? "moving the pointer" : "moved the pointer" }
-    return working ? "using the pointer" : "used the pointer"
+  static func pointer(_ verbs: Set<String>) -> String {
+    if !verbs.isEmpty, verbs.isSubset(of: clicks) { return "clicked" }
+    if verbs == ["drag"] { return "dragged" }
+    if verbs == ["move"] { return "moved the pointer" }
+    return "used the pointer"
   }
 
   /// What was done to apps, from the verbs Atlas wrote, each said once in a fixed order: "opened TextEdit", "closed
-  /// apps", "opened and installed TextEdit", "cleaned up", or "worked with apps" while the verbs are not known; while
-  /// working, "opening TextEdit" and so on.
+  /// apps", "opened and installed TextEdit", "cleaned up", or "worked with apps" while the verbs are not known.
   ///
   /// - Parameters:
   ///   - verbs: The window's verbs.
-  ///   - working: Whether it is under way.
   ///   - object: The app's name; empty says "apps".
   /// - Returns: The phrase.
-  static func window(_ verbs: Set<String>, working: Bool, object: String) -> String {
+  static func window(_ verbs: Set<String>, object: String) -> String {
     let apps = object.isEmpty ? "apps" : object
     let said = appVerbs.filter { verbs.contains($0.verb) }
-      .map { working ? $0.working : $0.done }
+      .map(\.done)
       .reduce(into: [String]()) { words, word in
         if !words.contains(word) { words.append(word) }
       }
-    let cleaned = verbs.contains("cleanup") ? [working ? "cleaning up" : "cleaned up"] : []
-    guard !said.isEmpty else {
-      return cleaned.first ?? (working ? "working with " : "worked with ") + apps
-    }
+    let cleaned = verbs.contains("cleanup") ? ["cleaned up"] : []
+    guard !said.isEmpty else { return cleaned.first ?? "worked with \(apps)" }
     return listed(["\(listed(said)) \(apps)"] + cleaned)
   }
 
   /// The verbs done to apps, in the order a summary says them, with their words.
-  static let appVerbs: [(verb: String, done: String, working: String)] = [
-    ("open", "opened", "opening"), ("open-link", "opened", "opening"), ("close", "closed", "closing"),
-    ("install", "installed", "installing"),
+  static let appVerbs: [(verb: String, done: String)] = [
+    ("open", "opened"), ("open-link", "opened"), ("close", "closed"), ("install", "installed"),
   ]
 
   /// The pointer's verbs that click or press a control.

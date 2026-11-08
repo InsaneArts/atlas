@@ -145,7 +145,7 @@
       return sections
     }
 
-    /// A session's tooltip: its name and line, then its facts.
+    /// A session's tooltip: its name and line, then its facts; a line left empty is left out.
     ///
     /// - Parameters:
     ///   - name: Its name.
@@ -154,7 +154,7 @@
     ///   - receipt: What its last cleanup did, one step a line; none by default.
     /// - Returns: The tooltip.
     static func viewerSessionHelp(_ name: String, _ line: String, facts: [String], receipt: [String] = []) -> String {
-      ([name, line] + facts + (receipt.isEmpty ? [] : ["Last cleanup"] + receipt))
+      ([name, line].filter { !$0.isEmpty } + facts + (receipt.isEmpty ? [] : ["Last cleanup"] + receipt))
         .joined(separator: "\n")
     }
 

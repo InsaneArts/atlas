@@ -30,7 +30,7 @@
       state.sidebar.sessions.groups[0].rows[0] = viewerSessionRow(
         SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
+        name: SessionSamples.claudeTitle,
         line: "Cleaning up…",
         facts: claudeRecordFacts,
         cleanup: false,
@@ -48,7 +48,7 @@
       state.sidebar.sessions.groups[0].rows[0] = viewerSessionRow(
         SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
+        name: SessionSamples.claudeTitle,
         line: SessionSamples.claudeDoing,
         badge: .acting,
         facts: claudeRecordFacts.filter { !$0.hasPrefix("Environment plan") },

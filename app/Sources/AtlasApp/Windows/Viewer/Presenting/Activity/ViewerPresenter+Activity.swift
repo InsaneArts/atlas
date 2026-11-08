@@ -15,7 +15,11 @@ extension ViewerPresenter {
   static func activity(_ snapshot: ViewerSnapshot) -> ViewerActivityState {
     let facts = snapshot.panes.activity
     let chosen = snapshot.shownSessions.key
-    let title = chosen.map { resolvedSession($0, snapshot).name } ?? ViewerWords.place(.activity)
+    let title =
+      chosen.map { key in
+        let (_, agent, project, _) = sessionHead(.session(key), snapshot)
+        return sessionTitle(agent: agent, project: project)
+      } ?? ViewerWords.place(.activity)
     guard facts.failure == nil, let log = facts.log, let readAt = facts.readAt, let moments = activityMoments(snapshot)
     else {
       let failed = facts.failure.map {

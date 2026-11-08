@@ -1,4 +1,4 @@
-/// The header over the helper's screen: who has the helper, such as "Claude Code · understudy" and "has the helper",
+/// The header over the helper's screen: who has the helper, such as "understudy" and "Claude Code · has the helper",
 /// "You" and "have control of the helper", or the helper's state alone.
 public struct ViewerHeaderState: Equatable, Sendable {
   /// Who, or the helper's state, in the header's semibold.

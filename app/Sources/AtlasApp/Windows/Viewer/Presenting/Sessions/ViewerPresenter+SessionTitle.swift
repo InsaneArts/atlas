@@ -3,19 +3,15 @@ import AtlasStatus
 import Foundation
 
 extension ViewerPresenter {
-  /// What the sidebar and the header call a session: what it mostly did and where, from its record's counts, which
-  /// outlast the log, else from its rows, such as "Typing in TextEdit" while it works and "Typed in TextEdit" after;
-  /// its name when it did nothing Atlas can name.
+  /// What the sidebar, Activity and the header call a session: its project folder's name as written, else its agent's
+  /// name, such as "atlas" or "Claude Code".
   ///
   /// - Parameters:
-  ///   - key: The session's key; empty for Terminal.
-  ///   - working: Whether it works now.
-  ///   - fallback: Its name.
-  ///   - snapshot: What the controller holds.
+  ///   - agent: Its agent's name.
+  ///   - project: Its project folder's name; empty for none.
   /// - Returns: The title.
-  static func sessionTitle(_ key: String, working: Bool, fallback: String, _ snapshot: ViewerSnapshot) -> String {
-    let gist = snapshot.panes.sessions.record(key)?.gist ?? ActivityGist(sessionRows(key, snapshot))
-    return gist.map { ViewerWords.sessionTitle($0, working: working) } ?? fallback
+  static func sessionTitle(agent: String, project: String) -> String {
+    project.isEmpty ? agent : project
   }
 
   /// Whether a session never acted in the helper, so the sidebar gives it no row: its record counts no action and the
@@ -30,17 +26,16 @@ extension ViewerPresenter {
     return record.actions == 0 && sessionRows(key, snapshot).isEmpty
   }
 
-  /// A quiet session's line in the sidebar: its project, or its host with none, and when it started, such as
-  /// "atlas-t3-r3 · Wed 22:20", or the time alone for today.
+  /// A quiet session's line in the sidebar: its agent and when it started, such as "Claude Code · Wed 22:20", or
+  /// "Claude Code · 12:46" for today; the time alone when its title is its agent already.
   ///
   /// - Parameters:
-  ///   - folder: Its project folder's name.
-  ///   - hostLabel: Its host's name.
+  ///   - agent: Its agent's name.
+  ///   - project: Its project folder's name; empty for none.
   ///   - started: When it started.
   ///   - snapshot: What the controller holds.
   /// - Returns: The line.
-  static func quietLine(folder: String?, hostLabel: String, started: Date?, _ snapshot: ViewerSnapshot) -> String {
-    let place = folder.flatMap { $0.isEmpty ? nil : $0 } ?? hostLabel
+  static func quietLine(agent: String, project: String, started: Date?, _ snapshot: ViewerSnapshot) -> String {
     let when = started.map { date in
       let calendar = snapshot.zonedCalendar
       let style = Date.FormatStyle(locale: snapshot.locale, calendar: calendar, timeZone: snapshot.timeZone)
@@ -48,7 +43,7 @@ extension ViewerPresenter {
       guard !calendar.isDate(date, inSameDayAs: snapshot.date) else { return time }
       return "\(date.formatted(style.weekday(.abbreviated))) \(time)"
     }
-    return ViewerWords.dotted([place, when ?? ""])
+    return ViewerWords.dotted([project.isEmpty ? "" : agent, when ?? ""])
   }
 
   /// A session's rows in the log as last read that sent something: a row refused before anything was sent is no work.

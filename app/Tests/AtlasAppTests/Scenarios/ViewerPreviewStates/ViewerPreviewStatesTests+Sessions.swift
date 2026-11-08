@@ -354,6 +354,7 @@
       key: "c0ffee5e5510",
       name: "Pi · notes-sync",
       host: .pi,
+      hostLabel: "Pi",
       folder: "notes-sync",
       startedAt: Date(timeIntervalSince1970: 1_792_662_000),
       endedAt: activityReadAt.addingTimeInterval(-20 * 60),

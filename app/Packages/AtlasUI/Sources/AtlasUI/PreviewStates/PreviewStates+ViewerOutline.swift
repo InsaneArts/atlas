@@ -385,7 +385,7 @@
 
     /// Claude Code chosen before it did anything in the helper.
     @MainActor static let oneSessionEmptyActivity = ViewerActivityState(
-      title: SessionSamples.claudeName,
+      title: SessionSamples.claudeTitle,
       meta: "",
       filters: activityFilters(),
       days: [],

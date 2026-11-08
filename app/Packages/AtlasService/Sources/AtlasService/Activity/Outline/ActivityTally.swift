@@ -62,9 +62,4 @@ public struct ActivityTally: Equatable, Sendable {
       .sorted { (apps[$0.element] ?? 0, -$0.offset) > (apps[$1.element] ?? 0, -$1.offset) }
       .map(\.element)
   }
-
-  /// What the lines mostly did, and where: what a session's title says.
-  public var gist: ActivityGist? {
-    ActivityGist(kinds: kinds, app: apps.first, verbs: verbs)
-  }
 }

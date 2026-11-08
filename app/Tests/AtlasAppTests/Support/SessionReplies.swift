@@ -16,6 +16,7 @@ enum SessionReplies {
       name: "Claude Code · understudy",
       state: "acting",
       hostLabel: "Claude Code",
+      folder: "understudy",
       holdsHelper: true,
       latest: ["says": "clicking Show Center in Opie", "ok": true, "started": true, "ageSeconds": 0]
     )
@@ -29,6 +30,7 @@ enum SessionReplies {
       name: "Claude Code · understudy",
       state: "needsYou",
       hostLabel: "Claude Code",
+      folder: "understudy",
       latest: ["says": "clicked Show Center in Opie", "ok": false, "uncertain": true, "ageSeconds": 60],
       uncertainRow: "c1",
       uncertainVerb: "click"
@@ -46,6 +48,7 @@ enum SessionReplies {
       name: "Codex · atlas-landing",
       state: "waiting",
       hostLabel: "Codex",
+      folder: "atlas-landing",
       waitingFor: recovery ? "recovery" : "helper",
       waitingSeconds: recovery ? nil : 8,
       latest: ["says": "opened Notes", "ok": true, "ageSeconds": 31]
@@ -59,6 +62,7 @@ enum SessionReplies {
       host: "cursor",
       name: "Cursor · opie",
       hostLabel: "Cursor",
+      folder: "opie",
       latest: ["says": "opened Opie", "ok": true, "ageSeconds": 240]
     )
   }
@@ -80,6 +84,7 @@ enum SessionReplies {
       host: "pi",
       name: "Pi · notes-sync",
       hostLabel: "Pi",
+      folder: "notes-sync",
       latest: ["says": "opened Notes", "ok": true, "ageSeconds": 1200]
     )
   }

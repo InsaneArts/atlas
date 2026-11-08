@@ -53,7 +53,7 @@ struct HostSessionListTests {
     #expect(record.cleanup == nil)
   }
 
-  @Test("a session keeps how many of each action and app it did, dropping odd counts, and reads its gist from them")
+  @Test("a session keeps how many of each action and app it did, dropping odd counts")
   func aSessionKeepsItsCounts() throws {
     let reading = try list(
       """
@@ -65,10 +65,8 @@ struct HostSessionListTests {
     let record = try #require(reading.sessions.first)
     #expect(record.counts == ["type": 4, "key": 2])
     #expect(record.appCounts == ["TextEdit": 6])
-    #expect(record.gist == ActivityGist(kind: .typing, count: 6, app: "TextEdit", verbs: ["type", "key"]))
     let older = try list(#"{"ok": true, "sessions": [{"key": "a1", "name": "Pi · notes-sync", "counts": [1]}]}"#)
     #expect(older.sessions.first?.counts.isEmpty == true)
-    #expect(older.sessions.first?.gist == nil)
   }
 
   @Test("a body with no list has no sessions")

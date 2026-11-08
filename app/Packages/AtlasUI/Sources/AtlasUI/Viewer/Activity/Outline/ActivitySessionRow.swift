@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A session's row, 44 high: its disclosure, the agent's icon at 24 with a blue dot while it works, the agent in
-/// semibold and the project in grey, then a one-line summary with its problems in orange, and its time on the first
-/// line. Both lines tail-truncate.
+/// A session's row, 44 high: its disclosure, the agent's icon at 24 with a blue dot while it works, the project in
+/// semibold and the agent in grey, or the agent alone in semibold, then a one-line summary with its problems in orange,
+/// and its time on the first line. Both lines tail-truncate.
 struct ActivitySessionRow: View {
   /// The session.
   let session: ViewerOutlineSession
@@ -64,15 +64,15 @@ struct ActivitySessionRow: View {
     }
   }
 
-  /// The agent in semibold, then the project in grey.
+  /// The title in semibold, then the agent in grey while the title is the project.
   private var who: some View {
-    let agent = Text(verbatim: session.agent)
+    let title = Text(verbatim: session.title)
       .font(Typography.font(.body, weight: .semibold))
       .foregroundStyle(Color.textPrimary)
-    let project = Text(verbatim: session.project.isEmpty ? "" : " · \(session.project)")
+    let byline = Text(verbatim: session.byline.isEmpty ? "" : " · \(session.byline)")
       .font(Typography.font(.body))
       .foregroundStyle(Color.textSecondary)
-    return Text("\(agent)\(project)")
+    return Text("\(title)\(byline)")
       .truncationMode(.tail)
   }
 

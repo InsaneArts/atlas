@@ -58,7 +58,7 @@
       #expect(
         Set(states.map(\.header.who)).isSuperset(of: [
           "Working", "Idle", "You", "Needs you", "Stopped", "In use elsewhere", "Not ready", "Logged out", "Connecting",
-          "Paused", SessionSamples.claudeName,
+          "Paused", SessionSamples.claudeTitle,
         ])
       )
       #expect(

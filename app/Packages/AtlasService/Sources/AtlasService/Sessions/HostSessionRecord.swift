@@ -40,11 +40,6 @@ public struct HostSessionRecord: Decodable, Equatable, Sendable, Identifiable {
   /// How many of its actions named each app, by the app's name, kept once its activity rows are gone.
   public var appCounts: [String: Int]
 
-  /// What it mostly did and where, as its record keeps it; nil while it did nothing this app can name.
-  public var gist: ActivityGist? {
-    ActivityGist(counts: counts, apps: appCounts)
-  }
-
   /// The session's identity: its key.
   public var id: String { key }
 

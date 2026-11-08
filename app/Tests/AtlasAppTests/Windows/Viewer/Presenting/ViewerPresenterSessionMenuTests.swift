@@ -67,7 +67,7 @@ struct ViewerPresenterSessionMenuTests {
     let lines = row.help
       .split(separator: "\n")
       .map(String.init)
-    #expect(Array(lines.prefix(2)) == ["Claude Code · understudy", "Clicking Show Center in Opie"])
+    #expect(Array(lines.prefix(2)) == ["understudy", "Clicking Show Center in Opie"])
     // Before the Apps list has read anything, an app reads by its name alone.
     #expect(
       Array(lines.dropFirst(2)) == [
@@ -85,7 +85,8 @@ struct ViewerPresenterSessionMenuTests {
     #expect(opened.contains("Opie: Open · a copy") && opened.contains("Notes: Closed"))
     // A live session the list does not name yet has the status's own facts.
     #expect(
-      try Self.row("8be20c4d1a77", snapshot).help == "Codex · atlas-landing\nWaiting for the helper · 8 s\nHost: Codex"
+      try Self.row("8be20c4d1a77", snapshot).help
+        == "atlas-landing\nWaiting for the helper · 8 s\nHost: Codex\nFolder: atlas-landing"
     )
   }
 

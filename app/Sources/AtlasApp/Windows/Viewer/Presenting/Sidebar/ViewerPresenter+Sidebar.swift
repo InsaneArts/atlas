@@ -75,12 +75,12 @@ extension ViewerPresenter {
           .filter { self.section(of: $0.state) == section }
           .filter { isBusy($0) || !neverActed($0.key, snapshot) }
           .map { sessionRow($0, snapshot) }
-          .filter { matches($0, query: query) }
+          .filter { matches($0, query: query, snapshot) }
         return ViewerSessionGroup(section, rows: rows)
       }
       .filter { !$0.rows.isEmpty }
     let endedRows = ended.map { endedRow($0, snapshot) }
-      .filter { matches($0, query: query) }
+      .filter { matches($0, query: query, snapshot) }
     let endedShown = snapshot.session.endedShown
     if !endedRows.isEmpty {
       let drawn = endedShown ? endedRows : endedRows.filter { chosen == .one($0.id) }
@@ -121,8 +121,8 @@ extension ViewerPresenter {
     }
   }
 
-  /// A live session's row: its icon and badge, its title from what it mostly did, what it does now while it works, or
-  /// its project and start while it is quiet, its tooltip and its menu; while its work is cleaned up, "Cleaning up…"
+  /// A live session's row: its icon and badge, its title from its project or agent, what it does now while it works,
+  /// or its agent and start while it is quiet, its tooltip and its menu; while its work is cleaned up, "Cleaning up…"
   /// with a spinner in the badge's place.
   ///
   /// - Parameters:
@@ -130,21 +130,16 @@ extension ViewerPresenter {
   ///   - snapshot: What the controller holds.
   /// - Returns: The row.
   private static func sessionRow(_ session: ViewerStatus.HostSession, _ snapshot: ViewerSnapshot) -> ViewerSessionRow {
-    let busy = isBusy(session)
+    let (_, agent, project, _) = sessionHead(.session(session.key), snapshot)
     let line =
-      busy
+      isBusy(session)
       ? ViewerWords.sessionRowLine(session, line: snapshot.reading.statusReading.line(of: session), now: snapshot.date)
-      : quietLine(
-        folder: session.folder,
-        hostLabel: session.hostLabel.isEmpty ? session.name : session.hostLabel,
-        started: session.startedAt,
-        snapshot
-      )
+      : quietLine(agent: agent, project: project, started: session.startedAt, snapshot)
     let record = snapshot.panes.sessions.record(session.key)
     return row(
       session.key,
       icon: session.host.icon,
-      name: sessionTitle(session.key, working: busy, fallback: session.name, snapshot),
+      name: sessionTitle(agent: agent, project: project),
       line: line,
       badge: badge(of: session.state),
       facts: sessionFacts(session, record: record, snapshot),
@@ -152,24 +147,20 @@ extension ViewerPresenter {
     )
   }
 
-  /// An ended session's row: its icon, its title from what it did, its project and when it started, with no badge, its
-  /// tooltip and its menu.
+  /// An ended session's row: its icon, its title from its project or agent, its agent and when it started, with no
+  /// badge, its tooltip and its menu.
   ///
   /// - Parameters:
   ///   - record: The session, as the list has it.
   ///   - snapshot: What the controller holds.
   /// - Returns: The row.
   private static func endedRow(_ record: HostSessionRecord, _ snapshot: ViewerSnapshot) -> ViewerSessionRow {
-    row(
+    let (_, agent, project, _) = sessionHead(.session(record.key), snapshot)
+    return row(
       record.key,
       icon: record.host.icon,
-      name: sessionTitle(record.key, working: false, fallback: record.name, snapshot),
-      line: quietLine(
-        folder: record.folder,
-        hostLabel: record.hostLabel.isEmpty ? record.name : record.hostLabel,
-        started: record.startedAt,
-        snapshot
-      ),
+      name: sessionTitle(agent: agent, project: project),
+      line: quietLine(agent: agent, project: project, started: record.startedAt, snapshot),
       badge: nil,
       facts: sessionFacts(nil, record: record, snapshot),
       snapshot
@@ -224,16 +215,18 @@ extension ViewerPresenter {
     [.acting, .waiting, .needsYou].contains(session.state) || session.holdsHelper
   }
 
-  /// Whether a row is kept by the search: every row while there is no query, else one whose name or line holds it,
-  /// ignoring case.
+  /// Whether a row is kept by the search: every row while there is no query, else one whose name, line or agent
+  /// holds it, ignoring case.
   ///
   /// - Parameters:
   ///   - row: The row.
   ///   - query: The query.
+  ///   - snapshot: What the controller holds.
   /// - Returns: Whether it is kept.
-  static func matches(_ row: ViewerSessionRow, query: String) -> Bool {
+  static func matches(_ row: ViewerSessionRow, query: String, _ snapshot: ViewerSnapshot) -> Bool {
     let query = query.trimmingCharacters(in: .whitespaces)
     guard !query.isEmpty else { return true }
-    return row.name.localizedCaseInsensitiveContains(query) || row.line.localizedCaseInsensitiveContains(query)
+    return [row.name, row.line, sessionHead(.session(row.id), snapshot).agent]
+      .contains { $0.localizedCaseInsensitiveContains(query) }
   }
 }

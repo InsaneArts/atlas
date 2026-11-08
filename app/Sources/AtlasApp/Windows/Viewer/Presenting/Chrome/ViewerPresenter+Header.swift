@@ -34,8 +34,8 @@ extension ViewerPresenter {
     return sessionHeader(holder, holds: true, snapshot)
   }
 
-  /// The header naming a session: its title from what it did, then its agent, its project, and whether it has the
-  /// helper, such as "Typing in TextEdit" and "Claude Code · atlas · has the helper".
+  /// The header naming a session: its title from its project or agent, then its agent while the title is its project,
+  /// and whether it has the helper, such as "atlas" and "Claude Code · has the helper".
   ///
   /// - Parameters:
   ///   - key: The session's key.
@@ -43,11 +43,10 @@ extension ViewerPresenter {
   ///   - snapshot: What the controller holds.
   /// - Returns: The header.
   static func sessionHeader(_ key: String, holds: Bool, _ snapshot: ViewerSnapshot) -> ViewerHeaderState {
-    let session = resolvedSession(key, snapshot)
-    let (_, agent, project, working) = sessionHead(.session(key), snapshot)
+    let (_, agent, project, _) = sessionHead(.session(key), snapshot)
     return ViewerHeaderState(
-      who: sessionTitle(key, working: working, fallback: session.name, snapshot),
-      what: ViewerWords.dotted([agent, project, holds ? ViewerWords.hasTheHelper : ""])
+      who: sessionTitle(agent: agent, project: project),
+      what: ViewerWords.dotted([project.isEmpty ? "" : agent, holds ? ViewerWords.hasTheHelper : ""])
     )
   }
 

@@ -344,13 +344,13 @@ struct ViewerPresenterActivityTests {
     #expect(none.showsFilters, "a search that finds nothing keeps the filters")
   }
 
-  @Test("one session's pane lists only its runs, under its name, with no row of its own")
+  @Test("one session's pane lists only its runs, under its title, with no row of its own")
   func oneSessionListsOnlyItsRuns() throws {
     var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.mixedLog)
     snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     let activity = ViewerPresenter.activity(snapshot)
     #expect(activity.filters.tabs.map(\.id) == ViewerActivityFilter.allCases)
-    #expect(activity.title == "Claude Code · understudy")
+    #expect(activity.title == "understudy")
     #expect(activity.meta == "6 actions today")
     #expect(
       ViewerActivityFixtures.runs(activity)
