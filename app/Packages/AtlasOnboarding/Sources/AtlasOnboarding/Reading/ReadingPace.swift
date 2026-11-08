@@ -2,7 +2,7 @@
 /// may have changed, watches closely for a moment after, and otherwise only now and then. What macOS reports never
 /// brings readings closer than ``minimumGap``; the window's own ask, after one of its commands or a press, reads as
 /// soon as the reading under way ends. Times are how long the window has been open, so the rule needs no clock.
-public struct ReadingPace: Equatable, Sendable {
+public struct ReadingPace: Sendable {
   /// The least time between the starts of two readings: 1.5 s.
   public static let minimumGap: Duration = .milliseconds(1500)
   /// How long after a change the window reads at ``minimumGap``: 10 s, as what follows a change takes a moment (the
@@ -13,8 +13,6 @@ public struct ReadingPace: Equatable, Sendable {
 
   /// When the last reading started; nil before the first.
   private var lastStart: Duration?
-  /// Whether something may have changed since the last reading started.
-  private var changed = false
   /// Whether the window asked for a reading since the last one started.
   private var asked = false
   /// When something last may have changed.
@@ -33,7 +31,6 @@ public struct ReadingPace: Equatable, Sendable {
     if asked { return lastStart }
     let earliest = lastStart + Self.minimumGap
     var due = lastStart + Self.fallbackEvery
-    if changed { due = earliest }
     if let lastChange, lastStart < lastChange + Self.closeWatch { due = min(due, earliest) }
     if let soonest = deadlines.values.min() { due = min(due, soonest) }
     return max(earliest, due)
@@ -43,7 +40,6 @@ public struct ReadingPace: Equatable, Sendable {
   ///
   /// - Parameter now: The time.
   public mutating func change(at now: Duration) {
-    changed = true
     lastChange = now
   }
 
@@ -61,7 +57,6 @@ public struct ReadingPace: Equatable, Sendable {
   /// - Parameter now: The time.
   public mutating func start(at now: Duration) {
     lastStart = now
-    changed = false
     asked = false
     deadlines = deadlines.filter { $0.value > now }
   }

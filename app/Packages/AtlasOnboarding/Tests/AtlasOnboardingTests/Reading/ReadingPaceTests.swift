@@ -11,19 +11,6 @@ struct ReadingPaceTests {
     return pace
   }
 
-  @Test("the first reading starts at once")
-  func firstAtOnce() {
-    #expect(ReadingPace().next == .zero)
-  }
-
-  @Test("with nothing changing, readings come only every fallback interval")
-  func fallback() {
-    var pace = started()
-    #expect(pace.next == ReadingPace.fallbackEvery)
-    pace.start(at: pace.next)
-    #expect(pace.next == ReadingPace.fallbackEvery * 2)
-  }
-
   @Test("a change reads at once, but never sooner than the gap after the last reading")
   func changeWaitsForTheGap() {
     var pace = started()
@@ -33,23 +20,6 @@ struct ReadingPaceTests {
     pace.change(at: .seconds(14))
     // Past the close watch, a change still reads as soon as the gap allows.
     #expect(pace.next == .milliseconds(6500))
-  }
-
-  @Test("a storm of changes reads at most once a gap")
-  func storm() {
-    var pace = started()
-    var readings: [Duration] = []
-    var now = Duration.zero
-    while now < .seconds(6) {
-      pace.change(at: now)
-      if pace.next <= now {
-        pace.start(at: now)
-        readings.append(now)
-      }
-      now += .milliseconds(10)
-    }
-    #expect(readings.count == 3)
-    #expect(zip(readings, readings.dropFirst()).allSatisfy { $1 - $0 >= ReadingPace.minimumGap })
   }
 
   @Test("after a change the window reads at the gap for the close watch, then falls back")

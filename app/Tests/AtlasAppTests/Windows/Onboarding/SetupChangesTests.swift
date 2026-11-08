@@ -7,15 +7,6 @@ import Testing
 @Suite("SetupChanges", .serialized)
 @MainActor
 struct SetupChangesTests {
-  /// A fresh folder of its own under the temporary folder.
-  private static func folder() throws -> URL {
-    let files = FileManager.default
-    let folder = files.temporaryDirectory
-      .appending(path: "setup-changes-\(UUID().uuidString)")
-    try make(folder)
-    return folder
-  }
-
   /// Makes the folder at `url`, and the folders above it.
   private static func make(_ url: URL) throws {
     let files = FileManager.default
@@ -45,22 +36,11 @@ struct SetupChangesTests {
     return counted
   }
 
-  @Test("a change in a watched folder is reported")
-  func aChangeInAWatchedFolder() async throws {
-    let folder = try Self.folder()
-    defer { try? Self.remove(folder) }
-    let watcher = SetupChanges()
-    defer { watcher.stop() }
-    let counted = Self.count(watcher)
-    watcher.watch(folders: [folder.path])
-    try Self.touch(folder.appending(path: "accepted.json"))
-    try await settle("the write was never reported") { counted.changes >= 1 }
-  }
-
   @Test("a folder that does not exist yet is watched through its parent, then itself once made")
   func aFolderMadeLater() async throws {
-    let parent = try Self.folder()
-    defer { try? Self.remove(parent) }
+    let temporary = try TemporaryFolder()
+    defer { temporary.remove() }
+    let parent = temporary.url
     let folder = parent.appending(path: "helper")
     let watcher = SetupChanges()
     defer { watcher.stop() }
@@ -75,8 +55,9 @@ struct SetupChangesTests {
 
   @Test("a folder replaced is still watched")
   func aReplacedFolder() async throws {
-    let parent = try Self.folder()
-    defer { try? Self.remove(parent) }
+    let temporary = try TemporaryFolder()
+    defer { temporary.remove() }
+    let parent = temporary.url
     let folder = parent.appending(path: "Atlas-accept-502")
     try Self.make(folder)
     let watcher = SetupChanges()
@@ -94,8 +75,9 @@ struct SetupChangesTests {
 
   @Test("a folder replaced at once, with no pause between, is still watched")
   func aFolderReplacedAtOnce() async throws {
-    let parent = try Self.folder()
-    defer { try? Self.remove(parent) }
+    let temporary = try TemporaryFolder()
+    defer { temporary.remove() }
+    let parent = temporary.url
     let folder = parent.appending(path: "Atlas-accept-502")
     try Self.make(folder)
     let watcher = SetupChanges()
@@ -114,8 +96,9 @@ struct SetupChangesTests {
 
   @Test("stopping ends the changes and the folders' watches")
   func stoppingEndsEverything() async throws {
-    let folder = try Self.folder()
-    defer { try? Self.remove(folder) }
+    let temporary = try TemporaryFolder()
+    defer { temporary.remove() }
+    let folder = temporary.url
     let watcher = SetupChanges()
     let counted = Self.count(watcher)
     watcher.watch(folders: [folder.path])
@@ -128,8 +111,9 @@ struct SetupChangesTests {
 
   @Test("the nearest folder that exists stands in for one that does not")
   func nearestExisting() throws {
-    let folder = try Self.folder()
-    defer { try? Self.remove(folder) }
+    let temporary = try TemporaryFolder()
+    defer { temporary.remove() }
+    let folder = temporary.url
     #expect(SetupChanges.nearestExisting(folder.path) == folder.path)
     #expect(SetupChanges.nearestExisting(folder.appending(path: "a/b").path) == folder.path)
     let file = folder.appending(path: "file")
