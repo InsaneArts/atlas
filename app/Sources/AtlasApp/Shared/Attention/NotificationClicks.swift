@@ -31,6 +31,8 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
   private let recover: @MainActor @Sendable () async -> Void
   /// Whether the main window is on screen now.
   private let viewerShows: @MainActor @Sendable () -> Bool
+  /// The id of the question the person sees now, in the open panel or over the viewer's Screen; nil for none.
+  private let askInView: @MainActor @Sendable () -> String?
   /// Answers a question as the person.
   private let answerAsk: @MainActor @Sendable (String, AskAnswer) async -> Void
 
@@ -41,16 +43,19 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
   ///   - recover: Recovers the helper.
   ///   - viewerShows: Whether the main window is on screen now; never, by default.
   ///   - answer: Answers a question as the person; nothing by default.
+  ///   - askInView: The id of the question the person sees now; none by default.
   init(
     open: @escaping @MainActor @Sendable () -> Void,
     recover: @escaping @MainActor @Sendable () async -> Void,
     viewerShows: @escaping @MainActor @Sendable () -> Bool = { false },
-    answer: @escaping @MainActor @Sendable (String, AskAnswer) async -> Void = { _, _ in }
+    answer: @escaping @MainActor @Sendable (String, AskAnswer) async -> Void = { _, _ in },
+    askInView: @escaping @MainActor @Sendable () -> String? = { nil }
   ) {
     self.open = open
     self.recover = recover
     self.viewerShows = viewerShows
     self.answerAsk = answer
+    self.askInView = askInView
   }
 
   /// What a response's action asks for: Recover recovers; a question's answer, on the question it carries, answers it;
@@ -88,7 +93,8 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
   }
 
   /// A notification arrived while Atlas is in front: a banner with its sound, unless the main window is on screen,
-  /// which already says it. With only Settings or the panel open, the person still hears.
+  /// which already says it. With only Settings or the panel open, the person still hears. A question's shows unless
+  /// the person sees that very question, as on Activity or Apps the main window doesn't show it.
   ///
   /// - Parameters:
   ///   - center: The notification center.
@@ -98,7 +104,20 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
     _ center: UNUserNotificationCenter,
     willPresent notification: UNNotification
   ) async -> UNNotificationPresentationOptions {
-    Self.presentation(viewerShows: await viewerShows())
+    if let ask = notification.request.content.userInfo[AskNotifications.idKey] as? String {
+      return Self.presentation(ask: ask, inView: await askInView())
+    }
+    return Self.presentation(viewerShows: await viewerShows())
+  }
+
+  /// How a question's notification shows while Atlas is in front.
+  ///
+  /// - Parameters:
+  ///   - ask: The question's id.
+  ///   - inView: The id of the question the person sees now; nil for none.
+  /// - Returns: Nothing while the person sees it, else a banner with its sound.
+  static func presentation(ask: String, inView: String?) -> UNNotificationPresentationOptions {
+    ask == inView ? [] : [.banner, .sound]
   }
 
   /// How a notification shows while Atlas is in front.

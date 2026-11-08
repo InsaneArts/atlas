@@ -1,8 +1,9 @@
 import AtlasService
 import Foundation
 
-/// What Atlas shows outside its windows of the questions it asks the person: a notification for each new one while
-/// the panel is closed, taken away once it is answered or ends, whatever Notify me says; and, when the person said no
+/// What Atlas shows outside its windows of the questions it asks the person: a notification for each new one the
+/// person isn't looking at, posted once macOS lets Atlas notify them and taken away once it is answered or ends,
+/// whatever Notify me says; and, when the person said no
 /// to notifications, the menu bar's badge while one is up (``AskStore/notificationsRefused``). macOS is asked whether
 /// Atlas may notify them once, the first time an account joins the list.
 final class AskSignals {
@@ -12,9 +13,11 @@ final class AskSignals {
   private let preferences: SettingsPreferences
   /// The store the menu bar's badge follows.
   private let store: AskStore
-  /// Whether the panel is open now, which shows the question itself.
-  private let panelOpen: @MainActor () -> Bool
-  /// The questions posted and not yet taken away.
+  /// The id of the question the person sees now, in the open panel or over the viewer's Screen; nil for none.
+  private let inView: @MainActor () -> String?
+  /// Whether macOS lets Atlas notify the person: nil until it is known, and while it is being asked.
+  private(set) var consent: Bool?
+  /// The questions delivered with consent and not yet taken away.
   private(set) var posted: Set<String> = []
   /// Whether macOS is being asked now, so it is asked once.
   private var asking = false
@@ -28,22 +31,33 @@ final class AskSignals {
   ///   - notifications: The notifications.
   ///   - preferences: Where asking macOS once is kept.
   ///   - store: The store the menu bar's badge follows.
-  ///   - panelOpen: Whether the panel is open now.
+  ///   - inView: The id of the question the person sees now; nil for none.
   init(
     notifications: AskNotifications,
     preferences: SettingsPreferences,
     store: AskStore,
-    panelOpen: @escaping @MainActor () -> Bool
+    inView: @escaping @MainActor () -> String?
   ) {
     self.notifications = notifications
     self.preferences = preferences
     self.store = store
-    self.panelOpen = panelOpen
+    self.inView = inView
   }
 
-  /// Reads whether the person let Atlas notify them, as macOS last said, for the menu bar's badge.
+  /// Reads whether the person let Atlas notify them, as macOS last said, for the menu bar's badge; once it says yes,
+  /// every question still up and not seen posts. Nothing is read while macOS is being asked.
   func readConsent() async {
-    store.notificationsRefused = await notifications.consent() == false
+    guard !asking else { return }
+    resolve(await notifications.consent())
+  }
+
+  /// Takes what macOS said: the badge follows a no, and a yes posts every question still up and not seen.
+  ///
+  /// - Parameter answer: Whether Atlas may notify the person; nil while undecided.
+  func resolve(_ answer: Bool?) {
+    consent = answer
+    store.notificationsRefused = answer == false
+    if answer == true, let list = store.list { post(list) }
   }
 
   /// The questions changed: each new one posts while the panel is closed, and each gone is taken away. The first time,
@@ -60,8 +74,22 @@ final class AskSignals {
     let gone = posted.subtracting(ids)
     if !gone.isEmpty { notifications.withdraw(gone.sorted()) }
     posted.formIntersection(ids)
-    guard !panelOpen() else { return }
-    for ask in list.asks where !posted.contains(ask.id) {
+    guard consent == true else {
+      // macOS may have been answered elsewhere since, as through Notify me: read it again for what waits.
+      if !asking, list.asks.contains(where: { !posted.contains($0.id) }) { Task { await readConsent() } }
+      return
+    }
+    post(list)
+  }
+
+  /// Posts each question up that isn't posted yet and that the person isn't looking at; only with consent, so a
+  /// question counts as posted once macOS could deliver it.
+  ///
+  /// - Parameter list: The questions up now.
+  private func post(_ list: AskList) {
+    guard consent == true else { return }
+    let seen = inView()
+    for ask in list.asks where !posted.contains(ask.id) && ask.id != seen {
       notifications.post(AskNotifications.note(ask))
       posted.insert(ask.id)
     }
@@ -86,9 +114,10 @@ final class AskSignals {
     guard let accounts = status.overview.accounts, !accounts.isEmpty else { return }
     guard !asking, !preferences.loadAskConsentAsked() else { return }
     asking = true
+    consent = nil
     preferences.saveAskConsentAsked()
     let allowed = await notifications.requestConsent()
-    store.notificationsRefused = !allowed
     asking = false
+    resolve(allowed)
   }
 }

@@ -85,10 +85,10 @@ struct AskNotificationsTests {
     #expect(NotificationClicks.answer(to: task) == .open, "an answer with no question only opens Atlas")
   }
 
-  @Test("each new question posts once while the panel is closed, and goes once it is answered")
+  @Test("each new question posts once unless the person sees it, and goes once it is answered")
   func eachQuestionPostsOnce() {
     let recorded = Recorded()
-    var panelOpen = false
+    var seen: String?
     let signals = AskSignals(
       notifications: recorded.notifications,
       preferences: SettingsPreferences(
@@ -98,16 +98,50 @@ struct AskNotificationsTests {
         saveNotify: { _ in }
       ),
       store: AskStore(service: ScriptedService()),
-      panelOpen: { panelOpen }
+      inView: { seen }
     )
+    signals.resolve(true)
     signals.asksChanged(AskList(asks: [Self.ask("a1")]))
     signals.asksChanged(AskList(asks: [Self.ask("a1")]))
     #expect(recorded.posted.map(\.id) == ["a1"], "whatever Notify me says")
-    panelOpen = true
-    signals.asksChanged(AskList(asks: [Self.ask("a1"), Self.ask("a2")]))
-    #expect(recorded.posted.map(\.id) == ["a1"], "the open panel shows it")
+    // The panel or the Screen's banner shows a2; on Activity or Apps it wouldn't be in view and would post.
+    seen = "a2"
+    signals.asksChanged(AskList(asks: [Self.ask("a1"), Self.ask("a2"), Self.ask("a3")]))
+    #expect(recorded.posted.map(\.id) == ["a1", "a3"], "only the question in view stays quiet")
     signals.asksChanged(AskList())
-    #expect(recorded.withdrawn == ["a1"])
+    #expect(recorded.withdrawn == ["a1", "a3"])
+    #expect(NotificationClicks.presentation(ask: "a2", inView: "a2").isEmpty)
+    #expect(
+      NotificationClicks.presentation(ask: "a2", inView: nil) == [.banner, .sound],
+      "a pane that doesn't show it"
+    )
+  }
+
+  @Test("nothing posts before macOS lets Atlas notify, and every question still up posts once it does")
+  func questionsWaitForConsent() async {
+    let recorded = Recorded()
+    let service = ScriptedService()
+    service.askList = AskList(asks: [Self.ask("a1")])
+    let store = AskStore(service: service) { Self.asked }
+    await store.read()
+    let signals = AskSignals(
+      notifications: recorded.notifications,
+      preferences: SettingsPreferences(
+        loadTab: { nil },
+        saveTab: { _ in },
+        loadNotify: { false },
+        saveNotify: { _ in }
+      ),
+      store: store
+    ) { nil }
+    signals.asksChanged(AskList(asks: [Self.ask("a1")]))
+    #expect(recorded.posted.isEmpty && signals.posted.isEmpty, "undecided: nothing posts, nothing counts as posted")
+    signals.resolve(false)
+    signals.asksChanged(AskList(asks: [Self.ask("a1")]))
+    #expect(recorded.posted.isEmpty && signals.posted.isEmpty, "refused: nothing posts")
+    signals.resolve(true)
+    #expect(recorded.posted.map(\.id) == ["a1"], "allowed: the question still up posts")
+    #expect(signals.posted == ["a1"])
   }
 
   @Test("after the first reading, a notification an earlier launch left whose question is gone is withdrawn")
@@ -128,7 +162,7 @@ struct AskNotificationsTests {
         saveNotify: { _ in }
       ),
       store: store
-    ) { false }
+    ) { nil }
     signals.asksChanged(try #require(store.list))
     try await settle("the leftover was never withdrawn") { recorded.withdrawn == ["a1"] }
   }
@@ -151,7 +185,7 @@ struct AskNotificationsTests {
         saveNotify: { _ in }
       ),
       store: store
-    ) { true }
+    ) { "a1" }
     signals.asksChanged(try #require(store.list))
     await signals.withdrawLeftovers()
     #expect(signals.posted.contains("a1"), "the kept notification is tracked")
@@ -173,7 +207,7 @@ struct AskNotificationsTests {
     )
     preferences.loadAskConsentAsked = { asked }
     preferences.saveAskConsentAsked = { asked = true }
-    let signals = AskSignals(notifications: recorded.notifications, preferences: preferences, store: store) { false }
+    let signals = AskSignals(notifications: recorded.notifications, preferences: preferences, store: store) { nil }
     await signals.statusRead(try status(["overview": ["accounts": [] as [Any]]]))
     #expect(recorded.asked == 0, "no account, no question")
     let listed = try status(["overview": ["accounts": [["kind": "app", "id": "x", "name": "Slack", "added": 1]]]])

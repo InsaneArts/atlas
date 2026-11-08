@@ -1,4 +1,5 @@
 import AppKit
+import AtlasStatus
 
 /// What Atlas shows outside its windows when it needs the person: the notification (``AttentionSignals``), fed by
 /// the panel's readings and the choices in Settings.
@@ -12,11 +13,9 @@ extension AppContainer {
         open: { [weak coordinator] in coordinator?.openViewer(place: .screen) },
         recover: { [weak self] in await self?.recoverFromNotification() },
         // On screen, not merely open: a minimised or covered main window says nothing.
-        viewerShows: { [weak coordinator] in
-          guard let window = coordinator?.viewer?.window as? NSWindow else { return false }
-          return WindowVisibility.shows(isVisible: window.isVisible, occlusionState: window.occlusionState)
-        },
-        answer: { [weak self] id, answer in await self?.actions?.asks.answer(id, with: answer) }
+        viewerShows: { [weak self] in self?.viewerOnScreen() ?? false },
+        answer: { [weak self] id, answer in await self?.actions?.asks.answer(id, with: answer) },
+        askInView: { [weak self] in self?.askInView() }
       ),
       preferences: settingsPreferences
     )
@@ -32,13 +31,36 @@ extension AppContainer {
       notifications: .live(),
       preferences: settingsPreferences,
       store: store,
-      panelOpen: { [weak self] in self?.menuBar?.popover.isShown == true }
+      inView: { [weak self] in self?.askInView() }
     )
     askSignals = signals
     store.changed = { [weak signals] list in signals?.asksChanged(list) }
     store.watch(.live(home: FileManager.default.homeDirectoryForCurrentUser))
     // Unstructured, as nothing at launch can wait: the badge follows what macOS last said.
     Task { await signals.readConsent() }
+  }
+
+  /// Whether the main window is on screen: not merely open, as a minimised or covered one says nothing.
+  ///
+  /// - Returns: Whether it shows.
+  func viewerOnScreen() -> Bool {
+    guard let window = coordinator.viewer?.window as? NSWindow else { return false }
+    return WindowVisibility.shows(isVisible: window.isVisible, occlusionState: window.occlusionState)
+  }
+
+  /// The question the person sees now: the oldest one up, which the open panel's card shows, and the banner over the
+  /// main window's Screen while it is on screen showing the Screen; nil while neither shows it, as on Activity or Apps.
+  ///
+  /// - Returns: The question's id, or nil.
+  func askInView() -> String? {
+    guard let store = actions?.asks, let panel else { return nil }
+    let panelShows = menuBar?.popover.isShown == true
+    let screenShows = viewerOnScreen() && coordinator.viewer?.controller.session.place == .screen
+    guard panelShows || screenShows else { return nil }
+    return StatusReading(panel.status)
+      .asks(from: store.list, at: Date())
+      .first?
+      .id
   }
 
   /// Atlas needs you's Recover: the alert's own recovery (``NotificationRecovery``) while Needs you still holds and
