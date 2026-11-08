@@ -1,12 +1,11 @@
 import SwiftUI
 
 /// The sidebar's content, straight on the window's recessed ground as a source list stands, with no border: the top
-/// bar with the search, All sessions and each section's sessions, then the Library and the helper's health at its
-/// foot, which stay put. The sessions scroll in their own room, which ends a section's gap above the Library: a row is
-/// cut at that edge, never drawn under the Library, and fades out over its last points into the ground, so a cut row
-/// reads as scrolled rather than broken; scrolled to its end, the last row stands clear of the fade. In a short window
-/// the foot folds into one row of the Library's circles with the helper's dot at its end, fading between the two on
-/// ``Motion/state``.
+/// bar with the search, All sessions and each section's sessions, then, under a hairline, the helper's row at its foot,
+/// which stays put. The sessions scroll in their own room, which ends a section's gap above the foot: a row is cut at
+/// that edge, never drawn under the foot, and fades out over its last points into the ground, so a cut row reads as
+/// scrolled rather than broken; scrolled to its end, the last row stands clear of the fade. In a short window the
+/// helper's row folds into its mark alone, fading between the two on ``Motion/state``.
 struct ViewerSidebar: View {
   /// What the sidebar shows.
   private let sidebar: ViewerSidebarState
@@ -50,9 +49,13 @@ struct ViewerSidebar: View {
       .scrollBounceBehavior(.basedOnSize)
       .mask { fadingEdge }
       .frame(maxHeight: .infinity, alignment: .top)
-      foot
-        .padding(.horizontal, ViewerLayout.sidebarInset)
-        .padding(.top, ViewerLayout.footGap)
+      VStack(alignment: .leading, spacing: ViewerLayout.helperRuleGap) {
+        SeparatorLine()
+          .padding(.horizontal, ViewerLayout.sidebarRowInset)
+        foot
+      }
+      .padding(.horizontal, ViewerLayout.sidebarInset)
+      .padding(.top, ViewerLayout.footGap)
     }
     .padding(.top, ViewerLayout.sidebarTopInset)
     .padding(.bottom, ViewerLayout.sidebarInset)
@@ -73,18 +76,14 @@ struct ViewerSidebar: View {
     }
   }
 
-  /// The Library and the helper's health: one row of circles in a short window, else the Library's rows and the
-  /// helper's line.
+  /// The helper's row: its mark alone in a short window, else the whole row.
   @ViewBuilder private var foot: some View {
     if isShort {
-      SidebarLibraryStrip(rows: sidebar.library, helper: sidebar.helper, send: send)
+      SidebarHelperLine(helper: sidebar.helper, isCompact: true, send: send)
         .transition(.opacity.animation(reduceMotion ? Motion.reduced : Motion.state))
     } else {
-      VStack(alignment: .leading, spacing: ViewerLayout.sidebarRowGap) {
-        SidebarLibrary(rows: sidebar.library, send: send)
-        SidebarHelperLine(helper: sidebar.helper, send: send)
-      }
-      .transition(.opacity)
+      SidebarHelperLine(helper: sidebar.helper, send: send)
+        .transition(.opacity)
     }
   }
 }

@@ -2,7 +2,7 @@
   import SwiftUI
 
   /// One of the main window's transitions the motion lab plays (``ViewerMotionLab``), the window's own and then
-  /// Activity's and Apps': each turns the window one way, and played again turns it back, so a second press straight
+  /// Activity's: each turns the window one way, and played again turns it back, so a second press straight
   /// after the first reverses it mid-way. A list's move shows that list first.
   enum ViewerMotionMove: String, CaseIterable, Identifiable {
     /// The sidebar hiding or showing.
@@ -16,9 +16,7 @@
     /// A session's badge stepping from acting to waiting to needs you to none.
     case badge = "Badge cycle"
     /// The Screen turning into Activity, the picture shrinking into its corner, or back.
-    case library = "Library and Screen"
-    /// Activity giving way to Apps, or back.
-    case lists = "List to list"
+    case activity = "Activity and Screen"
     /// Take Control, or Give Back.
     case control = "Take Control"
     /// Stop, or Resume.
@@ -33,12 +31,6 @@
     case newRun = "New run"
     /// Activity's Problems filter chosen, or All again.
     case problems = "Problems filter"
-    /// Opie coming to the front of Apps over Safari, or Safari again.
-    case front = "Front app"
-    /// Notes opening in Apps, or quitting.
-    case app = "Open or quit"
-    /// Notes moving from Already open to the agents' apps, or back.
-    case group = "Move group"
 
     /// The move's title, which identifies it.
     var id: String { rawValue }
@@ -75,12 +67,9 @@
         next = PreviewStates.viewer(state, applying: .toggleEnded)
       case .badge:
         next.sidebar.sessions.groups = Self.cycled(state.sidebar.sessions.groups)
-      case .library:
+      case .activity:
         next.pane = state.pane.place == .screen ? PreviewStates.viewerActivity.pane : PreviewStates.viewerWorking.pane
         next.mini = next.pane.place == .screen ? nil : PreviewStates.viewerActivity.mini
-      case .lists:
-        next.pane = state.pane.place == .activity ? PreviewStates.viewerApps.pane : PreviewStates.viewerActivity.pane
-        next.mini = PreviewStates.viewerActivity.mini
       case .control:
         let isInControl = state.footer.controls.control?.look == .accent
         let sample = isInControl ? PreviewStates.viewerWorking : PreviewStates.viewerControl
@@ -104,12 +93,6 @@
         next = Self.toggled(state, PreviewStates.viewerActivity, PreviewStates.viewerActivityNewRun)
       case .problems:
         next = Self.toggled(state, PreviewStates.viewerActivity, PreviewStates.viewerActivityProblems)
-      case .front:
-        next = Self.toggled(state, PreviewStates.viewerAppsSafariFront, PreviewStates.viewerApps)
-      case .app:
-        next = Self.toggled(state, PreviewStates.viewerAppsBeforeNotes, PreviewStates.viewerApps)
-      case .group:
-        next = Self.toggled(state, PreviewStates.viewerAppsNotesAlreadyOpen, PreviewStates.viewerApps)
       }
       return next
     }
@@ -141,7 +124,6 @@
       var next = state
       next.pane = sample.pane
       next.mini = sample.mini
-      next.sidebar.library = sample.sidebar.library
       return next
     }
 
@@ -157,7 +139,6 @@
       var next = state
       next.pane = sample.pane
       next.mini = sample.mini
-      next.sidebar.library = sample.sidebar.library
       return next
     }
 

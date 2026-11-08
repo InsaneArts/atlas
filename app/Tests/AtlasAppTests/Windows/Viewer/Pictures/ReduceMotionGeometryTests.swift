@@ -63,7 +63,7 @@ struct ReduceMotionGeometryTests {
     #expect(frames.allSatisfy { $0 == final }, "no intermediate layout is permitted while rows fade")
   }
 
-  @Test("the compact sidebar footer gives the sessions their final room throughout its opacity fade")
+  @Test("the compact sidebar footer, a row's height like the whole one, never moves the sessions' room as it fades")
   func compactFooterCommitsGeometryAtOnce() throws {
     let previous = Motion.Pose.moment
     Motion.Pose.hold(at: -5)
@@ -83,8 +83,6 @@ struct ReduceMotionGeometryTests {
       host.render()
       frames.append(host.frameFromTop(of: list))
     }
-    let final = try #require(frames.last)
-    #expect(initial != final, "the footer actually changes the sessions' available height")
-    #expect(frames.allSatisfy { $0 == final }, "the sessions' room must never interpolate")
+    #expect(frames.allSatisfy { $0 == initial }, "the sessions' room must never move")
   }
 }

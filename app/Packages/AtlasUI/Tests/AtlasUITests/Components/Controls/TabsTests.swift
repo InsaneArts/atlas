@@ -10,7 +10,7 @@ struct TabsTests {
   func aTabsAccessoryNeverMovesItsWord() throws {
     for face in [TabsFace.word, .symbol] {
       let bare = try PanelPixels(Self.track(face: face, dot: nil))
-      // Activity carries a dot that is not showing, as it does with nothing unseen: the row draws exactly as bare.
+      // Activity carries a dot that is not showing: the row draws exactly as bare.
       let hidden = try PanelPixels(Self.track(face: face, dot: 0))
       #expect(hidden.width == bare.width, "\(face)")
       #expect(Self.same(hidden, bare), "\(face): the hidden dot moved something")
@@ -21,7 +21,7 @@ struct TabsTests {
     }
   }
 
-  /// The four sample tabs in a track, Activity selected, Activity carrying a blue dot at `dot`'s opacity, or nothing.
+  /// The sample tabs in a track, Activity selected, Activity carrying a blue dot at `dot`'s opacity, or nothing.
   ///
   /// - Parameters:
   ///   - face: What each tab shows.

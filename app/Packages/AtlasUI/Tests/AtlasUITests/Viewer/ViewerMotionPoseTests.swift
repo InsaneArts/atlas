@@ -6,7 +6,7 @@ import Testing
 @Suite("Viewer motion poses")
 struct ViewerMotionPoseTests {
   @MainActor
-  @Test("every list pose holds each row and each card once, before its change and after")
+  @Test("every list pose holds each row once, before its change and after")
   func everyListPoseHoldsEachRowOnce() {
     let states = PreviewStates.viewerMotion
       .flatMap { [($0.name, $0.from), ($0.name, $0.to)] }
@@ -15,10 +15,6 @@ struct ViewerMotionPoseTests {
       case .activity(let activity):
         let ids = activity.days.flatMap(Self.rows(of:))
         #expect(Set(ids).count == ids.count, "\(name) draws a row twice")
-      case .apps(let apps):
-        let ids = apps.cards
-          .map(\.id)
-        #expect(Set(ids).count == ids.count, "\(name) draws a card twice")
       case .screen:
         break
       }

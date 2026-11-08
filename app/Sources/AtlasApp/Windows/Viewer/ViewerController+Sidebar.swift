@@ -2,8 +2,8 @@ import AtlasUI
 
 /// The sidebar: hiding and showing it, which the next window remembers; showing it over the card while the window is
 /// too narrow for it, which the toggle, Find and a choice in it answer; opening and folding Ended; and its search, which
-/// Find opens wherever the window is, showing the sidebar first if it is hidden, and which narrows the sessions and the
-/// Activity or Apps list shown.
+/// Find opens wherever the window is, showing the sidebar first if it is hidden, and which narrows the sessions and
+/// Activity.
 extension ViewerController {
   /// The toggle: puts away the sidebar shown over the card; shows it there while the window is too narrow to show it
   /// beside the card, leaving the person's own choice as it was; else hides the sidebar, or shows it again, and
@@ -60,7 +60,7 @@ extension ViewerController {
     session.search.query = ""
   }
 
-  /// Find…: the sidebar's search, on the Screen and on every list.
+  /// Find…: the sidebar's search, on the Screen and on Activity.
   func find() {
     openSearch()
   }

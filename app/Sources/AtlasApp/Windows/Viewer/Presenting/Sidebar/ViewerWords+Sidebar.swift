@@ -3,7 +3,7 @@ import AtlasStatus
 import Foundation
 
 /// The sidebar's words that depend on what the window holds: what each session last did under its name, and the
-/// helper's health at its foot. Its fixed copy, such as the sections' headings and All sessions, stays in AtlasUI's
+/// helper's row at its foot. Its fixed copy, such as the sections' headings and All sessions, stays in AtlasUI's
 /// views.
 extension ViewerWords {
   /// What a live session last did, under its name in the sidebar: what it does now, what it waits for, what it did
@@ -27,30 +27,43 @@ extension ViewerWords {
     }
   }
 
-  /// The helper's line while it can act.
+  /// The helper's row while it can act.
+  static let helperReadyTitle = "Atlas is ready"
+  /// The helper's row while some of its checks do not pass, or it is not ready.
+  static let helperSetupTitle = "Atlas needs setup"
+  /// The helper's row while it needs the person to recover it.
+  static let helperNeedsYouTitle = "Atlas needs you"
+  /// The helper's row while it is logged out.
+  static let helperLoggedOutTitle = "The helper is logged out"
+  /// The helper's row before the first reading, or while its picture is lost.
+  static let helperConnectingTitle = "Connecting to Atlas…"
+  /// What the person does while the helper needs them.
+  static let recoverLine = "Recover the helper to go on"
+
+  /// The helper by its short name, with its display when known, under the helper row's title.
   ///
-  /// - Parameter name: The helper's short name.
-  /// - Returns: "Helper ready · atlas".
-  static func helperReady(_ name: String) -> String {
-    "Helper ready · \(name)"
+  /// - Parameters:
+  ///   - name: The helper's short name; nil before it is known.
+  ///   - display: Its display, such as "1440 × 900"; nil when not known.
+  /// - Returns: "Helper atlas · 1440 × 900", "Helper atlas", or "Helper".
+  static func helperNamed(_ name: String?, display: String? = nil) -> String {
+    let named = name.map { "Helper \($0)" } ?? "Helper"
+    return display.map { "\(named) · \($0)" } ?? named
   }
 
-  /// The helper's line while some of its checks do not pass.
+  /// How many of the helper's checks do not pass.
   ///
-  /// - Parameter checks: How many do not.
-  /// - Returns: "Helper needs setup · 2 checks", or "Helper needs setup" when none is named.
-  static func helperNeedsSetup(_ checks: Int) -> String {
-    switch checks {
-    case 0: "Helper needs setup"
-    case 1: "Helper needs setup · 1 check"
-    default: "Helper needs setup · \(checks) checks"
-    }
+  /// - Parameter checks: How many, one or more.
+  /// - Returns: "1 check doesn't pass" or "2 checks don't pass".
+  static func checksFailing(_ checks: Int) -> String {
+    checks == 1 ? "1 check doesn't pass" : "\(checks) checks don't pass"
   }
 
-  /// The helper's line while it needs the person to recover it.
-  static let helperNeedsYou = "Helper needs you"
-  /// The helper's line while it is logged out.
-  static let helperLoggedOut = "Helper logged out"
-  /// The helper's line before the first reading, or while its picture is lost.
-  static let helperConnecting = "Connecting to the helper"
+  /// What the person does while the helper is logged out.
+  ///
+  /// - Parameter name: The helper's short name; nil before it is known.
+  /// - Returns: "Log in to atlas to go on", or "Log in to the helper to go on".
+  static func logInLine(_ name: String?) -> String {
+    "Log in to \(name ?? "the helper") to go on"
+  }
 }

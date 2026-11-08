@@ -30,7 +30,7 @@
       case .tagTones: IndicatorSamples(.tag)
       case .activityGlyphs: AppGlyphSamples(.activity)
       case .keycapsSoft: KeycapSamples()
-      case .appCards: AppsSamples(.cards)
+      case .helperRows: HelperRowSamples()
       case .activitySteps: ActivitySamples(.steps)
       case .activityRuns: ActivitySamples(.runs)
       case .accountPictureSizes: BrandSamples(.accountPicture)

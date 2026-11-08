@@ -63,15 +63,6 @@ struct ViewerMotionTableTests {
       ),
       ("step disc", ActivityMotion.disc, Motion.crossfade, nil),
       (
-        "app cards", AppsMotion.layout(reduceMotion: false), Motion.listMove,
-        AppsMotion.layout(reduceMotion: true)
-      ),
-      (
-        "app in front", AppsMotion.front(reduceMotion: false), Motion.state,
-        AppsMotion.front(reduceMotion: true)
-      ),
-      ("app picture", AppsMotion.picture, Motion.fade, nil),
-      (
         "sheet in", PictureSheetLayer.motion(opening: true, reduceMotion: false), Motion.present,
         PictureSheetLayer.motion(opening: true, reduceMotion: true)
       ),
@@ -95,16 +86,14 @@ struct ViewerMotionTableTests {
     #expect(!ScreenZoom.zooms(from: .screen, to: .activity, screen: screen, reduceMotion: true))
   }
 
-  @Test("Activity and Apps take nothing from where they move and under Reduce Motion only fade")
+  @Test("Activity takes nothing from where it moves and under Reduce Motion only fades")
   func listsOnlyFadeUnderReduceMotion() {
-    // Under Reduce Motion the rows and cards make room at once, as a new step's rows and an opening moment's height
-    // do, and fade over 0.15 seconds.
-    #expect(AppsMotion.layout(reduceMotion: true) == nil)
+    // Under Reduce Motion the rows make room at once, as a new step's rows and an opening moment's height do, and
+    // fade over 0.15 seconds.
     #expect(ActivityMotion.fold(reduceMotion: true) == nil)
     #expect(ActivityScroll.moving(isAtTop: true, reduceMotion: true) == nil)
-    // A colour change, the disc's or the picture's, is no movement, so Reduce Motion keeps it, and it is short.
+    // A colour change, the disc's, is no movement, so Reduce Motion keeps it, and it is short.
     #expect(ActivityMotion.disc == Animation.easeOut(duration: 0.2))
-    #expect(AppsMotion.picture == Animation.easeOut(duration: 0.2))
   }
 
   @Test("a row leaving a list fades before any row moves over it, and one arriving fades in once the room is made")

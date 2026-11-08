@@ -35,7 +35,7 @@ pub const THUMB: (u32, f64) = (480, 0.6);
 /// kept made.
 const ICON: usize = 64;
 pub const ICONS: usize = 12;
-pub const ICON_CACHE: usize = 64;
+const ICON_CACHE: usize = 64;
 /// The bytes of a PNG that say its size: the signature and the IHDR chunk.
 const PNG_HEAD: u64 = 33;
 

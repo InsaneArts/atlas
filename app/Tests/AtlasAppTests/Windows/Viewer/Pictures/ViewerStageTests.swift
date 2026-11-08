@@ -9,35 +9,15 @@ import Testing
 @Suite("ViewerStage", .serialized, AppKitState())
 @MainActor
 struct ViewerStageTests {
-  @Test("a tab shown again is the pane already built, still scrolled where it was left")
+  @Test("Activity shown again after the Screen is the pane already built")
   func aTabShownAgainIsThePaneAlreadyBuilt() throws {
     let host = ViewerHost(try Self.activity(lines: 80))
     let list = try #require(host.scrollViews.first, "Activity has its list")
-    list.contentView.scroll(to: NSPoint(x: 0, y: Self.scrolled))
-    list.reflectScrolledClipView(list.contentView)
-    host.show(PreviewStates.viewerApps)
+    host.show(PreviewStates.viewerWorking)
     host.show(try Self.activity(lines: 80))
-    // Activity's list and Apps' are all there is: nothing was built again, and nothing old is still leaving.
-    #expect(host.scrollViews.count == 2)
+    // Activity's list is all there is: nothing was built again, and nothing old is still leaving.
+    #expect(host.scrollViews.count == 1)
     #expect(host.scrollViews.contains { $0 === list }, "Activity's list was built again")
-    #expect(list.contentView.bounds.origin.y == Self.scrolled, "the list lost its place")
-  }
-
-  @Test("a switch's first frame, and a switch reversed at once, still show the pane left whole: never a blank stage")
-  func aSwitchNeverShowsABlankStage() throws {
-    let activity = try Self.activity(lines: 80)
-    let reference = ViewerHost(activity)
-    let settled = try reference.pixels(in: Self.panes)
-    let host = ViewerHost(activity)
-    host.show(PreviewStates.viewerApps)
-    host.show(activity)
-    host.show(PreviewStates.viewerApps)
-    // As the switch begins the old pane still shows whole, the new one not yet in: the stage is never empty.
-    #expect(try host.pixels(in: Self.panes) == settled, "Activity left the stage at once")
-    host.show(activity)
-    // Turned back at once, Activity never left: it shows whole, and Apps has not come in.
-    #expect(try host.pixels(in: Self.panes) == settled, "turning back left a gap")
-    #expect(host.scrollViews.count == 2, "a pane was built again")
   }
 
   @Test("a new session shows at the top, while a list scrolled down holds it under a line and never moves")
@@ -86,9 +66,6 @@ struct ViewerStageTests {
     #expect(host.frames["session line 80"] == nil, "the new session waits")
     #expect(host.frames["waiting line"] != nil, "the line says it waits")
   }
-
-  /// In the card, under its header and clear of the small screen: where the panes draw.
-  static let panes = CGRect(x: 260, y: 60, width: 840, height: 600)
 
   /// 10: the most run loop turns a change takes to settle in the list before it is measured.
   static let settlingTurns = 10

@@ -3,9 +3,9 @@
 
   extension PreviewStates {
     /// The main window's transitions drawn as key frames, each spaced along the move that travels furthest, or a
-    /// list's change along its beats: the window's own, then Activity's and Apps'.
+    /// list's change along its beats: the window's own, then Activity's.
     @MainActor public static var viewerMotion: [ViewerMotionPose] {
-      windowMotion + activityMotion + appsMotion
+      windowMotion + activityMotion
     }
 
     /// The sidebar hiding, the Screen turning into Activity with the picture shrinking into its corner, Give Back
@@ -20,9 +20,9 @@
           lead: .spring(Motion.Springs.slide)
         ),
         ViewerMotionPose(
-          "library-zoom",
+          "activity-zoom",
           from: viewerWorking,
-          to: viewer(viewerWorking, applying: .chooseLibrary(.activity)),
+          to: viewer(viewerWorking, applying: .show(.activity)),
           size: viewerSize,
           lead: .spring(Motion.Springs.zoom)
         ),
@@ -155,39 +155,5 @@
       return viewer(state, applying: .toggleSession(session.id, opens: !session.isOpen))
     }
 
-    /// Apps': Opie coming to the front over Safari, Notes opening and quitting, and Notes moving from Already open to
-    /// the agents' apps once the helper learns an agent opened it.
-    @MainActor private static var appsMotion: [ViewerMotionPose] {
-      [
-        ViewerMotionPose(
-          "apps-front",
-          from: viewerAppsSafariFront,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .spring(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-open",
-          from: viewerAppsBeforeNotes,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-quit",
-          from: viewerApps,
-          to: viewerAppsBeforeNotes,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-move",
-          from: viewerAppsNotesAlreadyOpen,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-      ]
-    }
   }
 #endif

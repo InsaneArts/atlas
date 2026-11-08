@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The one scroll view every list in the card scrolls in, Activity and Apps alike, by the rules in
+/// The one scroll view every list in the card scrolls in, Activity's, by the rules in
 /// ``CardScrollRoom``: the small screen floats over the list, which scrolls the pane's whole height under it and
 /// keeps its band as room at the end it floats over, so the last row, or the first, scrolls wholly clear of it, with
 /// nothing faded and nothing ended early. Headings scroll with their rows. A step to a row scrolls it into view only

@@ -1,7 +1,7 @@
 #if DEBUG
   import SwiftUI
 
-  /// A window row whose Show on Screen appears only under the pointer.
+  /// A row whose button appears only under the pointer.
   struct HoverRevealSample: View {
     @State private var isHovered = false
 
@@ -10,7 +10,7 @@
       HStack(spacing: Spacing.m) {
         Text(verbatim: "Opie Settings")
           .frame(maxWidth: .infinity, alignment: .leading)
-        Button(String("Show on Screen")) {}
+        Button(String("Open")) {}
           .buttonStyle(.capsule(.secondary, size: .mini))
           .revealsOnHover(isHovered)
       }

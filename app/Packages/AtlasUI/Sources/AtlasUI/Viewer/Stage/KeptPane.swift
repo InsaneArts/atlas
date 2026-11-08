@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Activity or Apps as the stage keeps it once shown (``KeptPaneShift``), filling the frame inside the
-/// window's inset.
+/// Activity as the stage keeps it once shown (``KeptPaneShift``), filling the frame inside the window's inset.
 struct KeptPane: View {
   /// The pane.
   let pane: ViewerPane
@@ -15,9 +14,6 @@ struct KeptPane: View {
       EmptyView()
     case .activity(let activity):
       ViewerActivityPane(state: activity, send: send)
-    case .apps(let apps):
-      ViewerAppsPane(state: apps, send: send)
     }
   }
-
 }

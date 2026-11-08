@@ -10,8 +10,6 @@
       switch event {
       case .show(let place):
         return placeSample(place)
-      case .chooseLibrary(let place):
-        return placeSample(place == state.pane.place ? .screen : place)
       case .menu(.togglePause):
         return state.footer.controls.pause?.isOn == true ? viewerWorking : viewerPaused
       case .menu(.toggleActualSize):
@@ -61,10 +59,6 @@
         return viewerActivityBySession
       case .chooseSession(.one):
         return viewerActivityOneSession
-      case .showWindow:
-        return viewerShowOnScreen
-      case .clearOutline:
-        return viewerIdle
       case .filterActivity, .toggleSession, .toggleRun, .showRunPictures, .showAllRunPictures, .hideRunPictures,
         .openShot, .openAction, .pictureSide, .closePicture, .openReplay, .replayFrame, .previousFrame, .nextFrame,
         .togglePlay, .closeReplay:
@@ -80,7 +74,6 @@
       switch place {
       case .screen: viewerWorking
       case .activity: viewerActivity
-      case .apps: viewerApps
       }
     }
   }

@@ -30,11 +30,7 @@
         sample("19-actual-size-needs-you", PreviewStates.viewerActualSizeNeedsYou),
         sample("20-activity", PreviewStates.viewerActivity),
         sample("21-activity-nothing-yet", PreviewStates.viewerActivityEmpty),
-        sample("22-apps", PreviewStates.viewerApps),
-        sample("23-show-on-screen", PreviewStates.viewerShowOnScreen),
         sample("27-activity-paused", PreviewStates.viewerActivityPaused),
-        sample("28-apps-paused", PreviewStates.viewerAppsPaused),
-        sample("29-show-on-screen-right-edge", PreviewStates.viewerShowOnScreenRightEdge),
         sample("31-sessions", PreviewStates.viewerSessions),
         sample("32-sessions-one-ended", PreviewStates.viewerSessionsEnded),
         sample("33-activity-by-session", PreviewStates.viewerActivityBySession),
@@ -52,7 +48,7 @@
         sample("51-sidebar-hidden", PreviewStates.viewerSidebarHidden),
         sample("53-pip-top-left", inCorner(.topLeading, PreviewStates.viewerActivity)),
         sample("54-pip-top-right-run-pictures", inCorner(.topTrailing, PreviewStates.viewerActivityShots)),
-        sample("55-pip-bottom-left-apps-paused", inCorner(.bottomLeading, PreviewStates.viewerAppsPaused)),
+        sample("55-pip-bottom-left-activity-paused", inCorner(.bottomLeading, PreviewStates.viewerActivityPaused)),
         sample("56-helper-needs-setup", PreviewStates.viewerHelperNeedsSetup),
         sample("57-session-chosen", PreviewStates.viewerSessionChosen),
         sample("58-cleaning-up-row", PreviewStates.viewerSessionCleaningUp),
@@ -63,11 +59,6 @@
         sample("63-activity-problems", PreviewStates.viewerActivityProblems),
         sample("64-activity-days-before", PreviewStates.viewerActivityDays),
         sample("65-activity-many-moments", PreviewStates.viewerActivityMany),
-        sample("66-apps-one-session", PreviewStates.viewerAppsOneSession),
-        sample("67-apps-one-session-empty", PreviewStates.viewerAppsOneSessionEmpty),
-        sample("68-apps-copy-monogram", PreviewStates.viewerAppsCopy),
-        sample("69-apps-hidden", PreviewStates.viewerAppsHidden),
-        sample("70-apps-many", PreviewStates.viewerAppsMany),
         sample("71-activity-run-pictures", PreviewStates.viewerActivityShots),
         sample("72-activity-replay", PreviewStates.viewerActivityReplay),
         sample("73-picture-sheet", PreviewStates.viewerPictureSheet),
@@ -111,7 +102,6 @@
       }
       return [
         sample("list-end-activity-many", PreviewStates.viewerActivityMany),
-        sample("list-end-apps-many", PreviewStates.viewerAppsMany),
         sample("list-end-activity-many-top-right", inCorner(.topTrailing, PreviewStates.viewerActivityMany)),
       ] + narrow
     }
@@ -146,15 +136,15 @@
     /// 700.
     nonisolated static let narrowWidths: [CGFloat] = [320, 400, 480, 600, 700, 860]
 
-    /// The short windows the content is drawn in for checking how the Library folds into a row: the least the renders
-    /// draw, one between, and the height it folds under.
+    /// The short windows the content is drawn in for checking how the helper's row folds into its mark: the least the
+    /// renders draw, one between, and the height it folds under.
     nonisolated static let shortHeights: [CGFloat] = [220, 300, 420]
 
     /// The narrow renders, each named by its file and drawn at its window's width and the standard height, as a window
     /// opened at that width fits them: Working, You have control, Stopped, Activity, the sidebar hidden, and the sidebar
     /// over the card where the width leaves no room for it beside the card, at each of ``narrowWidths``; then Working
-    /// whole and the sidebar over the card at each of ``shortHeights``, each with a few sessions and with many; and the
-    /// Apps list at each of ``appsWidths``.
+    /// whole, Activity, and the sidebar over the card at each of ``shortHeights``, each with a few sessions and with
+    /// many.
     static var narrowRenders: [PreviewState<ViewerState>] {
       let states = [
         ("working", PreviewStates.viewerWorking), ("control", PreviewStates.viewerControl),
@@ -170,17 +160,10 @@
           return PreviewState(name: "narrow-\(Int(width))-\(state.0)", value: fitted, size: size)
         }
       }
-      let apps = appsWidths.map { width in
-        let size = CGSize(width: width, height: PreviewStates.viewerSize.height)
-        return PreviewState(
-          name: "narrow-\(Int(width))-apps",
-          value: PreviewStates.viewer(PreviewStates.viewerApps, fittedTo: size),
-          size: size
-        )
-      }
       let short = shortHeights.flatMap { height in
         [
           ("working", PreviewStates.viewerWorking, Self.shortWidths.whole),
+          ("activity", PreviewStates.viewerActivity, Self.shortWidths.whole),
           ("overlay", PreviewStates.viewerSidebarOverlay, Self.shortWidths.hidden),
           ("many", PreviewStates.viewerSidebarMany, Self.shortWidths.whole),
           ("many-overlay", Self.overlaid(PreviewStates.viewerSidebarMany), Self.shortWidths.hidden),
@@ -191,11 +174,8 @@
           return PreviewState(name: file, value: PreviewStates.viewer(state, fittedTo: size), size: size)
         }
       }
-      return narrow + apps + short
+      return narrow + short
     }
-
-    /// The widths the Apps list is drawn narrow at: one column of cards, and two.
-    nonisolated static let appsWidths: [CGFloat] = [320, 600]
 
     /// `state` with the sidebar shown over the card, as the toggle shows it in a window too narrow for it beside the card.
     ///
@@ -213,16 +193,15 @@
     /// The narrow render names, in order, for a test to list as its arguments.
     static var narrowNames: [String] { narrowRenders.map(\.name) }
 
-    /// The three places' samples, the Screen first, and the sidebar hidden, which the frame renders draw at every size.
+    /// The two places' samples, the Screen first, and the sidebar hidden, which the frame renders draw at every size.
     private static var tabs: [(name: String, state: ViewerState)] {
       [
         ("screen", PreviewStates.viewerWorking), ("activity", PreviewStates.viewerActivity),
-        ("apps", PreviewStates.viewerApps),
         ("sidebar-hidden", PreviewStates.viewerSidebarHidden),
       ]
     }
 
-    /// The sizes the frame renders draw the three places at: the window's first size, the standard one, the narrower
+    /// The sizes the frame renders draw the two places at: the window's first size, the standard one, the narrower
     /// steps, a tall one and two full screens, so every place can be seen to stand in the same card. The design check
     /// draws them; the tests draw each state once, at the standard size or a narrow one.
     private static let frameSizes: [(name: String, size: NSSize, fullScreen: Bool)] = [

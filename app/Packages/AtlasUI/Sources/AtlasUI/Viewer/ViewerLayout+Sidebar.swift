@@ -23,8 +23,6 @@ extension ViewerLayout {
   static let toggleClearance = Spacing.s
   /// 44: a session's row, its 28-point icon and 8 above and below it.
   static let sidebarRowHeight = ControlHeight.xl
-  /// 32: a row of the Library.
-  static let libraryRowHeight = ControlHeight.m
   /// 2: between the sidebar's rows.
   static let sidebarRowGap = Spacing.half
   /// 10: a row's content inset inside its capsule, before the icon and after the words or the count.
@@ -65,7 +63,7 @@ extension ViewerLayout {
     bottom: Spacing.xsPlus,
     trailing: Spacing.sPlus
   )
-  /// 12: between the sessions' room and the Library under it, the gap a section's heading keeps above it.
+  /// 12: between the sessions' room and the hairline over the foot, the gap a section's heading keeps above it.
   static let footGap = headingInset.top
   /// 16: how far the sessions fade out at their room's lower edge; their last row ends that far up, so scrolled to the
   /// end it stands clear of the fade.
@@ -82,17 +80,19 @@ extension ViewerLayout {
   static let endedHeadingCorner = endedHeadingHeight / 2
   /// Ended's inset round its button: 6 above and 2 under, so its line stands where another heading's does.
   static let endedHeadingInset = EdgeInsets(top: Spacing.xsPlus, leading: .zero, bottom: Spacing.half, trailing: .zero)
-  /// 18: the room a Library row's symbol takes, so the words start in line.
-  static let librarySymbol = IconSize.sPlus
-  /// 8: above and below the helper's line.
-  static let helperInset = Spacing.s
-  /// 8: the helper's dot.
-  static let helperDot = Spacing.s
-  /// 8: between the helper's dot and its words.
-  static let helperGap = Spacing.s
-  /// 16: the corner of the helper line's fill under the pointer, half the most it stands tall, so the fill is a
-  /// capsule round the line.
-  static let helperCorner = ControlHeight.m / 2
+  /// 28: the helper row's tile, a session's icon's side, so its words start where a session's do.
+  static let helperTile = sidebarIcon
+  /// 7: the helper tile's corner, a quarter of its side, as a session's tile rounds.
+  static let helperTileCorner = sidebarIcon / 4
+  /// 18: Atlas's orbit across its tile.
+  static let helperMark = IconSize.sPlus
+  /// 4: between the helper row's words and the ellipsis after them.
+  static let helperMoreGap = Spacing.xs
+  /// 12: how far the helper row's ellipsis stands into the row's trailing inset, past its words' room, so a title
+  /// such as "The helper is logged out" keeps its room beside it.
+  static let helperMoreReach = Spacing.m
+  /// 6: from the hairline over the helper's row to the row.
+  static let helperRuleGap = Spacing.xsPlus
   /// 6: how far a row of Ended rises from as it comes in, from under its heading, and sinks to as it goes.
   static let endedRise = Spacing.xsPlus
   /// 12: how far past a threshold the window must go to cross back, so a window held near one never flickers between
@@ -102,16 +102,10 @@ extension ViewerLayout {
   /// leaves the card 456 at 700 and 444 at 688, room for the footer's widest buttons beside a latest line of about
   /// 120, so the card is never cramped beside it.
   static let wholeSidebar = ViewerThreshold(risesAt: 700, room: fitRoom)
-  /// 420: the window's height under which the Library folds into a row of circles, opening again only at 432.
+  /// 420: the window's height under which the helper's row folds into its mark, opening again only at 432.
   static let tallSidebar = ViewerThreshold(fallsUnder: 420, room: fitRoom)
-  /// 8: above and below the Library folded into a row, so the row stands 44 high.
-  static let libraryRowInset = Spacing.s
-  /// 4: between the circles of the Library folded into a row.
-  static let libraryCircleGap = Spacing.xs
-  /// 28: each circle of the Library folded into a row, and the helper's dot's at its end.
-  static let libraryCircle = ControlHeight.s
-  /// The Library's unseen dot's inset in a circle's top-trailing corner, where a badge stands.
-  static let libraryCircleDot = Spacing.xs
+  /// 44: the circle the helper's mark stands alone in, in a short window, a row's height across.
+  static let helperCircle = sidebarRowHeight
 
   /// The room the sidebar takes at the window's leading edge: its width, or none while hidden. Its content keeps its
   /// width as it hides, so its rows are cut off by its narrowing edge rather than laid out again.

@@ -113,14 +113,6 @@ enum Words {
     ago.isEmpty ? "Last: \(last)" : "Last: \(last) · \(ago)"
   }
 
-  /// The window an app shows on the screen, beside Idle.
-  ///
-  /// - Parameter app: The app's name.
-  /// - Returns: "Showing Opie's window".
-  static func showingLine(app: String) -> String {
-    "Showing \(app)'s window"
-  }
-
   /// What an operation did, after who did it: the service's own words when it gives them, so every app says the same.
   ///
   /// - Parameter row: The recorded operation.

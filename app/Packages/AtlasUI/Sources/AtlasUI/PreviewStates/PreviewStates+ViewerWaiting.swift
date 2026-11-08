@@ -20,9 +20,10 @@
       sidebar: viewerSidebar(
         helper: ViewerHelperLine(
           tone: .attention,
-          words: "Helper needs setup",
-          help: viewerHelperHelp(newest: "—"),
-          menu: viewerHelperMenu()
+          title: "Atlas needs setup",
+          line: "Helper atlas",
+          lineTone: .attention,
+          menu: viewerHelperMenu(facts: viewerHelperFacts(newest: "—"))
         )
       )
     )
@@ -47,9 +48,10 @@
       sidebar: viewerSidebar(
         helper: ViewerHelperLine(
           tone: .attention,
-          words: "Helper logged out",
-          help: viewerHelperHelp(newest: "—"),
-          menu: viewerHelperMenu()
+          title: "The helper is logged out",
+          line: "Log in to atlas to go on",
+          lineTone: .attention,
+          menu: viewerHelperMenu(facts: viewerHelperFacts(newest: "—"))
         )
       )
     )
@@ -72,9 +74,9 @@
       sidebar: viewerSidebar(
         helper: ViewerHelperLine(
           tone: .quiet,
-          words: "Connecting to the helper",
-          help: viewerHelperHelp(newest: "—"),
-          menu: viewerHelperMenu(logsOut: true)
+          title: "Connecting to Atlas…",
+          line: "Helper atlas",
+          menu: viewerHelperMenu(facts: viewerHelperFacts(newest: "—"), logsOut: true)
         )
       )
     )

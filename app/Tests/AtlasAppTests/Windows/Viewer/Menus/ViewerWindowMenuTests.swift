@@ -52,13 +52,13 @@ struct ViewerWindowMenuTests {
     #expect(size.state == .on)
   }
 
-  @Test("Screen, Activity and Apps take ⌘1 to ⌘3 in the sidebar's order")
-  func placesTakeTheirNumbersInTheSidebarsOrder() throws {
+  @Test("Screen and Activity take ⌘1 and ⌘2")
+  func placesTakeTheirNumbers() throws {
     let places = MainMenu.view().items
       .filter { $0.action == #selector(ViewerMenuActions.showPlace(_:)) }
-    #expect(places.map(\.title) == ["Screen", "Activity", "Apps"])
-    #expect(places.map(\.keyEquivalent) == ["1", "2", "3"])
-    #expect(places.compactMap { ViewerPlace(menuTag: $0.tag) } == [.screen, .activity, .apps])
+    #expect(places.map(\.title) == ["Screen", "Activity"])
+    #expect(places.map(\.keyEquivalent) == ["1", "2"])
+    #expect(places.compactMap { ViewerPlace(menuTag: $0.tag) } == [.screen, .activity])
     #expect(places.allSatisfy { $0.keyEquivalentModifierMask == .command })
   }
 
@@ -281,7 +281,7 @@ struct ViewerWindowMenuTests {
     #expect(sidebar.title == ViewerWords.hideSidebarItem)
   }
 
-  @Test("the helper line's menu offers Check Again, Open Settings, Recover, Switch and Log Out as the Helper menu does")
+  @Test("the helper row's menu offers Check Again, Open Settings, Recover, Switch and Log Out as the Helper menu does")
   func theHelperLinesMenuFollowsTheHelperMenu() throws {
     let viewer = ViewerController.scripted(ScriptedService())
     let window = window(viewer)
@@ -294,7 +294,10 @@ struct ViewerWindowMenuTests {
       (.askLogOut, #selector(HelperMenuActions.askLogOut(_:))),
     ]
     let agree = { (why: String) in
-      let line = viewer.state.sidebar.helper.menu.flatMap(\.items)
+      // The facts lead the menu, read-only; the commands follow.
+      let line = viewer.state.sidebar.helper.menu
+        .flatMap(\.items)
+        .filter { !$0.isInfo }
       #expect(line.map(\.command) == pairs.map(\.0), "\(why): in the Helper menu's order")
       for (command, action) in pairs {
         let lineItem = try #require(line.first { $0.command == command })
@@ -320,7 +323,7 @@ struct ViewerWindowMenuTests {
     let helper = MainMenu.helper()
     let check = try #require(helper.items.first { $0.action == #selector(ViewerMenuActions.checkAgain(_:)) })
     #expect(check.keyEquivalent == "r" && check.keyEquivalentModifierMask == .command)
-    #expect(viewer.state.sidebar.helper.menu.first?.items.first?.shortcut == ViewerMenuShortcut("r"))
+    #expect(viewer.state.sidebar.helper.menu.dropFirst().first?.items.first?.shortcut == ViewerMenuShortcut("r"))
   }
 
   @Test("Next Session and Previous Session follow the sidebar's order")

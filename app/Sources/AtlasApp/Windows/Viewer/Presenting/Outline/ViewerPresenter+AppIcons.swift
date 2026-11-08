@@ -2,9 +2,9 @@ import AtlasService
 import AtlasUI
 
 extension ViewerPresenter {
-  /// What stands for an app: the icon found for it, from the open app, the icons kept between launches or where it
-  /// is installed, by its bundle identifier, the one its name was seen with, or its name; else the tile drawn from
-  /// its name, which also shows while its icon is still being found. Never a blank square, and never a path.
+  /// What stands for an app: the icon found for it, from the icons kept between launches or where it is installed, by
+  /// its bundle identifier, the one its name was seen with, or its name; else the tile drawn from its name, which also
+  /// shows while its icon is still being found. Never a blank square, and never a path.
   ///
   /// - Parameters:
   ///   - bundleId: The app's bundle identifier, if known.

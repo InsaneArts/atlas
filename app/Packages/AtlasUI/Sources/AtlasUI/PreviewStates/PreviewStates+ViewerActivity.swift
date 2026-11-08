@@ -82,7 +82,7 @@
     /// runs folded to their problems and pictures, and yesterday's Terminal folded.
     @MainActor public static let viewerActivity: ViewerState = {
       var state = viewerWorking
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 19])
+      state.sidebar.sessions.chosen = .all
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(workingActivity)
@@ -106,7 +106,7 @@
     /// Activity from the days before: yesterday's Terminal, then Wednesday's sessions and the row for the rest.
     @MainActor public static let viewerActivityDays: ViewerState = {
       var state = viewerIdle
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 0])
+      state.sidebar.sessions.chosen = .all
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(daysActivity)
@@ -116,7 +116,7 @@
     /// A long list: today's live session, then a day of many short sessions and the row for the rest.
     @MainActor public static let viewerActivityMany: ViewerState = {
       var state = viewerIdle
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 20])
+      state.sidebar.sessions.chosen = .all
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(manyActivity)
@@ -126,8 +126,8 @@
     /// Activity before anything was done in the helper.
     @MainActor public static let viewerActivityEmpty: ViewerState = {
       var state = viewerIdle
+      state.sidebar.sessions.chosen = .all
       state.footer.latest = viewerStateLine("Idle", "Ready for your agents")
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 0])
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(
@@ -148,7 +148,7 @@
     /// Activity while the picture is paused: the screen in the corner fades, and the list is as it was.
     @MainActor public static let viewerActivityPaused: ViewerState = {
       var state = viewerPaused
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 19])
+      state.sidebar.sessions.chosen = .all
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0, isPaused: true) }
       state.pane = viewerActivity.pane

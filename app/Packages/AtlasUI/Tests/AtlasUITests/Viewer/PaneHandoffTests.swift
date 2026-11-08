@@ -15,48 +15,28 @@ struct PaneHandoffTests {
     #expect(PaneHandoff(.screen).shown == nil)
   }
 
-  @Test("the incoming list stays hidden until the outgoing list finishes departing")
-  func departurePrecedesArrival() {
+  @Test("leaving Activity for the Screen hides it until its departure finishes")
+  func departureEndsWithNothingShown() {
     let handoff = PaneHandoff()
     handoff.request(.activity)
     #expect(handoff.shown == .activity)
-    handoff.request(.apps)
+    handoff.request(.screen)
     #expect(handoff.shown == nil)
     #expect(handoff.departing == .activity)
     handoff.departed(.activity)
-    #expect(handoff.shown == .apps)
+    #expect(handoff.shown == nil)
     #expect(handoff.departing == nil)
   }
 
-  @Test("a newer navigation cancels the pending arrival and stale completions do nothing")
-  func navigationCancelsPendingArrivals() {
+  @Test("going back to Activity while it departs reverses the departure, and stale completions do nothing")
+  func reversalCancelsDeparture() {
     let handoff = PaneHandoff()
     handoff.request(.activity)
-    handoff.request(.apps)
     handoff.request(.screen)
-    handoff.request(.apps)
-    #expect(handoff.shown == nil)
-    handoff.departed(.apps)
-    #expect(handoff.shown == nil)
-    handoff.departed(.activity)
-    #expect(handoff.shown == .apps)
-    handoff.departed(.activity)
-    #expect(handoff.shown == .apps)
-  }
-
-  @Test("reversing navigation cancels departure and the Screen cancels a pending list")
-  func reversalAndScreenCancelPendingLists() {
-    let handoff = PaneHandoff()
-    handoff.request(.activity)
-    handoff.request(.apps)
     handoff.request(.activity)
     #expect(handoff.shown == .activity)
     #expect(handoff.departing == nil)
     handoff.departed(.activity)
     #expect(handoff.shown == .activity)
-    handoff.request(.apps)
-    handoff.request(.screen)
-    handoff.departed(.activity)
-    #expect(handoff.shown == nil)
   }
 }

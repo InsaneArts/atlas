@@ -6,7 +6,7 @@ import CoreGraphics
 /// the alert asked, and its cleanups. Each is observed, so the window follows every change at once. Control, and what the
 /// input method is composing, are ``ViewerControl``'s.
 struct ViewerSession {
-  /// The place shown: the Screen, or a list from the Library.
+  /// The place shown: the Screen, or Activity.
   var place = ViewerPlace.screen
   /// Whose work Activity shows: every host session's, or one's.
   var chosenSession = ViewerSessionChoice.all
@@ -58,9 +58,6 @@ struct ViewerSession {
   var toast: String?
   /// Take Control's refusals counted, so each one is its own footer line and only the newest toast's wait removes it.
   var refusals = 0
-  /// What the person has seen of the helper's activity: what the Activity pane showed, or the first reading's; nil
-  /// before the first reading, when nothing is unseen yet.
-  var activitySeen: ViewerSeenActivity?
   /// The corner the small screen keeps to, as the person last left it.
   var corner = MiniCorner.bottomTrailing
   /// What VoiceOver says about the helper's state once it has held a moment, while it asks something of the person;
