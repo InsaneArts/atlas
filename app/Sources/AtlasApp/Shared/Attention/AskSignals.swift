@@ -67,12 +67,15 @@ final class AskSignals {
     }
   }
 
-  /// Takes away every notification Notification Center still shows whose question is not up now.
+  /// Takes away every notification Notification Center still shows whose question is not up now, and keeps track of
+  /// the rest as posted.
   func withdrawLeftovers() async {
     let delivered = await notifications.delivered()
     let open = Set(store.list?.asks.map(\.id) ?? Array(posted))
     let leftovers = delivered.filter { !open.contains($0) }
     if !leftovers.isEmpty { notifications.withdraw(leftovers) }
+    // The ones kept are this launch's to take away once their question is answered or ends.
+    posted.formUnion(delivered.filter { open.contains($0) })
   }
 
   /// A status was read: the first time it lists an account, macOS is asked, once, whether Atlas may notify the

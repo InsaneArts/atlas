@@ -65,8 +65,8 @@ struct AskStoreTests {
   func anAnswerClearsBothSurfaces() async throws {
     let service = ScriptedService()
     service.askList = AskList(asks: [Self.ask("a1")])
-    let actions = HelperActions.scripted(service)
-    await actions.asks.read()
+    let store = AskStore(service: service) { Self.start }
+    await store.read()
     let shown = { (asks: AskList?) -> (AskCardState?, AskCardState?) in
       var panelSnapshot = PanelSnapshot(status: ViewerStatus(), date: Self.start, asks: asks)
       panelSnapshot.status.overview.state = .working
@@ -77,15 +77,15 @@ struct AskStoreTests {
       viewerSnapshot.asks = asks
       return (PanelPresenter.state(panelSnapshot).ask, ViewerPresenter.screen(viewerSnapshot).ask)
     }
-    #expect(shown(actions.asks.list).0?.id == "a1" && shown(actions.asks.list).1?.id == "a1")
+    #expect(shown(store.list).0?.id == "a1" && shown(store.list).1?.id == "a1")
     service.hold.insert("asks/answer")
-    let answering = Task { await actions.asks.answer("a1", with: .task) }
+    let answering = Task { await store.answer("a1", with: .task) }
     try await settle("the answer never reached the service") { service.held["asks/answer"] != nil }
-    #expect(shown(actions.asks.list).0 == nil && shown(actions.asks.list).1 == nil, "both clear before the reply")
+    #expect(shown(store.list).0 == nil && shown(store.list).1 == nil, "both clear before the reply")
     service.resume("asks/answer")
     await answering.value
     #expect(service.answers == ["a1 task"])
-    #expect(actions.asks.list?.asks.isEmpty == true)
+    #expect(store.list?.asks.isEmpty == true)
   }
 
   @Test("a question shows the picture its own reading names, and a rerun's new picture replaces it")
@@ -94,7 +94,7 @@ struct AskStoreTests {
     var first = Self.ask("a1")
     first.picture = "a1-x.jpg"
     service.askList = AskList(asks: [first])
-    let store = AskStore(service: service)
+    let store = AskStore(service: service) { Self.start }
     let image = png()
     let folder = AskFolder(watch: { _ in nil }, picture: { _ in image })
     store.watch(folder)
@@ -107,11 +107,28 @@ struct AskStoreTests {
     try await settle("the new picture never came") { store.pictures["a1-y.jpg"] != nil }
   }
 
+  @Test("a reply that arrives after its question ended shows nothing and tells the notifications nothing of it")
+  func aLateReplyShowsNothingEnded() async {
+    let service = ScriptedService()
+    service.askList = AskList(
+      asks: [Self.ask("a1", endsAfter: 120)],
+      allowed: [
+        AllowedGrant(session: "k", account: AccountKey(kind: .app, id: "x"), name: "X", ends: Self.start + 120)
+      ]
+    )
+    let store = AskStore(service: service) { Self.start + 200 }
+    var told: [[String]] = []
+    store.changed = { told.append($0.asks.map(\.id)) }
+    await store.read()
+    #expect(store.list?.asks.isEmpty == true && store.list?.allowed.isEmpty == true)
+    #expect(told == [[]], "no notification posts for an ended question")
+  }
+
   @Test("a reading started before an answer never brings the answered question back")
   func anAnsweredQuestionStaysGone() async throws {
     let service = ScriptedService()
     service.askList = AskList(asks: [Self.ask("a1")])
-    let store = AskStore(service: service)
+    let store = AskStore(service: service) { Self.start }
     await store.read()
     service.hold.insert("asks.json")
     // A reading that takes its reply, with the question still up, before the answer.

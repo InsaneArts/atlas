@@ -43,6 +43,9 @@ struct AskNotificationsTests {
   ///   - id: Its id.
   ///   - once: Whether Just This Once is offered.
   /// - Returns: The question.
+  /// When the questions were asked, which the stores read as now.
+  static let asked = Date(timeIntervalSince1970: 1_762_600_000)
+
   static func ask(_ id: String, once: Bool = true) -> Ask {
     let asked = Date(timeIntervalSince1970: 1_762_600_000)
     return Ask(
@@ -112,7 +115,7 @@ struct AskNotificationsTests {
     let recorded = Recorded()
     let service = ScriptedService()
     service.askList = AskList(asks: [Self.ask("a2")])
-    let store = AskStore(service: service)
+    let store = AskStore(service: service) { Self.asked }
     await store.read()
     var notifications = recorded.notifications
     notifications.delivered = { ["a1", "a2"] }
@@ -128,6 +131,33 @@ struct AskNotificationsTests {
     ) { false }
     signals.asksChanged(try #require(store.list))
     try await settle("the leftover was never withdrawn") { recorded.withdrawn == ["a1"] }
+  }
+
+  @Test("a notification kept from an earlier launch is withdrawn once its question is answered")
+  func aKeptNotificationIsWithdrawnLater() async throws {
+    let recorded = Recorded()
+    let service = ScriptedService()
+    service.askList = AskList(asks: [Self.ask("a1")])
+    let store = AskStore(service: service) { Self.asked }
+    await store.read()
+    var notifications = recorded.notifications
+    notifications.delivered = { ["a1"] }
+    let signals = AskSignals(
+      notifications: notifications,
+      preferences: SettingsPreferences(
+        loadTab: { nil },
+        saveTab: { _ in },
+        loadNotify: { false },
+        saveNotify: { _ in }
+      ),
+      store: store
+    ) { true }
+    signals.asksChanged(try #require(store.list))
+    await signals.withdrawLeftovers()
+    #expect(signals.posted.contains("a1"), "the kept notification is tracked")
+    #expect(recorded.withdrawn.isEmpty, "its question is still up")
+    signals.asksChanged(AskList())
+    #expect(recorded.withdrawn == ["a1"])
   }
 
   @Test("macOS is asked once, when the first account joins the list, and a no badges the menu bar")

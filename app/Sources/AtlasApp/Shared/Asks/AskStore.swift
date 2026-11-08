@@ -141,7 +141,7 @@ final class AskStore {
     if let list { changed(list) }
   }
 
-  /// Shows a reading, less what was answered here, reads the pictures of new questions and waits for the earliest
+  /// Shows a reading, less what was answered here and what has ended, reads the pictures of new questions and waits for the earliest
   /// end.
   ///
   /// - Parameter read: The reading.
@@ -149,7 +149,10 @@ final class AskStore {
     let listed = Set(read.asks.map(\.id))
     answered.formIntersection(listed)
     var shown = read
-    shown.asks.removeAll { answered.contains($0.id) }
+    // A reply that arrives late may still hold what ended meanwhile: it shows nowhere, and no notification posts for it.
+    let now = wallClock()
+    shown.asks.removeAll { answered.contains($0.id) || $0.ends <= now }
+    shown.allowed.removeAll { $0.ends <= now }
     list = shown
     keepPictures()
     for name in shown.asks.compactMap(\.picture) where pictures[name] == nil {
