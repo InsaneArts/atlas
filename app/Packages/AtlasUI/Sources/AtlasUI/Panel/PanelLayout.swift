@@ -78,10 +78,6 @@ enum PanelLayout {
   static let ringCorner = pictureCorner + ringReach
   /// 1.015: the rim settles in from a little larger.
   static let rimArrival: CGFloat = 1.015
-  /// 0.5: how much colour the picture keeps while it needs the person or is paused.
-  static let dimSaturation = 0.5
-  /// 0.3: the black over a dimmed picture, which leaves it at 70% brightness.
-  static let dimShade = 0.3
   /// 0.55: the mark on the empty stage at rest.
   static let markRest = 0.55
   /// 0.3: the low point of the connecting mark's breath.

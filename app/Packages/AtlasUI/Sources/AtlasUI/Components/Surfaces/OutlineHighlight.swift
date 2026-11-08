@@ -32,7 +32,9 @@ struct OutlineHighlight: View {
   #Preview("Samples") {
     ZStack {
       if let picture = SampleDesktop.picture {
-        PictureFrame(picture: picture)
+        Image(decorative: picture.image, scale: 1)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
       }
       OutlineHighlight(frame: OutlineHighlightLayout.sampleFrame, dim: OutlineHighlightLayout.sampleDim)
     }

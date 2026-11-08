@@ -18,10 +18,8 @@
       switch sample {
       case .capsuleButtons: CapsuleButtonSamples(.every)
       case .statusDots: IndicatorSamples(.statusDot)
-      case .floatingChip: FloatingChipSamples()
       case .alertCard: AlertCardSamples()
       case .emptyMessage: EmptyMessageSamples()
-      case .pictureFrame: PictureFrameSamples()
       case .miniScreen: MiniScreenSamples()
       case .searchField: SearchFieldSamples()
       case .groupLabel: GroupLabelSamples()

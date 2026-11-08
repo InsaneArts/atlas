@@ -5,14 +5,10 @@
     case capsuleButtons = "capsule-buttons"
     /// The status dot's marks.
     case statusDots = "status-dots"
-    /// A chip floating over a picture.
-    case floatingChip = "floating-chip"
     /// The alert card, side by side and stacked, asked, running, refused and done.
     case alertCard = "alert-card"
     /// A message in place of a picture.
     case emptyMessage = "empty-message"
-    /// One letterboxed picture in each look.
-    case pictureFrame = "picture-frame"
     /// The live corner picture.
     case miniScreen = "mini-screen"
     /// The search field.
