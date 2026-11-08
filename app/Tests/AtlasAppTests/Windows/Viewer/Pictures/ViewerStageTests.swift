@@ -42,6 +42,25 @@ struct ViewerStageTests {
     #expect(list.documentView?.frame == laidOut, "the hidden list was laid out again")
   }
 
+  @Test("Activity with no small screen keeps its list as it was laid out behind a Screen with no picture")
+  func activityWithNoPictureKeepsItsLayoutBehindTheScreen() throws {
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: .zero)
+    defer { Motion.Pose.hold(at: previous) }
+    var activity = try Self.activity(lines: 80)
+    activity.mini = nil
+    activity.miniCorner = .topTrailing
+    var screen = PreviewStates.viewerNotReady
+    screen.miniCorner = .topTrailing
+    let host = ViewerHost(activity)
+    let list = try #require(host.scrollViews.first, "Activity has its list")
+    let laidOut = try #require(list.documentView?.frame)
+    host.show(screen)
+    Self.settle(host)
+    // No picture, so no small screen comes back over the list: it keeps no room for one.
+    #expect(list.documentView?.frame == laidOut, "the hidden list was laid out again")
+  }
+
   /// Lets every animation of the change just made finish, holding the moment well past the longest, then draws.
   ///
   /// - Parameter host: The window.

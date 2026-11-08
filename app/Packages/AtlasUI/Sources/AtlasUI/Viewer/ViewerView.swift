@@ -265,13 +265,15 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   }
 
   /// Where the small screen floats over the panes' lists: the end of the corner it is in now and the band its size
-  /// takes there while it shows, else nowhere. While the Screen shows, Activity waits hidden with the room it keeps
-  /// over its list, so going to the Screen and back never lays its list out again or moves it from where it was read.
+  /// takes there while it shows, else nowhere. While the Screen shows its picture, Activity waits hidden with the room
+  /// it keeps under the small screen that picture comes back as, so going to the Screen and back never lays its list
+  /// out again or moves it from where it was read.
   ///
   /// - Parameter pip: The small screen's size.
   /// - Returns: The clearance.
   private func miniClearance(_ pip: CGSize) -> MiniClearance {
-    guard state.mini != nil || state.pane.place == .screen else { return MiniClearance() }
+    let waits = state.pane.place == .screen && state.screen.picture != nil
+    guard state.mini != nil || waits else { return MiniClearance() }
     return MiniClearance(edges: miniCorner.isTop ? .top : .bottom, length: ViewerLayout.pipRoom(pip))
   }
 
