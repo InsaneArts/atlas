@@ -277,11 +277,16 @@ impl Grant {
         Ok(state)
     }
 
-    /// This grant's owner, while that same owner still holds control and is
-    /// the person: never another holder that came in since.
+    /// This grant's owner, when it was granted to the person: never another
+    /// holder that came in since. It only looks, so a Stop or a release
+    /// that landed meanwhile keeps its own refusal for the batch to meet.
     pub(super) fn person(&self) -> Option<&str> {
-        let state = self.authorize().ok()?;
-        (state.holder() == Some(Who::Person)).then_some(self.owner.as_str())
+        let state = self.gate.lock().ok()?;
+        let theirs = state
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.token == self.owner && owner.who == Who::Person);
+        theirs.then_some(self.owner.as_str())
     }
 }
 

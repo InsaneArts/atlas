@@ -4513,3 +4513,33 @@ async fn an_agents_typing_is_never_looked_at_for_a_password() {
     let released = service.release(owner, &phase).await.unwrap();
     assert_eq!(released.get("signedIn"), None);
 }
+
+#[test]
+fn a_stop_or_release_landing_before_the_batch_runs_keeps_its_own_refusal() {
+    // A Stop between admission and execution: the person's control is never ended by it, an agent's is.
+    let gate = Arc::new(Gate::default());
+    let agent = "c".repeat(48);
+    let grant = gate.acquire(&agent, super::Who::Agent).unwrap();
+    gate.hold(true).unwrap();
+    assert_eq!(grant.person(), None);
+    assert_eq!(
+        grant.authorize().err().map(|error| error.code),
+        Some(Code::Stopped)
+    );
+    gate.hold(false).unwrap();
+
+    // A release between admission and execution.
+    let gate = Arc::new(Gate::default());
+    let person = "d".repeat(48);
+    let grant = gate.acquire(&person, super::Who::Person).unwrap();
+    gate.cancel(Some(&person)).unwrap();
+    assert_eq!(
+        grant.person(),
+        Some(person.as_str()),
+        "who it was granted to"
+    );
+    assert_eq!(
+        grant.authorize().err().map(|error| error.code),
+        Some(Code::Cancelled)
+    );
+}
