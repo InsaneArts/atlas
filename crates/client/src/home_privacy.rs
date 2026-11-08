@@ -313,18 +313,11 @@ fn private_in(listing: &str, helper: &str) -> bool {
 }
 
 /// Whether an entry of the listing may keep the helper from going into the
-/// home folder: any deny of `search` that applies, for anyone, before an
-/// allow of it that applies. The groups a subject covers aren't looked up,
-/// so an unknown case counts as kept out, and its folders as unreachable.
+/// home folder: any deny of `search` that applies, for anyone. Who a subject
+/// covers isn't looked up, so such a case counts as kept out, and its
+/// folders as unreachable.
 fn denies_search(listing: &str) -> bool {
-    for entry in entries(listing).filter(|entry| entry.applies() && entry.grants("search")) {
-        match entry.kind {
-            "allow" => return false,
-            "deny" => return true,
-            _ => {}
-        }
-    }
-    false
+    entries(listing).any(|entry| entry.kind == "deny" && entry.applies() && entry.grants("search"))
 }
 
 /// The place of the first entry Atlas adds for `helper`, wherever it is and

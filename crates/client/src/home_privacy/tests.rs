@@ -167,9 +167,12 @@ fn a_home_that_may_keep_the_helper_out_hides_its_folders() {
         "group:staff allow search,only_inherit",
         "group:everyone deny search"
     ])));
+    assert!(denies_search(&listing(&[
+        "user:someone allow search",
+        "group:everyone deny search"
+    ])));
     assert!(!denies_search(&listing(&[
-        "group:staff allow search",
-        "user:helper deny search"
+        "group:staff deny search,only_inherit"
     ])));
     assert!(!denies_search(&listing(&[
         "user:helper deny list",
