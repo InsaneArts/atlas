@@ -454,17 +454,6 @@ impl Client {
         // A permit is spent by the request that took it, unless that request
         // is proven to have sent nothing.
         crate::asking::return_permits(self, permits, &result);
-        // The person's question shows the screen as it is: the picture before
-        // a request that sent nothing, or one taken now.
-        if lease.is_none()
-            && crate::asking::asks_person(&result)
-            && !self.kept_for_ask()
-            && let Some(raw) = self
-                .picture_for_ask(&session.epoch.input_epoch(), session.epoch.capture_pid)
-                .await
-        {
-            self.keep_for_ask(raw);
-        }
 
         match &generation {
             Some(generation) => self.release_input(owner, generation, result).await,

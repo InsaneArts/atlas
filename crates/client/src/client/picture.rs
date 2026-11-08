@@ -109,23 +109,32 @@ impl Client {
         })
     }
 
-    /// A picture of the helper's screen now, in the session of `epoch`
-    /// whose daemon is `capture_pid`, for a question to the person: taken
-    /// whether or not the settings keep pictures of actions, and kept only
-    /// with that question. None when none comes within [`FOR_ASK`].
-    pub(super) async fn picture_for_ask(
-        &self,
-        epoch: &InputEpoch,
-        capture_pid: u32,
-    ) -> Option<Raw> {
-        let (_cancel, cancelled) = oneshot::channel();
-        let taking = frame(
-            self.transport.clone(),
-            epoch.clone(),
-            capture_pid,
-            cancelled,
-        );
-        tokio::time::timeout(FOR_ASK, taking).await.ok()?.ok()
+    /// A picture of the helper's screen now, for a question to the person:
+    /// taken once the command's input is cleaned up and its control let go,
+    /// so the person taking over never waits for it; in the helper's session
+    /// as verified afresh, never while the person has stopped agents, and
+    /// whether or not the settings keep pictures of actions. None when none
+    /// comes within [`FOR_ASK`].
+    pub(crate) async fn picture_for_ask(&self) -> Option<Raw> {
+        if self.controller.stop_noted() {
+            return None;
+        }
+        tokio::time::timeout(FOR_ASK, async {
+            let verified = self.verify().await.ok()?;
+            let epoch = &verified.session().epoch;
+            let (_cancel, cancelled) = oneshot::channel();
+            frame(
+                self.transport.clone(),
+                epoch.input_epoch(),
+                epoch.capture_pid,
+                cancelled,
+            )
+            .await
+            .ok()
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// Name `raw` on its command's rows from now on, with the facts of the

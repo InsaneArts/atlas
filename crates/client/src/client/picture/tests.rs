@@ -664,6 +664,19 @@ async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_wh
             )
             .await;
 
+        if !keeping {
+            // Taken only once the input was let go of and control with it,
+            // so the person taking over never waits for it.
+            let log = helper.log();
+            let released = log.iter().rposition(|op| op == "release");
+            let taken = log.iter().rposition(|op| op == "frame sent");
+            assert!(
+                released
+                    .zip(taken)
+                    .is_some_and(|(released, taken)| released < taken),
+                "{log:?}"
+            );
+        }
         let asks = client.controller.asks();
         let open = asks.open(atlas_core::time::now_ms());
         let picture = open[0].picture.clone().expect("the question has a picture");

@@ -225,6 +225,13 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
         let Some((question, later)) = asked(&outcome) else {
             return private(looked_at(outcome));
         };
+        // The person's question shows the screen: the picture before a
+        // request that sent nothing, or one taken now that nothing is held.
+        if !client.kept_for_ask()
+            && let Some(raw) = client.picture_for_ask().await
+        {
+            client.keep_for_ask(raw);
+        }
         let asks = client.controller.asks();
         let ask = Ask {
             id: String::new(),
@@ -247,7 +254,7 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
         let id = asks.ask(ask, now_ms())?;
         if let Some(raw) = client.take_for_ask() {
             // A question goes up without its picture when it can't be kept.
-            let _ = keep_picture(&asks, &id, &raw);
+            let _ = keep_picture(&asks, &id, &raw, now_ms());
         }
         let _shown = Shown {
             asks: asks.clone(),
@@ -499,6 +506,7 @@ fn keep_picture(
     asks: &atlas_control::asks::Asks,
     id: &str,
     raw: &crate::before::Raw,
+    now: u64,
 ) -> Result<()> {
     let (width, height) = (raw.width as usize, raw.height as usize);
     let (jpeg, _, _) = crate::helper_info::jpeg_rgb(
@@ -506,7 +514,7 @@ fn keep_picture(
         (width, height, width.saturating_mul(3)),
         (crate::before::SIDE, crate::before::QUALITY),
     )?;
-    asks.keep_picture(id, &jpeg)
+    asks.keep_picture(id, &jpeg, now)
 }
 
 /// Whether the agent session that asked `ask` still waits on it: its host
