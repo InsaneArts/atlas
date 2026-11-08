@@ -21,8 +21,6 @@ struct CardScroll<Content: View>: View {
   @State private var isAtTop = true
   /// Where the selected row stands as the list scrolls.
   @State private var selection = CardScrollSelection()
-  /// Where the rows stand, so rows arriving above the one read leave it in place.
-  @State private var place = CardScrollPlace()
   /// The list's whole width, its scroll bar's included.
   @State private var width: CGFloat = .zero
   /// The room kept beside the rows for a scroll bar that takes room.
@@ -48,8 +46,6 @@ struct CardScroll<Content: View>: View {
               }
           }
           .environment(\.cardScrollSelection, selection)
-          .environment(\.cardScrollPlace, place)
-          .background(CardScrollReach(place: place))
           // One width for the rows, inside a frame that fills the list, so the list never takes its width from them.
           .frame(width: width > gutter ? width - gutter : nil, alignment: .leading)
           .frame(maxWidth: .infinity, alignment: .leading)

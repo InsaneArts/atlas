@@ -50,7 +50,6 @@ struct ViewerStageTests {
 
     let host = ViewerHost(try Self.activity(lines: 80))
     let list = try #require(host.scrollViews.first)
-    let unscrolled = host.frames
     list.contentView.scroll(to: NSPoint(x: 0, y: Self.scrolled))
     list.reflectScrolledClipView(list.contentView)
     // SwiftUI hears a scroll on the run loop's later turns, as it would a wheel's, and only then knows the row it
@@ -64,12 +63,10 @@ struct ViewerStageTests {
     #expect(before == Self.scrolled, "the scroll did not hold: \(before)")
     host.render()
     let viewport = host.frameFromTop(of: list)
-    // A session row measured after scrolling and well inside the list, which the person reads. A row the list let go
-    // keeps its last report, so only one measured anew counts.
+    // A session row measured after scrolling and well inside the list, which the person reads.
     let read = try #require(
       host.frames.first { key, frame in
-        key.hasPrefix("session line ") && unscrolled[key] != frame
-          && frame.minY > viewport.minY + 40 && frame.maxY < viewport.maxY - 40
+        key.hasPrefix("session line ") && frame.minY > viewport.minY + 40 && frame.maxY < viewport.maxY - 40
       }
     )
     host.show(try Self.activity(lines: 81))

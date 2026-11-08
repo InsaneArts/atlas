@@ -8,7 +8,6 @@ struct ActivityListContent: View {
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.motionReduced) private var reduceMotion
   @Environment(\.listIsAtTop) private var isAtTop
-  @Environment(\.cardScrollPlace) private var place
   /// The card's width as last measured, which the outline gives way to.
   @State private var width = CGFloat.infinity
   /// The days that held more sessions than they showed as last drawn, so the update that shows the rest tells them to
@@ -71,12 +70,6 @@ struct ActivityListContent: View {
     .fixedSize()
   }
 
-  /// What changes as work arrives at the top: the newest session, and the newest run, which a folded session does not
-  /// list.
-  private var arrival: [String?] {
-    [state.days.first?.sessions.first?.id, state.newest]
-  }
-
   /// The days holding more sessions than they show.
   private var foldedDays: Set<String> {
     Set(
@@ -105,7 +98,6 @@ struct ActivityListContent: View {
             .accessibilityAddTraits(.isHeader)
             .outlineGround()
             .id("day.\(day.id)")
-            .listPlace("day.\(day.id)")
             .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
         }
         ForEach(Array(day.sessions.enumerated()), id: \.element.id) { index, session in
@@ -116,7 +108,6 @@ struct ActivityListContent: View {
               .padding(.vertical, ViewerLayout.sessionSeparatorGap)
               .outlineGround()
               .id("separator.\(session.id)")
-              .listPlace("separator.\(session.id)")
           }
           // The block names and moves its own rows, which stand in this stack themselves.
           ActivitySessionBlock(
@@ -129,17 +120,11 @@ struct ActivityListContent: View {
           ActivityMoreSessionsRow(more: more, send: send)
             .outlineGround()
             .id("more.\(more.day)")
-            .listPlace("more.\(more.day)")
         }
       }
     }
     .scrollTargetLayout()
     .onChange(of: foldedDays, initial: true) { _, days in drawnFolded = days }
-    // Work arriving at the top while the person reads further down, a new run or a new session folded or not, leaves
-    // the row they read where it stands.
-    .onChange(of: arrival) {
-      if !isAtTop { place?.hold() }
-    }
     .transaction(value: state.newest) { transaction in
       // A change the person made keeps the animation it was made in, so a filter's rows wait for those leaving.
       transaction.animation = Motion.layout(
