@@ -8,7 +8,7 @@ final class ViewerThumbnails {
   /// The panes that receive completed work; never keeps the window alive.
   private weak var model: ViewerPanesModel?
   private let service: any ViewerService
-  /// Two reads fill the grid without crowding out status and picture requests.
+  /// Two reads fill the outline's pictures without crowding out status and picture requests.
   static let atOnce = 2
   /// 352: the most pixels a thumbnail keeps along its longer side, the largest frame the outline draws a picture in,
   /// 176 points wide, at a Retina display's two pixels a point.
@@ -16,7 +16,7 @@ final class ViewerThumbnails {
   /// Pending and active thumbnail reads, with their cancellation generation.
   private(set) var work = ThumbnailWork()
 
-  /// Creates the shared thumbnail queue for Activity and Screenshots.
+  /// Creates the shared thumbnail queue for Activity.
   ///
   /// - Parameters:
   ///   - model: The panes whose cache receives each thumbnail.

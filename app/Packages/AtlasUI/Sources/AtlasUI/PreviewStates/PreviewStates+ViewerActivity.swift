@@ -31,7 +31,7 @@
     /// - Parameters:
     ///   - id: The app's bundle identifier, if known.
     ///   - name: Its name.
-    /// - Returns: What leads its moment.
+    /// - Returns: What leads its run.
     @MainActor static func sampleApp(_ id: String?, _ name: String) -> ActivityIcon {
       .app(.of(id.flatMap { SampleAppIcons.icons[$0] }, name: name))
     }

@@ -79,7 +79,7 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case list = "list.bullet"
   /// Apps, in the Library.
   case windows = "macwindow.on.rectangle"
-  /// Screenshots, in the Library.
+  /// A set of pictures, in the component samples.
   case photos = "photo.on.rectangle"
   /// A picture: a step's picture button.
   case photo

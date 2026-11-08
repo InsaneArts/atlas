@@ -17,7 +17,7 @@
     case badge = "Badge cycle"
     /// The Screen turning into Activity, the picture shrinking into its corner, or back.
     case library = "Library and Screen"
-    /// Activity giving way to Screenshots sideways, or back.
+    /// Activity giving way to Apps, or back.
     case lists = "List to list"
     /// Take Control, or Give Back.
     case control = "Take Control"

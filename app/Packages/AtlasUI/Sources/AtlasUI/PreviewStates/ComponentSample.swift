@@ -29,7 +29,7 @@
     case monogramTints = "monogram-tints"
     /// A tag in each tone.
     case tagTones = "tag-tones"
-    /// What leads an action: an app, an app's tile, Atlas, the person and commands, at a moment's and a Recent row's
+    /// What leads an action: an app, an app's tile, Atlas, the person and commands, at a run's and a Recent row's
     /// size.
     case activityGlyphs = "activity-glyphs"
     /// Soft keycaps alone and in chords.

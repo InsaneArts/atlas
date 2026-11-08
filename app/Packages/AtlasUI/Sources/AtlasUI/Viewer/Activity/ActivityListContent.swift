@@ -14,7 +14,7 @@ struct ActivityListContent: View {
   /// 48: above and below an empty filtered list's message.
   private static let emptyInset: CGFloat = 48
 
-  /// The filters and moments inside the shared scroll.
+  /// The filters and the outline inside the shared scroll.
   var body: some View {
     VStack(alignment: .leading, spacing: .zero) {
       if state.showsFilters {

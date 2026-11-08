@@ -20,13 +20,4 @@ extension ViewerMarkTone {
   var isDashed: Bool {
     self == .failed || self == .uncertain
   }
-
-  /// The colour an outcome's words take in the details beside a large picture.
-  var textColor: Color {
-    switch self {
-    case .worked: .success
-    case .failed, .uncertain: .attention
-    case .notSent: .markBubbleDim
-    }
-  }
 }

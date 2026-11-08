@@ -12,7 +12,7 @@ extension ViewerPresenter {
   ///
   /// - Parameters:
   ///   - run: The step's rows.
-  ///   - moment: Its run.
+  ///   - moment: Its app run.
   ///   - moments: Every run in scope, for what followed a problem.
   ///   - snapshot: What the controller holds.
   /// - Returns: The step.
@@ -85,15 +85,15 @@ extension ViewerPresenter {
     }
   }
 
-  /// What a step did, in the service's own words less the moment's app and, in the person's own moment, less "You",
-  /// which its header already names: the control or field it named set apart in semibold, the keys it pressed as caps
+  /// What a step did, in the service's own words less the run's app and, in the person's own run, less "You",
+  /// which its row already names: the control or field it named set apart in semibold, the keys it pressed as caps
   /// in place of their label, followed by the element with focus where Atlas named it, and the repeats counted. A
   /// command says it ran or failed and never what it ran. Typing shows what was typed, shortened to one line, only
   /// where Atlas kept it beside its picture; typing into a password field says so, and never what or how much.
   ///
   /// - Parameters:
   ///   - run: The step's rows.
-  ///   - moment: Its moment.
+  ///   - moment: Its app run.
   /// - Returns: The words.
   static func stepWords(_ run: ActivityRun, in moment: ActivityMoment) -> ViewerStepWords {
     stepWords(run.entry, count: run.count, in: moment)
@@ -104,7 +104,7 @@ extension ViewerPresenter {
   /// - Parameters:
   ///   - entry: The row.
   ///   - count: How many times in a row it was done.
-  ///   - moment: Its moment.
+  ///   - moment: Its app run.
   /// - Returns: The words.
   static func stepWords(_ entry: ActivityLog.Entry, count: Int, in moment: ActivityMoment) -> ViewerStepWords {
     let counted = count > 1 ? "×\(count)" : ""
@@ -119,7 +119,7 @@ extension ViewerPresenter {
       return ViewerStepWords(verb, count: counted)
     }
     var said = ActivityGrouping.text(entry)
-    // The person's own moment already says it was them.
+    // The person's own run already says it was them.
     if moment.stream == .you, said.hasPrefix("You ") { said = Words.leadingCapital(String(said.dropFirst(4))) }
     for app in [moment.app?.name, entry.app].compactMap({ $0 }) where said.hasSuffix(" in \(app)") {
       said.removeLast(" in \(app)".count)
@@ -166,7 +166,7 @@ extension ViewerPresenter {
   /// - Parameters:
   ///   - followUp: What followed.
   ///   - problem: The step that did not work.
-  ///   - moment: Its moment.
+  ///   - moment: Its app run.
   /// - Returns: "The agent tried again, and it worked.", "It failed again." or "Then it scrolled.".
   static func followUpWords(_ followUp: ActivityFollowUp, after problem: ActivityRun, in moment: ActivityMoment)
     -> String

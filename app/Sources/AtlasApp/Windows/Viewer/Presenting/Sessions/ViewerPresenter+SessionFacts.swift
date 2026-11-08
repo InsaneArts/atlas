@@ -123,7 +123,7 @@ extension ViewerPresenter {
     }
   }
 
-  /// How many screenshots a session took, while it took any; Show Screenshots in its menu shows them.
+  /// How many screenshots a session took, while it took any; Activity's Pictures filter shows them.
   ///
   /// - Parameter record: The session, as the list has it.
   /// - Returns: The fact, or none.

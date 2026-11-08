@@ -1,7 +1,7 @@
 import Foundation
 
-/// The Screenshots tab's rules, all pure: which stretch of time a capture falls in, how many were taken today, what
-/// a search by time keeps, and where Previous and Next go. Time comes in and is never read: the time now and the
+/// The rules for screenshots by time, all pure: which stretch of time a capture falls in, how many were taken today,
+/// what a search by time keeps, and where Previous and Next go. Time comes in and is never read: the time now and the
 /// person's calendar.
 public struct ShotGrouping: Sendable {
   /// 3600 s: "Today" is the last hour, the captures of the work under way; the rest of today reads by the
@@ -58,13 +58,12 @@ public struct ShotGrouping: Sendable {
       .count
   }
 
-  /// The groups the tab lists: the captures newest first, those a search by time keeps, each under its stretch of
-  /// time.
+  /// The captures a search by time keeps, newest first, each group under its stretch of time.
   ///
   /// - Parameters:
   ///   - shots: The screenshots the service lists.
   ///   - query: The search by time; empty keeps every capture.
-  ///   - time: A capture's time of day as the tab shows it, which the search looks in.
+  ///   - time: A capture's time of day as it is shown, which the search looks in.
   /// - Returns: The groups, newest first, each period once.
   public func days(_ shots: [Screenshot], matching query: String, time: (Date) -> String) -> [ShotDay] {
     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -94,7 +93,7 @@ public struct ShotGrouping: Sendable {
   /// Whether a capture's time holds a search: "10:31" finds 10:31:44.
   ///
   /// - Parameters:
-  ///   - time: The capture's time of day as the tab shows it; empty when it has none.
+  ///   - time: The capture's time of day as it is shown; empty when it has none.
   ///   - query: The search; empty, or spaces alone, matches every capture.
   /// - Returns: Whether the time holds the search, ignoring case.
   static func matches(time: String, query: String) -> Bool {
@@ -108,7 +107,7 @@ public struct ShotGrouping: Sendable {
   /// - Parameters:
   ///   - name: The capture shown.
   ///   - offset: −1 for Previous, 1 for Next.
-  ///   - names: The captures in the order the tab lists them.
+  ///   - names: The captures in the order they are listed.
   /// - Returns: The capture to show, or nil at the end or when `name` is not listed.
   public static func step(from name: String, by offset: Int, in names: [String]) -> String? {
     guard let index = names.firstIndex(of: name), names.indices.contains(index + offset) else { return nil }

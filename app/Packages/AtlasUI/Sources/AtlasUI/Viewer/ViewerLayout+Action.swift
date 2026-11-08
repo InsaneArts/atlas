@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The measures of pictures of agent actions: the marks drawn over them, a step's small picture, the action shown
-/// large, and a task's replay.
+/// The measures of pictures of agent actions: the marks drawn over them, a step's small picture, and a task's
+/// replay.
 extension ViewerLayout {
   /// 36: a mark's ring over a large picture.
   static let markRing: CGFloat = 36

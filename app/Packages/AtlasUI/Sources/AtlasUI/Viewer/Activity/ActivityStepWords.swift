@@ -8,7 +8,7 @@ struct ActivityStepWords: View {
   let words: ViewerStepWords
   /// Whether the step runs now.
   var isLive = false
-  /// The words' size: a step's line by default, larger as an action's title shown large.
+  /// The words' size: a step's line by default, larger as the picture sheet's title.
   var style = TextStyle.body
   /// The words' weight while the step does not run.
   var weight = Font.Weight.regular

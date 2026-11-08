@@ -36,7 +36,7 @@ final class ViewerPanesModel {
   @ObservationIgnored var sessionsReadAt: TimeInterval?
   /// The date and time now, which the panes tell times and days by.
   @ObservationIgnored let wallClock: @MainActor () -> Date
-  /// The preceding ingested Activity moments; presenting snapshots never writes this history.
+  /// The preceding ingested Activity runs; presenting snapshots never writes this history.
   @ObservationIgnored private var activityMoments: [ActivityMoment] = []
   /// Where a copied picture goes, and how its file is shown.
   @ObservationIgnored private let shotOutlet: ShotOutlet
@@ -85,8 +85,8 @@ final class ViewerPanesModel {
   }
 
   /// Reads the shown pane while the window is on screen, every its own pause, and stops reading any other. The
-  /// thumbnails being read are let go unless Activity or Screenshots shows, and the large picture follows the window.
-  /// With the window gone, nothing shows, and the sessions' list is not read.
+  /// thumbnails being read are let go unless Activity shows, and the pictures the sheet and the replay show follow the
+  /// window. With the window gone, nothing shows, and the sessions' list is not read.
   func followPane() {
     followSessions()
     work.generation += 1

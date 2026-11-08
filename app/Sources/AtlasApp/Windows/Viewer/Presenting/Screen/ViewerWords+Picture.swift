@@ -13,7 +13,7 @@ extension ViewerWords {
   static let copyPicture = "Copy Picture"
   /// Save Picture….
   static let savePicture = "Save Picture…"
-  /// Save Screenshot…, in the Screenshots list with one shown large or selected.
+  /// Save Screenshot…, while the picture sheet shows.
   static let saveScreenshot = "Save Screenshot…"
   /// Once the picture is on the clipboard.
   static let pictureCopied = "Picture copied."

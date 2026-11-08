@@ -4,13 +4,13 @@ import Foundation
 /// newest first. Actions in no app, such as a screenshot or a command, belong to the run around them, and neighbouring
 /// ones in no app form one run.
 public struct ActivityMoment: Equatable, Sendable, Identifiable {
-  /// The moment's identity, retained across readings with overlapping actions, even when its oldest row leaves.
+  /// The run's identity, retained across readings with overlapping actions, even when its oldest row leaves.
   public var id: String
   /// Whose work it follows.
   public var stream: ActivityStream
-  /// What it is titled by: its app, or Commands or Screenshots for a moment in no app.
+  /// What it is titled by: its app, or Commands or Screenshots for a run in no app.
   public var subject: Subject
-  /// Its lines, newest first: every line of the moment, or those a filter and a search keep.
+  /// Its lines, newest first: every line of the run, or those a filter and a search keep.
   public var runs: [ActivityRun]
   /// The first moment of the day it falls on, in the person's time zone.
   public var day: Date
@@ -19,7 +19,7 @@ public struct ActivityMoment: Equatable, Sendable, Identifiable {
   /// When its newest line's newest row started, when known.
   public var endedAt: Date?
 
-  /// Creates a moment.
+  /// Creates a run.
   ///
   /// - Parameters:
   ///   - id: Its identity.

@@ -3,8 +3,7 @@ import CoreGraphics
 
 /// The window's size: how the content gives way to it, decided here from each resize and changed only as a threshold is
 /// crossed (``ViewerFit``), so a resize at the display's rate changes the window's state only at those steps; and a
-/// resize under way, which holds the Screenshots grid's columns, the thumbnails' reads and the pointer's highlights
-/// until it ends.
+/// resize under way, which holds the thumbnails' reads and the pointer's highlights until it ends.
 extension ViewerController {
   /// The window was laid out at `size`: the content fits it, and the sidebar shown over the card goes once there is
   /// room for the whole sidebar beside it.

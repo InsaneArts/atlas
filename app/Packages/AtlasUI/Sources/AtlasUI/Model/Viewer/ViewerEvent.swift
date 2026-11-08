@@ -22,7 +22,7 @@ public enum ViewerEvent: Equatable, Sendable {
   case stopAgent
   /// Resume: let agents act in the helper again.
   case resumeAgent
-  /// A host session chosen in the sessions column, or All sessions, whose work Activity and Screenshots show.
+  /// A host session chosen in the sessions column, or All sessions, whose work Activity shows.
   ///
   /// - Parameter choice: Whose work.
   case chooseSession(ViewerSessionChoice)

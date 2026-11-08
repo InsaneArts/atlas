@@ -25,8 +25,8 @@ extension ViewerPresenter {
   }
 
   /// One session as every surface names it, looked up once: the status first, then the sessions' list's live
-  /// sessions, its records, and last the names the log or the apps list gives, so the sidebar, Activity, Screenshots,
-  /// Apps, the menus and the card's header agree on its name, icon and state.
+  /// sessions, its records, and last the names the log or the apps list gives, so the sidebar, Activity, Apps, the
+  /// menus and the card's header agree on its name, icon and state.
   ///
   /// - Parameters:
   ///   - key: The session's key; empty for Terminal.

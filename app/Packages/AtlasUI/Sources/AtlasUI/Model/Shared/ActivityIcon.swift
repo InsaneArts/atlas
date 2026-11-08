@@ -1,4 +1,4 @@
-/// What leads an action or a moment in Activity and Recent: the app it was done in, Atlas's own mark for what Atlas
+/// What leads an action or a run in Activity and Recent: the app it was done in, Atlas's own mark for what Atlas
 /// did itself, such as recovering the helper, the person's mark for their own input, or the glyph of what it holds
 /// when it was in no app. Never a bundle identifier or a path, which stay with the presenter.
 public enum ActivityIcon: Equatable, Sendable {

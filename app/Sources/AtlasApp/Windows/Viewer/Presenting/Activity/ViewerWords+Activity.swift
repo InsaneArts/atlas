@@ -1,14 +1,14 @@
 import AtlasUI
 import Foundation
 
-/// The Activity pane's words that depend on what it holds: the filters, the moments, a step's words and
-/// times, what followed a problem, and the empty messages. Fixed copy, such as Show large, stays in its view.
+/// The Activity pane's words that depend on what it holds: the filters, the runs, a step's words, what followed a
+/// problem, and the empty messages. Fixed copy stays in its view.
 extension ViewerWords {
   /// The Activity filters, for VoiceOver.
   static let activityFiltersLabel = "Which actions"
   /// The heading over yesterday's sessions.
   static let yesterdayGroup = "Yesterday"
-  /// A moment of commands, and anything else done in no app.
+  /// A run of commands, and anything else done in no app.
   static let commandsMoment = "Commands"
   /// A command that ran.
   static let ranCommand = "Ran a command"
@@ -74,18 +74,6 @@ extension ViewerWords {
     count == 1 ? one : "\(one)s"
   }
 
-  /// How much a folded moment held and when.
-  ///
-  /// - Parameters:
-  ///   - actions: How many actions it held.
-  ///   - start: When it started, on the person's clock.
-  ///   - end: When it ended.
-  /// - Returns: "9 actions · 10:21–10:24", or "1 action · 10:21" when it began and ended in one minute.
-  static func momentSpan(actions: Int, start: String, end: String) -> String {
-    let when = start == end ? start : "\(start)–\(end)"
-    return "\(actions) \(counted(actions, "action")) · \(when)"
-  }
-
   /// What a step did before a reason: the next step's words after "Then it" or "Then you".
   ///
   /// - Parameters:
@@ -95,20 +83,6 @@ extension ViewerWords {
   static func then(_ words: String, personal: Bool) -> String {
     let subject = personal ? "you" : "it"
     return "Then \(subject) \(words.prefix(1).lowercased() + words.dropFirst())."
-  }
-
-  /// When a step was done, or how long ago a folded moment ended: "now" under 10 seconds, then seconds and minutes
-  /// within the hour, else the time on the person's clock.
-  ///
-  /// - Parameters:
-  ///   - seconds: How long ago.
-  ///   - clock: The time on the person's clock, for longer ago.
-  /// - Returns: "now", "4 s", "3 min" or "10:31".
-  static func stepAge(_ seconds: TimeInterval, clock: String) -> String {
-    if seconds < 10 { return "now" }
-    if seconds < 60 { return "\(Int(seconds.rounded(.down))) s" }
-    if seconds < 3600 { return "\(Int((seconds / 60).rounded(.down))) min" }
-    return clock
   }
 
   /// A search that matches nothing: the headline.

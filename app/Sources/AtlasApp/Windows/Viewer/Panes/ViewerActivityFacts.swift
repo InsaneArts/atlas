@@ -11,7 +11,7 @@ struct ViewerActivityFacts {
   var log: ActivityLog?
   /// The model's prepared reading, copied as values with this snapshot.
   var preparation: ViewerActivityPreparation?
-  /// This reading's moments, whose identities were reconciled at ingestion.
+  /// This reading's runs, whose identities were reconciled at ingestion.
   var moments: [ActivityMoment] { preparation?.moments.moments ?? [] }
   /// When the log was read, which each row's age counts back from.
   var readAt: Date?

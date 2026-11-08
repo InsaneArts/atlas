@@ -132,8 +132,6 @@ extension ViewerLayout {
   static let sheetPictureInset = Spacing.xxl
   /// 16: the sheet's least margin from the window's sides.
   static let sheetMargin = Spacing.l
-  /// 32: how far above the well's bottom a step's mark bubble stands.
-  static let sheetBubbleBottom = Spacing.xxxl
   /// 4: between ‹ and ›.
   static let sheetArrowGap = Spacing.xs
   /// 46: where the sheet hangs from, under the card's header.

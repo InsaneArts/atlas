@@ -1,4 +1,4 @@
-/// The screenshots the Screenshots tab lists under one stretch of time, newest first.
+/// The screenshots taken in one stretch of time, newest first.
 public struct ShotDay: Equatable, Sendable, Identifiable {
   /// The stretch of time.
   public var period: ShotPeriod

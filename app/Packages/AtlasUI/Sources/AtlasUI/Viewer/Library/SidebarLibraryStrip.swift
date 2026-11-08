@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The Library folded into one row at the sidebar's foot, as a short window leaves it: Activity, Screenshots and Apps
-/// as circles round their symbols, the chosen one held, the unseen dot in Activity's corner, and the helper's dot at
+/// The Library folded into one row at the sidebar's foot, as a short window leaves it: Activity and Apps as
+/// circles round their symbols, the chosen one held, the unseen dot in Activity's corner, and the helper's dot at
 /// the row's end, which opens the helper's commands. Each circle's tooltip names its list and shortcut, and choosing
 /// the chosen one again shows the Screen.
 struct SidebarLibraryStrip: View {

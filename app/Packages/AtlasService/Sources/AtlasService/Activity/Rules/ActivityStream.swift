@@ -1,5 +1,5 @@
-/// Whose work a moment of the Activity pane follows: one host session's agents, or the person. Each has its own
-/// stream, so two agents working at once never cut each other's moments into pieces.
+/// Whose work a run of the Activity pane follows: one host session's agents, or the person. Each has its own
+/// stream, so two agents working at once never cut each other's runs into pieces.
 public enum ActivityStream: Hashable, Sendable {
   /// The person, through a viewer.
   case you
@@ -15,7 +15,7 @@ public enum ActivityStream: Hashable, Sendable {
     self = entry.groupKey.map(Self.session) ?? .you
   }
 
-  /// The stream's name in a moment's id: `you`, or `session:` and its key.
+  /// The stream's name in a run's id: `you`, or `session:` and its key.
   public var id: String {
     switch self {
     case .you: "you"

@@ -3,14 +3,14 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The task replayed: its moment's steps that kept a picture, oldest first, each frame the step's marked picture
+  /// The task replayed: its run's steps that kept a picture, oldest first, each frame the step's marked picture
   /// before it (a folded step's first), then the screen after its last step (a folded step's last after); the pictures
   /// as taken once read, their thumbnails before. Titled by the task its agent named, else by its session's name, else
   /// by its app and when it started; with whose it was where the title does not say, how many steps and when, and the
-  /// agent's icon. None once its moment is gone or holds no picture.
+  /// agent's icon. None once its run is gone or holds no picture.
   ///
   /// - Parameters:
-  ///   - moments: Every moment in scope.
+  ///   - moments: Every run in scope.
   ///   - snapshot: What the controller holds.
   /// - Returns: The replay, or nil.
   static func replay(_ moments: ActivityMoments, _ snapshot: ViewerSnapshot) -> ViewerReplayState? {
@@ -39,7 +39,7 @@ extension ViewerPresenter {
   /// name; the session's name alone; or, where neither is known, its app and when it started over whose it was.
   ///
   /// - Parameters:
-  ///   - moment: The moment.
+  ///   - moment: The run.
   ///   - snapshot: What the controller holds.
   /// - Returns: The title, and whose it was, empty where the title says.
   static func replayTitle(_ moment: ActivityMoment, _ snapshot: ViewerSnapshot) -> (title: String, who: String) {
@@ -64,11 +64,11 @@ extension ViewerPresenter {
     return (ViewerWords.dotted([app, minute]), streamName(moment.stream, snapshot))
   }
 
-  /// A moment's frames, oldest first: each step that kept a picture, then the screen after the last, each with the app
+  /// A run's frames, oldest first: each step that kept a picture, then the screen after the last, each with the app
   /// it was in, the screen after in the last step's.
   ///
   /// - Parameters:
-  ///   - moment: The moment.
+  ///   - moment: The run.
   ///   - snapshot: What the controller holds.
   /// - Returns: The frames.
   static func replayFrames(_ moment: ActivityMoment, _ snapshot: ViewerSnapshot) -> [ViewerReplayFrame] {
@@ -121,7 +121,7 @@ extension ViewerPresenter {
   ///
   /// - Parameters:
   ///   - run: The step's rows.
-  ///   - moment: Its moment.
+  ///   - moment: Its app run.
   ///   - snapshot: What the controller holds.
   /// - Returns: "Chrome · 10:30:41 to 10:30:52 · 12 in one step", or "Slack · 10:31:04".
   static func replayDetail(_ run: ActivityRun, in moment: ActivityMoment, _ snapshot: ViewerSnapshot) -> String {

@@ -1,8 +1,8 @@
 import AtlasUI
 
 extension ViewerPresenter {
-  /// What acts on the window's picture: only what nothing waits long for. Copy and Save act on the screenshot shown
-  /// large or selected while the Screenshots list shows one.
+  /// What acts on the window's picture: only what nothing waits long for. Copy and Save act on the picture sheet's
+  /// picture while it shows.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The picture's commands.

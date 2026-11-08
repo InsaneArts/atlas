@@ -1,8 +1,7 @@
 import AtlasUI
 
 /// The places: the Screen and the Library's lists. Leaving the Screen gives control back, as losing focus does, and Take
-/// Control then waits until the release is answered; each place reads while it shows, and a screenshot shown large
-/// closes with its list.
+/// Control then waits until the release is answered; each place reads while it shows.
 extension ViewerController {
   /// A Library row chosen: its list, or the Screen again when that list already shows, so the row leads back the way
   /// it came.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The stretch of time the Screenshots tab groups a capture under, newest first.
+/// The stretch of time a capture is grouped under, newest first.
 public enum ShotPeriod: Hashable, Sendable {
   /// Within the last hour, today: "Today".
   case lastHour

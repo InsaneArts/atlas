@@ -3,7 +3,7 @@ import Foundation
 
 /// One value-owned preparation. Reconciliation receives history explicitly, never from another projection.
 struct ViewerActivityPreparation {
-  /// The reading whose moments were formed.
+  /// The reading whose runs were formed.
   let log: ActivityLog
   /// The captures matched to its screenshot rows.
   let captures: [Screenshot]
@@ -13,7 +13,7 @@ struct ViewerActivityPreparation {
   let calendar: Calendar
   /// Today's start, also the initial day for rows without a time.
   let today: Date
-  /// The prepared moments, with every stream retained.
+  /// The prepared runs, with every stream retained.
   let moments: ActivityMoments
 
   /// Prepares one reading against the model's preceding ingestion or a snapshot's own values.
@@ -24,7 +24,7 @@ struct ViewerActivityPreparation {
   ///   - readAt: When the reading arrived.
   ///   - calendar: The person's calendar.
   ///   - now: The current time.
-  ///   - previous: The preceding reading's moments, whose overlapping identities survive.
+  ///   - previous: The preceding reading's runs, whose overlapping identities survive.
   init(
     log: ActivityLog,
     captures: [Screenshot],
@@ -46,7 +46,7 @@ struct ViewerActivityPreparation {
     )
   }
 
-  /// Whether a projection can read this preparation without reforming its moments.
+  /// Whether a projection can read this preparation without reforming its runs.
   ///
   /// - Parameters:
   ///   - log: The snapshot's reading.

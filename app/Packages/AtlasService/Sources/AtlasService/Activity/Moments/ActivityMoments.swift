@@ -1,30 +1,29 @@
 import Foundation
 
 /// The Activity outline's runs, all pure: which lines form one run, which the filters and the search keep, which
-/// runs show their steps, and what followed a problem. Moments form from every line in scope before any filter
-/// applies, so a moment keeps its identity whichever filter shows it. Time comes in and is never read.
+/// runs show their steps, and what followed a problem. Runs form from every line in scope before any filter
+/// applies, so a run keeps its identity whichever filter shows it. Time comes in and is never read.
 public struct ActivityMoments: Sendable {
-  /// 120 s: the longest pause inside a moment, between its oldest line so far and the line before it. An agent's run
-  /// of work is a string of actions seconds apart; a longer pause starts a new
-  /// moment, even in the same app.
+  /// 120 s: the longest pause inside a run, between its oldest line so far and the line before it. An agent's work is
+  /// a string of actions seconds apart; a longer pause starts a new run, even in the same app.
   static let momentGap: TimeInterval = 120
   /// 120 s: how soon after a problem the same stream's next line must start to be what it did next.
   static let followUpSpan: TimeInterval = 120
-  /// 60: the most moments the pane draws, which the service's 200 rows never pass in practice.
+  /// 60: the most runs the pane draws, which the service's 200 rows never pass in practice.
   public static let mostMoments = 60
 
-  /// Every moment in scope, newest first, each with every line.
+  /// Every run in scope, newest first, each with every line.
   public var moments: [ActivityMoment]
   /// Every line in scope, newest first, each with its stream.
   var runs: [(stream: ActivityStream, run: ActivityRun)]
 
-  /// Forms the moments of one reading of the log.
+  /// Forms the runs of one reading of the log.
   ///
   /// - Parameters:
   ///   - grouping: The rules over the reading, which say when each row started and on which day.
   ///   - captures: The screenshots the service lists, for the screenshot rows.
-  ///   - scope: Whose rows to form moments from.
-  ///   - previous: The preceding reading's moments, for retaining identities where their actions overlap.
+  ///   - scope: Whose rows to form runs from.
+  ///   - previous: The preceding reading's runs, for retaining identities where their actions overlap.
   public init(
     _ grouping: ActivityGrouping,
     captures: [Screenshot],
@@ -77,22 +76,22 @@ public struct ActivityMoments: Sendable {
     }
   }
 
-  /// The moment in scope with an identity.
+  /// The run in scope with an identity.
   ///
-  /// - Parameter id: The moment's identity.
-  /// - Returns: The moment, or nil once it is gone.
+  /// - Parameter id: The run's identity.
+  /// - Returns: The run, or nil once it is gone.
   public func moment(_ id: String) -> ActivityMoment? {
     moments.first { $0.id == id }
   }
 
-  /// The moments the pane lists: each with only the lines the filter and the search keep, a moment left with none
-  /// left out, at most ``mostMoments``. The search matches what a line did, or the moment's app by name, which keeps
+  /// The runs the pane lists: each with only the lines the filter and the search keep, a run left with none
+  /// left out, at most ``mostMoments``. The search matches what a line did, or the run's app by name, which keeps
   /// each of its lines the filter keeps.
   ///
   /// - Parameters:
   ///   - filter: Which lines to list.
   ///   - query: What to search for; empty keeps every line.
-  /// - Returns: The moments, newest first.
+  /// - Returns: The runs, newest first.
   public func shown(filter: ActivityFilter, query: String) -> [ActivityMoment] {
     let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
     let kept = moments.compactMap { moment -> ActivityMoment? in
@@ -155,13 +154,13 @@ public struct ActivityMoments: Sendable {
     return ActivityFollowUp(next: next, after: problem)
   }
 
-  /// The moments the lines form, newest first. A line joins its stream's open moment while it falls on the same day,
-  /// lies at most ``momentGap`` before the moment's oldest line, and acts in the same app, in none, or the moment is in
-  /// none yet, which then takes the line's app; else it opens a new moment for its stream. A line with no time stays
-  /// with the moment before it.
+  /// The runs the lines form, newest first. A line joins its stream's open run while it falls on the same day,
+  /// lies at most ``momentGap`` before the run's oldest line, and acts in the same app, in none, or the run is in
+  /// none yet, which then takes the line's app; else it opens a new run for its stream. A line with no time stays
+  /// with the run before it.
   ///
   /// - Parameter runs: The lines in scope, newest first, each with its day.
-  /// - Returns: The moments.
+  /// - Returns: The runs.
   static func formed(_ runs: [(part: Date, run: ActivityRun)]) -> [ActivityMoment] {
     var moments: [Forming] = []
     var open: [ActivityStream: Int] = [:]

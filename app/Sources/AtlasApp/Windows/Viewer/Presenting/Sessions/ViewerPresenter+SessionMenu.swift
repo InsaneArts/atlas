@@ -2,10 +2,10 @@ import AtlasService
 import AtlasUI
 
 extension ViewerPresenter {
-  /// What a right click on a session's row offers: Show Activity and Show Screenshots for its work; Recover… while it
-  /// needs the person, as the Helper menu offers it; Send Key, whose keys go to the helper while this window holds
-  /// control; Clean Up This Session's Work… while the session left something to clean up, which asks first; and every
-  /// fact about it under Details.
+  /// What a right click on a session's row offers: Show Activity for its work; Recover… while it needs the person, as
+  /// the Helper menu offers it; Send Key, whose keys go to the helper while this window holds control; Clean Up This
+  /// Session's Work… while the session left something to clean up, which asks first; and every fact about it under
+  /// Details.
   ///
   /// - Parameters:
   ///   - key: The session's key; empty for Terminal.

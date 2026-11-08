@@ -32,7 +32,7 @@
     /// A deterministic frame series in tenths, including both endpoints.
     private func series(release: Bool) -> some View {
       VStack(alignment: .leading, spacing: Spacing.s) {
-        Text(release ? "Drag release · 180 pt/s" : "Tap slide · All to Screenshots")
+        Text(release ? "Drag release · 180 pt/s" : "Tap slide · All to Pictures")
           .font(Typography.font(.body, weight: .medium))
         ForEach(0...10, id: \.self) { step in
           HStack(spacing: Spacing.m) {

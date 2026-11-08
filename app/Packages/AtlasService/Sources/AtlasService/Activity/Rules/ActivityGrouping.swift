@@ -164,7 +164,7 @@ public struct ActivityGrouping: Sendable {
   }
 
   /// Whether a row is the same action as the line just above it, by the same actor in the same host session, with the
-  /// same outcome, at most a moment gap apart: running and screenshot rows always stand alone.
+  /// same outcome, at most ``ActivityMoments/momentGap`` apart: running and screenshot rows always stand alone.
   ///
   /// - Parameters:
   ///   - newer: The line above.

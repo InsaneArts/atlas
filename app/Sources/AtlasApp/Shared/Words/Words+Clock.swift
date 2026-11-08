@@ -1,8 +1,8 @@
 import Foundation
 
 extension Words {
-  /// A time of day to the second, on the person's own 12- or 24-hour clock, as the Activity and Screenshots tabs
-  /// list it.
+  /// A time of day to the second, on the person's own 12- or 24-hour clock, as Activity and the picture sheet say
+  /// it.
   ///
   /// - Parameters:
   ///   - date: The moment.
@@ -18,25 +18,8 @@ extension Words {
     return date.formatted(style)
   }
 
-  /// A time of day to the hundredth of a second, on the person's own 12- or 24-hour clock, as an action's pictures say
-  /// when they were taken.
-  ///
-  /// - Parameters:
-  ///   - date: The moment.
-  ///   - locale: The person's locale, which picks the clock.
-  ///   - calendar: The calendar supplied by the snapshot.
-  ///   - timeZone: The person's time zone.
-  /// - Returns: "10:31:42.21" on a 24-hour clock, "10:31:42.21 AM" on a 12-hour one.
-  static func clockHundredths(_ date: Date, locale: Locale, calendar: Calendar, timeZone: TimeZone) -> String {
-    let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: timeZone)
-      .hour(.twoDigits(amPM: .abbreviated))
-      .minute(.twoDigits)
-      .second(.twoDigits)
-      .secondFraction(.fractional(2))
-    return date.formatted(style)
-  }
-
-  /// A time of day to the minute, on the person's own 12- or 24-hour clock, as an Activity moment says when it started.
+  /// A time of day to the minute, on the person's own 12- or 24-hour clock, as a replay and a session's title say
+  /// when it started.
   ///
   /// - Parameters:
   ///   - date: The moment.

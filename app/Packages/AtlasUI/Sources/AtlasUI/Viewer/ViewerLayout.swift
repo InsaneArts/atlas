@@ -20,21 +20,10 @@ enum ViewerLayout {
   /// The spring the mini screen lands on in the corner it was thrown toward: 0.4 seconds with a little bounce, the one
   /// bounce in the window, since the person threw it.
   static let miniThrown = Spring(duration: 0.4, bounce: 0.1)
-  /// 16 by 10: a screenshot's tile, and the screen's shape where a sample needs one.
+  /// 16 by 10: the screen's shape where a picture or a sample has none of its own.
   static let placeholderAspect = CGSize(width: 16, height: 10)
   /// 16: a pane's inset at its sides, which its header, rows and groups keep.
   static let swapInset = Spacing.l
-  /// 26: an app's icon at the head of an Activity moment.
-  static let appIcon = IconSize.mPlus
-  /// 280: the least width a screenshot's tile takes before the grid drops a column, so a full window holds
-  /// four and a narrow one two.
-  static let shotLeastWidth: CGFloat = 280
-  /// 14: between the Screenshots pane's tiles, across and down.
-  static let shotGap = Spacing.mPlus
-  /// 10: above the Screenshots pane's first heading.
-  static let shotHeadingTop = Spacing.sPlus
-  /// 16: above each later heading, past the gap under the row before it, so a group reads apart from the last.
-  static let shotHeadingAbove = Spacing.l
   /// 0.72: the shade over the window behind a run replayed; the window behind is not blurred, the shade is enough.
   static let replayScrim = 0.72
   /// The replay's shade's fade, in and out: ``Motion/fade``, which only changes opacity, so Reduce Motion keeps it.

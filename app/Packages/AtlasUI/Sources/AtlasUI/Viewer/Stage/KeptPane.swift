@@ -5,7 +5,6 @@ import SwiftUI
 struct KeptPane: View {
   /// The pane.
   let pane: ViewerPane
-  /// The namespace a screenshot zooms in between its tile and the large view, the window's.
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
 

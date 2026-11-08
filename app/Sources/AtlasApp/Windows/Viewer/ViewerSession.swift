@@ -8,7 +8,7 @@ import CoreGraphics
 struct ViewerSession {
   /// The place shown: the Screen, or a list from the Library.
   var place = ViewerPlace.screen
-  /// Whose work Activity and Screenshots show: every host session's, or one's.
+  /// Whose work Activity shows: every host session's, or one's.
   var chosenSession = ViewerSessionChoice.all
   /// Whether the person hid the sidebar, which the next window remembers.
   var sidebarHidden = false

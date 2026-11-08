@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// The Screen's opacity transition and the fade tokens shared with retained lists. Activity, Apps and Screenshots
-/// use ``KeptPaneShift`` and ``PaneHandoff``: the outgoing list disappears before the latest destination arrives,
-/// so their words never overlap. List switches change opacity in place, also under Reduce Motion.
+/// The Screen's opacity transition and the fade tokens shared with retained lists. Activity and Apps use
+/// ``KeptPaneShift`` and ``PaneHandoff``: the outgoing list disappears before the latest destination arrives, so their
+/// words never overlap. List switches change opacity in place, also under Reduce Motion.
 ///
 /// While the picture moves between the stage and the corner (``ScreenZoom``, ``EnvironmentValues/screenZooms``), the
 /// Screen's pane arrives whole as it grows out of the corner, so its picture and the mini screen's stay one.

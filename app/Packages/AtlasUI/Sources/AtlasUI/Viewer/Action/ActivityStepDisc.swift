@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// A step's disc on its moment's line, with its kind's glyph: the content's colour, so the line breaks around it, for
-/// a step that worked or was refused before anything was sent; blue while it runs; orange for one that did not work.
-/// No halo and no ring. Its colour moves on a crossfade, as the live blue passes to the newest step.
+/// A replayed step's disc beside its words, with its kind's glyph: the content's colour for a step that worked or was
+/// refused before anything was sent; blue while it runs; orange for one that did not work. No halo and no ring. Its
+/// colour moves on a crossfade as the replay goes from step to step.
 struct ActivityStepDisc: View {
   /// What kind of thing the step did.
   let kind: ViewerActivityKind

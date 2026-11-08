@@ -5,7 +5,7 @@ import Foundation
 public struct ActivityRun: Equatable, Sendable, Identifiable {
   /// The run's earliest row: the line keeps its id, which a newer repeat never changes, and says what was done.
   public var entry: ActivityLog.Entry
-  /// Every retained action's logical identity, for matching moments across readings.
+  /// Every retained action's logical identity, for matching app runs across readings.
   var logicalIDs: Set<String>
   /// When the run started: its earliest row's start, when known.
   public var startedAt: Date?

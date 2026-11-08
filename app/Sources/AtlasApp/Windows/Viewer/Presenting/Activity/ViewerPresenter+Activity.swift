@@ -51,10 +51,10 @@ extension ViewerPresenter {
     )
   }
 
-  /// Every moment of the reading in scope: the chosen session's, or every session's.
+  /// Every run of the reading in scope: the chosen session's, or every session's.
   ///
   /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The moments, or nil before the log is read.
+  /// - Returns: The runs, or nil before the log is read.
   static func activityMoments(_ snapshot: ViewerSnapshot) -> ActivityMoments? {
     let facts = snapshot.panes.activity
     guard
@@ -109,7 +109,7 @@ extension ViewerPresenter {
   ///
   /// - Parameters:
   ///   - log: The log read.
-  ///   - moments: Every moment in scope.
+  ///   - moments: Every run in scope.
   ///   - facts: The pane's filter.
   ///   - query: The sidebar's search.
   ///   - chosen: Whether one session is chosen.
