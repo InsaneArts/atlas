@@ -13,9 +13,9 @@ struct AskDecodingTests {
         [
           "id": "a1", "session": "k1", "who": "Claude Code · release", "task": "post the notes", "account": "Slack",
           "asked": 1_000, "ends": 121_000, "picture": "a1.jpg",
-          "frame": ["x": 10, "y": 20, "width": 80, "height": 24],
           "question": [
             "what": "send-key", "key": "return", "typed": 0, "once": true, "task": false,
+            "frame": ["x": 10, "y": 20, "width": 80, "height": 24], "pictureSize": ["width": 2880, "height": 1800],
             "message": ["digest": "d", "preview": "Atlas 0.1.1 is out", "length": 18],
           ],
         ],
@@ -36,6 +36,7 @@ struct AskDecodingTests {
     #expect(ask.asked == Date(timeIntervalSince1970: 1) && ask.ends == Date(timeIntervalSince1970: 121))
     #expect(ask.picture == "a1.jpg")
     #expect(ask.frame == Ask.Area(x: 10, y: 20, width: 80, height: 24))
+    #expect(ask.pictureSize == ViewerStatus.Size(width: 2880, height: 1800), "the frame's own pixels")
     #expect(list.allowed.map(\.name) == ["GitHub"])
     #expect(list.allowed.first?.account == AccountKey(kind: .site, id: "github.com"))
   }

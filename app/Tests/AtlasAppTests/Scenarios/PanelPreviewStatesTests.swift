@@ -62,7 +62,7 @@
     ///   - typed: How many characters; none by default.
     ///   - message: The message; none by default.
     ///   - once: Whether Just This Once is offered; yes by default.
-    ///   - frame: The element's frame on the display; none by default.
+    ///   - frame: The element's frame in its 1440 by 900 picture; none by default.
     /// - Returns: The question.
     static func ask(
       _ id: String,
@@ -90,7 +90,8 @@
         asked: asked,
         ends: asked + 120,
         picture: frame == nil ? nil : "\(id).jpg",
-        frame: frame
+        frame: frame,
+        pictureSize: frame == nil ? nil : ViewerStatus.Size(width: 1440, height: 900)
       )
     }
 
@@ -113,7 +114,6 @@
       )
       snapshot.status.overview.hostSessions = try status(["overview": ["hostSessions": [session]]]).overview
         .hostSessions
-      snapshot.status.overview.display = ViewerStatus.Size(width: 1440, height: 900)
       snapshot.date = Self.asked + 42
       snapshot.asks = AskList(asks: ask.map { [$0] } ?? [])
       if let ask, let name = ask.picture, let picture {

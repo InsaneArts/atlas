@@ -1,6 +1,5 @@
 extension Ask {
-  /// Where the element stands on the helper's display, in points from its top-left corner, as the ask's picture shows
-  /// the whole display.
+  /// Where the element stands in the ask's picture, in its pixels from the top-left corner.
   public struct Area: Decodable, Equatable, Sendable {
     /// Its left edge.
     public var x: Double

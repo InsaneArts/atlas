@@ -37,8 +37,10 @@ public struct Ask: Decodable, Equatable, Sendable, Identifiable {
   /// The picture of the screen before the action, as a file name in the asks folder, named anew each time a rerun
   /// replaces it, so it always goes with the frame read beside it; nil for none, and once the question is answered.
   public var picture: String?
-  /// The element's frame on the helper's display, which the picture shows whole, in points; nil when unknown.
+  /// The element's frame in the picture, in its pixels; nil when unknown, as for an element action.
   public var frame: Area?
+  /// The picture's size in pixels, published with the frame, which the frame is measured in; nil when unknown.
+  public var pictureSize: ViewerStatus.Size?
 
   /// Creates a question.
   ///
@@ -60,6 +62,7 @@ public struct Ask: Decodable, Equatable, Sendable, Identifiable {
   ///   - ends: When it ends unanswered.
   ///   - picture: The picture's file name; none by default.
   ///   - frame: The element's frame in the picture; none by default.
+  ///   - pictureSize: The picture's size in pixels; none by default.
   public init(
     id: String,
     session: String = "",
@@ -77,7 +80,8 @@ public struct Ask: Decodable, Equatable, Sendable, Identifiable {
     asked: Date,
     ends: Date,
     picture: String? = nil,
-    frame: Area? = nil
+    frame: Area? = nil,
+    pictureSize: ViewerStatus.Size? = nil
   ) {
     self.id = id
     self.session = session
@@ -96,13 +100,14 @@ public struct Ask: Decodable, Equatable, Sendable, Identifiable {
     self.ends = ends
     self.picture = picture
     self.frame = frame
+    self.pictureSize = pictureSize
   }
 
   /// The fields of a question, and of the input service's part of it, as the service writes them.
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.
     case id, session, who, task, account, question, what, name, role, key, typed, message, once, asked, ends, expires,
-      picture, frame
+      picture, frame, pictureSize
   }
 
   /// Decodes a question, reading what the agent would do from its `question`, or, in the status's summary, from its
@@ -139,6 +144,7 @@ public struct Ask: Decodable, Equatable, Sendable, Identifiable {
     frame =
       (try? container.decodeIfPresent(Area.self, forKey: .frame))
       ?? (try? question?.decodeIfPresent(Area.self, forKey: .frame))
+    pictureSize = try? question?.decodeIfPresent(ViewerStatus.Size.self, forKey: .pictureSize)
   }
 
   /// A picture's name when it is one file's in the asks folder, never a path that leaves it.

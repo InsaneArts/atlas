@@ -28,7 +28,7 @@ enum AskCards {
   ///
   /// - Parameters:
   ///   - ask: The question.
-  ///   - status: The latest status, for the agent's mark and the display's size.
+  ///   - status: The latest status, for the agent's mark.
   ///   - picture: The question's picture, when it was read.
   ///   - date: The time now.
   /// - Returns: The question's state.
@@ -45,7 +45,7 @@ enum AskCards {
       waited: AskWords.waited(date.timeIntervalSince(ask.asked)),
       title: title,
       task: ask.task.map(AskWords.task),
-      body: body(ask, status: status, picture: picture),
+      body: body(ask, picture: picture),
       choices: choices,
       scope: ask.offersTask ? AskWords.scope(agent: AskWords.agent(ask.who), account: ask.account) : nil,
       label: AskWords.label(who: ask.who, title: title)
@@ -57,24 +57,24 @@ enum AskCards {
   ///
   /// - Parameters:
   ///   - ask: The question.
-  ///   - status: The latest status, for the display's size.
   ///   - picture: The question's picture, when it was read.
   /// - Returns: The body, or nil for none.
-  static func body(_ ask: Ask, status: ViewerStatus, picture: DesktopPicture?) -> AskCardBody? {
+  static func body(_ ask: Ask, picture: DesktopPicture?) -> AskCardBody? {
     if ask.kind == .password { return .note(AskWords.password(ask.typed)) }
     if let message = ask.message {
       let cut = message.length > message.preview.count
       return .message(cut ? message.preview + "…" : message.preview)
     }
-    guard let picture, let frame = ask.frame, let display = status.overview.display, display.width > 0,
-      display.height > 0
-    else { return nil }
-    // The picture shows the whole display, so the element's points are shares of the display's.
+    guard let picture, let frame = ask.frame else { return nil }
+    // The frame is in the picture's own pixels, measured against the size published with it, else the picture's.
+    let width = ask.pictureSize?.width ?? Double(picture.image.width)
+    let height = ask.pictureSize?.height ?? Double(picture.image.height)
+    guard width > 0, height > 0 else { return nil }
     let element = CGRect(
-      x: frame.x / display.width,
-      y: frame.y / display.height,
-      width: frame.width / display.width,
-      height: frame.height / display.height
+      x: frame.x / width,
+      y: frame.y / height,
+      width: frame.width / width,
+      height: frame.height / height
     )
     return .ringed(picture, element: element)
   }

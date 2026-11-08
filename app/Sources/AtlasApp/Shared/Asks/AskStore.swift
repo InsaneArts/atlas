@@ -184,9 +184,12 @@ final class AskStore {
   private func waitForEnd(of shown: AskList) {
     wake?.cancel()
     wake = nil
-    let ends = shown.asks.map(\.ends) + shown.allowed.map(\.ends)
+    // What ended already shows nowhere; waiting for it again would only read the same again.
+    let now = wallClock()
+    let ends = (shown.asks.map(\.ends) + shown.allowed.map(\.ends))
+      .filter { $0 > now }
     guard let earliest = ends.min() else { return }
-    let seconds = max(.zero, earliest.timeIntervalSince(wallClock()))
+    let seconds = earliest.timeIntervalSince(now)
     wake = Task { [weak self, clock] in
       do {
         try await clock.sleep(for: .seconds(seconds))

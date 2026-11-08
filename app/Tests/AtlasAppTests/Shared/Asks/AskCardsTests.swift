@@ -85,6 +85,18 @@ struct AskCardsTests {
     #expect(card.body == .note("12 characters in a password field"))
   }
 
+  @Test("the element is ringed by its frame in the picture's own pixels, whatever the display's size")
+  @MainActor func theRingFollowsThePicturesPixels() throws {
+    let picture = try #require(SampleDesktop.chat("ask-a1", stage: .typed))
+    var ask = Self.ask(.click, element: "Send")
+    ask.frame = Ask.Area(x: 2540, y: 1420, width: 114, height: 118)
+    ask.pictureSize = ViewerStatus.Size(width: 2880, height: 1800)
+    let element = CGRect(x: 2540.0 / 2880, y: 1420.0 / 1800, width: 114.0 / 2880, height: 118.0 / 1800)
+    #expect(AskCards.body(ask, picture: picture) == .ringed(picture, element: element))
+    ask.frame = nil
+    #expect(AskCards.body(ask, picture: picture) == nil, "an element action has no frame, so no picture")
+  }
+
   @Test("how long a question waited, and what was allowed, count on the clock they are read at")
   func theCountdownFollowsTheClock() {
     #expect(AskWords.waited(42) == "0:42")
