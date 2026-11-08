@@ -267,7 +267,7 @@ pub fn account_of(seen: &Seen, now: u64) -> Entry {
 /// is kept whole.
 #[must_use]
 pub fn site_key(host: &str) -> String {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let host = atlas_core::name::web_host(host);
     if host.parse::<IpAddr>().is_ok() {
         return host;
     }

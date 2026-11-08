@@ -580,7 +580,10 @@ fn target(action: &Action, look: &mut impl Look) -> Target {
         | Action::SetValue { reference, .. }
         | Action::Check { reference }
         | Action::Uncheck { reference }
-        | Action::Pick { reference, .. }
+        // A pick lands on the option it picks, not the list holding it.
+        | Action::Pick {
+            option: reference, ..
+        }
         | Action::Expand { reference }
         | Action::Collapse { reference }
         | Action::ScrollIntoView { reference } => look.referenced(reference),
@@ -624,9 +627,15 @@ fn account(target: &Target, asking: &Asking) -> Option<Found> {
         .filter(|listed| listed.kind == Kind::Site)
         .filter(in_browser);
     let site = match &target.site {
-        Site::Host(host) => sites
-            .filter(|listed| host == &listed.id || host.ends_with(&format!(".{}", listed.id)))
-            .min_by_key(|listed| listed.level),
+        Site::Host(host) => {
+            let host = atlas_core::name::web_host(host);
+            sites
+                .filter(|listed| {
+                    let id = atlas_core::name::web_host(&listed.id);
+                    host == id || host.ends_with(&format!(".{id}"))
+                })
+                .min_by_key(|listed| listed.level)
+        }
         Site::Unread => match sites.map(|listed| listed.level).min() {
             Some(level) => return Some(unknown(level)),
             None => None,

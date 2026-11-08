@@ -1217,3 +1217,84 @@ fn space_in_a_password_field_follows_the_password_rule_and_tab_only_moves() {
     let tab = actions(json!([{"type": "key", "key": "tab"}]));
     assert_eq!(decide(&tab, &asking, &mut look), Decision::Free);
 }
+
+/// A look at a menu: element 14 is its option, any other its list.
+struct Menu {
+    list: Target,
+    option: Target,
+}
+
+impl Look for Menu {
+    fn at_point(&mut self, _: f64, _: f64) -> Target {
+        Target::default()
+    }
+    fn focused(&mut self) -> Target {
+        Target::default()
+    }
+    fn referenced(&mut self, reference: &Reference) -> Target {
+        if reference.index == 14 {
+            self.option.clone()
+        } else {
+            self.list.clone()
+        }
+    }
+    fn message(&mut self) -> Message {
+        Message::Unread
+    }
+    fn unmoved(&mut self) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_pick_is_judged_and_bound_by_the_option_it_picks() {
+    let mut asking = listing(Kind::App, SLACK, Level::Ask);
+    let slack = |role: &str, name: &str| Target {
+        app: Some(SLACK.to_owned()),
+        role: Some(role.to_owned()),
+        name: Some(name.to_owned()),
+        ..Target::default()
+    };
+    let mut look = Menu {
+        list: slack("AXMenu", "Actions"),
+        option: slack("AXMenuItem", "Delete"),
+    };
+    let pick = actions(json!([{"type": "pick", "ref": "8123abc.12", "option": "8123abc.14"}]));
+    let Decision::Ask(question) = decide(&pick, &asking, &mut look) else {
+        panic!("Delete under a harmless menu asks");
+    };
+    assert_eq!(question.name.as_deref(), Some("Delete"));
+    assert_eq!(
+        question.bound.name.as_deref(),
+        Some("Delete"),
+        "bound to it"
+    );
+    asking.grants.push(once(&question));
+    assert_eq!(decide(&pick, &asking, &mut look), Decision::Free);
+    look.option = slack("AXMenuItem", "Remove");
+    assert!(matches!(
+        decide(&pick, &asking, &mut look),
+        Decision::Ask(_)
+    ));
+}
+
+#[test]
+fn a_host_written_with_its_final_dot_is_the_site_listed_without_it() {
+    let asking = listing(Kind::Site, "github.com", Level::LookOnly);
+    let mut look = scripted(
+        Target {
+            site: Site::Host("GitHub.com.".to_owned()),
+            ..page("github.com", "AXButton", Some("Open"))
+        },
+        Target::default(),
+    );
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    assert!(matches!(
+        decide(&click, &asking, &mut look),
+        Decision::Deny { .. }
+    ));
+    assert_eq!(
+        crate::native::service::page_host("https://github.com./pulls").as_deref(),
+        Some("github.com")
+    );
+}

@@ -827,8 +827,9 @@ pub(super) fn seen_at(app: &str, name: Option<String>, address: Option<&str>) ->
     })
 }
 
-/// The host of a web page's address, lowercased: only for `http` and
-/// `https`, with any user, port, path, query and fragment dropped.
+/// The host of a web page's address, as accounts are matched by it (see
+/// [`atlas_core::name::web_host`]): only for `http` and `https`, with any
+/// user, port, path, query and fragment dropped.
 pub(super) fn page_host(url: &str) -> Option<String> {
     let (scheme, rest) = url.split_once("://")?;
     if !["http", "https"]
@@ -845,7 +846,8 @@ pub(super) fn page_host(url: &str) -> Option<String> {
         Some(bracketed) => bracketed.split_once(']')?.0,
         None => host.split(':').next()?,
     };
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+    let host = atlas_core::name::web_host(host);
+    (!host.is_empty()).then_some(host)
 }
 
 /// How often the service looks for its desktop, and how many looks in a
