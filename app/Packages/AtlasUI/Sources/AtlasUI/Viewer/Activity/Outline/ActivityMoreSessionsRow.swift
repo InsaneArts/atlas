@@ -12,7 +12,7 @@ struct ActivityMoreSessionsRow: View {
   /// The row's link.
   var body: some View {
     Button(more.title) {
-      withAnimation(ActivityMotion.filter(reduceMotion: reduceMotion)) { send(.showDaySessions(more.day)) }
+      withAnimation(ActivityMotion.fold(reduceMotion: reduceMotion)) { send(.showDaySessions(more.day)) }
     }
     .buttonStyle(OutlineLinkStyle())
     .padding(.leading, ViewerLayout.outlineText(level: 0) - ViewerLayout.linkInset)

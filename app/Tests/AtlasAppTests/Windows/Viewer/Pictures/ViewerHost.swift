@@ -239,6 +239,17 @@ final class ViewerHost {
     }
   }
 
+  /// This frame, to read pixel by pixel.
+  ///
+  /// - Returns: The frame.
+  /// - Throws: When nothing was drawn.
+  func sampled() throws -> SampledFrame {
+    let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+    hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+    let pixels = try #require(bitmap.converting(to: .sRGB, renderingIntent: .default))
+    return SampledFrame(pixels: pixels, scale: CGFloat(bitmap.pixelsWide) / hosting.bounds.width)
+  }
+
   /// What this frame draws in `rect`, as raw pixels, for comparing one frame with another.
   ///
   /// - Parameter rect: The part of the window, in its points from its top left.

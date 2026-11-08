@@ -32,6 +32,8 @@ public struct ViewerPictureSheet: Equatable, Sendable {
   public var canGoForward: Bool
   /// Whether Show in Finder can find the picture's file; Copy reads the picture whatever it finds.
   public var canShowInFinder: Bool
+  /// What the footer briefly says after Copy or Show in Finder; nil says nothing.
+  public var notice: ViewerSheetNotice?
 
   /// Creates the sheet's state.
   ///
@@ -50,6 +52,7 @@ public struct ViewerPictureSheet: Equatable, Sendable {
   ///   - canGoBack: Whether ‹ goes anywhere.
   ///   - canGoForward: Whether › goes anywhere.
   ///   - canShowInFinder: Whether Show in Finder can find the file.
+  ///   - notice: What the footer briefly says after Copy or Show in Finder; nothing by default.
   public init(
     id: String,
     icon: ActivityIcon,
@@ -64,7 +67,8 @@ public struct ViewerPictureSheet: Equatable, Sendable {
     run: String,
     canGoBack: Bool,
     canGoForward: Bool,
-    canShowInFinder: Bool
+    canShowInFinder: Bool,
+    notice: ViewerSheetNotice? = nil
   ) {
     self.id = id
     self.icon = icon
@@ -80,6 +84,7 @@ public struct ViewerPictureSheet: Equatable, Sendable {
     self.canGoBack = canGoBack
     self.canGoForward = canGoForward
     self.canShowInFinder = canShowInFinder
+    self.notice = notice
   }
 
   /// Which side shows as drawn: before while there is no picture after.

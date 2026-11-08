@@ -9,6 +9,7 @@ struct ActivityPictureStrip: View {
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.outlineWidth) private var width
+  @Environment(\.motionReduced) private var reduceMotion
   /// The picture the sheet showed last, or takes focus back to, which keeps its place in the strip after the sheet
   /// closes, so focus has it to come back to.
   @State private var pinned: String?
@@ -20,7 +21,9 @@ struct ActivityPictureStrip: View {
         HStack(spacing: ViewerLayout.pictureGap) {
           tiles(shown)
           Button(strip.link) {
-            send(strip.opensSession ? .toggleSession(strip.run, opens: true) : .showRunPictures(strip.run))
+            withAnimation(ActivityMotion.fold(reduceMotion: reduceMotion)) {
+              send(strip.opensSession ? .toggleSession(strip.run, opens: true) : .showRunPictures(strip.run))
+            }
           }
           .buttonStyle(OutlineLinkStyle())
           .padding(.leading, ViewerLayout.stripLinkLead)

@@ -25,12 +25,12 @@ struct ActivityPictureGrid: View {
       HStack(spacing: ViewerLayout.pictureGap) {
         if grid.more > 0 {
           Button(grid.moreTitle) {
-            withAnimation(ActivityMotion.filter(reduceMotion: reduceMotion)) { send(.showAllRunPictures(grid.run)) }
+            withAnimation(ActivityMotion.fold(reduceMotion: reduceMotion)) { send(.showAllRunPictures(grid.run)) }
           }
           .buttonStyle(OutlineLinkStyle())
         }
         Button("Show fewer") {
-          withAnimation(ActivityMotion.filter(reduceMotion: reduceMotion)) { send(.hideRunPictures(grid.run)) }
+          withAnimation(ActivityMotion.fold(reduceMotion: reduceMotion)) { send(.hideRunPictures(grid.run)) }
         }
         .buttonStyle(OutlineLinkStyle(chevron: false))
       }

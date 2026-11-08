@@ -36,7 +36,8 @@ extension ViewerPresenter {
         run: ViewerWords.inRun(name),
         canGoBack: index > 0,
         canGoForward: index < sequence.count - 1,
-        canShowInFinder: list.pictureFile(named: shot) != nil
+        canShowInFinder: list.pictureFile(named: shot) != nil,
+        notice: focus.notice
       )
     case .before(let row):
       let entry = run.runs
@@ -68,7 +69,8 @@ extension ViewerPresenter {
         run: ViewerWords.inRun(name),
         canGoBack: index > 0,
         canGoForward: index < sequence.count - 1,
-        canShowInFinder: list.pictureFile(named: shown) != nil
+        canShowInFinder: list.pictureFile(named: shown) != nil,
+        notice: focus.notice
       )
     }
   }

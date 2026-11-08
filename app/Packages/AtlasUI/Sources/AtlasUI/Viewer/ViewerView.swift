@@ -34,6 +34,8 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   /// Whether the picture rests in the corner, small, rather than on the stage: what its corners round to, the small
   /// screen's or the stage's, changing on the picture's own spring as it moves between the two.
   @State private var pictureInCorner: Bool
+  /// Whether the picture sheet stands over the window, until its closing has finished.
+  @State private var sheetCovers: Bool
   /// The namespace the helper's screen moves in between the stage and the corner.
   @Namespace private var screenZoom
   @Environment(\.motionReduced) private var reduceMotion
@@ -59,6 +61,7 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
     _settledPlace = State(initialValue: state.pane.place)
     _miniCorner = State(initialValue: state.miniCorner)
     _pictureInCorner = State(initialValue: state.pane.place.keepsScreenInCorner)
+    _sheetCovers = State(initialValue: Self.activity(of: state)?.sheet != nil)
   }
 
   /// The sidebar beside the card, the toggle over them in the window buttons' band; the picture sheet, or a run
@@ -73,9 +76,10 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
       .disabled(isCovered)
       .accessibilityHidden(isCovered)
       .environment(\.pictureSheetShown, activity?.sheet != nil)
+      .environment(\.pictureSheetCovers, sheetCovers)
       .overlay {
         // An alert over the sheet or the replay takes the keyboard and VoiceOver from them, as from the window.
-        PictureSheetLayer(sheet: activity?.sheet, send: send)
+        PictureSheetLayer(sheet: activity?.sheet, covers: $sheetCovers, send: send)
           .allowsHitTesting(activity?.sheet != nil && state.alert == nil)
           .disabled(state.alert != nil)
           .accessibilityHidden(state.alert != nil)
@@ -306,6 +310,14 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
 
   /// The Activity pane, while it shows, for the picture sheet or the run replayed over the whole window.
   private var activity: ViewerActivityState? {
+    Self.activity(of: state)
+  }
+
+  /// Activity's pane in `state`, while it shows.
+  ///
+  /// - Parameter state: What the window shows.
+  /// - Returns: The pane, or nil.
+  private static func activity(of state: ViewerState) -> ViewerActivityState? {
     guard case .activity(let activity) = state.pane else { return nil }
     return activity
   }

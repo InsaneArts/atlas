@@ -2,8 +2,9 @@ import SwiftUI
 
 /// A folded row and its key items, its problem lines or its newest pictures, as one box: the pointer over any of it
 /// lights the whole box, pressing its row presses the whole box, and keyboard focus on its row rings the whole box. It
-/// spans the list's width, on the row's own edges, with 12 under its last item. Unboxed, it adds nothing, so a row
-/// keeps its place, its focus and its chevron's turn as it opens out of its box or folds into one.
+/// spans the list's width, on the row's own edges, with 12 under its last item. Unboxed, it adds no box, so a row keeps
+/// its place, its focus and its chevron's turn as it opens out of its box or folds into one. Boxed or not, it stands
+/// on the card's ground (``SwiftUI/View/outlineGround()``).
 struct OutlineBox: ViewModifier {
   /// Whether the row and its key items stand as one box.
   let isBoxed: Bool
@@ -24,6 +25,7 @@ struct OutlineBox: ViewModifier {
           highlight.foregroundStyle(fill)
         }
       )
+      .outlineGround()
       .overlay {
         if isBoxed, row.isFocused {
           shape.strokeBorder(Color.strokeFocus, lineWidth: Stroke.thick)

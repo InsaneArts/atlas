@@ -79,12 +79,31 @@ struct PictureSheetFooter: View {
     return "\(sheet.position) \(sheet.run)"
   }
 
-  /// Copy, Show in Finder and Done, in macOS order with the default button last.
+  /// What could not be done, then Copy, Show in Finder and Done, in macOS order with the default button last.
   private var buttons: some View {
     HStack(spacing: Spacing.s) {
-      Button("Copy") { send(.copyPicture) }
-        .buttonStyle(.capsule(.secondary, size: .small))
-        .help("Copy this picture")
+      if let failure {
+        Text(failure)
+          .font(Typography.font(.callout))
+          .foregroundStyle(Color.textAttention)
+          .lineLimit(1)
+          .transition(.opacity)
+      }
+      Button(action: { send(.copyPicture) }) {
+        // Both words hold the button's width, so it never changes size as one gives way to the other.
+        ZStack {
+          Text("Copy")
+            .opacity(copied ? 0 : 1)
+          HStack(spacing: Spacing.xs) {
+            Image(systemName: SymbolName.done.rawValue)
+            Text("Copied")
+          }
+          .opacity(copied ? 1 : 0)
+        }
+      }
+      .buttonStyle(.capsule(.secondary, size: .small))
+      .help("Copy this picture")
+      .accessibilityLabel(copied ? Text("Copied") : Text("Copy"))
       Button("Show in Finder") { send(.showPictureInFinder) }
         .buttonStyle(.capsule(.secondary, size: .small))
         .disabled(!sheet.canShowInFinder)
@@ -96,5 +115,39 @@ struct PictureSheetFooter: View {
         .onAppear { doneFocused = true }
     }
     .fixedSize()
+    .animation(Motion.textSwap, value: sheet.notice)
+    .onChange(of: sheet.notice) { _, notice in
+      // VoiceOver hears what the footer says, as it may not be looking at it.
+      guard let words = spoken(notice) else { return }
+      AccessibilityNotification.Announcement(words)
+        .post()
+    }
+  }
+
+  /// What VoiceOver says for `notice`.
+  ///
+  /// - Parameter notice: What the footer says.
+  /// - Returns: The words, or nil for none.
+  private func spoken(_ notice: ViewerSheetNotice?) -> String? {
+    switch notice {
+    case .copied: String(localized: "Copied")
+    case .copyFailed: String(localized: "Couldn't copy this picture")
+    case .fileMissing: String(localized: "Couldn't find this picture's file")
+    case nil: nil
+    }
+  }
+
+  /// Whether Copy just put the picture on the clipboard.
+  private var copied: Bool {
+    sheet.notice == .copied
+  }
+
+  /// What could not be done, said briefly beside the buttons; nil when nothing failed.
+  private var failure: LocalizedStringKey? {
+    switch sheet.notice {
+    case .copyFailed: "Couldn't copy this picture"
+    case .fileMissing: "Couldn't find this picture's file"
+    case .copied, nil: nil
+    }
   }
 }

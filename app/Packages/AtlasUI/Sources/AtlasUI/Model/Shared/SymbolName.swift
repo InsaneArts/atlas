@@ -67,6 +67,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case exclamation = "exclamationmark"
   /// A check that passed.
   case passed = "checkmark.circle.fill"
+  /// Something just done, such as a picture copied.
+  case done = "checkmark"
   /// The General settings.
   case gear = "gearshape"
   /// The helper's screen.

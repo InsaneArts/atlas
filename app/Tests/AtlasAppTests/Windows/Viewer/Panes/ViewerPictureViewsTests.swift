@@ -22,11 +22,14 @@ struct ViewerPictureViewsTests {
   /// - Parameters:
   ///   - service: The scripted service.
   ///   - clock: The clock a replay plays on.
+  ///   - shotOutlet: Where copied pictures go and how files are shown.
   /// - Returns: The viewer, its log read.
   /// - Throws: The failed requirement, when the log is never read.
-  static func onActivity(_ service: ScriptedService, clock: ManualClock = ManualClock()) async throws
-    -> ViewerController
-  {
+  static func onActivity(
+    _ service: ScriptedService,
+    clock: ManualClock = ManualClock(),
+    shotOutlet: ShotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true })
+  ) async throws -> ViewerController {
     let click = ActionFacts(action: .click, display: .init(width: 4, height: 3), point: .init(x: 2, y: 1))
     service.activityLog = ActivityLog(entries: [
       ActivityFixtures.row(
@@ -55,7 +58,7 @@ struct ViewerPictureViewsTests {
       names.second: png(width: 4, height: 3),
       names.after: png(width: 4, height: 3),
     ]
-    let viewer = try await ViewerController.watching(service, clock: clock)
+    let viewer = try await ViewerController.watching(service, clock: clock, shotOutlet: shotOutlet)
     viewer.send(.show(.activity))
     try await settle("the log was never read") { viewer.panes.activity.log != nil }
     return viewer

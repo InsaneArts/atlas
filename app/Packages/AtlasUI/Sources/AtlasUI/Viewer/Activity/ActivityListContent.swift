@@ -10,6 +10,9 @@ struct ActivityListContent: View {
   @Environment(\.listIsAtTop) private var isAtTop
   /// The card's width as last measured, which the outline gives way to.
   @State private var width = CGFloat.infinity
+  /// The days that held more sessions than they showed as last drawn, so the update that shows the rest tells them to
+  /// come in with it.
+  @State private var drawnFolded: Set<String> = []
 
   /// 48: above and below an empty filtered list's message.
   private static let emptyInset: CGFloat = 48
@@ -67,9 +70,19 @@ struct ActivityListContent: View {
     .fixedSize()
   }
 
+  /// The days holding more sessions than they show.
+  private var foldedDays: Set<String> {
+    Set(
+      state.days
+        .filter { $0.more != nil }
+        .map(\.id)
+    )
+  }
+
   /// Every day's heading, its sessions with a hairline between two, and the row for the rest of a long day, each keyed
-  /// by its identity so a session in two filters stays where it is. A session's row and runs are rows of this stack,
-  /// so the list holds the place of whichever the person scrolled to.
+  /// by its identity so a session in two filters stays where it is, and each on the card's ground
+  /// (``SwiftUI/View/outlineGround()``), so what a disclosure brings in is uncovered as the rows below move down. A
+  /// session's row and runs are rows of this stack, so the list holds the place of whichever the person scrolled to.
   private var rows: some View {
     LazyVStack(alignment: .leading, spacing: .zero) {
       ForEach(Array(state.days.enumerated()), id: \.element.id) { place, day in
@@ -83,6 +96,7 @@ struct ActivityListContent: View {
             .padding(.leading, ViewerLayout.outlineInset)
             .padding(.top, place == 0 && state.showsFilters ? .zero : ViewerLayout.dayAbove)
             .accessibilityAddTraits(.isHeader)
+            .outlineGround()
             .id("day.\(day.id)")
             .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
         }
@@ -92,18 +106,25 @@ struct ActivityListContent: View {
               .padding(.leading, ViewerLayout.outlineText(level: 0))
               .padding(.trailing, ViewerLayout.outlineInset)
               .padding(.vertical, ViewerLayout.sessionSeparatorGap)
+              .outlineGround()
               .id("separator.\(session.id)")
           }
           // The block names and moves its own rows, which stand in this stack themselves.
-          ActivitySessionBlock(session: session, send: send)
+          ActivitySessionBlock(
+            session: session,
+            revealing: day.more == nil && drawnFolded.contains(day.id),
+            send: send
+          )
         }
         if let more = day.more {
           ActivityMoreSessionsRow(more: more, send: send)
+            .outlineGround()
             .id("more.\(more.day)")
         }
       }
     }
     .scrollTargetLayout()
+    .onChange(of: foldedDays, initial: true) { _, days in drawnFolded = days }
     .transaction(value: state.newest) { transaction in
       // A change the person made keeps the animation it was made in, so a filter's rows wait for those leaving.
       transaction.animation = Motion.layout(

@@ -2,7 +2,8 @@ import SwiftUI
 
 /// An app run as one piece: its row, then while folded its problem lines and its newest pictures in one box with the
 /// row, or its pictures opened in place; while open, its steps oldest first, packed, with 8 after the last. The row
-/// stands first in every case, so it keeps its focus and its chevron's turn as the run opens or folds.
+/// stands first in every case, so it keeps its focus and its chevron's turn as the run opens or folds, and opening it
+/// is one move: its key items fade out as its steps fade and slide in on the fold's spring.
 struct ActivityRunBlock: View {
   /// The run.
   let run: ViewerOutlineRun
@@ -10,6 +11,7 @@ struct ActivityRunBlock: View {
   let level: Int
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The row and what shows under it.
   var body: some View {
@@ -23,7 +25,7 @@ struct ActivityRunBlock: View {
           }
         }
         .padding(.bottom, ViewerLayout.stepsBelow)
-        .transition(.opacity)
+        .transition(ActivityMotion.disclosure(reduceMotion: reduceMotion))
       } else {
         VStack(alignment: .leading, spacing: .zero) {
           ForEach(run.problemSteps) { step in
@@ -32,7 +34,7 @@ struct ActivityRunBlock: View {
           pictures
             .padding(.leading, ViewerLayout.outlineText(level: level))
         }
-        .transition(.opacity)
+        .transition(ActivityMotion.disclosure(reduceMotion: reduceMotion))
       }
     }
     .outlineBox(run.isBoxed)

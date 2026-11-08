@@ -15,4 +15,6 @@ struct ViewerPictureFocus: Equatable {
   /// What the sheet was opened from, which takes focus back as it closes while the picture shown is not in the
   /// outline: a screenshot by its name, or a step by its line's identity; nil when not known.
   var opener: ViewerPictureItem?
+  /// What the footer briefly says after Copy or Show in Finder, until it is said long enough or another picture shows.
+  var notice: ViewerSheetNotice?
 }

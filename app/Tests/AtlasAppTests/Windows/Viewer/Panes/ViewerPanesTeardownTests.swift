@@ -37,8 +37,11 @@ struct ViewerPanesTeardownTests {
     let viewer = try await ViewerPanesModelTests.onShots(
       service,
       shotOutlet: ShotOutlet(
-        copy: { deliveries.append($0) },
-        reveal: { _ in },
+        copy: { png, _ in
+          deliveries.append(png)
+          return true
+        },
+        reveal: { _ in true },
         save: { data, _ in
           deliveries.append(data)
           return true

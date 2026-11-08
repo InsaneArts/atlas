@@ -9,6 +9,8 @@ import Foundation
 final class ViewerPictureViews {
   /// 1 s: how long the replay holds each frame while it plays.
   static let hold: Duration = .seconds(1)
+  /// How long the sheet's footer says what Copy or Show in Finder did (``Motion/Duration/confirmHold``).
+  static let noticeHold: Duration = .seconds(Motion.Duration.confirmHold.seconds)
 
   /// The panes it serves.
   private weak var model: ViewerPanesModel?
@@ -24,6 +26,8 @@ final class ViewerPictureViews {
   private(set) var playing: Task<Void, Never>?
   /// The picture being read to copy or save, while one is.
   private(set) var copying: Task<Void, Never>?
+  /// Clears what the sheet's footer says once it has been said long enough.
+  private(set) var noticing: Task<Void, Never>?
 
   /// Creates the views' work.
   ///
@@ -71,6 +75,7 @@ final class ViewerPictureViews {
     guard let index = sequence.firstIndex(of: current), sequence.indices.contains(index + offset) else { return }
     model.panes.activity.sheet?.item = sequence[index + offset]
     model.panes.activity.sheet?.side = .before
+    model.panes.activity.sheet?.notice = nil
     refresh()
   }
 
@@ -79,6 +84,7 @@ final class ViewerPictureViews {
   /// - Parameter side: The side.
   func side(_ side: ViewerPictureSide) {
     model?.panes.activity.sheet?.side = side
+    model?.panes.activity.sheet?.notice = nil
     refresh()
   }
 
@@ -86,21 +92,25 @@ final class ViewerPictureViews {
   func close() {
     copying?.cancel()
     copying = nil
+    noticing?.cancel()
+    noticing = nil
     model?.panes.activity.sheet = nil
     refresh()
   }
 
-  /// Copy: the sheet's picture, as taken, on the clipboard.
+  /// Copy: the sheet's picture, as taken, on the clipboard with its file, then Copy briefly reads Copied; a picture
+  /// that cannot be read or copied says so instead.
   func copy() {
-    guard let name = shownPicture() else { return }
+    guard let name = shownPicture() else { return notify(.copyFailed) }
+    let file = pictureFile(named: name)
     copying?.cancel()
     copying = Task { [weak self, service] in
-      // A picture that cannot be read gives nothing; the person can ask again.
       let data = try? await service.screenshot(name: name, full: true)
       let png = if let data { await ImageEncoding.png(data) } else { Data?.none }
-      guard !Task.isCancelled, let self, let png else { return }
+      guard !Task.isCancelled, let self else { return }
       copying = nil
-      outlet.copy(png)
+      let copied = png.map { outlet.copy($0, file) } ?? false
+      notify(copied ? .copied : .copyFailed)
     }
   }
 
@@ -120,12 +130,36 @@ final class ViewerPictureViews {
     }
   }
 
-  /// Show in Finder: the sheet's picture's file.
+  /// Show in Finder: the sheet's picture's file, or a short line saying it could not be found.
   func reveal() {
-    guard let model, let name = shownPicture() else { return }
+    guard let name = shownPicture(), let file = pictureFile(named: name), outlet.reveal(file) else {
+      return notify(.fileMissing)
+    }
+  }
+
+  /// Where a picture's file is, among the screenshots listed or the pictures kept beside them.
+  ///
+  /// - Parameter name: The picture's file name.
+  /// - Returns: Its file, or nil when the folder is not known.
+  private func pictureFile(named name: String) -> URL? {
+    guard let model else { return nil }
     let list = ScreenshotList(shots: model.panes.shots.shots ?? [], folder: model.panes.shots.folder)
-    guard let file = list.pictureFile(named: name) else { return }
-    outlet.reveal(file)
+    return list.pictureFile(named: name)
+  }
+
+  /// Says `notice` in the sheet's footer for ``noticeHold``, unless another picture shows first.
+  ///
+  /// - Parameter notice: What to say.
+  private func notify(_ notice: ViewerSheetNotice) {
+    guard let model, model.panes.activity.sheet != nil else { return }
+    model.panes.activity.sheet?.notice = notice
+    noticing?.cancel()
+    noticing = Task { [weak self, clock] in
+      try? await clock.sleep(for: Self.noticeHold)
+      guard !Task.isCancelled, let self, let panes = self.model else { return }
+      noticing = nil
+      if panes.panes.activity.sheet?.notice == notice { panes.panes.activity.sheet?.notice = nil }
+    }
   }
 
   /// A run's Replay: its steps played over the window.
@@ -189,6 +223,8 @@ final class ViewerPictureViews {
       // A copy or save asked of a sheet no longer shown never lands over what the person copies next.
       copying?.cancel()
       copying = nil
+      noticing?.cancel()
+      noticing = nil
     }
     let wanted = shows ? wantedPictures() : []
     for (name, load) in loads where !wanted.contains(name) {
@@ -208,6 +244,8 @@ final class ViewerPictureViews {
     loads = [:]
     copying?.cancel()
     copying = nil
+    noticing?.cancel()
+    noticing = nil
     playing?.cancel()
     playing = nil
   }

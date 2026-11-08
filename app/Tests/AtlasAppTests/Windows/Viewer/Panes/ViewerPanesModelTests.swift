@@ -60,7 +60,7 @@ struct ViewerPanesModelTests {
   /// - Throws: The failed requirement, when they never are.
   static func onShots(
     _ service: ScriptedService,
-    shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
+    shotOutlet: ShotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true })
   ) async throws -> ViewerController {
     service.shots = shots
     service.activityLog = log
@@ -75,6 +75,20 @@ struct ViewerPanesModelTests {
       viewer.panes.shots.shots != nil && viewer.panes.activity.readAt != nil
     }
     return viewer
+  }
+
+  /// An outlet that hands each copied picture to `copied` and says it was copied.
+  ///
+  /// - Parameter copied: Receives each picture copied.
+  /// - Returns: The outlet.
+  static func copying(_ copied: @escaping @MainActor (Data) -> Void) -> ShotOutlet {
+    ShotOutlet(
+      copy: { png, _ in
+        copied(png)
+        return true
+      },
+      reveal: { _ in true }
+    )
   }
 
   /// The picture sheet the window shows.
@@ -292,7 +306,7 @@ struct ViewerPanesModelTests {
     let service = ScriptedService()
     service.shotData = [Self.newer: png(width: 1, height: 1), Self.older: png(width: 2, height: 2)]
     var copied: [Data] = []
-    let viewer = try await Self.onShots(service, shotOutlet: ShotOutlet(copy: { copied.append($0) }, reveal: { _ in }))
+    let viewer = try await Self.onShots(service, shotOutlet: Self.copying { copied.append($0) })
     defer {
       viewer.close()
       service.resumeAllShots()
@@ -318,7 +332,7 @@ struct ViewerPanesModelTests {
     let service = ScriptedService()
     service.shotData = [Self.newer: png(width: 1, height: 1), Self.older: png(width: 2, height: 2)]
     var copied: [Data] = []
-    let viewer = try await Self.onShots(service, shotOutlet: ShotOutlet(copy: { copied.append($0) }, reveal: { _ in }))
+    let viewer = try await Self.onShots(service, shotOutlet: Self.copying { copied.append($0) })
     defer {
       viewer.close()
       service.resumeAllShots()
@@ -341,7 +355,7 @@ struct ViewerPanesModelTests {
   func closingTheSheetCancelsItsCopy() async throws {
     let service = ScriptedService()
     var copied: [Data] = []
-    let viewer = try await Self.onShots(service, shotOutlet: ShotOutlet(copy: { copied.append($0) }, reveal: { _ in }))
+    let viewer = try await Self.onShots(service, shotOutlet: Self.copying { copied.append($0) })
     defer {
       viewer.close()
       service.resumeAllShots()
@@ -367,8 +381,8 @@ struct ViewerPanesModelTests {
     let viewer = try await Self.onShots(
       service,
       shotOutlet: ShotOutlet(
-        copy: { _ in },
-        reveal: { _ in },
+        copy: { _, _ in true },
+        reveal: { _ in true },
         save: { _, _ in
           saved = true
           return true
@@ -437,7 +451,13 @@ struct ViewerPanesModelTests {
     var revealed: [URL] = []
     let viewer = try await Self.onShots(
       service,
-      shotOutlet: ShotOutlet(copy: { _ in }, reveal: { revealed.append($0) })
+      shotOutlet: ShotOutlet(
+        copy: { _, _ in true },
+        reveal: { file in
+          revealed.append(file)
+          return true
+        }
+      )
     )
     defer {
       viewer.close()

@@ -137,8 +137,11 @@ extension ViewerLayout {
   static let sheetArrowGap = Spacing.xs
   /// 46: where the sheet hangs from, under the card's header.
   static let sheetTop = cardInset + headerHeight
-  /// 24: how far above its place the sheet starts as it comes, and ends as it goes.
-  static let sheetDrop = Spacing.xxl
+  /// 2000: how far an outline row's ground reaches below it, under the rows that follow, past any list's height, so
+  /// what a disclosure brings in stays covered until the rows below have moved past it.
+  static let outlineCurtain: CGFloat = 2000
+  /// 0.97: how small the sheet starts as it comes, and ends as it goes, in its own place.
+  static let sheetEnterScale: CGFloat = 0.97
 
   /// The sheet's width in a window this wide: 824, or the window's width less a margin each side.
   ///
