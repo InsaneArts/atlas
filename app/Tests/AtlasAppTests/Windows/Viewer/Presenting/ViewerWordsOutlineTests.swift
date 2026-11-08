@@ -23,6 +23,25 @@ struct ViewerWordsOutlineTests {
         == "Opened and closed apps"
     )
     #expect(
+      ViewerWords.sessionTitle(
+        ActivityGist(kind: .window, count: 2, app: "Probe", verbs: ["install", "open"]),
+        working: false
+      ) == "Opened and installed Probe"
+    )
+    #expect(
+      ViewerWords.sessionTitle(ActivityGist(kind: .window, count: 1, app: nil, verbs: ["cleanup"]), working: false)
+        == "Cleaned up"
+    )
+    #expect(
+      ViewerWords.sessionTitle(ActivityGist(kind: .window, count: 1, app: "Notes"), working: false)
+        == "Worked with Notes",
+      "verbs not known say nothing they did not see"
+    )
+    #expect(
+      ViewerWords.sessionTitle(ActivityGist(kind: .pointer, count: 1, app: "Notes"), working: false)
+        == "Used the pointer in Notes"
+    )
+    #expect(
       ViewerWords.sessionTitle(ActivityGist(kind: .pointer, count: 4, app: "Opie", verbs: ["move"]), working: false)
         == "Moved the pointer in Opie"
     )

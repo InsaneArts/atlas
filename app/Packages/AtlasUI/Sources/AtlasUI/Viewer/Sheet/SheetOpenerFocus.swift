@@ -1,10 +1,15 @@
 import SwiftUI
 
 /// What opened the picture sheet takes the keyboard and VoiceOver back as the sheet closes, by Done, Escape or a
-/// press on the dimmed window: the picture or the step's picture button whose picture the sheet showed last.
+/// press on the dimmed window: the picture whose picture the sheet showed last, or for a step the keyboard to its
+/// picture button and VoiceOver to its line, which reads as one.
 struct SheetOpenerFocus: ViewModifier {
   /// Whether the sheet shows this view's picture now.
   let isCurrent: Bool
+  /// Whether the keyboard comes back to this view.
+  let keys: Bool
+  /// Whether VoiceOver comes back to this view.
+  let voiceOver: Bool
   @Environment(\.pictureSheetShown) private var sheetShown
   /// Whether the sheet showed this view's picture last, so it takes focus back as the sheet closes.
   @State private var showedLast = false
@@ -30,8 +35,8 @@ struct SheetOpenerFocus: ViewModifier {
       .onChange(of: sheetShown) { _, shown in
         guard !shown, showedLast else { return }
         showedLast = false
-        focused = true
-        spoken = true
+        if keys { focused = true }
+        if voiceOver { spoken = true }
       }
   }
 }

@@ -167,21 +167,22 @@ extension ViewerWords {
   }
 
   /// What the pointer did, by the verbs Atlas wrote: "clicked" for clicks and presses, "dragged", "moved the pointer",
-  /// or "used the pointer" for a mix; while working, "clicking" and so on.
+  /// or "used the pointer" for a mix or verbs not known; while working, "clicking" and so on.
   ///
   /// - Parameters:
   ///   - verbs: The pointer's verbs.
   ///   - working: Whether it is under way.
   /// - Returns: The phrase.
   static func pointer(_ verbs: Set<String>, working: Bool) -> String {
-    if verbs.isSubset(of: clicks) { return working ? "clicking" : "clicked" }
+    if !verbs.isEmpty, verbs.isSubset(of: clicks) { return working ? "clicking" : "clicked" }
     if verbs == ["drag"] { return working ? "dragging" : "dragged" }
     if verbs == ["move"] { return working ? "moving the pointer" : "moved the pointer" }
     return working ? "using the pointer" : "used the pointer"
   }
 
-  /// What was done to apps, by the verbs Atlas wrote: "opened TextEdit", "closed apps", "installed apps", "cleaned up",
-  /// or "opened and closed apps" for a mix; while working, "opening TextEdit" and so on.
+  /// What was done to apps, from the verbs Atlas wrote, each said once in a fixed order: "opened TextEdit", "closed
+  /// apps", "opened and installed TextEdit", "cleaned up", or "worked with apps" while the verbs are not known; while
+  /// working, "opening TextEdit" and so on.
   ///
   /// - Parameters:
   ///   - verbs: The window's verbs.
@@ -190,12 +191,23 @@ extension ViewerWords {
   /// - Returns: The phrase.
   static func window(_ verbs: Set<String>, working: Bool, object: String) -> String {
     let apps = object.isEmpty ? "apps" : object
-    if verbs.isSubset(of: ["open", "open-link"]) { return (working ? "opening " : "opened ") + apps }
-    if verbs == ["close"] { return (working ? "closing " : "closed ") + apps }
-    if verbs == ["install"] { return (working ? "installing " : "installed ") + apps }
-    if verbs == ["cleanup"] { return working ? "cleaning up" : "cleaned up" }
-    return (working ? "opening and closing " : "opened and closed ") + apps
+    let said = appVerbs.filter { verbs.contains($0.verb) }
+      .map { working ? $0.working : $0.done }
+      .reduce(into: [String]()) { words, word in
+        if !words.contains(word) { words.append(word) }
+      }
+    let cleaned = verbs.contains("cleanup") ? [working ? "cleaning up" : "cleaned up"] : []
+    guard !said.isEmpty else {
+      return cleaned.first ?? (working ? "working with " : "worked with ") + apps
+    }
+    return listed(["\(listed(said)) \(apps)"] + cleaned)
   }
+
+  /// The verbs done to apps, in the order a summary says them, with their words.
+  static let appVerbs: [(verb: String, done: String, working: String)] = [
+    ("open", "opened", "opening"), ("open-link", "opened", "opening"), ("close", "closed", "closing"),
+    ("install", "installed", "installing"),
+  ]
 
   /// The pointer's verbs that click or press a control.
   static let clicks: Set<String> = [
