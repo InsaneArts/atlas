@@ -411,7 +411,8 @@ fn readable_in(listing: &str, uid: u32, groups: &[u32]) -> (u32, Vec<String>) {
             // `ls -a` lists the home folder itself first, as `.`.
             "." if !seen_home => {
                 seen_home = true;
-                home_open = item.opens_for(uid, groups);
+                // Going in is enough to reach a folder by its name.
+                home_open = item.searchable(uid, groups);
             }
             ".." => {}
             name if item.folder && !has_entries && item.opens_for(uid, groups) => {
@@ -465,18 +466,27 @@ impl<'a> Item<'a> {
         })
     }
 
-    /// Whether the helper `uid`, in `groups`, may list it and go into it:
-    /// macOS checks the owner's bits for its owner, else the group's for a
-    /// member, else everyone else's.
-    fn opens_for(&self, uid: u32, groups: &[u32]) -> bool {
-        let class = if self.owner == uid {
+    /// The permission bits that apply to the helper `uid`, in `groups`: macOS
+    /// checks the owner's for its owner, else the group's for a member, else
+    /// everyone else's.
+    fn class_for(&self, uid: u32, groups: &[u32]) -> &[u8] {
+        if self.owner == uid {
             &self.mode[1..4]
         } else if groups.contains(&self.group) {
             &self.mode[4..7]
         } else {
             &self.mode[7..10]
-        };
-        class[0] == b'r' && matches!(class[2], b'x' | b's' | b't')
+        }
+    }
+
+    /// Whether the helper may go into it.
+    fn searchable(&self, uid: u32, groups: &[u32]) -> bool {
+        matches!(self.class_for(uid, groups)[2], b'x' | b's' | b't')
+    }
+
+    /// Whether the helper may list it and go into it.
+    fn opens_for(&self, uid: u32, groups: &[u32]) -> bool {
+        self.class_for(uid, groups)[0] == b'r' && self.searchable(uid, groups)
     }
 }
 

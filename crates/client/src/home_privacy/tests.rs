@@ -237,3 +237,15 @@ fn listings_are_read_without_the_persons_colours_or_language() {
         Some(std::ffi::OsStr::new("C"))
     );
 }
+
+#[test]
+fn a_home_the_helper_may_only_go_into_still_shows_its_open_folders() {
+    let text = home_listing(
+        "drwx--x--x+",
+        &["drwxr-xr-x  13 501  20   416 Oct 21 14:46 dev"],
+    );
+    assert_eq!(
+        readable_in(&text, HELPER, &[STAFF]),
+        (1, vec!["dev".to_owned()])
+    );
+}
