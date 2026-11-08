@@ -9,6 +9,9 @@ struct ActivityPictureStrip: View {
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
   @Environment(\.outlineWidth) private var width
+  /// The picture the sheet showed last, or takes focus back to, which keeps its place in the strip after the sheet
+  /// closes, so focus has it to come back to.
+  @State private var pinned: String?
 
   /// The pictures and the link.
   var body: some View {
@@ -30,13 +33,18 @@ struct ActivityPictureStrip: View {
       }
     }
     .padding(.bottom, ViewerLayout.stripBelow)
+    .onChange(of: strip.tiles.first { $0.isCurrent || $0.returnsFocus }?.id, initial: true) { _, held in
+      // Kept through the sheet's closing; the next picture the sheet shows here takes its place.
+      if let held { pinned = held }
+    }
   }
 
-  /// The newest pictures that fit beside the link; the one the sheet shows, or takes focus back to, stands last among
-  /// them when it would not fit, so focus always has a picture to come back to.
+  /// The newest pictures that fit beside the link; the one the sheet showed last, or takes focus back to, stands last
+  /// among them when it would not fit, so focus always has a picture to come back to.
   private var shown: [ViewerPictureTile] {
     var shown = Array(strip.tiles.prefix(ViewerLayout.stripCount(width: width)))
-    if let held = strip.tiles.first(where: { $0.isCurrent || $0.returnsFocus }), !shown.contains(held), !shown.isEmpty {
+    let held = strip.tiles.first { $0.isCurrent || $0.returnsFocus } ?? strip.tiles.first { $0.id == pinned }
+    if let held, !shown.contains(where: { $0.id == held.id }), !shown.isEmpty {
       shown[shown.count - 1] = held
     }
     return shown
