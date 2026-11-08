@@ -156,7 +156,8 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   /// - Parameter listWidth: The width the lists are laid out at, pinned to the stage's trailing edge.
   /// - Returns: The stage.
   private func stage(listWidth: CGFloat) -> some View {
-    let pip = ViewerLayout.pipSize(bodyWidth: listWidth, aspect: state.mini?.picture.aspectRatio)
+    let live = state.mini?.picture ?? state.screen.picture
+    let pip = ViewerLayout.pipSize(bodyWidth: listWidth, aspect: live?.aspectRatio)
     return ZStack {
       if state.pane.place == .screen {
         ViewerScreen(
@@ -264,12 +265,13 @@ public struct ViewerView<Input: View, LivePicture: View>: View {
   }
 
   /// Where the small screen floats over the panes' lists: the end of the corner it is in now and the band its size
-  /// takes there while it shows, else nowhere.
+  /// takes there while it shows, else nowhere. While the Screen shows, Activity waits hidden with the room it keeps
+  /// over its list, so going to the Screen and back never lays its list out again or moves it from where it was read.
   ///
   /// - Parameter pip: The small screen's size.
   /// - Returns: The clearance.
   private func miniClearance(_ pip: CGSize) -> MiniClearance {
-    guard state.mini != nil else { return MiniClearance() }
+    guard state.mini != nil || state.pane.place == .screen else { return MiniClearance() }
     return MiniClearance(edges: miniCorner.isTop ? .top : .bottom, length: ViewerLayout.pipRoom(pip))
   }
 

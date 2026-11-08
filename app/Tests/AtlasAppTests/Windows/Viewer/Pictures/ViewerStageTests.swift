@@ -9,16 +9,51 @@ import Testing
 @Suite("ViewerStage", .serialized, AppKitState())
 @MainActor
 struct ViewerStageTests {
-  @Test("Activity shown again after the Screen is the pane already built")
+  @Test("Activity shown again after the Screen is the pane already built, still scrolled where it was left")
   func aTabShownAgainIsThePaneAlreadyBuilt() throws {
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: .zero)
+    defer { Motion.Pose.hold(at: previous) }
     let host = ViewerHost(try Self.activity(lines: 80))
     let list = try #require(host.scrollViews.first, "Activity has its list")
+    list.contentView.scroll(to: NSPoint(x: 0, y: Self.scrolled))
+    list.reflectScrolledClipView(list.contentView)
     host.show(PreviewStates.viewerWorking)
+    Self.settle(host)
     host.show(try Self.activity(lines: 80))
+    Self.settle(host)
     // Activity's list is all there is: nothing was built again, and nothing old is still leaving.
     #expect(host.scrollViews.count == 1)
     #expect(host.scrollViews.contains { $0 === list }, "Activity's list was built again")
+    #expect(list.contentView.bounds.origin.y == Self.scrolled, "the list lost its place")
   }
+
+  @Test("Activity hidden behind the Screen keeps its list as it was laid out")
+  func activityHiddenBehindTheScreenKeepsItsLayout() throws {
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: .zero)
+    defer { Motion.Pose.hold(at: previous) }
+    let host = ViewerHost(try Self.activity(lines: 80))
+    let list = try #require(host.scrollViews.first, "Activity has its list")
+    let laidOut = try #require(list.documentView?.frame)
+    host.show(PreviewStates.viewerWorking)
+    Self.settle(host)
+    // The small screen leaves with Activity, but the hidden list keeps the room it kept under it.
+    #expect(list.documentView?.frame == laidOut, "the hidden list was laid out again")
+  }
+
+  /// Lets every animation of the change just made finish, holding the moment well past the longest, then draws.
+  ///
+  /// - Parameter host: The window.
+  static func settle(_ host: ViewerHost) {
+    host.render()
+    Motion.Pose.hold(at: settled)
+    host.render()
+    Motion.Pose.hold(at: .zero)
+  }
+
+  /// 5 seconds: well past the end of every animation a change runs.
+  static let settled: TimeInterval = 5
 
   @Test("a new session shows at the top, while a list scrolled down holds it under a line and never moves")
   func aNewActionKeepsAScrolledListInPlace() throws {
