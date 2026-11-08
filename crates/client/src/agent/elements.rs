@@ -993,6 +993,7 @@ pub async fn click_element(
     // checked after native preparation, under the same lock as the click.
     let windows = client.windows_in(None, true, WINDOW_LOOKUP).await?.windows;
     let check = element_check(element, &windows, expect, (x, y))?;
+    client.picture_found(element);
 
     // The name it was found by is kept only as a control's caption: any
     // other element's name may be a document's text, a file or a title.

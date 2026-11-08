@@ -14,9 +14,6 @@ final class ViewerPanesModel {
   /// 3 s: Apps' pause. Listing the apps asks the helper itself for its windows, more than a file read; apps open and
   /// windows move at the person's pace, and 3 s still shows a new window before they look for it.
   static let appsEvery: Duration = .seconds(3)
-  /// 5 s: the Screenshots list's pause. An agent takes one every few seconds at most while it checks its work, and
-  /// the list is a folder the service reads; 5 s shows a new one within a glance.
-  static let shotsEvery: Duration = .seconds(5)
   /// 10 s: the host sessions' list's pause. The status says every few seconds which sessions are live and what each
   /// does; the list adds those that ended and what each made, which changes at an agent's pace, and is a few files the
   /// service reads.
@@ -39,19 +36,18 @@ final class ViewerPanesModel {
   @ObservationIgnored var sessionsReadAt: TimeInterval?
   /// The date and time now, which the panes tell times and days by.
   @ObservationIgnored let wallClock: @MainActor () -> Date
-  /// The preceding ingested Activity moments; presenting snapshots never writes this history.
+  /// The preceding ingested Activity runs; presenting snapshots never writes this history.
   @ObservationIgnored private var activityMoments: [ActivityMoment] = []
-  /// Where a copied screenshot goes, and how its file is shown.
+  /// Where a copied picture goes, and how its file is shown.
   @ObservationIgnored private let shotOutlet: ShotOutlet
-  /// Screenshot selection, row navigation and large-picture loading.
-  @ObservationIgnored private(set) lazy var screenshots = ViewerShotNavigation(model: self, service: service)
-  /// Cancellable Copy and Save delivery, and Finder actions.
-  @ObservationIgnored private(set) lazy var exports = ViewerShotExports(
+  /// The picture sheet and the run replayed over Activity: their pictures, Copy, Show in Finder and playing.
+  @ObservationIgnored private(set) lazy var pictures = ViewerPictureViews(
     model: self,
     service: service,
-    shotOutlet: shotOutlet
+    clock: clock,
+    outlet: shotOutlet
   )
-  /// The bounded thumbnail queue shared by Activity and Screenshots.
+  /// The bounded thumbnail queue Activity's pictures share.
   @ObservationIgnored private(set) lazy var thumbnails = ViewerThumbnails(model: self, service: service)
   /// The pane and session readings under way.
   @ObservationIgnored var work = ViewerPaneWork()
@@ -89,8 +85,8 @@ final class ViewerPanesModel {
   }
 
   /// Reads the shown pane while the window is on screen, every its own pause, and stops reading any other. The
-  /// thumbnails being read are let go unless Activity or Screenshots shows, and the large picture follows the window.
-  /// With the window gone, nothing shows, and the sessions' list is not read.
+  /// thumbnails being read are let go unless Activity shows, and the pictures the sheet and the replay show follow the
+  /// window. With the window gone, nothing shows, and the sessions' list is not read.
   func followPane() {
     followSessions()
     work.generation += 1
@@ -102,7 +98,7 @@ final class ViewerPanesModel {
     let shown = viewer?.shown == true
     let place = viewer?.session.place ?? .screen
     thumbnails.follow(shown: shown, place: place)
-    screenshots.followLarge()
+    pictures.refresh()
     guard shown, place != .screen else { return }
     let number = work.generation
     work.reading = Task { [weak self, clock] in
@@ -122,9 +118,9 @@ final class ViewerPanesModel {
   /// - Returns: Its pause.
   static func pause(for place: ViewerPlace) -> Duration {
     switch place {
-    case .activity: activityEvery
+    // The Screen reads nothing here; its picture streams.
+    case .activity, .screen: activityEvery
     case .apps: appsEvery
-    case .screen, .screenshots: shotsEvery
     }
   }
 
@@ -137,7 +133,6 @@ final class ViewerPanesModel {
     switch place {
     case .activity: await readActivity(number)
     case .apps: await readApps(number)
-    case .screenshots: await readShots(number)
     case .screen: return
     }
   }
@@ -148,23 +143,29 @@ final class ViewerPanesModel {
   func sendPane(_ event: ViewerEvent) {
     switch event {
     case .filterActivity(let filter): panes.activity.filter = filter
-    case .toggleMoment(let id, let opens): panes.activity.choices[id] = opens
-    case .showMomentSteps(let id): panes.activity.expanded.insert(id)
+    case .toggleSession(let id, let opens): panes.activity.sessionChoices[id] = opens
+    case .toggleRun(let id, let opens): panes.activity.choices[id] = opens
+    case .showRunPictures(let id): panes.activity.pictureRuns[id] = false
+    case .showAllRunPictures(let id): panes.activity.pictureRuns[id] = true
+    case .hideRunPictures(let id): panes.activity.pictureRuns[id] = nil
+    case .showDaySessions(let id): panes.activity.shownDays.insert(id)
     case .showWindow(let app, let window): showWindow(app: app, window: window)
     case .clearOutline: panes.apps.shown = nil
-    case .shotColumns(let columns): if panes.shots.columns != columns { panes.shots.columns = columns }
-    case .selectShot(let name): screenshots.select(name)
-    case .openShot(let name): openShot(name)
-    case .toggleShot: toggleShot()
-    case .previousShot: stepShot(by: -1)
-    case .nextShot: stepShot(by: 1)
-    case .shotAbove: stepRow(by: -1)
-    case .shotBelow: stepRow(by: 1)
-    case .clearShotSelection: screenshots.clearSelection()
-    case .closeShot: closeShot()
-    case .copyShot: copyShot()
-    case .showShotInFinder: showShotInFinder()
-    case .thumbnailNeeded(let name): thumbnailNeeded(name)
+    case .thumbnailNeeded(let name): thumbnails.thumbnailNeeded(name)
+    case .openShot(let name): pictures.openShot(name)
+    case .openAction(let step): pictures.openStep(step)
+    case .previousPicture: pictures.step(by: -1)
+    case .nextPicture: pictures.step(by: 1)
+    case .pictureSide(let side): pictures.side(side)
+    case .copyPicture: pictures.copy()
+    case .showPictureInFinder: pictures.reveal()
+    case .closePicture: pictures.close()
+    case .openReplay(let run): pictures.openReplay(run)
+    case .replayFrame(let index): pictures.show(frame: index)
+    case .previousFrame: pictures.step(frames: -1)
+    case .nextFrame: pictures.step(frames: 1)
+    case .togglePlay: pictures.togglePlay()
+    case .closeReplay: pictures.closeReplay()
     default: return
     }
   }
@@ -178,7 +179,9 @@ final class ViewerPanesModel {
       let log = try await service.activity()
       // Each row's age counts back from the moment the log arrived, never from after the screenshots' reply.
       let readAt = wallClock()
-      let wantsShots = log.entries.contains { $0.operation == ActivityGrouping.screenshotOperation }
+      // The screenshots' list sizes and finds the pictures: wanted while the log names a screenshot or a picture shows.
+      let wantsShots =
+        panes.activity.sheet != nil || log.entries.contains { $0.operation == ActivityGrouping.screenshotOperation }
       let list = wantsShots ? try? await service.screenshots() : nil
       guard number == work.generation else { return }
       panes.activity.log = log
@@ -195,7 +198,9 @@ final class ViewerPanesModel {
       panes.activity.preparation = preparation
       panes.activity.failure = nil
       wantIcons(for: log.entries)
-      if let list { screenshots.keep(list) }
+      if let list { keep(list) }
+      // A newer reading may name the picture after a step in the sheet, or a replay's next frame.
+      if panes.activity.sheet != nil || panes.activity.replay != nil { pictures.refresh() }
       // What the pane now shows is seen, also while the picture, and with it the status, is paused.
       viewer?.noteActivitySeen()
     } catch {
@@ -258,55 +263,14 @@ final class ViewerPanesModel {
     viewer?.show(.screen)
   }
 
-  /// Reads the screenshots and their folder. A reply overtaken by a newer start or stop has no effect; a failure is
-  /// kept to say only while nothing was read, and a cancelled request says nothing.
+  /// Keeps the screenshots' list: their names, sizes and folder.
   ///
-  /// - Parameter number: The reading's generation.
-  func readShots(_ number: Int) async {
-    do {
-      let list = try await service.screenshots()
-      guard number == work.generation else { return }
-      screenshots.keep(list)
-      panes.shots.failure = nil
-      screenshots.followLarge()
-    } catch {
-      guard number == work.generation, !error.isCancelled else { return }
-      panes.shots.failure = error.message
-    }
+  /// - Parameter list: The list.
+  func keep(_ list: ScreenshotList) {
+    panes.shots.shots = list.shots
+    panes.shots.folder = list.folder
   }
 
-  /// Screenshot operations keep their own task generations and cancellation.
-  var actedShot: String? { exports.actedShot }
-  /// Shows the named screenshot large, switching to Screenshots when needed.
-  ///
-  /// - Parameter name: The screenshot file name.
-  func openShot(_ name: String) { screenshots.openShot(name) }
-  /// Opens the selected screenshot large, or closes the large view.
-  func toggleShot() { screenshots.toggleShot() }
-  /// Moves the screenshot selection along the displayed order.
-  ///
-  /// - Parameter offset: The number of screenshots to move.
-  func stepShot(by offset: Int) { screenshots.stepShot(by: offset) }
-  /// Moves the screenshot selection by a displayed grid row.
-  ///
-  /// - Parameter offset: Minus one for up, one for down.
-  func stepRow(by offset: Int) { screenshots.stepRow(by: offset) }
-  /// Closes the large screenshot and cancels its pending load.
-  func closeShot() { screenshots.closeShot() }
-  /// Copies the acted-on screenshot as taken.
-  func copyShot() { exports.copyShot() }
-  /// Saves the acted-on screenshot where the person chooses.
-  func saveShot() { exports.saveShot() }
-  /// Cancels pending Copy or Save delivery before the window is released.
-  func stopCopy() { exports.stopCopy() }
-  /// Reveals the listed large screenshot in the folder named by the service.
-  func showShotInFinder() { exports.showShotInFinder() }
-  /// Queues a visible screenshot thumbnail unless it is already kept or pending.
-  ///
-  /// - Parameter name: The screenshot file name.
-  func thumbnailNeeded(_ name: String) { thumbnails.thumbnailNeeded(name) }
-  /// Holds new thumbnail reads during resizing, then resumes the queue.
-  ///
-  /// - Parameter held: Whether new reads wait.
-  func holdThumbnails(_ held: Bool) { thumbnails.holdThumbnails(held) }
+  /// Stops reading the sheet's pictures and copying one, before the window is released.
+  func stopPictures() { pictures.stop() }
 }

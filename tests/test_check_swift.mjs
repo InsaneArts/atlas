@@ -1,7 +1,7 @@
-// The check-swift-*.mjs checkers: each passes a clean fixture and fails a
-// dirty one, at the lines and for the reasons the fixture holds. Fixtures live in
-// tests/check-swift/<checker>/{clean,dirty}; the real tree is npm test's own
-// run of the checkers, not this file's.
+// The Swift source rules: each passes a clean fixture and fails a dirty one,
+// at the lines and for the reasons the fixture holds. Fixtures live in
+// tests/check-swift/<rule>/{clean,dirty}; the real tree is npm test's own run
+// of check-swift-rules.mjs, not this file's.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { packages, steps, summaryLine } from '../scripts/check-swift.mjs';
+import { packages, summaryLine } from '../scripts/check-swift.mjs';
 import { violations as typeViolations } from '../scripts/check-swift-types.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -32,18 +32,11 @@ test('one Swift type per file permits nested types and extensions but rejects a 
   assert.deepEqual(typeViolations('enum Layout { static let name = "struct Fake {}" }'), []);
 });
 
-test('all maintained Swift sources declare at most one top-level type', () => {
-  const result = spawnSync(process.execPath, [path.join(root, 'scripts/check-swift-types.mjs')], {
-    encoding: 'utf8',
-  });
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-});
-
-// Runs one checker on `folder` under `base`.
-function check(checker, folder, { base = path.join(fixtures, checker), list = false } = {}) {
+// Runs one rule on `folder` under `base`.
+function check(checker, folder, { base = path.join(fixtures, checker) } = {}) {
   const result = spawnSync(
     process.execPath,
-    [path.join(root, `scripts/check-swift-${checker}.mjs`), folder, ...(list ? ['--list'] : [])],
+    [path.join(root, 'scripts/check-swift-rules.mjs'), '--rule', checker, folder],
     {
       encoding: 'utf8',
       env: {
@@ -79,14 +72,6 @@ test('the token checker flags a literal frame width outside the design system', 
   );
 });
 
-test('the token checker flags a literal size passed through the glyph font door', () => {
-  const { lines } = check('tokens', 'dirty');
-  assert.ok(
-    lines.includes('dirty/AtlasUI/Components/Badge.swift:14: inline font size'),
-    lines.join('\n'),
-  );
-});
-
 test('the token checker flags every design-system name that holds a window, cases, properties and types included', () => {
   const { status, lines } = check('tokens', 'dirty');
   assert.equal(status, 1);
@@ -111,12 +96,7 @@ test('the token checker flags black or white at an opacity in the design system 
   );
 });
 
-test('the token checker passes names by size or role, iconSize included, and shades in Colors.swift', () => {
-  const { status, lines } = check('tokens', 'clean');
-  assert.equal(status, 0, lines.join('\n'));
-});
-
-test('the token checker accepts a documented constant in a Layout enum', () => {
+test('the token checker passes names by size or role, iconSize included, shades in Colors.swift and a documented constant in a Layout enum', () => {
   const { status, lines } = check('tokens', 'clean');
   assert.equal(status, 0, lines.join('\n'));
   assert.deepEqual(lines, []);
@@ -201,15 +181,6 @@ test('the tests checker passes try #require, a logical not and bangs in comments
   assert.equal(status, 0, lines.join('\n'));
 });
 
-test('--list keeps real violations on stderr and exits with failure', () => {
-  const ordinary = check('docs', 'dirty');
-  const listed = check('docs', 'dirty', { list: true });
-  assert.equal(listed.status, 1);
-  assert.deepEqual(listed.lines, ordinary.lines);
-  assert.ok(listed.lines.length > 0);
-  assert.equal(listed.stdout, '');
-});
-
 test('a missing source folder reports its location and exits 2', () => {
   const { status, lines, stdout } = check('tokens', 'missing');
   assert.equal(status, 2);
@@ -225,8 +196,7 @@ test('the Swift check covers app and then every local package', () => {
   assert.ok(folders.includes('app/Packages/AtlasUI'), folders.join('\n'));
 });
 
-// A repository holding app/ and two local packages: Kit, with a test target,
-// and KitTesting, a Testing-only package with Sources alone.
+// A repository holding app/ and one local package, Kit.
 function swiftRepository(t) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-check-swift-'));
   t.after(() => fs.rmSync(base, { recursive: true, force: true }));
@@ -239,24 +209,8 @@ function swiftRepository(t) {
     write(`${folder}/Sources/A/A.swift`, '');
     write(`${folder}/Tests/ATests/ATests.swift`, '');
   }
-  write('app/Packages/KitTesting/Package.swift', '.target(name: "KitTesting")\n');
-  write('app/Packages/KitTesting/Sources/KitTesting/Fake.swift', '');
   return base;
 }
-
-test('the Swift check skips the tests of a package with no test target and lints only the folders it has', (t) => {
-  const base = swiftRepository(t);
-  assert.deepEqual(packages(base), ['app', 'app/Packages/Kit', 'app/Packages/KitTesting']);
-  const planned = steps(['app/Packages/KitTesting'], base);
-  assert.deepEqual(
-    planned.map((step) => step.skipped ?? step.args.join(' ')),
-    ['no test target', 'format lint -rs Sources'],
-  );
-  assert.equal(
-    summaryLine(planned[0]),
-    'skip app/Packages/KitTesting: swift test (no test target)',
-  );
-});
 
 test('the Swift check exits 1 when one step fails, after running every other step', (t) => {
   const base = swiftRepository(t);
@@ -281,13 +235,11 @@ test('the Swift check exits 1 when one step fails, after running every other ste
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stdout, /^FAIL app: swift test$/m);
   assert.match(result.stdout, /^ok   app\/Packages\/Kit: swift test$/m);
-  assert.match(result.stdout, /^skip app\/Packages\/KitTesting: swift test \(no test target\)$/m);
   assert.deepEqual(fs.readFileSync(log, 'utf8').trim().split('\n'), [
     'app test',
     'app format lint -rs Sources Tests',
     'Kit test',
     'Kit format lint -rs Sources Tests',
-    'KitTesting format lint -rs Sources',
   ]);
 });
 

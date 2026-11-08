@@ -75,6 +75,14 @@ struct ViewerMotionTableTests {
         AppsMotion.front(reduceMotion: true)
       ),
       ("app picture", AppsMotion.picture, Motion.fade, nil),
+      (
+        "sheet in", PictureSheetLayer.motion(opening: true, reduceMotion: false), Motion.present,
+        PictureSheetLayer.motion(opening: true, reduceMotion: true)
+      ),
+      (
+        "sheet out", PictureSheetLayer.motion(opening: false, reduceMotion: false), Motion.close,
+        PictureSheetLayer.motion(opening: false, reduceMotion: true)
+      ),
     ]
     let fades = [Motion.reduced, Motion.crossfadeReduced, Motion.swapIn, Motion.swapOut]
     for row in table {
@@ -115,6 +123,16 @@ struct ViewerMotionTableTests {
     #expect(Motion.Springs.state.value(target: 1.0, time: made) >= 0.9)
     // Words that swap in place wait for the last ones too.
     #expect(Motion.swapInAfterOut == Animation.easeOut(duration: 0.15).delay(0.1))
+  }
+
+  @Test("the sheet comes in on a spring with no bounce, goes a little quicker, and grows from a touch smaller")
+  func theSheetComesAndGoesOnSprings() {
+    #expect(Motion.present == Animation.spring(Motion.Springs.present))
+    #expect(Motion.close == Animation.spring(Motion.Springs.close))
+    #expect(Motion.Springs.present.bounce == 0)
+    #expect(Motion.Springs.close.bounce == 0)
+    #expect(Motion.Springs.close.duration < Motion.Springs.present.duration)
+    #expect(ViewerLayout.sheetEnterScale == 0.97)
   }
 
   @Test("every fade kept under Reduce Motion lasts at most 0.2 seconds")

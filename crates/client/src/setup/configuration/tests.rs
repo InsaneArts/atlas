@@ -106,6 +106,7 @@ fn the_managed_layout_only_moves_sockets() {
         identity_probe: "/Users/Shared/Atlas/atlas".into(),
         input_socket: "/tmp/atlas-input-502/input.sock".into(),
         output_dir: "/Users/c/runs".into(),
+        activity: Default::default(),
     };
     let layout = Layout::new(502, "/Users/atlastest".into());
     let target = managed(&config, &layout);
@@ -129,6 +130,7 @@ fn configuration_at(root: &Path) -> Config {
         identity_probe: root.join("atlas"),
         input_socket: root.join("input.sock"),
         output_dir: root.join("runs"),
+        activity: Default::default(),
     }
 }
 

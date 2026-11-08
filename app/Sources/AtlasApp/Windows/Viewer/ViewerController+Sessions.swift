@@ -43,10 +43,10 @@ extension ViewerController {
     openSession(sessions.choice(offset, from: snapshot.shownSessions))
   }
 
-  /// A session's work in Activity or its screenshots, as its menu's Show Activity and Show Screenshots offer them.
+  /// A session's work in a place, such as Activity, as its menu's Show Activity offers it.
   ///
   /// - Parameters:
-  ///   - place: Activity or Screenshots.
+  ///   - place: The place, such as Activity.
   ///   - key: The session's key.
   func show(_ place: ViewerPlace, of key: String) {
     chooseSession(.one(key))

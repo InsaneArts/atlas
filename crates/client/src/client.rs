@@ -9,6 +9,7 @@ mod input;
 mod install;
 pub mod live;
 mod mutate;
+mod picture;
 mod record;
 mod run;
 pub mod service;

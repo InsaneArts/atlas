@@ -25,7 +25,4 @@ public struct SettingsNote: Equatable, Sendable {
     self.text = text
     self.kind = kind
   }
-
-  /// Whether it says something went wrong or could not run.
-  public var isProblem: Bool { kind == .problem }
 }

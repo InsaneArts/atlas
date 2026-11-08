@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Library at the sidebar's foot, under its heading: Activity, Screenshots and Apps, each a row that shows its list
+/// The Library at the sidebar's foot, under its heading: Activity and Apps, each a row that shows its list
 /// in the card, the chosen one on its raised pill, which moves to another row at once as the choice changes; choosing
 /// the chosen row again shows the Screen. It stays at the foot while the sessions scroll.
 struct SidebarLibrary: View {

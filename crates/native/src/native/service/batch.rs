@@ -2,7 +2,7 @@
 //! focus budget and failure settlement.
 use super::{Engine, Gate, worker_failed};
 use crate::native::{
-    ax::{self, Acted, Resolved},
+    ax::{self, Acted, Reached, Resolved},
     focus::{self, Need},
 };
 use atlas_core::{
@@ -222,19 +222,22 @@ pub(super) async fn checked_preparation<T: Send + 'static>(
     }
 }
 
-/// What a batch came to: the role of the field its checks named, when every
-/// check of it found the same, and what its action on an element through
-/// Accessibility came to, when it had one.
+/// What a batch came to: the role of the field its text went into (see
+/// [`typed_into`]), or for a batch that types nothing, the field its checks
+/// named, when every check of it found the same; what its action on an element through
+/// Accessibility came to, when it had one, and the element its first
+/// referenced click or action on an element reached, as it was met then.
 pub(super) struct Done {
     pub(super) field: Option<&'static str>,
     pub(super) acted: Option<Acted>,
+    pub(super) reached: Option<Reached>,
 }
 
 impl Done {
     /// How many of the batch's `count` actions were sent: all but an action
     /// on an element that already read as asked, for which nothing was.
     pub(super) fn performed(&self, count: usize) -> usize {
-        count - usize::from(self.acted.is_some_and(|acted| !acted.changed))
+        count - usize::from(self.acted.as_ref().is_some_and(|acted| !acted.changed))
     }
 }
 
@@ -257,7 +260,10 @@ pub(super) async fn run(
     let later = expect.map(Expect::app_only);
     let mut pressed = false;
     let mut roles = BTreeSet::new();
+    // The role each typing action's check found, in turn.
+    let mut typed = Vec::new();
     let mut acted = None;
+    let mut reached = None;
 
     for (performed, action) in actions.into_iter().enumerate() {
         let before = engine.posted();
@@ -280,6 +286,7 @@ pub(super) async fn run(
             | Action::Collapse { .. }
             | Action::ScrollIntoView { .. } => false,
         };
+        let types = matches!(action, Action::Type { .. });
         let continuation = key && pressed;
         let expected = if continuation { later.as_ref() } else { expect };
         pressed |= key;
@@ -290,13 +297,22 @@ pub(super) async fn run(
                 .act(reference, element, expected.and_then(Expect::window))
                 .await
                 .map(|done| {
+                    let met = done.reached.clone();
                     acted = Some(done);
-                    None
+                    (None, met)
                 }),
             None => step(engine, action, expected, prepare, &mut budget).await,
         };
         match outcome {
-            Ok(role) => roles.extend(role),
+            Ok((role, met)) => {
+                if types {
+                    typed.push(role);
+                }
+                roles.extend(role);
+                if reached.is_none() {
+                    reached = met;
+                }
+            }
             Err(error) => {
                 // Only a poisoned gate fails this, and that refuses every later grant.
                 let _ = gate.revoke();
@@ -305,12 +321,33 @@ pub(super) async fn run(
         }
     }
 
-    let mut roles = roles.into_iter();
-    let field = match (roles.next(), roles.next()) {
-        (Some(role), None) => Some(role),
-        _ => None,
+    let field = if typed.is_empty() {
+        let mut roles = roles.into_iter();
+        match (roles.next(), roles.next()) {
+            (Some(role), None) => Some(role),
+            _ => None,
+        }
+    } else {
+        typed_into(&typed)
     };
-    Ok(Done { field, acted })
+    Ok(Done {
+        field,
+        acted,
+        reached,
+    })
+}
+
+/// The field a batch's text went into, from the role each of its typing
+/// actions' checks found: a password field when any found one, and
+/// otherwise the role every one of them found alike. None when any found
+/// none, or they disagree: some text may then have gone into a password
+/// field.
+fn typed_into(typed: &[Option<&'static str>]) -> Option<&'static str> {
+    if typed.contains(&Some(focus::SECURE)) {
+        return Some(focus::SECURE);
+    }
+    let first = *typed.first()?;
+    typed.iter().all(|role| *role == first).then_some(first)?
 }
 
 /// One action of a batch, checked against `expected` (when it names an app)
@@ -318,14 +355,14 @@ pub(super) async fn run(
 /// against what its own element must reach, then confirmed to be that very
 /// element once more and its point checked again, reading only, just before
 /// it is posted. Once done, the role of the field the check named, when it
-/// named one.
+/// named one, and for a referenced click, its element as it was found.
 async fn step(
     engine: &mut impl Perform,
     action: Action,
     expected: Option<&Expect>,
     prepare: bool,
     budget: &mut Duration,
-) -> Result<Option<&'static str>> {
+) -> Result<(Option<&'static str>, Option<Reached>)> {
     let (reference, button, count, modifiers) = match action {
         Action::Reference {
             reference,
@@ -341,7 +378,7 @@ async fn step(
                 None => None,
             };
             engine.perform(action).await?;
-            return Ok(role);
+            return Ok((role, None));
         }
     };
 
@@ -360,12 +397,13 @@ async fn step(
         modifiers,
     };
     let expect = resolved.expect.clone();
+    let reached = resolved.reached.clone();
     let role = require_within(engine, &expect, click.target(), budget, prepare).await?;
     engine.confirm(resolved).await?;
     // Whatever came in front meanwhile is seen by a check that only reads.
     require_within(engine, &expect, click.target(), budget, false).await?;
     engine.perform(click).await?;
-    Ok(role)
+    Ok((role, Some(reached)))
 }
 
 /// [`Perform::require`], spending what it takes of `budget`: the time one

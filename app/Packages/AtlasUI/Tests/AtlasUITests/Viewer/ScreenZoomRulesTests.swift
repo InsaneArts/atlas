@@ -10,16 +10,15 @@ struct ScreenZoomRulesTests {
   func onlyTheScreenAndTheCornerZoom() throws {
     let screen = PreviewStates.viewerWorking.screen
     try #require(screen.picture != nil)
-    #expect(ViewerPlace.allCases.filter(\.keepsScreenInCorner) == [.activity, .screenshots, .apps])
+    #expect(ViewerPlace.allCases.filter(\.keepsScreenInCorner) == [.activity, .apps])
     let moves: [(ViewerPlace, ViewerPlace)] = [
-      (.screen, .activity), (.screen, .screenshots), (.screen, .apps), (.activity, .screen), (.screenshots, .screen),
-      (.apps, .screen),
+      (.screen, .activity), (.screen, .apps), (.activity, .screen), (.apps, .screen),
     ]
     for (old, new) in moves {
       #expect(ScreenZoom.zooms(from: old, to: new, screen: screen, reduceMotion: false), "\(old) to \(new)")
     }
     // Between two lists the small screen simply stays in its corner.
-    for (old, new) in [(ViewerPlace.activity, ViewerPlace.apps), (.screenshots, .activity), (.apps, .screenshots)] {
+    for (old, new) in [(ViewerPlace.activity, ViewerPlace.apps), (.apps, .activity)] {
       #expect(!ScreenZoom.zooms(from: old, to: new, screen: screen, reduceMotion: false), "\(old) to \(new)")
     }
     // At actual size the picture scrolls, so it fades as any pane; with no picture there is none to move.

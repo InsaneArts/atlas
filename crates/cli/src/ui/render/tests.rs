@@ -436,6 +436,14 @@ fn config_names_the_settings_file() {
         json!({"ok": true, "path": "/etc/atlas.toml", "config": {"helper_uid": 502}}),
     );
     assert!(shown.out.starts_with("Settings        /etc/atlas.toml"));
+    assert!(shown.out.ends_with("Pictures        before each action"));
+
+    let off = show(
+        View::Config,
+        json!({"ok": true, "path": "/etc/atlas.toml",
+            "config": {"helper_uid": 502, "activity": {"pictures_before_actions": false}}}),
+    );
+    assert!(off.out.ends_with("Pictures        off"));
 }
 
 #[test]

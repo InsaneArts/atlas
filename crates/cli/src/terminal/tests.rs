@@ -4,6 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 mod focus;
 mod frame_health;
 mod scroll;
+mod service;
 mod shared;
 mod view;
 
@@ -220,22 +221,24 @@ fn graphics_queries_require_a_complete_reply_with_the_matching_image_id() {
 
 #[test]
 fn large_images_finish_uploading_before_their_placement_is_created() {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-    let png = vec![42; 15000];
+    let rgb: Vec<u8> = (0..120_u32 * 100 * 3)
+        .map(|index| (index.wrapping_mul(2_654_435_761) >> 24) as u8)
+        .collect();
     let mut wire = Vec::new();
-    graphics::Painter::default()
-        .draw(
+    graphics::Painter::at(graphics::IMAGE, (0, 0))
+        .draw_rgb(
             &mut wire,
-            &png,
+            &rgb,
+            (120, 100),
             graphics::Layout {
                 columns: 80,
                 rows: 20,
             },
         )
         .unwrap();
+    let uploads = tile_uploads(&wire);
     let wire = String::from_utf8(wire).unwrap();
-    assert!(wire.starts_with("\x1b_Ga=t,f=100,t=d,i=47471,q=2,m=1;"));
-    let mut payload = String::new();
+    assert!(wire.starts_with("\x1b_Ga=t,f=24,s=120,v=100,o=z,t=d,i=47471,q=2,m=1;"));
     let mut parts = wire
         .split("\x1b_G")
         .skip(1)
@@ -244,10 +247,10 @@ fn large_images_finish_uploading_before_their_placement_is_created() {
     while let Some((head, body)) = parts.next() {
         assert!(body.len() <= 4096);
         assert!(head.ends_with(if parts.peek().is_some() { "m=1" } else { "m=0" }));
-        payload.push_str(body);
     }
-    assert_eq!(STANDARD.decode(payload).unwrap(), png);
-    assert!(wire.ends_with("\x1b_Ga=p,i=47471,p=1,c=80,r=20,C=1,q=2\x1b\\\x1b[?2026l"));
+    assert_eq!(uploads.len(), 1);
+    assert_eq!(uploads[0].1, rgb);
+    assert!(wire.ends_with("\x1b_Ga=p,i=47471,p=1,c=80,r=20,C=1,q=2\x1b\\"));
 }
 
 #[test]
@@ -256,13 +259,17 @@ fn new_frames_are_placed_before_the_visible_image_is_deleted_and_memory_stays_bo
         columns: 80,
         rows: 20,
     };
-    let mut painter = graphics::Painter::default();
+    let mut painter = graphics::Painter::at(graphics::IMAGE, (0, 0));
     for index in 0..6 {
         let mut wire = Vec::new();
-        painter.draw(&mut wire, &[index], layout).unwrap();
+        painter
+            .draw_rgb(&mut wire, &[index; 3], (1, 1), layout)
+            .unwrap();
         let wire = String::from_utf8(wire).unwrap();
         let image = graphics::IMAGE + if index.is_multiple_of(2) { 0 } else { 2 };
-        assert!(wire.starts_with(&format!("\x1b_Ga=t,f=100,t=d,i={image},q=2,m=0;")));
+        assert!(wire.starts_with(&format!(
+            "\x1b_Ga=t,f=24,s=1,v=1,o=z,t=d,i={image},q=2,m=0;"
+        )));
         let place = wire.find(&format!("\x1b_Ga=p,i={image},")).unwrap();
         if index > 0 {
             let previous = graphics::IMAGE + if index.is_multiple_of(2) { 2 } else { 0 };
@@ -271,38 +278,11 @@ fn new_frames_are_placed_before_the_visible_image_is_deleted_and_memory_stays_bo
                 place < remove,
                 "The visible image must survive until its replacement is placed"
             );
-            assert!(!wire.contains(&format!("\x1b_Ga=t,f=100,t=d,i={previous},")));
+            assert!(!wire.contains(&format!("t=d,i={previous},")));
         } else {
             assert!(!wire.contains("a=d"));
         }
     }
-}
-
-#[test]
-fn unchanged_pixels_do_not_reupload_and_resizing_only_moves_the_existing_placement() {
-    let mut painter = graphics::Painter::default();
-    let layout = graphics::Layout {
-        columns: 80,
-        rows: 20,
-    };
-    painter.draw(&mut Vec::new(), b"unchanged", layout).unwrap();
-    let mut wire = Vec::new();
-    painter.draw(&mut wire, b"unchanged", layout).unwrap();
-    assert!(wire.is_empty());
-    painter
-        .draw(
-            &mut wire,
-            b"unchanged",
-            graphics::Layout {
-                columns: 60,
-                rows: 15,
-            },
-        )
-        .unwrap();
-    let wire = String::from_utf8(wire).unwrap();
-    assert!(wire.contains("a=p,i=47471,p=1,c=60,r=15"));
-    assert!(!wire.contains("a=t"));
-    assert!(!wire.contains("a=d"));
     let mut clear = Vec::new();
     painter.clear(&mut clear).unwrap();
     assert!(!clear.is_empty());
@@ -382,6 +362,23 @@ fn mouse_phases_and_scroll_directions_match_native_input() {
         )
         .unwrap();
     }
+}
+
+/// Controlling, with no picture yet.
+fn controlling() -> watch::Sender<State> {
+    watch::channel(State {
+        revision: 0,
+        frame: None,
+        controlling: true,
+        paused: false,
+        phase: ControlPhase::Controlling,
+        view: viewport::Viewport::default(),
+        diagnostics: 0,
+        input_ack_ms: None,
+        last_frame_error: None,
+        message: String::new(),
+    })
+    .0
 }
 
 fn states() -> watch::Sender<State> {
@@ -664,10 +661,6 @@ fn terminal_rendering_benchmark() {
         .unwrap()
         .to_rgb8();
     let layout = graphics::Layout::fit(120, 42, (960, 672), picture.dimensions()).unwrap();
-    let mut old = Vec::new();
-    graphics::Painter::default()
-        .draw(&mut old, &png, layout)
-        .unwrap();
     let mut renderer = tiles::Tiles::default();
     renderer.set_patches(true);
     let mut wire = Vec::new();
@@ -698,8 +691,7 @@ fn terminal_rendering_benchmark() {
         .unwrap();
     let unchanged_ms = start.elapsed().as_secs_f64() * 1000.0;
     println!(
-        "terminal benchmark: old_full_bytes={} tiled_full_bytes={full} small_change_bytes={update} changed_tiles={count} initial_ms={initial_ms:.2} update_ms={update_ms:.2} unchanged_ms={unchanged_ms:.2}",
-        old.len()
+        "terminal benchmark: tiled_full_bytes={full} small_change_bytes={update} changed_tiles={count} initial_ms={initial_ms:.2} update_ms={update_ms:.2} unchanged_ms={unchanged_ms:.2}"
     );
     assert!(
         update < full / 4,

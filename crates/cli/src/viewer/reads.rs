@@ -8,8 +8,9 @@ use super::{
     unpoisoned,
 };
 use atlas_client::{
+    before,
     client::{AppList, Client},
-    helper_info,
+    helper_info::{self, Capture},
     host_session::{
         names::{name_of, names},
         reading::{SessionFacts, SessionReading},
@@ -36,6 +37,12 @@ use std::{
 /// tabs show, a day or so of an agent's work.
 pub(super) const ACTIVITY_ROWS: usize = 200;
 const SHOTS: usize = 200;
+
+/// A picture the app may read, by the name that says which kind it is.
+enum Named {
+    Before(before::Before),
+    Capture(Capture),
+}
 
 impl Viewer {
     /// The helper's status and overview as the app shows them, with
@@ -97,9 +104,22 @@ impl Viewer {
         // A folder that can't be read is said, never shown as no activity.
         let directory = client.output_dir()?.to_path_buf();
         let unreadable = || Error::new(Code::Io, "The activity log could not be read.");
-        let (rows, records) = tokio::task::spawn_blocking(move || {
-            let rows = atlas_client::activity_log::try_recent(&directory, ACTIVITY_ROWS)?;
-            Ok::<_, std::io::Error>((rows, Store::at(&directory).recent()))
+        let (rows, pictures, records) = tokio::task::spawn_blocking(move || {
+            let mut rows = atlas_client::activity_log::try_recent(&directory, ACTIVITY_ROWS)?;
+            let kept = atlas_client::before::Listing::of(&directory);
+            // A picture pruned or cleaned up since is no longer named. Each
+            // kept one comes with the picture after it and its facts.
+            let pictures = rows
+                .iter_mut()
+                .map(|row| {
+                    row.before = row.before.take().filter(|name| kept.has(name));
+                    row.before.as_deref().map(|before| {
+                        let after = row.at_ms().and_then(|ended| kept.after(before, ended));
+                        (after, atlas_client::before::facts(&directory, before))
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok::<_, std::io::Error>((rows, pictures, Store::at(&directory).recent()))
         })
         .await
         .map_err(|error| unreadable().with_source(error))?
@@ -108,7 +128,19 @@ impl Viewer {
         let now = atlas_core::time::timestamp();
         let rows = rows
             .iter()
-            .map(|row| activity_row(row, now))
+            .zip(pictures)
+            .map(|(row, picture)| {
+                let mut shown = activity_row(row, now);
+                let (after, facts) = picture.unwrap_or_default();
+                let (after, after_at) = after.unzip();
+                shown["after"] = json!(after);
+                // When the picture after was taken, in milliseconds since 1970.
+                shown["afterAt"] = json!(after_at);
+                if let Some(facts) = facts {
+                    shown["facts"] = facts;
+                }
+                shown
+            })
             .collect::<Vec<_>>();
         let sessions =
             sessions_named(&client, &records, rows.iter().map(|row| &row["session"])).await;
@@ -283,9 +315,10 @@ impl Viewer {
         Ok(json!({"ok": true, "screenshots": shots, "folder": folder, "sessions": sessions}))
     }
 
-    /// One screenshot an agent took, as `query` names it: its thumbnail as
-    /// a JPEG, or with `size=full` the PNG as taken. Any other name, a link
-    /// or anything but a plain file is not found.
+    /// One screenshot an agent took, or a picture taken before an agent's
+    /// action, as `query` names it: its thumbnail as a JPEG, or with
+    /// `size=full` the picture as kept. Any other name, a link or anything
+    /// but a plain file is not found.
     pub(super) async fn screenshot(&self, query: Option<&str>) -> Response {
         let refused = || {
             json_response(
@@ -308,20 +341,26 @@ impl Viewer {
             Some("full") => true,
             Some(_) => return refused(),
         };
-        let Some(name) = name
-            .filter(|name| helper_info::capture_time(name).is_some())
-            .map(str::to_owned)
-        else {
-            return refused();
+        let named = match name.map(|name| (before::Before::parse(name), Capture::parse(name))) {
+            Some((Some(picture), _)) => Named::Before(picture),
+            Some((None, Some(capture))) => Named::Capture(capture),
+            Some((None, None)) | None => return refused(),
         };
 
         let client = self.client();
         let read = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, &'static str)> {
-            let png = helper_info::read_capture(client.output_dir()?, &name)?;
+            let output = client.output_dir()?;
+            let (kept, mime) = match &named {
+                Named::Before(picture) => (before::read(output, picture)?, "image/jpeg"),
+                Named::Capture(capture) => (
+                    helper_info::read_capture(output, capture.as_str())?,
+                    "image/png",
+                ),
+            };
             if full {
-                return Ok((png, "image/png"));
+                return Ok((kept, mime));
             }
-            let (thumbnail, _, _) = helper_info::jpeg(&png, helper_info::THUMB)?;
+            let (thumbnail, _, _) = helper_info::jpeg(&kept, helper_info::THUMB)?;
             Ok((thumbnail, "image/jpeg"))
         })
         .await
@@ -440,9 +479,10 @@ async fn account_title(
 
 /// A logged row as the app's activity lists it: what was done in words, by
 /// whom, how long ago, whether it worked and how many actions it sent, and
-/// the app, control and keys its words name. Only these fields go, through
-/// [`atlas_client::overview::shown`]: never typed text, argv, coordinates or
-/// titles, which the log never keeps either.
+/// the app, control and keys its words name, and the picture taken before
+/// it. Only these fields go, through [`atlas_client::overview::shown`]:
+/// never typed text, argv, coordinates or titles, which the log never keeps
+/// either.
 pub(super) fn activity_row(row: &atlas_client::activity_log::Row, now: u128) -> Value {
     let shown = atlas_client::overview::shown(row, now);
     let keys = shown.keys();
@@ -453,6 +493,8 @@ pub(super) fn activity_row(row: &atlas_client::activity_log::Row, now: u128) -> 
     // between readings.
     fields["startedAt"] = json!(row.at_ms());
     fields["keys"] = json!(keys);
+    // Only the person's app is given it; no agent's reply names it.
+    fields["before"] = json!(row.before);
     fields
 }
 

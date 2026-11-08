@@ -38,12 +38,7 @@ struct WindowShellTests {
   func everyWindowIsHostedByTheShellInTheMacsAppearance() throws {
     let service = ScriptedService()
     let commands = ScriptedCommands([:])
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: ManualClock())
-    )
+    let actions = HelperActions.scripted(service, commands: commands)
     let live = WindowMaking.live
     let windows: [any WindowPresenting] = [
       live.viewer(.scripted(service)) { _ in },

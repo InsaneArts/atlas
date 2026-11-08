@@ -1,21 +1,5 @@
 use super::*;
 
-fn state() -> watch::Sender<State> {
-    watch::channel(State {
-        revision: 0,
-        frame: None,
-        controlling: true,
-        paused: false,
-        phase: ControlPhase::Controlling,
-        view: viewport::Viewport::default(),
-        diagnostics: 0,
-        input_ack_ms: None,
-        last_frame_error: None,
-        message: String::new(),
-    })
-    .0
-}
-
 fn scroll(dx: i64, dy: i64) -> Value {
     json!({"type":"scroll", "x":10.0, "y":20.0, "dx":dx, "dy":dy})
 }
@@ -39,7 +23,7 @@ fn waiting() -> Session {
 
 #[tokio::test]
 async fn wheel_bursts_gather_while_input_is_blocked_instead_of_releasing_control() {
-    let states = state();
+    let states = controlling();
     let mut session = waiting();
     for _ in 0..64 {
         enqueue(&mut session, &states, "observed", scroll(0, 1));
@@ -52,7 +36,7 @@ async fn wheel_bursts_gather_while_input_is_blocked_instead_of_releasing_control
 
 #[tokio::test]
 async fn scroll_travel_past_one_actions_limit_is_preserved_in_later_actions() {
-    let states = state();
+    let states = controlling();
     let mut session = waiting();
     for _ in 0..301 {
         enqueue(&mut session, &states, "observed", scroll(-1, 1));
@@ -85,7 +69,7 @@ async fn scroll_travel_past_one_actions_limit_is_preserved_in_later_actions() {
 
 #[tokio::test]
 async fn scrolling_does_not_merge_across_frame_target_direction_or_key_boundaries() {
-    let states = state();
+    let states = controlling();
     let mut session = waiting();
     enqueue(&mut session, &states, "first", scroll(0, 1));
     enqueue(&mut session, &states, "second", scroll(0, 1));
@@ -179,7 +163,7 @@ fn text_merging_keeps_the_original_sixteen_event_batch_bound() {
 
 #[tokio::test]
 async fn typing_bursts_compact_before_the_queue_limit_without_growing_native_batches() {
-    let states = state();
+    let states = controlling();
     let mut session = waiting();
     let text: String = (0..100)
         .map(|index| char::from(b'a' + index % 26))
@@ -213,7 +197,7 @@ async fn typing_bursts_compact_before_the_queue_limit_without_growing_native_bat
 
 #[tokio::test]
 async fn queued_text_compaction_preserves_frame_key_unicode_and_pointer_boundaries() {
-    let states = state();
+    let states = controlling();
     let mut session = waiting();
     for (frame, action) in [
         ("first", json!({"type":"type","text":"a"})),

@@ -25,6 +25,15 @@
     /// Terminal's name.
     static let terminalName = "Terminal"
 
+    /// Claude Code's title: its project folder.
+    static let claudeTitle = "understudy"
+    /// Codex's title: its project folder.
+    static let codexTitle = "atlas-landing"
+    /// Cursor's title: its project folder.
+    static let cursorTitle = "opie"
+    /// Pi's title: its project folder.
+    static let piTitle = "notes-sync"
+
     /// Claude Code's logo.
     static let claudeIcon = RowIcon.app(AgentLogos.claude)
     /// Codex's logo.

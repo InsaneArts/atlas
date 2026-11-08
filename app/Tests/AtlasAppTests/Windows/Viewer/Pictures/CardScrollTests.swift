@@ -10,10 +10,10 @@ import Testing
 @MainActor
 struct CardScrollTests {
   /// The lists in the card, each long enough to scroll, with the small screen in the bottom-trailing corner.
-  nonisolated static let lists = ["activity", "screenshots", "apps"]
+  nonisolated static let lists = ["activity", "apps"]
 
   @Test(
-    "Activity, Screenshots and Apps each scroll the card's whole height under the floating picture, their end clear of it",
+    "Activity and Apps each scroll the card's whole height under the floating picture, their end clear of it",
     arguments: lists
   )
   func eachListScrollsUnderTheFloatingPicture(list name: String) async throws {
@@ -37,37 +37,6 @@ struct CardScrollTests {
       .filter { abs($0.1 - first) >= 0.01 }
       .map(\.0)
     #expect(odd.isEmpty, "\(name) draws in the small screen's band at its end, at \(odd.prefix(4)) in \(frame)")
-  }
-
-  @Test("a step to a tile under the picture scrolls it into view clear of the picture, only as far as it must")
-  func aStepScrollsTheSelectedTileClearOfThePicture() async throws {
-    let host = ViewerHost(PreviewStates.viewerShotsMany)
-    let list = try #require(Self.list(in: host))
-    #expect(list.contentView.bounds.origin.y == 0)
-    // The selected tile is the very last, in the bottom-trailing corner, under the small screen.
-    host.show(Self.stepped(PreviewStates.viewerShotsMany))
-    await Self.settle(host)
-    let end = try #require(list.documentView).frame.height - list.contentView.bounds.height
-    let offset = list.contentView.bounds.origin.y
-    // Its room, the tile and the small screen's band under it, now stands whole at the list's foot.
-    #expect(offset > end - 16 && offset <= end, "scrolled to \(offset) of \(end)")
-  }
-
-  @Test("a step to a tile already in view leaves the list where it is")
-  func aStepToATileInViewLeavesTheList() async throws {
-    var first = PreviewStates.viewerShotsMany
-    guard case .screenshots(var shots) = first.pane else { return }
-    for day in shots.days.indices {
-      for tile in shots.days[day].shots.indices {
-        shots.days[day].shots[tile].isSelected = day == 0 && tile == 0
-      }
-    }
-    first.pane = .screenshots(shots)
-    let host = ViewerHost(first)
-    let list = try #require(Self.list(in: host))
-    host.show(Self.stepped(first))
-    await Self.settle(host)
-    #expect(list.contentView.bounds.origin.y == 0)
   }
 
   @Test(
@@ -124,21 +93,8 @@ struct CardScrollTests {
   static func state(_ name: String) throws -> ViewerState {
     switch name {
     case "activity": try ViewerStageTests.activity(lines: 80)
-    case "screenshots": PreviewStates.viewerShotsMany
     default: PreviewStates.viewerAppsMany
     }
-  }
-
-  /// `state` with one more keyboard step made.
-  ///
-  /// - Parameter state: A Screenshots sample.
-  /// - Returns: The sample, stepped.
-  static func stepped(_ state: ViewerState) -> ViewerState {
-    var stepped = state
-    guard case .screenshots(var shots) = stepped.pane else { return state }
-    shots.scrollRequest += 1
-    stepped.pane = .screenshots(shots)
-    return stepped
   }
 
   /// The card's list: its tallest scroll view.

@@ -4,8 +4,8 @@ public enum ViewerActivityFilter: Hashable, Sendable, CaseIterable {
   case all
   /// What did not work.
   case problems
-  /// The screenshots taken.
-  case screenshots
+  /// The screenshots taken: the steps that show a picture in the outline.
+  case pictures
   /// The text typed and the keys pressed.
   case typing
 }

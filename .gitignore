@@ -1,18 +1,7 @@
-# Machine-local configuration and original investigation archive
-/atlas.local.json
+# Machine-local configuration
 /atlas.local.toml
-/migration.local.json
-/LIVE-TEST-HANDOFF.md
-/evidence/
-/bin/
 /runs/
 /local/
-/build/
-/dist/
-/.venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
 .DS_Store
 *.log
 

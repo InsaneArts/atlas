@@ -9,9 +9,9 @@ struct ActivityGroupingSessionTests {
   @Test("Terminal's moment scope excludes the person's own rows")
   func terminalScopeExcludesThePerson() {
     let rules = ActivityFixtures.rules([
-      ActivityFixtures.row(id: "t1", says: "took a screenshot", ageSeconds: 1, session: nil),
-      ActivityFixtures.row(id: "y1", says: "clicked in Opie", actor: .you, ageSeconds: 2, session: nil),
-      ActivityFixtures.row(id: "a1", says: "clicked Save", ageSeconds: 4, session: "claude"),
+      ActivityLog.Entry(id: "t1", says: "took a screenshot", ageSeconds: 1, session: nil),
+      ActivityLog.Entry(id: "y1", says: "clicked in Opie", actor: .you, ageSeconds: 2, session: nil),
+      ActivityLog.Entry(id: "a1", says: "clicked Save", ageSeconds: 4, session: "claude"),
     ])
     let terminal = ActivityMoments(rules, captures: [], scope: .session(""))
       .shown(filter: .all, query: "")
@@ -52,14 +52,14 @@ struct ActivityGroupingSessionTests {
     let near = Screenshot(name: "near.png", takenAt: started)
     let own = Screenshot(name: "own.png", takenAt: started.addingTimeInterval(-60))
     let rules = ActivityFixtures.rules([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s1",
         says: "took a screenshot",
         ageSeconds: 20,
         operation: "screenshot",
         capture: "own.png"
       ),
-      ActivityFixtures.row(id: "s2", says: "took a screenshot", ageSeconds: 20, operation: "screenshot"),
+      ActivityLog.Entry(id: "s2", says: "took a screenshot", ageSeconds: 20, operation: "screenshot"),
     ])
     let shots = rules.shots(in: [near, own])
     #expect(shots == ["s1": "own.png", "s2": "near.png"])
@@ -71,7 +71,7 @@ struct ActivityGroupingSessionTests {
       .addingTimeInterval(-20)
     let near = Screenshot(name: "near.png", takenAt: started)
     let rules = ActivityFixtures.rules([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s1",
         says: "took a screenshot",
         ageSeconds: 20,
@@ -85,25 +85,26 @@ struct ActivityGroupingSessionTests {
   @Test("repeats from two sessions stay two lines")
   func repeatsFromTwoSessionsStayTwoLines() {
     let rules = ActivityFixtures.rules([
-      ActivityFixtures.row(id: "c1", says: "scrolled in Opie", ageSeconds: 1, session: "codex"),
-      ActivityFixtures.row(id: "a1", says: "scrolled in Opie", ageSeconds: 2, session: "claude"),
-      ActivityFixtures.row(id: "a2", says: "scrolled in Opie", ageSeconds: 3, session: "claude"),
+      ActivityLog.Entry(id: "c1", says: "scrolled in Opie", ageSeconds: 1, session: "codex"),
+      ActivityLog.Entry(id: "a1", says: "scrolled in Opie", ageSeconds: 2, session: "claude"),
+      ActivityLog.Entry(id: "a2", says: "scrolled in Opie", ageSeconds: 3, session: "claude"),
+      ActivityLog.Entry(id: "a3", says: "scrolled in Opie", ageSeconds: 4, session: "claude"),
     ])
     let lines = ActivityMoments(rules, captures: [], scope: .all)
       .shown(filter: .all, query: "")
       .flatMap(\.runs)
-    #expect(lines.map(\.id) == ["c1", "a2"])
-    #expect(lines.map(\.count) == [1, 2])
+    #expect(lines.map(\.id) == ["c1", "a3"])
+    #expect(lines.map(\.count) == [1, 3])
   }
 
   @Test("one session's count today leaves out the other sessions' rows and the person's")
   func oneSessionsCountLeavesOutTheRest() {
     let rules = ActivityFixtures.rules([
-      ActivityFixtures.row(id: "a1", says: "clicked in Opie", ageSeconds: 1, session: "claude"),
-      ActivityFixtures.row(id: "c1", says: "clicked in Opie", ageSeconds: 2, session: "codex"),
-      ActivityFixtures.row(id: "y1", says: "clicked in Opie", actor: .you, ageSeconds: 3, session: nil),
-      ActivityFixtures.row(id: "a2", says: "clicked in Opie", ageSeconds: 4, session: "claude"),
-      ActivityFixtures.row(id: "t1", says: "clicked in Opie", ageSeconds: 5, session: nil),
+      ActivityLog.Entry(id: "a1", says: "clicked in Opie", ageSeconds: 1, session: "claude"),
+      ActivityLog.Entry(id: "c1", says: "clicked in Opie", ageSeconds: 2, session: "codex"),
+      ActivityLog.Entry(id: "y1", says: "clicked in Opie", actor: .you, ageSeconds: 3, session: nil),
+      ActivityLog.Entry(id: "a2", says: "clicked in Opie", ageSeconds: 4, session: "claude"),
+      ActivityLog.Entry(id: "t1", says: "clicked in Opie", ageSeconds: 5, session: nil),
     ])
     #expect(rules.countToday == 5)
     #expect(rules.countToday(in: .session("claude")) == 2)

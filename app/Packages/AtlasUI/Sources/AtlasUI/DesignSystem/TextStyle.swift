@@ -4,12 +4,8 @@ import SwiftUI
 /// which sets the style's size, weight, tracking and line height at once, or through `Typography.font`, where the
 /// weight stays with the use.
 enum TextStyle: CaseIterable, Sendable {
-  /// 28: a screen's headline.
-  case largeTitle
   /// 24: a headline over a picture, such as an alert's, and a setup screen's title (24/29 semibold −0.36).
   case title
-  /// 22: a narrow panel's headline.
-  case title2
   /// 20: a column's title, such as an account's name, and a large avatar's letter; a title too long for
   /// ``title`` (20/25).
   case title3
@@ -35,9 +31,7 @@ enum TextStyle: CaseIterable, Sendable {
   /// The style's size in points.
   var pointSize: CGFloat {
     switch self {
-    case .largeTitle: 28
     case .title: 24
-    case .title2: 22
     case .title3: 20
     case .subheading: 17
     case .heading: 15
@@ -60,7 +54,7 @@ enum TextStyle: CaseIterable, Sendable {
     case .body: 17
     case .callout: 16
     case .caption: 14
-    case .largeTitle, .title2, .headline, .caption2, .footnote: nil
+    case .headline, .caption2, .footnote: nil
     }
   }
 
@@ -78,7 +72,7 @@ enum TextStyle: CaseIterable, Sendable {
     case .body: 1
     case .callout: 1
     case .caption: 1
-    case .largeTitle, .title2, .headline, .caption2, .footnote: 0
+    case .headline, .caption2, .footnote: 0
     }
   }
 
@@ -86,7 +80,7 @@ enum TextStyle: CaseIterable, Sendable {
   /// medium title is its row's choice, not the style's.
   var defaultWeight: Font.Weight {
     switch self {
-    case .largeTitle, .title, .title2, .title3, .subheading, .heading, .headline: .semibold
+    case .title, .title3, .subheading, .heading, .headline: .semibold
     case .body, .callout, .caption, .caption2, .footnote: .regular
     }
   }
@@ -97,7 +91,7 @@ enum TextStyle: CaseIterable, Sendable {
     case .title: -0.36
     case .subheading: -0.2
     case .heading: -0.15
-    case .largeTitle, .title2, .title3, .headline, .body, .callout, .caption, .caption2, .footnote: 0
+    case .title3, .headline, .body, .callout, .caption, .caption2, .footnote: 0
     }
   }
 }

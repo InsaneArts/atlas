@@ -33,7 +33,7 @@ struct ReduceMotionGeometryTests {
     #expect(frames.allSatisfy { $0 == final }, "opacity changes must never move the age")
   }
 
-  @Test("filtering places surviving moments at their final geometry throughout the opacity fade")
+  @Test("filtering places surviving runs at their final geometry throughout the opacity fade")
   func filteringCommitsGeometryAtOnce() throws {
     let previous = Motion.Pose.moment
     Motion.Pose.hold(at: -5)
@@ -41,26 +41,25 @@ struct ReduceMotionGeometryTests {
     let first = PreviewStates.viewerActivity
     var next = first
     var activity = try #require({ if case .activity(let state) = first.pane { state } else { nil } }())
-    let notesIndex = try #require(
-      activity.days[0].moments.firstIndex { $0.title == "Notes" }
-    )
-    let notes = activity.days[0].moments[notesIndex]
-    activity.days[0].moments = Array(activity.days[0].moments[notesIndex...])
+    let runs = activity.days[0].sessions[0].runs
+    let chromeIndex = try #require(runs.firstIndex { $0.name == "Google Chrome" })
+    let chrome = runs[chromeIndex]
+    activity.days[0].sessions[0].runs = Array(runs[chromeIndex...])
     next.pane = .activity(activity)
     let host = ViewerHost(first, animatesArrivals: false, reduceMotion: true)
     host.render()
     Motion.Pose.hold(at: .zero)
     host.render()
-    let initial = try #require(host.frames["moment \(notes.id)"])
+    let initial = try #require(host.frames["run \(chrome.id)"])
     withAnimation(ActivityMotion.filter(reduceMotion: true)) { host.show(next) }
     var frames: [CGRect] = []
     for time in [0.0, 0.04, 0.08, 0.15, 1.0] {
       Motion.Pose.hold(at: time)
       host.render()
-      frames.append(try #require(host.frames["moment \(notes.id)"]))
+      frames.append(try #require(host.frames["run \(chrome.id)"]))
     }
     let final = try #require(frames.last)
-    #expect(initial != final, "the surviving Notes moment actually changes position")
+    #expect(initial != final, "the surviving Chrome run actually changes position")
     #expect(frames.allSatisfy { $0 == final }, "no intermediate layout is permitted while rows fade")
   }
 

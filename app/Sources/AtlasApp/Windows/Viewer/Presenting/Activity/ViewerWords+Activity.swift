@@ -1,21 +1,15 @@
 import AtlasUI
 import Foundation
 
-/// The Activity pane's words that depend on what it holds: the filters, the moments, a step's words and
-/// times, what followed a problem, and the empty messages. Fixed copy, such as Show large, stays in its view.
+/// The Activity pane's words that depend on what it holds: the filters, the runs, a step's words, what followed a
+/// problem, and the empty messages. Fixed copy stays in its view.
 extension ViewerWords {
   /// The Activity filters, for VoiceOver.
   static let activityFiltersLabel = "Which actions"
-  /// The group of what was done in the last two minutes, as Screenshots heads it.
-  static let nowGroup = "Now"
-  /// The group of what was done earlier today, as Screenshots heads it.
-  static let earlierTodayGroup = "Earlier today"
-  /// The heading over yesterday's moments, and Screenshots' group of yesterday's.
+  /// The heading over yesterday's sessions.
   static let yesterdayGroup = "Yesterday"
-  /// A moment of commands, and anything else done in no app.
+  /// A run of commands, and anything else done in no app.
   static let commandsMoment = "Commands"
-  /// A moment of screenshots alone.
-  static let screenshotsMoment = "Screenshots"
   /// A command that ran.
   static let ranCommand = "Ran a command"
   /// A command that runs now.
@@ -34,9 +28,9 @@ extension ViewerWords {
   static let noProblems = "No problems"
   /// Problems, with none: the sentence.
   static let noProblemsMessage = "Every action here worked."
-  /// Screenshots or Typing, with nothing: the headline.
+  /// Pictures or Typing, with nothing: the headline.
   static let noneFiltered = "No actions here"
-  /// Screenshots or Typing, with nothing: the sentence.
+  /// Pictures or Typing, with nothing: the sentence.
   static let noneFilteredMessage = "Choose All to see every action."
   /// A problem's retry that worked.
   static let workedOnRetry = "The agent tried again, and it worked."
@@ -48,12 +42,12 @@ extension ViewerWords {
   /// A filter's word.
   ///
   /// - Parameter filter: The filter.
-  /// - Returns: "All", "Problems", "Screenshots" or "Typing".
+  /// - Returns: "All", "Problems", "Pictures" or "Typing".
   static func filter(_ filter: ViewerActivityFilter) -> String {
     switch filter {
     case .all: "All"
     case .problems: "Problems"
-    case .screenshots: "Screenshots"
+    case .pictures: "Pictures"
     case .typing: "Typing"
     }
   }
@@ -80,18 +74,6 @@ extension ViewerWords {
     count == 1 ? one : "\(one)s"
   }
 
-  /// How much a folded moment held and when.
-  ///
-  /// - Parameters:
-  ///   - actions: How many actions it held.
-  ///   - start: When it started, on the person's clock.
-  ///   - end: When it ended.
-  /// - Returns: "9 actions · 10:21–10:24", or "1 action · 10:21" when it began and ended in one minute.
-  static func momentSpan(actions: Int, start: String, end: String) -> String {
-    let when = start == end ? start : "\(start)–\(end)"
-    return "\(actions) \(counted(actions, "action")) · \(when)"
-  }
-
   /// What a step did before a reason: the next step's words after "Then it" or "Then you".
   ///
   /// - Parameters:
@@ -101,20 +83,6 @@ extension ViewerWords {
   static func then(_ words: String, personal: Bool) -> String {
     let subject = personal ? "you" : "it"
     return "Then \(subject) \(words.prefix(1).lowercased() + words.dropFirst())."
-  }
-
-  /// When a step was done, or how long ago a folded moment ended: "now" under 10 seconds, then seconds and minutes
-  /// within the hour, else the time on the person's clock.
-  ///
-  /// - Parameters:
-  ///   - seconds: How long ago.
-  ///   - clock: The time on the person's clock, for longer ago.
-  /// - Returns: "now", "4 s", "3 min" or "10:31".
-  static func stepAge(_ seconds: TimeInterval, clock: String) -> String {
-    if seconds < 10 { return "now" }
-    if seconds < 60 { return "\(Int(seconds.rounded(.down))) s" }
-    if seconds < 3600 { return "\(Int((seconds / 60).rounded(.down))) min" }
-    return clock
   }
 
   /// A search that matches nothing: the headline.

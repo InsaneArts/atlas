@@ -11,8 +11,6 @@
       case lede
       /// Notes in both tones.
       case note
-      /// Title and detail pairs at each size.
-      case titleDetail
     }
 
     private let kind: Kind
@@ -46,14 +44,6 @@
         case .note:
           Note(text: String("You set this up once, in about five minutes."))
           Note(text: String("The passwords don't match."), tone: .attention)
-        case .titleDetail:
-          TitleDetail(title: String("Claude Code"), detail: String("Found. Adds the Atlas skill to every session."))
-          TitleDetail(
-            title: String("The helper is logged out"),
-            detail: String("Log in to it to use it again."),
-            size: .compact,
-            wraps: true
-          )
         }
       }
       .frame(width: SampleWidth.column)

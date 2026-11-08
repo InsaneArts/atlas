@@ -3,8 +3,7 @@ import CoreGraphics
 
 /// The window's size: how the content gives way to it, decided here from each resize and changed only as a threshold is
 /// crossed (``ViewerFit``), so a resize at the display's rate changes the window's state only at those steps; and a
-/// resize under way, which holds the Screenshots grid's columns, the thumbnails' reads and the pointer's highlights
-/// until it ends.
+/// resize under way, which holds the thumbnails' reads and the pointer's highlights until it ends.
 extension ViewerController {
   /// The window was laid out at `size`: the content fits it, and the sidebar shown over the card goes once there is
   /// room for the whole sidebar beside it.
@@ -23,14 +22,12 @@ extension ViewerController {
     setOverlayShown(session.overlayShown)
   }
 
-  /// A resize began or ended. While it lasts the Screenshots grid keeps the columns it had and the thumbnails wait;
-  /// once it ends the grid takes the columns the width holds and the thumbnails waiting are read.
+  /// A resize began or ended. While it lasts the thumbnails wait; once it ends the thumbnails waiting are read.
   ///
   /// - Parameter resizing: Whether the resize is under way.
   func setLiveResizing(_ resizing: Bool) {
     guard resizing != session.liveResizing else { return }
     session.liveResizing = resizing
-    session.heldShotColumns = resizing ? panes.shots.columns : nil
-    panesModel.holdThumbnails(resizing)
+    panesModel.thumbnails.holdThumbnails(resizing)
   }
 }

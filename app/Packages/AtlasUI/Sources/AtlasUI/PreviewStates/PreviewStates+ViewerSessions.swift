@@ -38,38 +38,38 @@
       )
     }
 
-    /// The live sessions in the service's order: Claude Code with the helper, Codex waiting its turn, Cursor idle since
-    /// it opened Opie and Terminal idle since a command took a screenshot 70 seconds ago. The status names each one's
-    /// host alone.
+    /// The live sessions in the service's order, each titled by its project folder, Terminal by its name: Claude
+    /// Code with the helper, Codex waiting its turn, and Cursor and Terminal idle, Cursor's line naming its agent, as
+    /// the status gives neither a start.
     static let sessionRows = [
       viewerSessionRow(
         SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
+        name: SessionSamples.claudeTitle,
         line: SessionSamples.claudeDoing,
         badge: .acting,
-        facts: ["Host: Claude Code"]
+        facts: ["Host: Claude Code", "Folder: understudy"]
       ),
       viewerSessionRow(
         SessionSamples.codexKey,
         icon: SessionSamples.codexIcon,
-        name: SessionSamples.codexName,
+        name: SessionSamples.codexTitle,
         line: "Waiting for the helper · 8 s",
         badge: .waiting,
-        facts: ["Host: Codex"]
+        facts: ["Host: Codex", "Folder: atlas-landing"]
       ),
       viewerSessionRow(
         SessionSamples.cursorKey,
         icon: SessionSamples.cursorIcon,
-        name: SessionSamples.cursorName,
-        line: "Opened Opie · 4 min ago",
-        facts: ["Host: Cursor"]
+        name: SessionSamples.cursorTitle,
+        line: "Cursor",
+        facts: ["Host: Cursor", "Folder: opie"]
       ),
       viewerSessionRow(
         SessionSamples.terminalKey,
         icon: SessionSamples.terminalIcon,
         name: SessionSamples.terminalName,
-        line: "Took a screenshot · 70 s ago",
+        line: "",
         facts: ["Host: None named"]
       ),
     ]
@@ -79,39 +79,47 @@
       viewerSessionRow(
         SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
+        name: SessionSamples.claudeTitle,
         line: "A click may not have finished",
         badge: .needsYou,
-        facts: ["Host: Claude Code"],
+        facts: ["Host: Claude Code", "Folder: understudy"],
         recover: true
       ),
       viewerSessionRow(
         SessionSamples.codexKey,
         icon: SessionSamples.codexIcon,
-        name: SessionSamples.codexName,
+        name: SessionSamples.codexTitle,
         line: "Waits until you recover",
         badge: .waiting,
-        facts: ["Host: Codex"]
+        facts: ["Host: Codex", "Folder: atlas-landing"]
       ),
     ]
 
     /// The sidebar's sessions while every session's work shows: the three first live sessions' icons over All sessions,
     /// then Claude Code and Codex under Working and Cursor and Terminal under Idle.
-    static let allSessions = ViewerSessionsState(
-      icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
-      liveCount: sessionRows.count,
-      groups: [
-        ViewerSessionGroup(.working, rows: Array(sessionRows.prefix(2))),
-        ViewerSessionGroup(.idle, rows: Array(sessionRows.suffix(2))),
-      ]
-    )
+    ///
+    /// - Parameter rows: The live sessions' rows, in the service's order.
+    /// - Returns: The sessions.
+    static func liveSessions(_ rows: [ViewerSessionRow]) -> ViewerSessionsState {
+      ViewerSessionsState(
+        icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
+        liveCount: rows.count,
+        groups: [
+          ViewerSessionGroup(.working, rows: Array(rows.prefix(2))),
+          ViewerSessionGroup(.idle, rows: Array(rows.suffix(2))),
+        ]
+      )
+    }
 
-    /// Pi · notes-sync, which ended 20 minutes ago.
+    /// Every session's work.
+    static let allSessions = liveSessions(sessionRows)
+
+    /// Pi · notes-sync, which started at 09:40 in notes-sync and ended 20 minutes ago.
     static let piEndedRow = viewerSessionRow(
       SessionSamples.piKey,
       icon: SessionSamples.piIcon,
-      name: SessionSamples.piName,
-      line: "Ended 20 min ago",
+      name: SessionSamples.piTitle,
+      line: "Pi · 09:40",
       facts: ["Host: Pi", "Folder: notes-sync", "Started: 09:40", "Ended: 20 min ago"]
     )
 
@@ -136,7 +144,7 @@
     @MainActor public static let viewerSessions: ViewerState = {
       var state = viewerWorking
       state.sidebar.sessions = allSessions
-      state.header = ViewerHeaderState(who: SessionSamples.claudeName, what: "has the helper")
+      state.header = ViewerHeaderState(who: SessionSamples.claudeTitle, what: "Claude Code · has the helper")
       state.footer.latest = ViewerLatestLine(
         id: "0",
         icon: SessionSamples.claudeIcon,
@@ -170,7 +178,7 @@
       state.sidebar.sessions.groups[0].rows[0] = viewerSessionRow(
         SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
+        name: SessionSamples.claudeTitle,
         line: SessionSamples.claudeDoing,
         badge: .acting,
         facts: claudeRecordFacts,

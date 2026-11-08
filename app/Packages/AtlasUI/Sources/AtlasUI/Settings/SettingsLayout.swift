@@ -26,6 +26,8 @@ public enum SettingsLayout {
   static let aboutTile: CGFloat = 68
   /// 360: the widest About's tagline runs, also constrained by the available column.
   static let aboutTextWidth: CGFloat = 360
+  /// 72: a number the person types, such as how many days pictures are kept.
+  static let numberWidth: CGFloat = 72
   /// 40: the helper's picture at the top of the Helper pane.
   static let accountPicture: CGFloat = 40
   /// 10: between a section's name and its group, as ``GroupedSection`` sets them, for a section that draws its own

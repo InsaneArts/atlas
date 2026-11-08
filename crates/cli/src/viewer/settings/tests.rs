@@ -76,6 +76,78 @@ async fn an_unchanged_settings_file_retries_a_failed_viewer_record_move() {
     }
 }
 
+/// A picture taken eight days ago, kept in `output`'s private pictures folder.
+fn expired_picture(output: &Path) -> std::path::PathBuf {
+    use std::os::unix::fs::DirBuilderExt;
+    let folder = output.join(atlas_client::before::FOLDER);
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&folder)
+        .unwrap();
+    let taken = std::time::SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60);
+    let nanos = taken
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let picture = folder.join(format!("{nanos}-before.jpg"));
+    std::fs::write(&picture, b"jpeg").unwrap();
+    picture
+}
+
+async fn gone(picture: &Path) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while picture.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{} was never pruned", picture.display()));
+}
+
+#[tokio::test]
+async fn pictures_expire_in_the_output_folder_the_settings_move_to_and_the_one_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let settings = base.join("u.toml");
+    let (viewer, _) = followed(&base, &settings).await;
+    let first = expired_picture(&base.join("out"));
+    let pruning = tokio::spawn(crate::viewer::app::prune_pictures(viewer.clone()));
+    gone(&first).await;
+
+    let left = expired_picture(&base.join("out"));
+    let moved = expired_picture(&base.join("moved"));
+    std::fs::write(&settings, SETTINGS.replace("\"out\"", "\"moved\"")).unwrap();
+    viewer.follow_settings().await;
+    gone(&moved).await;
+    gone(&left).await;
+    pruning.abort();
+}
+
+#[tokio::test]
+async fn two_moves_while_a_pruning_runs_still_prune_every_folder_served() {
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let settings = base.join("u.toml");
+    let (viewer, _) = followed(&base, &settings).await;
+    // Both moves land before the pruning task reads anything, as they would
+    // while a pruning runs: their signals coalesce into one.
+    for folder in ["between", "last"] {
+        std::fs::write(
+            &settings,
+            SETTINGS.replace("\"out\"", &format!("\"{folder}\"")),
+        )
+        .unwrap();
+        viewer.follow_settings().await;
+    }
+    let pictures = ["out", "between", "last"].map(|folder| expired_picture(&base.join(folder)));
+    let pruning = tokio::spawn(crate::viewer::app::prune_pictures(viewer.clone()));
+    for picture in &pictures {
+        gone(picture).await;
+    }
+    pruning.abort();
+}
+
 #[tokio::test]
 async fn a_record_retry_publishes_the_current_output_after_another_settings_change() {
     let dir = tempfile::tempdir().unwrap();

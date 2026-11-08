@@ -5,7 +5,6 @@ extension ViewerPlace {
     case .screen: .display
     case .activity: .list
     case .apps: .windows
-    case .screenshots: .photos
     }
   }
 }

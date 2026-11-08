@@ -777,12 +777,24 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>>
     Err(refused_with(reason, fact, found))
 }
 
-/// The role of the field with keyboard focus, as [`FIELDS`] spells it,
-/// when it is one of them.
+/// The role of the field with keyboard focus, as [`field_of`] says it.
 fn field_role(keyboard: &Keyboard) -> Option<&'static str> {
-    let role = keyboard.focused.as_ref()?.element.role.as_deref()?;
-    FIELDS.into_iter().find(|field| *field == role)
+    let element = &keyboard.focused.as_ref()?.element;
+    field_of(element.role.as_deref(), element.subrole.as_deref())
 }
+
+/// The field an element of `role` and `subrole` is, as [`FIELDS`] spells
+/// it, when it is one of them: a password field whatever role it gives
+/// beside that subrole.
+pub(super) fn field_of(role: Option<&str>, subrole: Option<&str>) -> Option<&'static str> {
+    if subrole == Some(SECURE) {
+        return Some(SECURE);
+    }
+    FIELDS.into_iter().find(|field| role == Some(*field))
+}
+
+/// A password field's role, or subrole beside a text field's role.
+pub(super) const SECURE: &str = "AXSecureTextField";
 
 /// What one part of a check found.
 #[derive(Debug, PartialEq)]

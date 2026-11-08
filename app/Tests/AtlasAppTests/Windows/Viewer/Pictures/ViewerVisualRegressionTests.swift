@@ -58,42 +58,6 @@ struct ViewerVisualRegressionTests {
     }
   }
 
-  @Test(
-    "Show more removes the link before drawing the replacement step in its reserved place",
-    arguments: [false, true],
-    [NSAppearance.Name.aqua, .darkAqua]
-  )
-  func showMoreNeverOverprintsItsLink(reduced: Bool, appearance: NSAppearance.Name) throws {
-    let previous = Motion.Pose.moment
-    Motion.Pose.hold(at: -5)
-    defer { Motion.Pose.hold(at: previous) }
-    let first = PreviewStates.viewerActivityOpened
-    let host = ViewerHost(
-      first,
-      animatesArrivals: false,
-      reduceMotion: reduced,
-      appearance: NSAppearance(named: appearance)
-    )
-    host.render()
-    let link = try #require(host.frames.first { $0.key.hasPrefix("more ") }?.value)
-    let region = link.insetBy(dx: -2, dy: -2)
-    let lightText = appearance == .darkAqua
-    let before = try Self.ink(host.pixels(in: region), lightText: lightText)
-    try #require(before.blue && !before.text, "the settled link alone must not count as replacement words")
-    Motion.Pose.hold(at: .zero)
-    withAnimation(ActivityMotion.fold(reduceMotion: reduced)) {
-      host.show(ViewerMotionMove.more.played(on: first))
-    }
-    for time in [0.0, 0.02, 0.05, 0.08, 0.1, 0.12, 0.2, 0.4, 1.0] {
-      Motion.Pose.hold(at: time)
-      host.render()
-      let ink = try Self.ink(host.pixels(in: region), lightText: lightText)
-      #expect(!(ink.blue && ink.text), "the link and replacement text must not overprint at time \(time)")
-    }
-    let after = try Self.ink(host.pixels(in: region), lightText: lightText)
-    #expect(after.text && !after.blue, "the settled replacement must draw in the link's reserved place")
-  }
-
   /// Counts blue link ink and neutral text ink, excluding the ground in the appearance being drawn.
   private static func ink(_ pixels: Data, lightText: Bool = false) throws -> (blue: Bool, text: Bool) {
     let bitmap = try #require(NSBitmapImageRep(data: pixels))

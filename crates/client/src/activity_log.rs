@@ -212,6 +212,10 @@ pub struct Row {
     /// Whether it is a command's first step.
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub started: Option<bool>,
+    /// The file name of the picture taken right before an agent's input, as
+    /// [`crate::before`] names it.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
     /// The row's id, from what it holds as the log keeps it: never written.
     #[serde(skip)]
     pub id: String,

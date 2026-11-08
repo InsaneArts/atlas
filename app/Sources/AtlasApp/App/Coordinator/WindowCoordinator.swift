@@ -225,7 +225,7 @@ final class WindowCoordinator {
       inViewer: { [weak self] alert in
         guard let viewer = self?.viewer else { return }
         viewer.window.present()
-        viewer.controller.ask(Self.viewerAlert(alert))
+        viewer.controller.ask(.helper(alert))
       },
       inWindow: { [weak self] alert in self?.showAlertWindow(alert) }
     )
@@ -296,18 +296,5 @@ final class WindowCoordinator {
   private func settleDockIcon() {
     let open = [viewer?.window, onboarding?.window, settings?.window].contains { $0?.isPresented == true }
     parts?.showDockIcon(open)
-  }
-
-  /// The main window's alert for one the panel asks for.
-  ///
-  /// - Parameter alert: The panel's alert.
-  /// - Returns: The same alert as the main window names it.
-  private static func viewerAlert(_ alert: HelperAlert) -> ViewerAlert {
-    switch alert {
-    case .recover: .recover
-    case .switchToHelper: .switchToHelper
-    case .logOut: .logOut
-    case .logOutAnyway: .logOutAnyway
-    }
   }
 }

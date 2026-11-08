@@ -53,6 +53,22 @@ struct HostSessionListTests {
     #expect(record.cleanup == nil)
   }
 
+  @Test("a session keeps how many of each action and app it did, dropping odd counts")
+  func aSessionKeepsItsCounts() throws {
+    let reading = try list(
+      """
+      {"ok": true, "sessions": [{"key": "a1", "name": "Codex · notes",
+        "counts": {"type": 4, "key": 2, "click": "many", "scroll": -1, "": 3},
+        "appCounts": {"TextEdit": 6, "Notes": 0}}]}
+      """
+    )
+    let record = try #require(reading.sessions.first)
+    #expect(record.counts == ["type": 4, "key": 2])
+    #expect(record.appCounts == ["TextEdit": 6])
+    let older = try list(#"{"ok": true, "sessions": [{"key": "a1", "name": "Pi · notes-sync", "counts": [1]}]}"#)
+    #expect(older.sessions.first?.counts.isEmpty == true)
+  }
+
   @Test("a body with no list has no sessions")
   func aBodyWithNoListHasNone() throws {
     let reading = try list(#"{"ok": true, "sessions": "none"}"#)

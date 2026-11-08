@@ -98,12 +98,7 @@ final class StandInParts: WindowParts {
     let service = ScriptedService()
     return AlertController(
       alert: alert,
-      actions: HelperActions(
-        console: SessionConsole(read: { true }),
-        commands: ScriptedCommands([:]),
-        service: service,
-        barrier: ControlBarrier(service: service, clock: clock)
-      ),
+      actions: HelperActions.scripted(service, clock: clock),
       links: links
     )
   }

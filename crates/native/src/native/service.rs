@@ -48,7 +48,7 @@ const MAX_REQUEST: usize = 64 * 1024;
 /// app, with the Dock covering where it takes clicks, and the window and
 /// field it names, reading an app's elements as looks a click can name, and
 /// acting on an element of a look through Accessibility.
-const CAPABILITIES: [&str; 8] = [
+const CAPABILITIES: [&str; 9] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,
@@ -57,6 +57,7 @@ const CAPABILITIES: [&str; 8] = [
     atlas_core::session::FOCUS_FIELD,
     atlas_core::session::LOOKS,
     atlas_core::session::ELEMENT_ACTIONS,
+    atlas_core::session::TYPED_FIELDS,
 ];
 
 struct Service {
@@ -447,6 +448,11 @@ impl Service {
         if let Some(acted) = acted {
             reply["mechanism"] = json!("accessibility");
             reply["verification"] = json!(acted.verification);
+        }
+        // The element a referenced click or an action on an element reached,
+        // as it was met just before: for the mark on the picture before it.
+        if let Some(reached) = &done.reached {
+            reply["element"] = json!(reached);
         }
 
         cancellation.owner = None;

@@ -1,13 +1,16 @@
 import SwiftUI
 
-/// The one scroll view every list in the card scrolls in, Activity, Screenshots and Apps alike, by the rules in
+/// The one scroll view every list in the card scrolls in, Activity and Apps alike, by the rules in
 /// ``CardScrollRoom``: the small screen floats over the list, which scrolls the pane's whole height under it and
 /// keeps its band as room at the end it floats over, so the last row, or the first, scrolls wholly clear of it, with
 /// nothing faded and nothing ended early. Headings scroll with their rows. A step to a row scrolls it into view only
 /// as far as it must, clear of the small screen (``View/listSelection(_:isSelected:)``). Scrolled down, rows coming
 /// in above, or the list changing around the row scrolled to, leave what the person reads where it is; at the top the
-/// list stays at the top, so new rows show. The scroll bar hides while the pane fades in or out. A list supplies only
-/// its content, with `scrollTargetLayout()` on the stack whose rows hold the place.
+/// list stays at the top, so new rows show. A list can hold back rows arriving above a person scrolled down, under a
+/// quiet line at its top saying what waits (``View/listWaiting(_:)``); pressing it takes the list to its top. The
+/// scroll bar hides while the pane fades in or out. The rows keep one width whether a scroll bar that takes room shows or not (``CardScrollRoom/scrollerGutter(_:)``), so a list growing
+/// past its height, or shrinking under it, never lays its rows out again mid-motion. A list supplies only its content,
+/// with `scrollTargetLayout()` on the stack whose rows hold the place.
 struct CardScroll<Content: View>: View {
   /// The selected row to scroll into view as the person steps to it; nil for a list with no selection.
   var reveal: CardScrollReveal?
@@ -17,11 +20,18 @@ struct CardScroll<Content: View>: View {
   @State private var scrolledTo: String?
   /// Whether the list sits at its very top.
   @State private var isAtTop = true
+  /// What waits above the person scrolled down, such as "3 new sessions"; nil while nothing does.
+  @State private var waiting: String?
   /// Where the selected row stands as the list scrolls.
   @State private var selection = CardScrollSelection()
+  /// The list's whole width, its scroll bar's included.
+  @State private var width: CGFloat = .zero
+  /// The room kept beside the rows for a scroll bar that takes room.
+  @State private var gutter = CardScrollRoom.scrollerGutter(NSScroller.preferredScrollerStyle)
   @Environment(\.miniClearance) private var clearance
   @Environment(\.paneSettled) private var paneSettled
   @Environment(\.cardScrollPlacement) private var placement
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// The list, scrolling under the small screen.
   var body: some View {
@@ -38,20 +48,59 @@ struct CardScroll<Content: View>: View {
               } action: { atTop in
                 isAtTop = atTop
               }
+              .id(CardScrollRoom.top)
           }
           .environment(\.cardScrollSelection, selection)
+          // One width for the rows, inside a frame that fills the list, so the list never takes its width from them.
+          .frame(width: width > gutter ? width - gutter : nil, alignment: .leading)
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
       .scrollIndicators(paneSettled ? .automatic : .hidden)
       .scrollPosition(id: anchor, anchor: .top)
-      .onGeometryChange(for: CGFloat.self) { proxy in
-        proxy.size.height
-      } action: { height in
-        selection.viewport = height
+      .onPreferenceChange(CardScrollWaitingKey.self) { waiting = $0 }
+      .overlay(alignment: .top) {
+        ZStack {
+          if let waiting {
+            WaitingLine(words: waiting) {
+              withAnimation(Motion.layout(Motion.state, reduceMotion: reduceMotion)) {
+                scroll.scrollTo(CardScrollRoom.top, anchor: .top)
+              }
+            }
+            .layoutFrame("waiting line")
+            .padding(.top, CardScrollRoom.contentInsets(clearance).top + ViewerLayout.waitingAbove)
+            .transition(
+              Motion.transition(.opacity.combined(with: .offset(y: -Spacing.xsPlus)), reduceMotion: reduceMotion)
+            )
+          }
+        }
+        // Only the line fades in and out: the rows keep the animation their own change brings.
+        .animation(
+          Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced),
+          value: waiting == nil
+        )
+      }
+      // Measured on the room the list is given, not on the scroll view, which grows to rows wider than that room: the
+      // rows take their width from this, so measuring the scroll view would keep them at any wider width they once had.
+      .frame(minWidth: .zero, maxWidth: .infinity, minHeight: .zero, maxHeight: .infinity, alignment: .topLeading)
+      .onGeometryChange(for: CGSize.self) { proxy in
+        proxy.size
+      } action: { size in
+        selection.viewport = size.height
+        width = size.width
+      }
+      .onReceive(scrollerStyleChanges) { _ in
+        gutter = CardScrollRoom.scrollerGutter(NSScroller.preferredScrollerStyle)
       }
       .onChange(of: reveal?.request) { _, _ in
         show(reveal?.id, in: scroll)
       }
     }
+  }
+
+  /// The Mac's word that the scroll bars' style changed, as the person plugs in a mouse or changes their setting.
+  private var scrollerStyleChanges: NotificationCenter.Publisher {
+    NotificationCenter.default
+      .publisher(for: NSScroller.preferredScrollerStyleDidChangeNotification)
   }
 
   /// The list's scroll position (``CardScrollRoom/anchor(scrolledTo:isAtTop:)``).

@@ -174,7 +174,7 @@ struct PanelControllerIconsTests {
     ])
     panel.wantRecentIcons()
     try await settle("the windows never joined the lookup") { icons.repository.waiterCount == 2 }
-    viewer.show(.screenshots)
+    viewer.show(.apps)
     try await settle("the old pane kept its icon waiter") { icons.repository.waiterCount == 1 }
     gate.release()
     try await settle("the panel never received the icon") { !panel.icons.isEmpty }

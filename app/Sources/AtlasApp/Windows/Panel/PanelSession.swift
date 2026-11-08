@@ -8,6 +8,6 @@ struct PanelSession: Equatable {
   /// Whether the ⋯ menu is open, so its button draws pressed.
   var moreOpen = false
   /// What VoiceOver should say: a state that asks something of the person, once it has held for
-  /// ``PanelController/announceAfter``; nil for nothing.
+  /// ``StatusAnnouncer/after``; nil for nothing.
   var announcement: String?
 }

@@ -43,19 +43,14 @@ extension ViewerController {
     actions: HelperActions? = nil,
     connectedAgents: @escaping @MainActor () async -> [AgentID]? = { nil },
     wallClock: @escaping @MainActor () -> Date = { Date(timeIntervalSince1970: 0) },
-    shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in }),
+    shotOutlet: ShotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true }),
     preferences: ViewerPreferences? = nil,
     icons: AppIcons = .none
   ) -> ViewerController {
     let viewer = WeakViewer()
     let actions =
       actions
-      ?? HelperActions(
-        console: SessionConsole(read: { true }),
-        commands: commands,
-        service: service,
-        barrier: ControlBarrier(service: service, clock: clock)
-      ) {
+      ?? HelperActions.scripted(service, commands: commands, clock: clock) {
         viewer.controller?.control.releaseControl()
       }
     let controller = ViewerController(
@@ -105,7 +100,7 @@ extension ViewerController {
     pictures: PictureOutlet = PictureOutlet(copy: { _ in }, save: { _ in nil }),
     actions: HelperActions? = nil,
     wallClock: @escaping @MainActor () -> Date = { Date(timeIntervalSince1970: 0) },
-    shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in }),
+    shotOutlet: ShotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true }),
     icons: AppIcons = .none
   ) async throws -> ViewerController {
     service.picture = png()

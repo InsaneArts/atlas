@@ -1,8 +1,8 @@
 import AtlasUI
 
 extension ViewerPresenter {
-  /// What acts on the window's picture: only what nothing waits long for. Copy and Save act on the screenshot shown
-  /// large or selected while the Screenshots list shows one.
+  /// What acts on the window's picture: only what nothing waits long for. Copy and Save act on the picture sheet's
+  /// picture while it shows.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The picture's commands.
@@ -15,13 +15,12 @@ extension ViewerPresenter {
     )
   }
 
-  /// Whether Copy and Save act on a screenshot now: the Screenshots list shows, with one shown large or selected.
+  /// Whether Copy and Save act on a picture now: the picture sheet shows over Activity.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: Whether they do.
   static func actsOnShot(_ snapshot: ViewerSnapshot) -> Bool {
-    guard snapshot.session.place == .screenshots else { return false }
-    return snapshot.panes.shots.large != nil || selectedShot(snapshot) != nil
+    snapshot.session.place == .activity && snapshot.panes.activity.sheet != nil
   }
 
   /// What a right click on the picture offers: Copy Picture and Save Picture…; then Actual Size, ticked while on,

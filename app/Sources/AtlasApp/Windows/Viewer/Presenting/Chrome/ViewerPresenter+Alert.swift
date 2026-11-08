@@ -12,7 +12,7 @@ extension ViewerPresenter {
       return alert(asked, snapshot: snapshot, askedByPerson: true)
     }
     guard case .alert = snapshot.recovery else { return nil }
-    return alert(.recover, snapshot: snapshot)
+    return alert(.helper(.recover), snapshot: snapshot)
   }
 
   /// One alert's words and buttons, as every window builds them
@@ -34,7 +34,7 @@ extension ViewerPresenter {
   ) -> AlertCardState<AlertChoice> {
     let session = snapshot.session
     let progress =
-      kind == .recover
+      kind == .helper(.recover)
       ? AlertProgress.of(
         running: session.recovering || snapshot.running.contains(.recovery),
         failure: session.recoveryRefusal,
@@ -43,18 +43,8 @@ extension ViewerPresenter {
       : AlertProgress.of(running: session.alertRunning, failure: nil)
     let overview = snapshot.reading.status.overview
     return switch kind {
-    case .recover:
-      HelperAlert.recover
-        .state(overview: overview, progress: progress, askedByPerson: askedByPerson)
-    case .switchToHelper:
-      HelperAlert.switchToHelper
-        .state(overview: overview, progress: progress, askedByPerson: askedByPerson, onConsole: snapshot.isOnConsole)
-    case .logOut:
-      HelperAlert.logOut
-        .state(overview: overview, progress: progress, askedByPerson: askedByPerson)
-    case .logOutAnyway:
-      HelperAlert.logOutAnyway
-        .state(overview: overview, progress: progress, askedByPerson: askedByPerson)
+    case .helper(let alert):
+      alert.state(overview: overview, progress: progress, askedByPerson: askedByPerson, onConsole: snapshot.isOnConsole)
     case .restart:
       HelperAlert.destructive(
         ViewerWords.restartTitle,

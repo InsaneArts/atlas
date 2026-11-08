@@ -1,6 +1,6 @@
 // Fails on glass or a material anywhere Atlas draws: every surface is an
 // opaque fill, so nothing behind it shows through and Reduce Transparency has
-// nothing to change. node scripts/check-swift-surfaces.mjs [FOLDER...], over
+// nothing to change. node scripts/check-swift-rules.mjs --rule surfaces [FOLDER...], over
 // AtlasUI's and AtlasApp's sources by default.
 //
 // On the source with comments and string contents blanked, it reports
@@ -11,8 +11,7 @@
 // - a material: any name ending in `Material`, such as `.ultraThinMaterial`
 //   or `NSVisualEffectView.Material`, and `NSVisualEffectView` itself.
 // Each match is reported once, at the line it starts on.
-import { fileURLToPath } from 'node:url';
-import { codeOnly, lineOf, run } from './swift-source.mjs';
+import { codeOnly, lineOf } from './swift-source.mjs';
 
 // One pattern a rule, so one spelling yields one report.
 const RULES = [
@@ -34,13 +33,4 @@ export function violations(text) {
   return found
     .sort((a, b) => a.index - b.index)
     .map(({ line: at, rule, message }) => ({ line: at, rule, message }));
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
-  run(
-    'surfaces',
-    folders.length ? folders : ['app/Packages/AtlasUI/Sources', 'app/Sources/AtlasApp'],
-    violations,
-  );
 }

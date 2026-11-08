@@ -58,4 +58,19 @@ public struct ScreenshotList: Decodable, Equatable, Sendable {
     else { return nil }
     return folder.appendingPathComponent(name, isDirectory: false)
   }
+
+  /// The file of a picture the viewer's sheet shows: a listed screenshot's, or a picture taken before or after an
+  /// agent's action, by its own name in the folder's `before` folder; never a path.
+  ///
+  /// - Parameter name: The picture's file name.
+  /// - Returns: The file, or nil when the folder is unknown or the name is neither.
+  public func pictureFile(named name: String) -> URL? {
+    if let file = file(named: name) { return file }
+    guard let folder, ActionPicture.isName(name), !name.contains("/") else { return nil }
+    return folder.appendingPathComponent(Self.pictures, isDirectory: true)
+      .appendingPathComponent(name, isDirectory: false)
+  }
+
+  /// The folder inside the screenshots' folder that keeps the pictures taken before and after agents' actions.
+  static let pictures = "before"
 }

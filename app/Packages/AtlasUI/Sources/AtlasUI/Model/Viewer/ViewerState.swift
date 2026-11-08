@@ -10,7 +10,7 @@ public struct ViewerState: Equatable, Sendable {
   public var sidebar: ViewerSidebarState
   /// The alert over the whole window; nil shows none.
   public var alert: AlertCardState<AlertChoice>?
-  /// The helper's screen, small and live in the corner, over Activity, Apps or Screenshots; nil shows none.
+  /// The helper's screen, small and live in the corner, over Activity or Apps; nil shows none.
   public var mini: MiniScreenState?
   /// The corner the small screen keeps to, as the person last left it.
   public var miniCorner: MiniCorner

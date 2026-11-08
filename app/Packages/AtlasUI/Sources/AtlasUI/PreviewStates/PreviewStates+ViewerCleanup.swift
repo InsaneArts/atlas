@@ -30,7 +30,7 @@
       state.sidebar.sessions.groups[0].rows[0] = viewerSessionRow(
         SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
+        name: SessionSamples.claudeTitle,
         line: "Cleaning up…",
         facts: claudeRecordFacts,
         cleanup: false,
@@ -48,7 +48,7 @@
       state.sidebar.sessions.groups[0].rows[0] = viewerSessionRow(
         SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,
-        name: SessionSamples.claudeName,
+        name: SessionSamples.claudeTitle,
         line: SessionSamples.claudeDoing,
         badge: .acting,
         facts: claudeRecordFacts.filter { !$0.hasPrefix("Environment plan") },
@@ -67,6 +67,7 @@
     /// when it started and ended.
     @MainActor public static let viewerSessionEnded: ViewerState = {
       var state = viewerSessionChosen
+      state.header = viewerSessions.header
       state.sidebar.sessions = allSessions
       state.sidebar.sessions.chosen = .one(SessionSamples.piKey)
       // Ended stays folded, its one chosen session still listed under it.

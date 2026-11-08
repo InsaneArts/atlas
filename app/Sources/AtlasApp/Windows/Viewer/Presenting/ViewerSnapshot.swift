@@ -36,7 +36,7 @@ struct ViewerSnapshot {
   var timeZone = TimeZone.current
   /// The locale the facts tell their times in, and the lists their times and days.
   var locale = Locale.current
-  /// What the Activity, Apps and Screenshots panes hold.
+  /// What the Activity and Apps panes hold.
   var panes = ViewerPanes()
   /// The date and time now, which the panes tell Now, today and the last hour by.
   var date = Date()

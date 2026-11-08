@@ -1,17 +1,17 @@
 #if DEBUG
   extension PreviewStates {
-    /// Activity with every session's work: each moment named by its session, Claude Code acting in Opie, Codex's
-    /// typing refused in Notes, the person's own clicks, Cursor and Terminal before them.
+    /// Activity with every session's work: Claude Code working, Codex's ended session folded, and the person's own
+    /// clicks.
     @MainActor public static let viewerActivityBySession: ViewerState = {
       var state = viewerSessions
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 14, .screenshots: 6])
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 14])
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(bySessionActivity)
       return state
     }()
 
-    /// Activity while Claude Code's click may not have finished: the click held open in its moment with Show Screen
+    /// Activity while Claude Code's click may not have finished: the click held open in its run with Show Screen
     /// and Recover…, every other session waiting, the recovery alert set aside.
     @MainActor public static let viewerActivityNeedsYou: ViewerState = {
       var state = viewerNeedsYou
@@ -26,7 +26,7 @@
           ViewerSessionGroup(.idle, rows: [sessionRows[2]]),
         ]
       )
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 14, .screenshots: 6])
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 14])
       state.footer.latest = ViewerLatestLine(
         id: "c1",
         icon: SessionSamples.claudeIcon,
@@ -40,12 +40,11 @@
       return state
     }()
 
-    /// Activity for Claude Code alone, chosen in the sidebar: its moments under its name, Opie open and an older
-    /// command folded.
+    /// Activity for Claude Code alone, chosen in the sidebar: its runs at the first level, Chrome opened.
     @MainActor public static let viewerActivityOneSession: ViewerState = {
       var state = viewerActivityBySession
       state.sidebar.sessions.chosen = .one(SessionSamples.claudeKey)
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 6, .screenshots: 0])
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 6])
       state.pane = .activity(oneSessionActivity)
       return state
     }()

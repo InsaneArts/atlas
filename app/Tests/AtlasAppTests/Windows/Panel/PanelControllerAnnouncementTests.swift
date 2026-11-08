@@ -26,9 +26,9 @@ struct PanelControllerAnnouncementTests {
     service.reply = ["overview": ["mode": "stopped", "state": "stopped"]]
     await panel.readStatus()
     let text = try #require(panel.askingStatus)
-    try await clock.untilSleeping(for: PanelController.announceAfter, "the announcement never waited")
+    try await clock.untilSleeping(for: StatusAnnouncer.after, "the announcement never waited")
     #expect(clock.waiting.count == 1)
-    clock.advance(by: PanelController.announceAfter)
+    clock.advance(by: StatusAnnouncer.after)
     try await settle("the status change was never announced") { panel.state.announcement == text }
     #expect(clock.waiting.isEmpty)
   }
@@ -49,8 +49,8 @@ struct PanelControllerAnnouncementTests {
     await panel.readStatus()
     let text = try #require(panel.askingStatus)
     panel.announceSoon(text)
-    try await clock.untilSleeping(for: PanelController.announceAfter, "the announcement never waited")
-    clock.advance(by: PanelController.announceAfter - .milliseconds(1))
+    try await clock.untilSleeping(for: StatusAnnouncer.after, "the announcement never waited")
+    clock.advance(by: StatusAnnouncer.after - .milliseconds(1))
     await Task.yield()
     #expect(panel.state.announcement == nil)
     clock.advance(by: .milliseconds(1))
@@ -69,16 +69,16 @@ struct PanelControllerAnnouncementTests {
     let panel = PanelController.scripted(clock: clock)
     panel.isOpen = true
     panel.announceSoon("Stopped")
-    try await clock.untilSleeping(for: PanelController.announceAfter, "the first announcement never waited")
+    try await clock.untilSleeping(for: StatusAnnouncer.after, "the first announcement never waited")
     panel.announceSoon("Needs you")
-    try await clock.untilSleeping(for: PanelController.announceAfter, "the replacement never waited")
-    clock.advance(by: PanelController.announceAfter)
+    try await clock.untilSleeping(for: StatusAnnouncer.after, "the replacement never waited")
+    clock.advance(by: StatusAnnouncer.after)
     try await settle("the replacement was never announced") { panel.state.announcement == "Needs you" }
     panel.announceSoon("Logged out")
-    try await clock.untilSleeping(for: PanelController.announceAfter, "the last announcement never waited")
+    try await clock.untilSleeping(for: StatusAnnouncer.after, "the last announcement never waited")
     panel.isOpen = false
     panel.restartAnnouncements()
-    clock.advance(by: PanelController.announceAfter)
+    clock.advance(by: StatusAnnouncer.after)
     await Task.yield()
     #expect(panel.state.announcement == nil)
   }

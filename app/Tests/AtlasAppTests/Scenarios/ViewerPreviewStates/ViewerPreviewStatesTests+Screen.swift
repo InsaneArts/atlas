@@ -83,9 +83,9 @@
           $0.reading.lastPicture = SampleDesktop.picture
           $0.reading.waitedLong = true
         },
-        "Switch": shown(loggedOut, picture: false, unavailable: gone) { $0.session.alert = .switchToHelper },
-        "Log out": shown(idle) { $0.session.alert = .logOut },
-        "Log out anyway": shown(idle) { $0.session.alert = .logOutAnyway },
+        "Switch": shown(loggedOut, picture: false, unavailable: gone) { $0.session.alert = .helper(.switchToHelper) },
+        "Log out": shown(idle) { $0.session.alert = .helper(.logOut) },
+        "Log out anyway": shown(idle) { $0.session.alert = .helper(.logOutAnyway) },
         "Restart": shown(idle) { $0.session.alert = .restart },
         "Typing": shown(try reported("controlling", state: "control")) {
           $0.lease = "lease"

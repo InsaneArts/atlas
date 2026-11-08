@@ -55,20 +55,14 @@ the version, runs the checks, builds and notarizes with `cargo xtask dist`, tags
 
 ## Where things live
 
-| Path             | What it holds                                                            |
-| ---------------- | ------------------------------------------------------------------------ |
-| `crates/core`    | names, errors, time, wire types and what Atlas observes                  |
-| `crates/native`  | capture, accessibility, input and the held-input journal                 |
-| `crates/daemon`  | the helper daemon, and the helper's layout, launchd jobs and first login |
-| `crates/control` | who may act on the helper, cancellation and what is still pending        |
-| `crates/client`  | requests to the helper, copies into it, and setup from the controller    |
-| `crates/agents`  | connecting coding agents to Atlas, and the guide they read               |
-| `crates/cli`     | the `atlas` command, viewers, MCP server, menu bar and onboarding        |
-| `app/`           | Atlas.app in Swift 6: AtlasApp and its `Packages/`                       |
-| `agents/`        | bundled skills, MCP registration and supported host integrations         |
-| `scripts/`       | repository checks and live checks against a real helper                  |
-| `tests/`         | Node tests, shared fixtures and the native test fixture                  |
-| `xtask/`         | release builds (`cargo xtask dist`)                                      |
+| Path       | What it holds                                                                  |
+| ---------- | ------------------------------------------------------------------------------ |
+| `crates/`  | the Rust workspace, one crate per layer ([crates/AGENTS.md](crates/AGENTS.md)) |
+| `app/`     | Atlas.app in Swift 6: AtlasApp and its `Packages/`                             |
+| `agents/`  | bundled skills, MCP registration and supported host integrations               |
+| `scripts/` | repository checks and live checks against a real helper                        |
+| `tests/`   | Node tests, shared fixtures and the native test fixture                        |
+| `xtask/`   | release builds (`cargo xtask dist`)                                            |
 
 See [Architecture](docs/architecture.md) for the process model, Rust responsibilities
 and Swift package dependencies. Public user guides live in [docs/](docs/README.md).
@@ -81,13 +75,8 @@ Install the pinned dependency checker once with
 `cargo install cargo-machete --version 0.9.2 --locked`.
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo machete --skip-target-dir .
-cargo test --workspace --locked
-npm run format:check
-npm test
-node scripts/check-swift.mjs   # swift test and swift format lint, app/ and app/Packages/*
+scripts/check.sh   # Rust formatting, lints and tests, Node checks, swift test and swift format lint
 ```
 
 Passing tests are not enough for anything that changes input, windows,
@@ -98,6 +87,19 @@ screenshots or setup. Check it on a real helper too:
 2. For the viewer and input paths, run the live checks in `scripts/`
    (`check-input.mjs`, `check-control.mjs`, `check-recovery.mjs`).
 3. Say in the pull request what you ran and what you saw.
+
+To measure the terminal viewer, replay a saved picture through its encoder, or
+time the installed helper's captures; neither sends input or opens an app:
+
+```sh
+ATLAS_TERMINAL_BENCH_IMAGE=/path/to/frame.png \
+  cargo test --release --package atlas-cli --lib terminal::tests::terminal_rendering_benchmark -- --ignored --nocapture
+cargo run --release --package atlas-client --example profile_capture
+```
+
+`cargo xtask preview --sign 'Developer ID Application: NAME (TEAMID)'` builds a
+signed `target/terminal-preview/Atlas.app` for this Mac only; it installs and
+publishes nothing.
 
 Unit tests, DOM fixtures and rendered previews do not prove that macOS displayed
 a native window or accepted input. Distinguish those checks from native desktop
@@ -122,12 +124,10 @@ These hold everywhere; a change that needs to break one needs an issue first.
 - **`unsafe` is denied in every crate.** Prefer safe bindings (`nix`, `objc2`).
   FFI without one lives in a module or function marked `allow(unsafe_code)`
   with its reason, and every `unsafe` block has a `SAFETY:` note.
-- **Swift** follows `app/`'s layout: the domain packages under `app/Packages`
-  (AtlasService, AtlasCommands, AtlasControl, AtlasStatus, AtlasOnboarding)
-  hold rules and the service client, AtlasUI holds views and never imports
-  them, AtlasApp holds the AppKit windows. Use the design tokens, one type per
-  file, a `///` line on every declaration other code can reach, and name tests
-  as sentences.
+- **Swift** follows the package boundaries in
+  [Architecture](docs/architecture.md#swift-package-boundaries). Use the design
+  tokens, one type per file, a `///` line on every declaration other code can
+  reach, and name tests as sentences.
 - **Plain words** in every message a person or agent reads: short, specific,
   no jargon.
 

@@ -32,8 +32,6 @@ extension ViewerLayout {
   static let screenRadius = Radius.extraSmall
   /// 3: control's accent edge, drawn inside the screen's shape.
   static let controlEdge: CGFloat = 3
-  /// 36: the row over the Activity list that holds its filters.
-  static let filtersHeight: CGFloat = 36
   /// 200: the small screen's width over a list, in a card body at least ``pipFullBody`` wide.
   static let pipWidth: CGFloat = 200
   /// 140: the narrowest the small screen draws, in a narrow card.

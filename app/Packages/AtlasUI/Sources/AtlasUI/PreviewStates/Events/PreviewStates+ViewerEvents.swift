@@ -30,8 +30,6 @@
         return viewerCleanUp
       case .menu(.showActivity):
         return viewerActivityOneSession
-      case .menu(.showScreenshots):
-        return viewerShotsOneSession
       case .togglePause:
         return state.footer.controls.pause?.isOn == true ? viewerWorking : viewerPaused
       case .toggleSound:
@@ -54,8 +52,8 @@
         return viewerLogOut
       case .askRestart:
         return viewerRestart
-      case .copyShot, .showShotInFinder, .thumbnailNeeded, .shotColumns, .moveCorner,
-        .openSettings:
+      case .copyPicture, .showPictureInFinder, .previousPicture, .nextPicture, .thumbnailNeeded, .moveCorner,
+        .openSettings, .showDaySessions:
         return state
       case .toggleSidebar, .dismissSidebarOverlay, .toggleEnded, .openSearch, .search, .closeSearch:
         return viewerSidebar(state, applying: event)
@@ -67,8 +65,9 @@
         return viewerShowOnScreen
       case .clearOutline:
         return viewerIdle
-      case .filterActivity, .toggleMoment, .showMomentSteps, .selectShot, .openShot, .toggleShot, .previousShot,
-        .nextShot, .shotAbove, .shotBelow, .clearShotSelection, .closeShot:
+      case .filterActivity, .toggleSession, .toggleRun, .showRunPictures, .showAllRunPictures, .hideRunPictures,
+        .openShot, .openAction, .pictureSide, .closePicture, .openReplay, .replayFrame, .previousFrame, .nextFrame,
+        .togglePlay, .closeReplay:
         return viewerPane(state, applying: event)
       }
     }
@@ -81,7 +80,6 @@
       switch place {
       case .screen: viewerWorking
       case .activity: viewerActivity
-      case .screenshots: viewerShots
       case .apps: viewerApps
       }
     }

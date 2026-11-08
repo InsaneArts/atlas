@@ -1,4 +1,4 @@
-/// One of the Library's rows at the sidebar's foot: Activity, Screenshots or Apps with how many it holds, chosen while
+/// One of the Library's rows at the sidebar's foot: Activity or Apps with how many it holds, chosen while
 /// its list shows.
 public struct ViewerLibraryRow: Equatable, Sendable, Identifiable {
   /// The list the row shows.

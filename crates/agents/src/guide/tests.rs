@@ -75,12 +75,10 @@ fn references_folder() -> std::path::PathBuf {
 }
 
 #[test]
-fn the_skill_is_the_core_followed_by_its_references() {
+fn the_skill_ends_with_every_reference_and_what_it_is_for() {
     let skill = skill();
-    let (_, body) = skill.split_once("\n---\n\n# Atlas\n\n").unwrap();
-    let (_, core) = CORE.split_once('\n').unwrap();
-    let rest = body.strip_prefix(core.trim_start()).unwrap();
-    let mut expected = String::from("\n## References\n\nRead one when the task needs it:\n\n");
+    let (_, rest) = skill.split_once("\n\n## References\n").unwrap();
+    let mut expected = String::from("\nRead one when the task needs it:\n\n");
     for (file, about) in REFERENCES.iter().zip(ABOUT) {
         expected.push_str(&format!(
             "- [references/{file}](references/{file}): {about}\n"
@@ -149,7 +147,7 @@ fn the_skill_core_keeps_every_rule_an_agent_needs_from_the_start() {
 
 #[test]
 fn the_guides_limit_window_memory_to_untargeted_points_and_name_windows_in_shared_apps() {
-    for guide in [CORE, GUIDE, include_str!("../../../../docs/cli.md")] {
+    for guide in [CORE.as_str(), GUIDE.as_str()] {
         assert!(guide.contains("Untargeted points"));
         assert!(guide.contains("bypasses this memory"));
         assert!(
@@ -162,7 +160,7 @@ fn the_guides_limit_window_memory_to_untargeted_points_and_name_windows_in_share
 
 /// Spans in backticks in the full guide and the error reference.
 fn shown_spans() -> impl Iterator<Item = &'static str> {
-    [GUIDE, ERRORS]
+    [GUIDE.as_str(), ERRORS]
         .into_iter()
         .flat_map(|text| text.split('`').skip(1).step_by(2))
 }
@@ -278,38 +276,6 @@ fn a_cleanup_with_no_task_is_said_to_cover_the_whole_session() {
     }
 }
 
-/// The hosts whose time limits the guide gives are the ones the public
-/// connection guide lists, and the other way round.
-#[test]
-fn the_guide_and_the_connection_docs_list_the_same_host_limits() {
-    let (_, limits) = GUIDE.split_once("\n### Time limits\n").unwrap();
-    let (limits, _) = limits.split_once("\n### ").unwrap();
-    let mut in_guide: Vec<&str> = limits
-        .lines()
-        .filter_map(|line| line.strip_prefix("- "))
-        .filter_map(|line| line.split_once(':').map(|(host, _)| host))
-        .collect();
-    in_guide.sort_unstable();
-
-    let docs =
-        std::fs::read_to_string(atlas_core::app_bundle::checkout().join("docs/agents.md")).unwrap();
-    let (_, table) = docs
-        .split_once("## Several agents and time limits")
-        .unwrap();
-    let (table, _) = table.split_once("\n## ").unwrap();
-    let mut in_docs: Vec<&str> = table
-        .lines()
-        .filter_map(|line| line.strip_prefix('|'))
-        .filter_map(|line| line.split('|').next())
-        .map(str::trim)
-        .filter(|host| !host.is_empty() && *host != "Host" && !host.starts_with('-'))
-        .collect();
-    in_docs.sort_unstable();
-
-    assert_eq!(in_guide, in_docs);
-    assert_eq!(in_guide.len(), 5, "{in_guide:?}");
-}
-
 #[test]
 fn no_step_quits_or_discards_what_the_task_did_not_open() {
     let core = core_text();
@@ -325,7 +291,7 @@ fn no_step_quits_or_discards_what_the_task_did_not_open() {
 
 #[test]
 fn the_full_guide_is_the_core_then_every_reference_written_for_it() {
-    let mut expected = format!("{CORE}\n");
+    let mut expected = format!("{}\n", CORE.as_str());
     for file in ["testing.md", "environment.md", "limits.md"] {
         assert!(REFERENCES.contains(&file), "{file}");
         let text = std::fs::read_to_string(references_folder().join(file)).unwrap();

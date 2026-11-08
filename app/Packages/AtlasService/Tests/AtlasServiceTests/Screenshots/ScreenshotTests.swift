@@ -27,6 +27,12 @@ struct ScreenshotTests {
     )
     #expect(relative.folder == nil)
     #expect(relative.file(named: name) == nil)
+    let before = "1700000006000000000-before.jpg"
+    #expect(listed.pictureFile(named: name)?.path == "/Users/me/runs/\(name)")
+    #expect(listed.pictureFile(named: before)?.path == "/Users/me/runs/before/\(before)")
+    #expect(listed.pictureFile(named: "../\(before)") == nil, "never a path")
+    #expect(listed.pictureFile(named: "notes.txt") == nil)
+    #expect(relative.pictureFile(named: before) == nil)
   }
 
   @Test("a capture's time reads from its file name, and a name of another shape has none")

@@ -15,8 +15,6 @@ extension ViewerWords {
   static let showEndedItem = "Show Ended Sessions"
   /// A session's menu's item that shows its work in Activity.
   static let showActivity = "Show Activity"
-  /// A session's menu's item that shows its screenshots.
-  static let showScreenshots = "Show Screenshots"
   /// The heading over a session's facts in its menu.
   static let details = "Details"
   /// The Helper menu's and the helper line's item that reads the helper's status now.
@@ -41,13 +39,12 @@ extension ViewerWords {
   /// A place's word, in the Library and the View menu.
   ///
   /// - Parameter place: The place.
-  /// - Returns: "Screen", "Activity", "Apps" or "Screenshots".
+  /// - Returns: "Screen", "Activity" or "Apps".
   static func place(_ place: ViewerPlace) -> String {
     switch place {
     case .screen: "Screen"
     case .activity: "Activity"
     case .apps: "Apps"
-    case .screenshots: "Screenshots"
     }
   }
 }

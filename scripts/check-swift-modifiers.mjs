@@ -2,7 +2,7 @@
 // call, a SwiftUI modifier above all, starts its own line, indented one step
 // under its receiver, never `}.padding()`. swift-format keeps a line break
 // that is already there but never adds one before a chained call, so this
-// checker does: node scripts/check-swift-modifiers.mjs [FOLDER...].
+// checker does: node scripts/check-swift-rules.mjs --rule modifiers [FOLDER...].
 //
 // On the source with comments and string contents blanked, a call is `.name(` or
 // `.name {` with a lowercase-initial name, written right after an
@@ -28,10 +28,7 @@
 // indentation when the line itself starts with `.`, `}`, `)` or `]`. It only
 // splits lines, and a second run changes nothing. Run swift format on the
 // files it changed afterwards, for the indentation swift-format keeps.
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { codeOnly, lineOf, packageFolders, repository, run, swiftFiles } from './swift-source.mjs';
+import { codeOnly, lineOf } from './swift-source.mjs';
 
 // A call: `.name(` or `.name {`, the name lowercase-initial.
 const CALL = /\.([a-z_]\w*)(?=\(|[ \t]*\{)/g;
@@ -265,24 +262,4 @@ export function fixed(text) {
   }
   pieces.push(text.slice(last));
   return pieces.join('');
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
-  const roots = folders.length
-    ? folders
-    : ['app/Sources', 'app/Tests', ...packageFolders('Sources'), ...packageFolders('Tests')];
-  if (process.argv.includes('--fix')) {
-    for (const folder of roots) {
-      for (const file of swiftFiles(path.resolve(repository, folder))) {
-        const text = fs.readFileSync(file, 'utf8');
-        const rewritten = fixed(text);
-        if (rewritten !== text) {
-          fs.writeFileSync(file, rewritten);
-          console.log(`fixed ${path.relative(repository, file)}`);
-        }
-      }
-    }
-  }
-  run('modifiers', roots, violations);
 }

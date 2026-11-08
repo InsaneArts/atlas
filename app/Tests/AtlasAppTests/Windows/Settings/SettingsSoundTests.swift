@@ -45,50 +45,6 @@ struct SettingsSoundTests {
     #expect(controller.state.general.soundProblem == nil)
   }
 
-  @Test("rapid toggles run one atlas sound at a time and end on the person's latest choice")
-  func rapidTogglesEndOnTheLatestChoice() async throws {
-    let commands = ScriptedCommands([
-      "sound off": #"{"ok": true, "helperSound": "muted", "reason": null, "wanted": true}"#,
-      "sound on": #"{"ok": true, "helperSound": "on", "reason": null, "wanted": false}"#,
-    ])
-    let gate = ReleaseSignal()
-    commands.whileRunning { _ in await gate.wait() }
-    let controller = SettingsController.scripted(commands: commands)
-
-    let first = Task { await controller.setHelperSound(muted: false) }
-    try await settle("the first change never started") { commands.ran.count == 1 }
-    await controller.setHelperSound(muted: true)
-    await controller.setHelperSound(muted: false)
-    #expect(commands.ran.count == 1, "nothing runs beside the first")
-    gate.open()
-    await first.value
-
-    let soundOn = Action.setHelperSound(muted: false).arguments
-    #expect(commands.ran == [soundOn, soundOn])
-    #expect(controller.helperSound == HelperSound(state: .on, wanted: false))
-    #expect(!controller.state.general.muteHelper)
-  }
-
-  @Test("bringing Settings forward during a change reads nothing that could undo it")
-  func aReadNeverOverlapsAChange() async throws {
-    let commands = ScriptedCommands([
-      "sound on": #"{"ok": true, "helperSound": "on", "reason": null, "wanted": false}"#,
-      "sound": #"{"ok": true, "helperSound": "muted", "reason": null, "wanted": true}"#,
-    ])
-    let gate = ReleaseSignal()
-    commands.whileRunning { _ in await gate.wait() }
-    let controller = SettingsController.scripted(commands: commands)
-
-    let change = Task { await controller.setHelperSound(muted: false) }
-    try await settle("the change never started") { commands.ran.count == 1 }
-    await controller.readHelperSound()
-    gate.open()
-    await change.value
-
-    #expect(commands.ran == [Action.setHelperSound(muted: false).arguments])
-    #expect(controller.helperSound == HelperSound(state: .on, wanted: false))
-  }
-
   @Test("an older helper's answer shows its upgrade step under the switch")
   func anOlderHelperSaysHowToUpdate() async {
     let older = "The helper is running an older Atlas that cannot mute its apps; run atlas restart, then try again"

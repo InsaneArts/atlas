@@ -15,4 +15,23 @@ enum ImageDecoding {
     let options = [kCGImageSourceShouldCacheImmediately: true, kCGImageSourceShouldCache: true] as CFDictionary
     return CGImageSourceCreateImageAtIndex(source, 0, options)
   }
+
+  /// A picture read at no more than `longest` pixels along its longer side, scaled down as it is read, so a small
+  /// frame draws it sharp rather than shrinking the whole picture as it draws.
+  ///
+  /// - Parameters:
+  ///   - data: The picture as encoded.
+  ///   - longest: The most pixels along its longer side.
+  /// - Returns: The picture, decoded, or nil when the data reads as none.
+  @concurrent nonisolated static func thumbnail(_ data: Data, longest: Int) async -> CGImage? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+    let options =
+      [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: longest,
+        kCGImageSourceShouldCacheImmediately: true,
+      ] as CFDictionary
+    return CGImageSourceCreateThumbnailAtIndex(source, 0, options)
+  }
 }

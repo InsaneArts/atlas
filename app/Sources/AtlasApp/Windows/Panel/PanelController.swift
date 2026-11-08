@@ -20,10 +20,6 @@ final class PanelController {
   /// Between status readings with the panel closed: 5 s, often enough for the menu bar glyph to follow the helper's
   /// mode, rarely enough to cost nothing.
   static let closedEvery: Duration = .seconds(5)
-  /// How long a state that asks something of the person holds before VoiceOver hears it: 1 s, as in the main window,
-  /// so a state that passes at once is never said.
-  static let announceAfter: Duration = .seconds(1)
-
   /// The latest status the service reported: every field at its safe default, as a service that cannot be reached
   /// reads, before the first reading ends and after one that fails, which the panel shows alike.
   var status = ViewerStatus()
@@ -76,11 +72,8 @@ final class PanelController {
   @ObservationIgnored var wantedAtLogin: Bool?
   /// Whether a change to Open at Login runs now: one at a time, so the system ends where the person last asked.
   @ObservationIgnored var changingAtLogin = false
-  /// What VoiceOver was last handed (``askingStatus``), so a reading that says the same again, or the panel opening
-  /// on it, says nothing more.
-  @ObservationIgnored var askedBefore: String?
-  /// The wait before the newest asking state is said; nil while none waits.
-  @ObservationIgnored var announcing: Task<Void, Never>?
+  /// What VoiceOver hears of the state (``askingStatus``), once it has held.
+  @ObservationIgnored let announcer = StatusAnnouncer()
 
   /// Creates a panel that has read nothing yet.
   ///
