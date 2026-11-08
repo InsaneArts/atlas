@@ -151,7 +151,7 @@ final class ViewerPanesModel {
     case .showDaySessions(let id): panes.activity.shownDays.insert(id)
     case .showWindow(let app, let window): showWindow(app: app, window: window)
     case .clearOutline: panes.apps.shown = nil
-    case .thumbnailNeeded(let name): thumbnailNeeded(name)
+    case .thumbnailNeeded(let name): thumbnails.thumbnailNeeded(name)
     case .openShot(let name): pictures.openShot(name)
     case .openAction(let step): pictures.openStep(step)
     case .previousPicture: pictures.step(by: -1)
@@ -273,12 +273,4 @@ final class ViewerPanesModel {
 
   /// Stops reading the sheet's pictures and copying one, before the window is released.
   func stopPictures() { pictures.stop() }
-  /// Queues a visible screenshot thumbnail unless it is already kept or pending.
-  ///
-  /// - Parameter name: The screenshot file name.
-  func thumbnailNeeded(_ name: String) { thumbnails.thumbnailNeeded(name) }
-  /// Holds new thumbnail reads during resizing, then resumes the queue.
-  ///
-  /// - Parameter held: Whether new reads wait.
-  func holdThumbnails(_ held: Bool) { thumbnails.holdThumbnails(held) }
 }

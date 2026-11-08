@@ -2,8 +2,6 @@
 enum Opacity {
   /// 0.12: a tinted fill, such as a selected row's or a taught project's.
   static let tint = 0.12
-  /// 0.16: a stronger tinted fill, such as a tag's capsule (In front).
-  static let tintStrong = 0.16
   /// 0.3: a quieter tinted edge, such as an attention card's.
   static let edgeTintQuiet = 0.3
   /// 0.35: a disabled control.

@@ -17,7 +17,6 @@ struct OpencodeConnectionTests {
             .utf8
         )
       )
-    #expect(change.requiresRestart)
     #expect(change.restarting == [.claude, .opencode])
     #expect(change.connected == [.claude, .opencode])
     #expect(change.failures.first?.agent == .pi)

@@ -63,7 +63,7 @@ struct SettingsControllerTests {
     await controller.confirmAlert()
     let notice = controller.state.agents.notice
     #expect(notice?.text.contains("AGENTS.md has an Atlas marker without its pair") == true)
-    #expect(notice?.isProblem == true, "drawn in the attention colour")
+    #expect(notice?.kind == .problem, "drawn in the attention colour")
   }
 
   @Test("Connect on Claude connects the installed Claude app alone")

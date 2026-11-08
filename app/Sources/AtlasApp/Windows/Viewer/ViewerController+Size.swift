@@ -28,6 +28,6 @@ extension ViewerController {
   func setLiveResizing(_ resizing: Bool) {
     guard resizing != session.liveResizing else { return }
     session.liveResizing = resizing
-    panesModel.holdThumbnails(resizing)
+    panesModel.thumbnails.holdThumbnails(resizing)
   }
 }

@@ -3,9 +3,8 @@ import Foundation
 import UserNotifications
 
 /// How Atlas reaches the person outside its windows: asking macOS, the normal way, whether it may, and posting what
-/// it tells them. The helper needs you carries one action, Recover, or Open Atlas when
-/// ``NotificationWords/offersRecover`` is off; a click on it opens Atlas. A seam of closures, so tests stand in one that records and never reach
-/// Notification Center.
+/// it tells them. The helper needs you carries one action, Recover; a click on it opens Atlas. A seam of closures, so
+/// tests stand in one that records and never reach Notification Center.
 struct Notifier {
   /// Asks macOS whether Atlas may notify the person. macOS asks them the first time and remembers their answer, so
   /// asking again only reads it.
@@ -71,16 +70,10 @@ struct Notifier {
   }
 
   /// The helper needs you's kind: Recover alone, which runs without bringing Atlas forward but only once the Mac is
-  /// unlocked; or Open Atlas alone, which does.
+  /// unlocked.
   ///
-  /// - Parameter offersRecover: Whether Recover is offered (``NotificationWords/offersRecover``).
   /// - Returns: The category.
-  static func attentionCategory(offersRecover: Bool = NotificationWords.offersRecover) -> UNNotificationCategory {
-    let open = UNNotificationAction(
-      identifier: NotificationWords.openAction,
-      title: NotificationWords.openAtlas,
-      options: [.foreground]
-    )
+  static func attentionCategory() -> UNNotificationCategory {
     let recover = UNNotificationAction(
       identifier: NotificationWords.recoverAction,
       title: NotificationWords.recover,
@@ -88,7 +81,7 @@ struct Notifier {
     )
     return UNNotificationCategory(
       identifier: NotificationWords.attentionCategory,
-      actions: offersRecover ? [recover] : [open],
+      actions: [recover],
       intentIdentifiers: []
     )
   }

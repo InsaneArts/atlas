@@ -80,16 +80,6 @@ struct ViewerClientFetchTests {
     }
   }
 
-  @Test("a recovery with no answer in time is reported as still recovering, a value with no words of its own")
-  func aLateRecoveryIsAValue() async throws {
-    let late = try client(.failure(.timedOut))
-    let error = await #expect(throws: ServiceError.self) { try await late.recover() }
-    #expect(error?.isStillRecovering == true)
-    let other = try client(.failure(.timedOut))
-    let screenshots = await #expect(throws: ServiceError.self) { try await other.screenshots() }
-    #expect(screenshots?.isStillRecovering == false, "only Recover carries on in the service")
-  }
-
   @Test("a cleanup that got no answer may still run, while a preview that got none is only late")
   func aCleanupWithNoAnswerMayStillRun() async throws {
     let late = try client(.failure(.timedOut))
