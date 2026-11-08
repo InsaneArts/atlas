@@ -40,10 +40,7 @@ enum NoticeRender: String, CaseIterable, Sendable {
     let alert = NoticeAlert.make(title: title, message: message, switchBack: switchBack, onConsole: true)
     alert.window.appearance = appearance
     alert.layout()
-    guard let appearance, let frame = alert.window.contentView?.superview,
-      let data = PNG.data(of: frame, appearance: appearance)
-    else { return false }
-    // The render reports a failed write as false; why it failed is not its concern.
-    return (try? data.write(to: URL(fileURLWithPath: path))) != nil
+    guard let frame = alert.window.contentView?.superview else { return false }
+    return PNG.write(frame, to: URL(fileURLWithPath: path), appearance: appearance)
   }
 }

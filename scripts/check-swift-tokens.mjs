@@ -2,7 +2,7 @@
 // opacity, size, offset (a view's or a shadow's), position, shadow or blur
 // radius, line width, scale, tracking or animation duration in AtlasUI or
 // AtlasApp outside AtlasUI/DesignSystem, or on arithmetic that bends a token
-// with a literal: node scripts/check-swift-tokens.mjs [FOLDER...]. The domain
+// with a literal: node scripts/check-swift-rules.mjs --rule tokens [FOLDER...]. The domain
 // packages draw nothing and are not read. Inside
 // the design system it fails on a name that holds a window or surface:
 // a token says its role or size. Outside Colors.swift it also fails on
@@ -17,8 +17,7 @@
 // and Components/Brand/Orbit.swift (drawing geometry). A heuristic over
 // source text, deliberately simple; comments and strings are blanked first,
 // and every match is reported at the line it starts on.
-import { fileURLToPath } from 'node:url';
-import { codeOnly, lineOf, run } from './swift-source.mjs';
+import { codeOnly, lineOf } from './swift-source.mjs';
 
 const NUMBER = String.raw`-?\d+(?:\.\d+)?`;
 // SwiftUI's built-in colors. `clear` is left out: transparency is not a design
@@ -245,13 +244,4 @@ export function violations(text, file = '') {
     }
   }
   return found.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const folders = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
-  run(
-    'tokens',
-    folders.length ? folders : ['app/Packages/AtlasUI/Sources', 'app/Sources/AtlasApp'],
-    violations,
-  );
 }

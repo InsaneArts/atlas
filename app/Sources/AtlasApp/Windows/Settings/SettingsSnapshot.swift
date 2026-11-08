@@ -14,6 +14,8 @@ struct SettingsSnapshot {
   var sound = HelperSoundButton()
   /// The person's files and the helper, as last read.
   var files = SettingsFiles()
+  /// The pictures of agent actions.
+  var pictures = SettingsPictures()
   /// What the rest of the app says now.
   var facts = SettingsFacts()
 }

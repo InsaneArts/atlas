@@ -71,6 +71,46 @@ struct LayerPictureTests {
     #expect(layer.animation(forKey: LayerPicture.cornerPath) == nil, "a new frame alone never moves the corner")
   }
 
+  @Test("a picture at full colour draws with no colour filter, which the window server would run every frame")
+  func fullColourDrawsWithNoFilter() throws {
+    let layer = CALayer()
+    let picture = LayerPicture(layer: layer)
+    picture.show(ViewerLivePicture(picture: try Self.picture("one"), saturation: 1, corner: 12))
+    #expect(layer.filters == nil)
+    picture.show(ViewerLivePicture(picture: try Self.picture("two"), saturation: 1, corner: 12))
+    #expect(layer.filters == nil)
+  }
+
+  @Test("easing back to full colour keeps the filter until the ease ends, and the next frame drops it")
+  func easingBackToFullColourDropsTheFilterAfterwards() throws {
+    let layer = CALayer()
+    let picture = LayerPicture(layer: layer)
+    picture.show(ViewerLivePicture(picture: try Self.picture("one"), saturation: 0.5, corner: 12))
+    #expect(layer.filters?.count == 1)
+    picture.show(ViewerLivePicture(picture: try Self.picture("two"), saturation: 1, corner: 12))
+    #expect(layer.filters?.count == 1, "the ease to full colour runs on the filter")
+    picture.show(ViewerLivePicture(picture: try Self.picture("three"), saturation: 1, corner: 12))
+    #expect(layer.filters?.count == 1, "not while the ease still runs")
+    layer.removeAnimation(forKey: LayerPicture.saturationPath)
+    picture.show(ViewerLivePicture(picture: try Self.picture("four"), saturation: 1, corner: 12))
+    #expect(layer.filters == nil)
+  }
+
+  @Test("the same image again under a new frame leaves the layer's contents alone")
+  func theSameImageAgainLeavesTheContentsAlone() throws {
+    let layer = ContentsCountingLayer()
+    let picture = LayerPicture(layer: layer)
+    let first = try Self.picture("one")
+    picture.show(ViewerLivePicture(picture: first, saturation: 1, corner: 12))
+    let again = DesktopPicture(id: "two", image: first.image)
+    picture.show(ViewerLivePicture(picture: again, saturation: 1, corner: 12))
+    #expect(layer.contentsSets == 1)
+    let changed = try Self.picture("three")
+    picture.show(ViewerLivePicture(picture: changed, saturation: 1, corner: 12))
+    #expect(layer.contentsSets == 2)
+    #expect((layer.contents as AnyObject?) === changed.image)
+  }
+
   @Test("the window's live slot shows each new frame through its layer, without building its view again")
   @MainActor
   func theLiveSlotShowsEachNewFrame() throws {

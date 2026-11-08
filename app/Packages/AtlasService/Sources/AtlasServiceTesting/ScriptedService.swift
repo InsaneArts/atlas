@@ -270,15 +270,6 @@ public final class ScriptedService: ViewerService {
     try await pause("input")
   }
 
-  /// Records the recovery, which always restarts the helper.
-  ///
-  /// - Returns: True.
-  @MainActor
-  public func recover() async throws -> Bool {
-    log.append("recover")
-    return true
-  }
-
   /// Answers `activityLog`, unless held or failed.
   ///
   /// - Returns: The activity log.

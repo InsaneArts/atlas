@@ -18,12 +18,7 @@ struct HelperCommandsReleaseTests {
     let service = ScriptedService()
     service.reply = HelperCommandsScenario.idle
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: ManualClock())
-    )
+    let actions = HelperActions.scripted(service, commands: commands)
     let viewer = try await ViewerController.watching(service, commands: commands, actions: actions)
     await viewer.control.takeControl()
     service.hold = ["release"]
@@ -55,12 +50,7 @@ struct HelperCommandsReleaseTests {
   func aFreedWindowsWorkStillHoldsTheBarrier() async throws {
     let service = ScriptedService()
     service.reply = HelperCommandsScenario.idle
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: ScriptedCommands([:]),
-      service: service,
-      barrier: ControlBarrier(service: service, clock: ManualClock())
-    )
+    let actions = HelperActions.scripted(service)
     var viewer: ViewerController? = try await ViewerController.watching(service, actions: actions)
     weak let gone = viewer
     await viewer?.control.takeControl()

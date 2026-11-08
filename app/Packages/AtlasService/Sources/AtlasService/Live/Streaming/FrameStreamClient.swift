@@ -2,8 +2,14 @@ import Foundation
 
 /// One observer of the frame service: it pairs both lanes, subscribes, and reads one verified picture per credit,
 /// which only its commit makes the picture input may name. Every reply is checked against exactly what was asked;
-/// anything else ends the observer.
+/// anything else ends the observer. A source that fails for a moment keeps the observer; pictures that stop coming
+/// end it.
 public actor FrameStreamClient {
+  /// How many credits in a row may expire unserved before the observer ends: about two seconds at the service's
+  /// credit life. The service's word that its source is failing is only a hint: it is sent once, and a picture
+  /// already on its way may follow it.
+  static let unservedCredits = 10
+
   private let descriptor: FramePipeDescriptor
   private let control: any FramePipeTransport
   private let frame: any FramePipeTransport
@@ -144,6 +150,8 @@ public actor FrameStreamClient {
   /// - Returns: The picture, not yet committed.
   /// - Throws: ``FramePipeError`` or a lane failure, which end the observer.
   public func next(longest: Int) async throws -> FramePipePicture {
+    // The credits in a row this call gave that expired unserved: each call ends with a picture, or the observer.
+    var unserved = 0
     while true {
       if generations == nil { try await subscribe(reason: "reconfigure", longest: longest) }
       guard let generations else { throw FramePipeError.invalid }
@@ -162,7 +170,12 @@ public actor FrameStreamClient {
         case .packet(.control, let header, let metadata):
           switch header.kind {
           case .creditAccepted: continue
-          case .creditExpired: break reading
+          case .creditExpired:
+            unserved += 1
+            guard unserved < Self.unservedCredits else {
+              throw ServiceError("The helper's pictures are unavailable")
+            }
+            break reading
           case .state: try note(metadata)
           case .error:
             if self.generations == nil, Self.retired(metadata) {
@@ -300,15 +313,12 @@ public actor FrameStreamClient {
     }
   }
 
-  /// Notes a state change: a changed profile is subscribed to again before the next credit, and a source that
-  /// stopped working ends the observer, so the window reads pictures another way meanwhile.
+  /// Notes a state change: a changed profile is subscribed to again before the next credit. A source that stopped
+  /// working keeps the observer: credits that keep expiring unserved (``unservedCredits``) end it, so the window
+  /// reads pictures another way meanwhile.
   private func note(_ metadata: Data) throws {
     let state = try Self.object(metadata, keys: nil)
-    switch state["phase"] as? String {
-    case "profile-changed": generations = nil
-    case "unavailable": throw ServiceError("The helper's pictures are unavailable")
-    default: return
-    }
+    if state["phase"] as? String == "profile-changed" { generations = nil }
   }
 
   /// `metadata` as an object, once it passes the lexical check and, when `keys` is given, has exactly those keys.

@@ -36,6 +36,7 @@ struct ViewerHeader: View {
       }
     }
     .lineLimit(1)
+    .layoutFrame("header words")
     .padding(.leading, leading)
     .padding(.trailing, ViewerLayout.headerInset + hold)
     .frame(maxWidth: .infinity, alignment: .leading)

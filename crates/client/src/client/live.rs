@@ -14,7 +14,7 @@ use atlas_core::{
         SESSION_PROOF, SessionPin,
     },
     session::{Epoch, InputEpoch},
-    transport::refusal,
+    transport::{connect_socket, refusal},
 };
 use serde_json::{Value, json};
 use std::{
@@ -155,12 +155,20 @@ impl LiveStream {
         limit: u32,
         backend: CaptureBackend,
     ) -> Result<Option<Self>> {
-        tokio::time::timeout(DEADLINE, Self::open(client, limit, backend))
+        let setup = tokio::time::Instant::now() + DEADLINE;
+        tokio::time::timeout_at(setup, Self::open(client, limit, backend, setup))
             .await
             .map_err(|_| invalid("Preview setup timed out"))?
     }
 
-    async fn open(client: &Client, limit: u32, backend: CaptureBackend) -> Result<Option<Self>> {
+    /// Open the stream; a denied connection is tried again only while it fits
+    /// before `setup`, the whole setup's deadline.
+    async fn open(
+        client: &Client,
+        limit: u32,
+        backend: CaptureBackend,
+        setup: tokio::time::Instant,
+    ) -> Result<Option<Self>> {
         if !(320..=4096).contains(&limit) {
             return Err(invalid("Invalid preview size"));
         }
@@ -185,7 +193,7 @@ impl LiveStream {
         let high_res = offers(RGB_STREAM_HIGH_RES);
         let limit = if high_res { limit } else { limit.min(1600) };
         let epoch = verified.session.epoch.clone();
-        let socket = tokio::time::timeout(DEADLINE, UnixStream::connect(&client.transport.path))
+        let socket = tokio::time::timeout(DEADLINE, connect_socket(&client.transport.path, setup))
             .await
             .map_err(|_| invalid("Preview connection timed out"))??;
         let peer = socket.peer_cred()?;
@@ -403,9 +411,11 @@ impl LiveStream {
                 return Ok(());
             }
             let query = atlas_core::files::token()[..32].to_owned();
-            let reply =
-                tokio::time::timeout_at(until, drain_query(client, daemon, generation, &query))
-                    .await;
+            let reply = tokio::time::timeout_at(
+                until,
+                drain_query(client, daemon, generation, &query, until),
+            )
+            .await;
             match reply {
                 Ok(Ok(reply))
                     if reply["ok"] == true
@@ -664,8 +674,14 @@ fn request(epoch: &Epoch, limit: u32, backend: CaptureBackend) -> Value {
 }
 
 /// Ask the daemon `daemon`, and only it, whether `generation` is drained.
-async fn drain_query(client: &Client, daemon: u32, generation: u64, query: &str) -> Result<Value> {
-    let mut socket = UnixStream::connect(&client.transport.path).await?;
+async fn drain_query(
+    client: &Client,
+    daemon: u32,
+    generation: u64,
+    query: &str,
+    until: tokio::time::Instant,
+) -> Result<Value> {
+    let mut socket = connect_socket(&client.transport.path, until).await?;
     let peer = socket.peer_cred()?;
     if peer.uid() != client.transport.peer_uid
         || peer.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(daemon)
@@ -687,7 +703,7 @@ async fn drain_query(client: &Client, daemon: u32, generation: u64, query: &str)
     Ok(serde_json::from_slice(&reply)?)
 }
 
-async fn read_header(reader: &mut (impl tokio::io::AsyncRead + Unpin)) -> Result<Value> {
+pub(super) async fn read_header(reader: &mut (impl tokio::io::AsyncRead + Unpin)) -> Result<Value> {
     let length = reader.read_u32().await? as usize;
     if length == 0 || length > HEADER_LIMIT {
         return Err(invalid("Invalid preview header length"));

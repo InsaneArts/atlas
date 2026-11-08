@@ -14,7 +14,8 @@ pub(crate) const ACTIVE_FOR: Duration = Duration::from_secs(10 * 60);
 const SEEN_WITHIN: Duration = Duration::from_secs(30);
 /// The record format this build writes.
 pub(super) const VERSION: u32 = 1;
-/// The most screenshot names, copy tokens, plans and verbs a record keeps.
+/// The most screenshot names, copy tokens, plans, and verbs or apps a
+/// record keeps.
 const SCREENSHOTS: usize = 50;
 const COPIES: usize = 64;
 const PLANS: usize = 32;
@@ -52,6 +53,10 @@ pub struct Record {
     /// How many of each action it did.
     #[serde(default)]
     pub counts: BTreeMap<String, u64>,
+    /// How many of its actions named each app, by the app's name: what it
+    /// mostly worked in, kept once its activity rows have rotated away.
+    #[serde(default)]
+    pub apps: BTreeMap<String, u64>,
     /// Its screenshots' file names, newest first.
     #[serde(default)]
     pub screenshots: Vec<Capture>,
@@ -79,6 +84,7 @@ impl Record {
             ended: None,
             previous: None,
             counts: BTreeMap::new(),
+            apps: BTreeMap::new(),
             screenshots: Vec::new(),
             copies: Vec::new(),
             plans: Vec::new(),
@@ -102,9 +108,15 @@ impl Record {
         self.ended_at().is_none() && now.saturating_sub(self.last_seen) <= within
     }
 
-    /// Note that `session` acted `now`, doing `verb` when its command was
-    /// not refused.
-    pub(crate) fn seen(&mut self, session: &HostSession, now: u64, verb: Option<&str>) {
+    /// Note that `session` acted `now`, doing `verb` in `app` when its
+    /// command was not refused.
+    pub(crate) fn seen(
+        &mut self,
+        session: &HostSession,
+        now: u64,
+        verb: Option<&str>,
+        app: Option<&str>,
+    ) {
         self.last_seen = now;
         // Without a host identity, activity is the legacy lifetime proof.
         // A process-backed end still requires a verified new root to revive.
@@ -116,6 +128,12 @@ impl Record {
             && (self.counts.len() < COUNTS || self.counts.contains_key(verb))
         {
             *self.counts.entry(verb.to_owned()).or_default() += 1;
+        }
+        if verb.is_some()
+            && let Some(app) = app
+            && (self.apps.len() < COUNTS || self.apps.contains_key(app))
+        {
+            *self.apps.entry(app.to_owned()).or_default() += 1;
         }
     }
 

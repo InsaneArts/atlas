@@ -76,10 +76,13 @@ pub(super) fn configured(
     client.actor = atlas_client::client::Actor::Viewer;
     client.person_input = Some(atlas_client::client::PersonInput::default());
     let prefix = format!("/{}/", files::token());
+    let outputs = vec![client.config.output_dir.clone()];
     Arc::new(Viewer {
         client: std::sync::Mutex::new(Arc::new(client)),
         settings: settings.map(Path::to_path_buf),
         settings_text: std::sync::Mutex::new(None),
+        outputs: std::sync::Mutex::new(outputs),
+        output_moved: tokio::sync::Notify::new(),
         lease: Arc::new(Mutex::new(Lease::new(Duration::from_secs(LEASE_SECONDS)))),
         lease_epoch: Mutex::new(None),
         lease_client: std::sync::Mutex::new(None),
@@ -88,6 +91,7 @@ pub(super) fn configured(
         frames: Mutex::new(Frames::default()),
         committed: std::sync::Mutex::new(std::collections::VecDeque::new()),
         pipe: std::sync::Mutex::new(None),
+        input_sent: Arc::new(tokio::sync::Notify::new()),
         frame_width: FRAME_WIDTH,
         frame_reuse: FRAME_REUSE,
         capture: std::sync::Mutex::new(None),

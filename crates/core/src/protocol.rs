@@ -284,6 +284,13 @@ requests! { request =>
                 as u32,
             pin: pin(request)?.ok_or_else(|| bad("stream requires a session pin"))?,
         }),
+    /// One raw frame, framed as a live frame is: the picture before an
+    /// agent's action, which one byte on the connection cancels.
+    "frame" Frame { max_dimension: u32, pin: SessionPin } = Ok(Request::Frame {
+        max_dimension: whole(&request["maxDimension"], 320..=4096, "\"maxDimension\" must be 320–4096")?
+            as u32,
+        pin: pin(request)?.ok_or_else(|| bad("frame requires a session pin"))?,
+    }),
     "apps" Apps { pin: Option<SessionPin> } = Ok(Request::Apps { pin: pin(request)? }),
     "windows" Windows { dock: bool, pin: Option<SessionPin> } = Ok(Request::Windows {
         dock: boolean(request, "dock")?,
@@ -369,6 +376,7 @@ impl Request {
             Self::SessionProof { .. } => (Hidden, None, Read("session-proof")),
             Self::HostSession(_) => (Any, None, Read("host-session")),
             Self::Stream { pin, .. } => (Hidden, Some(*pin), Read("stream")),
+            Self::Frame { pin, .. } => (Hidden, Some(*pin), Read("frame")),
             Self::StreamDrainStatus { .. } => (Any, None, Read("stream-drain-status")),
             Self::Apps { pin } => (Any, *pin, Read("apps")),
             Self::Windows { pin, .. } => (Hidden, *pin, Read("windows")),

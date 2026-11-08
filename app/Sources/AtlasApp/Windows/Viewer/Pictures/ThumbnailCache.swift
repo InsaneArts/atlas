@@ -3,8 +3,8 @@ import AtlasUI
 /// The screenshots' thumbnails read so far, by name, keeping only the newest ``limit`` so a long session never holds
 /// every one.
 struct ThumbnailCache {
-  /// 96: about six screens of the four-column grid, so scrolling back never reads them again, at roughly 0.6 MB a
-  /// decoded 480-point thumbnail, under 60 MB in all.
+  /// 96: several screens of the outline's pictures, so scrolling back never reads them again, at roughly 0.6 MB a
+  /// decoded thumbnail, under 60 MB in all.
   static let limit = 96
 
   /// The thumbnails, by name.

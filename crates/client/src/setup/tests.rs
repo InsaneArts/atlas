@@ -292,6 +292,7 @@ async fn observing_a_blocked_transport_preserves_its_code_and_advice() {
         identity_probe: dir.path().join("atlas"),
         input_socket: dir.path().join("input.sock"),
         output_dir: dir.path().join("runs"),
+        activity: Default::default(),
     })
     .unwrap();
     client.controller = atlas_control::Controller::at(uid, &dir.path().join("state"));

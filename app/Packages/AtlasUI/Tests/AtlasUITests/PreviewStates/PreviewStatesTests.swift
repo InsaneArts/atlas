@@ -58,7 +58,7 @@
       #expect(
         Set(states.map(\.header.who)).isSuperset(of: [
           "Working", "Idle", "You", "Needs you", "Stopped", "In use elsewhere", "Not ready", "Logged out", "Connecting",
-          "Paused", SessionSamples.claudeName,
+          "Paused", SessionSamples.claudeTitle,
         ])
       )
       #expect(
@@ -96,13 +96,13 @@
         states.map { state in
           switch state.pane {
           case .screen: "screen"
-          case .activity(let activity): activity.empty == nil ? "activity" : "activity, empty"
+          case .activity(let activity):
+            activity.sheet != nil ? "sheet" : activity.empty == nil ? "activity" : "activity, empty"
           case .apps: "apps"
-          case .screenshots(let shots): shots.large != nil ? "large" : shots.empty == nil ? "shots" : "shots, empty"
           }
         }
       )
-      #expect(panes == ["screen", "activity", "activity, empty", "apps", "shots", "large", "shots, empty"])
+      #expect(panes == ["screen", "activity", "activity, empty", "sheet", "apps"])
       #expect(states.contains { $0.screen.outline != nil })
     }
 

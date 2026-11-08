@@ -1,0 +1,163 @@
+import SwiftUI
+
+/// The sheet's footer: ‹ and › through that run's pictures with where this one stands, such as "120 of 120 in this
+/// TextEdit run"; then Copy, Show in Finder and Done, the default button, which Return presses. Escape closes too. On a
+/// narrow window the position drops its run, and narrower still the buttons wrap to a second row.
+struct PictureSheetFooter: View {
+  /// The sheet.
+  let sheet: ViewerPictureSheet
+  /// The window's width.
+  let window: CGFloat
+  /// Receives what the person does.
+  let send: @MainActor (ViewerEvent) -> Void
+  /// Whether Done has keyboard focus, as it takes on the sheet's arrival so the keyboard is in the sheet.
+  @FocusState private var doneFocused: Bool
+
+  /// The two sides of the footer, on one row or two.
+  var body: some View {
+    VStack(alignment: .trailing, spacing: Spacing.s) {
+      controls
+      if let failure {
+        // On a line of its own under the buttons, wrapping in a narrow sheet rather than pushing them out.
+        Text(failure)
+          .font(Typography.font(.callout))
+          .foregroundStyle(Color.textAttention)
+          .multilineTextAlignment(.trailing)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: .infinity, alignment: .trailing)
+          .transition(.opacity)
+      }
+    }
+    .animation(Motion.textSwap, value: sheet.notice)
+    .padding(ViewerLayout.sheetInset)
+    .background {
+      // Escape closes the sheet as Done does.
+      Button("Close") { send(.closePicture) }
+        .keyboardShortcut(.cancelAction)
+        .hidden()
+        .accessibilityHidden(true)
+    }
+  }
+
+  /// ‹ › and the position, then the buttons: side by side, or on a narrow window one over the other.
+  private var controls: some View {
+    Group {
+      if window <= ViewerLayout.outlineNarrowest {
+        VStack(alignment: .trailing, spacing: ViewerLayout.sheetInset) {
+          stepping
+            .frame(maxWidth: .infinity, alignment: .leading)
+          buttons
+        }
+      } else {
+        HStack(spacing: ViewerLayout.sheetInset) {
+          stepping
+          Spacer(minLength: .zero)
+          buttons
+        }
+      }
+    }
+  }
+
+  /// ‹ and ›, then where this picture stands.
+  private var stepping: some View {
+    HStack(spacing: Spacing.s) {
+      HStack(spacing: ViewerLayout.sheetArrowGap) {
+        Button {
+          send(.previousPicture)
+        } label: {
+          Image(systemName: SymbolName.back.rawValue)
+        }
+        .buttonStyle(.capsule(.secondary, size: .small, outline: .circle))
+        .disabled(!sheet.canGoBack)
+        .keyboardShortcut(.leftArrow, modifiers: [])
+        .help("The picture before")
+        .accessibilityLabel(Text("Previous picture"))
+        Button {
+          send(.nextPicture)
+        } label: {
+          Image(systemName: SymbolName.next.rawValue)
+        }
+        .buttonStyle(.capsule(.secondary, size: .small, outline: .circle))
+        .disabled(!sheet.canGoForward)
+        .keyboardShortcut(.rightArrow, modifiers: [])
+        .help("The picture after")
+        .accessibilityLabel(Text("Next picture"))
+      }
+      Text(verbatim: position)
+        .font(Typography.digits(.callout))
+        .foregroundStyle(Color.textSecondary)
+        .lineLimit(1)
+        .truncationMode(.tail)
+    }
+  }
+
+  /// "120 of 120 in this TextEdit run", or on a narrow window "120 of 120".
+  private var position: String {
+    guard window > ViewerLayout.outlineNarrow, !sheet.run.isEmpty else { return sheet.position }
+    return "\(sheet.position) \(sheet.run)"
+  }
+
+  /// Copy, Show in Finder and Done, in macOS order with the default button last.
+  private var buttons: some View {
+    HStack(spacing: Spacing.s) {
+      Button(action: { send(.copyPicture) }) {
+        // Both words hold the button's width, so it never changes size as one gives way to the other.
+        ZStack {
+          Text("Copy")
+            .opacity(copied ? 0 : 1)
+          HStack(spacing: Spacing.xs) {
+            Image(systemName: SymbolName.done.rawValue)
+            Text("Copied")
+          }
+          .opacity(copied ? 1 : 0)
+        }
+      }
+      .buttonStyle(.capsule(.secondary, size: .small))
+      .help("Copy this picture")
+      .accessibilityLabel(copied ? Text("Copied") : Text("Copy"))
+      Button("Show in Finder") { send(.showPictureInFinder) }
+        .buttonStyle(.capsule(.secondary, size: .small))
+        .disabled(!sheet.canShowInFinder)
+        .help("Show this picture's file in the Finder")
+      Button("Done") { send(.closePicture) }
+        .buttonStyle(.capsule(.accent, size: .small))
+        .keyboardShortcut(.defaultAction)
+        .focused($doneFocused)
+        .onAppear { doneFocused = true }
+    }
+    .fixedSize()
+    .onChange(of: sheet.notice) { _, notice in
+      // VoiceOver hears what the footer says, as it may not be looking at it.
+      guard let words = spoken(notice) else { return }
+      AccessibilityNotification.Announcement(words)
+        .post()
+    }
+  }
+
+  /// What VoiceOver says for `notice`.
+  ///
+  /// - Parameter notice: What the footer says.
+  /// - Returns: The words, or nil for none.
+  private func spoken(_ notice: ViewerSheetNotice?) -> String? {
+    switch notice {
+    case .copied: String(localized: "Copied")
+    case .copyFailed: String(localized: "Couldn't copy this picture")
+    case .fileMissing: String(localized: "Couldn't find this picture's file")
+    case nil: nil
+    }
+  }
+
+  /// Whether Copy just put the picture on the clipboard.
+  private var copied: Bool {
+    sheet.notice == .copied
+  }
+
+  /// What could not be done, said briefly beside the buttons; nil when nothing failed.
+  private var failure: LocalizedStringKey? {
+    switch sheet.notice {
+    case .copyFailed: "Couldn't copy this picture"
+    case .fileMissing: "Couldn't find this picture's file"
+    case .copied, nil: nil
+    }
+  }
+}

@@ -157,6 +157,41 @@ fn a_refused_command_is_seen_but_not_counted() {
 }
 
 #[test]
+fn a_session_counts_the_apps_its_actions_named_but_not_its_refusals() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let session = session("apps");
+    let typing = Doing::new("type").app(Some("TextEdit"));
+    let shot = Doing::new("screenshot");
+
+    let worked = json!({"ok": true});
+    note(
+        &client,
+        &session,
+        Kind::Other,
+        Some(&typing),
+        &Ok(worked.clone()),
+    )
+    .unwrap();
+    note(
+        &client,
+        &session,
+        Kind::Other,
+        Some(&typing),
+        &Ok(worked.clone()),
+    )
+    .unwrap();
+    note(&client, &session, Kind::Other, Some(&shot), &Ok(worked)).unwrap();
+    let busy = Error::new(Code::Busy, "Another command has control");
+    note(&client, &session, Kind::Other, Some(&typing), &Err(busy)).unwrap();
+
+    let record = store(&client).read(session.key()).unwrap();
+    assert_eq!(record.apps, BTreeMap::from([("TextEdit".into(), 2)]));
+    assert_eq!(record.counts["type"], 2);
+    assert_eq!(record.counts["screenshot"], 1);
+}
+
+#[test]
 fn an_uncertain_refusal_does_not_invent_confirmed_cleanup() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());

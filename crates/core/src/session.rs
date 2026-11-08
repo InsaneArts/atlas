@@ -405,6 +405,11 @@ pub const LOOKS: &str = "looks";
 /// Accessibility alone, and says whether it reads as asked afterwards.
 pub const ELEMENT_ACTIONS: &str = "element-actions";
 
+/// The input-service capability that names the field a batch's text went
+/// into, a password field by its subrole too, and none when its typing
+/// actions found different fields: what typed text may be kept by.
+pub const TYPED_FIELDS: &str = "typed-fields";
+
 /// Whether an input service's hello lists `name` among its capabilities.
 pub fn has_capability(native: &Value, name: &str) -> bool {
     capability_names(native)

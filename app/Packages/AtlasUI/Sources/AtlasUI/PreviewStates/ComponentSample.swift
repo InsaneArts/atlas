@@ -5,14 +5,10 @@
     case capsuleButtons = "capsule-buttons"
     /// The status dot's marks.
     case statusDots = "status-dots"
-    /// A chip floating over a picture.
-    case floatingChip = "floating-chip"
     /// The alert card, side by side and stacked, asked, running, refused and done.
     case alertCard = "alert-card"
     /// A message in place of a picture.
     case emptyMessage = "empty-message"
-    /// One letterboxed picture in each look.
-    case pictureFrame = "picture-frame"
     /// The live corner picture.
     case miniScreen = "mini-screen"
     /// The search field.
@@ -29,7 +25,7 @@
     case monogramTints = "monogram-tints"
     /// A tag in each tone.
     case tagTones = "tag-tones"
-    /// What leads an action: an app, an app's tile, Atlas, the person and commands, at a moment's and a Recent row's
+    /// What leads an action: an app, an app's tile, Atlas, the person and commands, at a run's and a Recent row's
     /// size.
     case activityGlyphs = "activity-glyphs"
     /// Soft keycaps alone and in chords.
@@ -38,8 +34,8 @@
     case appCards = "app-cards"
     /// Activity's steps of every kind and mark.
     case activitySteps = "activity-steps"
-    /// Activity's moments, open, folded and held.
-    case activityMoments = "activity-moments"
+    /// Activity's runs, folded with their problems and pictures, and open.
+    case activityRuns = "activity-runs"
     /// The account picture in its circle at each size.
     case accountPictureSizes = "account-picture-sizes"
     /// Choose's accounts in a grouped list, the new one picked.

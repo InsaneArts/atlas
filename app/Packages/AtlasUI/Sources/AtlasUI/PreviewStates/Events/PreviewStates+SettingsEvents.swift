@@ -19,6 +19,8 @@
         next.alert = settingsForget.alert
       case .askInstall:
         next.alert = settingsInstall.alert
+      case .askDeletePictures:
+        next.alert = settingsDeletePictures.alert
       case .checkForUpdates:
         next.about = settingsAboutNewer.about
       case .connect(let id):
@@ -34,6 +36,10 @@
       case .alertConfirm:
         if next.alert == settingsForget.alert { next.agents.projects.removeFirst() }
         if next.alert == settingsInstall.alert { next.about = settingsAbout.about }
+        if next.alert == settingsDeletePictures.alert {
+          next.general.storedPictures = "No pictures"
+          next.general.canDeletePictures = false
+        }
         next.alert = nil
       case .alertCancel:
         next.alert = nil

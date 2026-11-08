@@ -20,6 +20,7 @@ public func status(_ reply: [String: Any]) throws -> ViewerStatus {
 ///   - name: The session's name.
 ///   - state: Its state's word; idle by default.
 ///   - hostLabel: The host's name in the service's words; none by default.
+///   - folder: The project folder's name; none by default.
 ///   - holdsHelper: Whether it has the helper.
 ///   - waitingFor: What it waits for: `helper` or `recovery`.
 ///   - waitingSeconds: How long it has waited for the helper.
@@ -33,6 +34,7 @@ public func hostSession(
   name: String,
   state: String = "idle",
   hostLabel: String? = nil,
+  folder: String? = nil,
   holdsHelper: Bool = false,
   waitingFor: String? = nil,
   waitingSeconds: Double? = nil,
@@ -44,6 +46,7 @@ public func hostSession(
     "key": key, "host": host, "name": name, "state": state, "live": state != "ended", "holdsHelper": holdsHelper,
   ]
   fields["hostLabel"] = hostLabel
+  fields["folder"] = folder
   fields["waitingFor"] = waitingFor
   fields["waitingSeconds"] = waitingSeconds
   fields["latest"] = latest

@@ -151,24 +151,14 @@ struct ViewerControllerSizeTests {
     #expect(viewer.state.sidebar.mode == .hidden, "fitted to the frame it opens at, not the first size")
   }
 
-  @Test("the Screenshots grid keeps its columns while the window is being resized and settles them after")
-  func theGridKeepsItsColumnsWhileResizing() async throws {
-    let viewer = try await ViewerPanesModelGridTests.onGrid(ScriptedService())
+  @Test("the window says it is being resized while it is, and settles after")
+  func theWindowSaysItIsResizing() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
     defer { viewer.close() }
+    viewer.send(.show(.activity))
     viewer.setLiveResizing(true)
-    viewer.send(.shotColumns(4))
-    guard case .screenshots(let held) = viewer.state.pane else {
-      Issue.record("Screenshots shows")
-      return
-    }
-    #expect(held.heldColumns == 2)
     #expect(viewer.state.isResizing)
     viewer.setLiveResizing(false)
-    guard case .screenshots(let settled) = viewer.state.pane else {
-      Issue.record("Screenshots shows")
-      return
-    }
-    #expect(settled.heldColumns == nil)
     #expect(!viewer.state.isResizing)
   }
 }

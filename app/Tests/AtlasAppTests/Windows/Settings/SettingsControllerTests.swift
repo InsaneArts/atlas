@@ -63,7 +63,7 @@ struct SettingsControllerTests {
     await controller.confirmAlert()
     let notice = controller.state.agents.notice
     #expect(notice?.text.contains("AGENTS.md has an Atlas marker without its pair") == true)
-    #expect(notice?.isProblem == true, "drawn in the attention colour")
+    #expect(notice?.kind == .problem, "drawn in the attention colour")
   }
 
   @Test("Connect on Claude connects the installed Claude app alone")
@@ -217,12 +217,7 @@ struct SettingsControllerTests {
     let gate = ReleaseSignal()
     commands.whileRunning { _ in await gate.wait() }
     let service = ScriptedService()
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: ManualClock())
-    )
+    let actions = HelperActions.scripted(service, commands: commands)
     let controller = SettingsController.scripted(commands: commands, actions: actions)
     #expect(controller.state.helper.waiting == nil)
     // Another window's Recover, through the commands every window shares.

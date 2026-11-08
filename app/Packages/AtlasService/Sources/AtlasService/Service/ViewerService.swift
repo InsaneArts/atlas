@@ -66,13 +66,6 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the input is refused.
   func input(lease: String, frame: String, actions: [InputAction]) async throws
 
-  /// Recovers the helper.
-  ///
-  /// - Returns: Whether it restarted the helper, rather than starting its input.
-  /// - Throws: ``ServiceError`` when recovery did not run, or one that ``ServiceError/isStillRecovering`` when no
-  ///   answer came in time. Its message is generic, so the app words these errors with `HelperRecovery.notice(_:)`.
-  func recover() async throws -> Bool
-
   /// Reads what was done in the helper lately. Reading it records nothing.
   ///
   /// - Returns: The log, newest first, every missing field at its safe default.

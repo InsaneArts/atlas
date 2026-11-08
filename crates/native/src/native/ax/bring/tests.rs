@@ -35,6 +35,9 @@ struct Fake {
     count_reads: usize,
     pauses: Vec<Duration>,
     hit: Option<usize>,
+    /// Attributes and lists the app is busy for: each answers that it could
+    /// not complete, as many times as it is busy.
+    busy: HashMap<(usize, &'static str), usize>,
 }
 
 impl Fake {
@@ -76,6 +79,7 @@ impl Fake {
             count_reads: 0,
             pauses: Vec::new(),
             hit: None,
+            busy: HashMap::new(),
         };
         fake.lists.insert((APP, "AXWindows"), vec![WINDOW]);
         fake.lists.insert((WINDOW, "AXChildren"), vec![FIELD]);
@@ -118,6 +122,17 @@ impl Fake {
         self.answers.insert((sheet, "AXModal"), Answer::Flag(true));
         self.lists.insert((parent, "AXSheets"), vec![sheet]);
     }
+    /// Whether the app is still busy for `name` of `element`, counting this
+    /// time.
+    fn busied(&mut self, element: usize, name: &'static str) -> bool {
+        match self.busy.get_mut(&(element, name)) {
+            Some(busy) if *busy > 0 => {
+                *busy -= 1;
+                true
+            }
+            _ => false,
+        }
+    }
     fn run(&mut self, expect: &Expect) -> Result<()> {
         let deadline = self.now.get() + Duration::from_millis(450);
         prepare(self, expect, Need::Keys, deadline, &|| Ok(()), &mut |_| {
@@ -127,10 +142,27 @@ impl Fake {
     }
 }
 
+/// Prepares `expect` under a guard that never refuses, with a fixed answer
+/// to whether the target is already in place.
+fn prepared<'a>(
+    fake: &'a mut Fake,
+    expect: &Expect,
+    need: Need,
+    deadline: Instant,
+    ready: bool,
+) -> Target<&'a mut Fake> {
+    prepare(fake, expect, need, deadline, &|| Ok(()), &mut |_| ready).unwrap()
+}
+
 impl Ask for &mut Fake {
     type Element = usize;
     fn now(&self) -> Instant {
         self.now.get()
+    }
+    fn pause(&mut self, duration: Duration) {
+        assert!(!duration.is_zero());
+        self.pauses.push(duration);
+        self.now.set(self.now.get() + duration);
     }
     fn bound(&mut self, _: &usize, timeout: Duration) -> bool {
         self.bounds.push(timeout);
@@ -143,6 +175,9 @@ impl Ask for &mut Fake {
             on_ask(self, *element, name);
         }
         self.now.set(self.now.get() + self.delay);
+        if self.busied(*element, name) {
+            return Answer::Failed(AXError::CannotComplete);
+        }
         self.answers
             .get(&(*element, name))
             .cloned()
@@ -153,11 +188,6 @@ impl Ask for &mut Fake {
     }
 }
 impl Backend for &mut Fake {
-    fn pause(&mut self, duration: Duration) {
-        assert!(!duration.is_zero());
-        self.pauses.push(duration);
-        self.now.set(self.now.get() + duration);
-    }
     fn app(&mut self, _: i64) -> Result<usize> {
         self.present
             .then_some(APP)
@@ -184,6 +214,9 @@ impl Backend for &mut Fake {
         }
         if self.malformed {
             return Err(Unread::Malformed.error());
+        }
+        if self.busied(*element, name) {
+            return Err(Unread::Malformed.asking(name, AXError::CannotComplete));
         }
         Ok(self
             .lists
@@ -385,15 +418,7 @@ fn a_busy_focus_write_gets_one_second_while_reads_keep_their_short_bound() {
         }
     });
     let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET - SETTLE_BUDGET;
-    prepare(
-        &mut fake,
-        &named(),
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    prepared(&mut fake, &named(), Need::Keys, deadline, false);
     assert_eq!(fake.writes.len(), 4);
     assert!(fake.bounds.iter().all(|timeout| *timeout <= WRITE_BUDGET));
 }
@@ -414,15 +439,13 @@ fn settling_keeps_its_check_short_even_with_a_longer_preparation_deadline() {
     let mut fake = Fake::new();
     let deadline = fake.now.get() + crate::native::focus::PREPARE_BUDGET;
     let now = fake.now.clone();
-    let target = prepare(
+    let target = prepared(
         &mut fake,
         &named(),
         Need::Keys,
         deadline - SETTLE_BUDGET,
-        &|| Ok(()),
-        &mut |_| true,
-    )
-    .unwrap();
+        true,
+    );
     let error = settle(target, &named(), deadline, &|| Ok(()), |_, until| {
         assert_eq!(until, now.get() + CHECK_BUDGET);
         now.set(until);
@@ -632,15 +655,7 @@ fn an_explicit_sheet_target_is_admitted_when_its_parent_also_lists_it() {
 fn an_already_ready_target_is_admitted_without_writes() {
     let mut fake = Fake::new();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    prepare(
-        &mut fake,
-        &named(),
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| true,
-    )
-    .unwrap();
+    prepared(&mut fake, &named(), Need::Keys, deadline, true);
     assert!(fake.writes.is_empty());
 }
 
@@ -755,15 +770,7 @@ fn secure_field_with_slow_window_counts(
     let mut observation = fake.clone();
     let listed = fake.windows.clone();
     let mut verifications = 0;
-    let target = prepare(
-        &mut fake,
-        &expect,
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &expect, Need::Keys, deadline, false);
     assert_eq!(target.reader.ask.focused_element.get(), FIELD);
     let writes = target.reader.ask.writes.clone();
     assert_eq!(writes.last(), Some(&(FIELD, Write::Flag("AXFocused"))));
@@ -1074,15 +1081,7 @@ fn a_window_refusal_survives_a_later_production_verification_that_exceeds_its_de
     other.bounds.x = 600.0;
     listed.push(other);
     let expect = named();
-    let target = prepare(
-        &mut fake,
-        &expect,
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &expect, Need::Keys, deadline, false);
     let mut reads = 0;
     let error = settle(target, &expect, deadline, &|| Ok(()), |_, until| {
         reads += 1;
@@ -1183,15 +1182,7 @@ fn a_successful_focus_setter_cannot_authorize_input_to_a_leading_sibling_or_inne
         let deadline = fake.now.get() + Duration::from_millis(450);
         let mut observation = fake.clone();
         let now = fake.now.clone();
-        let target = prepare(
-            &mut fake,
-            &expect,
-            Need::Keys,
-            deadline,
-            &|| Ok(()),
-            &mut |_| false,
-        )
-        .unwrap();
+        let target = prepared(&mut fake, &expect, Need::Keys, deadline, false);
         let mut reads = 0;
         let mut inputs = 0;
         let result = settle(target, &expect, deadline, &|| Ok(()), |_, until| {
@@ -1233,15 +1224,7 @@ fn an_already_ready_field_still_requires_the_selected_element_to_hold_focus() {
     let focused = fake.focused_element.clone();
     let expect = named().in_field("Email").unwrap();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &expect,
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| true,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &expect, Need::Keys, deadline, true);
     focused.set(3);
     let mut reads = 0;
     let error = settle(target, &expect, deadline, &|| Ok(()), |_, _| {
@@ -1262,15 +1245,7 @@ fn field_identity_is_read_again_after_the_second_destination_verification() {
     let focused = fake.focused_element.clone();
     let expect = named().in_field("_NS:9").unwrap();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &expect,
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| true,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &expect, Need::Keys, deadline, true);
     let mut reads = 0;
     let error = settle(target, &expect, deadline, &|| Ok(()), |_, _| {
         reads += 1;
@@ -1313,15 +1288,7 @@ fn a_find_field_focus_write_that_does_not_take_retains_the_field_refusal_at_the_
         let deadline = fake.now.get() + Duration::from_millis(450);
         let mut observation = fake.clone();
         let now = fake.now.clone();
-        let target = prepare(
-            &mut fake,
-            &expect,
-            Need::Keys,
-            deadline,
-            &|| Ok(()),
-            &mut |_| false,
-        )
-        .unwrap();
+        let target = prepared(&mut fake, &expect, Need::Keys, deadline, false);
         let mut reads = 0;
         let error = settle(target, &expect, deadline, &|| Ok(()), |_, until| {
             reads += 1;
@@ -1468,15 +1435,7 @@ fn a_target_can_be_prepared_when_no_app_or_window_has_focus() {
     let mut fake = Fake::new();
     fake.answers.remove(&(APP, "AXFocusedWindow"));
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &named(),
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &named(), Need::Keys, deadline, false);
     let role = settle(target, &named(), deadline, &|| Ok(()), |number, _| {
         assert_eq!(number, Some(42));
         Ok(Some("AXTextField"))
@@ -1495,15 +1454,7 @@ fn an_app_only_point_selects_its_own_frontmost_window_before_raising() {
     fake.windows.insert(0, covering);
     let expect = Expect::new(812).unwrap();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &expect,
-        Need::Point(30.0, 60.0),
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &expect, Need::Point(30.0, 60.0), deadline, false);
     assert_eq!(target.number, Some(42));
     settle(target, &expect, deadline, &|| Ok(()), |number, _| {
         assert_eq!(number, Some(42));
@@ -1915,15 +1866,7 @@ fn the_actual_focus_refusal_survives_the_final_pause() {
         let mut fake = Fake::new();
         let deadline = fake.now.get() + Duration::from_millis(450);
         let expect = named();
-        let target = prepare(
-            &mut fake,
-            &expect,
-            Need::Keys,
-            deadline,
-            &|| Ok(()),
-            &mut |_| false,
-        )
-        .unwrap();
+        let target = prepared(&mut fake, &expect, Need::Keys, deadline, false);
         let now = target.reader.ask.now.clone();
         let writes = target.reader.ask.writes.clone();
         let guard = || {
@@ -1981,15 +1924,7 @@ fn the_actual_focus_refusal_survives_the_final_pause() {
 fn a_window_refusal_is_preserved_when_the_next_admission_scan_runs_out_of_time() {
     let mut fake = Fake::new();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &named(),
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &named(), Need::Keys, deadline, false);
     let now = target.reader.ask.now.clone();
     target.reader.ask.delay = Duration::from_millis(2);
     let mut reads = 0;
@@ -2023,15 +1958,13 @@ fn a_menu_bar_point_activates_only_the_app() {
         },
     );
     let deadline = fake.now.get() + Duration::from_millis(450);
-    prepare(
+    prepared(
         &mut fake,
         &Expect::new(812).unwrap(),
         Need::Point(100.0, 10.0),
         deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+        false,
+    );
     assert_eq!(fake.writes, [(APP, Write::Flag("AXFrontmost"))]);
 }
 
@@ -2119,15 +2052,7 @@ fn an_epoch_or_permission_change_stops_before_the_next_write() {
 fn a_confirmed_write_needs_fresh_proof_and_does_not_expand_the_reply() {
     let mut fake = Fake::new();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &named(),
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &named(), Need::Keys, deadline, false);
     let error = settle(target, &named(), deadline, &|| Ok(()), |_, _| {
         Err(refused(Reason::Sheet))
     })
@@ -2166,15 +2091,7 @@ fn an_open_menu_uses_the_app_check_without_resolving_or_raising_its_window() {
 fn a_sheet_discovered_during_final_verification_still_refuses() {
     let mut fake = Fake::new();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &named(),
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &named(), Need::Keys, deadline, false);
     target
         .reader
         .ask
@@ -2270,15 +2187,7 @@ fn field_readiness_is_polled_after_a_confirmed_focus_request() {
         .insert((APP, "AXFocusedUIElement"), Answer::Element(FIELD));
     let expect = named().in_field("Email").unwrap();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &expect,
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| false,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &expect, Need::Keys, deadline, false);
     let mut observations = 0;
     let role = settle(target, &expect, deadline, &|| Ok(()), |_, _| {
         observations += 1;
@@ -2520,15 +2429,13 @@ fn a_child_only_sheet_is_rechecked_without_blocking_another_document() {
     fake.answers
         .insert((APP, "AXFocusedWindow"), Answer::Element(3));
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
+    let target = prepared(
         &mut fake,
         &expect,
         Need::Point(100.0, 150.0),
         deadline,
-        &|| Ok(()),
-        &mut |_| true,
-    )
-    .unwrap();
+        true,
+    );
     target.reader.ask.lists.remove(&(WINDOW, "AXChildren"));
     let mut verified = false;
     let error = settle(target, &expect, deadline, &|| Ok(()), |_, _| {
@@ -2580,15 +2487,13 @@ fn a_sheet_that_moves_or_closes_during_button_preparation_prevents_the_click() {
         listed_sheet(&mut fake);
         let expect = Expect::new(812).unwrap().in_window(43).unwrap();
         let deadline = fake.now.get() + Duration::from_millis(450);
-        let target = prepare(
+        let target = prepared(
             &mut fake,
             &expect,
             Need::Point(100.0, 150.0),
             deadline,
-            &|| Ok(()),
-            &mut |_| false,
-        )
-        .unwrap();
+            false,
+        );
         if closes {
             target.reader.ask.lists.remove(&(WINDOW, "AXSheets"));
         } else {
@@ -2669,15 +2574,7 @@ fn a_later_admission_scan_cannot_reuse_an_earlier_window_proof() {
         .insert((5, "AXTitle"), Answer::Text("Other document".into()));
     let observed = fake.observed_window.clone();
     let deadline = fake.now.get() + Duration::from_millis(450);
-    let target = prepare(
-        &mut fake,
-        &named(),
-        Need::Keys,
-        deadline,
-        &|| Ok(()),
-        &mut |_| true,
-    )
-    .unwrap();
+    let target = prepared(&mut fake, &named(), Need::Keys, deadline, true);
     target.reader.ask.on_ask = Some(|fake, element, name| {
         if element == APP && name == "AXFocusedWindow" && fake.observed_window.get() == 0 {
             fake.observed_window.set(5);
@@ -3193,4 +3090,84 @@ fn a_move_proven_in_preparation_is_proven_again_before_any_input() {
         "a check reusing the earlier proof lets it through"
     );
     assert_eq!(posted, 3, "and the drag would be sent outside the app");
+}
+
+fn app_only() -> Expect {
+    Expect::new(812).unwrap()
+}
+
+#[test]
+fn an_app_only_preparation_asks_again_a_focused_window_the_app_was_too_busy_to_give() {
+    let mut fake = Fake::new();
+    fake.busy.insert((APP, "AXFocusedWindow"), 2);
+    fake.run(&app_only()).unwrap();
+    assert_eq!(fake.busy[&(APP, "AXFocusedWindow")], 0);
+    assert_eq!(fake.pauses, vec![BUSY_PAUSE; 2]);
+}
+
+#[test]
+fn a_window_list_the_app_was_too_busy_to_give_is_listed_again_whole() {
+    let mut fake = Fake::new();
+    fake.busy.insert((APP, "AXWindows"), 1);
+    fake.run(&app_only()).unwrap();
+    assert_eq!(fake.busy[&(APP, "AXWindows")], 0);
+    assert_eq!(fake.pauses, vec![BUSY_PAUSE]);
+}
+
+/// What preparing and settling keys for the app alone, as `fake` answers,
+/// says of the field they go into, with every verification passing and
+/// naming none.
+fn app_only_keys(fake: &mut Fake) -> Option<&'static str> {
+    let expect = Expect::new(812).unwrap();
+    let deadline = fake.now.get() + Duration::from_millis(450);
+    let target = prepared(&mut *fake, &expect, Need::Keys, deadline, true);
+    settle(target, &expect, deadline, &|| Ok(()), |_, _| Ok(None)).unwrap()
+}
+
+#[test]
+fn keys_for_the_app_alone_say_the_field_admission_found_focused() {
+    let mut fake = Fake::new();
+    fake.answers
+        .insert((APP, "AXFocusedUIElement"), Answer::Element(FIELD));
+    assert_eq!(app_only_keys(&mut fake), Some("AXTextField"));
+
+    fake.answers.insert(
+        (FIELD, "AXSubrole"),
+        Answer::Text("AXSecureTextField".into()),
+    );
+    assert_eq!(
+        app_only_keys(&mut fake),
+        Some("AXSecureTextField"),
+        "a password field is said to be one"
+    );
+
+    fake.answers
+        .insert((FIELD, "AXRole"), Answer::Text("AXGroup".into()));
+    fake.answers.remove(&(FIELD, "AXSubrole"));
+    assert_eq!(
+        app_only_keys(&mut fake),
+        None,
+        "no field is said for another element"
+    );
+
+    fake.answers.remove(&(APP, "AXFocusedUIElement"));
+    assert_eq!(app_only_keys(&mut fake), None, "nor with nothing focused");
+}
+
+#[test]
+fn saying_the_focused_field_asks_the_app_nothing_more() {
+    let asks = |role: &str| {
+        let mut fake = Fake::new();
+        fake.answers
+            .insert((APP, "AXFocusedUIElement"), Answer::Element(FIELD));
+        fake.answers
+            .insert((FIELD, "AXRole"), Answer::Text(role.to_owned()));
+        app_only_keys(&mut fake);
+        fake.bounds.len()
+    };
+    assert_eq!(
+        asks("AXTextField"),
+        asks("AXGroup"),
+        "the same requests whether or not the element is a field"
+    );
 }

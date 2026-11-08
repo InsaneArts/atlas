@@ -48,7 +48,7 @@ async function ready() {
   }
 }
 function cli(args) {
-  return spawnSync(path.join(root, 'atlas'), ['--json', ...args], {
+  return spawnSync(path.join(root, 'target/debug/atlas'), ['--json', ...args], {
     cwd: root,
     encoding: 'utf8',
   });

@@ -216,6 +216,7 @@ async fn an_unrecorded_helper_never_uses_its_daemons_word_to_adopt_an_account() 
         input_socket: dir.path().join("no-input.sock"),
         identity_probe: dir.path().join("atlas"),
         output_dir: dir.path().join("runs"),
+        activity: Default::default(),
     })
     .unwrap();
     client.controller = Controller::at(7001, &dir.path().join("control"));
@@ -277,6 +278,7 @@ fn removable(dir: &Path, loaded: bool) -> Found {
         input_socket: dir.join("no-input.sock"),
         identity_probe: dir.join("atlas"),
         output_dir: output,
+        activity: Default::default(),
     })
     .unwrap();
     let found = Found {

@@ -5,7 +5,6 @@ extension ViewerPane {
     case .screen: .screen
     case .activity: .activity
     case .apps: .apps
-    case .screenshots: .screenshots
     }
   }
 }

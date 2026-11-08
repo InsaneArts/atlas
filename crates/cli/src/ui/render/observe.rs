@@ -244,6 +244,17 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
         }
     }
 
+    // Apple jobs seen quitting at once and restarting in the helper: only
+    // reported, as Atlas cannot stop them.
+    for job in items(&value["restartingJobs"]) {
+        lines.push(format!(
+            "{}  {} restarted {} times in the last hour",
+            style::dim(format!("{:<13}", "Restarting")),
+            text::printable(job["label"].as_str().unwrap_or("A job")),
+            job["runs"].as_u64().unwrap_or(0)
+        ));
+    }
+
     lines.push(style::dim("--json --verbose has everything."));
 
     lines
@@ -314,6 +325,14 @@ pub(super) fn config(value: &Value) -> String {
         ("Shared command", path(&config["identity_probe"])),
         ("Helper socket", path(&config["socket_path"])),
         ("Input socket", path(&config["input_socket"])),
+        (
+            "Pictures",
+            if config["activity"]["pictures_before_actions"] == false {
+                "off".into()
+            } else {
+                "before each action".into()
+            },
+        ),
     ];
 
     labelled(&rows, 14).join("\n")

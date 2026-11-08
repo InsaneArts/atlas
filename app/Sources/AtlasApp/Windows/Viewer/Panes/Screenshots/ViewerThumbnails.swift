@@ -8,12 +8,15 @@ final class ViewerThumbnails {
   /// The panes that receive completed work; never keeps the window alive.
   private weak var model: ViewerPanesModel?
   private let service: any ViewerService
-  /// Two reads fill the grid without crowding out status and picture requests.
+  /// Two reads fill the outline's pictures without crowding out status and picture requests.
   static let atOnce = 2
+  /// 352: the most pixels a thumbnail keeps along its longer side, the largest frame the outline draws a picture in,
+  /// 176 points wide, at a Retina display's two pixels a point.
+  static let longest = 352
   /// Pending and active thumbnail reads, with their cancellation generation.
   private(set) var work = ThumbnailWork()
 
-  /// Creates the shared thumbnail queue for Activity and Screenshots.
+  /// Creates the shared thumbnail queue for Activity.
   ///
   /// - Parameters:
   ///   - model: The panes whose cache receives each thumbnail.
@@ -26,11 +29,13 @@ final class ViewerThumbnails {
   /// Follows pane visibility without changing the cache or losing pending requests.
   func follow(shown: Bool, place: ViewerPlace) {
     guard let model else { return }
-    if !shown || (place != .activity && place != .screenshots) {
+    if !shown || place != .activity {
       resetThumbnails()
     } else {
+      // A picture of an agent's action is never listed among the screenshots, and is read all the same.
       work.wanted = work.wanted.filter { name in
-        model.panes.shots.shots?.contains(where: { $0.name == name }) == true && model.panes.thumbnails[name] == nil
+        (ActionPicture.isName(name) || model.panes.shots.shots?.contains(where: { $0.name == name }) == true)
+          && model.panes.thumbnails[name] == nil
       }
       readThumbnails()
     }
@@ -70,7 +75,7 @@ final class ViewerThumbnails {
         var image: CGImage?
         // A thumbnail that cannot be read lands as none, its tile left as it was.
         if let jpeg = try? await service.screenshot(name: name, full: false) {
-          image = await ImageDecoding.image(jpeg)
+          image = await ImageDecoding.thumbnail(jpeg, longest: Self.longest)
         }
         self?.land(image, for: name, number: number)
       }

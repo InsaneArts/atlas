@@ -1,5 +1,4 @@
 use super::*;
-use serde_json::{Value, json};
 
 fn failed(id: u64, stage: Stage, reason: Reason) -> Record {
     let mut record = Record::new(id);
@@ -40,25 +39,6 @@ fn an_untaken_timing_reads_as_none_rather_than_zero() {
     assert_eq!(record.timing(Timing::BodyRead), None);
     record.time(Timing::BodyRead, Duration::ZERO);
     assert_eq!(record.timing(Timing::BodyRead), Some(Duration::ZERO));
-}
-
-#[test]
-fn the_first_failure_of_an_outage_survives_later_retries_and_recovery() {
-    let mut ring = Ring::default();
-    ring.push(Record::new(1));
-    assert!(ring.first_outage().is_none());
-    ring.push(failed(2, Stage::AfterProof, Reason::SourceStale));
-    ring.push(failed(3, Stage::Peer, Reason::BackendInUse));
-    assert_eq!(ring.first_outage().unwrap().acquisition_id, 2);
-    ring.push(Record::new(4));
-    assert_eq!(
-        ring.first_outage().unwrap().acquisition_id,
-        2,
-        "recovery keeps the cause on show"
-    );
-    ring.push(failed(5, Stage::BodyRead, Reason::TransportEnded));
-    assert_eq!(ring.first_outage().unwrap().acquisition_id, 5);
-    assert_eq!(ring.last().unwrap().acquisition_id, 5);
 }
 
 #[test]
@@ -124,8 +104,6 @@ fn errors_name_their_reason_by_code_alone() {
     assert_eq!(Reason::of(Code::Capture), Reason::OtherKnownError);
     assert_eq!(Backend::named("cg-fallback"), Backend::CgFallback);
     assert_eq!(Backend::named("anything"), Backend::None);
-    let words: Value = serde_json::to_value([Outcome::CleanupPending]).unwrap();
-    assert_eq!(words, json!(["cleanup-pending"]));
 }
 
 #[test]

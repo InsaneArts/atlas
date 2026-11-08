@@ -21,7 +21,7 @@ atlas-control.workspace = true
 atlas-core.workspace = true
 atlas-daemon.workspace = true
 atlas-native.workspace = true
-axum = { workspace = true, features = ["http1", "json", "tokio"] }
+axum.workspace = true
 base64.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 console.workspace = true
@@ -43,6 +43,7 @@ unicode-segmentation.workspace = true
 unicode-width.workspace = true
 
 [dev-dependencies]
+axum = { workspace = true, features = ["http1", "json", "tokio"] }
 atlas-agents = { workspace = true, features = ["test-support"] }
 atlas-client = { workspace = true, features = ["test-support"] }
 atlas-control = { workspace = true, features = ["test-support"] }

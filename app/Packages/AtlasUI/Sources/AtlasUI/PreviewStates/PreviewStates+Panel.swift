@@ -3,7 +3,7 @@
 
   extension PreviewStates {
     /// Every panel sample, in the order the renders list them, then a stop the service refused, which no card draws,
-    /// then the host sessions' samples.
+    /// then the host sessions' samples and the rest, the note on a macOS service slowing the Mac last.
     @MainActor public static var panel: [PreviewState<PanelState>] {
       [
         PreviewState(name: "Idle", value: panelIdle),
@@ -24,6 +24,7 @@
         PreviewState(name: "Stopped, jobs left", value: panelStoppedJobsLeft),
         PreviewState(name: "You have control, a command runs", value: panelControlCommandRuns),
         PreviewState(name: "Needs you, a command runs", value: panelNeedsYouCommandRuns),
+        PreviewState(name: "Service note", value: panelServiceNote),
       ]
     }
 
@@ -63,6 +64,15 @@
     /// Nothing acts in the helper; its screen shows, with what an agent did last.
     @MainActor static let panelIdle = PanelState(
       status: StatusSummary(label: "Idle", tone: .quiet, mark: .dot, line: "Last: turned Show Center off · 2 min ago"),
+      picture: screen(.live),
+      recent: earlier,
+      controls: PanelControls(main: openAtlas)
+    )
+
+    /// Nothing happens in the helper, and the note says a macOS service there slowly slows the Mac.
+    @MainActor static let panelServiceNote = PanelState(
+      status: panelIdle.status,
+      showsServiceNote: true,
       picture: screen(.live),
       recent: earlier,
       controls: PanelControls(main: openAtlas)

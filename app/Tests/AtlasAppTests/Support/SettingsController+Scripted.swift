@@ -34,12 +34,7 @@ extension SettingsController {
       dependencies: SettingsDependencies(
         commands: commands,
         actions: actions
-          ?? HelperActions(
-            console: SessionConsole(read: { true }),
-            commands: commands,
-            service: service,
-            barrier: ControlBarrier(service: service, clock: ManualClock())
-          ),
+          ?? HelperActions.scripted(service, commands: commands),
         installs: installs ?? AgentInstalls(commands: commands),
         preferences: SettingsPreferences(
           loadTab: { nil },

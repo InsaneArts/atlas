@@ -32,7 +32,7 @@ struct ViewerDependencies {
   /// The date and time now, which the panes tell times and days by.
   var wallClock: @MainActor () -> Date = { Date() }
   /// Where a copied screenshot goes, and how its file is shown; by default nowhere.
-  var shotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
+  var shotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true })
   /// Opens Settings on Helper, which says what the helper needs.
   var openSettings: @MainActor () -> Void = {}
   /// Where apps' icons are found and kept; by default none is, and every app draws its tile.

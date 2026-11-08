@@ -391,7 +391,26 @@ fn checked(
     deadline: Instant,
 ) -> Result<Option<&'static str>> {
     let deadline = deadline.min(Instant::now() + CHECK_BUDGET);
-    require(expect, need, display, &mut Live::until(deadline), deadline)
+    read_again_if_replaced(deadline, || {
+        require(expect, need, display, &mut Live::until(deadline), deadline)
+    })
+}
+
+/// `read`, and once more while time is left before `deadline` when an
+/// element it held was replaced while it read, as TextEdit replaces its text
+/// view's as it lays out a long text again. That read tells nothing of where
+/// focus is; the next one, from the app down, decides.
+fn read_again_if_replaced<T>(deadline: Instant, mut read: impl FnMut() -> Result<T>) -> Result<T> {
+    match read() {
+        Err(error) if replaced(&error) && Instant::now() < deadline => read(),
+        result => result,
+    }
+}
+
+/// Whether the request behind `error` named an element the app no longer
+/// has.
+fn replaced(error: &Error) -> bool {
+    request(error).1 == Some(AXError::InvalidUIElement.0)
 }
 
 /// Prepare once, then poll with fresh observations. Resolution and writes
@@ -567,7 +586,7 @@ fn request(error: &Error) -> (Option<&'static str>, Option<i32>) {
 
 /// Whether the request behind `error` could not complete, rather than
 /// being refused or answering wrongly.
-fn incomplete(error: &Error) -> bool {
+pub(in crate::native) fn incomplete(error: &Error) -> bool {
     request(error).1 == Some(AXError::CannotComplete.0)
 }
 
@@ -758,12 +777,24 @@ fn inside(expect: &Expect, look: &mut impl Look) -> Result<Option<&'static str>>
     Err(refused_with(reason, fact, found))
 }
 
-/// The role of the field with keyboard focus, as [`FIELDS`] spells it,
-/// when it is one of them.
+/// The role of the field with keyboard focus, as [`field_of`] says it.
 fn field_role(keyboard: &Keyboard) -> Option<&'static str> {
-    let role = keyboard.focused.as_ref()?.element.role.as_deref()?;
-    FIELDS.into_iter().find(|field| *field == role)
+    let element = &keyboard.focused.as_ref()?.element;
+    field_of(element.role.as_deref(), element.subrole.as_deref())
 }
+
+/// The field an element of `role` and `subrole` is, as [`FIELDS`] spells
+/// it, when it is one of them: a password field whatever role it gives
+/// beside that subrole.
+pub(super) fn field_of(role: Option<&str>, subrole: Option<&str>) -> Option<&'static str> {
+    if subrole == Some(SECURE) {
+        return Some(SECURE);
+    }
+    FIELDS.into_iter().find(|field| role == Some(*field))
+}
+
+/// A password field's role, or subrole beside a text field's role.
+pub(super) const SECURE: &str = "AXSecureTextField";
 
 /// What one part of a check found.
 #[derive(Debug, PartialEq)]

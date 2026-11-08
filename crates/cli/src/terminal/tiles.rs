@@ -199,7 +199,6 @@ impl Tiles {
                     }
                 }
             }
-            self.canvas.invalidate();
         }
         let mut dirty = Vec::new();
         let mut changed_pixels = 0_u64;
@@ -225,12 +224,8 @@ impl Tiles {
             || changed_pixels > u64::from(width) * u64::from(height) / 2;
         let sent = super::output::frame(out, |wire| {
             if full {
-                // Exact baseline comparisons already decided that this upload is
-                // necessary. Bypass Painter's digest cache instead of hashing the
-                // whole picture again or relying on a hash for pixel equality.
-                self.canvas.invalidate();
                 self.canvas
-                    .draw_rgb(wire, source.pixels, source.size, layout, [0; 32])?;
+                    .draw_rgb(wire, source.pixels, source.size, layout)?;
             } else {
                 for tile in &dirty {
                     self.pixels.clear();
@@ -259,7 +254,6 @@ impl Tiles {
             Ok(sent) => sent,
             Err(error) => {
                 self.geometry = None;
-                self.canvas.invalidate();
                 return Err(error);
             }
         };

@@ -70,6 +70,16 @@ public enum Action: Sendable, Equatable {
   case homeOffered
   /// Let agents copy sign-ins and secrets into the helper, or stop them; the person confirmed turning it on.
   case copySignIns(Bool)
+  /// Read Atlas's settings with how many pictures of agent actions this Mac keeps, and their size.
+  case picturesSummary
+  /// Keep pictures of the helper's screen around each agent action, or stop keeping them.
+  case keepPictures(Bool)
+  /// Keep pictures of agent actions this many days.
+  case keepPicturesFor(days: Int)
+  /// Keep at most this many characters of what an agent typed; 0 keeps it all.
+  case limitTypedText(Int)
+  /// Delete every picture of agent actions on this Mac.
+  case deletePictures
 
   /// Recover as the viewer service's own Recover does: restart the helper while an action's outcome is unknown or
   /// under way, else start its input, which never needs the full restart.
@@ -128,6 +138,15 @@ public enum Action: Sendable, Equatable {
     case .openHome: ["onboarding", "files", "open"]
     case .homeOffered: ["onboarding", "files", "offered"]
     case .copySignIns(let allow): ["onboarding", "sign-ins", allow ? "allow" : "refuse"]
+    case .picturesSummary: ["config", "--pictures-summary"]
+    // The person turned the switch in Settings.
+    case .keepPictures(let on): ["config", "--pictures-before-actions", on ? "on" : "off"]
+    // The person chose how long in Settings.
+    case .keepPicturesFor(let days): ["config", "--keep-pictures-days", "\(days)"]
+    // The person chose a limit in Settings.
+    case .limitTypedText(let characters): ["config", "--typed-text-limit", "\(characters)"]
+    // The person confirmed in Settings.
+    case .deletePictures: ["config", "--delete-pictures"]
     }
   }
 }

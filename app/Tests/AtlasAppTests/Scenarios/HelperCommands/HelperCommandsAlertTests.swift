@@ -54,19 +54,14 @@ struct HelperCommandsAlertTests {
     viewer.send(.askSwitch)
     viewer.send(.alertConfirm)
     try await settle("the switch never started") { viewer.session.alertRunning }
-    viewer.ask(.logOut)
+    viewer.ask(.helper(.logOut))
     #expect(viewer.session.notice == HelperWords.waitForAction)
     gate.open()
     try await settle("the switch never ended") { !viewer.session.alertRunning }
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
     let held = ReleaseSignal()
     commands.whileRunning { _ in await held.wait() }
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: ManualClock())
-    )
+    let actions = HelperActions.scripted(service, commands: commands)
     let clock = ManualClock()
     let window = AlertController(alert: .recover, actions: actions, links: AlertLinks(clock: clock))
     window.send(.confirm)

@@ -30,7 +30,7 @@ struct SettingsPane: View {
     switch tab {
     case .general:
       FormColumn(insets: SettingsLayout.swapInsets, fits: fits(.general)) {
-        GeneralPane(state: Binding(get: { state.general }, set: { edit($0) }))
+        GeneralPane(state: Binding(get: { state.general }, set: { edit($0) }), send: send)
       }
     case .helper:
       FormColumn(insets: SettingsLayout.swapInsets, fits: fits(.helper)) {

@@ -9,8 +9,10 @@ const GROUP: usize = 3;
 const FIELD: usize = 4;
 
 /// A test app: answers by element and attribute, each taking its time
-/// on a clock that moves only as it answers. It keeps every timeout it
-/// was asked to set, and the attributes asked for.
+/// on a clock that moves only as it answers or pauses. It keeps every
+/// timeout it was asked to set, the attributes asked for and the pauses.
+/// An attribute it is busy for answers that it could not complete, as
+/// many times as it is busy.
 struct Fake {
     started: Instant,
     elapsed: Duration,
@@ -19,6 +21,10 @@ struct Fake {
     asked: Vec<(usize, &'static str)>,
     bounded: bool,
     owners: HashMap<usize, i64>,
+    busy: HashMap<(usize, &'static str), usize>,
+    pauses: Vec<Duration>,
+    /// When, on its clock, each timeout was set.
+    bounded_at: Vec<Duration>,
 }
 
 impl Fake {
@@ -32,6 +38,9 @@ impl Fake {
             asked: Vec::new(),
             bounded: true,
             owners: HashMap::new(),
+            busy: HashMap::new(),
+            pauses: Vec::new(),
+            bounded_at: Vec::new(),
         };
         let text = |text: &str| Answer::Text(text.to_owned());
         fake.set(APP, "AXFocusedWindow", Answer::Element(WINDOW));
@@ -71,13 +80,26 @@ impl Ask for &mut Fake {
         self.started + self.elapsed
     }
 
+    fn pause(&mut self, duration: Duration) {
+        self.pauses.push(duration);
+        self.elapsed += duration;
+    }
+
     fn bound(&mut self, _: &usize, timeout: Duration) -> bool {
         self.bounds.push(timeout);
+        self.bounded_at.push(self.elapsed);
         self.bounded
     }
 
     fn ask(&mut self, element: &usize, attribute: &'static str) -> Answer<usize> {
         self.asked.push((*element, attribute));
+        if let Some(busy) = self.busy.get_mut(&(*element, attribute))
+            && *busy > 0
+        {
+            *busy -= 1;
+            self.elapsed += Duration::from_millis(1);
+            return Answer::Failed(AXError::CannotComplete);
+        }
         let (answer, delay) = self
             .answers
             .get(&(*element, attribute))
@@ -577,4 +599,81 @@ fn a_focused_element_that_no_longer_exists_proves_no_focus_alone() {
 
     fake.set(APP, "AXFocusedWindow", Answer::Element(WINDOW));
     assert!(proves_focus_for(&mut fake, false).unwrap());
+}
+
+#[test]
+fn an_attribute_the_app_was_too_busy_to_give_is_asked_again_and_the_next_answer_decides() {
+    let mut fake = Fake::app();
+    fake.busy.insert((FIELD, "AXSubrole"), 2);
+    read_with(&mut fake, budget()).unwrap();
+    assert_eq!(
+        fake.asked
+            .iter()
+            .filter(|asked| **asked == (FIELD, "AXSubrole"))
+            .count(),
+        3
+    );
+    assert_eq!(fake.pauses, vec![BUSY_PAUSE; 2]);
+}
+
+#[test]
+fn an_app_that_stays_too_busy_refuses_as_slow_naming_the_request_once_no_time_is_left() {
+    let mut fake = Fake::app();
+    fake.busy.insert((FIELD, "AXSubrole"), usize::MAX);
+    let error = read_with(&mut fake, budget()).unwrap_err();
+    assert_eq!(Unread::of(&error), Some(Unread::Slow));
+    assert!(crate::native::focus::incomplete(&error));
+    assert!(fake.elapsed <= budget());
+    assert!(fake.pauses.len() > 1, "asked again while time was left");
+    let asks = fake.asked.len();
+    assert_eq!(
+        fake.bounds.len(),
+        asks,
+        "every request, each ask again too, is bounded afresh"
+    );
+    for (bound, at) in fake.bounds.iter().zip(&fake.bounded_at) {
+        assert_eq!(
+            *bound,
+            (budget() - *at).min(REQUEST),
+            "by what is left of the read"
+        );
+    }
+}
+
+#[test]
+fn a_request_that_could_not_complete_past_the_deadline_keeps_its_call_and_status() {
+    let mut fake = Fake::app();
+    fake.set(FIELD, "AXSubrole", Answer::Failed(AXError::CannotComplete));
+    fake.slow(FIELD, "AXSubrole", budget());
+    let error = read_with(&mut fake, budget()).unwrap_err();
+    assert_eq!(Unread::of(&error), Some(Unread::Slow));
+    let asked = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<Asked>())
+        .expect("the refusal keeps the request that failed");
+    assert_eq!(
+        (asked.call, asked.status),
+        ("AXSubrole", AXError::CannotComplete)
+    );
+    assert!(fake.pauses.is_empty());
+}
+
+#[test]
+fn only_a_request_the_app_could_not_complete_is_asked_again() {
+    for status in [
+        AXError::Failure,
+        AXError::InvalidUIElement,
+        AXError::IllegalArgument,
+    ] {
+        let mut fake = Fake::app();
+        fake.set(FIELD, "AXSubrole", Answer::Failed(status));
+        assert!(read_with(&mut fake, budget()).is_err());
+        assert_eq!(
+            fake.asked
+                .iter()
+                .filter(|asked| **asked == (FIELD, "AXSubrole"))
+                .count(),
+            1
+        );
+        assert!(fake.pauses.is_empty());
+    }
 }

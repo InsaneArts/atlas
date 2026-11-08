@@ -4,7 +4,9 @@ use super::capture::{Capture, Screen, screenshot};
 use crate::daemon::{
     consent, facts,
     job::{self, Jobs},
-    preferences, proof, read, run,
+    preferences, proof, read,
+    recorder::{self, Recorder},
+    run,
     sound::{Set, Sound},
 };
 use atlas_core::{
@@ -56,6 +58,10 @@ const SHUTDOWN: Duration = Duration::from_secs(2);
 
 /// How often a running command checks that the helper is still off screen.
 const CONSOLE_CHECK: Duration = Duration::from_secs(1);
+
+/// The file beside the socket that records the screen recorder's one
+/// restart after an update.
+const RESTARTED_AFTER_UPDATE: &str = "recorder-restarted-after-update";
 
 type Connections = HashMap<Id, watch::Receiver<ConnectionPhase>>;
 
@@ -186,6 +192,9 @@ pub struct Daemon {
     proof_worker: Mutex<Option<proof::Worker>>,
     /// Whether the helper's apps can be heard on the person's speakers.
     sound: Sound,
+    /// The screen recorder, as each hello reports it; restarted only in the
+    /// helper.
+    recorder: Arc<Recorder>,
 }
 
 impl Daemon {
@@ -215,6 +224,7 @@ impl Daemon {
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
             sound: Sound::detached(),
+            recorder: Arc::new(Recorder::new(recorder::System::real(), None)),
         }
     }
 
@@ -243,6 +253,20 @@ impl Daemon {
         // The helper's apps go silent before any agent acts, as the person
         // last chose.
         daemon.sound = Sound::start(uid, std::env::var_os("HOME").map(PathBuf::from));
+        // Only a daemon shown to run as the helper restarts its screen
+        // recorder; one built any other way only reads it. A restart never
+        // overlaps the input service's input, told beside its socket.
+        let mut recorder = Recorder::new(recorder::System::real(), Some(uid));
+        if let Some(home) = std::env::var_os("HOME") {
+            let input = crate::helper_setup::Layout::new(uid, PathBuf::from(home)).input_socket();
+            recorder = recorder.beside_input(atlas_native::native::activity::beside(&input));
+        }
+        // A recorder grown under an earlier version is restarted once, early;
+        // that it was is kept beside the socket, so it never repeats.
+        if let Some(folder) = socket.parent() {
+            recorder = recorder.once_after_update(folder.join(RESTARTED_AFTER_UPDATE));
+        }
+        daemon.recorder = Arc::new(recorder);
         // Jobs are kept beside the socket; the jobs a daemon before this one
         // started are found again by their records.
         if let (Some(folder), Ok(launcher)) = (socket.parent(), std::env::current_exe()) {
@@ -263,7 +287,8 @@ impl Daemon {
         }
         match self.jobs.as_deref().map(Jobs::census).transpose() {
             Ok(census) => {
-                let mut hello = facts::hello(&self.manager, census);
+                let mut hello =
+                    facts::hello(&self.manager, census, self.recorder.report(&self.source));
                 hello["sound"] = self.sound.report().json();
                 hello
             }
@@ -377,6 +402,7 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
     let recording = tokio::spawn(consent::restart_for_recording(move || {
         watcher.restarting.notify_one();
     }));
+    let releasing = tokio::spawn(stream::release_kept_pictures(daemon.clone()));
     let mut serving = Serving {
         supervision: daemon.supervision(uid),
         daemon: daemon.clone(),
@@ -400,6 +426,7 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
 
     asking.abort();
     recording.abort();
+    releasing.abort();
     if let Some(supervision) = serving.supervision {
         let supervised = drain_supervision(supervision, deadline).await;
         if supervised.is_err() {
@@ -689,6 +716,9 @@ pub(crate) async fn handle(
             pin,
             backend,
         } => return stream::serve(daemon, reader, writer, max_dimension, pin, backend).await,
+        Request::Frame { max_dimension, pin } => {
+            return stream::one(daemon, reader, writer, max_dimension, pin).await;
+        }
         Request::SessionProof { challenge } => proof::query(&daemon.proof_worker, &challenge)
             .await
             .unwrap_or_else(refused),
@@ -813,7 +843,7 @@ async fn admit(
         .await
         .map_err(|error| (refused(error), false))?;
     let request = protocol::parse(&line).map_err(|refusal| (refusal, false))?;
-    let framed = matches!(request, Request::Stream { .. });
+    let framed = matches!(request, Request::Stream { .. } | Request::Frame { .. });
     let policy = request.policy();
     if !controller && !policy.open_to_helper() {
         return Err((

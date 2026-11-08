@@ -13,14 +13,14 @@ extension ViewerWords {
   static let copyPicture = "Copy Picture"
   /// Save Picture….
   static let savePicture = "Save Picture…"
-  /// Save Screenshot…, in the Screenshots list with one shown large or selected.
+  /// Save Screenshot…, while the picture sheet shows.
   static let saveScreenshot = "Save Screenshot…"
   /// Once the picture is on the clipboard.
   static let pictureCopied = "Picture copied."
   /// A picture that could not be written.
   static let pictureNotSaved = "Atlas couldn't save the picture."
   /// A screenshot that could not be written.
-  static let shotNotSaved = "Atlas couldn't save the screenshot."
+  static let shotNotSaved = "Atlas couldn't save the picture."
 
   /// A rate's item.
   ///

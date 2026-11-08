@@ -31,6 +31,8 @@ public enum SettingsEvent: Equatable, Sendable {
   case disconnect(String)
   /// Asks to forget the project in this folder.
   case askForget(String)
+  /// Asks to delete every picture of agent actions on this Mac.
+  case askDeletePictures
   /// Checks whether a newer Atlas is published.
   case checkForUpdates
   /// Asks to install the newer Atlas found.

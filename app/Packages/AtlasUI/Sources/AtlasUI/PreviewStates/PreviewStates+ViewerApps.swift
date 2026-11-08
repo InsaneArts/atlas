@@ -177,7 +177,7 @@
     /// Claude Code chosen on Apps: only the apps it opened, with no heading, each saying when it opened them.
     @MainActor public static let viewerAppsOneSession: ViewerState = {
       var state = viewerActivityOneSession
-      state.sidebar.library = viewerLibrary(.apps, counts: [.activity: 6, .screenshots: 0, .apps: 2])
+      state.sidebar.library = viewerLibrary(.apps, counts: [.activity: 6, .apps: 2])
       state.pane = .apps(
         ViewerAppsState(
           title: "2 apps open",
@@ -194,7 +194,7 @@
     /// out, and the pane says so.
     @MainActor public static let viewerAppsOneSessionEmpty: ViewerState = {
       var state = viewerAppsOneSession
-      state.sidebar.library = viewerLibrary(.apps, counts: [.activity: 6, .screenshots: 0, .apps: 0])
+      state.sidebar.library = viewerLibrary(.apps, counts: [.activity: 6, .apps: 0])
       state.pane = .apps(
         ViewerAppsState(
           title: "",

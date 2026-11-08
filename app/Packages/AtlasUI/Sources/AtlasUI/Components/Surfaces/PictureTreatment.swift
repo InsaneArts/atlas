@@ -1,25 +1,7 @@
-import SwiftUI
-
 /// How a picture of the helper's screen is drawn for its look: greyed and darkened while dimmed, a little
-/// less while paused, as it is otherwise. The fitted frame, the screen at actual size and the live picture's
-/// layer share its two numbers, so none drops a treatment.
-struct PictureTreatment: ViewModifier {
-  /// How the picture is drawn.
-  let look: PictureLook
-
-  /// Draws the picture in its look.
-  ///
-  /// - Parameter content: The picture.
-  /// - Returns: The picture, treated.
-  func body(content: Content) -> some View {
-    content
-      .saturation(Self.saturation(for: look))
-      .overlay(
-        Color.letterbox
-          .opacity(Self.shade(for: look))
-      )
-  }
-
+/// less while paused, as it is otherwise. Every picture of the screen, the panel's, the mini screen's and the
+/// live picture's layer among them, shares its two numbers, so none drops a treatment.
+enum PictureTreatment {
   /// How much colour a picture keeps in `look`.
   ///
   /// - Parameter look: How the picture is drawn.
@@ -44,9 +26,3 @@ struct PictureTreatment: ViewModifier {
     }
   }
 }
-
-#if DEBUG
-  #Preview("Looks") {
-    ModifierSamples(.pictureTreatment)
-  }
-#endif

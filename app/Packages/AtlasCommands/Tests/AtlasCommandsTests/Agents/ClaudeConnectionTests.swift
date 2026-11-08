@@ -14,7 +14,7 @@ struct ClaudeConnectionTests {
         from: Data("{\"agents\":[{\"agent\":\"claude-app\",\"ok\":true\(field)}]}".utf8)
       )
     #expect(change.agents.first?.restart == (restart == "missing" ? nil : restart == "true"))
-    #expect(change.requiresRestart == (restart == "true"))
+    #expect(change.restarting == (restart == "true" ? [.claude] : []))
   }
 
   @Test("an unsuccessful agent change does not request a restart")
@@ -24,7 +24,7 @@ struct ClaudeConnectionTests {
         AgentsChange.self,
         from: Data(#"{"agents":[{"agent":"claude-app","ok":false,"restart":true}]}"#.utf8)
       )
-    #expect(!change.requiresRestart)
+    #expect(change.restarting.isEmpty)
   }
 
   @Test("Claude is connected only when every installed part is connected", arguments: [false, true])

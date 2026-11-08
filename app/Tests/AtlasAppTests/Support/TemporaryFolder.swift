@@ -8,7 +8,7 @@ struct TemporaryFolder {
   /// Makes a new, empty folder.
   init() throws {
     url = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
-      .appendingPathComponent("atlas-icons-\(UUID().uuidString)", isDirectory: true)
+      .appendingPathComponent("atlas-test-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default
       .createDirectory(at: url, withIntermediateDirectories: true)
   }

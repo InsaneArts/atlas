@@ -12,21 +12,11 @@ extension SettingsPresenter {
     let session = snapshot.session
     guard let kind = session.alert else { return nil }
     let overview = snapshot.facts.status.overview
-    let busy = session.alertRunning || (kind == .recover && snapshot.facts.running.contains(.recovery))
+    let busy = session.alertRunning || (kind == .helper(.recover) && snapshot.facts.running.contains(.recovery))
     let progress = AlertProgress.of(running: busy, failure: session.alertRefusal, done: session.alertDone)
     return switch kind {
-    case .recover:
-      HelperAlert.recover
-        .state(overview: overview, progress: progress, askedByPerson: true)
-    case .switchToHelper:
-      HelperAlert.switchToHelper
-        .state(overview: overview, progress: progress, askedByPerson: true, onConsole: snapshot.facts.isOnConsole)
-    case .logOut:
-      HelperAlert.logOut
-        .state(overview: overview, progress: progress, askedByPerson: true)
-    case .logOutAnyway:
-      HelperAlert.logOutAnyway
-        .state(overview: overview, progress: progress, askedByPerson: true)
+    case .helper(let alert):
+      alert.state(overview: overview, progress: progress, askedByPerson: true, onConsole: snapshot.facts.isOnConsole)
     case .forget(let path):
       HelperAlert.destructive(
         SettingsWords.forgetTitle(projectName(path)),
@@ -60,6 +50,17 @@ extension SettingsPresenter {
           running: SettingsWords.changingFiles,
           done: SettingsWords.allow,
           doneMessage: SettingsWords.allowSignInsMessage
+        )
+      )
+    case .deletePictures:
+      HelperAlert.destructive(
+        SettingsWords.deletePicturesTitle,
+        SettingsWords.deletePicturesMessage(snapshot.pictures.stored?.count),
+        SettingsWords.deleteAll,
+        phase: progress.phase(
+          running: SettingsWords.deleting,
+          done: SettingsWords.deleteAll,
+          doneMessage: SettingsWords.deletePicturesMessage(nil)
         )
       )
     case .install(let version):

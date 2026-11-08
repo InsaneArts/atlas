@@ -19,7 +19,7 @@ struct ViewerMotionPoseTests {
         let ids = apps.cards
           .map(\.id)
         #expect(Set(ids).count == ids.count, "\(name) draws a card twice")
-      case .screen, .screenshots:
+      case .screen:
         break
       }
     }
@@ -27,13 +27,13 @@ struct ViewerMotionPoseTests {
 
   private static func rows(of day: ViewerActivityDay) -> [String] {
     let title: [String] = day.title.isEmpty ? [] : ["day.\(day.id)"]
-    return title + day.moments.flatMap(rows(in:))
+    let more: [String] = day.more.map { ["more.\($0.day)"] } ?? []
+    return title + day.sessions.flatMap(rows(in:)) + more
   }
 
-  private static func rows(in moment: ViewerActivityMoment) -> [String] {
-    let steps: [String] = moment.steps.map { "step.\($0.id)" }
-    let more: [String] = moment.more.map { ["more.\($0.moment)"] } ?? []
-    return ["moment.\(moment.id)"] + steps + more
+  private static func rows(in session: ViewerOutlineSession) -> [String] {
+    let runs = session.runs.flatMap { run in ["run.\(run.id)"] + run.steps.map { "step.\($0.id)" } }
+    return ["session.\(session.id)"] + runs
   }
 
   @MainActor

@@ -71,13 +71,15 @@ final class ViewerFramePump {
           client = opened
           try await opened.open(longest: Self.longest)
           var late = 0
+          var kept: DecodedPixels?
           while !Task.isCancelled {
             if paused() {
               try await clock.sleep(for: .milliseconds(250))
               continue
             }
             let picture = try await opened.next(longest: Self.longest)
-            guard let decoded = await Self.decode(picture) else { throw ServiceError.unknownScreenSize }
+            guard let decoded = await Self.decode(picture, reusing: kept) else { throw ServiceError.unknownScreenSize }
+            kept = DecodedPixels(rgb: picture.rgb, decoded: decoded)
             // Committed before it is shown: input aimed at a picture on screen always finds it. One set aside as
             // too old is skipped for the next.
             guard try await opened.commit(picture) else {
@@ -116,18 +118,47 @@ final class ViewerFramePump {
 
   /// The picture `picture`'s pixels make, off the main actor; nil when they are not one.
   ///
-  /// - Parameter picture: The picture.
+  /// - Parameters:
+  ///   - picture: The picture.
+  ///   - kept: The last picture decoded, whose image the same pixels again reuse.
   /// - Returns: The picture and its size in points: a point a pixel, as with the viewer's PNGs.
-  @concurrent nonisolated static func decode(_ picture: FramePipePicture) async -> DesktopPicture.Decoded? {
+  @concurrent nonisolated static func decode(
+    _ picture: FramePipePicture,
+    reusing kept: DecodedPixels?
+  ) async -> DesktopPicture.Decoded? {
+    await decode(rgb: picture.rgb, width: picture.width, height: picture.height, key: picture.frameKey, reusing: kept)
+  }
+
+  /// The picture packed RGB pixels make, `width` by `height`, named `key`, off the main actor: the image of `kept`
+  /// again when they are its very pixels, so a still screen's picture is never drawn anew. Nil when they are not one.
+  ///
+  /// - Parameters:
+  ///   - rgb: The pixels, `width * 3` bytes a row.
+  ///   - width: The width, in pixels.
+  ///   - height: The height, in pixels.
+  ///   - key: The frame's key.
+  ///   - kept: The last picture decoded.
+  /// - Returns: The picture and its size in points: a point a pixel, as with the viewer's PNGs.
+  @concurrent nonisolated static func decode(
+    rgb: Data,
+    width: Int,
+    height: Int,
+    key: String,
+    reusing kept: DecodedPixels?
+  ) async -> DesktopPicture.Decoded? {
+    let size = CGSize(width: width, height: height)
+    if let kept, kept.decoded.size == size, kept.rgb == rgb {
+      return DesktopPicture.Decoded(picture: DesktopPicture(id: key, image: kept.decoded.picture.image), size: size)
+    }
     guard
-      let provider = CGDataProvider(data: picture.rgb as CFData),
+      let provider = CGDataProvider(data: rgb as CFData),
       let space = CGColorSpace(name: CGColorSpace.sRGB),
       let image = CGImage(
-        width: picture.width,
-        height: picture.height,
+        width: width,
+        height: height,
         bitsPerComponent: 8,
         bitsPerPixel: 24,
-        bytesPerRow: picture.width * 3,
+        bytesPerRow: width * 3,
         space: space,
         bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue),
         provider: provider,
@@ -136,7 +167,6 @@ final class ViewerFramePump {
         intent: .defaultIntent
       )
     else { return nil }
-    let size = CGSize(width: picture.width, height: picture.height)
-    return DesktopPicture.Decoded(picture: DesktopPicture(id: picture.frameKey, image: image), size: size)
+    return DesktopPicture.Decoded(picture: DesktopPicture(id: key, image: image), size: size)
   }
 }

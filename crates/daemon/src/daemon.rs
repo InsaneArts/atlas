@@ -17,6 +17,8 @@ mod preferences;
 pub mod proof;
 #[cfg(target_os = "macos")]
 pub(crate) mod read;
+#[cfg(target_os = "macos")]
+mod recorder;
 mod run;
 #[cfg(target_os = "macos")]
 pub mod serve;

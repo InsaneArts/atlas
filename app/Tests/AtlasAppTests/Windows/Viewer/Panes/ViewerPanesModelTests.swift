@@ -45,26 +45,59 @@ struct ViewerPanesModelTests {
     service.resumeShot(name: name, full: full)
   }
 
-  /// A viewer on the Screenshots tab over the two screenshots, its every screenshot request held.
+  /// The log while an agent took the two screenshots, newest first.
+  static let log = ActivityLog(entries: [
+    ActivityLog.Entry(id: "s2", says: "took a screenshot", ageSeconds: 4, operation: "screenshot", capture: newer),
+    ActivityLog.Entry(id: "s1", says: "took a screenshot", ageSeconds: 28, operation: "screenshot", capture: older),
+  ])
+
+  /// A viewer on Activity over an agent's two screenshots, its every screenshot request held.
   ///
   /// - Parameters:
   ///   - service: The scripted service.
-  ///   - shotOutlet: Where copied screenshots go and how files are shown.
-  /// - Returns: The viewer, its screenshots read.
+  ///   - shotOutlet: Where copied pictures go and how files are shown.
+  /// - Returns: The viewer, its log and screenshots read.
   /// - Throws: The failed requirement, when they never are.
   static func onShots(
     _ service: ScriptedService,
-    shotOutlet: ShotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
+    shotOutlet: ShotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true })
   ) async throws -> ViewerController {
     service.shots = shots
+    service.activityLog = log
+    if service.shot.isEmpty { service.shot = png() }
     let viewer = try await ViewerController.watching(
       service,
       shotOutlet: shotOutlet
     )
     service.holdShots = true
-    viewer.send(.show(.screenshots))
-    try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
+    viewer.send(.show(.activity))
+    try await settle("the screenshots were never read") {
+      viewer.panes.shots.shots != nil && viewer.panes.activity.readAt != nil
+    }
     return viewer
+  }
+
+  /// An outlet that hands each copied picture to `copied` and says it was copied.
+  ///
+  /// - Parameter copied: Receives each picture copied.
+  /// - Returns: The outlet.
+  static func copying(_ copied: @escaping @MainActor (Data) -> Void) -> ShotOutlet {
+    ShotOutlet(
+      copy: { png, _ in
+        copied(png)
+        return true
+      },
+      reveal: { _ in true }
+    )
+  }
+
+  /// The picture sheet the window shows.
+  ///
+  /// - Parameter viewer: The viewer.
+  /// - Returns: The sheet, or nil while none shows.
+  static func sheet(_ viewer: ViewerController) -> ViewerPictureSheet? {
+    guard case .activity(let activity) = viewer.state.pane else { return nil }
+    return activity.sheet
   }
 
   @Test("Activity stops reading when the window hides or leaves its tab")
@@ -138,7 +171,7 @@ struct ViewerPanesModelTests {
     let stale = viewer.panesModel.thumbnails.work.loading[Self.newer]
     try await settle("the first thumbnail was never asked for") { service.heldShots.count == 1 }
     viewer.send(.show(.screen))
-    viewer.send(.show(.screenshots))
+    viewer.send(.show(.activity))
     service.shot = png(width: 2, height: 2)
     viewer.send(.thumbnailNeeded(Self.newer))
     let fresh = viewer.panesModel.thumbnails.work.loading[Self.newer]
@@ -153,7 +186,7 @@ struct ViewerPanesModelTests {
     viewer.close()
   }
 
-  @Test("leaving the screenshots for Apps lets the thumbnail queue go, so a reply starts no queued request")
+  @Test("leaving Activity for Apps lets the thumbnail queue go, so a reply starts no queued request")
   func appsLetsTheThumbnailsGo() async throws {
     let service = ScriptedService()
     let viewer = try await Self.onShots(service)
@@ -168,8 +201,8 @@ struct ViewerPanesModelTests {
     viewer.close()
   }
 
-  @Test("pending thumbnails resume when the same pane shows again", arguments: [ViewerPlace.screenshots, .activity])
-  func hiddenThumbnailsResume(_ place: ViewerPlace) async throws {
+  @Test("pending thumbnails resume when Activity shows again")
+  func hiddenThumbnailsResume() async throws {
     let service = ScriptedService()
     let viewer = try await Self.onShots(service)
     defer {
@@ -179,14 +212,7 @@ struct ViewerPanesModelTests {
     let queued = "queued.png"
     let removed = "removed.png"
     service.shots += [Screenshot(name: queued), Screenshot(name: removed)]
-    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
-    if place == .activity {
-      service.activityLog = ActivityLog(entries: [
-        ActivityLog.Entry(id: "1", says: "took a screenshot", ageSeconds: 4, operation: "screenshot")
-      ])
-      viewer.send(.show(.activity))
-      try await settle("Activity was never read") { viewer.panes.activity.readAt != nil }
-    }
+    await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
     service.shot = png(width: 1, height: 1)
     for name in [Self.newer, Self.older, queued, removed] { viewer.send(.thumbnailNeeded(name)) }
     try await settle("two thumbnails were never asked for") { service.heldShots.count == 2 }
@@ -196,7 +222,7 @@ struct ViewerPanesModelTests {
     for task in stale { #expect(task.isCancelled) }
     #expect(viewer.panesModel.thumbnails.work.loading.isEmpty)
     service.shots.removeAll { $0.name == removed }
-    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
+    await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
     service.shot = png(width: 2, height: 2)
     viewer.setVisible(true)
     try await settle("the cancelled thumbnails were not requested again") { service.heldShots.count == 4 }
@@ -223,99 +249,131 @@ struct ViewerPanesModelTests {
     #expect(viewer.panesModel.thumbnails.work.loading.isEmpty, "cached thumbnails need no new requests")
   }
 
-  @Test(
-    "a screenshot removed from the list closes its large view and leaves exports and arrows on the grid",
-    arguments: [false, true]
-  )
-  func removedLargeShotCloses(_ loaded: Bool) async throws {
+  @Test("a screenshot opens in the picture sheet over Activity, read as taken, and steps through its run's screenshots")
+  func aScreenshotOpensInTheSheet() async throws {
     let service = ScriptedService()
-    let newest = "1792665120000000000-capture.png"
-    service.shotData = [newest: png(width: 1, height: 1), Self.older: png(width: 2, height: 2)]
-    var copied: [Data] = []
-    var saved: [Data] = []
-    let viewer = try await Self.onShots(
-      service,
-      shotOutlet: ShotOutlet(
-        copy: { copied.append($0) },
-        reveal: { _ in },
-        save: { data, _ in
-          saved.append(data)
-          return true
-        }
-      )
-    )
+    let viewer = try await Self.onShots(service)
+    defer {
+      viewer.close()
+      service.resumeAllShots()
+    }
+    viewer.send(.openShot(Self.newer))
+    #expect(viewer.state.pane.place == .activity)
+    let opened = try #require(Self.sheet(viewer))
+    #expect(opened.id == Self.newer)
+    #expect(opened.position == "2 of 2")
+    #expect(opened.canGoBack)
+    #expect(!opened.canGoForward)
+    let load = try #require(viewer.panesModel.pictures.loads[Self.newer])
+    try await Self.answer(service, Self.newer, full: true)
+    try await Self.ended(load, "the picture never arrived")
+    #expect(viewer.panes.activity.pictures[Self.newer] != nil)
+    viewer.send(.previousPicture)
+    let older = try #require(Self.sheet(viewer))
+    #expect(older.id == Self.older)
+    #expect(older.position == "1 of 2")
+    #expect(!older.canGoBack)
+    #expect(viewer.panes.activity.pictures[Self.newer] == nil, "a picture no longer shown is let go")
+    viewer.send(.previousPicture)
+    #expect(Self.sheet(viewer)?.id == Self.older, "‹ goes no further than the run's oldest")
+    viewer.send(.closePicture)
+    #expect(Self.sheet(viewer) == nil)
+    #expect(viewer.panesModel.pictures.loads.isEmpty)
+  }
+
+  @Test("a screenshot whose row leaves the log closes the sheet and lets its picture go")
+  func aScreenshotLeavingTheLogClosesTheSheet() async throws {
+    let service = ScriptedService()
+    let viewer = try await Self.onShots(service)
     defer {
       viewer.close()
       service.resumeAllShots()
     }
     viewer.send(.openShot(Self.older))
-    let load = try #require(viewer.panesModel.screenshots.load)
-    if loaded {
-      try await Self.answer(service, Self.older, full: true)
-      try await Self.ended(load, "the large screenshot never arrived")
-      try #require(viewer.panes.shots.full != nil)
-    }
-    service.shots = [Screenshot(name: newest, takenAt: Date(timeIntervalSince1970: 1_792_665_120)), Self.shots[0]]
-    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
-    #expect(viewer.panes.shots.large == nil)
-    #expect(viewer.panes.shots.selected == nil)
-    #expect(viewer.panes.shots.full == nil)
-    #expect(viewer.panesModel.screenshots.load == nil)
-    if !loaded {
-      #expect(load.isCancelled)
-      try await Self.answer(service, Self.older, full: true)
-      try await Self.ended(load, "the removed screenshot never replied")
-      #expect(viewer.panes.shots.full == nil)
-    }
-    #expect(ViewerPresenter.selectedShot(viewer.snapshot) == newest)
-    #expect(viewer.panesModel.actedShot == newest)
-    viewer.send(.copyShot)
-    let copy = viewer.panesModel.exports.pending
-    try await Self.answer(service, newest, full: true)
-    try await Self.ended(copy, "Copy never finished")
-    viewer.panesModel.saveShot()
-    let save = viewer.panesModel.exports.pending
-    try await Self.answer(service, newest, full: true)
-    try await Self.ended(save, "Save never finished")
-    #expect(copied == [service.shotData[newest]])
-    #expect(saved == [service.shotData[newest]])
-    viewer.send(.nextShot)
-    #expect(ViewerPresenter.selectedShot(viewer.snapshot) == Self.newer)
-    #expect(viewer.panesModel.actedShot == Self.newer)
-    service.shots.removeAll { $0.name == Self.newer }
-    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
-    #expect(viewer.panes.shots.selected == nil)
-    #expect(viewer.panesModel.actedShot == newest)
+    let load = try #require(viewer.panesModel.pictures.loads[Self.older])
+    service.activityLog = ActivityLog(entries: Array(Self.log.entries.prefix(1)))
+    await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
+    #expect(viewer.panes.activity.sheet == nil)
+    #expect(Self.sheet(viewer) == nil)
+    #expect(load.isCancelled)
+    try await Self.answer(service, Self.older, full: true)
+    try await Self.ended(load, "the closed picture never replied")
+    #expect(viewer.panes.activity.pictures[Self.older] == nil)
   }
 
-  @Test("an older Copy never lands over a newer one, read or kept")
+  @Test("an older Copy never lands over a newer one")
   func olderCopyNeverLands() async throws {
     let service = ScriptedService()
     service.shotData = [Self.newer: png(width: 1, height: 1), Self.older: png(width: 2, height: 2)]
     var copied: [Data] = []
-    let viewer = try await Self.onShots(service, shotOutlet: ShotOutlet(copy: { copied.append($0) }, reveal: { _ in }))
+    let viewer = try await Self.onShots(service, shotOutlet: Self.copying { copied.append($0) })
+    defer {
+      viewer.close()
+      service.resumeAllShots()
+    }
     viewer.send(.openShot(Self.newer))
-    viewer.send(.copyShot)
-    let firstCopy = viewer.panesModel.exports.pending
-    viewer.send(.nextShot)
-    let olderLoad = viewer.panesModel.screenshots.load
-    viewer.send(.copyShot)
-    let secondCopy = viewer.panesModel.exports.pending
-    try await Self.answer(service, Self.older, full: true)
-    try await Self.ended(olderLoad, "the older screenshot never arrived")
-    viewer.send(.copyShot)
-    #expect(copied == [service.shotData[Self.older]], "the kept picture is copied at once")
-    try await Self.answer(service, Self.older, full: true)
+    viewer.send(.copyPicture)
+    let firstCopy = try #require(viewer.panesModel.pictures.copying)
+    viewer.send(.previousPicture)
+    viewer.send(.copyPicture)
+    let secondCopy = try #require(viewer.panesModel.pictures.copying)
+    #expect(firstCopy.isCancelled)
+    try await settle("the second Copy was never asked for") {
+      service.heldShots.filter { $0.name == Self.older && $0.full }.count == 2
+    }
+    service.resumeAllShots()
     try await Self.ended(secondCopy, "the second Copy's reply never came back")
-    try await Self.answer(service, Self.newer, full: true)
-    try await Self.answer(service, Self.newer, full: true)
     try await Self.ended(firstCopy, "the first Copy's reply never came back")
     #expect(copied == [service.shotData[Self.older]])
-    service.resumeAllShots()
-    viewer.close()
   }
 
-  @Test("a delayed screenshot reply after close does not run the save outlet")
+  @Test("Copy puts the picture on the clipboard though the screenshots' folder is not known")
+  func copyNeedsNoFolder() async throws {
+    let service = ScriptedService()
+    service.shotData = [Self.newer: png(width: 1, height: 1), Self.older: png(width: 2, height: 2)]
+    var copied: [Data] = []
+    let viewer = try await Self.onShots(service, shotOutlet: Self.copying { copied.append($0) })
+    defer {
+      viewer.close()
+      service.resumeAllShots()
+    }
+    viewer.panesModel.panes.shots.folder = nil
+    viewer.send(.openShot(Self.newer))
+    let sheet = try #require(ViewerPresenter.activity(viewer.snapshot).sheet)
+    #expect(!sheet.canShowInFinder)
+    viewer.send(.copyPicture)
+    let copy = try #require(viewer.panesModel.pictures.copying)
+    try await settle("the Copy was never asked for") {
+      service.heldShots.filter { $0.name == Self.newer && $0.full }.count == 2
+    }
+    service.resumeAllShots()
+    try await Self.ended(copy, "the Copy's reply never came back")
+    #expect(copied == [service.shotData[Self.newer]])
+  }
+
+  @Test("closing the sheet cancels a Copy still being read, so it never lands over what is copied next")
+  func closingTheSheetCancelsItsCopy() async throws {
+    let service = ScriptedService()
+    var copied: [Data] = []
+    let viewer = try await Self.onShots(service, shotOutlet: Self.copying { copied.append($0) })
+    defer {
+      viewer.close()
+      service.resumeAllShots()
+    }
+    viewer.send(.openShot(Self.newer))
+    viewer.send(.copyPicture)
+    let copy = try #require(viewer.panesModel.pictures.copying)
+    // The sheet reads the picture to show it, and Copy reads it again.
+    try await settle("the Copy was never asked for") { service.heldShots.count == 2 }
+    viewer.send(.closePicture)
+    #expect(copy.isCancelled)
+    #expect(viewer.panesModel.pictures.copying == nil)
+    service.resumeAllShots()
+    try await Self.ended(copy, "the cancelled Copy never replied")
+    #expect(copied.isEmpty)
+  }
+
+  @Test("a delayed picture reply after close does not run the save outlet")
   func delayedSaveDoesNotRunAfterClose() async throws {
     let service = ScriptedService()
     service.shot = png()
@@ -323,76 +381,67 @@ struct ViewerPanesModelTests {
     let viewer = try await Self.onShots(
       service,
       shotOutlet: ShotOutlet(
-        copy: { _ in },
-        reveal: { _ in },
+        copy: { _, _ in true },
+        reveal: { _ in true },
         save: { _, _ in
           saved = true
           return true
         }
       )
     )
-    viewer.send(.selectShot(Self.newer))
-    viewer.panesModel.saveShot()
-    let save = try #require(viewer.panesModel.exports.pending)
-    try await settle("the screenshot was never asked for") { service.heldShots.count == 1 }
+    viewer.send(.openShot(Self.newer))
+    viewer.panesModel.pictures.save {}
+    let save = try #require(viewer.panesModel.pictures.copying)
+    try await settle("the picture was never asked for") { service.heldShots.count == 2 }
     viewer.close()
-    try await Self.answer(service, Self.newer, full: true)
-    try await Self.ended(save, "the screenshot's reply never came back")
+    service.resumeAllShots()
+    try await Self.ended(save, "the picture's reply never came back")
     #expect(!saved)
     #expect(save.isCancelled)
-    #expect(viewer.panesModel.exports.pending == nil)
+    #expect(viewer.panesModel.pictures.copying == nil)
   }
 
-  @Test("a large screenshot read while the window hides never lands, and is read again once it shows")
-  func largeReadStopsWhileHidden() async throws {
+  @Test("the sheet's picture read while the window hides never lands, and is read again once it shows")
+  func sheetReadStopsWhileHidden() async throws {
     let service = ScriptedService()
     let viewer = try await Self.onShots(service)
+    defer {
+      viewer.close()
+      service.resumeAllShots()
+    }
     viewer.send(.openShot(Self.newer))
-    let hiddenLoad = viewer.panesModel.screenshots.load
+    let hiddenLoad = try #require(viewer.panesModel.pictures.loads[Self.newer])
     viewer.setVisible(false)
+    #expect(hiddenLoad.isCancelled)
     try await Self.answer(service, Self.newer, full: true)
     try await Self.ended(hiddenLoad, "the picture's reply never came back")
-    #expect(viewer.panes.shots.full == nil)
+    #expect(viewer.panes.activity.pictures[Self.newer] == nil)
     viewer.setVisible(true)
-    let shownLoad = try #require(viewer.panesModel.screenshots.load, "the picture is read again")
+    let shownLoad = try #require(viewer.panesModel.pictures.loads[Self.newer], "the picture is read again")
     try await Self.answer(service, Self.newer, full: true)
     try await Self.ended(shownLoad, "the picture read again never arrived")
-    #expect(viewer.panes.shots.full != nil)
-    service.resumeAllShots()
-    viewer.close()
+    #expect(viewer.panes.activity.pictures[Self.newer] != nil)
   }
 
-  @Test("closing the window drops the large screenshot still being read")
-  func largeReadStopsOnClose() async throws {
-    let service = ScriptedService()
-    let viewer = try await Self.onShots(service)
-    viewer.send(.openShot(Self.newer))
-    let load = viewer.panesModel.screenshots.load
-    viewer.close()
-    try await Self.answer(service, Self.newer, full: true)
-    try await Self.ended(load, "the picture's reply never came back")
-    #expect(viewer.panes.shots.full == nil)
-    service.resumeAllShots()
-  }
-
-  @Test("a large screenshot that could not be read is read again with the next reading of the screenshots")
-  func failedLargeReadIsTriedAgain() async throws {
+  @Test("a sheet's picture that could not be read is read again with the next reading of Activity")
+  func failedSheetReadIsTriedAgain() async throws {
     let service = ScriptedService()
     service.shots = Self.shots
+    service.activityLog = Self.log
     service.fail = ["screenshot"]
     let viewer = try await ViewerController.watching(service)
-    viewer.send(.show(.screenshots))
-    try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
+    defer { viewer.close() }
+    viewer.send(.show(.activity))
+    try await settle("Activity was never read") { viewer.panes.shots.shots != nil }
     viewer.send(.openShot(Self.newer))
-    try await Self.ended(viewer.panesModel.screenshots.load, "the failed read never ended")
-    #expect(viewer.panesModel.screenshots.load == nil)
+    try await Self.ended(viewer.panesModel.pictures.loads[Self.newer], "the failed read never ended")
+    #expect(viewer.panesModel.pictures.loads[Self.newer] == nil)
     service.fail = []
     service.shot = png()
-    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
-    let retry = try #require(viewer.panesModel.screenshots.load, "the next reading reads it again")
+    await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
+    let retry = try #require(viewer.panesModel.pictures.loads[Self.newer], "the next reading reads it again")
     try await Self.ended(retry, "the second read never ended")
-    #expect(viewer.panes.shots.full != nil)
-    viewer.close()
+    #expect(viewer.panes.activity.pictures[Self.newer] != nil)
   }
 
   @Test("Show in Finder shows only a listed screenshot, inside the folder the service names")
@@ -402,23 +451,28 @@ struct ViewerPanesModelTests {
     var revealed: [URL] = []
     let viewer = try await Self.onShots(
       service,
-      shotOutlet: ShotOutlet(copy: { _ in }, reveal: { revealed.append($0) })
+      shotOutlet: ShotOutlet(
+        copy: { _, _ in true },
+        reveal: { file in
+          revealed.append(file)
+          return true
+        }
+      )
     )
-    viewer.send(.openShot(Self.newer))
-    guard case .screenshots(let shots) = viewer.state.pane else {
-      Issue.record("the Screenshots tab does not show")
-      return
+    defer {
+      viewer.close()
+      service.resumeAllShots()
     }
-    #expect(shots.large?.canShowInFinder == true)
-    viewer.send(.showShotInFinder)
+    viewer.send(.openShot(Self.newer))
+    #expect(Self.sheet(viewer)?.canShowInFinder == true)
+    viewer.send(.showPictureInFinder)
     #expect(revealed.map(\.path) == ["/Users/me/runs/\(Self.newer)"])
     service.shotsFolder = nil
-    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
+    await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
     try #require(viewer.panes.shots.folder == nil, "a reading that names no folder leaves it unknown")
-    viewer.send(.showShotInFinder)
+    #expect(Self.sheet(viewer)?.canShowInFinder == false)
+    viewer.send(.showPictureInFinder)
     #expect(revealed.count == 1, "no file is shown while the folder is unknown")
-    service.resumeAllShots()
-    viewer.close()
   }
 
   @Test("Clear removes the outline and nothing else")
@@ -440,25 +494,6 @@ struct ViewerPanesModelTests {
     try #require(viewer.state.screen.outline != nil, "the window was outlined")
     viewer.send(.clearOutline)
     #expect(viewer.state == before)
-    viewer.close()
-  }
-
-  @Test("Open on an Activity line shows its screenshot large on the Screenshots tab")
-  func openShowsTheScreenshotLarge() async throws {
-    let service = ScriptedService()
-    service.shots = Self.shots
-    service.shot = png()
-    let viewer = try await ViewerController.watching(service)
-    viewer.send(.show(.screenshots))
-    try await settle("the screenshots were never read") { viewer.panes.shots.shots != nil }
-    viewer.send(.show(.activity))
-    viewer.send(.openShot(Self.newer))
-    #expect(viewer.state.pane.place == .screenshots)
-    guard case .screenshots(let shots) = viewer.state.pane else {
-      Issue.record("the Screenshots tab does not show")
-      return
-    }
-    #expect(shots.large?.id == Self.newer)
     viewer.close()
   }
 }

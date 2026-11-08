@@ -1,10 +1,10 @@
 #if DEBUG
   import SwiftUI
 
-  /// The tabs' samples: the main window's four tabs in a track by their words, then by their symbols with the last one
-  /// selected, then as symbols over words, then as a segment.
+  /// The tabs' samples: four tabs like the main window's in a track by their words, then by their symbols with the
+  /// last one selected, then as symbols over words, then as a segment.
   struct TabsSamples: View {
-    /// The main window's tabs, standing in for its own.
+    /// Four panes, standing in for the main window's.
     enum Pane: Hashable, Sendable {
       /// The helper's screen.
       case screen

@@ -1280,6 +1280,90 @@ fn cost_fixtures(source: &str) -> Vec<Value> {
     serde_json::from_str(source).unwrap()
 }
 
+/// A status whose overview lists `rows` recent actions, as the status
+/// reply-cost fixtures read it.
+fn status_rows(rows: usize) -> Value {
+    let activity: Vec<Value> = (0..rows)
+        .map(|index| {
+            json!({
+                "actor": if index % 3 == 0 { "viewer" } else { "agent" },
+                "says": atlas_core::test_support::reply_cost_text(index),
+                "ok": index % 2 == 0,
+                "ageSeconds": index,
+                "nothingSent": index == 1,
+                "uncertain": index == 2,
+            })
+        })
+        .collect();
+    json!({"overview": {
+        "state": "idle",
+        "label": "Idle",
+        "headline": atlas_core::test_support::reply_cost_text(0),
+        "accountName": "Helper 東京",
+        "display": {"width": 2560, "height": 1440, "scale": 1},
+        "pending": 0,
+        "commands": 0,
+        "activity": activity,
+    }})
+}
+
+/// `rows` activity log rows, every odd one refused, as the activity
+/// reply-cost fixtures read them.
+fn activity_rows(rows: usize) -> Value {
+    (0..rows)
+        .map(|index| {
+            let mut row = json!({
+                "at": "999999999999999999999999999999",
+                "id": format!("synthetic-{index}"),
+                "operation": "input",
+                "ok": index % 2 == 0,
+                "actor": "agent",
+                "verb": "click",
+                "app": atlas_core::test_support::reply_cost_text(index),
+                "label": "Save \"東京\"",
+                "started": false,
+                "partial": false,
+            });
+            if index % 2 == 1 {
+                row["code"] = json!("focus-changed");
+                row["reason"] = json!("covered");
+            }
+            row
+        })
+        .collect()
+}
+
+/// `rows` running apps, each with one window, as the app reply-cost
+/// fixtures read them.
+fn app_rows(rows: usize) -> Value {
+    let text = atlas_core::test_support::reply_cost_text;
+    let apps: Vec<Value> = (0..rows)
+        .map(|index| {
+            json!({
+                "pid": 812 + index,
+                "name": text(index),
+                "policy": "regular",
+                "active": index == 0,
+                "hidden": false,
+            })
+        })
+        .collect();
+    let windows: Vec<Value> = (0..rows)
+        .map(|index| {
+            json!({
+                "number": index + 1,
+                "pid": 812 + index,
+                "owner": text(index),
+                "title": text(index),
+                "layer": 0,
+                "alpha": 1,
+                "bounds": {"x": index, "y": index, "width": 640, "height": 480},
+            })
+        })
+        .collect();
+    json!({"apps": apps, "windows": windows})
+}
+
 fn cost_activity(server: &Server, fixture: &Value) {
     let output = server.client.output_dir().unwrap();
     std::fs::create_dir_all(output).unwrap();
@@ -1294,9 +1378,10 @@ fn cost_activity(server: &Server, fixture: &Value) {
 
 #[test]
 fn reply_cost_counts_utf8_bytes_and_escaping() {
-    for fixture in cost_fixtures(include_str!(
-        "../../../../tests/fixtures/reply-cost/status.json"
-    )) {
+    for fixture in atlas_core::test_support::reply_cost_fixtures(
+        include_str!("../../../../tests/fixtures/reply-cost/status.json"),
+        status_rows,
+    ) {
         let status = summary(&fixture["input"], &BTreeMap::new(), None);
         let reply = said(&status);
         let serialized = reply.to_string();
@@ -1312,9 +1397,10 @@ fn reply_cost_counts_utf8_bytes_and_escaping() {
 
 #[test]
 fn reply_cost_refuses_larger_bytes_rows_and_duplicate_content() {
-    let fixture = &cost_fixtures(include_str!(
-        "../../../../tests/fixtures/reply-cost/status.json"
-    ))[1];
+    let fixture = &atlas_core::test_support::reply_cost_fixtures(
+        include_str!("../../../../tests/fixtures/reply-cost/status.json"),
+        status_rows,
+    )[1];
     let reply = said(&summary(&fixture["input"], &BTreeMap::new(), None));
     for field in ["bytes", "rows"] {
         let mut changed = fixture.clone();
@@ -1341,9 +1427,10 @@ fn reply_cost_refuses_larger_bytes_rows_and_duplicate_content() {
 
 #[tokio::test]
 async fn reply_cost_counts_the_complete_serialized_envelope() {
-    let activity = cost_fixtures(include_str!(
-        "../../../../tests/fixtures/reply-cost/activity.json"
-    ));
+    let activity = atlas_core::test_support::reply_cost_fixtures(
+        include_str!("../../../../tests/fixtures/reply-cost/activity.json"),
+        activity_rows,
+    );
     for fixture in cost_fixtures(include_str!(
         "../../../../tests/fixtures/reply-cost/answer.json"
     )) {
@@ -1364,9 +1451,10 @@ async fn reply_cost_counts_the_complete_serialized_envelope() {
 
 #[tokio::test]
 async fn activity_reply_cost_keeps_empty_and_populated_rows() {
-    for fixture in cost_fixtures(include_str!(
-        "../../../../tests/fixtures/reply-cost/activity.json"
-    )) {
+    for fixture in atlas_core::test_support::reply_cost_fixtures(
+        include_str!("../../../../tests/fixtures/reply-cost/activity.json"),
+        activity_rows,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let server = server(dir.path());
         cost_activity(&server, &fixture);
@@ -1422,9 +1510,10 @@ async fn representative_reads_keep_their_helper_request_counts() {
     use atlas_client::test_support::Helper;
     use atlas_core::test_support::UID;
 
-    for fixture in cost_fixtures(include_str!(
-        "../../../../tests/fixtures/reply-cost/apps.json"
-    )) {
+    for fixture in atlas_core::test_support::reply_cost_fixtures(
+        include_str!("../../../../tests/fixtures/reply-cost/apps.json"),
+        app_rows,
+    ) {
         for envelope in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let mut server = server(dir.path());
@@ -1517,9 +1606,10 @@ async fn reply_cost_includes_the_private_frame_in_the_outgoing_envelope() {
 
 #[test]
 fn app_reply_cost_preserves_the_window_projection() {
-    for fixture in cost_fixtures(include_str!(
-        "../../../../tests/fixtures/reply-cost/apps.json"
-    )) {
+    for fixture in atlas_core::test_support::reply_cost_fixtures(
+        include_str!("../../../../tests/fixtures/reply-cost/apps.json"),
+        app_rows,
+    ) {
         let windows: Vec<atlas_core::screen::windows::Window> =
             serde_json::from_value(fixture["input"]["windows"].clone()).unwrap();
         let running =

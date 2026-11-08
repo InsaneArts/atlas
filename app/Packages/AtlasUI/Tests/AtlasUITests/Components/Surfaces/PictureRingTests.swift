@@ -12,7 +12,7 @@ struct PictureRingTests {
     // Its inner edge runs the gap outside the picture's corner and its outer edge its width further.
     #expect(PictureRing.reach == PictureRing.gap + PictureRing.width)
     #expect(PictureRing.outerRadius(around: 10) == 10 + PictureRing.reach)
-    let picture = try #require(ShotThumbnailTests.picture(width: 100, height: 60))
+    let picture = try #require(TestPictures.picture(width: 100, height: 60))
     let selected = try Pixels(
       PictureTile(picture: picture, isSelected: true, showsEdge: false)
         .frame(width: 100, height: 60)

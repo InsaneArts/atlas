@@ -3,7 +3,7 @@ use super::{
     admitted, hold, read_request,
 };
 use crate::native::{
-    ax::{Acted, Resolved},
+    ax::{Acted, Reached, Resolved},
     events::tap::{Posted, Seen, Tap},
     focus::Need,
 };
@@ -64,6 +64,7 @@ fn service(marker: &std::path::Path) -> super::Service {
         executable: None,
         stopping: tokio::sync::Notify::new(),
         stop_marker: marker.to_owned(),
+        activity: marker.with_extension("activity"),
     }
 }
 
@@ -1824,7 +1825,7 @@ struct Stand {
     asked: Vec<Expect>,
     /// The role each check of a field finds it of, a text field's past
     /// the list.
-    roles: Vec<&'static str>,
+    roles: Vec<Option<&'static str>>,
     preparations: Vec<bool>,
     budgets: Vec<Duration>,
     check_delay: Duration,
@@ -1929,9 +1930,12 @@ impl Perform for Stand {
                 crate::native::focus::Reason::Unreadable,
             ));
         }
-        Ok(expect
-            .field()
-            .map(|_| self.roles.get(index).copied().unwrap_or("AXTextField")))
+        Ok(expect.field().and_then(|_| {
+            self.roles
+                .get(index)
+                .copied()
+                .unwrap_or(Some("AXTextField"))
+        }))
     }
 
     async fn resolve(&mut self, _: Reference) -> Result<Resolved> {
@@ -1963,7 +1967,7 @@ impl Perform for Stand {
         let index = self.logged("act");
         self.log.push(format!("act {index}"));
         self.acted.push((reference, action, window));
-        match self.acts {
+        match self.acts.clone() {
             None => Err(stale("That look is no longer kept")),
             Some(Err(code)) => {
                 Err(Error::new(code, "The app did not acknowledge the action").uncertain())
@@ -2289,16 +2293,17 @@ async fn text_is_checked_whole_before_every_part() {
     );
 }
 
-/// Type `parts` on a stand-in whose checks find the field of each of
-/// `roles` in turn, expecting the field named Email.
-async fn typed_into(parts: &[&str], roles: &[&'static str]) -> Option<&'static str> {
+/// Send `actions` on a stand-in whose checks find the field of each of
+/// `roles` in turn (none for one they could not tell), expecting the field
+/// named Email.
+async fn typed_into(actions: &[Value], roles: &[Option<&'static str>]) -> Option<&'static str> {
     let stand = Stand::locked(&[]);
     stand.lock().await.roles = roles.to_vec();
     let gate = Arc::new(Gate::default());
     let expect = Expect::new(812).unwrap().in_field("Email").unwrap();
-    let actions = parts
+    let actions = actions
         .iter()
-        .map(|text| serde_json::from_value(json!({"type": "type", "text": text})).unwrap())
+        .map(|action| serde_json::from_value(action.clone()).unwrap())
         .collect();
     let mut engine = stand.lock().await;
     run(&mut *engine, &gate, actions, Some(&expect))
@@ -2308,12 +2313,18 @@ async fn typed_into(parts: &[&str], roles: &[&'static str]) -> Option<&'static s
 
 #[tokio::test]
 async fn typing_into_a_named_field_says_the_role_every_check_found_it_of() {
+    let part = |text: &str| json!({"type": "type", "text": text});
+    let search = Some("AXSearchField");
     assert_eq!(
-        typed_into(&["sam@", "example"], &["AXSearchField", "AXSearchField"]).await,
-        Some("AXSearchField")
+        typed_into(&[part("sam@"), part("example")], &[search, search]).await,
+        search
     );
     assert_eq!(
-        typed_into(&["sam@", "example"], &["AXTextField", "AXTextArea"]).await,
+        typed_into(
+            &[part("sam@"), part("example")],
+            &[Some("AXTextField"), Some("AXTextArea")]
+        )
+        .await,
         None,
         "checks that disagree name no role"
     );
@@ -2327,6 +2338,46 @@ async fn typing_into_a_named_field_says_the_role_every_check_found_it_of() {
     )
     .await;
     assert!(refused.is_err(), "a refusal is a reply of its own");
+}
+
+#[tokio::test]
+async fn text_any_check_could_not_place_in_a_field_names_no_field() {
+    let part = |text: &str| json!({"type": "type", "text": text});
+    let tab = json!({"type": "key", "key": "tab"});
+    let field = Some("AXTextField");
+    assert_eq!(
+        typed_into(&[part("sam"), tab, part("hunter2")], &[field, field, None]).await,
+        None,
+        "one part typed where no field was found keeps the batch from naming one"
+    );
+    assert_eq!(
+        typed_into(&[part("sam"), part("more")], &[None, field]).await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn text_any_check_found_in_a_password_field_names_the_password_field() {
+    let part = |text: &str| json!({"type": "type", "text": text});
+    let tab = json!({"type": "key", "key": "tab"});
+    let field = Some("AXTextField");
+    assert_eq!(
+        typed_into(
+            &[part("sam"), tab, part("hunter2")],
+            &[field, field, Some("AXSecureTextField")]
+        )
+        .await,
+        Some("AXSecureTextField")
+    );
+    assert_eq!(
+        typed_into(
+            &[part("sam"), part("x")],
+            &[None, Some("AXSecureTextField")]
+        )
+        .await,
+        Some("AXSecureTextField"),
+        "a password field found is said whatever else was not"
+    );
 }
 
 #[tokio::test]
@@ -2414,6 +2465,43 @@ async fn a_found_reference_is_checked_against_its_own_window_and_clicked_where_i
     }
 }
 
+/// A referenced click's batch reports its element as it was found, from
+/// the reads its click needs anyway: nothing more is asked.
+#[tokio::test]
+async fn a_referenced_click_reports_the_element_it_found_without_another_read() {
+    let found = Expect::new(812).unwrap().in_window(42).unwrap();
+    let stand = Stand::locked(&[Step::Post]);
+    stand.lock().await.found = Some(Resolved::at(30.0, 40.0, found));
+    let gate = Arc::new(Gate::default());
+    let done = {
+        let mut engine = stand.lock().await;
+        super::run(&mut *engine, &gate, vec![referenced()], None)
+            .await
+            .unwrap()
+    };
+    assert_eq!(done.reached, Some(Reached::button(30.0, 40.0)));
+    let stand = stand.lock().await;
+    assert_eq!(
+        stand.log,
+        ["resolve 0", "check 0", "confirm 0", "check 1", "post 0"]
+    );
+}
+
+/// A click at a point reaches no element the batch knows of.
+#[tokio::test]
+async fn a_click_at_a_point_reports_no_element() {
+    let stand = Stand::locked(&[Step::Post]);
+    let gate = Arc::new(Gate::default());
+    let click = serde_json::from_value(json!({"type": "click", "x": 30, "y": 40})).unwrap();
+    let done = {
+        let mut engine = stand.lock().await;
+        super::run(&mut *engine, &gate, vec![click], app().as_ref())
+            .await
+            .unwrap()
+    };
+    assert_eq!(done.reached, None);
+}
+
 /// An element that changes once its app is brought forward is refused
 /// after that preparation, before anything is posted.
 #[tokio::test]
@@ -2481,6 +2569,11 @@ fn the_input_service_offers_actions_on_the_elements_of_a_look() {
     assert_eq!(atlas_core::session::ELEMENT_ACTIONS, "element-actions");
 }
 
+#[test]
+fn the_input_service_says_it_names_a_password_field_by_its_subrole() {
+    assert!(CAPABILITIES.contains(&atlas_core::session::TYPED_FIELDS));
+}
+
 fn pressed() -> Action {
     serde_json::from_value(json!({"type": "press", "ref": "8123abc.12"})).unwrap()
 }
@@ -2496,6 +2589,7 @@ async fn an_element_action_is_carried_out_with_no_focus_check_and_no_event() {
         verification: Verification::Matched,
         instance: Instance::new(812, [1, 0]),
         changed: true,
+        reached: None,
     }));
     let gate = Arc::new(Gate::default());
     let done = {
@@ -2523,6 +2617,28 @@ async fn an_element_action_is_carried_out_with_no_focus_check_and_no_event() {
     assert_eq!(stand.posted, 2);
 }
 
+/// An action on an element reports the element as the action met it, and
+/// nothing else is asked of the app for it.
+#[tokio::test]
+async fn an_element_action_reports_the_element_it_met() {
+    let stand = Stand::locked(&[]);
+    stand.lock().await.acts = Some(Ok(Acted {
+        verification: Verification::NotChecked,
+        instance: Instance::new(812, [1, 0]),
+        changed: true,
+        reached: Some(Reached::button(30.0, 40.0)),
+    }));
+    let gate = Arc::new(Gate::default());
+    let done = {
+        let mut engine = stand.lock().await;
+        super::run(&mut *engine, &gate, vec![pressed()], None)
+            .await
+            .unwrap()
+    };
+    assert_eq!(done.reached, Some(Reached::button(30.0, 40.0)));
+    assert_eq!(stand.lock().await.log, ["act 0"]);
+}
+
 /// An element already as asked is left: the reply says so, and nothing
 /// counts as sent.
 #[tokio::test]
@@ -2532,6 +2648,7 @@ async fn an_element_already_as_asked_is_matched_with_nothing_sent() {
         verification: Verification::Matched,
         instance: Instance::new(812, [1, 0]),
         changed: false,
+        reached: None,
     }));
     let gate = Arc::new(Gate::default());
     let mut engine = stand.lock().await;
@@ -2871,6 +2988,7 @@ impl Perform for Blocked {
             verification: Verification::NotChecked,
             instance: Instance::new(812, [1, 0]),
             changed: true,
+            reached: None,
         })
     }
     async fn perform(&mut self, _: Action) -> Result<()> {
@@ -3766,7 +3884,8 @@ fn display_epoch() -> atlas_core::session::InputEpoch {
 /// A service whose engine journals into `directory` and posts only to `tap`.
 fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc<super::Service> {
     let epoch = display_epoch();
-    let engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
+    let mut engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
+    engine.activity = Some(directory.join("input.activity"));
     Arc::new(super::Service {
         looks: engine.looks.clone(),
         engine: Arc::new(Mutex::new(engine)),
@@ -3777,6 +3896,7 @@ fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc
         executable: None,
         stopping: tokio::sync::Notify::new(),
         stop_marker: directory.join("stopped"),
+        activity: directory.join("input.activity"),
     })
 }
 
@@ -4110,4 +4230,107 @@ async fn expiry_cleanup_remains_registered_until_its_journal_finishes() {
     assert!(!service.engine.lock().await.held_input());
     let up = posts(&seen).pop().unwrap();
     assert_eq!(up.kind, objc2_core_graphics::CGEventType::LeftMouseUp.0);
+}
+
+#[test]
+fn input_that_comes_while_quiet_work_runs_waits_for_it_and_is_then_posted() {
+    let (notice, contended) = std::sync::mpsc::channel();
+    // The batch takes the activity lock on a blocking thread of this runtime.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .on_thread_start(move || atlas_core::files::on_next_lock_contention(notice.clone()))
+        .build()
+        .unwrap();
+    let owner = "a".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    let (started, working) = std::sync::mpsc::channel();
+    let (finish, finished) = std::sync::mpsc::channel::<()>();
+    let work = std::thread::spawn({
+        let (activity, seen) = (service.activity.clone(), seen.clone());
+        move || {
+            crate::native::activity::quiet(&activity, Duration::ZERO, || {
+                started.send(()).unwrap();
+                finished.recv().unwrap();
+                posts(&seen).is_empty()
+            })
+        }
+    });
+    working.recv().unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let actions = vec![serde_json::from_value(json!({"type": "move", "x": 10, "y": 20})).unwrap()];
+    let (reply, waited) = runtime.block_on(async {
+        tokio::join!(
+            service.input(
+                owner,
+                Ok(display_epoch()),
+                Ok(actions),
+                Ok(None),
+                false,
+                &phase,
+            ),
+            async {
+                let waited = tokio::task::spawn_blocking(move || {
+                    contended.recv_timeout(Duration::from_secs(5)).is_ok()
+                })
+                .await
+                .unwrap();
+                finish.send(()).unwrap();
+                waited
+            },
+        )
+    });
+    let reply = reply.unwrap();
+    assert!(waited, "the input waited for the work");
+    assert_eq!(
+        work.join().unwrap(),
+        Some(true),
+        "nothing posted under the work"
+    );
+    assert_eq!(reply["ok"], true, "the input waited rather than failed");
+    assert_eq!(reply["performed"], 1);
+    assert!(!posts(&seen).is_empty());
+    assert_eq!(
+        crate::native::activity::quiet(&service.activity, Duration::from_secs(2), || ()),
+        None,
+        "the input was told to the helper's other processes"
+    );
+}
+
+#[tokio::test]
+async fn input_held_between_requests_keeps_quiet_work_out_until_it_is_let_go() {
+    let owner = "a".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, _seen) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let down = vec![
+        serde_json::from_value(json!({"type": "pointer", "phase": "down", "x": 50, "y": 60}))
+            .unwrap(),
+    ];
+    let reply = service
+        .input(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(down),
+            Ok(None),
+            false,
+            &phase,
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["ok"], true);
+    let quiet = || crate::native::activity::quiet(&service.activity, Duration::ZERO, || ());
+    assert_eq!(quiet(), None, "the button is still held");
+    service.release(owner, &phase).await.unwrap();
+    assert_eq!(quiet(), Some(()), "let go");
 }

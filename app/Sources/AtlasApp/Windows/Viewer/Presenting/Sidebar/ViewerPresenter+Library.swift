@@ -2,7 +2,7 @@ import AtlasService
 import AtlasUI
 
 extension ViewerPresenter {
-  /// The Library at the sidebar's foot: Activity, Screenshots and Apps, in the View menu's order, each with its word and
+  /// The Library at the sidebar's foot: Activity and Apps, in the View menu's order, each with its word and
   /// shortcut, how many its list holds once read (``count(of:_:)``), the one showing chosen, and Activity's dot while it
   /// holds actions the person has not seen.
   ///
@@ -22,12 +22,11 @@ extension ViewerPresenter {
       }
   }
 
-  /// How many a Library list holds, as its pane counts them for whose work shows: today's actions in Activity, the
-  /// screenshots Screenshots lists, and the apps open in the helper, only those it opened while a session is chosen;
-  /// nil until the list has been read.
+  /// How many a Library list holds, as its pane counts them for whose work shows: today's actions in Activity, and the
+  /// apps open in the helper, only those it opened while a session is chosen; nil until the list has been read.
   ///
   /// - Parameters:
-  ///   - place: Activity, Screenshots or Apps.
+  ///   - place: Activity or Apps.
   ///   - snapshot: What the controller holds.
   /// - Returns: The count, or nil.
   static func count(of place: ViewerPlace, _ snapshot: ViewerSnapshot) -> Int? {
@@ -37,8 +36,6 @@ extension ViewerPresenter {
       guard let log = panes.activity.log, let readAt = panes.activity.readAt else { return nil }
       let rules = ActivityGrouping(log: log, readAt: readAt, now: snapshot.date, calendar: snapshot.zonedCalendar)
       return rules.countToday(in: ActivityScope(snapshot.shownSessions))
-    case .screenshots:
-      return panes.shots.shots.map { _ in listedShots(snapshot).count }
     case .apps:
       return panes.apps.apps.map { scopedApps($0, snapshot.shownSessions).count }
     case .screen:

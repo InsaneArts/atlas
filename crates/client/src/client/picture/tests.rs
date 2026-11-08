@@ -1,0 +1,588 @@
+use super::*;
+use crate::{
+    activity_log,
+    doing::Doing,
+    host_session::{Host, HostSession},
+    test_support::{Helper, Pictures},
+};
+use atlas_core::{
+    session::{FOCUS_APP, TYPED_FIELDS},
+    test_support::UID,
+};
+use serde_json::Value;
+use std::{fs, path::Path};
+
+/// An agent's client of a stand-in helper with an input service, keeping
+/// pictures before actions, its command doing `verb`.
+fn agent(directory: &Path, pictures: Pictures, verb: &'static str) -> (Client, Helper) {
+    let (client, helper) = Helper::client(directory, UID);
+    let mut client = client.doing(Doing::new(verb));
+    client.config.activity.pictures_before_actions = true;
+    let helper = helper
+        .serving_input(&client, &[FOCUS_APP, TYPED_FIELDS])
+        .taking_pictures(pictures);
+    (client, helper)
+}
+
+/// The input service's answer to `request`. An input waits, when `saved`,
+/// until its command's picture is saved, so a test can find its file.
+fn input_service(client: &Client, saved: bool, request: &Value) -> Option<Value> {
+    match request["op"].as_str() {
+        Some("acquire" | "release") => Some(json!({"ok": true})),
+        Some("input") => {
+            let slot = client.doing.as_ref().unwrap().before();
+            let until = Instant::now() + Duration::from_secs(5);
+            let output = client.config.output_dir.clone();
+            let saved_yet = || {
+                slot.name()
+                    .is_some_and(|name| before::Listing::of(&output).has(&name))
+            };
+            while saved && !saved_yet() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let performed = request["actions"].as_array().unwrap().len();
+            Some(json!({"ok": true, "performed": performed}))
+        }
+        other => panic!("nothing else is asked: {other:?}"),
+    }
+}
+
+/// The rows `client` wrote, oldest first.
+fn rows(client: &Client) -> Vec<Value> {
+    let log = client.output_dir().unwrap().join(activity_log::FILE);
+    fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+fn pictures(client: &Client) -> Vec<String> {
+    let folder = client.output_dir().unwrap().join(before::FOLDER);
+    let Ok(entries) = fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    entries
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|name| before::time(name).is_some())
+        .collect()
+}
+
+fn key() -> Value {
+    json!([{"type": "key", "key": "a"}])
+}
+
+#[tokio::test]
+async fn an_agents_input_names_the_picture_taken_before_it_was_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    client.host_session = Some(HostSession::new(Host::Codex, "one").unwrap());
+    let key_of = client.host_session.as_ref().unwrap().key().to_string();
+    let reply = helper
+        .serve(client.input(&key(), None, None), |request| {
+            input_service(&client, true, request)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(reply["ok"], true);
+    assert!(reply.get("before").is_none(), "the agent is never given it");
+    let log = helper.log();
+    let sent = log.iter().position(|op| op == "frame sent").unwrap();
+    let input = log.iter().position(|op| op == "input").unwrap();
+    assert!(sent < input, "the picture came before the input: {log:?}");
+    let [picture] = <[String; 1]>::try_from(pictures(&client)).unwrap();
+    assert_eq!(rows(&client)[0]["before"], picture);
+    assert!(
+        picture.contains(&key_of),
+        "its name says whose action it was"
+    );
+    let facts = before::facts(&client.config.output_dir, &picture).unwrap();
+    assert_eq!(
+        (
+            &facts["action"],
+            &facts["outcome"],
+            &facts["display"]["width"]
+        ),
+        (&json!("key"), &json!("worked"), &json!(100.0)),
+        "{facts}"
+    );
+}
+
+/// The facts kept beside the one picture `client` took.
+fn only_facts(client: &Client) -> Value {
+    let [picture] = <[String; 1]>::try_from(pictures(client)).unwrap();
+    before::facts(&client.config.output_dir, &picture).unwrap()
+}
+
+#[tokio::test]
+async fn a_named_click_marks_its_element_window_and_task_and_its_reply_stays_as_it_was() {
+    use crate::{
+        agent::{Target, click_element},
+        task::Task,
+        test_support::completed,
+    };
+    use atlas_core::{
+        actions::Button,
+        screen::select::ElementFilter,
+        session::{FOCUS_APP, FOCUS_DOCK, FOCUS_WINDOW},
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let mut client = client.doing(Doing::new("click"));
+    client.config.activity.pictures_before_actions = true;
+    let session = HostSession::new(Host::Codex, "one").unwrap();
+    client.task = Some(Task::of(session.key(), Some("probe")).unwrap());
+    client.host_session = Some(session);
+    let helper = helper
+        .serving_input(&client, &[FOCUS_APP, FOCUS_DOCK, FOCUS_WINDOW])
+        .taking_pictures(Pictures::Taken);
+    let pid = i64::from(std::process::id());
+    let filter = ElementFilter {
+        name: Some("Save".into()),
+        ..ElementFilter::default()
+    };
+    let reply = helper
+        .serve(
+            click_element(&client, &Target::Pid(pid), &filter, Button::Left, 1, &[]),
+            |request| match request["op"].as_str() {
+                Some("apps") => Some(json!({"ok": true, "apps": [{"pid": pid, "name": "Notes"}],
+                    "starts": {pid.to_string(): [123, 456]}})),
+                Some("windows") => Some(json!({"ok": true,
+                    "starts": {pid.to_string(): [123, 456]}, "windows": [{"number": 42,
+                    "pid": pid, "owner": "Notes", "title": "Draft", "layer": 0, "alpha": 1.0,
+                    "bounds": {"x": 10, "y": 20, "width": 80, "height": 60}}]})),
+                Some("run") => Some(completed(
+                    &json!({"ok": true, "truncated": false, "elements": [{"index": 0,
+                        "depth": 0, "role": "AXButton", "title": "Save", "enabled": true,
+                        "frame": {"x": 20, "y": 30, "width": 20, "height": 20},
+                        "window": {"x": 10, "y": 20, "width": 80, "height": 60}}]})
+                    .to_string(),
+                )),
+                Some("input") => input_service(&client, true, request).map(|mut reply| {
+                    reply["expect"] = request["expect"].clone();
+                    reply
+                }),
+                _ => input_service(&client, false, request),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        reply["element"],
+        json!({"role": "AXButton", "name": "Save", "at": [30, 40]})
+    );
+    let facts = only_facts(&client);
+    assert_eq!(
+        (&facts["element"], &facts["task"]),
+        (
+            &json!({"frame": {"x": 20.0, "y": 30.0, "width": 20.0, "height": 20.0},
+                "role": "AXButton", "name": "Save"}),
+            &json!("probe")
+        ),
+        "{facts}"
+    );
+    assert!(
+        !facts.to_string().contains("Draft"),
+        "a window's title may name a document, so it is never kept: {facts}"
+    );
+}
+
+#[tokio::test]
+async fn a_referenced_click_or_press_marks_the_element_the_input_service_reached() {
+    use atlas_core::session::{ELEMENT_ACTIONS, FOCUS_APP, LOOKS};
+
+    let reached = json!({"frame": {"x": 20, "y": 30, "width": 20, "height": 20},
+        "role": "AXButton", "name": "Save"});
+    for press in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = Helper::client(directory.path(), UID);
+        let mut client = client.doing(Doing::new(if press { "press" } else { "click" }));
+        client.config.activity.pictures_before_actions = true;
+        let helper = helper
+            .serving_input(&client, &[FOCUS_APP, LOOKS, ELEMENT_ACTIONS])
+            .taking_pictures(Pictures::Taken);
+        let answer = |request: &Value| {
+            let mut reply = input_service(&client, true, request)?;
+            if request["op"] != "input" {
+                return Some(reply);
+            }
+            reply["element"] = reached.clone();
+            if press {
+                reply["mechanism"] = json!("accessibility");
+                reply["verification"] = json!("matched");
+            }
+            Some(reply)
+        };
+        let reply = if press {
+            let action = json!({"type": "press", "ref": "8123abc.12"});
+            helper
+                .serve(crate::agent::element(&client, None, &action), answer)
+                .await
+        } else {
+            helper
+                .serve(
+                    crate::agent::click_reference(
+                        &client,
+                        None,
+                        "8123abc.12",
+                        atlas_core::actions::Button::Left,
+                        1,
+                        &[],
+                    ),
+                    answer,
+                )
+                .await
+        }
+        .unwrap();
+        let mut reply = reply;
+        reply.as_object_mut().unwrap().remove("elapsedMs");
+
+        let said = if press {
+            json!({"ok": true, "performed": 1, "mechanism": "accessibility",
+                "verification": "matched"})
+        } else {
+            json!({"ok": true, "performed": 1})
+        };
+        assert_eq!(reply, said, "the agent is never told: {press}");
+        let facts = only_facts(&client);
+        assert_eq!(
+            facts["element"],
+            json!({"frame": {"x": 20.0, "y": 30.0, "width": 20.0, "height": 20.0},
+                "role": "AXButton", "name": "Save"}),
+            "{facts}"
+        );
+        assert!(facts.get("window").is_none() && facts.get("task").is_none());
+    }
+}
+
+#[tokio::test]
+async fn a_click_at_a_point_marks_only_its_point() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "click");
+    let click = json!([{"type": "click", "x": 10, "y": 20}]);
+    helper
+        .serve(client.input(&click, None, None), |request| {
+            input_service(&client, true, request)
+        })
+        .await
+        .unwrap();
+
+    let facts = only_facts(&client);
+    assert_eq!(facts["point"], json!({"x": 10.0, "y": 20.0}));
+    for absent in ["element", "window", "task"] {
+        assert!(facts.get(absent).is_none(), "{absent}: {facts}");
+    }
+}
+
+#[tokio::test]
+async fn the_picture_after_an_action_is_taken_only_when_no_next_step_serves() {
+    for next_within in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+        let output = client.config.output_dir.clone();
+        let at = atlas_core::time::timestamp() - 5_000_000_000;
+        let first = before::name(at, None, None);
+        let ended = u64::try_from(at / 1_000_000).unwrap() + 100;
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+            .recursive(true)
+            .create(output.join(before::FOLDER))
+            .unwrap();
+        if next_within {
+            let next = before::name(at + 500_000_000, None, None);
+            fs::write(output.join(before::FOLDER).join(next), b"jpeg").unwrap();
+        }
+        helper
+            .serve(client.picture_after(&first, ended), |request| {
+                panic!("nothing else is asked: {request}")
+            })
+            .await
+            .unwrap();
+
+        let after = before::after_name(&first).unwrap();
+        let listing = before::Listing::of(&output);
+        assert_eq!(
+            listing.has(&after),
+            !next_within,
+            "next within: {next_within}"
+        );
+        assert_eq!(
+            helper.log().contains(&"frame sent".to_owned()),
+            !next_within
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_picture_after_the_helper_never_answers_gives_up_in_time() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Late, "key");
+    let at = atlas_core::time::timestamp() - 5_000_000_000;
+    let first = before::name(at, None, None);
+    let ended = u64::try_from(at / 1_000_000).unwrap() + 100;
+
+    let error = helper
+        .serve(client.picture_after(&first, ended), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await
+        .unwrap_err();
+
+    // Its process ends rather than waiting on with the next action's.
+    assert_eq!(error.code, Code::Capture, "{error:?}");
+    let after = before::after_name(&first).unwrap();
+    assert!(!before::Listing::of(&client.config.output_dir).has(&after));
+}
+
+#[tokio::test]
+async fn the_persons_input_and_a_setting_turned_off_take_no_picture() {
+    for person in [true, false] {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = agent(directory.path(), Pictures::Taken, "key");
+        if person {
+            client.actor = Actor::Viewer;
+        } else {
+            client.config.activity.pictures_before_actions = false;
+        }
+        helper
+            .serve(client.input(&key(), None, None), |request| {
+                input_service(&client, false, request)
+            })
+            .await
+            .unwrap();
+
+        assert!(!helper.log().contains(&"frame".to_owned()), "{person}");
+        assert!(pictures(&client).is_empty());
+        assert!(rows(&client).iter().all(|row| row.get("before").is_none()));
+    }
+}
+
+#[tokio::test]
+async fn typing_in_several_batches_takes_one_picture_named_on_its_command() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "type");
+    // Three batches of at most 64 characters.
+    let text = "a".repeat(129);
+    let report = helper
+        .serve(crate::agent::type_text(&client, &text, None), |request| {
+            input_service(&client, true, request)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(report["batches"], 3);
+    let log = helper.log();
+    assert_eq!(log.iter().filter(|op| *op == "frame").count(), 1, "{log:?}");
+    assert_eq!(log.iter().filter(|op| *op == "input").count(), 3);
+    let [picture] = <[String; 1]>::try_from(pictures(&client)).unwrap();
+    let last = rows(&client).pop().unwrap();
+    assert_eq!(last["before"], picture, "the command's row names it");
+}
+
+#[tokio::test]
+async fn text_typed_in_batches_is_kept_only_when_every_batch_went_into_a_known_field() {
+    // Each batch's field, or how its reply went instead.
+    let field = json!({"role": "AXTextField"});
+    let password = json!({"role": "AXSecureTextField"});
+    let (lost, failed) = (json!("lost"), json!("failed"));
+    for (into, kept, secure) in [
+        ([field.clone(), field.clone(), field.clone()], true, false),
+        ([field.clone(), Value::Null, field.clone()], false, false),
+        ([field.clone(), password, field.clone()], false, true),
+        ([field.clone(), lost, field.clone()], false, false),
+        ([field.clone(), failed, field.clone()], false, false),
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = agent(directory.path(), Pictures::Taken, "type");
+        let text = "a".repeat(129);
+        let mut batch = 0;
+        helper
+            .serve(crate::agent::type_text(&client, &text, None), |request| {
+                let mut reply = input_service(&client, true, request)?;
+                if request["op"] == "input" {
+                    let said = into[batch].clone();
+                    batch += 1;
+                    if said == "lost" {
+                        return None;
+                    }
+                    if said == "failed" {
+                        return Some(json!({"ok": false, "code": "input",
+                            "error": "The batch failed", "performed": 1, "partial": true,
+                            "uncertain": false}));
+                    }
+                    reply["field"] = said;
+                }
+                Some(reply)
+            })
+            .await
+            .unwrap();
+
+        let facts = only_facts(&client);
+        assert_eq!(facts.get("text").is_some(), kept, "{into:?}: {facts}");
+        assert_eq!(facts.get("length").is_some(), kept, "{into:?}");
+        assert_eq!(facts.get("secure").is_some(), secure, "{into:?}");
+        if kept {
+            assert_eq!(facts["length"], 129);
+        }
+    }
+}
+
+#[tokio::test]
+async fn no_text_is_kept_through_an_input_service_that_cannot_tell_a_password_field() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let mut client = client.doing(Doing::new("type"));
+    client.config.activity.pictures_before_actions = true;
+    // An older service names a password field by its role alone.
+    let helper = helper
+        .serving_input(&client, &[FOCUS_APP])
+        .taking_pictures(Pictures::Taken);
+    helper
+        .serve(
+            crate::agent::type_text(&client, "secret", None),
+            |request| {
+                let mut reply = input_service(&client, true, request)?;
+                if request["op"] == "input" {
+                    reply["field"] = json!({"role": "AXTextField"});
+                }
+                Some(reply)
+            },
+        )
+        .await
+        .unwrap();
+
+    let facts = only_facts(&client);
+    assert_eq!(facts["action"], "type");
+    for absent in ["text", "length"] {
+        assert!(facts.get(absent).is_none(), "{absent}: {facts}");
+    }
+}
+
+#[tokio::test]
+async fn a_refused_or_late_picture_never_holds_the_input_back() {
+    for pictures_answer in [Pictures::Refused, Pictures::Late, Pictures::Cancelled] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = agent(directory.path(), pictures_answer, "key");
+        let reply = helper
+            .serve(client.input(&key(), None, None), |request| {
+                input_service(&client, false, request)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(reply["ok"], true, "{pictures_answer:?}");
+        let log = helper.log();
+        assert!(!log.contains(&"frame sent".to_owned()));
+        assert!(pictures(&client).is_empty(), "{pictures_answer:?}");
+        assert!(rows(&client)[0].get("before").is_none());
+        if pictures_answer == Pictures::Cancelled {
+            let cancelled = log.iter().position(|op| op == "frame cancelled");
+            let input = log.iter().position(|op| op == "input");
+            assert!(
+                cancelled
+                    .zip(input)
+                    .is_some_and(|(cancelled, input)| cancelled < input),
+                "the input waits for the cancel's answer: {log:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_frame_whose_pixels_come_only_after_the_input_leaves_no_trace() {
+    for pictures_answer in [Pictures::AfterInput, Pictures::PixelsAfterInput] {
+        let directory = tempfile::tempdir().unwrap();
+        let (client, helper) = agent(directory.path(), pictures_answer, "type");
+        let reply = helper
+            .serve(crate::agent::type_text(&client, "hello", None), |request| {
+                let mut reply = input_service(&client, false, request)?;
+                if request["op"] == "input" {
+                    reply["field"] = json!({"role": "AXTextField"});
+                }
+                Some(reply)
+            })
+            .await
+            .unwrap();
+        // Long enough for a writer that should not exist to have written.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(reply["ok"], true, "{pictures_answer:?}");
+        let log = helper.log();
+        let input = log.iter().position(|op| op == "input");
+        let released = log.iter().position(|op| op == "frame released");
+        assert!(
+            input
+                .zip(released)
+                .is_some_and(|(input, released)| input < released),
+            "valid pixels came, only after the input: {log:?}"
+        );
+        let folder = client.config.output_dir.join(before::FOLDER);
+        let kept: Vec<_> = fs::read_dir(folder)
+            .map(|entries| entries.map(|entry| entry.unwrap().file_name()).collect())
+            .unwrap_or_default();
+        assert!(kept.is_empty(), "{pictures_answer:?}: {kept:?}");
+        assert!(
+            rows(&client).iter().all(|row| row.get("before").is_none()),
+            "{pictures_answer:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_picture_comes_only_from_the_verified_daemon() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let taking = client
+        .picture_before(&epoch(), std::process::id() + 1)
+        .unwrap();
+    let picture = helper
+        .serve(taking.taken(), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await;
+    assert!(picture.is_none());
+    assert!(
+        helper.log().is_empty(),
+        "nothing is asked of another process"
+    );
+}
+
+#[tokio::test]
+async fn a_late_picture_is_given_up_at_its_deadline() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Late, "key");
+    let started = Instant::now();
+    let taking = client.picture_before(&epoch(), std::process::id()).unwrap();
+    assert!(
+        client
+            .picture_before(&epoch(), std::process::id())
+            .is_none(),
+        "one for each command"
+    );
+    let picture = helper
+        .serve(taking.taken(), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await;
+    assert!(picture.is_none());
+    let waited = started.elapsed();
+    assert!(waited >= WAIT, "{waited:?}");
+    assert!(
+        waited < WAIT + Duration::from_millis(80),
+        "the cancel's answer is waited for within the deadline: {waited:?}"
+    );
+}
+
+/// The session a picture is asked of.
+fn epoch() -> InputEpoch {
+    InputEpoch {
+        uid: UID,
+        security_session_id: 42,
+        display_id: 7,
+        width: 100.0,
+        height: 100.0,
+        process_id: 456,
+    }
+}

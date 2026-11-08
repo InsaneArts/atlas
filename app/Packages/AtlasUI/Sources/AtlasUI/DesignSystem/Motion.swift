@@ -98,6 +98,8 @@ public enum Motion {
     static let spin = Duration(seconds: 0.9)
     /// 1.6: one breath of the live badge.
     public static let breathe = Duration(seconds: 1.6)
+    /// 1.5: how long a button says what it just did, such as Copy saying Copied, before it reads as itself again.
+    public static let confirmHold = Duration(seconds: 1.5)
     /// 2.4: how long a toast stays.
     public static let toast = Duration(seconds: 2.4)
     /// 2.4: one turn of the ring tracing round Atlas's mark while the viewer connects.

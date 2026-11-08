@@ -1,7 +1,7 @@
 import Foundation
 
 extension ActivityMoments {
-  /// A moment while its lines are gathered, oldest last.
+  /// A run while its lines are gathered, oldest last.
   struct Forming {
     /// Whose work it follows.
     var stream: ActivityStream
@@ -16,7 +16,7 @@ extension ActivityMoments {
     /// When its newest line's newest row started, when known.
     var endedAt: Date?
 
-    /// Opens a moment with its newest line.
+    /// Opens a run with its newest line.
     ///
     /// - Parameters:
     ///   - stream: Whose work it follows.
@@ -32,9 +32,10 @@ extension ActivityMoments {
       endedAt = run.endedAt
     }
 
-    /// Whether an older line joins the moment: on the same day, at most ``ActivityMoments/momentGap`` before its
-    /// oldest line, and in the same app, in none, or the moment is in none yet. A line or a moment with no time is
-    /// never too far.
+    /// Whether an older line joins the run: on the same day, at most ``ActivityMoments/momentGap`` before its
+    /// oldest line, and in the same app, in none, or the run is in none yet. A line in no app joins a run in none
+    /// however long before it was, so neighbouring commands and screenshots read as one run. A line or a run with no
+    /// time is never too far.
     ///
     /// - Parameters:
     ///   - run: The line.
@@ -43,6 +44,7 @@ extension ActivityMoments {
     /// - Returns: Whether it joins.
     func takes(_ run: ActivityRun, app: ActivityApp?, day: Date) -> Bool {
       guard day == self.day else { return false }
+      if app == nil, self.app == nil { return true }
       if let startedAt, let ended = run.endedAt, startedAt.timeIntervalSince(ended) > ActivityMoments.momentGap {
         return false
       }
@@ -50,7 +52,7 @@ extension ActivityMoments {
       return own.isSame(as: app)
     }
 
-    /// Adds an older line, which a moment in no app takes its app from.
+    /// Adds an older line, which a run in no app takes its app from.
     ///
     /// - Parameters:
     ///   - run: The line.
@@ -62,7 +64,7 @@ extension ActivityMoments {
       if let ended = run.endedAt { endedAt = max(endedAt ?? ended, ended) }
     }
 
-    /// The moment with an initial identity from its stream and oldest line, reconciled against preceding readings.
+    /// The run with an initial identity from its stream and oldest line, reconciled against preceding readings.
     var moment: ActivityMoment {
       ActivityMoment(
         id: "\(stream.id)|\(runs.last?.entry.logicalId ?? "")",

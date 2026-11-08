@@ -7,31 +7,22 @@ import UserNotifications
 struct NotificationClicksTests {
   @Test("Recover recovers, a click or Open Atlas opens the main window, and a dismissal does nothing")
   func eachResponseAsksForItsOwn() {
-    #expect(NotificationClicks.answer(to: NotificationWords.recoverAction, offersRecover: true) == .recover)
+    #expect(NotificationClicks.answer(to: NotificationWords.recoverAction) == .recover)
     #expect(NotificationClicks.answer(to: NotificationWords.openAction) == .open)
     #expect(NotificationClicks.answer(to: UNNotificationDefaultActionIdentifier) == .open)
     #expect(NotificationClicks.answer(to: UNNotificationDismissActionIdentifier) == .none)
-  }
-
-  @Test("with Recover no longer offered, a Recover left in Notification Center opens Atlas instead")
-  func recoverOpensWhenNotOffered() {
-    #expect(NotificationClicks.answer(to: NotificationWords.recoverAction, offersRecover: false) == .open)
   }
 
   @Test(
     "The helper needs you offers Recover alone, which asks for the Mac to be unlocked and never brings Atlas forward"
   )
   func recoverIsTheOneAction() throws {
-    let actions = Notifier.attentionCategory(offersRecover: true)
+    let actions = Notifier.attentionCategory()
       .actions
     #expect(actions.map(\.identifier) == [NotificationWords.recoverAction], "a click on it opens Atlas already")
     let recover = try #require(actions.first)
     #expect(recover.options.contains(.authenticationRequired))
     #expect(!recover.options.contains(.foreground))
-    let alone = Notifier.attentionCategory(offersRecover: false)
-      .actions
-    #expect(alone.map(\.identifier) == [NotificationWords.openAction], "Open Atlas instead when Recover is off")
-    #expect(try #require(alone.first).options.contains(.foreground))
   }
 
   @Test(

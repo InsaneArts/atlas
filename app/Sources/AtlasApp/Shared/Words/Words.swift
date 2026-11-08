@@ -56,8 +56,6 @@ enum Words {
   static let nothingHappening = "Nothing is happening in the helper"
   /// While the helper is recovered, from the panel or the viewer.
   static let recovering = "Recovering the helper…"
-  /// Recovery gave no answer in time and may still be under way.
-  static let stillRecovering = "The helper is still recovering. This can take a minute."
   /// Once recovery ran without restarting the helper, from the panel or the viewer.
   static let readyAgain = "The helper is ready again."
   /// Once recovery restarted the helper, which ended any control.

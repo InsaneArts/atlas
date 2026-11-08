@@ -19,13 +19,13 @@ import Testing
 @MainActor
 struct ViewerSidebarKeyDispatchTests {
   @Test(
-    "native window dispatch preserves arrows and Space for a focused sidebar session row while Screenshots shows",
+    "native window dispatch preserves arrows and Space for a focused sidebar session row while Activity shows",
     arguments: [false, true]
   )
   func sidebarRowsOwnTheirKeys(overlay: Bool) async throws {
     _ = NSApplication.shared
     let viewer = ViewerController.scripted(ScriptedService())
-    viewer.session.place = .screenshots
+    viewer.session.place = .activity
     viewer.session.overlayShown = overlay
     let window = ViewerWindow(controller: viewer) { _ in }
     defer { window.close() }
@@ -45,7 +45,7 @@ struct ViewerSidebarKeyDispatchTests {
       hosting._renderForTest(interval: .zero)
     }
     #expect(window.firstResponder !== window, "a real sidebar row must own native focus")
-    window.sendEvent(try Self.key(ShotKeys.down, characters: "\u{f701}", in: window))
+    window.sendEvent(try Self.key(Self.down, characters: "\u{f701}", in: window))
     for _ in 0..<6 {
       await afterQueuedWork()
       hosting._renderForTest(interval: .zero)
@@ -53,9 +53,12 @@ struct ViewerSidebarKeyDispatchTests {
     let choice = try #require(sent.last)
     #expect(choice == .chooseSession(state.choice(1, from: .all)))
     sent.removeAll()
-    window.sendEvent(try Self.key(ShotKeys.space, characters: " ", in: window))
-    #expect(sent.last == choice, "Space activates the focused session row rather than a screenshot")
+    window.sendEvent(try Self.key(WindowKeys.space, characters: " ", in: window))
+    #expect(sent.last == choice, "Space activates the focused session row rather than anything in Activity")
   }
+
+  /// ↓'s key code.
+  private static let down: UInt16 = 125
 
   private static func key(_ code: UInt16, characters: String, in window: NSWindow) throws -> NSEvent {
     try #require(

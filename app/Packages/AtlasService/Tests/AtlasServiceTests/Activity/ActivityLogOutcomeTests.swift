@@ -37,7 +37,7 @@ struct ActivityLogOutcomeTests {
     )
     let entries = try ViewerClient.activity(body, response: reply(200)).entries
     #expect(entries.map(\.logicalId) == ["command", "older", "empty", "null", "malformed"])
-    #expect(ActivityFixtures.row(id: "constructed").logicalId == "constructed")
+    #expect(ActivityLog.Entry(id: "constructed").logicalId == "constructed")
   }
 
   @Test("an input refused part-way through is a failure, not refused before anything was sent")
@@ -76,12 +76,14 @@ struct ActivityLogOutcomeTests {
     let entries = try ViewerClient.activity(body, response: reply(200)).entries
     #expect(entries.count == 2)
     let entry = try #require(entries.first)
-    #expect(entry.id == "405a9bc9382e3946")
+    #expect(entry.id == "005c1a426da2b2fb")
     #expect(entry.logicalId == "c1")
     #expect(entry.outcome == .failed)
     #expect(ActivityFilter.problems.admits(entry))
     #expect(entry.reason == "Another window was in front")
+    #expect(entry.before == "90000000000-before.jpg")
     #expect(entries.last?.logicalId == "18919a007a04e825")
+    #expect(entries.last?.before == nil)
   }
 
   @Test(
