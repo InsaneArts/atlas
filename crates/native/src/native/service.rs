@@ -710,13 +710,14 @@ fn recheck(
     let Some(mut recheck) = engine.recheck.take() else {
         return Ok(());
     };
-    let mut look = asking::live::OnScreen {
-        looks: &engine.looks,
-        epoch: &engine.epoch,
-        deadline: std::time::Instant::now() + ASK_BUDGET,
-        intended: recheck.intended.clone(),
-        held: recheck.held.take(),
-    };
+    // What it lands in now, as found: the app the request named stands in
+    // for what is in front only before its first event.
+    let mut look = asking::live::OnScreen::observing(
+        &engine.looks,
+        &engine.epoch,
+        std::time::Instant::now() + ASK_BUDGET,
+        recheck.held.take(),
+    );
     let decision = judge(&mut recheck, &mut look);
     recheck.held = look.held;
     engine.recheck = Some(recheck);
@@ -756,7 +757,7 @@ fn gate_request(
         intended: intended.clone(),
         held: None,
     };
-    let (decision, recheck) = asking::recheck(actions, asking, &mut look, intended);
+    let (decision, recheck) = asking::recheck(actions, asking, &mut look);
     match decision {
         asking::Decision::Free => Ok(recheck),
         asking::Decision::Ask(question) => {

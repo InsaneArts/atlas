@@ -37,13 +37,31 @@ pub(crate) struct OnScreen<'a> {
     pub(crate) epoch: &'a InputEpoch,
     pub(crate) deadline: Instant,
     /// The app the request names (`--app`, `--pid`, `--window`), which its
-    /// preparation brings forward before the first event: what it lands in.
+    /// preparation brings forward before the first event: what it lands in,
+    /// as the check before the first event judges it.
     pub(crate) intended: Option<String>,
     /// The element keyboard focus was on when last read.
     pub(crate) held: Option<Held>,
 }
 
-impl OnScreen<'_> {
+impl<'a> OnScreen<'a> {
+    /// The screen as a check before an event reads it: what it finds there,
+    /// never the app the request named in its place.
+    pub(crate) fn observing(
+        looks: &'a Looks,
+        epoch: &'a InputEpoch,
+        deadline: Instant,
+        held: Option<Held>,
+    ) -> Self {
+        Self {
+            looks,
+            epoch,
+            deadline,
+            intended: None,
+            held,
+        }
+    }
+
     /// `read`, unless the request names another app it will bring forward:
     /// then that app, with what lies in it not yet readable.
     pub(super) fn as_intended(&self, read: Target) -> Target {

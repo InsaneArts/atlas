@@ -293,7 +293,7 @@ async fn each_character_after_the_first_is_judged_again_and_one_that_asks_stops_
         text: "a\nb".to_owned(),
     };
     let (_, mut recheck) =
-        crate::native::asking::recheck(std::slice::from_ref(&typing), &asking, &mut Nowhere, None);
+        crate::native::asking::recheck(std::slice::from_ref(&typing), &asking, &mut Nowhere);
     let _ = recheck.check(&typing, &mut Nowhere);
     engine.recheck = Some(recheck);
 

@@ -515,8 +515,8 @@ fn an_action_that_would_now_land_somewhere_stricter_stops_the_rest() {
         ..Target::default()
     };
     let mut look = scripted(notes.clone(), notes);
-    let keys = actions(json!([{"type": "key", "key": "a"}, {"type": "key", "key": "b"}]));
-    let (decision, mut recheck) = recheck(&keys, &asking, &mut look, None);
+    let keys = actions(json!([{"type": "type", "text": "a"}, {"type": "type", "text": "b"}]));
+    let (decision, mut recheck) = recheck(&keys, &asking, &mut look);
     assert_eq!(decision, Decision::Free, "judged in an app not listed");
     assert_eq!(recheck.check(&keys[0], &mut look), Decision::Free);
     // Before the second key, Slack, kept Look Only, has come to the front.
@@ -687,7 +687,7 @@ fn an_action_judged_again_stops_when_the_same_account_now_has_a_control_that_sen
         page("github.com", "AXButton", Some("Open")),
         Target::default(),
     );
-    let (decision, mut again) = recheck(&click, &asking, &mut look, None);
+    let (decision, mut again) = recheck(&click, &asking, &mut look);
     assert_eq!(decision, Decision::Free);
     look.point = page("github.com", "AXButton", Some("Send"));
     assert_eq!(
@@ -715,7 +715,7 @@ fn an_action_judged_again_keeps_each_grant_to_its_own_account_window_and_element
     task.grants.push(Allowance::Task {
         account: site("slack.com"),
     });
-    let (decision, mut again) = recheck(&click, &task, &mut look, None);
+    let (decision, mut again) = recheck(&click, &task, &mut look);
     assert_eq!(decision, Decision::Free);
     look.point = page("github.com", "AXButton", Some("Send"));
     assert!(
@@ -728,7 +728,7 @@ fn an_action_judged_again_keeps_each_grant_to_its_own_account_window_and_element
         panic!("asks");
     };
     asking.grants.push(once(&question));
-    let (decision, mut again) = recheck(&click, &asking, &mut look, None);
+    let (decision, mut again) = recheck(&click, &asking, &mut look);
     assert_eq!(decision, Decision::Free);
     assert_eq!(again.check(&click[0], &mut look), Decision::Free);
     look.point = Target {
@@ -754,7 +754,7 @@ fn between_characters_focus_that_stayed_is_not_read_again_and_focus_that_moved_i
     let asking = listing(Kind::Site, "slack.com", Level::Ask);
     let typing = actions(json!([{"type": "type", "text": "hunter2"}]));
     let mut look = scripted(Target::default(), field("app.slack.com", true));
-    let (decision, mut again) = recheck(&typing, &asking, &mut look, None);
+    let (decision, mut again) = recheck(&typing, &asking, &mut look);
     assert_eq!(decision, Decision::Free);
     assert_eq!(again.check(&typing[0], &mut look), Decision::Free);
     let reads = look.focus_reads;
@@ -776,7 +776,7 @@ fn between_characters_focus_that_stayed_is_not_read_again_and_focus_that_moved_i
     let mut bank = asking.clone();
     bank.accounts[0].id = "bank.example".to_owned();
     bank.accounts[0].level = Level::LookOnly;
-    let (_, mut again) = recheck(&typing, &bank, &mut look, None);
+    let (_, mut again) = recheck(&typing, &bank, &mut look);
     let _ = again.check(&typing[0], &mut look);
     assert!(
         matches!(again.event(&mut look), Decision::Deny { .. }),
@@ -1110,4 +1110,72 @@ fn after_typing_what_lies_under_a_point_cant_be_told_but_more_typing_stays_a_dra
         {"type": "type", "text": "notes"},
     ]));
     assert_eq!(decide(&drafts, &asking, &mut look), Decision::Free);
+}
+
+#[test]
+fn after_a_click_which_account_a_key_lands_in_cant_be_told_so_it_asks_first() {
+    let asking = listing(Kind::Site, "slack.com", Level::Ask);
+    // The click lands in the listed page's draft field; the focus read
+    // before it is an unlisted page.
+    let mut look = scripted(
+        Target {
+            editable: true,
+            ..page("app.slack.com", "AXTextArea", Some("Message"))
+        },
+        field("gitlab.com", false),
+    );
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
+    let then_return = actions(json!([
+        {"type": "click", "x": 1, "y": 1},
+        {"type": "key", "key": "return"},
+    ]));
+    let Decision::Ask(question) = decide(&then_return, &asking, &mut look) else {
+        panic!("asks before the click is sent");
+    };
+    assert_eq!(question.what, "unsure");
+    assert_eq!(
+        question.details()["task"],
+        false,
+        "no account to allow it in"
+    );
+    assert_eq!(question.details()["once"], true);
+}
+
+#[test]
+fn a_check_before_an_event_judges_the_app_it_finds_not_the_one_the_request_named() {
+    let looks = crate::native::ax::Looks::default();
+    let epoch = atlas_core::session::InputEpoch {
+        uid: 501,
+        security_session_id: 1,
+        display_id: 2,
+        width: 800.0,
+        height: 600.0,
+        process_id: 1,
+    };
+    let screen = live::OnScreen::observing(&looks, &epoch, std::time::Instant::now(), None);
+    let slack = Target {
+        app: Some(SLACK.to_owned()),
+        editable: true,
+        ..Target::default()
+    };
+    assert_eq!(screen.as_intended(slack.clone()), slack);
+
+    // Typing into TextEdit, which isn't listed, when Slack, kept Look Only,
+    // takes focus partway.
+    let asking = listing(Kind::App, SLACK, Level::LookOnly);
+    let typing = actions(json!([{"type": "type", "text": "hello"}]));
+    let mut look = scripted(
+        Target::default(),
+        Target {
+            app: Some("com.apple.TextEdit".to_owned()),
+            editable: true,
+            ..Target::default()
+        },
+    );
+    let (decision, mut again) = recheck(&typing, &asking, &mut look);
+    assert_eq!(decision, Decision::Free);
+    assert_eq!(again.check(&typing[0], &mut look), Decision::Free);
+    look.focus = slack;
+    assert!(matches!(again.event(&mut look), Decision::Deny { .. }));
 }

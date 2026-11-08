@@ -365,7 +365,6 @@ pub(crate) struct Recheck {
     asking: Asking,
     batch: String,
     pressed: bool,
-    pub(crate) intended: Option<String>,
     /// The action under way, judged again before each of its events after
     /// the first.
     current: Option<Action>,
@@ -408,13 +407,11 @@ pub(crate) fn recheck(
     actions: &[Action],
     asking: &Asking,
     look: &mut impl Look,
-    intended: Option<String>,
 ) -> (Decision, Recheck) {
     let recheck = Recheck {
         asking: asking.clone(),
         batch: digest(actions),
         pressed: false,
-        intended,
         current: None,
         held: None,
     };
@@ -437,10 +434,22 @@ fn judge(
         Action::Drag { to_x, to_y, .. } => Some(look.at_point(*to_x, *to_y)),
         _ => None,
     };
-    let found: Vec<Found> = std::iter::once(&target)
+    let mut found: Vec<Found> = std::iter::once(&target)
         .chain(drop.as_ref())
         .filter_map(|landing| account(landing, asking))
         .collect();
+    if changed {
+        // Where an earlier action may have moved things, which account this
+        // lands in can't be told either: it asks, and only once, unless what
+        // was read is already Look Only.
+        found.retain(|found| found.level == Level::LookOnly);
+        found.push(Found {
+            key: AccountKey::unread(),
+            name: "this account".to_owned(),
+            level: Level::Ask,
+            known: false,
+        });
+    }
     // A move with a button held, a scroll's own move included, is a drag:
     // a change where it lands.
     let changes_it = mutates(action)
@@ -479,7 +488,9 @@ fn judge(
     };
     let known = open.iter().all(|found| found.known);
     let message = (what == "send-key" && target.editable && !target.secure).then(|| look.message());
-    let pinned = known
+    // Allowed once, a request whose later part can't be told runs again;
+    // the check before each event then judges where each part lands.
+    let pinned = (known || changed)
         && pinned(action, &target)
         && drop.as_ref().is_none_or(|drop| drop.window.is_some())
         && !matches!(message, Some(Message::Unread));
