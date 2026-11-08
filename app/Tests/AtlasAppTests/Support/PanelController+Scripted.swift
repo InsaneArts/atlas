@@ -28,12 +28,7 @@ extension PanelController {
       dependencies: PanelDependencies(
         service: service,
         commands: commands,
-        actions: HelperActions(
-          console: SessionConsole(read: { true }),
-          commands: commands,
-          service: service,
-          barrier: ControlBarrier(service: service, clock: clock)
-        ),
+        actions: HelperActions.scripted(service, commands: commands, clock: clock),
         loginItem: loginItem.seam,
         links: links,
         clock: clock,

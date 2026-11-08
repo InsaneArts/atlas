@@ -61,12 +61,7 @@ struct HelperCommandsAlertTests {
     let commands = ScriptedCommands(["start-input": #"{"ok": true}"#])
     let held = ReleaseSignal()
     commands.whileRunning { _ in await held.wait() }
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: ManualClock())
-    )
+    let actions = HelperActions.scripted(service, commands: commands)
     let clock = ManualClock()
     let window = AlertController(alert: .recover, actions: actions, links: AlertLinks(clock: clock))
     window.send(.confirm)

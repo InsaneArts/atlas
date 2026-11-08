@@ -32,7 +32,7 @@ struct ViewerPictureViewsTests {
   ) async throws -> ViewerController {
     let click = ActionFacts(action: .click, display: .init(width: 4, height: 3), point: .init(x: 2, y: 1))
     service.activityLog = ActivityLog(entries: [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c2",
         says: "clicked in TextEdit",
         ageSeconds: 1,
@@ -42,7 +42,7 @@ struct ViewerPictureViewsTests {
         after: names.after,
         facts: click
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "clicked Name in TextEdit",
         ageSeconds: 3,

@@ -18,12 +18,7 @@ struct PanelAccessibilityTests {
       dependencies: PanelDependencies(
         service: service,
         commands: commands,
-        actions: HelperActions(
-          console: SessionConsole(read: { true }),
-          commands: commands,
-          service: service,
-          barrier: ControlBarrier(service: service, clock: clock)
-        ),
+        actions: HelperActions.scripted(service, commands: commands, clock: clock),
         loginItem: ScriptedLoginItem().seam,
         clock: clock
       )

@@ -39,7 +39,7 @@ struct ViewerActivityHistoryTests {
     ActivityLog(
       entries: range.reversed()
         .map { index in
-          ActivityFixtures.row(
+          ActivityLog.Entry(
             id: "row-\(index)",
             says: "clicked Item \(index)",
             ageSeconds: Double(range.upperBound - index),

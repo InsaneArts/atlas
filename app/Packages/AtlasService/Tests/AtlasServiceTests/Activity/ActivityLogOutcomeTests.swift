@@ -37,7 +37,7 @@ struct ActivityLogOutcomeTests {
     )
     let entries = try ViewerClient.activity(body, response: reply(200)).entries
     #expect(entries.map(\.logicalId) == ["command", "older", "empty", "null", "malformed"])
-    #expect(ActivityFixtures.row(id: "constructed").logicalId == "constructed")
+    #expect(ActivityLog.Entry(id: "constructed").logicalId == "constructed")
   }
 
   @Test("an input refused part-way through is a failure, not refused before anything was sent")

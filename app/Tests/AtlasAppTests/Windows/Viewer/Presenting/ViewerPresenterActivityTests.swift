@@ -28,16 +28,16 @@ struct ViewerPresenterActivityTests {
   @Test("each kind of action has its glyph, and a problem has the warning glyph")
   func eachKindHasItsGlyph() {
     let rows: [(entry: ActivityLog.Entry, kind: ViewerActivityKind)] = [
-      (ActivityFixtures.row(id: "1", says: "clicked Save in TextEdit", verb: "click"), .pointer),
-      (ActivityFixtures.row(id: "2", says: "typed in TextEdit", verb: "type"), .typing),
-      (ActivityFixtures.row(id: "3", says: "pressed ⌘S in TextEdit", verb: "key"), .keys),
-      (ActivityFixtures.row(id: "4", says: "scrolled in Opie"), .scroll),
-      (ActivityFixtures.row(id: "5", says: "took a screenshot", operation: "screenshot"), .screenshot),
-      (ActivityFixtures.row(id: "6", says: "opened Opie", operation: "open"), .window),
-      (ActivityFixtures.row(id: "7", says: "ran a command", operation: "run"), .command),
-      (ActivityFixtures.row(id: "8", says: "clicked in Opie", actor: .you), .person),
-      (ActivityFixtures.row(id: "9", says: "gave back control", actor: .you, operation: "release"), .control),
-      (ActivityFixtures.row(id: "10", says: "couldn't click Save in TextEdit", outcome: .failed), .problem),
+      (ActivityLog.Entry(id: "1", says: "clicked Save in TextEdit", verb: "click"), .pointer),
+      (ActivityLog.Entry(id: "2", says: "typed in TextEdit", verb: "type"), .typing),
+      (ActivityLog.Entry(id: "3", says: "pressed ⌘S in TextEdit", verb: "key"), .keys),
+      (ActivityLog.Entry(id: "4", says: "scrolled in Opie"), .scroll),
+      (ActivityLog.Entry(id: "5", says: "took a screenshot", operation: "screenshot"), .screenshot),
+      (ActivityLog.Entry(id: "6", says: "opened Opie", operation: "open"), .window),
+      (ActivityLog.Entry(id: "7", says: "ran a command", operation: "run"), .command),
+      (ActivityLog.Entry(id: "8", says: "clicked in Opie", actor: .you), .person),
+      (ActivityLog.Entry(id: "9", says: "gave back control", actor: .you, operation: "release"), .control),
+      (ActivityLog.Entry(id: "10", says: "couldn't click Save in TextEdit", outcome: .failed), .problem),
     ]
     for row in rows {
       #expect(ViewerPresenter.stepKind(row.entry) == row.kind, "\(row.entry.id)")
@@ -65,7 +65,7 @@ struct ViewerPresenterActivityTests {
     let log = [42.0, 72, 112, 117]
       .enumerated()
       .map { index, age in
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "c\(index)",
           says: "clicked Item \(index) in TextEdit",
           ageSeconds: age,
@@ -99,8 +99,8 @@ struct ViewerPresenterActivityTests {
     let name = "1792665100000000000-before.jpg"
     let snapshot = try ViewerActivityFixtures.onActivity(
       [
-        ActivityFixtures.row(id: "c2", says: "clicked Save in TextEdit", ageSeconds: 1, verb: "click", before: name),
-        ActivityFixtures.row(id: "c1", says: "scrolled in TextEdit", ageSeconds: 3, verb: "scroll"),
+        ActivityLog.Entry(id: "c2", says: "clicked Save in TextEdit", ageSeconds: 1, verb: "click", before: name),
+        ActivityLog.Entry(id: "c1", says: "scrolled in TextEdit", ageSeconds: 3, verb: "scroll"),
       ],
       sessions: []
     )
@@ -121,7 +121,7 @@ struct ViewerPresenterActivityTests {
     let plain = ViewerActivityFixtures.steps(
       ViewerActivityFixtures.opened(
         try ViewerActivityFixtures.onActivity(
-          [ActivityFixtures.row(id: "t1", says: "typed in TextEdit", ageSeconds: 0, verb: "type", app: "TextEdit")],
+          [ActivityLog.Entry(id: "t1", says: "typed in TextEdit", ageSeconds: 0, verb: "type", app: "TextEdit")],
           sessions: []
         )
       )
@@ -140,7 +140,7 @@ struct ViewerPresenterActivityTests {
         "install": "installed TextEdit", "cleanup": "cleaned up this session's work",
       ][verb]
     )
-    let row = ActivityFixtures.row(
+    let row = ActivityLog.Entry(
       id: "app",
       says: words,
       operation: "run",
@@ -155,14 +155,14 @@ struct ViewerPresenterActivityTests {
   @Test("a command shows no arguments")
   func aCommandShowsNoArguments() throws {
     let log = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "r2",
         says: "ran swift build --verbose",
         outcome: .failed,
         ageSeconds: 1,
         operation: "run"
       ),
-      ActivityFixtures.row(id: "r1", says: "ran rm -rf build", ageSeconds: 5, operation: "run"),
+      ActivityLog.Entry(id: "r1", says: "ran rm -rf build", ageSeconds: 5, operation: "run"),
     ]
     let activity = ViewerActivityFixtures.opened(try ViewerActivityFixtures.onActivity(log, sessions: []))
     #expect(
@@ -196,7 +196,7 @@ struct ViewerPresenterActivityTests {
     let older = (0..<9)
       .reversed()
       .map {
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "e\($0)",
           says: "clicked in TextEdit",
           ageSeconds: Double(600 - $0 * 20),
@@ -206,7 +206,7 @@ struct ViewerPresenterActivityTests {
       }
     let log =
       [
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "n1",
           says: "opened Notes",
           ageSeconds: 2,
@@ -230,7 +230,7 @@ struct ViewerPresenterActivityTests {
   func openingAFoldedRunKeepsItOpen() throws {
     let older = (0..<3)
       .map {
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "e\($0)",
           says: "clicked in TextEdit",
           ageSeconds: Double(600 + $0 * 10),
@@ -242,7 +242,7 @@ struct ViewerPresenterActivityTests {
     var run = try #require(ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).first)
     #expect(!run.isOpen)
     snapshot.panes.activity.choices[run.id] = true
-    let newer = ActivityFixtures.row(
+    let newer = ActivityLog.Entry(
       id: "e9",
       says: "clicked in TextEdit",
       ageSeconds: 590,
@@ -251,7 +251,7 @@ struct ViewerPresenterActivityTests {
     )
     snapshot.panes.activity.log = ActivityLog(
       entries: [
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "n1",
           says: "opened Notes",
           ageSeconds: 0,
@@ -274,7 +274,7 @@ struct ViewerPresenterActivityTests {
       names
       .enumerated()
       .map { index, name in
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "s\(index)",
           says: "took a screenshot",
           ageSeconds: Double(10 - index),
@@ -282,7 +282,7 @@ struct ViewerPresenterActivityTests {
           capture: name
         )
       }
-    let failed = ActivityFixtures.row(
+    let failed = ActivityLog.Entry(
       id: "r1",
       says: "ran swift build",
       outcome: .failed,
@@ -312,8 +312,8 @@ struct ViewerPresenterActivityTests {
   func theFiltersCountWhatWasDone() throws {
     let log =
       ViewerActivityFixtures.textEditLog + [
-        ActivityFixtures.row(id: "s1", says: "took a screenshot", ageSeconds: 40, operation: "screenshot"),
-        ActivityFixtures.row(
+        ActivityLog.Entry(id: "s1", says: "took a screenshot", ageSeconds: 40, operation: "screenshot"),
+        ActivityLog.Entry(
           id: "f1",
           says: "couldn't click Save in TextEdit",
           outcome: .failed,
@@ -384,7 +384,7 @@ struct ViewerPresenterActivityTests {
   @Test("only the causing session's uncertain step offers Recover, and its run and session stay open")
   func onlyTheCausersUncertainStepOffersRecover() throws {
     let log = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "clicked Show Center in Opie",
         outcome: .failed,
@@ -393,7 +393,7 @@ struct ViewerPresenterActivityTests {
         verb: "click",
         app: "Opie"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "x1",
         says: "couldn't click Save in Notes",
         outcome: .failed,
@@ -438,7 +438,7 @@ struct ViewerPresenterActivityTests {
   func oneSessionCannotFoldAwayRecovery() throws {
     var snapshot = try ViewerActivityFixtures.onActivity(
       [
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "c1",
           says: "clicked in Opie",
           outcome: .failed,
@@ -468,7 +468,7 @@ struct ViewerPresenterActivityTests {
 
   @Test("an aggregated personal input row has the same action total in its run, Library and VoiceOver summary")
   func personalInputCountsAgreeAcrossTheViewer() throws {
-    let row = ActivityFixtures.row(id: "personal", says: "sent 2107 actions", actor: .you, ageSeconds: 0, count: 2107)
+    let row = ActivityLog.Entry(id: "personal", says: "sent 2107 actions", actor: .you, ageSeconds: 0, count: 2107)
     var snapshot = try ViewerActivityFixtures.onActivity([row], sessions: [])
     let activity = ViewerPresenter.activity(snapshot)
     let session = try #require(ViewerActivityFixtures.sessions(activity).first)
@@ -490,9 +490,9 @@ struct ViewerPresenterActivityTests {
   @Test("a session's Library and VoiceOver summary count its actions and exclude personal input")
   func sessionActionCountsAgreeAcrossTheViewer() throws {
     let rows = [
-      ActivityFixtures.row(id: "chosen", ageSeconds: 0, count: 7, session: ViewerActivityFixtures.claude),
-      ActivityFixtures.row(id: "other", ageSeconds: 1, count: 3, session: ViewerActivityFixtures.codex),
-      ActivityFixtures.row(id: "personal", actor: .you, ageSeconds: 2, count: 2107),
+      ActivityLog.Entry(id: "chosen", ageSeconds: 0, count: 7, session: ViewerActivityFixtures.claude),
+      ActivityLog.Entry(id: "other", ageSeconds: 1, count: 3, session: ViewerActivityFixtures.codex),
+      ActivityLog.Entry(id: "personal", actor: .you, ageSeconds: 2, count: 2107),
     ]
     var snapshot = try ViewerActivityFixtures.onActivity(rows)
     snapshot.session.chosenSession = .one(ViewerActivityFixtures.claude)
@@ -505,8 +505,8 @@ struct ViewerPresenterActivityTests {
   @Test("a refusal before anything was sent is no problem, and says what the agent did next")
   func aRefusalIsNoProblem() throws {
     let log = [
-      ActivityFixtures.row(id: "f2", says: "typed in Notes", ageSeconds: 1, verb: "type", app: "Notes"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "f2", says: "typed in Notes", ageSeconds: 1, verb: "type", app: "Notes"),
+      ActivityLog.Entry(
         id: "f1",
         says: "didn't type in Notes",
         outcome: .notSent,
@@ -531,7 +531,7 @@ struct ViewerPresenterActivityTests {
   @Test("an unreadable focus refusal says Atlas could not read the app in front")
   func anUnreadableFocusRefusalSaysAtlasCouldNotReadTheAppInFront() throws {
     let log = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "unreadable",
         says: "didn't type in Notes",
         outcome: .notSent,
@@ -551,7 +551,7 @@ struct ViewerPresenterActivityTests {
   @Test("a personal run's follow-up names the person after its step has removed the actor prefix")
   func personalFollowUpsKeepTheirActor() throws {
     let log = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "next",
         says: "clicked Cancel in Notes",
         actor: .you,
@@ -560,7 +560,7 @@ struct ViewerPresenterActivityTests {
         app: "Notes",
         label: "Cancel"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "failed",
         says: "couldn't click Save in Notes",
         outcome: .failed,
@@ -579,8 +579,8 @@ struct ViewerPresenterActivityTests {
 
   @Test("sessions group by day, newest first, under a heading only while the outline spans more than one day")
   func sessionsGroupByDay() throws {
-    let today = ActivityFixtures.row(id: "t1", says: "opened Notes", ageSeconds: 10, operation: "open", app: "Notes")
-    let yesterday = ActivityFixtures.row(
+    let today = ActivityLog.Entry(id: "t1", says: "opened Notes", ageSeconds: 10, operation: "open", app: "Notes")
+    let yesterday = ActivityLog.Entry(
       id: "y1",
       says: "opened Safari",
       ageSeconds: 90_000,
@@ -598,7 +598,7 @@ struct ViewerPresenterActivityTests {
   func sessionsOpenWhileWorkingOrFiltered() throws {
     let shot = "1792665100000000000-capture.png"
     let log = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "clicked in Opie",
         ageSeconds: 2,
@@ -606,7 +606,7 @@ struct ViewerPresenterActivityTests {
         verb: "click",
         app: "Opie"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s1",
         says: "took a screenshot",
         ageSeconds: 30,
@@ -638,7 +638,7 @@ struct ViewerPresenterActivityTests {
   func aLongDayKeepsTheHeldSession() throws {
     let newer = (0..<6)
       .map { index in
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "r\(index)",
           says: "clicked in Notes",
           ageSeconds: Double(index * 60),
@@ -647,7 +647,7 @@ struct ViewerPresenterActivityTests {
           app: "Notes"
         )
       }
-    let held = ActivityFixtures.row(
+    let held = ActivityLog.Entry(
       id: "c1",
       says: "clicked Show Center in Opie",
       outcome: .failed,
@@ -673,7 +673,7 @@ struct ViewerPresenterActivityTests {
   func aLongDayListsFiveSessions() throws {
     let log = (0..<7)
       .map { index in
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "r\(index)",
           says: "clicked in Notes",
           ageSeconds: Double(index * 60),
@@ -697,8 +697,8 @@ struct ViewerPresenterActivityTests {
   func theSheetStepsThroughItsRun() throws {
     let shot = "1792665100000000000-capture.png"
     let log = [
-      ActivityFixtures.row(id: "s1", says: "took a screenshot", ageSeconds: 2, operation: "screenshot", capture: shot),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "s1", says: "took a screenshot", ageSeconds: 2, operation: "screenshot", capture: shot),
+      ActivityLog.Entry(
         id: "c1",
         says: "ran a command",
         ageSeconds: 5,
@@ -734,7 +734,7 @@ struct ViewerPresenterActivityTests {
       .map { "179266510\($0)000000000-capture.png" }
     let log = shots.enumerated()
       .map { index, shot in
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "s\(index)",
           says: "took a screenshot",
           ageSeconds: Double(10 - index),
@@ -785,7 +785,7 @@ struct ViewerPresenterActivityTests {
     let log =
       shots.enumerated()
       .map { index, shot in
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "s\(index)",
           says: "took a screenshot",
           ageSeconds: Double(10 - index),
@@ -793,7 +793,7 @@ struct ViewerPresenterActivityTests {
           session: ViewerActivityFixtures.codex,
           capture: shot
         )
-      } + [ActivityFixtures.row(id: "c9", says: "clicked", ageSeconds: 1, session: ViewerActivityFixtures.claude)]
+      } + [ActivityLog.Entry(id: "c9", says: "clicked", ageSeconds: 1, session: ViewerActivityFixtures.claude)]
     var snapshot = try ViewerActivityFixtures.onActivity(log.reversed(), sessions: [])
     snapshot.panes.shots.shots = shots.map { Screenshot(name: $0) }
     let run = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first { $0.shots.count == 2 })

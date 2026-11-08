@@ -47,8 +47,8 @@ struct ViewerPanesModelTests {
 
   /// The log while an agent took the two screenshots, newest first.
   static let log = ActivityLog(entries: [
-    ActivityFixtures.row(id: "s2", says: "took a screenshot", ageSeconds: 4, operation: "screenshot", capture: newer),
-    ActivityFixtures.row(id: "s1", says: "took a screenshot", ageSeconds: 28, operation: "screenshot", capture: older),
+    ActivityLog.Entry(id: "s2", says: "took a screenshot", ageSeconds: 4, operation: "screenshot", capture: newer),
+    ActivityLog.Entry(id: "s1", says: "took a screenshot", ageSeconds: 28, operation: "screenshot", capture: older),
   ])
 
   /// A viewer on Activity over an agent's two screenshots, its every screenshot request held.

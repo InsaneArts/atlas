@@ -83,12 +83,7 @@ struct HelperCommandsGrantTests {
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
     let lifetime = ControlBarrier.lateGrant + ControlBarrier.leaseLifetime
     let clock = ManualClock()
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: clock)
-    )
+    let actions = HelperActions.scripted(service, commands: commands, clock: clock)
     let viewer = try await ViewerController.watching(
       service,
       commands: commands,
@@ -121,12 +116,7 @@ struct HelperCommandsGrantTests {
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
     let lifetime = ControlBarrier.lateGrant + ControlBarrier.leaseLifetime
     let clock = ManualClock()
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: clock)
-    )
+    let actions = HelperActions.scripted(service, commands: commands, clock: clock)
     let viewer = try await ViewerController.watching(
       service,
       commands: commands,

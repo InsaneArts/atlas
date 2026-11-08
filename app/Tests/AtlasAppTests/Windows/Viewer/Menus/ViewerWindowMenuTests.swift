@@ -384,7 +384,7 @@ struct ViewerWindowMenuTests {
     let service = ScriptedService()
     service.shots = [Screenshot(name: "one.png")]
     service.activityLog = ActivityLog(entries: [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s1",
         says: "took a screenshot",
         ageSeconds: 1,

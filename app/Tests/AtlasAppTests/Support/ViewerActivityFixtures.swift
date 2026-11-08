@@ -43,7 +43,7 @@ enum ViewerActivityFixtures {
 
   /// An agent's four steps in TextEdit, newest first: ⌘S pressed, Name typed into, Save clicked, TextEdit opened.
   static let textEditLog = [
-    ActivityFixtures.row(
+    ActivityLog.Entry(
       id: "k1",
       says: "pressed ⌘S in TextEdit",
       ageSeconds: 0,
@@ -52,7 +52,7 @@ enum ViewerActivityFixtures {
       label: "⌘S",
       keys: [["⌘", "S"]]
     ),
-    ActivityFixtures.row(
+    ActivityLog.Entry(
       id: "t1",
       says: "typed into Name in TextEdit",
       ageSeconds: 5,
@@ -60,7 +60,7 @@ enum ViewerActivityFixtures {
       app: "TextEdit",
       label: "Name"
     ),
-    ActivityFixtures.row(
+    ActivityLog.Entry(
       id: "c1",
       says: "clicked Save in TextEdit",
       ageSeconds: 10,
@@ -68,7 +68,7 @@ enum ViewerActivityFixtures {
       app: "TextEdit",
       label: "Save"
     ),
-    ActivityFixtures.row(
+    ActivityLog.Entry(
       id: "o1",
       says: "opened TextEdit",
       ageSeconds: 20,
@@ -82,7 +82,7 @@ enum ViewerActivityFixtures {
   static var mixedLog: [ActivityLog.Entry] {
     (0..<6)
       .map {
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "claude-\($0)",
           says: "clicked Item \($0) in Opie",
           ageSeconds: Double($0),
@@ -92,7 +92,7 @@ enum ViewerActivityFixtures {
           label: "Item \($0)"
         )
       } + [
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "codex",
           says: "opened Notes",
           ageSeconds: 10,
@@ -101,7 +101,7 @@ enum ViewerActivityFixtures {
           verb: "open",
           app: "Notes"
         ),
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "you",
           says: "clicked in Opie",
           actor: .you,
@@ -109,7 +109,7 @@ enum ViewerActivityFixtures {
           verb: "click",
           app: "Opie"
         ),
-        ActivityFixtures.row(id: "terminal", says: "ran a command", ageSeconds: 30, operation: "run"),
+        ActivityLog.Entry(id: "terminal", says: "ran a command", ageSeconds: 30, operation: "run"),
       ]
   }
 

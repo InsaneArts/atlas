@@ -17,9 +17,9 @@ struct ActivityOutlineTests {
   @Test("each session's runs on one day form one session, in the order its newest run comes")
   func eachSessionsRunsFormOneSession() {
     let runs = Self.runs([
-      ActivityFixtures.row(id: "a2", says: "typed", ageSeconds: 5, session: "claude", verb: "type", app: "Notes"),
-      ActivityFixtures.row(id: "b1", says: "clicked", ageSeconds: 10, session: "codex", verb: "click", app: "Mail"),
-      ActivityFixtures.row(id: "a1", says: "clicked", ageSeconds: 400, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "a2", says: "typed", ageSeconds: 5, session: "claude", verb: "type", app: "Notes"),
+      ActivityLog.Entry(id: "b1", says: "clicked", ageSeconds: 10, session: "codex", verb: "click", app: "Mail"),
+      ActivityLog.Entry(id: "a1", says: "clicked", ageSeconds: 400, session: "claude", verb: "click", app: "Opie"),
     ])
     let groups = ActivitySessionGroup.grouped(runs)
     #expect(groups.map(\.stream) == [.session("claude"), .session("codex")])
@@ -30,7 +30,7 @@ struct ActivityOutlineTests {
   func aTallyCountsKindsInOrder() {
     let tally = ActivityTally(
       ActivityFixtures.rules([
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "s1",
           says: "took a screenshot",
           ageSeconds: 2,
@@ -38,7 +38,7 @@ struct ActivityOutlineTests {
           session: "claude",
           verb: "screenshot"
         ),
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "c2",
           says: "couldn't click",
           outcome: .failed,
@@ -47,8 +47,8 @@ struct ActivityOutlineTests {
           verb: "click",
           app: "Google Chrome"
         ),
-        ActivityFixtures.row(id: "k1", says: "pressed", ageSeconds: 4, session: "claude", verb: "key", app: "TextEdit"),
-        ActivityFixtures.row(
+        ActivityLog.Entry(id: "k1", says: "pressed", ageSeconds: 4, session: "claude", verb: "key", app: "TextEdit"),
+        ActivityLog.Entry(
           id: "t1",
           says: "typed",
           ageSeconds: 5,
@@ -96,15 +96,15 @@ struct ActivityOutlineTests {
   @Test("a session's rows give its gist, the person's own and refused ones left out")
   func aSessionsRowsGiveItsGist() {
     let gist = ActivityGist([
-      ActivityFixtures.row(id: "t2", says: "typed", session: "claude", verb: "type", app: "TextEdit"),
-      ActivityFixtures.row(id: "k1", says: "pressed", session: "claude", verb: "key", app: "TextEdit"),
-      ActivityFixtures.row(id: "c1", says: "clicked", session: "claude", verb: "click", app: "Google Chrome"),
-      ActivityFixtures.row(id: "y1", says: "clicked", actor: .you, verb: "click", app: "Notes"),
-      ActivityFixtures.row(id: "y2", says: "clicked", actor: .you, verb: "click", app: "Notes"),
+      ActivityLog.Entry(id: "t2", says: "typed", session: "claude", verb: "type", app: "TextEdit"),
+      ActivityLog.Entry(id: "k1", says: "pressed", session: "claude", verb: "key", app: "TextEdit"),
+      ActivityLog.Entry(id: "c1", says: "clicked", session: "claude", verb: "click", app: "Google Chrome"),
+      ActivityLog.Entry(id: "y1", says: "clicked", actor: .you, verb: "click", app: "Notes"),
+      ActivityLog.Entry(id: "y2", says: "clicked", actor: .you, verb: "click", app: "Notes"),
     ])
     #expect(gist == ActivityGist(kind: .typing, count: 2, app: "TextEdit", verbs: ["type", "key"]))
     #expect(ActivityGist([]) == nil)
-    let refused = ActivityFixtures.row(
+    let refused = ActivityLog.Entry(
       id: "n1",
       says: "didn't type in TextEdit",
       outcome: .notSent,
@@ -118,7 +118,7 @@ struct ActivityOutlineTests {
   @Test("a tally counts a line refused before anything was sent only among the refused")
   func aTallyCountsRefusalsApart() {
     let runs = ActivityFixtures.rules([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "n1",
         says: "didn't type in Notes",
         outcome: .notSent,
@@ -127,7 +127,7 @@ struct ActivityOutlineTests {
         verb: "type",
         app: "Notes"
       ),
-      ActivityFixtures.row(id: "c1", says: "clicked", ageSeconds: 3, session: "claude", verb: "click", app: "Notes"),
+      ActivityLog.Entry(id: "c1", says: "clicked", ageSeconds: 3, session: "claude", verb: "click", app: "Notes"),
     ])
     .runs(captures: [], first: 0) { _ in 0 }
     .map(\.run)

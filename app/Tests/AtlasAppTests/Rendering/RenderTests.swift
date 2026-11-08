@@ -10,25 +10,11 @@
   // work and outlast its waits; one by one, that work runs between them.
   @Suite("Render", .serialized, AppKitState())
   struct RenderTests {
-    /// A new empty folder for one test's renders, which the test removes.
-    ///
-    /// - Returns: The folder.
-    /// - Throws: When the folder cannot be made.
-    private static func directory() throws -> URL {
-      let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("atlas-render-\(UUID().uuidString)")
-      try FileManager.default
-        .createDirectory(at: directory, withIntermediateDirectories: true)
-      return directory
-    }
-
     @Test("every onboarding render draws at its window's size")
     func everyOnboardingPreviewDraws() throws {
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       #expect(OnboardingRender.draw(to: directory.path, appearance: Appearance.dark))
       for render in OnboardingRender.renders {
         let file = directory.appendingPathComponent("\(render.file).png")
@@ -41,11 +27,9 @@
 
     @Test("every docked render draws the panel beside System Settings, the ghost over both")
     func everyDockedRenderDraws() throws {
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       #expect(DockedRender.draw(to: directory.path, appearance: Appearance.light))
       for render in DockedRender.renders {
         let file = directory.appendingPathComponent("\(render.file).png")
@@ -62,11 +46,9 @@
       let size = PreviewStates.viewerSize
       let render = try #require(ViewerRender.renders.first { $0.name == file })
       #expect(render.size == size)
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       #expect(
         ViewerRender.draw(
           file,
@@ -85,11 +67,9 @@
     @Test("every narrow and short main window render draws at its size", arguments: await ViewerRender.narrowNames)
     func everyNarrowRenderDraws(file: String) throws {
       let render = try #require(ViewerRender.narrowRenders.first { $0.name == file })
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       let size = try #require(render.size)
       #expect(size.width < PreviewStates.viewerSize.width || size.height < PreviewStates.viewerSize.height)
       #expect(ViewerRender.draw(file, render.value, to: directory, size: size, appearance: Appearance.light))
@@ -105,11 +85,9 @@
     )
     func everyMotionKeyFrameDraws(name: String) throws {
       let pose = try #require(PreviewStates.viewerMotion.first { $0.name == name })
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       let step = pose.steps[pose.steps.count / 2]
       #expect(ViewerRender.draw(pose, at: step, to: directory, appearance: Appearance.light))
       let drawn = directory.appendingPathComponent("\(pose.file(at: step)).png")
@@ -121,11 +99,9 @@
     @Test("every list render draws at its size", arguments: await ViewerRender.listNames)
     func everyListRenderDraws(file: String) throws {
       let render = try #require(ViewerRender.listRenders.first { $0.name == file })
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       let size = try #require(render.size)
       #expect(ViewerRender.draw(file, render.value, to: directory, size: size, appearance: Appearance.dark))
       let drawn = directory.appendingPathComponent("\(file).png")
@@ -149,11 +125,9 @@
       #expect(size.width == SettingsLayout.width)
       #expect(size.height > SettingsLayout.header, "the pane said how tall it draws")
       #expect(size.height != SettingsLayout.firstHeight, "the pane said how tall it draws")
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       #expect(SettingsRender.draw(file, state, to: directory, appearance: Appearance.dark))
       let drawn = directory.appendingPathComponent("\(file).png")
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
@@ -163,11 +137,9 @@
 
     @Test("a render drawn light has a light ground, and drawn dark a dark one")
     func rendersDrawInTheAppearanceAsked() throws {
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       let state = try #require(SettingsRender.renders.first?.state)
       var grounds: [CGFloat] = []
       for (file, appearance) in [("light", Appearance.light), ("dark", Appearance.dark)] {
@@ -190,11 +162,9 @@
 
     @Test("every panel render draws the panel at its width on its card", arguments: PanelRender.modes)
     func everyPanelRenderDraws(mode: String) throws {
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       let snapshot = PanelRenderOverrides(environment: ["ATLAS_RENDER_MODE": mode, "ATLAS_RENDER_PREVIEW": "1"])
         .applied(to: PanelSnapshot(picture: SampleDesktop.picture))
       let drawn = directory.appendingPathComponent("\(mode).png")
@@ -220,11 +190,9 @@
 
     @Test("every alert window render draws its alert", arguments: PanelRender.alerts.map(\.file))
     func everyAlertRenderDraws(file: String) throws {
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       let drawn = directory.appendingPathComponent("\(file).png")
       #expect(PanelRender.draw(alert: try Self.alert(file), to: drawn.path, appearance: Appearance.dark))
       let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
@@ -233,11 +201,9 @@
 
     @Test("every helper notice render draws the system alert", arguments: PanelRender.notices.map(\.file))
     func everyNoticeRenderDraws(file: String) throws {
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       let environment = try #require(PanelRender.notices.first { $0.file == file }?.environment)
       let notice = try #require(PanelRenderOverrides(environment: environment).notice)
       let drawn = directory.appendingPathComponent("\(file).png")
@@ -259,11 +225,9 @@
 
     @Test("every component's samples draw, none of them empty")
     func everyComponentRenderDraws() throws {
-      let directory = try Self.directory()
-      defer {
-        try? FileManager.default
-          .removeItem(at: directory)
-      }
+      let folder = try TemporaryFolder()
+      defer { folder.remove() }
+      let directory = folder.url
       #expect(ComponentRender.draw(to: directory.path, appearance: Appearance.light))
       for sample in ComponentSample.allCases {
         let file = directory.appendingPathComponent("\(sample.rawValue).png")

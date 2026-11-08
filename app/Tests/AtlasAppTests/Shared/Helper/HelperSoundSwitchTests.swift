@@ -48,6 +48,50 @@ struct HelperSoundSwitchTests {
     #expect(refused.problem != nil)
   }
 
+  @Test("rapid toggles run one atlas sound at a time and end on the person's latest choice")
+  func rapidTogglesEndOnTheLatestChoice() async throws {
+    let commands = ScriptedCommands([
+      "sound off": #"{"ok": true, "helperSound": "muted", "reason": null, "wanted": true}"#,
+      "sound on": Self.soundOn,
+    ])
+    let gate = ReleaseSignal()
+    commands.whileRunning { _ in await gate.wait() }
+    let sound = HelperSoundSwitch(commands: commands)
+
+    let first = Task { await sound.set(muted: false) }
+    try await settle("the first change never started") { commands.ran.count == 1 }
+    await sound.set(muted: true)
+    await sound.set(muted: false)
+    #expect(commands.ran.count == 1, "nothing runs beside the first")
+    gate.open()
+    await first.value
+
+    let soundOn = Action.setHelperSound(muted: false).arguments
+    #expect(commands.ran == [soundOn, soundOn])
+    #expect(sound.sound == HelperSound(state: .on, wanted: false))
+    #expect(!sound.isMuted)
+  }
+
+  @Test("reading the helper's sound during a change reads nothing that could undo it")
+  func aReadNeverOverlapsAChange() async throws {
+    let commands = ScriptedCommands([
+      "sound on": Self.soundOn,
+      "sound": #"{"ok": true, "helperSound": "muted", "reason": null, "wanted": true}"#,
+    ])
+    let gate = ReleaseSignal()
+    commands.whileRunning { _ in await gate.wait() }
+    let sound = HelperSoundSwitch(commands: commands)
+
+    let change = Task { await sound.set(muted: false) }
+    try await settle("the change never started") { commands.ran.count == 1 }
+    await sound.read()
+    gate.open()
+    await change.value
+
+    #expect(commands.ran == [Action.setHelperSound(muted: false).arguments])
+    #expect(sound.sound == HelperSound(state: .on, wanted: false))
+  }
+
   @Test("a status asked for before a change is dropped when it arrives after the change ended")
   func aStatusOlderThanAChangeIsDropped() async {
     let sound = HelperSoundSwitch(commands: ScriptedCommands(["sound on": Self.soundOn]))

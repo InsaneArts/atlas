@@ -96,7 +96,7 @@ struct ViewerWindowEdgeTests {
   private static let log = ActivityLog(
     entries: (0..<40)
       .map { index in
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "row-\(index)",
           says: "clicked Item \(index)",
           ageSeconds: Double(index * 60),

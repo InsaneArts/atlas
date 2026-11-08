@@ -31,7 +31,7 @@ struct ViewerActivityPreparationTests {
     let snapshot = try ViewerActivityFixtures.onActivity(rows, sessions: [])
     var earlier = snapshot
     earlier.panes.activity.log?.entries.append(
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "earlier",
         says: "opened TextEdit",
         ageSeconds: 30,
@@ -68,7 +68,7 @@ struct ViewerActivityPreparationTests {
   )
   func presentationUsesSnapshotContext(locale: String, timeZone: String, heading: String, clock: String) throws {
     let rows = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "new",
         says: "opened Notes",
         ageSeconds: 0,
@@ -76,7 +76,7 @@ struct ViewerActivityPreparationTests {
         verb: "open",
         app: "Notes"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "old",
         says: "opened TextEdit",
         ageSeconds: 172_800,
@@ -118,7 +118,7 @@ struct ViewerActivityPreparationTests {
   @Test("the clock moving and a run opened by the person change the outline without reforming runs")
   func foldsFollowTheChoiceNotTheClock() throws {
     let rows = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "new",
         says: "opened Notes",
         ageSeconds: 1,
@@ -126,7 +126,7 @@ struct ViewerActivityPreparationTests {
         verb: "open",
         app: "Notes"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "older",
         says: "opened TextEdit",
         ageSeconds: 299,

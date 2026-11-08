@@ -36,7 +36,7 @@ struct ViewerPresenterActionTests {
     afterAt: Date? = nil,
     session: String = ViewerActivityFixtures.claude
   ) -> ActivityLog.Entry {
-    ActivityFixtures.row(
+    ActivityLog.Entry(
       id: id,
       says: says,
       outcome: outcome,
@@ -373,7 +373,7 @@ struct ViewerPresenterActionTests {
       task: "Post the 0.1.1 release note"
     )
     let snapshot = try ViewerActivityFixtures.onActivity([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "k1",
         says: "pressed ⏎ in TextEdit",
         ageSeconds: 3,
@@ -399,7 +399,7 @@ struct ViewerPresenterActionTests {
   @Test("keys pressed say the element with focus after them where Atlas named it, and stand alone where it did not")
   func keysNameTheirElement() throws {
     func pressed(_ id: String, age: Double, element: ActionFacts.Element?) -> ActivityLog.Entry {
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: id,
         says: "pressed ⏎ in TextEdit",
         ageSeconds: age,
@@ -414,7 +414,7 @@ struct ViewerPresenterActionTests {
     let message = ActionFacts.Element(frame: .init(x: 360, y: 711, width: 1066, height: 135), name: "Message")
     let snapshot = try ViewerActivityFixtures.onActivity([
       pressed("k2", age: 3, element: message),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "clicked Save in TextEdit",
         ageSeconds: 4,

@@ -18,7 +18,7 @@ struct ActivityMomentsTests {
 
   @Test("a screenshot reassigned to a new app leaves both split moments with independent folds")
   func aScreenshotSplitsWithoutSharingIdentity() throws {
-    let click = ActivityFixtures.row(
+    let click = ActivityLog.Entry(
       id: "textedit",
       says: "click textedit",
       ageSeconds: 30,
@@ -26,7 +26,7 @@ struct ActivityMomentsTests {
       verb: "click",
       app: "TextEdit"
     )
-    let screenshot = ActivityFixtures.row(
+    let screenshot = ActivityLog.Entry(
       id: "screenshot",
       says: "screenshot screenshot",
       ageSeconds: 20,
@@ -38,7 +38,7 @@ struct ActivityMomentsTests {
     let before = Self.moments([screenshot, click])
     let after = ActivityMoments(
       ActivityFixtures.rules([
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "calculator",
           says: "click calculator",
           ageSeconds: 10,
@@ -57,7 +57,7 @@ struct ActivityMomentsTests {
 
   @Test("a command completing after a long gap leaves both split moments with independent folds")
   func aCompletedCommandSplitsWithoutSharingIdentity() throws {
-    let click = ActivityFixtures.row(
+    let click = ActivityLog.Entry(
       id: "click",
       says: "click click",
       ageSeconds: 600,
@@ -65,7 +65,7 @@ struct ActivityMomentsTests {
       verb: "click",
       app: "Opie"
     )
-    var running = ActivityFixtures.row(
+    var running = ActivityLog.Entry(
       id: "start",
       says: "run start",
       outcome: .running,
@@ -77,7 +77,7 @@ struct ActivityMomentsTests {
     )
     running.logicalId = "command"
     let before = Self.moments([running, click])
-    var completed = ActivityFixtures.row(
+    var completed = ActivityLog.Entry(
       id: "end",
       says: "run end",
       ageSeconds: 10,
@@ -124,7 +124,7 @@ struct ActivityMomentsTests {
 
   @Test("a moment holding a running command keeps its identity and its fold choice when the command finishes")
   func aRunningCommandsMomentKeepsItsIdentityAndFoldChoice() throws {
-    var running = ActivityFixtures.row(
+    var running = ActivityLog.Entry(
       id: "start",
       says: "click start",
       outcome: .running,
@@ -136,7 +136,7 @@ struct ActivityMomentsTests {
     running.logicalId = "command"
     let before = Self.moments([
       running,
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "older",
         says: "click older",
         ageSeconds: 20,
@@ -157,7 +157,7 @@ struct ActivityMomentsTests {
       "a run under way folds like any other"
     )
 
-    var completed = ActivityFixtures.row(
+    var completed = ActivityLog.Entry(
       id: "end",
       says: "click end",
       ageSeconds: 5,
@@ -195,7 +195,7 @@ struct ActivityMomentsTests {
 
   @Test("a growing personal input run keeps its moment identity and fold choice")
   func aGrowingInputRunKeepsItsMoment() throws {
-    var input = ActivityFixtures.row(
+    var input = ActivityLog.Entry(
       id: "first",
       says: "click first",
       actor: .you,
@@ -207,7 +207,7 @@ struct ActivityMomentsTests {
     input.logicalId = "2000000000"
     let before = Self.moments([input])
     let id = try #require(before.moments.first?.id)
-    var grown = ActivityFixtures.row(
+    var grown = ActivityLog.Entry(
       id: "newest",
       says: "click newest",
       actor: .you,
@@ -238,10 +238,10 @@ struct ActivityMomentsTests {
   @Test("moment action totals include aggregated input while repeated rows keep their own count")
   func actionTotalsSurviveRowCollapsing() throws {
     let entries = [
-      ActivityFixtures.row(id: "new", says: "sent input", actor: .you, ageSeconds: 1, count: 2107),
-      ActivityFixtures.row(id: "mid", says: "sent input", actor: .you, ageSeconds: 2),
-      ActivityFixtures.row(id: "old", says: "sent input", actor: .you, ageSeconds: 2, count: 12),
-      ActivityFixtures.row(id: "plain", says: "clicked", actor: .you, ageSeconds: 3),
+      ActivityLog.Entry(id: "new", says: "sent input", actor: .you, ageSeconds: 1, count: 2107),
+      ActivityLog.Entry(id: "mid", says: "sent input", actor: .you, ageSeconds: 2),
+      ActivityLog.Entry(id: "old", says: "sent input", actor: .you, ageSeconds: 2, count: 12),
+      ActivityLog.Entry(id: "plain", says: "clicked", actor: .you, ageSeconds: 3),
     ]
     let moment = try #require(Self.moments(entries).moments.first)
     #expect(moment.runs.count == 2)
@@ -254,9 +254,9 @@ struct ActivityMomentsTests {
   @Test("consecutive actions in one app form one moment")
   func consecutiveActionsInOneAppFormOneMoment() {
     let moments = Self.moments([
-      ActivityFixtures.row(id: "c3", says: "type c3", ageSeconds: 10, session: "claude", verb: "type", app: "Opie"),
-      ActivityFixtures.row(id: "c2", says: "key c2", ageSeconds: 40, session: "claude", verb: "key", app: "Opie"),
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 90, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "c3", says: "type c3", ageSeconds: 10, session: "claude", verb: "type", app: "Opie"),
+      ActivityLog.Entry(id: "c2", says: "key c2", ageSeconds: 40, session: "claude", verb: "key", app: "Opie"),
+      ActivityLog.Entry(id: "c1", says: "click c1", ageSeconds: 90, session: "claude", verb: "click", app: "Opie"),
     ])
     .moments
     #expect(moments.map { $0.runs.map(\.id) } == [["c3", "c2", "c1"]])
@@ -269,7 +269,7 @@ struct ActivityMomentsTests {
   @Test("identical words in same-named apps with different bundle identities retain both moments")
   func identicalWordsCannotEraseBundleIdentity() {
     let entries = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "one",
         says: "clicked in Opie",
         ageSeconds: 5,
@@ -278,7 +278,7 @@ struct ActivityMomentsTests {
         app: "Opie",
         bundleId: "com.one.opie"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "two",
         says: "clicked in Opie",
         ageSeconds: 10,
@@ -297,7 +297,7 @@ struct ActivityMomentsTests {
   @Test("a repeat with no bundle keeps the known bundle and cannot bridge two different apps")
   func repeatsRetainKnownIdentity() {
     let entries = [
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "one",
         says: "clicked in Opie",
         ageSeconds: 5,
@@ -306,7 +306,7 @@ struct ActivityMomentsTests {
         app: "Opie",
         bundleId: "com.one.opie"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "unknown",
         says: "clicked in Opie",
         ageSeconds: 10,
@@ -314,7 +314,7 @@ struct ActivityMomentsTests {
         verb: "click",
         app: "Opie"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "two",
         says: "clicked in Opie",
         ageSeconds: 15,
@@ -333,10 +333,10 @@ struct ActivityMomentsTests {
   @Test("a gap of more than two minutes starts a new moment in the same app")
   func aGapOfMoreThanTwoMinutesStartsANewMoment() {
     let moments = Self.moments([
-      ActivityFixtures.row(id: "c4", says: "click c4", ageSeconds: 10, session: "claude", verb: "click", app: "Opie"),
-      ActivityFixtures.row(id: "c3", says: "type c3", ageSeconds: 130, session: "claude", verb: "type", app: "Opie"),
-      ActivityFixtures.row(id: "c2", says: "key c2", ageSeconds: 251, session: "claude", verb: "key", app: "Opie"),
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 300, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "c4", says: "click c4", ageSeconds: 10, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "c3", says: "type c3", ageSeconds: 130, session: "claude", verb: "type", app: "Opie"),
+      ActivityLog.Entry(id: "c2", says: "key c2", ageSeconds: 251, session: "claude", verb: "key", app: "Opie"),
+      ActivityLog.Entry(id: "c1", says: "click c1", ageSeconds: 300, session: "claude", verb: "click", app: "Opie"),
     ])
     .moments
     #expect(moments.map { $0.runs.map(\.id) } == [["c4", "c3"], ["c2", "c1"]], "120 s joins, 121 s does not")
@@ -345,8 +345,8 @@ struct ActivityMomentsTests {
   @Test("identical actions more than two minutes apart stay in separate moments")
   func identicalActionsRespectMomentGaps() {
     let moments = Self.moments([
-      ActivityFixtures.row(id: "new", says: "scrolled", ageSeconds: 10, session: "claude", verb: "scroll", app: "Opie"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "new", says: "scrolled", ageSeconds: 10, session: "claude", verb: "scroll", app: "Opie"),
+      ActivityLog.Entry(
         id: "old",
         says: "scrolled",
         ageSeconds: 610,
@@ -362,7 +362,7 @@ struct ActivityMomentsTests {
   @Test("overlapping repeat runs retain their moment identity after their oldest row leaves")
   func overlappingRepeatsRetainTheirMomentIdentity() {
     let scroll = { (id: String, age: Double) in
-      ActivityFixtures.row(id: id, says: "scrolled", ageSeconds: age, session: "claude", verb: "scroll", app: "Opie")
+      ActivityLog.Entry(id: id, says: "scrolled", ageSeconds: age, session: "claude", verb: "scroll", app: "Opie")
     }
     let before = Self.moments([scroll("b", 10), scroll("a", 20), scroll("z", 25)])
     let after = ActivityMoments(
@@ -378,7 +378,7 @@ struct ActivityMomentsTests {
   @Test("another app starts a new moment, and the same app by bundle id joins whatever its name's case")
   func anotherAppStartsANewMoment() {
     let moments = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "n2",
         says: "click n2",
         ageSeconds: 5,
@@ -387,8 +387,8 @@ struct ActivityMomentsTests {
         app: "Notes",
         bundleId: "com.apple.Notes"
       ),
-      ActivityFixtures.row(id: "n1", says: "click n1", ageSeconds: 10, session: "claude", verb: "click", app: "notes"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "n1", says: "click n1", ageSeconds: 10, session: "claude", verb: "click", app: "notes"),
+      ActivityLog.Entry(
         id: "o1",
         says: "click o1",
         ageSeconds: 15,
@@ -397,7 +397,7 @@ struct ActivityMomentsTests {
         app: "Opie",
         bundleId: "com.insanearts.opie"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "x1",
         says: "click x1",
         ageSeconds: 20,
@@ -415,8 +415,8 @@ struct ActivityMomentsTests {
   @Test("a screenshot between two clicks in Opie stays in Opie's moment")
   func aScreenshotBetweenTwoClicksStaysInOpiesMoment() {
     let moments = Self.moments([
-      ActivityFixtures.row(id: "c2", says: "click c2", ageSeconds: 10, session: "claude", verb: "click", app: "Opie"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "c2", says: "click c2", ageSeconds: 10, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(
         id: "s1",
         says: "screenshot s1",
         ageSeconds: 20,
@@ -425,7 +425,7 @@ struct ActivityMomentsTests {
         verb: "screenshot",
         app: nil
       ),
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 30, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "c1", says: "click c1", ageSeconds: 30, session: "claude", verb: "click", app: "Opie"),
     ])
     .moments
     #expect(moments.map { $0.runs.map(\.id) } == [["c2", "s1", "c1"]])
@@ -434,7 +434,7 @@ struct ActivityMomentsTests {
   @Test("a moment in no app takes the app of the first action with one, else reads as Commands or Screenshots")
   func aMomentInNoAppTakesTheFirstAppItMeets() {
     let joined = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s1",
         says: "screenshot s1",
         ageSeconds: 5,
@@ -443,7 +443,7 @@ struct ActivityMomentsTests {
         verb: "screenshot",
         app: nil
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "r1",
         says: "run r1",
         ageSeconds: 10,
@@ -452,12 +452,12 @@ struct ActivityMomentsTests {
         verb: "run",
         app: nil
       ),
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 20, session: "claude", verb: "click", app: "Notes"),
+      ActivityLog.Entry(id: "c1", says: "click c1", ageSeconds: 20, session: "claude", verb: "click", app: "Notes"),
     ])
     .moments
     #expect(joined.map(\.subject) == [.app(ActivityApp(name: "Notes"))])
     let commands = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s1",
         says: "screenshot s1",
         ageSeconds: 5,
@@ -466,7 +466,7 @@ struct ActivityMomentsTests {
         verb: "screenshot",
         app: nil
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "r1",
         says: "run r1",
         ageSeconds: 10,
@@ -479,7 +479,7 @@ struct ActivityMomentsTests {
     .moments
     #expect(commands.map(\.subject) == [.commands])
     let shots = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s2",
         says: "screenshot s2",
         ageSeconds: 5,
@@ -488,7 +488,7 @@ struct ActivityMomentsTests {
         verb: "screenshot",
         app: nil
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s1",
         says: "screenshot s1",
         ageSeconds: 10,
@@ -505,11 +505,11 @@ struct ActivityMomentsTests {
   @Test("two sessions working at once keep their own moments")
   func twoSessionsWorkingAtOnceKeepTheirOwnMoments() {
     let moments = Self.moments([
-      ActivityFixtures.row(id: "a3", says: "click a3", ageSeconds: 5, session: "claude", verb: "click", app: "Opie"),
-      ActivityFixtures.row(id: "b2", says: "click b2", ageSeconds: 10, session: "codex", verb: "click", app: "Notes"),
-      ActivityFixtures.row(id: "a2", says: "type a2", ageSeconds: 15, session: "claude", verb: "type", app: "Opie"),
-      ActivityFixtures.row(id: "b1", says: "type b1", ageSeconds: 20, session: "codex", verb: "type", app: "Notes"),
-      ActivityFixtures.row(id: "a1", says: "click a1", ageSeconds: 25, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "a3", says: "click a3", ageSeconds: 5, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "b2", says: "click b2", ageSeconds: 10, session: "codex", verb: "click", app: "Notes"),
+      ActivityLog.Entry(id: "a2", says: "type a2", ageSeconds: 15, session: "claude", verb: "type", app: "Opie"),
+      ActivityLog.Entry(id: "b1", says: "type b1", ageSeconds: 20, session: "codex", verb: "type", app: "Notes"),
+      ActivityLog.Entry(id: "a1", says: "click a1", ageSeconds: 25, session: "claude", verb: "click", app: "Opie"),
     ])
     .moments
     #expect(moments.map { $0.runs.map(\.id) } == [["a3", "a2", "a1"], ["b2", "b1"]])
@@ -519,8 +519,8 @@ struct ActivityMomentsTests {
   @Test("the person's own actions form their own moments")
   func thePersonsOwnActionsFormTheirOwnMoments() {
     let moments = Self.moments([
-      ActivityFixtures.row(id: "a2", says: "click a2", ageSeconds: 5, session: "claude", verb: "click", app: "Opie"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "a2", says: "click a2", ageSeconds: 5, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(
         id: "y1",
         says: "click y1",
         actor: .you,
@@ -529,14 +529,14 @@ struct ActivityMomentsTests {
         verb: "click",
         app: "Opie"
       ),
-      ActivityFixtures.row(id: "a1", says: "click a1", ageSeconds: 15, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "a1", says: "click a1", ageSeconds: 15, session: "claude", verb: "click", app: "Opie"),
     ])
     .moments
     #expect(moments.map { $0.runs.map(\.id) } == [["a2", "a1"], ["y1"]])
     #expect(moments.map(\.stream) == [.session("claude"), .you])
     let one = Self.moments(
       [
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "y1",
           says: "click y1",
           actor: .you,
@@ -545,7 +545,7 @@ struct ActivityMomentsTests {
           verb: "click",
           app: "Opie"
         ),
-        ActivityFixtures.row(id: "a1", says: "click a1", ageSeconds: 15, session: "claude", verb: "click", app: "Opie"),
+        ActivityLog.Entry(id: "a1", says: "click a1", ageSeconds: 15, session: "claude", verb: "click", app: "Opie"),
       ],
       scope: .session("claude")
     )
@@ -555,14 +555,14 @@ struct ActivityMomentsTests {
   @Test("a moment keeps its id as newer actions join it")
   func aMomentKeepsItsIdAsNewerActionsJoinIt() {
     let older = [
-      ActivityFixtures.row(id: "c2", says: "type c2", ageSeconds: 20, session: "claude", verb: "type", app: "Opie"),
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 30, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "c2", says: "type c2", ageSeconds: 20, session: "claude", verb: "type", app: "Opie"),
+      ActivityLog.Entry(id: "c1", says: "click c1", ageSeconds: 30, session: "claude", verb: "click", app: "Opie"),
     ]
     let before = Self.moments(older).moments
     let after = Self.moments(
       [
-        ActivityFixtures.row(id: "c4", says: "key c4", ageSeconds: 2, session: "claude", verb: "key", app: "Opie"),
-        ActivityFixtures.row(
+        ActivityLog.Entry(id: "c4", says: "key c4", ageSeconds: 2, session: "claude", verb: "key", app: "Opie"),
+        ActivityLog.Entry(
           id: "c3",
           says: "screenshot c3",
           ageSeconds: 8,
@@ -585,7 +585,7 @@ struct ActivityMomentsTests {
     let sinceMidnight = ActivityFixtures.readAt
       .timeIntervalSince(midnight)
     let moments = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c2",
         says: "click c2",
         ageSeconds: sinceMidnight - 30,
@@ -593,7 +593,7 @@ struct ActivityMomentsTests {
         verb: "click",
         app: "Opie"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         ageSeconds: sinceMidnight + 30,
@@ -610,9 +610,9 @@ struct ActivityMomentsTests {
   @Test("repeats are one line whatever stretch of time they cross, ending at their newest")
   func repeatsAreOneLine() {
     let moments = Self.moments([
-      ActivityFixtures.row(id: "c3", says: "scrolled", ageSeconds: 100, session: "claude", verb: "scroll", app: "Opie"),
-      ActivityFixtures.row(id: "c2", says: "scrolled", ageSeconds: 118, session: "claude", verb: "scroll", app: "Opie"),
-      ActivityFixtures.row(id: "c1", says: "scrolled", ageSeconds: 125, session: "claude", verb: "scroll", app: "Opie"),
+      ActivityLog.Entry(id: "c3", says: "scrolled", ageSeconds: 100, session: "claude", verb: "scroll", app: "Opie"),
+      ActivityLog.Entry(id: "c2", says: "scrolled", ageSeconds: 118, session: "claude", verb: "scroll", app: "Opie"),
+      ActivityLog.Entry(id: "c1", says: "scrolled", ageSeconds: 125, session: "claude", verb: "scroll", app: "Opie"),
     ])
     .moments
     #expect(moments.first?.runs.map(\.id) == ["c1"])
@@ -624,8 +624,8 @@ struct ActivityMomentsTests {
   @Test("a run folds by default under All and opens under any other filter")
   func aRunFoldsUnderAllAndOpensUnderAnotherFilter() {
     let rules = Self.moments([
-      ActivityFixtures.row(id: "e1", says: "type e1", ageSeconds: 10, session: "claude", verb: "type", app: "Notes"),
-      ActivityFixtures.row(id: "d1", says: "type d1", ageSeconds: 60, session: "claude", verb: "type", app: "Mail"),
+      ActivityLog.Entry(id: "e1", says: "type e1", ageSeconds: 10, session: "claude", verb: "type", app: "Notes"),
+      ActivityLog.Entry(id: "d1", says: "type d1", ageSeconds: 60, session: "claude", verb: "type", app: "Mail"),
     ])
     let shown = rules.shown(filter: .all, query: "")
     let folds = rules.folds(of: shown, filter: .all, uncertainRow: nil, choices: [:])
@@ -638,7 +638,7 @@ struct ActivityMomentsTests {
   @Test("the person's choice wins, and a run of unknown outcome is held open")
   func thePersonsChoiceWinsButHeldMomentsStayOpen() {
     let rules = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         outcome: .running,
@@ -647,7 +647,7 @@ struct ActivityMomentsTests {
         verb: "click",
         app: "Notes"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "b1",
         says: "click b1",
         outcome: .failed,
@@ -656,7 +656,7 @@ struct ActivityMomentsTests {
         verb: "click",
         app: "Mail"
       ),
-      ActivityFixtures.row(id: "a1", says: "click a1", ageSeconds: 1000, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "a1", says: "click a1", ageSeconds: 1000, session: "claude", verb: "click", app: "Opie"),
     ])
     let shown = rules.shown(filter: .all, query: "")
     let ids = shown.map(\.id)
@@ -681,8 +681,8 @@ struct ActivityMomentsTests {
   @Test("Problems keeps only runs with a problem, open unless the person folds one, and keeps each run's id")
   func problemsKeepsOnlyMomentsWithAProblem() {
     let rules = Self.moments([
-      ActivityFixtures.row(id: "c2", says: "click c2", ageSeconds: 5, session: "claude", verb: "click", app: "Notes"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "c2", says: "click c2", ageSeconds: 5, session: "claude", verb: "click", app: "Notes"),
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         outcome: .failed,
@@ -691,7 +691,7 @@ struct ActivityMomentsTests {
         verb: "click",
         app: "Notes"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "b1",
         says: "click b1",
         outcome: .notSent,
@@ -700,7 +700,7 @@ struct ActivityMomentsTests {
         verb: "click",
         app: "Mail"
       ),
-      ActivityFixtures.row(id: "a1", says: "click a1", ageSeconds: 900, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "a1", says: "click a1", ageSeconds: 900, session: "claude", verb: "click", app: "Opie"),
     ])
     let all = rules.shown(filter: .all, query: "")
     let problems = rules.shown(filter: .problems, query: "")
@@ -719,8 +719,8 @@ struct ActivityMomentsTests {
   @Test("Pictures and Typing keep their own steps")
   func picturesAndTypingKeepTheirOwnSteps() {
     let rules = Self.moments([
-      ActivityFixtures.row(id: "k1", says: "key k1", ageSeconds: 5, session: "claude", verb: "key", app: "Opie"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "k1", says: "key k1", ageSeconds: 5, session: "claude", verb: "key", app: "Opie"),
+      ActivityLog.Entry(
         id: "s1",
         says: "screenshot s1",
         ageSeconds: 10,
@@ -729,8 +729,8 @@ struct ActivityMomentsTests {
         verb: "screenshot",
         app: nil
       ),
-      ActivityFixtures.row(id: "t1", says: "type t1", ageSeconds: 15, session: "claude", verb: "type", app: "Opie"),
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 20, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "t1", says: "type t1", ageSeconds: 15, session: "claude", verb: "type", app: "Opie"),
+      ActivityLog.Entry(id: "c1", says: "click c1", ageSeconds: 20, session: "claude", verb: "click", app: "Opie"),
     ])
     #expect(rules.shown(filter: .pictures, query: "").map { $0.runs.map(\.id) } == [["s1"]])
     #expect(rules.shown(filter: .typing, query: "").map { $0.runs.map(\.id) } == [["k1", "t1"]])
@@ -739,7 +739,7 @@ struct ActivityMomentsTests {
   @Test("the search matches a step's words, or the moment's app, which keeps every step")
   func theSearchMatchesWordsOrTheApp() {
     let rules = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "n2",
         says: "typed into Title in Notes",
         ageSeconds: 5,
@@ -747,7 +747,7 @@ struct ActivityMomentsTests {
         verb: "type",
         app: "Notes"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "n1",
         says: "clicked Save in Notes",
         ageSeconds: 10,
@@ -755,7 +755,7 @@ struct ActivityMomentsTests {
         verb: "click",
         app: "Notes"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "o1",
         says: "clicked Ring in Opie",
         ageSeconds: 400,
@@ -774,7 +774,7 @@ struct ActivityMomentsTests {
   func anOpenedRunReadsOldestFirst() {
     let rules = ActivityMoments(
       ActivityFixtures.rules([
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "s2",
           says: "took a screenshot",
           ageSeconds: 5,
@@ -783,7 +783,7 @@ struct ActivityMomentsTests {
           capture: "b.png",
           verb: "screenshot"
         ),
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "c1",
           says: "couldn't click Go",
           outcome: .failed,
@@ -792,7 +792,7 @@ struct ActivityMomentsTests {
           verb: "click",
           app: "Opie"
         ),
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "s1",
           says: "took a screenshot",
           ageSeconds: 15,
@@ -801,7 +801,7 @@ struct ActivityMomentsTests {
           capture: "a.png",
           verb: "screenshot"
         ),
-        ActivityFixtures.row(id: "t1", says: "typed", ageSeconds: 20, session: "claude", verb: "type", app: "Opie"),
+        ActivityLog.Entry(id: "t1", says: "typed", ageSeconds: 20, session: "claude", verb: "type", app: "Opie"),
       ]),
       captures: [Screenshot(name: "a.png"), Screenshot(name: "b.png")],
       scope: .all
@@ -815,7 +815,7 @@ struct ActivityMomentsTests {
   @Test("neighbouring commands and screenshots form one run however far apart")
   func neighbouringCommandsAndScreenshotsFormOneRun() {
     let moments = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "s1",
         says: "took a screenshot",
         ageSeconds: 10,
@@ -823,9 +823,9 @@ struct ActivityMomentsTests {
         session: "claude",
         verb: "screenshot"
       ),
-      ActivityFixtures.row(id: "r2", says: "ran", ageSeconds: 400, operation: "run", session: "claude", verb: "run"),
-      ActivityFixtures.row(id: "r1", says: "ran", ageSeconds: 900, operation: "run", session: "claude", verb: "run"),
-      ActivityFixtures.row(id: "c1", says: "click", ageSeconds: 1200, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "r2", says: "ran", ageSeconds: 400, operation: "run", session: "claude", verb: "run"),
+      ActivityLog.Entry(id: "r1", says: "ran", ageSeconds: 900, operation: "run", session: "claude", verb: "run"),
+      ActivityLog.Entry(id: "c1", says: "click", ageSeconds: 1200, session: "claude", verb: "click", app: "Opie"),
     ])
     .moments
     #expect(moments.map { $0.runs.map(\.id) } == [["s1", "r2", "r1"], ["c1"]])
@@ -836,7 +836,7 @@ struct ActivityMomentsTests {
   func atMostSixtyMomentsAreListed() {
     let rows = (0..<70)
       .map {
-        ActivityFixtures.row(
+        ActivityLog.Entry(
           id: "c\($0)",
           says: "click c\($0)",
           ageSeconds: Double($0 * 200),
@@ -855,7 +855,7 @@ struct ActivityMomentsTests {
   @Test("a problem says what the agent did next")
   func aProblemSaysWhatTheAgentDidNext() {
     let retried = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c2",
         says: "click c2",
         ageSeconds: 10,
@@ -864,8 +864,8 @@ struct ActivityMomentsTests {
         app: "Notes",
         label: "Save"
       ),
-      ActivityFixtures.row(id: "b1", says: "click b1", ageSeconds: 12, session: "codex", verb: "click", app: "Mail"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "b1", says: "click b1", ageSeconds: 12, session: "codex", verb: "click", app: "Mail"),
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         outcome: .failed,
@@ -880,7 +880,7 @@ struct ActivityMomentsTests {
     #expect(problem.id == "c1")
     #expect(retried.followUp(to: problem) == .workedOnRetry, "another session's action between is not what it did")
     let again = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c2",
         says: "click c2",
         outcome: .failed,
@@ -890,7 +890,7 @@ struct ActivityMomentsTests {
         app: "Opie",
         label: "Save"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         outcome: .failed,
@@ -903,8 +903,8 @@ struct ActivityMomentsTests {
     ])
     #expect(again.followUp(to: again.moments[0].runs[1]) == .failedAgain)
     let then = Self.moments([
-      ActivityFixtures.row(id: "t1", says: "type t1", ageSeconds: 10, session: "claude", verb: "type", app: "Opie"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "t1", says: "type t1", ageSeconds: 10, session: "claude", verb: "type", app: "Opie"),
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         outcome: .notSent,
@@ -916,7 +916,7 @@ struct ActivityMomentsTests {
     ])
     #expect(then.followUp(to: then.moments[0].runs[1]) == .then(then.moments[0].runs[0]))
     let underWay = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c2",
         says: "click c2",
         outcome: .running,
@@ -926,7 +926,7 @@ struct ActivityMomentsTests {
         app: "Opie",
         label: "Save"
       ),
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         outcome: .failed,
@@ -939,8 +939,8 @@ struct ActivityMomentsTests {
     ])
     #expect(underWay.followUp(to: underWay.moments[0].runs[1]) == nil, "a retry under way says nothing yet")
     let late = Self.moments([
-      ActivityFixtures.row(id: "c2", says: "click c2", ageSeconds: 10, session: "claude", verb: "click", app: "Opie"),
-      ActivityFixtures.row(
+      ActivityLog.Entry(id: "c2", says: "click c2", ageSeconds: 10, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         outcome: .failed,
@@ -952,7 +952,7 @@ struct ActivityMomentsTests {
     ])
     #expect(late.followUp(to: late.moments[1].runs[0]) == nil, "past two minutes nothing followed")
     let none = Self.moments([
-      ActivityFixtures.row(
+      ActivityLog.Entry(
         id: "c1",
         says: "click c1",
         outcome: .failed,
@@ -964,8 +964,8 @@ struct ActivityMomentsTests {
     ])
     #expect(none.followUp(to: none.moments[0].runs[0]) == nil)
     let worked = Self.moments([
-      ActivityFixtures.row(id: "c2", says: "click c2", ageSeconds: 10, session: "claude", verb: "click", app: "Opie"),
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 20, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "c2", says: "click c2", ageSeconds: 10, session: "claude", verb: "click", app: "Opie"),
+      ActivityLog.Entry(id: "c1", says: "click c1", ageSeconds: 20, session: "claude", verb: "click", app: "Opie"),
     ])
     #expect(worked.followUp(to: worked.moments[0].runs[1]) == nil, "an action that worked has no follow-up")
   }
@@ -973,7 +973,7 @@ struct ActivityMomentsTests {
   @Test("a moment is found by its identity and none once it is gone")
   func aMomentIsFoundByItsIdentity() throws {
     let moments = Self.moments([
-      ActivityFixtures.row(id: "c1", says: "click c1", ageSeconds: 10, session: "claude", verb: "click", app: "Opie")
+      ActivityLog.Entry(id: "c1", says: "click c1", ageSeconds: 10, session: "claude", verb: "click", app: "Opie")
     ])
     let moment = try #require(moments.moments.first)
     #expect(moments.moment(moment.id)?.runs.map(\.id) == ["c1"])

@@ -11,7 +11,7 @@ struct ActivityLogEntryTests {
     let log = try ViewerClient.activity(activityAllNull, response: reply(200))
     #expect(
       log.entries == [
-        ActivityFixtures.row(id: "9f2c41d07a3b55e1", outcome: .failed, actor: .agent, operation: "action")
+        ActivityLog.Entry(id: "9f2c41d07a3b55e1", outcome: .failed, actor: .agent, operation: "action")
       ]
     )
   }

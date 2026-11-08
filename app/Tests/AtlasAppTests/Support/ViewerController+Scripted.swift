@@ -50,12 +50,7 @@ extension ViewerController {
     let viewer = WeakViewer()
     let actions =
       actions
-      ?? HelperActions(
-        console: SessionConsole(read: { true }),
-        commands: commands,
-        service: service,
-        barrier: ControlBarrier(service: service, clock: clock)
-      ) {
+      ?? HelperActions.scripted(service, commands: commands, clock: clock) {
         viewer.controller?.control.releaseControl()
       }
     let controller = ViewerController(
