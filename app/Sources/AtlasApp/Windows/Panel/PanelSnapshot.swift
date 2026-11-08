@@ -32,4 +32,6 @@ struct PanelSnapshot {
   var date = Date()
   /// The icons found for Recent's apps, by their key's text (``AppIconKey/text``).
   var icons: [String: IconImage] = [:]
+  /// Whether the person said OK to the note that a macOS service in the helper slowly slows their Mac.
+  var serviceNoteDismissed = false
 }

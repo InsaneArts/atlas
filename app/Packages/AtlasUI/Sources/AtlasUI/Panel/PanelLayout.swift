@@ -41,6 +41,10 @@ enum PanelLayout {
   static let textInset = Spacing.xs
   /// 10: between a session row's icon and its words.
   static let sessionGap = Spacing.sPlus
+  /// 12: the service note's inset round its words and OK.
+  static let noteInset = Spacing.m
+  /// 14: the service note's corners, the card's less the panel's inset, so the two curves run side by side.
+  static let noteCorner = Radius.nested(in: corner, inset: inset)
   /// Where a session row's words start: past its inset, its icon and the gap after it, so the row under the sessions
   /// lines up with their names.
   static let sessionText = sessionInset.leading + sessionIcon + sessionGap
