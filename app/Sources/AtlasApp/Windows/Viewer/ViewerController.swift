@@ -13,7 +13,7 @@ import Observation
 final class ViewerController {
   /// What this window is doing. Written only by the controller's own files; the shells call its methods.
   var session = ViewerSession()
-  /// What the helper line's tooltip lists that the status does not carry. Written only by the controller's own files.
+  /// What the helper row's menu lists that the status does not carry. Written only by the controller's own files.
   var helperFacts = ViewerHelperFacts()
   /// The window is on screen.
   private(set) var shown = false

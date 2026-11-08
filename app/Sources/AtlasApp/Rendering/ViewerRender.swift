@@ -136,7 +136,7 @@
     /// 700.
     nonisolated static let narrowWidths: [CGFloat] = [320, 400, 480, 600, 700, 860]
 
-    /// The short windows the content is drawn in for checking how the helper's health folds into its dot: the least the
+    /// The short windows the content is drawn in for checking how the helper's row folds into its mark: the least the
     /// renders draw, one between, and the height it folds under.
     nonisolated static let shortHeights: [CGFloat] = [220, 300, 420]
 

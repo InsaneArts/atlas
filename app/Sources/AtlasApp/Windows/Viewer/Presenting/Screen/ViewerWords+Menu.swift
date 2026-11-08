@@ -1,6 +1,6 @@
 import AtlasUI
 
-/// The menus' words: the View, Session and Helper menus' items, those of a session's and the helper line's menus, and
+/// The menus' words: the View, Session and Helper menus' items, those of a session's and the helper row's menus, and
 /// each place's word.
 extension ViewerWords {
   /// The Session menu.
@@ -17,9 +17,9 @@ extension ViewerWords {
   static let showActivity = "Show Activity"
   /// The heading over a session's facts in its menu.
   static let details = "Details"
-  /// The Helper menu's and the helper line's item that reads the helper's status now.
+  /// The Helper menu's and the helper row's item that reads the helper's status now.
   static let checkAgainItem = "Check Again"
-  /// The Helper menu's and the helper line's item that opens Settings on Helper.
+  /// The Helper menu's and the helper row's item that opens Settings on Helper.
   static let openSettingsItem = "Open Settings on Helper…"
   /// The View menu's item while the sidebar shows.
   static let hideSidebarItem = "Hide Sidebar"

@@ -220,7 +220,7 @@ struct ViewerControllerTests {
     clock.advance(by: .seconds(Motion.Duration.leastWork.seconds))
     try await checking.value("Check Again never ended")
     #expect(reads.count == 2)
-    #expect(viewer.state.sidebar.helper.help.contains("Agents: Codex"))
+    #expect(viewer.state.sidebar.helper.menu.first?.items.contains { $0.title == "Agents: Codex" } == true)
     viewer.close()
   }
 

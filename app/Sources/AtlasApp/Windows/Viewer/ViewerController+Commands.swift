@@ -1,6 +1,6 @@
 import AtlasUI
 
-/// The commands the window's menus offer: the stage's, a session's and the helper line's. Each does what the main
+/// The commands the window's menus offer: the stage's, a session's and the helper row's. Each does what the main
 /// menu's item for it does, with its guards.
 extension ViewerController {
   /// A command chosen from one of the window's menus.

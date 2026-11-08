@@ -5,7 +5,7 @@ public struct ViewerSidebarState: Equatable, Sendable {
   public var mode: ViewerSidebarMode
   /// Whether it shows whole over the card, as the toggle or Find shows it while the window is too narrow for it.
   public var overlay: Bool
-  /// Whether the window is short, so the helper's health folds into its dot alone.
+  /// Whether the window is short, so the helper's row folds into its mark alone.
   public var isShort: Bool
   /// The search in its top bar.
   public var search: ViewerSearchState
@@ -19,7 +19,7 @@ public struct ViewerSidebarState: Equatable, Sendable {
   /// - Parameters:
   ///   - mode: Whether it shows beside the card or hides; beside it by default.
   ///   - overlay: Whether it shows whole over the card; no by default.
-  ///   - isShort: Whether the helper's health folds into its dot; no by default.
+  ///   - isShort: Whether the helper's row folds into its mark; no by default.
   ///   - search: The search; closed by default.
   ///   - sessions: The sessions.
   ///   - helper: The helper's health.

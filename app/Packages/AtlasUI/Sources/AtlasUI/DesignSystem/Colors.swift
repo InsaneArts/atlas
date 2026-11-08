@@ -16,6 +16,10 @@ extension Color {
   static let brandOpencodeInner = Color(red: 0x5A / 255, green: 0x58 / 255, blue: 0x58 / 255)
   /// The white silhouette on a dark brand card.
   static let brandWhite = Color.white
+  /// Atlas's orbit on its white tile at the sidebar's foot: graphite #3A3A3C in either appearance.
+  static let brandAtlasInk = Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3C / 255)
+  /// The hairline round Atlas's white tile, which only the light ground needs: black at 0.14, or none.
+  static let brandAtlasEdge = Color(light: .black(0.14), dark: .black(0))
   /// Pi's graphite card, at its top edge.
   static let brandPiTop = Color(red: 0x2B / 255, green: 0x2B / 255, blue: 0x2E / 255)
   /// Pi's graphite card, at its bottom edge.

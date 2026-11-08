@@ -86,7 +86,7 @@
       #expect(rows.contains { $0.isCleaningUp }, "a session's work being cleaned up")
       #expect(rows.contains { $0.help.contains("Last cleanup") }, "a session's last cleanup in its tooltip")
       #expect(
-        states.contains { $0.sidebar.helper.words.hasPrefix("Helper needs setup ·") },
+        states.contains { $0.sidebar.helper.title == "Atlas needs setup" && $0.sidebar.helper.lineTone == .attention },
         "a check that does not pass, counted on the helper's line"
       )
       #expect(states.contains { $0.footer.controls.pause?.isOn == true })

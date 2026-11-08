@@ -286,8 +286,8 @@ struct ViewerPresenterTests {
     )
     let line = ViewerPresenter.helperLine(ready)
     #expect(line.tone == .ready)
-    #expect(line.words == "Helper ready · atlas")
-    let facts = line.help.components(separatedBy: "\n")
+    #expect(line.title == "Atlas is ready")
+    let facts = line.menu.first?.items.map(\.title) ?? []
     #expect(facts.contains("Ready to act: All checks pass"), "\(facts)")
     #expect(facts.contains("Save and Open dialogs unavailable: Didn't work 5 min ago."), "\(facts)")
 
@@ -300,6 +300,6 @@ struct ViewerPresenterTests {
     )
     let setup = ViewerPresenter.helperLine(notReady)
     #expect(setup.tone == .attention)
-    #expect(setup.words == "Helper needs setup · 1 check", "a readiness check still asks for setup, alone")
+    #expect(setup.line == "1 check doesn't pass", "a readiness check still asks for setup, alone")
   }
 }

@@ -104,7 +104,7 @@ struct ViewerControllerSizeTests {
     #expect(!preferences.loadSidebarHidden())
   }
 
-  @Test("the helper's health folds into its dot below 420 high")
+  @Test("the helper's row folds into its mark below 420 high")
   func theHelperLineFoldsInAShortWindow() {
     let viewer = ViewerController.scripted(ScriptedService())
     defer { viewer.close() }

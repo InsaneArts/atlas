@@ -30,6 +30,8 @@
     case activityGlyphs = "activity-glyphs"
     /// Soft keycaps alone and in chords.
     case keycapsSoft = "keycaps-soft"
+    /// The helper's row at the sidebar's foot in each state, and its mark alone for a short window.
+    case helperRows = "helper-rows"
     /// Activity's steps of every kind and mark.
     case activitySteps = "activity-steps"
     /// Activity's runs, folded with their problems and pictures, and open.

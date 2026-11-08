@@ -167,30 +167,46 @@
     /// The sidebar while no host session is listed: All sessions alone.
     static let viewerNoSessions = ViewerSessionsState(icons: [], liveCount: 0, groups: [])
 
-    /// The helper's line while two of its checks do not pass.
+    /// The helper's row while two of its checks do not pass.
     static let viewerHelperSetup = ViewerHelperLine(
       tone: .attention,
-      words: "Helper needs setup · 2 checks",
-      help: viewerHelperHelp(
-        ready: [
-          "Mouse and keyboard: Not ready. Recover… starts them again.", "Screen Recording: Not allowed",
-          "1 more check passes",
-        ]
-      ),
-      menu: viewerHelperMenu(logsOut: true)
+      title: "Atlas needs setup",
+      line: "2 checks don't pass",
+      lineTone: .attention,
+      menu: viewerHelperMenu(
+        facts: viewerHelperFacts(
+          ready: [
+            "Mouse and keyboard: Not ready. Recover… starts them again.", "Screen Recording: Not allowed",
+            "1 more check passes",
+          ]
+        ),
+        logsOut: true
+      )
     )
 
-    /// The helper's line while it needs the person to recover it.
+    /// The helper's row while it needs the person to recover it.
     ///
     /// - Parameter alertUp: Whether the recovery alert is up, rather than set aside with Not Now.
-    /// - Returns: The line.
+    /// - Returns: The row.
     static func viewerHelperNeedsYou(alertUp: Bool) -> ViewerHelperLine {
       ViewerHelperLine(
         tone: .attention,
-        words: "Helper needs you",
-        help: viewerHelperHelp(),
+        title: "Atlas needs you",
+        line: "Recover the helper to go on",
+        lineTone: .attention,
         menu: viewerHelperMenu(recovers: true, alertUp: alertUp)
       )
+    }
+
+    /// The helper's row in each of its states, for its previews and renders.
+    @MainActor public static var viewerHelperLines: [PreviewState<ViewerHelperLine>] {
+      [
+        PreviewState(name: "Ready", value: viewerHelperReady(logsOut: true)),
+        PreviewState(name: "Needs setup", value: viewerHelperSetup),
+        PreviewState(name: "Needs you", value: viewerHelperNeedsYou(alertUp: false)),
+        PreviewState(name: "Logged out", value: viewerLoggedOut.sidebar.helper),
+        PreviewState(name: "Connecting", value: viewerConnecting.sidebar.helper),
+      ]
     }
 
     /// The sidebar.
