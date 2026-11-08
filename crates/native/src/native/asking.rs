@@ -361,7 +361,22 @@ fn decide_into(
     let mut pressed = false;
     for action in actions {
         let target = target(action, look);
-        let Some((key, account, level)) = account(&target, asking) else {
+        let found = match action {
+            // A drag goes by the stricter of where it starts and where it drops.
+            Action::Drag { to_x, to_y, .. } => {
+                let drop = look.at_point(*to_x, *to_y);
+                let from = account(&target, asking);
+                let to = account(&drop, asking);
+                if rank(to.as_ref().map(|found| found.2)) > rank(from.as_ref().map(|found| found.2))
+                {
+                    to
+                } else {
+                    from
+                }
+            }
+            _ => account(&target, asking),
+        };
+        let Some((key, account, level)) = found else {
             ranks.push(0);
             changed |= changes(action);
             continue;
@@ -369,7 +384,12 @@ fn decide_into(
         ranks.push(rank(Some(level)));
         match level {
             Level::Trusted => {}
-            Level::LookOnly if mutates(action) => return Decision::Deny { account },
+            // A move with a button held is a drag: a change.
+            Level::LookOnly
+                if mutates(action) || (pressed && matches!(action, Action::Pointer { .. })) =>
+            {
+                return Decision::Deny { account };
+            }
             Level::LookOnly => {}
             Level::Ask => {
                 let what = asks(action, &target, changed, pressed);
@@ -390,13 +410,17 @@ fn decide_into(
                 }
             }
         }
-        pressed |= matches!(
-            action,
+        match action {
             Action::Pointer {
                 phase: PointerPhase::Down,
                 ..
-            }
-        );
+            } => pressed = true,
+            Action::Pointer {
+                phase: PointerPhase::Up,
+                ..
+            } => pressed = false,
+            _ => {}
+        }
         changed |= changes(action);
     }
     Decision::Free
@@ -540,6 +564,7 @@ fn changes(action: &Action) -> bool {
 fn asks(action: &Action, target: &Target, changed: bool, pressed: bool) -> Option<&'static str> {
     match action {
         Action::Pointer { phase, .. } => match phase {
+            PointerPhase::Move if pressed => Some("drag"),
             PointerPhase::Move => None,
             PointerPhase::Up if pressed => None,
             PointerPhase::Down | PointerPhase::Up => by_name(target, changed),
@@ -591,6 +616,11 @@ fn by_key(key: &str, target: &Target, changed: bool) -> Option<&'static str> {
     }
     if changed {
         return Some("unsure");
+    }
+    // A character typed into a password field follows the password rule.
+    let character = base.chars().count() == 1 && (parts.len() == 1 || shift_only);
+    if target.secure && character {
+        return Some("password");
     }
     match base {
         "return" | "enter" if target.editable => {

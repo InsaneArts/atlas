@@ -572,3 +572,74 @@ fn a_browser_read_that_failed_counts_as_an_unread_page() {
         Decision::Deny { .. }
     ));
 }
+
+/// A look whose points differ: `from` everywhere but at x = 9, where `to` lies.
+struct TwoPlaces {
+    from: Target,
+    to: Target,
+}
+
+impl Look for TwoPlaces {
+    fn at_point(&mut self, x: f64, _: f64) -> Target {
+        if (x - 9.0).abs() < f64::EPSILON {
+            self.to.clone()
+        } else {
+            self.from.clone()
+        }
+    }
+    fn focused(&mut self) -> Target {
+        self.from.clone()
+    }
+    fn referenced(&mut self, _: &Reference) -> Target {
+        self.from.clone()
+    }
+    fn message(&mut self) -> Message {
+        Message::Unread
+    }
+}
+
+#[test]
+fn a_drag_goes_by_where_it_drops_and_a_move_with_a_button_held_is_a_drag() {
+    let asking = listing(Kind::App, SLACK, Level::LookOnly);
+    let mut look = TwoPlaces {
+        from: Target {
+            app: Some("com.apple.finder".to_owned()),
+            ..Target::default()
+        },
+        to: Target {
+            app: Some(SLACK.to_owned()),
+            ..Target::default()
+        },
+    };
+    let into_slack = actions(json!([{"type": "drag", "fromX": 1, "fromY": 1, "toX": 9, "toY": 1}]));
+    assert!(matches!(
+        decide(&into_slack, &asking, &mut look),
+        Decision::Deny { .. }
+    ));
+
+    let held = actions(json!([
+        {"type": "pointer", "phase": "down", "x": 9, "y": 1},
+        {"type": "pointer", "phase": "move", "x": 9, "y": 2},
+    ]));
+    assert!(matches!(
+        decide(&held, &asking, &mut look),
+        Decision::Deny { .. }
+    ));
+}
+
+#[test]
+fn a_character_key_into_a_password_field_follows_the_password_rule() {
+    let asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let mut secure = field("app.slack.com", false);
+    secure.secure = true;
+    let mut look = scripted(Target::default(), secure);
+    for key in ["a", "shift+a", "7"] {
+        let decision = decide(
+            &actions(json!([{"type": "key", "key": key}])),
+            &asking,
+            &mut look,
+        );
+        assert_eq!(what(&decision), Some("password"), "{key}");
+    }
+    assert_eq!(look.messages, 0, "the field is never read");
+}
