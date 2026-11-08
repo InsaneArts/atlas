@@ -1,6 +1,10 @@
 use super::*;
 use serde_json::json;
 
+fn slack() -> Value {
+    json!({"kind": "site", "id": "slack.com", "browser": "com.google.Chrome"})
+}
+
 fn asks(folder: &Path) -> Asks {
     Asks::at(
         folder.join("h.asks"),
@@ -16,7 +20,12 @@ fn question(session: &str, batch: &str) -> Ask {
         who: "Claude Code · release".to_owned(),
         task: Some("post the release notes".to_owned()),
         account: "slack.com".to_owned(),
-        question: json!({"what": "send-key", "batch": batch}),
+        question: json!({
+            "what": "send-key",
+            "batch": batch,
+            "accountKey": slack(),
+            "bind": {"accountKey": slack(), "batch": batch, "value": "m1"},
+        }),
         asked: 0,
         ends: 0,
     }
@@ -76,22 +85,21 @@ fn only_the_person_answers_and_allow_for_this_task_covers_that_session_in_that_a
     assert_eq!(asks.answered(&id), Some(Answer::Task));
     let allowed = asks.allowed(1_000);
     assert_eq!(allowed.len(), 1);
-    assert_eq!(
-        (allowed[0].session.as_str(), allowed[0].account.as_str()),
-        ("s1", "slack.com")
-    );
+    assert_eq!(allowed[0].session, "s1");
+    assert_eq!(allowed[0].account, slack());
+    assert_eq!(allowed[0].name, "slack.com");
     assert!(
         asks.allowed(1_000 + millis(TASK_LIFE)).is_empty(),
         "an hour at most"
     );
 
     assert_eq!(
-        asks.end(Some("slack.com"), None, false, 1_000)
+        asks.end(Some(&slack()), None, false, 1_000)
             .unwrap_err()
             .code,
         Code::Stopped
     );
-    asks.end(Some("slack.com"), None, true, 1_000).unwrap();
+    asks.end(Some(&slack()), None, true, 1_000).unwrap();
     assert!(asks.allowed(1_000).is_empty(), "End stops it");
     assert_eq!(
         asks.answer("gone", Answer::Once, true, 1_000)
@@ -154,4 +162,52 @@ fn a_wait_ends_at_the_answer_at_stop_or_at_its_deadline_and_never_polls() {
     );
     assert!(started.elapsed() < Duration::from_secs(2));
     stopping.join().unwrap();
+}
+
+#[test]
+fn a_changed_message_is_a_question_of_its_own() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let first = asks.ask(question("s1", "b1"), 1_000).unwrap();
+    let mut changed = question("s1", "b1");
+    changed.question["bind"]["value"] = json!("m2");
+    assert_ne!(asks.ask(changed, 1_000).unwrap(), first);
+}
+
+#[test]
+fn grants_and_ends_at_once_never_undo_one_another() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let ids: Vec<String> = (0..8)
+        .map(|index| {
+            let mut ask = question(&format!("s{index}"), "b1");
+            ask.question["accountKey"] =
+                json!({"kind": "site", "id": format!("site{index}.example")});
+            asks.ask(ask, 1_000).unwrap()
+        })
+        .collect();
+    let answering: Vec<_> = ids
+        .into_iter()
+        .map(|id| {
+            let asks = asks.clone();
+            std::thread::spawn(move || asks.answer(&id, Answer::Task, true, 1_000).unwrap())
+        })
+        .collect();
+    for thread in answering {
+        thread.join().unwrap();
+    }
+    assert_eq!(asks.allowed(1_000).len(), 8, "every grant kept");
+    let ending: Vec<_> = (0..8)
+        .map(|index| {
+            let asks = asks.clone();
+            std::thread::spawn(move || {
+                let account = json!({"kind": "site", "id": format!("site{index}.example")});
+                asks.end(Some(&account), None, true, 1_000).unwrap();
+            })
+        })
+        .collect();
+    for thread in ending {
+        thread.join().unwrap();
+    }
+    assert!(asks.allowed(1_000).is_empty(), "every End kept");
 }

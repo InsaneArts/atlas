@@ -4159,3 +4159,147 @@ async fn an_unverified_daemon_never_starts_either_independent_read() {
         }
     }
 }
+
+/// The input service's refusal to ask the person, as it answers it: with
+/// the message the person would see.
+fn refusal_to_ask(canary: &str) -> Value {
+    let key = json!({"kind": "site", "id": "slack.com", "browser": "com.google.Chrome"});
+    json!({
+        "ok": false,
+        "code": "waiting-for-person",
+        "error": "slack.com is signed in; Atlas asked the person before sending and they haven't answered.",
+        "ask": {
+            "account": "slack.com",
+            "accountKey": key,
+            "what": "send-key",
+            "batch": "b1",
+            "bound": {"app": "com.google.Chrome", "site": "app.slack.com"},
+            "bind": {"accountKey": key, "batch": "b1", "value": "d1"},
+            "message": {"preview": canary, "digest": "d1", "length": canary.len()},
+            "once": true,
+        },
+    })
+}
+
+/// A stand-in input service that grants and releases, and answers each input with the next of `replies`.
+fn answering_input(
+    listener: UnixListener,
+    replies: Vec<Value>,
+) -> tokio::task::JoinHandle<Vec<Value>> {
+    tokio::spawn(async move {
+        let mut replies = replies.into_iter();
+        let mut inputs = Vec::new();
+        while let Ok(Ok((peer, _))) =
+            tokio::time::timeout(Duration::from_secs(3), listener.accept()).await
+        {
+            let mut peer = BufReader::new(peer);
+            let mut line = String::new();
+            peer.read_line(&mut line).await.unwrap();
+            let request = serde_json::from_str::<Value>(&line).unwrap();
+            let reply = match request["op"].as_str() {
+                Some("input") => {
+                    inputs.push(request);
+                    replies
+                        .next()
+                        .unwrap_or(json!({"ok": true, "performed": 1}))
+                }
+                _ => json!({"ok": true}),
+            };
+            answer(&mut peer, reply).await;
+            if inputs.len() >= 2 {
+                break;
+            }
+        }
+        inputs
+    })
+}
+
+#[tokio::test]
+async fn a_refusal_to_ask_through_the_real_input_path_waits_and_tells_the_agent_nothing_private() {
+    const CANARY: &str = "the release notes canary 9f2e";
+    let (_dir, client, listener, session) = native_client();
+    let client = Client {
+        controller: client
+            .controller
+            .clone()
+            .waiting(Duration::from_millis(150)),
+        ..client
+    };
+    let service = answering_input(listener, vec![refusal_to_ask(CANARY)]);
+    let outcome = crate::asking::after_asking(&client, async || {
+        let _ownership = client.controller.acquire(false)?;
+        let actions = json!([{"type": "key", "key": "return"}]);
+        client
+            .input_in_session(
+                actions::Batch::decode(&actions)?,
+                None,
+                None,
+                None,
+                &session,
+            )
+            .await
+    })
+    .await;
+    service.abort();
+
+    let shown = match &outcome {
+        Ok(reply) => reply.to_string(),
+        Err(error) => serde_json::to_string(error).unwrap(),
+    };
+    assert!(shown.contains("waiting-for-person"), "{shown}");
+    assert!(
+        !shown.contains(CANARY),
+        "the message never reaches the agent: {shown}"
+    );
+    assert!(
+        !shown.contains("app.slack.com"),
+        "nor where it lands: {shown}"
+    );
+    let asks = client.controller.asks().open(atlas_core::time::now_ms());
+    assert_eq!(asks.len(), 1, "the question went up for the person");
+    assert_eq!(
+        asks[0].question["message"]["preview"], CANARY,
+        "the person sees the message"
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_sent_part_of_itself_is_never_asked_about_or_sent_again() {
+    let (_dir, client, listener, session) = native_client();
+    let mut partial = refusal_to_ask("partial");
+    partial["performed"] = json!(1);
+    let service = answering_input(listener, vec![partial]);
+    let mut attempts = 0;
+    let outcome = crate::asking::after_asking(&client, async || {
+        attempts += 1;
+        let _ownership = client.controller.acquire(false)?;
+        let actions = json!([{"type": "key", "key": "a"}, {"type": "key", "key": "return"}]);
+        client
+            .input_in_session(
+                actions::Batch::decode(&actions)?,
+                None,
+                None,
+                None,
+                &session,
+            )
+            .await
+    })
+    .await;
+    service.abort();
+    assert_eq!(attempts, 1, "never resubmitted");
+    assert!(
+        client
+            .controller
+            .asks()
+            .open(atlas_core::time::now_ms())
+            .is_empty()
+    );
+    let shown = match &outcome {
+        Ok(reply) => reply.to_string(),
+        Err(error) => serde_json::to_string(error).unwrap(),
+    };
+    assert!(
+        shown.contains("\"performed\":1") || shown.contains("waiting-for-person"),
+        "{shown}"
+    );
+}

@@ -477,9 +477,12 @@ impl Service {
             drop(grant.authorize()?);
             let engine = self.engine.clone().lock_owned().await;
             let asking = asking.clone();
+            let intended = expect
+                .as_ref()
+                .and_then(|expect| super::apps::bundle_id(expect.pid()));
             return tokio::task::spawn_blocking(move || {
-                gate_request(&engine, &actions, &asking)
-                    .map(|()| json!({"ok": true, "performed": 0, "dry": true}))
+                gate_request(&engine, &actions, &asking, intended)
+                    .map(|_| json!({"ok": true, "performed": 0, "dry": true}))
             })
             .await
             .map_err(|cause| worker_failed().with_source(cause))?;
@@ -576,9 +579,13 @@ impl Service {
                     if let Some(asking) = &asking
                         && person.is_none()
                     {
-                        gate_request(engine, &actions, asking)?;
+                        let intended = expect
+                            .as_ref()
+                            .and_then(|expect| super::apps::bundle_id(expect.pid()));
+                        engine.recheck = Some(gate_request(engine, &actions, asking, intended)?);
                     }
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
+                    engine.recheck = None;
                     // Part of the batch's own work, so giving control back
                     // waits for it before it reads what was seen.
                     if typed && result.is_ok() {
@@ -682,20 +689,55 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
     Ok(())
 }
 
+/// Check `action`, the next of an agent's request the person's accounts
+/// passed, by where it lands now: one landing in a stricter account than the
+/// request was judged by is refused, and with it the rest of the request.
+pub(super) fn recheck_action(engine: &mut Engine, action: &Action) -> Result<()> {
+    let Some(mut recheck) = engine.recheck.take() else {
+        return Ok(());
+    };
+    let stricter = {
+        let mut look = asking::live::OnScreen {
+            looks: &engine.looks,
+            epoch: &engine.epoch,
+            deadline: std::time::Instant::now() + ASK_BUDGET,
+            intended: recheck.intended.clone(),
+        };
+        recheck.check(action, &mut look)
+    };
+    engine.recheck = Some(recheck);
+    stricter.map_err(|account| {
+        Error::new(
+            Code::WaitingForPerson,
+            format!(
+                "The next action would have landed in {account}, which the person keeps closer than \
+                 where this began; it and the rest weren't sent."
+            ),
+        )
+    })
+}
+
 /// How long the gate may take to read where a request lands, in all.
 const ASK_BUDGET: Duration = Duration::from_millis(300);
 
 /// Judge `actions` by `asking` on the helper's screen as it is now: refused
 /// with `waiting-for-person` while the person must be asked, or `denied` in
 /// a Look Only account. Nothing is sent either way.
-fn gate_request(engine: &Engine, actions: &[Action], asking: &asking::Asking) -> Result<()> {
+fn gate_request(
+    engine: &Engine,
+    actions: &[Action],
+    asking: &asking::Asking,
+    intended: Option<String>,
+) -> Result<asking::Recheck> {
     let mut look = asking::live::OnScreen {
         looks: &engine.looks,
         epoch: &engine.epoch,
         deadline: std::time::Instant::now() + ASK_BUDGET,
+        intended: intended.clone(),
     };
-    match asking::decide(actions, asking, &mut look) {
-        asking::Decision::Free => Ok(()),
+    let (decision, recheck) = asking::recheck(actions, asking, &mut look, intended);
+    match decision {
+        asking::Decision::Free => Ok(recheck),
         asking::Decision::Ask(question) => {
             let mut details = question.details();
             details["dry"] = json!(asking.dry);

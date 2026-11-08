@@ -163,6 +163,8 @@ impl Perform for Engine {
         window: Option<i64>,
     ) -> Result<Acted> {
         self.check()?;
+        // Checked again by the element it acts on, as any action is.
+        super::recheck_action(self, &Action::Press { reference })?;
         let looks = self.looks.clone();
         let epoch = self.epoch.clone();
         let named = self.target;
@@ -181,6 +183,7 @@ impl Perform for Engine {
     }
 
     async fn perform(&mut self, action: Action) -> Result<()> {
+        super::recheck_action(self, &action)?;
         Engine::perform(self, action).await
     }
 

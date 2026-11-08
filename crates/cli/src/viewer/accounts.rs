@@ -97,10 +97,24 @@ pub(super) fn asks(client: &atlas_client::client::Client) -> Value {
 }
 
 /// The status's part of them: the questions up, without what would be sent,
-/// and what the person allowed.
-pub(super) fn asks_for_status(client: &atlas_client::client::Client) -> (Value, Value) {
+/// and what the person allowed, once the grants of the agent sessions that
+/// ended among `sessions` are ended.
+pub(super) fn asks_for_status(
+    client: &atlas_client::client::Client,
+    sessions: &Value,
+) -> (Value, Value) {
     let now = atlas_core::time::now_ms();
     let asks = client.controller.asks();
+    // What the person allowed a task ends with its agent session.
+    for ended in sessions
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|session| !session["ended"].is_null())
+        .filter_map(|session| session["key"].as_str())
+    {
+        let _ = asks.end(None, Some(ended), true, now);
+    }
     let open: Vec<Value> = asks
         .open(now)
         .into_iter()
@@ -135,9 +149,13 @@ pub(super) fn answer(client: &atlas_client::client::Client, body: &Value) -> Res
 
 /// End what the person allowed in the account `body` names.
 pub(super) fn end_allowed(client: &atlas_client::client::Client, body: &Value) -> Result<Value> {
-    let Some(account) = text(&body["account"]) else {
-        return Err(Error::new(Code::Input, "Name the account"));
-    };
+    let account = &body["account"];
+    if !account.is_object() {
+        return Err(Error::new(
+            Code::Input,
+            "Name the account by its kind, id and browser",
+        ));
+    }
     client
         .controller
         .asks()

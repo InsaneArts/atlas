@@ -214,3 +214,32 @@ fn each_mutation_sends_its_exact_request() {
         assert_eq!(mutation.request().to_string(), wire);
     }
 }
+
+#[test]
+fn a_check_before_typing_is_confirmed_only_as_judged_with_nothing_performed() {
+    let actions = json!([{"type": "type", "text": "x"}]);
+    let checking = Mutation::Input {
+        actions: Batch::decode(&actions).unwrap(),
+        owner: "owner",
+        epoch: epoch(),
+        picture: None,
+        app: false,
+        expect: None,
+        asking: Some(json!({"accounts": [], "dry": true})),
+    };
+    checking
+        .validate(&json!({"ok": true, "performed": 0, "dry": true}))
+        .unwrap();
+    assert!(
+        checking
+            .validate(&json!({"ok": true, "performed": 1}))
+            .is_err(),
+        "typed instead of checked"
+    );
+    assert!(
+        checking
+            .validate(&json!({"ok": true, "performed": 0}))
+            .is_err(),
+        "never said it only checked"
+    );
+}

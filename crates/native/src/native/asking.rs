@@ -58,11 +58,45 @@ pub(crate) struct Listed {
     pub(crate) level: Level,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Kind {
     Site,
     App,
+}
+
+/// Which account: a site in a browser, or an app. Names are only for the
+/// person to read; grants and questions go by this.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AccountKey {
+    pub(crate) kind: Kind,
+    pub(crate) id: String,
+    #[serde(default)]
+    pub(crate) browser: Option<String>,
+}
+
+impl AccountKey {
+    /// Any account: the one an unreadable list or app stands for.
+    fn any() -> Self {
+        Self {
+            kind: Kind::App,
+            id: "*".to_owned(),
+            browser: None,
+        }
+    }
+}
+
+/// What a once grant is bound to where the request lands: the app, page,
+/// window and element, as read before it ran.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Bound {
+    pub(crate) app: Option<String>,
+    pub(crate) site: Option<String>,
+    pub(crate) window: Option<i64>,
+    pub(crate) role: Option<String>,
+    pub(crate) name: Option<String>,
 }
 
 /// How agents may act in an account, strictest first.
@@ -81,15 +115,17 @@ pub(crate) enum Level {
 #[serde(rename_all = "camelCase", tag = "scope")]
 pub(crate) enum Allowance {
     /// Everything this agent session sends in the account, until it ends.
-    Task { account: String },
+    Task { account: AccountKey },
     /// The rest of one command the person allowed once, as its first check
     /// asked: the client attaches it to that command's own requests only.
-    Command { account: String },
-    /// This very request: its actions' digest, and the digest of the
+    Command { account: AccountKey },
+    /// This very request, landing where it was asked about: its actions'
+    /// digest, the receiving window and element, and the digest of the
     /// message a Return would send when there is one.
     Once {
-        account: String,
+        account: AccountKey,
         batch: String,
+        target: Bound,
         #[serde(default)]
         value: Option<String>,
     },
@@ -101,6 +137,8 @@ pub(crate) struct Target {
     /// The receiving app's bundle identifier; none when it can't be read.
     pub(crate) app: Option<String>,
     pub(crate) site: Site,
+    /// The receiving window's number, when it is known.
+    pub(crate) window: Option<i64>,
     /// The element's role, such as `AXButton`.
     pub(crate) role: Option<String>,
     /// The element's name; none when it has none or it can't be read.
@@ -179,6 +217,8 @@ pub(crate) enum Decision {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Question {
     pub(crate) account: String,
+    pub(crate) account_key: AccountKey,
+    pub(crate) bound: Bound,
     pub(crate) app: Option<String>,
     pub(crate) site: Option<String>,
     /// What it would do: `send-key`, `click`, `newline`, `password`,
@@ -200,8 +240,22 @@ impl Question {
     /// only to the person's ask, and only Just This Once binds its digest;
     /// Just This Once isn't offered when it couldn't be read whole.
     pub(crate) fn details(&self) -> Value {
+        let digest = match &self.message {
+            Some(Message::Whole { digest, .. }) => Some(digest.clone()),
+            Some(Message::Unread) | None => None,
+        };
         let mut details = json!({
             "account": self.account,
+            "accountKey": self.account_key,
+            "bound": self.bound,
+            // What makes it this question, which a rerun joins: the account,
+            // the request, where it lands and the message it would send.
+            "bind": {
+                "accountKey": self.account_key,
+                "batch": self.batch,
+                "bound": self.bound,
+                "value": digest,
+            },
             "app": self.app,
             "site": self.site,
             "what": self.what,
@@ -226,7 +280,79 @@ impl Question {
 
 /// Decide the whole request `actions` against `asking`, reading where each
 /// action lands through `look` before anything is sent.
+#[cfg(test)]
 pub(crate) fn decide(actions: &[Action], asking: &Asking, look: &mut impl Look) -> Decision {
+    decide_ranked(actions, asking, look).0
+}
+
+/// How strict an account's level is: what the check before each event
+/// compares, so it stops when an action would now land somewhere stricter.
+fn rank(level: Option<Level>) -> u8 {
+    match level {
+        None | Some(Level::Trusted) => 0,
+        Some(Level::Ask) => 1,
+        Some(Level::LookOnly) => 2,
+    }
+}
+
+/// The check before each event of a request that passed: where each action
+/// lands is read again just before it is sent, and one landing in a
+/// stricter account than the request was judged by stops the rest.
+#[derive(Debug, Clone)]
+pub(crate) struct Recheck {
+    pub(crate) asking: Asking,
+    ranks: std::collections::VecDeque<u8>,
+    pub(crate) intended: Option<String>,
+}
+
+impl Recheck {
+    /// Check `action`, the next one, by what `look` reads now: the stricter
+    /// account's name when it would land in one.
+    pub(crate) fn check(
+        &mut self,
+        action: &Action,
+        look: &mut impl Look,
+    ) -> std::result::Result<(), String> {
+        let before = self.ranks.pop_front().unwrap_or(0);
+        let target = target(action, look);
+        let found = account(&target, &self.asking);
+        let now = rank(found.as_ref().map(|(_, _, level)| *level));
+        match found {
+            Some((_, name, _)) if now > before => Err(name),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// [`decide`], with the check before each event of a request that passed.
+pub(crate) fn recheck(
+    actions: &[Action],
+    asking: &Asking,
+    look: &mut impl Look,
+    intended: Option<String>,
+) -> (Decision, Recheck) {
+    let (decision, ranks) = decide_ranked(actions, asking, look);
+    let recheck = Recheck {
+        asking: asking.clone(),
+        ranks: ranks.into(),
+        intended,
+    };
+    (decision, recheck)
+}
+
+/// [`decide`], with the rank of the account each action was judged in.
+fn decide_ranked(actions: &[Action], asking: &Asking, look: &mut impl Look) -> (Decision, Vec<u8>) {
+    let mut ranks = Vec::with_capacity(actions.len());
+    let decision = decide_into(actions, asking, look, &mut ranks);
+    (decision, ranks)
+}
+
+fn decide_into(
+    actions: &[Action],
+    asking: &Asking,
+    look: &mut impl Look,
+    ranks: &mut Vec<u8>,
+) -> Decision {
     let batch = digest(actions);
     // An earlier action may move focus or what lies under a point, so what
     // was read for later ones may not hold: those are "can't tell".
@@ -235,10 +361,12 @@ pub(crate) fn decide(actions: &[Action], asking: &Asking, look: &mut impl Look) 
     let mut pressed = false;
     for action in actions {
         let target = target(action, look);
-        let Some((account, level)) = account(&target, asking) else {
+        let Some((key, account, level)) = account(&target, asking) else {
+            ranks.push(0);
             changed |= changes(action);
             continue;
         };
+        ranks.push(rank(Some(level)));
         match level {
             Level::Trusted => {}
             Level::LookOnly if mutates(action) => return Decision::Deny { account },
@@ -248,9 +376,15 @@ pub(crate) fn decide(actions: &[Action], asking: &Asking, look: &mut impl Look) 
                 if let Some(what) = what {
                     let message = (what == "send-key" && target.editable && !target.secure)
                         .then(|| look.message());
-                    if !allowed(asking, &account, &batch, message.as_ref()) {
+                    let bound = bound(&target);
+                    if !allowed(asking, &key, &batch, &bound, message.as_ref()) {
                         return Decision::Ask(Box::new(question(
-                            action, &target, what, account, batch, message,
+                            action,
+                            &target,
+                            what,
+                            (key, account),
+                            batch,
+                            message,
                         )));
                     }
                 }
@@ -299,9 +433,9 @@ fn target(action: &Action, look: &mut impl Look) -> Target {
 /// is in none. A site counts before its browser app. A browser page whose
 /// address can't be read takes the strictest level of the sites listed for
 /// that browser, so Look Only is never weakened to asking.
-fn account(target: &Target, asking: &Asking) -> Option<(String, Level)> {
+fn account(target: &Target, asking: &Asking) -> Option<(AccountKey, String, Level)> {
     if asking.unknown {
-        return Some(("this account".to_owned(), Level::Ask));
+        return Some((AccountKey::any(), "this account".to_owned(), Level::Ask));
     }
     // An app that can't be read could be any listed account: the strictest.
     let Some(app) = target.app.as_deref() else {
@@ -309,7 +443,7 @@ fn account(target: &Target, asking: &Asking) -> Option<(String, Level)> {
             .accounts
             .iter()
             .min_by_key(|listed| listed.level)
-            .map(|listed| ("this account".to_owned(), listed.level));
+            .map(|listed| (AccountKey::any(), "this account".to_owned(), listed.level));
     };
     let app = Some(app);
     let in_browser =
@@ -333,8 +467,14 @@ fn account(target: &Target, asking: &Asking) -> Option<(String, Level)> {
             .filter(|listed| listed.kind == Kind::App && Some(listed.id.as_str()) == app)
             .min_by_key(|listed| listed.level)
     };
-    site.or_else(app_listed)
-        .map(|listed| (display(listed), listed.level))
+    site.or_else(app_listed).map(|listed| {
+        let key = AccountKey {
+            kind: listed.kind,
+            id: listed.id.clone(),
+            browser: listed.browser.clone(),
+        };
+        (key, display(listed), listed.level)
+    })
 }
 
 /// What the person reads of an account.
@@ -478,7 +618,13 @@ fn by_name(target: &Target, changed: bool) -> Option<&'static str> {
 
 /// Whether a grant in `asking` covers this request in `account`: a task
 /// grant there, or a once grant for this very request and message.
-fn allowed(asking: &Asking, account: &str, batch: &str, message: Option<&Message>) -> bool {
+fn allowed(
+    asking: &Asking,
+    account: &AccountKey,
+    batch: &str,
+    target: &Bound,
+    message: Option<&Message>,
+) -> bool {
     asking.grants.iter().any(|grant| match grant {
         Allowance::Task { account: granted } | Allowance::Command { account: granted } => {
             granted == account
@@ -486,6 +632,7 @@ fn allowed(asking: &Asking, account: &str, batch: &str, message: Option<&Message
         Allowance::Once {
             account: granted,
             batch: allowed,
+            target: approved,
             value,
         } => {
             let same_message = match message {
@@ -493,9 +640,23 @@ fn allowed(asking: &Asking, account: &str, batch: &str, message: Option<&Message
                 Some(Message::Whole { digest, .. }) => value.as_deref() == Some(digest),
                 Some(Message::Unread) => false,
             };
-            granted == account && allowed == batch && same_message
+            granted == account && allowed == batch && approved == target && same_message
         }
     })
+}
+
+/// Where `target` lands, as a once grant is bound to it.
+fn bound(target: &Target) -> Bound {
+    Bound {
+        app: target.app.clone(),
+        site: match &target.site {
+            Site::Host(host) => Some(host.clone()),
+            Site::None | Site::Unread => None,
+        },
+        window: target.window,
+        role: target.role.clone(),
+        name: target.name.clone(),
+    }
 }
 
 /// The question about `action`, landing at `target`.
@@ -503,7 +664,7 @@ fn question(
     action: &Action,
     target: &Target,
     what: &'static str,
-    account: String,
+    (account_key, account): (AccountKey, String),
     batch: String,
     message: Option<Message>,
 ) -> Question {
@@ -514,6 +675,8 @@ fn question(
     };
     Question {
         account,
+        account_key,
+        bound: bound(target),
         app: target.app.clone(),
         site: match &target.site {
             Site::Host(host) => Some(host.clone()),

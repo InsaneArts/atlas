@@ -154,6 +154,12 @@ impl Mutation<'_> {
             // service that ignored it posted the input unchecked. An action
             // on an element is confirmed only with how it was verified, and
             // one already as asked (matched) sent nothing, so is not counted.
+            // A check before a command types sends nothing: confirmed only as
+            // judged, with nothing performed.
+            Self::Input {
+                asking: Some(asking),
+                ..
+            } if asking["dry"] == true => reply["dry"] == true && reply["performed"] == 0,
             Self::Input {
                 actions, expect, ..
             } => {

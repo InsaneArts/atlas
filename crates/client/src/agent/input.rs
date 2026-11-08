@@ -165,7 +165,12 @@ async fn type_once(
             )
             .await;
         client.set_checking(false);
-        checked?;
+        // A check refused, to ask the person or for a Look Only account:
+        // nothing is typed, and the caller asks.
+        let checked = checked?;
+        if checked["ok"] != true {
+            return Ok(checked);
+        }
     }
     let send = async |actions: &Value| {
         client

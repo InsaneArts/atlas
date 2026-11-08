@@ -59,6 +59,15 @@ fn field(host: &str, multiline: bool) -> Target {
     }
 }
 
+/// The account key of site `id` in Chrome.
+fn site(id: &str) -> AccountKey {
+    AccountKey {
+        kind: Kind::Site,
+        id: id.to_owned(),
+        browser: Some(CHROME.to_owned()),
+    }
+}
+
 fn scripted(point: Target, focus: Target) -> Scripted {
     Scripted {
         point,
@@ -291,7 +300,7 @@ fn an_unreadable_page_takes_the_strictest_level_listed_for_its_browser() {
     ));
     // Whatever grant it carries: Look Only is never asked, so no grant can cover it.
     asking.grants.push(Allowance::Task {
-        account: "bank.example".to_owned(),
+        account: site("bank.example"),
     });
     assert!(matches!(
         decide(&click, &asking, &mut look),
@@ -345,8 +354,9 @@ fn a_once_grant_covers_only_this_request_with_this_message_and_a_task_grant_only
         panic!("read whole");
     };
     asking.grants.push(Allowance::Once {
-        account: "slack.com".to_owned(),
+        account: question.account_key.clone(),
         batch: question.batch.clone(),
+        target: question.bound.clone(),
         value: Some(digest.clone()),
     });
     assert_eq!(decide(&send, &asking, &mut look), Decision::Free);
@@ -367,14 +377,14 @@ fn a_once_grant_covers_only_this_request_with_this_message_and_a_task_grant_only
 
     let mut task = listing(Kind::Site, "slack.com", Level::Ask);
     task.grants.push(Allowance::Task {
-        account: "github.com".to_owned(),
+        account: site("github.com"),
     });
     assert!(
         matches!(decide(&send, &task, &mut look), Decision::Ask(_)),
         "another account's grant"
     );
     task.grants.push(Allowance::Task {
-        account: "slack.com".to_owned(),
+        account: site("slack.com"),
     });
     assert_eq!(decide(&send, &task, &mut look), Decision::Free);
 }
@@ -390,8 +400,9 @@ fn a_message_that_cant_be_read_whole_offers_no_just_this_once() {
     };
     assert_eq!(question.details()["once"], false);
     asking.grants.push(Allowance::Once {
-        account: "slack.com".to_owned(),
+        account: question.account_key.clone(),
         batch: question.batch.clone(),
+        target: question.bound.clone(),
         value: None,
     });
     assert!(matches!(
@@ -428,4 +439,136 @@ fn referenced_actions_go_by_the_elements_name() {
     }
     let into_view = actions(json!([{"type": "scroll-into-view", "ref": reference}]));
     assert_eq!(decide(&into_view, &asking, &mut look), Decision::Free);
+}
+
+#[test]
+fn a_once_grant_for_send_never_covers_the_same_click_landing_on_delete() {
+    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    let mut look = scripted(
+        page("app.slack.com", "AXButton", Some("Send")),
+        Target::default(),
+    );
+    let Decision::Ask(question) = decide(&click, &asking, &mut look) else {
+        panic!("asks");
+    };
+    asking.grants.push(Allowance::Once {
+        account: question.account_key.clone(),
+        batch: question.batch.clone(),
+        target: question.bound.clone(),
+        value: None,
+    });
+    assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
+    look.point = page("app.slack.com", "AXButton", Some("Delete message"));
+    assert!(
+        matches!(decide(&click, &asking, &mut look), Decision::Ask(_)),
+        "another element there now"
+    );
+}
+
+#[test]
+fn the_same_site_in_two_browsers_is_two_accounts_to_a_grant() {
+    let mut asking = listing(Kind::Site, "github.com", Level::Ask);
+    asking.accounts.push(Listed {
+        kind: Kind::Site,
+        id: "github.com".to_owned(),
+        name: "github.com".to_owned(),
+        browser: Some("org.mozilla.firefox".to_owned()),
+        level: Level::Ask,
+    });
+    asking.grants.push(Allowance::Task {
+        account: AccountKey {
+            kind: Kind::Site,
+            id: "github.com".to_owned(),
+            browser: Some("org.mozilla.firefox".to_owned()),
+        },
+    });
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    let mut chrome = scripted(
+        page("github.com", "AXButton", Some("Merge")),
+        Target::default(),
+    );
+    assert!(
+        matches!(decide(&click, &asking, &mut chrome), Decision::Ask(_)),
+        "Firefox's grant, not Chrome's"
+    );
+}
+
+#[test]
+fn an_action_that_would_now_land_somewhere_stricter_stops_the_rest() {
+    let asking = listing(Kind::App, SLACK, Level::LookOnly);
+    let notes = Target {
+        app: Some("com.apple.Notes".to_owned()),
+        name: Some("Open".to_owned()),
+        ..Target::default()
+    };
+    let mut look = scripted(notes.clone(), notes);
+    let keys = actions(json!([{"type": "key", "key": "a"}, {"type": "key", "key": "b"}]));
+    let (decision, mut recheck) = recheck(&keys, &asking, &mut look, None);
+    assert_eq!(decision, Decision::Free, "judged in an app not listed");
+    assert_eq!(recheck.check(&keys[0], &mut look), Ok(()));
+    // Before the second key, Slack, kept Look Only, has come to the front.
+    look.focus = Target {
+        app: Some(SLACK.to_owned()),
+        ..Target::default()
+    };
+    assert_eq!(recheck.check(&keys[1], &mut look), Err(SLACK.to_owned()));
+}
+
+#[test]
+fn a_request_naming_an_app_not_yet_in_front_is_judged_as_that_app() {
+    let looks = crate::native::ax::Looks::default();
+    let epoch = atlas_core::session::InputEpoch {
+        uid: 501,
+        security_session_id: 1,
+        display_id: 2,
+        width: 800.0,
+        height: 600.0,
+        process_id: 1,
+    };
+    let screen = live::OnScreen {
+        looks: &looks,
+        epoch: &epoch,
+        deadline: std::time::Instant::now(),
+        intended: Some(SLACK.to_owned()),
+    };
+    let front = Target {
+        app: Some("com.apple.TextEdit".to_owned()),
+        editable: true,
+        name: Some("Untitled".to_owned()),
+        ..Target::default()
+    };
+    let intended = screen.as_intended(front);
+    assert_eq!(intended.app.as_deref(), Some(SLACK));
+    assert_eq!(
+        (intended.name, intended.editable),
+        (None, false),
+        "what lies in it can't be told yet"
+    );
+    let asking = listing(Kind::App, SLACK, Level::LookOnly);
+    let mut look = scripted(Target::default(), screen.as_intended(Target::default()));
+    let send = actions(json!([{"type": "key", "key": "return"}]));
+    assert!(matches!(
+        decide(&send, &asking, &mut look),
+        Decision::Deny { .. }
+    ));
+}
+
+#[test]
+fn a_browser_read_that_failed_counts_as_an_unread_page() {
+    // A process that isn't running reads as no bundle at all; the rule is on what a browser's failed read gives.
+    let unread = live::target(i64::from(std::process::id()), None);
+    assert_ne!(unread.site, Site::Host(String::new()));
+    let asking = listing(Kind::Site, "bank.example", Level::LookOnly);
+    let browser = Target {
+        app: Some(CHROME.to_owned()),
+        site: Site::Unread,
+        ..Target::default()
+    };
+    let mut look = scripted(browser, Target::default());
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    assert!(matches!(
+        decide(&click, &asking, &mut look),
+        Decision::Deny { .. }
+    ));
 }

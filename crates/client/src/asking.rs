@@ -23,8 +23,9 @@ use std::time::Instant;
 /// What an agent's input carries for the input service to judge it by:
 /// none while the person lists no account.
 pub(crate) fn policy(client: &Client) -> Option<Value> {
-    // Tests never read the person's own accounts on the Mac running them.
-    if cfg!(test) {
+    // Tests never read the person's own accounts on the Mac running them,
+    // this crate's or any crate's built with its test support.
+    if cfg!(any(test, feature = "test-support")) {
         return None;
     }
     policy_by(client, crate::sign_ins::listed())
@@ -97,14 +98,10 @@ pub async fn after_asking(
     loop {
         let outcome = attempt().await;
         client.clear_granted();
-        let Err(error) = &outcome else {
-            return outcome;
-        };
         // Only a refusal that sent nothing becomes a question.
-        if error.code != Code::WaitingForPerson || error.uncertain {
-            return outcome;
-        }
-        let question = error.details.get("ask").cloned().unwrap_or(Value::Null);
+        let Some(question) = asked(&outcome) else {
+            return private(outcome);
+        };
         let asks = client.controller.asks();
         let ask = Ask {
             id: String::new(),
@@ -118,7 +115,7 @@ pub async fn after_asking(
                 .as_str()
                 .unwrap_or("this account")
                 .to_owned(),
-            question: question.clone(),
+            question,
             asked: 0,
             ends: 0,
         };
@@ -132,8 +129,14 @@ pub async fn after_asking(
         .map_err(|cause| {
             Error::new(Code::State, "The wait for the person ended").with_source(cause)
         })??;
+        // What the person saw is what they answered: the grant comes from
+        // the stored question, never from what a rerun read.
+        let Some(stored) = asks.open(now_ms()).into_iter().find(|ask| ask.id == id) else {
+            return private(outcome);
+        };
+        let question = stored.question;
         match waited {
-            Waited::Unanswered => return outcome,
+            Waited::Unanswered => return private(outcome),
             Waited::Stopped => return Err(Error::stopped()),
             Waited::Answered(Answer::Deny) => {
                 asks.close(&id);
@@ -141,26 +144,77 @@ pub async fn after_asking(
                     Code::Denied,
                     format!(
                         "The person said no to sending this in {}. Nothing was sent.",
-                        question["account"].as_str().unwrap_or("this account")
+                        stored.account
                     ),
                 ));
             }
             Waited::Answered(Answer::Task) => asks.close(&id),
             // A command's check before typing covers the rest of that one
-            // command; a request's own ask covers that request alone.
+            // command; a request's own ask covers that request alone, where
+            // it was asked about.
             Waited::Answered(Answer::Once) if question["dry"] == true => {
                 asks.close(&id);
-                client.grant(json!({"scope": "command", "account": question["account"]}));
+                client.grant(json!({"scope": "command", "account": question["accountKey"]}));
             }
             Waited::Answered(Answer::Once) => {
                 asks.close(&id);
                 client.grant(json!({
                     "scope": "once",
-                    "account": question["account"],
+                    "account": question["accountKey"],
                     "batch": question["batch"],
+                    "target": question["bound"],
                     "value": question["message"]["digest"],
                 }));
             }
+        }
+    }
+}
+
+/// The question in `outcome` when it is a refusal to ask the person that
+/// sent nothing, whether it came back as an error or as a reply saying so.
+fn asked(outcome: &Result<Value>) -> Option<Value> {
+    let (code, uncertain, performed, ask) = match outcome {
+        Ok(reply) if reply["ok"] == false => (
+            Code::of_reply(reply, Code::Native),
+            reply["uncertain"] == true,
+            reply["performed"].as_u64().unwrap_or(0),
+            reply["ask"].clone(),
+        ),
+        Ok(_) => return None,
+        Err(error) => (
+            error.code,
+            error.uncertain,
+            error
+                .details
+                .get("performed")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            error.details.get("ask").cloned().unwrap_or(Value::Null),
+        ),
+    };
+    (code == Code::WaitingForPerson && !uncertain && performed == 0 && ask.is_object())
+        .then_some(ask)
+}
+
+/// `outcome` as the agent may see it: of a question, only the account and
+/// what it would do, never the message, the element or where it lands.
+fn private(outcome: Result<Value>) -> Result<Value> {
+    let trim = |ask: &mut Value| {
+        let kept = json!({"account": ask["account"], "what": ask["what"]});
+        *ask = kept;
+    };
+    match outcome {
+        Ok(mut reply) => {
+            if let Some(ask) = reply.get_mut("ask") {
+                trim(ask);
+            }
+            Ok(reply)
+        }
+        Err(mut error) => {
+            if let Some(ask) = error.details.get_mut("ask") {
+                trim(ask);
+            }
+            Err(error)
         }
     }
 }

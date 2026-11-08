@@ -126,6 +126,9 @@ pub(super) struct Engine {
     pub(super) grant: Option<Grant>,
     /// The process resolved for this request, retained through the last post.
     pub(super) target: Option<atlas_core::process::Instance>,
+    /// An agent's request the person's accounts passed: each action is
+    /// checked again just before it is sent.
+    pub(super) recheck: Option<super::asking::Recheck>,
     /// The looks the service keeps, where a referenced click finds its element.
     pub(super) looks: Arc<Looks>,
     journal: Option<Journal>,
@@ -177,6 +180,7 @@ impl Engine {
             epoch,
             grant: None,
             target: None,
+            recheck: None,
             looks: Arc::default(),
             journal: None,
             journal_dirty: false,

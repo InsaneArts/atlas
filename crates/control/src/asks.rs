@@ -74,7 +74,11 @@ pub enum Answer {
 #[serde(rename_all = "camelCase")]
 pub struct Allowed {
     pub session: String,
-    pub account: String,
+    /// The account, as the input service names it: its kind, id and
+    /// browser.
+    pub account: Value,
+    /// The account as the person reads it.
+    pub name: String,
     /// When it ends, in milliseconds since 1970.
     pub ends: u64,
 }
@@ -108,12 +112,12 @@ impl Asks {
     /// Returns file errors when the ask can't be written.
     pub fn ask(&self, mut ask: Ask, now: u64) -> Result<String> {
         self.expire(now);
-        let batch = &ask.question["batch"];
-        if let Some(open) = self
-            .open(now)
-            .into_iter()
-            .find(|open| open.session == ask.session && &open.question["batch"] == batch)
-        {
+        // The same question: this session, account, request, target and
+        // message. A changed message or target is a question of its own.
+        let bind = &ask.question["bind"];
+        if let Some(open) = self.open(now).into_iter().find(|open| {
+            open.session == ask.session && !bind.is_null() && &open.question["bind"] == bind
+        }) {
             return Ok(open.id);
         }
         ask.id = atlas_core::files::token();
@@ -164,7 +168,7 @@ impl Asks {
             return Err(Error::new(Code::Input, "That question is no longer open"));
         };
         if answer == Answer::Task {
-            self.allow_task(&ask.session, &ask.account, now)?;
+            self.allow_task(&ask.session, &ask.question["accountKey"], &ask.account, now)?;
         }
         let path = self.folder.join(format!("{id}.answer"));
         atlas_core::files::save_private(&path, serde_json::to_string(&answer)?.as_bytes())
@@ -216,15 +220,33 @@ impl Asks {
     }
 
     /// Allow `session` the rest of its task in `account`, for an hour at most.
-    fn allow_task(&self, session: &str, account: &str, now: u64) -> Result<()> {
+    fn allow_task(&self, session: &str, account: &Value, name: &str, now: u64) -> Result<()> {
+        let _locked = self.lock_allowed()?;
         let mut allowed = self.allowed(now);
-        allowed.retain(|grant| !(grant.session == session && grant.account == account));
+        allowed.retain(|grant| !(grant.session == session && &grant.account == account));
         allowed.push(Allowed {
             session: session.to_owned(),
-            account: account.to_owned(),
+            account: account.clone(),
+            name: name.to_owned(),
             ends: now + millis(TASK_LIFE),
         });
         self.save_allowed(&allowed)
+    }
+
+    /// The grants' lock, held across each read, change and write of them,
+    /// so an End is never undone by another change at once.
+    fn lock_allowed(&self) -> Result<atlas_core::files::LockFile> {
+        let path = self.allowed.with_extension("lock");
+        if let Some(parent) = path.parent() {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)
+                .map_err(|error| Error::writing(parent, error))?;
+        }
+        let lock = atlas_core::files::open_lock(&path)?;
+        fs2::FileExt::lock_exclusive(&lock.0).map_err(|error| Error::writing(&path, error))?;
+        Ok(lock)
     }
 
     /// End every task grant in `account` (End in the panel), or every one of
@@ -235,7 +257,7 @@ impl Asks {
     /// Returns `stopped` for an agent, and file errors.
     pub fn end(
         &self,
-        account: Option<&str>,
+        account: Option<&Value>,
         session: Option<&str>,
         by_person: bool,
         now: u64,
@@ -246,9 +268,10 @@ impl Asks {
                 "Only the person ends what they allowed, in the Atlas menu bar",
             ));
         }
+        let _locked = self.lock_allowed()?;
         let mut allowed = self.allowed(now);
         allowed.retain(|grant| {
-            account.is_none_or(|account| grant.account != account)
+            account.is_none_or(|account| &grant.account != account)
                 && session.is_none_or(|session| grant.session != session)
         });
         self.save_allowed(&allowed)

@@ -36,7 +36,15 @@ fn waiting(batch: &str) -> Error {
     )
     .with(
         "ask",
-        json!({"account": "github.com", "what": "click", "batch": batch, "once": true}),
+        json!({
+            "account": "github.com",
+            "accountKey": {"kind": "site", "id": "github.com", "browser": "com.google.Chrome"},
+            "what": "click",
+            "batch": batch,
+            "bound": {"name": "Merge"},
+            "bind": {"batch": batch, "bound": {"name": "Merge"}},
+            "once": true,
+        }),
     )
 }
 
@@ -85,6 +93,11 @@ async fn just_this_once_runs_the_request_again_once_with_its_grant_and_the_ordin
     assert!(attempts[0].is_empty());
     assert_eq!(attempts[1][0]["scope"], "once");
     assert_eq!(attempts[1][0]["batch"], "b1");
+    assert_eq!(
+        attempts[1][0]["target"]["name"], "Merge",
+        "bound where it was asked about"
+    );
+    assert_eq!(attempts[1][0]["account"]["id"], "github.com");
     assert!(
         client.granted().is_empty(),
         "a once grant is spent by the attempt it was for"
