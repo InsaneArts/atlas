@@ -139,7 +139,14 @@ impl Look for OnScreen<'_> {
     }
 
     fn referenced(&mut self, reference: &Reference) -> Target {
-        let Some((pid, role, name, in_page)) = self.looks.described(*reference, self.epoch) else {
+        let Some(ax::Described {
+            pid,
+            role,
+            name,
+            in_page,
+            frame,
+        }) = self.looks.described(*reference, self.epoch)
+        else {
             return Target::default();
         };
         Target {
@@ -156,6 +163,7 @@ impl Look for OnScreen<'_> {
             identifier: None,
             secure: false,
             window: None,
+            frame,
         }
     }
 
@@ -229,5 +237,6 @@ pub(super) fn target(pid: i64, aimed: Option<Aimed>) -> Target {
         name: aimed.name,
         identifier: aimed.identifier,
         window: None,
+        frame: aimed.frame,
     }
 }

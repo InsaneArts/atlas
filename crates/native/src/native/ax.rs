@@ -35,7 +35,7 @@ pub(super) use keyboard::{
     Aimed, Asked, Focused, Held, Judged, Keyboard, Status, Unread, Within, focused_aim,
     focused_text, frontmost, keyboard, password_page, pointed_aim, remaining, still_focused,
 };
-pub(super) use references::{Looks, Reached, Resolved, confirm, read, resolve};
+pub(super) use references::{Described, Looks, Reached, Resolved, confirm, read, resolve};
 pub(super) use system::dock_item;
 pub use system::{DOCK_TIMEOUT, dock};
 pub(super) use system::{focused_pid, menu_bar_owner};

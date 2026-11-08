@@ -491,7 +491,13 @@ fn the_gate_reads_a_referenced_element_by_its_own_role_and_name_not_its_windows(
         seen: vec![seen(1, None, window), seen(2, Some(0), button(1, "Send"))],
     };
     let (look, _) = looks.keep(epoch(), read, Instant::now()).unwrap();
-    let (pid, role, name, in_page) = looks.described(at(look, 1), &epoch()).unwrap();
+    let Described {
+        pid,
+        role,
+        name,
+        in_page,
+        ..
+    } = looks.described(at(look, 1), &epoch()).unwrap();
     assert_eq!(pid, 812);
     assert_eq!(role.as_deref(), Some("AXButton"));
     assert_eq!(name.as_deref(), Some("Send"), "the button, not its window");

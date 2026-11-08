@@ -197,6 +197,8 @@ pub(crate) struct Target {
     pub(crate) multiline: bool,
     /// Whether it is a password field.
     pub(crate) secure: bool,
+    /// Where the element is on screen, for the person's picture of it.
+    pub(crate) frame: Option<atlas_core::screen::geometry::Bounds>,
 }
 
 /// The page an action lands in.
@@ -295,6 +297,8 @@ pub(crate) struct Question {
     /// Whether Allow for This Task can be offered: which account it is was
     /// read, and the person's list too.
     pub(crate) task: bool,
+    /// Where the element is on screen, for the person's picture of it.
+    pub(crate) frame: Option<atlas_core::screen::geometry::Bounds>,
 }
 
 impl Question {
@@ -330,6 +334,8 @@ impl Question {
             "typing": self.typing,
             "once": self.once,
             "task": self.task,
+            // For the person's picture only: the agent never sees it.
+            "frame": self.frame,
         });
         if let Some(Message::Whole {
             digest,
@@ -891,6 +897,7 @@ fn question(
         typing: None,
         once: false,
         task: false,
+        frame: target.frame.clone(),
     }
 }
 

@@ -1298,3 +1298,31 @@ fn a_host_written_with_its_final_dot_is_the_site_listed_without_it() {
         Some("github.com")
     );
 }
+
+#[test]
+fn the_question_says_where_the_element_is_for_the_persons_picture_alone() {
+    let asking = listing(Kind::Site, "github.com", Level::Ask);
+    let frame = atlas_core::screen::geometry::Bounds {
+        x: 10.0,
+        y: 20.0,
+        width: 80.0,
+        height: 24.0,
+    };
+    let mut look = scripted(
+        Target {
+            frame: Some(frame.clone()),
+            ..page("github.com", "AXButton", Some("Merge"))
+        },
+        Target::default(),
+    );
+    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
+    let Decision::Ask(question) = decide(&click, &asking, &mut look) else {
+        panic!("asks");
+    };
+    assert_eq!(question.details()["frame"], json!(frame));
+    assert_eq!(
+        question.details()["bound"].get("frame"),
+        None,
+        "a grant isn't bound to where it is drawn"
+    );
+}

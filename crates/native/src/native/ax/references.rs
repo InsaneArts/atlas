@@ -120,6 +120,17 @@ impl Default for Looks {
     }
 }
 
+/// A referenced element as the ask-before-sending gate reads it: the
+/// process it is in, its role and name, whether it sat in a web page, and
+/// where it was on screen.
+pub(in crate::native) struct Described {
+    pub(in crate::native) pid: i64,
+    pub(in crate::native) role: Option<String>,
+    pub(in crate::native) name: Option<String>,
+    pub(in crate::native) in_page: bool,
+    pub(in crate::native) frame: Option<Bounds>,
+}
+
 /// One look as read, before it is kept.
 pub(in crate::native) struct Read {
     instance: Instance,
@@ -286,14 +297,13 @@ impl Looks {
     }
 
     /// What the ask-before-sending gate reads of the element `reference`
-    /// names, as its look saw it in `epoch`: the process it is in, its role
-    /// and name, and whether it sat in a web page. None when that look is
-    /// gone or was taken elsewhere.
+    /// names, as its look saw it in `epoch`. None when that look is gone or
+    /// was taken elsewhere.
     pub(in crate::native) fn described(
         &self,
         reference: Reference,
         epoch: &InputEpoch,
-    ) -> Option<(i64, Option<String>, Option<String>, bool)> {
+    ) -> Option<Described> {
         let found = self.find(reference, epoch, Instant::now()).ok()?;
         let element = &found.chain.first()?.element;
         let name = element
@@ -301,12 +311,13 @@ impl Looks {
             .clone()
             .filter(|title| !title.is_empty())
             .or_else(|| element.description.clone().filter(|text| !text.is_empty()));
-        Some((
-            i64::from(found.instance.pid),
-            element.role.clone(),
+        Some(Described {
+            pid: i64::from(found.instance.pid),
+            role: element.role.clone(),
             name,
-            found.in_web_page(),
-        ))
+            in_page: found.in_web_page(),
+            frame: element.frame.clone(),
+        })
     }
 
     /// What the look `reference` names holds of its element at `now`,

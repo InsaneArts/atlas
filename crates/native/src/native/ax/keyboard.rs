@@ -698,6 +698,8 @@ pub(in crate::native) struct Aimed {
     pub(in crate::native) identifier: Option<String>,
     /// The window it is in, read for the element with keyboard focus.
     pub(in crate::native) window: Option<Element>,
+    /// Where it is on screen.
+    pub(in crate::native) frame: Option<Bounds>,
     /// The web page's address, when it sits in one and it reads.
     pub(in crate::native) url: Option<String>,
     /// Whether it sits in a web page at all.
@@ -748,6 +750,7 @@ impl<A: Ask> Reader<A> {
                 current = parent;
             }
         }
+        aimed.frame = self.frame(&named).ok().flatten();
         let mut failed = false;
         aimed.name = self
             .name(&named, "AXTitle", &mut failed)?
