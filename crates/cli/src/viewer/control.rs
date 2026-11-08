@@ -297,6 +297,10 @@ impl Viewer {
             .map_err(|_| Error::new(Code::Busy, "Wait for the current input to finish"))?;
         let _permit = ActionPermit::begin(self.lease.clone(), owner).await?;
         let client = self.holder();
+        // The frame service reads the helper at its full pace from the
+        // first event, and again once the last is done: a long paste must
+        // not wait out a still screen's slower pace.
+        self.input_sent.notify_one();
         let result = client
             .input(
                 actions,
@@ -306,6 +310,7 @@ impl Viewer {
             .await;
 
         self.frames.lock().await.input_revision += 1;
+        self.input_sent.notify_one();
         result
     }
 }

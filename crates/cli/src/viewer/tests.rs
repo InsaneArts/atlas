@@ -2298,6 +2298,13 @@ async fn fresh_input_frame(viewer: &Viewer, key: &str) {
     frames.items.push_back((key.into(), Arc::new(frame)));
 }
 
+/// Whether the frame service has been told of sent input since it last was.
+async fn frame_service_told(viewer: &Viewer) -> bool {
+    tokio::time::timeout(Duration::ZERO, viewer.input_sent.notified())
+        .await
+        .is_ok()
+}
+
 #[tokio::test]
 async fn raw_input_with_a_live_lease_rejects_the_whole_invalid_batch_before_native_dispatch() {
     let dir = tempfile::tempdir().unwrap();
@@ -2449,6 +2456,7 @@ async fn raw_input_frame_refusals_clean_up_only_the_live_lease_without_dispatchi
             "{reply}"
         );
         assert_eq!(asked.try_recv().ok().as_deref(), Some("input"));
+        assert!(frame_service_told(&viewer).await);
         fresh_input_frame(&viewer, "observed").await;
         let revision = viewer.frames.lock().await.input_revision;
         let mut malformed = valid;
@@ -2470,7 +2478,48 @@ async fn raw_input_frame_refusals_clean_up_only_the_live_lease_without_dispatchi
         assert!(!viewer.lease.lock().await.active());
         assert!(client.controller.pending().unwrap().is_empty());
         assert_eq!(viewer.frames.lock().await.input_revision, revision);
+        assert!(
+            !frame_service_told(&viewer).await,
+            "refused input tells nothing"
+        );
     }
+}
+
+#[tokio::test]
+async fn input_tells_the_frame_service_before_the_helper_finishes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("input.sock");
+    let (mut asked, finish) = input_service(&socket, "input");
+    let viewer = http::configured(
+        client_with_input(dir.path(), &socket),
+        "127.0.0.1:1".into(),
+        None,
+    );
+    let client = viewer.client();
+    let owner = viewer.take_control(&client, &epoch()).await.unwrap();
+    assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
+    fresh_input_frame(&viewer, "observed").await;
+    let sending = viewer.clone();
+    let typed = json!({"lease":owner,"frame":"observed","actions":[{"type":"type","text":"a"}]});
+    let input = tokio::spawn(async move { posted(&sending, "input", &typed).await });
+    // The helper has the input and has not answered it.
+    assert_eq!(asked.recv().await.as_deref(), Some("input"));
+    assert!(
+        frame_service_told(&viewer).await,
+        "told while the input is still running"
+    );
+    finish.notify_one();
+    let (status, reply) = input.await.unwrap();
+    assert_eq!(
+        (status, reply["performed"].clone()),
+        (200, json!(1)),
+        "{reply}"
+    );
+    assert!(
+        frame_service_told(&viewer).await,
+        "told again once it is done"
+    );
+    viewer.release(Some(&owner)).await.unwrap();
 }
 
 fn recovery_session(id: &str) -> atlas_core::host::HostSession {

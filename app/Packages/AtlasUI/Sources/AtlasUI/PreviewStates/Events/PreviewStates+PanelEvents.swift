@@ -1,7 +1,8 @@
 #if DEBUG
   extension PreviewStates {
     /// The panel sample an event leads to, so the Interactive preview answers clicks as the app would: Stop stops,
-    /// Resume and Give Back go back to idle, and the pause button pauses or resumes the picture. What opens a window,
+    /// Resume and Give Back go back to idle, the pause button pauses or resumes the picture, and OK takes the service
+    /// note away. What opens a window,
     /// an alert or a menu changes nothing here.
     ///
     /// - Parameters:
@@ -19,6 +20,10 @@
       case .toggleSound:
         var next = state
         next.picture.sound = HelperSoundButton(isMuted: !state.picture.sound.isMuted)
+        return next
+      case .dismissServiceNote:
+        var next = state
+        next.showsServiceNote = false
         return next
       case .openAtlas, .openScreen, .openActivity, .openSession, .showAllSessions, .askRecover, .askSwitch,
         .openSettings,

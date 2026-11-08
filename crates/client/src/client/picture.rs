@@ -14,13 +14,12 @@ use atlas_core::{
     protocol::SessionPin,
     screen::elements::Element,
     session::InputEpoch,
-    transport::Transport,
+    transport::{Transport, connect_socket},
 };
 use serde_json::json;
 use std::time::{Duration, Instant};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::UnixStream,
     sync::oneshot,
     task::JoinHandle,
 };
@@ -231,7 +230,7 @@ async fn frame(
     daemon: u32,
     cancelled: oneshot::Receiver<()>,
 ) -> Result<Raw> {
-    let mut socket = UnixStream::connect(&transport.path).await?;
+    let mut socket = connect_socket(&transport.path, tokio::time::Instant::now() + WAIT).await?;
     let peer = socket.peer_cred()?;
     if peer.uid() != transport.peer_uid
         || peer.pid().and_then(|pid| u32::try_from(pid).ok()) != Some(daemon)

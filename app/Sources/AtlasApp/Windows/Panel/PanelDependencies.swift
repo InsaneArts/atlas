@@ -4,7 +4,7 @@ import Foundation
 
 /// What the menu bar panel's controller reaches outside itself, handed in so tests can stand in for each: the viewer
 /// service, the `atlas` command line, the helper's own commands, the login item, its links to the rest of the app,
-/// the clocks its readings wait on and its words count to, and where Recent's apps' icons are found.
+/// the clocks its readings wait on and its words count to, where Recent's apps' icons are found, and the choice it keeps.
 struct PanelDependencies {
   /// The viewer service it reads and asks.
   var service: any ViewerService
@@ -22,4 +22,7 @@ struct PanelDependencies {
   var wallClock: @MainActor () -> Date = { Date() }
   /// Where Recent's apps' icons are found; none by default, so tests and renders never touch the disk.
   var icons = AppIcons.none
+  /// Whether the person said OK to the service note; kept in memory by default, so tests and renders never write the
+  /// real defaults.
+  var preferences = PanelPreferences()
 }

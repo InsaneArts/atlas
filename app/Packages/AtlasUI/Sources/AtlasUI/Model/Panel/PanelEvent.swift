@@ -30,6 +30,8 @@ public enum PanelEvent: Equatable, Sendable {
   case togglePause
   /// The sound button: mute the helper, or let it play.
   case toggleSound
+  /// OK on the note that a macOS service in the helper slowly slows the Mac: never show it again.
+  case dismissServiceNote
   /// ⋯: open the menu under its button.
   ///
   /// - Parameter below: The button's frame in the panel, top left first, so the menu opens under it.

@@ -391,7 +391,26 @@ fn checked(
     deadline: Instant,
 ) -> Result<Option<&'static str>> {
     let deadline = deadline.min(Instant::now() + CHECK_BUDGET);
-    require(expect, need, display, &mut Live::until(deadline), deadline)
+    read_again_if_replaced(deadline, || {
+        require(expect, need, display, &mut Live::until(deadline), deadline)
+    })
+}
+
+/// `read`, and once more while time is left before `deadline` when an
+/// element it held was replaced while it read, as TextEdit replaces its text
+/// view's as it lays out a long text again. That read tells nothing of where
+/// focus is; the next one, from the app down, decides.
+fn read_again_if_replaced<T>(deadline: Instant, mut read: impl FnMut() -> Result<T>) -> Result<T> {
+    match read() {
+        Err(error) if replaced(&error) && Instant::now() < deadline => read(),
+        result => result,
+    }
+}
+
+/// Whether the request behind `error` named an element the app no longer
+/// has.
+fn replaced(error: &Error) -> bool {
+    request(error).1 == Some(AXError::InvalidUIElement.0)
 }
 
 /// Prepare once, then poll with fresh observations. Resolution and writes

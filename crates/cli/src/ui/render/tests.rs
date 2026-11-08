@@ -387,6 +387,20 @@ fn a_verbose_doctor_shows_the_facts_behind_it() {
 }
 
 #[test]
+fn a_verbose_doctor_lists_apple_jobs_restarting_in_the_helper() {
+    let report = json!({
+        "ok": true, "ready": true, "checks": [], "nextSteps": [], "warnings": [],
+        "capabilities": {"nativeDialogs": {"state": "unknown", "reason": "Not checked"}},
+        "session": {"user": {"name": "atlas", "uid": 502}},
+        "restartingJobs": [{"label": "com.apple.example", "runs": 42}],
+    });
+    let verbose = show(View::Doctor { verbose: true }, report.clone()).out;
+    assert!(verbose.contains("com.apple.example restarted 42 times in the last hour"));
+    let short = show(View::Doctor { verbose: false }, report).out;
+    assert!(!short.contains("com.apple.example"));
+}
+
+#[test]
 fn roles_from_helper_apps_are_made_safe() {
     let shown = show(
         View::Action("Clicked".into()),

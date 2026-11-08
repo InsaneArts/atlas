@@ -135,7 +135,7 @@ pub(super) enum Command {
         /// Override automatic Retina-aware capture sizing (320–4096 pixels).
         #[arg(long, requires = "terminal", value_name = "PIXELS", value_parser = clap::value_parser!(u32).range(320..=4096))]
         max_dimension: Option<u32>,
-        /// Capture with cg (default) or experimental sck; requires the updated signed helper.
+        /// Capture with sck (default), one ScreenCaptureKit stream, or cg, a CoreGraphics capture per picture.
         #[arg(long, requires = "terminal", value_name = "BACKEND", value_parser = ["cg", "sck"], hide_possible_values = true)]
         capture_backend: Option<String>,
         /// Local port for the native viewer.

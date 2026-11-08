@@ -1,5 +1,6 @@
 //! CoreGraphics input belongs to one private event source in the helper session.
 use super::{
+    activity::{self, Acting},
     ax::Looks,
     journal::{self, Held, Journal},
     lease::Grant,
@@ -145,6 +146,12 @@ pub(super) struct Engine {
     /// When macOS last confirmed that this process may post events; none
     /// until it has, or after it said no.
     post_access: Option<Instant>,
+    /// Where input is told to the helper's other processes, so their work
+    /// that must not overlap it waits; none tells no one.
+    pub(super) activity: Option<PathBuf>,
+    /// Held while input stays held between requests, such as a button
+    /// pressed and not yet let go, so no such work starts under it.
+    acting: Option<Acting>,
     #[cfg(test)]
     tap: Option<tap::Tap>,
 }
@@ -185,6 +192,8 @@ impl Engine {
             drag_started: false,
             flags: 0,
             post_access: None,
+            activity: None,
+            acting: None,
             #[cfg(test)]
             tap: None,
         }
@@ -423,12 +432,33 @@ impl Engine {
         self.post(event, flags, point)
     }
 
+    /// Input about to be posted, told to the helper's other processes once
+    /// work that keeps input out has ended (see [`activity::acting`]); none
+    /// when input held from before is told already, or no one is told.
+    pub(super) fn acting(&self) -> Option<Acting> {
+        if self.acting.is_some() {
+            return None;
+        }
+        self.activity.as_deref().and_then(activity::acting)
+    }
+
+    /// After posting under `acting`: input still held stays told until it
+    /// is let go; otherwise it has ended now.
+    pub(super) fn keep_while_held(&mut self, acting: Option<Acting>) {
+        if !self.held_input() {
+            self.acting = None;
+        } else if self.acting.is_none() {
+            self.acting = acting;
+        }
+    }
+
     pub(super) fn release(&mut self) -> Result<()> {
         self.grant = None;
         self.target = None;
         self.dock_down = None;
 
         if !self.held_input() {
+            self.acting = None;
             return if self.journal_dirty {
                 self.commit()
             } else {
@@ -436,6 +466,14 @@ impl Engine {
             };
         }
 
+        let acting = self.acting();
+        let released = self.release_held();
+        self.keep_while_held(acting);
+        released
+    }
+
+    /// Let go of every button and key still held, and save that.
+    fn release_held(&mut self) -> Result<()> {
         if let Some(button) = self.held {
             self.mouse(
                 Mouse::from(button).up,

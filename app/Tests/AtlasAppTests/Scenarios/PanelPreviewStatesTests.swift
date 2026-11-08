@@ -61,6 +61,8 @@
       controlCommand.status.overview.commands = 1
       var needsYouCommand = try snapshot("recovering", state: "needsYou")
       needsYouCommand.status.overview.commands = 1
+      var serviceNote = try snapshot("observing", state: "idle")
+      serviceNote.status.restartingService = .restarting
       let presented: [String: PanelSnapshot] = [
         "Idle": try snapshot("observing", state: "idle"),
         "Working": try snapshot("agent", state: "working"),
@@ -76,6 +78,7 @@
         "Stopped, jobs left": jobsLeft,
         "You have control, a command runs": controlCommand,
         "Needs you, a command runs": needsYouCommand,
+        "Service note": serviceNote,
         "Sessions": try SessionReplies.snapshot([SessionReplies.claudeActing, SessionReplies.cursorIdle]),
         "Sessions waiting": try SessionReplies.snapshot([
           SessionReplies.claudeActing, SessionReplies.codexWaiting(), SessionReplies.cursorIdle,
