@@ -12,6 +12,8 @@ public struct ViewerActivityState: Equatable, Sendable {
   public var days: [ViewerActivityDay]
   /// Why nothing shows, in place of the items; nil while items show or before the first reading.
   public var empty: EmptyMessageState?
+  /// The sidebar's search narrowing the steps; empty for none.
+  public var query: String
   /// Whether the log holds anything to filter, so the filters show.
   public var showsFilters: Bool
   /// The picture sheet over the window; nil shows none.
@@ -27,6 +29,7 @@ public struct ViewerActivityState: Equatable, Sendable {
   ///   - filters: The filters, and which one is chosen.
   ///   - days: The days and their sessions, runs and steps.
   ///   - empty: Why nothing shows.
+  ///   - query: The sidebar's search narrowing the steps; none by default.
   ///   - showsFilters: Whether the filters show; they do by default.
   ///   - sheet: The picture sheet; none by default.
   ///   - replay: The task replayed; none by default.
@@ -36,6 +39,7 @@ public struct ViewerActivityState: Equatable, Sendable {
     filters: CapsuleTabsState<ViewerActivityFilter>,
     days: [ViewerActivityDay],
     empty: EmptyMessageState? = nil,
+    query: String = "",
     showsFilters: Bool = true,
     sheet: ViewerPictureSheet? = nil,
     replay: ViewerReplayState? = nil
@@ -45,6 +49,7 @@ public struct ViewerActivityState: Equatable, Sendable {
     self.filters = filters
     self.days = days
     self.empty = empty
+    self.query = query
     self.showsFilters = showsFilters
     self.sheet = sheet
     self.replay = replay

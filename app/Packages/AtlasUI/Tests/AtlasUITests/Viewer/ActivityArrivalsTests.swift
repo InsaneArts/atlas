@@ -10,8 +10,13 @@ struct ActivityArrivalsTests {
   /// - Parameters:
   ///   - sessions: The sessions' identities.
   ///   - filter: The filter chosen.
+  ///   - query: The sidebar's search.
   /// - Returns: The pane.
-  static func state(_ sessions: [String], filter: ViewerActivityFilter = .all) -> ViewerActivityState {
+  static func state(
+    _ sessions: [String],
+    filter: ViewerActivityFilter = .all,
+    query: String = ""
+  ) -> ViewerActivityState {
     var filters = PreviewStates.activityFilters()
     filters.selected = filter
     return ViewerActivityState(
@@ -25,7 +30,8 @@ struct ActivityArrivalsTests {
             ViewerOutlineSession(id: $0, icon: nil, agent: "You", summary: $0, time: "10:31", runs: [])
           }
         )
-      ]
+      ],
+      query: query
     )
   }
 
@@ -55,13 +61,15 @@ struct ActivityArrivalsTests {
     #expect(ActivityArrivals.words(0) == nil)
   }
 
-  @Test("at the top, on the first reading, or as the person picks a filter, nothing waits")
+  @Test("at the top, on the first reading, or as the person picks a filter or searches, nothing waits")
   func nothingWaitsOnThePersonsOwnChange() {
     var arrivals = ActivityArrivals()
     #expect(arrivals.waiting(in: Self.state(["a", "b"]), isAtTop: false).isEmpty, "the first reading")
     arrivals.meet(Self.state(["b"]), isAtTop: true)
     #expect(arrivals.waiting(in: Self.state(["a", "b"]), isAtTop: true).isEmpty, "at the top")
     #expect(arrivals.waiting(in: Self.state(["a", "b"], filter: .problems), isAtTop: false).isEmpty, "a filter")
+    arrivals.meet(Self.state(["b"], query: "Chrome"), isAtTop: false)
+    #expect(arrivals.waiting(in: Self.state(["a", "b"]), isAtTop: false).isEmpty, "a search cleared")
     #expect(ActivityArrivals.words(1) == "1 new session")
   }
 
