@@ -12,7 +12,11 @@ import Observation
 @Observable
 final class ViewerController {
   /// What this window is doing. Written only by the controller's own files; the shells call its methods.
-  var session = ViewerSession()
+  var session = ViewerSession() {
+    didSet {
+      if oldValue.place != session.place { dependencies.placeChanged() }
+    }
+  }
   /// What the helper line's tooltip lists that the status does not carry. Written only by the controller's own files.
   var helperFacts = ViewerHelperFacts()
   /// The window is on screen.

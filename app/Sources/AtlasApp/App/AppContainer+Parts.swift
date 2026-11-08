@@ -37,7 +37,8 @@ extension AppContainer: WindowParts {
           let outcome = await commands.run(.listWindows)
           return outcome.ok ? outcome.decode(HelperOccluderList.self) : nil
         },
-        framePipe: NativeFramePipeConnector()
+        framePipe: NativeFramePipeConnector(),
+        placeChanged: { [weak self] in self?.askSignals?.lookedAway() }
       )
     )
   }

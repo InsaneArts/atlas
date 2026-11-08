@@ -36,8 +36,27 @@ extension AppContainer {
     askSignals = signals
     store.changed = { [weak signals] list in signals?.asksChanged(list) }
     store.watch(.live(home: FileManager.default.homeDirectoryForCurrentUser))
+    watchLookAways()
     // Unstructured, as nothing at launch can wait: the badge follows what macOS last said.
     Task { await signals.readConsent() }
+  }
+
+  /// Tells the questions' signals each time the person may have looked away from a question: the panel closing, or a
+  /// window minimised, covered or closing. The main window leaving the Screen tells them through its own dependency.
+  func watchLookAways() {
+    let names: [Notification.Name] = [
+      NSPopover.didCloseNotification,
+      NSWindow.didMiniaturizeNotification,
+      NSWindow.didChangeOcclusionStateNotification,
+      NSWindow.willCloseNotification,
+    ]
+    lookAways = names.map { name in
+      NotificationCenter.default
+        .addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+          // On the next turn, once the window that is closing has gone from the screen.
+          Task { @MainActor in self?.askSignals?.lookedAway() }
+        }
+    }
   }
 
   /// Whether the main window is on screen: not merely open, as a minimised or covered one says nothing.

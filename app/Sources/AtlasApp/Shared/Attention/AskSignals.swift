@@ -82,6 +82,12 @@ final class AskSignals {
     post(list)
   }
 
+  /// The person may have looked away from a question they saw, as the panel closed or the main window left the Screen,
+  /// was minimised, covered or closed: it posts now, by the same rules, if it is still up and not seen.
+  func lookedAway() {
+    if let list = store.list { post(list) }
+  }
+
   /// Posts each question up that isn't posted yet and that the person isn't looking at; only with consent, so a
   /// question counts as posted once macOS could deliver it.
   ///

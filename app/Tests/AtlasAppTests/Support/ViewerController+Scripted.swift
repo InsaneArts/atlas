@@ -30,6 +30,7 @@ extension ViewerController {
   ///   - shotOutlet: Where copied screenshots go and how files are shown; by default nowhere.
   ///   - preferences: The window's saved choices; by default in memory, with `rate` saved.
   ///   - icons: Where apps' icons are found; by default nowhere, so every app draws its tile.
+  ///   - placeChanged: Told when the window leaves one place for another; nothing by default.
   /// - Returns: The viewer, closed until it is shown.
   static func scripted(
     _ service: ScriptedService,
@@ -45,7 +46,8 @@ extension ViewerController {
     wallClock: @escaping @MainActor () -> Date = { Date(timeIntervalSince1970: 0) },
     shotOutlet: ShotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true }),
     preferences: ViewerPreferences? = nil,
-    icons: AppIcons = .none
+    icons: AppIcons = .none,
+    placeChanged: @escaping @MainActor () -> Void = {}
   ) -> ViewerController {
     let viewer = WeakViewer()
     let actions =
@@ -67,7 +69,8 @@ extension ViewerController {
         connectedAgents: connectedAgents,
         wallClock: wallClock,
         shotOutlet: shotOutlet,
-        icons: icons
+        icons: icons,
+        placeChanged: placeChanged
       )
     )
     viewer.controller = controller

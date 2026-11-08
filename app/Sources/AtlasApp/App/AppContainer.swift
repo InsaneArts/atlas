@@ -40,6 +40,8 @@ final class AppContainer {
   var signals: AttentionSignals?
   /// The notifications of the questions Atlas asks the person; made at launch.
   var askSignals: AskSignals?
+  /// What tells the questions' signals the person may have looked away: the panel closing, and a window going.
+  var lookAways: [any NSObjectProtocol] = []
 
   /// An app that runs `commands` and reads `service`. Nothing runs until ``start()``.
   ///

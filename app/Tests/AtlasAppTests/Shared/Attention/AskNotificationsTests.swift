@@ -1,6 +1,7 @@
 import AsyncSupportTesting
 import AtlasService
 import AtlasServiceTesting
+import AtlasUI
 import Foundation
 import Observation
 import Testing
@@ -115,6 +116,77 @@ struct AskNotificationsTests {
       NotificationClicks.presentation(ask: "a2", inView: nil) == [.banner, .sound],
       "a pane that doesn't show it"
     )
+  }
+
+  @Test("a question seen in the panel posts once the panel closes, if it is still up")
+  func aQuestionPostsOnceThePanelCloses() async {
+    let recorded = Recorded()
+    let service = ScriptedService()
+    service.askList = AskList(asks: [Self.ask("a1")])
+    let store = AskStore(service: service) { Self.asked }
+    await store.read()
+    var panelOpen = true
+    let signals = AskSignals(
+      notifications: recorded.notifications,
+      preferences: SettingsPreferences(
+        loadTab: { nil },
+        saveTab: { _ in },
+        loadNotify: { false },
+        saveNotify: { _ in }
+      ),
+      store: store
+    ) { panelOpen ? "a1" : nil }
+    signals.resolve(true)
+    #expect(recorded.posted.isEmpty, "the open panel shows it")
+    signals.lookedAway()
+    #expect(recorded.posted.isEmpty, "still in view")
+    panelOpen = false
+    signals.lookedAway()
+    signals.lookedAway()
+    #expect(recorded.posted.map(\.id) == ["a1"], "posted once, as the panel closed")
+
+    let answered = Recorded()
+    let quiet = AskSignals(
+      notifications: answered.notifications,
+      preferences: SettingsPreferences(
+        loadTab: { nil },
+        saveTab: { _ in },
+        loadNotify: { false },
+        saveNotify: { _ in }
+      ),
+      store: AskStore(service: ScriptedService())
+    ) { nil }
+    quiet.resolve(true)
+    quiet.lookedAway()
+    #expect(answered.posted.isEmpty, "a question answered before the panel closed posts nothing")
+  }
+
+  @Test("a question seen over the Screen posts once the main window leaves the Screen, and not before")
+  func aQuestionPostsOnceTheScreenIsLeft() async {
+    let recorded = Recorded()
+    let service = ScriptedService()
+    service.askList = AskList(asks: [Self.ask("a1")])
+    let store = AskStore(service: service) { Self.asked }
+    await store.read()
+    var signals: AskSignals?
+    let viewer = ViewerController.scripted(service, placeChanged: { signals?.lookedAway() })
+    signals = AskSignals(
+      notifications: recorded.notifications,
+      preferences: SettingsPreferences(
+        loadTab: { nil },
+        saveTab: { _ in },
+        loadNotify: { false },
+        saveNotify: { _ in }
+      ),
+      store: store
+    ) { viewer.session.place == .screen ? "a1" : nil }
+    signals?.resolve(true)
+    #expect(recorded.posted.isEmpty, "the Screen's banner shows it")
+    viewer.send(.show(.activity))
+    #expect(recorded.posted.map(\.id) == ["a1"], "Activity doesn't show it")
+    viewer.send(.show(.screen))
+    viewer.send(.show(.apps))
+    #expect(recorded.posted.map(\.id) == ["a1"], "posted once")
   }
 
   @Test("nothing posts before macOS lets Atlas notify, and every question still up posts once it does")

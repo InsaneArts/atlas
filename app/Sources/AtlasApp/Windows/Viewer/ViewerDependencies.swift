@@ -41,4 +41,7 @@ struct ViewerDependencies {
   var appWindows: @MainActor () async -> HelperOccluderList? = { nil }
   /// Opens lanes to the frame service; nil reads every picture over the viewer's address.
   var framePipe: (any FramePipeConnector)?
+  /// Told when the window leaves one place for another, such as the Screen for Activity, so a question its banner
+  /// showed is notified once it no longer shows; nothing by default.
+  var placeChanged: @MainActor () -> Void = {}
 }
