@@ -384,12 +384,24 @@ fn frame(x: f64) -> Value {
     json!({"x": x, "y": 20.0, "width": 80.0, "height": 24.0})
 }
 
+/// Every picture file of ask `id` in `folder`.
+fn pictures_of(folder: &Path, id: &str) -> Vec<String> {
+    fs::read_dir(folder.join("h.asks"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .filter(|name| name.starts_with(id) && name.ends_with(".jpg"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[test]
 fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
     let folder = tempfile::tempdir().unwrap();
     let asks = asks(folder.path());
     let now = atlas_core::time::now_ms();
-    let picture = |id: &str| folder.path().join(format!("h.asks/{id}.jpg"));
     let pictured = |batch: &str, process| {
         let id = asks
             .ask(
@@ -400,21 +412,37 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
                 now,
             )
             .unwrap();
+        // A rerun's newer one too.
         asks.keep_picture(&id, b"jpeg", &frame(10.0)).unwrap();
-        assert!(picture(&id).exists(), "while it is up");
+        asks.keep_picture(&id, b"jpeg", &frame(20.0)).unwrap();
+        let named = asks
+            .open(now)
+            .into_iter()
+            .find(|ask| ask.id == id)
+            .unwrap()
+            .picture;
+        assert_eq!(
+            pictures_of(folder.path(), &id),
+            [named.unwrap()],
+            "only the one it names, while it is up"
+        );
         id
     };
 
     let mut answered = Vec::new();
     for answer in [Answer::Once, Answer::Task, Answer::Deny] {
         let id = pictured(&format!("{answer:?}"), None);
+        let name = pictures_of(folder.path(), &id).remove(0);
         use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(picture(&id)).unwrap().permissions().mode();
+        let mode = fs::metadata(folder.path().join("h.asks").join(name))
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o600);
         // Answered through the person's own route, with no command left to
         // take the question down.
         asks.answer(&id, answer, true, now).unwrap();
-        assert!(!picture(&id).exists(), "{answer:?}");
+        assert!(pictures_of(folder.path(), &id).is_empty(), "{answer:?}");
         answered.push(id);
     }
     assert!(
@@ -423,18 +451,68 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
     );
     asks.keep_picture(&answered[0], b"jpeg", &frame(10.0))
         .unwrap();
-    assert!(!picture(&answered[0]).exists(), "none for one answered");
+    assert!(
+        pictures_of(folder.path(), &answered[0]).is_empty(),
+        "none for one answered"
+    );
 
     let expired = pictured("b3", None);
     assert!(asks.open(now + millis(LIFE)).is_empty());
-    assert!(!picture(&expired).exists(), "ran out");
+    assert!(pictures_of(folder.path(), &expired).is_empty(), "ran out");
 
     let gone = atlas_core::process::Instance::new(812, [1, 0]);
     let ended = pictured("b4", Some(gone));
     asks.close_unless(now, |ask| ask.process != Some(gone));
-    assert!(!picture(&ended).exists(), "its session ended");
+    assert!(
+        pictures_of(folder.path(), &ended).is_empty(),
+        "its session ended"
+    );
     asks.keep_picture(&ended, b"jpeg", &frame(10.0)).unwrap();
-    assert!(!picture(&ended).exists(), "never kept for one that is down");
+    assert!(
+        pictures_of(folder.path(), &ended).is_empty(),
+        "never kept for one that is down"
+    );
+}
+
+#[test]
+fn a_reader_never_finds_a_picture_beside_a_frame_that_isnt_its_own() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    let now = atlas_core::time::now_ms();
+    let id = asks.ask(question("s1", "b1"), now).unwrap();
+    let done = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for n in 0..200 {
+                let x = f64::from(n);
+                asks.keep_picture(&id, x.to_string().as_bytes(), &frame(x))
+                    .unwrap();
+            }
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let mut seen = 0;
+        while !done.load(std::sync::atomic::Ordering::SeqCst) {
+            let Some(ask) = asks.open(now).into_iter().next() else {
+                continue;
+            };
+            let Some(name) = ask.picture else {
+                continue;
+            };
+            // Gone already, once a newer one is named: never a mismatch.
+            let Ok(bytes) = fs::read(asks.folder().join(&name)) else {
+                continue;
+            };
+            let x = ask.question["frame"]["x"].as_f64().unwrap();
+            assert_eq!(String::from_utf8(bytes).unwrap(), x.to_string(), "{name}");
+            seen += 1;
+        }
+        assert!(seen > 0, "a reader saw some");
+    });
+    assert_eq!(
+        pictures_of(folder.path(), &id).len(),
+        1,
+        "only the last left"
+    );
 }
 
 #[test]
@@ -458,8 +536,13 @@ fn a_rerun_that_joins_replaces_the_picture_and_its_frame_together() {
     );
     asks.keep_picture(&id, b"second", &frame(300.0)).unwrap();
     assert_eq!(asks.open(now)[0].question["frame"], frame(300.0));
-    let kept = fs::read(folder.path().join(format!("h.asks/{id}.jpg"))).unwrap();
-    assert_eq!(kept, b"second");
+    let name = asks.open(now)[0].picture.clone().unwrap();
+    assert_eq!(fs::read(asks.folder().join(name)).unwrap(), b"second");
+    assert_eq!(
+        pictures_of(folder.path(), &id).len(),
+        1,
+        "the first is gone"
+    );
 }
 
 #[test]
@@ -483,7 +566,7 @@ fn a_question_that_runs_out_while_its_picture_waits_for_the_lock_goes_and_gets_n
     std::thread::sleep(std::time::Duration::from_millis(300));
     drop(held);
     publishing.join().unwrap();
-    assert!(!folder.path().join(format!("h.asks/{id}.jpg")).exists());
+    assert!(pictures_of(folder.path(), &id).is_empty());
     assert!(
         !folder.path().join(format!("h.asks/{id}.json")).exists(),
         "and the question itself is gone"

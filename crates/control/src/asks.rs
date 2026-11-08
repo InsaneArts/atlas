@@ -4,7 +4,7 @@
 //!
 //! An ask is one file, `<id>.json`, in the helper's asks folder: who asks,
 //! the account, what would be sent and, for a message, its preview. It lives
-//! two minutes; its picture, `<id>.jpg`, lives as long as it does, and goes
+//! two minutes; its picture, `<id>-<token>.jpg`, lives as long as it does, and goes
 //! too when its agent session ends. The preview lives only while a command waits on the ask: the
 //! command takes it off when its wait ends, however it ends, and a rerun
 //! that joins the ask writes it again. An ask whose command was killed is
@@ -245,12 +245,12 @@ impl Asks {
         if let Some(mut answered) = self.read(id)
             && answered.picture.take().is_some()
         {
-            let _ = fs::remove_file(self.folder.join(format!("{id}.jpg")));
             atlas_core::files::save_private(
                 &self.folder.join(format!("{id}.json")),
                 &serde_json::to_vec(&answered)?,
             )?;
         }
+        self.remove_pictures(id, None);
         Ok(())
     }
 
@@ -414,7 +414,6 @@ impl Asks {
     ///
     /// Returns file errors; the ask then has no picture.
     pub fn keep_picture(&self, id: &str, jpeg: &[u8], frame: &Value) -> Result<()> {
-        let name = format!("{id}.jpg");
         let _locked = self.lock()?;
         // Read once the lock is held: a wait for it may outlast the ask.
         let now = atlas_core::time::now_ms();
@@ -430,13 +429,47 @@ impl Asks {
         if self.answered(id).is_some() {
             return Ok(());
         }
-        atlas_core::files::save_private(&self.folder.join(&name), jpeg)?;
-        ask.picture = Some(name);
+        // Each picture has a name of its own, never written over: a reader
+        // of the question finds the picture and the frame it names together,
+        // and the one before stays until nothing names it.
+        let name = format!("{id}-{}.jpg", atlas_core::files::token());
+        let path = self.folder.join(&name);
+        atlas_core::files::save_private(&path, jpeg)?;
+        let before = ask.picture.replace(name.clone());
         ask.question["frame"] = frame.clone();
-        atlas_core::files::save_private(
+        let published = atlas_core::files::save_private(
             &self.folder.join(format!("{id}.json")),
             &serde_json::to_vec(&ask)?,
-        )
+        );
+        if published.is_err() {
+            // The question still names the one before, with its frame.
+            let _ = fs::remove_file(&path);
+            return published;
+        }
+        if before.is_some() {
+            self.remove_pictures(id, Some(&name));
+        }
+        Ok(())
+    }
+
+    /// Remove ask `id`'s pictures but `keep`, whatever names they have.
+    fn remove_pictures(&self, id: &str, keep: Option<&str>) {
+        let Ok(entries) = fs::read_dir(&self.folder) else {
+            return;
+        };
+        let prefix = format!("{id}-");
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let its = name.ends_with(".jpg")
+                && (name.starts_with(&prefix) || name == format!("{id}.jpg"));
+            if its && Some(name) != keep {
+                // One that can't be removed now goes at its ask's next cleanup.
+                let _ = fs::remove_file(entry.path());
+            }
+        }
     }
 
     /// Take down every ask that `lives` says no longer has an agent session
@@ -458,9 +491,10 @@ impl Asks {
     }
 
     fn remove(&self, id: &str) {
-        for ending in ["json", "answer", "jpg"] {
+        for ending in ["json", "answer"] {
             let _ = fs::remove_file(self.folder.join(format!("{id}.{ending}")));
         }
+        self.remove_pictures(id, None);
     }
 
     /// Take down every ask whose time ran out by `now`.
