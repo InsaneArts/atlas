@@ -68,7 +68,8 @@ struct ActivityListContent: View {
   }
 
   /// Every day's heading, its sessions with a hairline between two, and the row for the rest of a long day, each keyed
-  /// by its identity so a session in two filters stays where it is.
+  /// by its identity so a session in two filters stays where it is. A session's row and runs are rows of this stack,
+  /// so the list holds the place of whichever the person scrolled to.
   private var rows: some View {
     LazyVStack(alignment: .leading, spacing: .zero) {
       ForEach(state.days) { day in
@@ -88,9 +89,8 @@ struct ActivityListContent: View {
             SeparatorLine()
               .padding(.vertical, ViewerLayout.sessionSeparatorGap)
           }
+          // The block names and moves its own rows, which stand in this stack themselves.
           ActivitySessionBlock(session: session, send: send)
-            .id("session.\(session.id)")
-            .transition(ActivityMotion.row(isAtTop: isAtTop, reduceMotion: reduceMotion))
         }
         if let more = day.more {
           ActivityMoreSessionsRow(more: more, send: send)

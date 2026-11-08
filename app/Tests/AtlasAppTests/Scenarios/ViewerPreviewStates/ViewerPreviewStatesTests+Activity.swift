@@ -30,7 +30,10 @@
       for preview in PreviewStates.viewer {
         guard case .activity = preview.value.pane else { continue }
         let state = try #require(presented[preview.name], "\(preview.name) has no facts")
-        #expect(preview.value == state, "\(preview.name), starting in \(locale), \(timeZone)")
+        #expect(
+          preview.value == Self.held(preview.value, to: state),
+          "\(preview.name), starting in \(locale), \(timeZone)"
+        )
       }
     }
 
@@ -61,25 +64,56 @@
           onLog(Self.activityLog, &snapshot)
           snapshot.session.paused = true
         },
-        "Activity, a moment opened": shown(working) { snapshot in
+        "Activity, a run opened": shown(working) { snapshot in
           onLog(Self.activityLog, &snapshot)
-          snapshot.panes.activity.choices = [Self.textEditMoment: true, Self.notesMoment: false]
+          snapshot.panes.activity.choices = [Self.textEditRun: true]
         },
         "Activity, problems": shown(working) { snapshot in
           onLog(Self.activityLog, &snapshot)
           snapshot.panes.activity.filter = .problems
         },
         "Activity, days before": shown(idle) { onLog(Self.daysLog, &$0) },
-        "Activity, many moments": shown(idle) { onLog(Self.manyLog, &$0) },
+        "Activity, many sessions": shown(idle) { onLog(Self.manyLog, &$0) },
+        "Activity, a run's pictures": shown(working) { snapshot in
+          onLog(Self.activityLog, &snapshot)
+          snapshot.panes.activity.pictureRuns[Self.opieRun] = false
+        },
+        "A picture": shown(working) { snapshot in
+          onLog(Self.activityLog, &snapshot)
+          snapshot.panes.activity.pictureRuns[Self.opieRun] = false
+          snapshot.panes.activity.sheet = ViewerPictureFocus(
+            run: Self.opieRun,
+            item: .shot(PreviewStates.shotNames[2]),
+            everyStep: false
+          )
+        },
       ]
+    }
+
+    /// The samples' captures, newest first, each 2560 × 1440.
+    static let shots: [Screenshot] = zip(
+      PreviewStates.shotNames,
+      [1_792_665_105, 1_792_665_104, 1_792_665_080, 1_792_665_074, 1_792_663_923, 1_792_663_121]
+    )
+    .map { Screenshot(name: $0, takenAt: Date(timeIntervalSince1970: $1), width: 2560, height: 1440) }
+
+    /// Every capture's thumbnail read, and every picture's taken before an action: the sample desktop at the
+    /// captures' shape, known by the file's name.
+    ///
+    /// - Parameter snapshot: The facts to change.
+    static func keepThumbnails(_ snapshot: inout ViewerSnapshot) {
+      for name in PreviewStates.shotNames + PreviewStates.beforeNames {
+        guard let picture = PreviewStates.shotPicture(name) else { continue }
+        snapshot.panes.thumbnails.keep(picture, for: name)
+      }
     }
 
     /// 10:31:42 on 22 October 2026, in UTC: when the Activity sample's log is read.
     static let activityReadAt = Date(timeIntervalSince1970: 1_792_665_102)
-    /// The TextEdit moment's identity in the Activity sample.
-    static let textEditMoment = "session:|e1"
-    /// The Notes moment's identity in the Activity sample.
-    static let notesMoment = "session:|n1"
+    /// The TextEdit run's identity in the Activity sample.
+    static let textEditRun = "session:|e1"
+    /// The Opie run's identity in the Activity sample, which took its screenshot.
+    static let opieRun = "session:|o1"
 
     /// A row an agent wrote in an app, as the service lists it.
     ///

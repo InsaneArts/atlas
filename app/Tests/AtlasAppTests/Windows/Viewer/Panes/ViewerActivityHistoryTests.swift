@@ -8,7 +8,7 @@ import Testing
 
 @Suite("Viewer Activity history")
 struct ViewerActivityHistoryTests {
-  @Test("fold and expansion choices survive the oldest retained row leaving the log")
+  @Test("a run the person opened stays open with every retained step as the oldest row leaves the log")
   func choicesSurviveHistoryAdvancing() async throws {
     let service = ScriptedService()
     service.activityLog = Self.log(0..<200)
@@ -16,23 +16,22 @@ struct ViewerActivityHistoryTests {
     viewer.send(.show(.activity))
     try await settle("Activity was never read") { viewer.panes.activity.log != nil }
     let first = try #require(viewer.panes.activity.moments.first?.id)
-    viewer.send(.toggleMoment(first, opens: false))
-    viewer.send(.showMomentSteps(first))
+    #expect(ViewerActivityFixtures.runs(ViewerPresenter.activity(viewer.snapshot)).first?.isOpen == false)
+    viewer.send(.toggleRun(first, opens: true))
     service.activityLog = Self.log(1..<201)
     await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
     #expect(viewer.panes.activity.moments.first?.id == first)
-    #expect(viewer.panes.activity.choices[first] == false)
-    #expect(viewer.panes.activity.expanded.contains(first))
-    let shown = ViewerActivityFixtures.moments(ViewerPresenter.activity(viewer.snapshot))
-    #expect(shown.first?.id == first)
-    #expect(shown.first?.isOpen == false)
-    viewer.send(.toggleMoment(first, opens: true))
-    let reopened = ViewerPresenter.activity(viewer.snapshot)
-    #expect(ViewerActivityFixtures.steps(reopened).count == 200, "the expansion still shows every retained step")
+    #expect(viewer.panes.activity.choices[first] == true)
+    let shown = ViewerPresenter.activity(viewer.snapshot)
+    #expect(ViewerActivityFixtures.runs(shown).first?.id == first)
+    #expect(ViewerActivityFixtures.runs(shown).first?.isOpen == true)
+    #expect(ViewerActivityFixtures.steps(shown).count == 200, "the opened run shows every retained step")
+    viewer.send(.toggleRun(first, opens: false))
+    #expect(ViewerActivityFixtures.steps(ViewerPresenter.activity(viewer.snapshot)).isEmpty)
     viewer.close()
   }
 
-  /// A full reading of distinct actions in one continuous moment, newest first.
+  /// A full reading of distinct actions in one continuous run, newest first.
   ///
   /// - Parameter range: The retained row numbers.
   /// - Returns: The log.

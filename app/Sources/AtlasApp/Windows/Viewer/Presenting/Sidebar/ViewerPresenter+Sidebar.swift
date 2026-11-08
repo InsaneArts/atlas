@@ -134,7 +134,12 @@ extension ViewerPresenter {
     let line =
       busy
       ? ViewerWords.sessionRowLine(session, line: snapshot.reading.statusReading.line(of: session), now: snapshot.date)
-      : quietLine(folder: session.folder, hostLabel: session.hostLabel, started: session.startedAt, snapshot)
+      : quietLine(
+        folder: session.folder,
+        hostLabel: session.hostLabel.isEmpty ? session.name : session.hostLabel,
+        started: session.startedAt,
+        snapshot
+      )
     let record = snapshot.panes.sessions.record(session.key)
     return row(
       session.key,
@@ -159,7 +164,12 @@ extension ViewerPresenter {
       record.key,
       icon: record.host.icon,
       name: sessionTitle(record.key, working: false, fallback: record.name, snapshot),
-      line: quietLine(folder: record.folder, hostLabel: record.hostLabel, started: record.startedAt, snapshot),
+      line: quietLine(
+        folder: record.folder,
+        hostLabel: record.hostLabel.isEmpty ? record.name : record.hostLabel,
+        started: record.startedAt,
+        snapshot
+      ),
       badge: nil,
       facts: sessionFacts(nil, record: record, snapshot),
       snapshot

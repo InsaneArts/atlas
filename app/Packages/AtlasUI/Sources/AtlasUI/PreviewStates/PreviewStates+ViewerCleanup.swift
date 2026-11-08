@@ -67,6 +67,7 @@
     /// when it started and ended.
     @MainActor public static let viewerSessionEnded: ViewerState = {
       var state = viewerSessionChosen
+      state.header = viewerSessions.header
       state.sidebar.sessions = allSessions
       state.sidebar.sessions.chosen = .one(SessionSamples.piKey)
       // Ended stays folded, its one chosen session still listed under it.

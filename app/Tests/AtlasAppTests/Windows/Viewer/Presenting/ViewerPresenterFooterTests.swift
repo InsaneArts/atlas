@@ -75,8 +75,8 @@ struct ViewerPresenterFooterTests {
   func tooltipsNameTheirShortcuts() throws {
     var snapshot = watching(try status(["overview": ["mode": "agent", "state": "working"]]))
     let state = ViewerPresenter.state(snapshot)
-    #expect(state.sidebar.library.map(\.help) == ["Activity (⌘2)", "Screenshots (⌘3)", "Apps (⌘4)"])
-    #expect(state.sidebar.library.map(\.place) == [.activity, .screenshots, .apps])
+    #expect(state.sidebar.library.map(\.help) == ["Activity (⌘2)", "Apps (⌘3)"])
+    #expect(state.sidebar.library.map(\.place) == [.activity, .apps])
     #expect(state.footer.controls.pause?.help == "Pause Picture (⇧⌘P)")
     #expect(state.footer.controls.pause?.label == "Pause Picture")
     #expect(state.footer.controls.control?.help == "Take Control (⌃⇧⎋)")
@@ -189,7 +189,7 @@ struct ViewerPresenterFooterTests {
     #expect(asked.buttons.first { $0.id == .cancel }?.title == "Cancel")
   }
 
-  @Test("the picture's commands tick the rate the picture resumes at, and act on a screenshot in the Screenshots list")
+  @Test("the picture's commands tick the rate the picture resumes at, and act on the picture sheet while it shows")
   func thePicturesCommandsActOnWhatShows() throws {
     var snapshot = watching(try status(["overview": ["mode": "observing", "state": "idle"]]))
     snapshot.rate = .everyFiveSeconds
@@ -197,10 +197,11 @@ struct ViewerPresenterFooterTests {
     let menu = ViewerPresenter.pictureMenu(snapshot)
     #expect(menu.rate == .everyFiveSeconds, "paused, it still ticks the rate it resumes at")
     #expect(!menu.actsOnShot)
-    snapshot.session.place = .screenshots
-    snapshot.panes.shots.shots = [Screenshot(name: "a.png", takenAt: nil, width: nil, height: nil)]
-    #expect(ViewerPresenter.pictureMenu(snapshot).actsOnShot, "the first one is selected")
-    snapshot.panes.shots.selectionCleared = true
-    #expect(!ViewerPresenter.pictureMenu(snapshot).actsOnShot, "Esc cleared the selection")
+    snapshot.panes.activity.sheet = ViewerPictureFocus(run: "run", item: .shot("a.png"), everyStep: false)
+    #expect(!ViewerPresenter.pictureMenu(snapshot).actsOnShot, "the sheet shows only over Activity")
+    snapshot.session.place = .activity
+    #expect(ViewerPresenter.pictureMenu(snapshot).actsOnShot)
+    snapshot.panes.activity.sheet = nil
+    #expect(!ViewerPresenter.pictureMenu(snapshot).actsOnShot, "Done closed the sheet")
   }
 }

@@ -8,8 +8,8 @@ import Testing
 @testable import AtlasApp
 
 @MainActor
-@Suite("ViewerActionViews")
-struct ViewerActionViewsTests {
+@Suite("ViewerPictureViews")
+struct ViewerPictureViewsTests {
   /// The pictures the log names, before and after.
   static let names = (
     first: "1792665001000000000-before.jpg",
@@ -61,59 +61,47 @@ struct ViewerActionViewsTests {
     return viewer
   }
 
-  @Test("a step's picture opens its action large, reads both pictures as taken, and lets them go on Close")
+  @Test("a step's picture opens in the sheet, reads both its pictures as taken, and lets them go on Done")
   func openReadsBothPictures() async throws {
     let service = ScriptedService()
     let viewer = try await Self.onActivity(service)
     defer { viewer.close() }
     viewer.send(.openAction("c2"))
     try await settle("the pictures were never read") { viewer.panes.activity.pictures.count == 2 }
-    let large = try #require(ViewerPresenter.activity(viewer.snapshot).large)
-    #expect(large.id == "c2")
-    #expect(large.before?.id == "\(Self.names.second) full")
-    #expect(large.after?.id == "\(Self.names.after) full")
+    let sheet = try #require(ViewerPresenter.activity(viewer.snapshot).sheet)
+    #expect(sheet.id == "c2")
+    #expect(sheet.hasAfter)
+    #expect(sheet.picture?.id == "\(Self.names.second) full")
+    viewer.send(.pictureSide(.after))
+    #expect(ViewerPresenter.activity(viewer.snapshot).sheet?.picture?.id == "\(Self.names.after) full")
 
-    viewer.send(.previousAction)
-    #expect(ViewerPresenter.activity(viewer.snapshot).large?.id == "c1")
-    viewer.send(.compareAction(.after))
-    #expect(ViewerPresenter.activity(viewer.snapshot).large?.compare == .after)
+    viewer.send(.previousPicture)
+    let previous = try #require(ViewerPresenter.activity(viewer.snapshot).sheet)
+    #expect(previous.id == "c1")
+    #expect(previous.side == .before, "a step stepped to shows the screen before it first")
 
-    viewer.send(.closeAction)
-    #expect(ViewerPresenter.activity(viewer.snapshot).large == nil)
+    viewer.send(.closePicture)
+    #expect(ViewerPresenter.activity(viewer.snapshot).sheet == nil)
     #expect(viewer.panes.activity.pictures.isEmpty)
   }
 
-  @Test("focus whose action or replay is gone is let go, and their keys go back to the window")
+  @Test("a sheet or replay whose run is gone is let go, and their keys go back to the window")
   func staleFocusLetGo() async throws {
     let service = ScriptedService()
     let viewer = try await Self.onActivity(service)
     defer { viewer.close() }
     viewer.send(.openAction("c2"))
-    #expect(ViewerPresenter.shownOverlays(viewer.snapshot).large)
-    #expect(ActionKeys.event(keyCode: ActionKeys.before, hasModifiers: false, large: true, replaying: false) != nil)
+    #expect(ViewerPresenter.shownOverlays(viewer.snapshot).sheet)
+    #expect(ActionKeys.event(keyCode: ActionKeys.before, hasModifiers: false, sheet: true, replaying: false) != nil)
 
-    viewer.panesModel.panes.activity.action = ViewerActionFocus(moment: "gone", row: "c2")
+    viewer.panesModel.panes.activity.sheet = ViewerPictureFocus(run: "gone", item: .before("c2"), everyStep: true)
     #expect(ViewerPresenter.shownOverlays(viewer.snapshot) == (false, false), "nothing shows, so no key is caught")
-    viewer.panesModel.actions.refresh()
-    #expect(viewer.panes.activity.action == nil)
+    viewer.panesModel.pictures.refresh()
+    #expect(viewer.panes.activity.sheet == nil)
 
     viewer.panesModel.panes.activity.replay = ViewerReplayFocus(moment: "gone")
-    viewer.panesModel.actions.refresh()
+    viewer.panesModel.pictures.refresh()
     #expect(viewer.panes.activity.replay == nil)
-  }
-
-  @Test("Show changes compares the two pictures once both are read, and keeps only that comparison")
-  func showChangesCompares() async throws {
-    let service = ScriptedService()
-    let viewer = try await Self.onActivity(service)
-    defer { viewer.close() }
-    viewer.send(.openAction("c2"))
-    viewer.send(.toggleChanges)
-    try await settle("the pictures were never compared") {
-      ViewerPresenter.activity(viewer.snapshot).large?.changes != nil
-    }
-    #expect(ViewerPresenter.activity(viewer.snapshot).large?.showsChanges == true)
-    #expect(viewer.panes.activity.changes.count == 1)
   }
 
   @Test("a replay plays one frame a second from its first, stops on the screen after, and plays again from the start")
@@ -122,7 +110,7 @@ struct ViewerActionViewsTests {
     let clock = ManualClock()
     let viewer = try await Self.onActivity(service, clock: clock)
     defer { viewer.close() }
-    let moment = try #require(ViewerPresenter.activity(viewer.snapshot).days.first?.moments.first)
+    let moment = try #require(ViewerActivityFixtures.runs(ViewerPresenter.activity(viewer.snapshot)).first)
     #expect(moment.canReplay)
     viewer.send(.openReplay(moment.id))
     #expect(ViewerPresenter.activity(viewer.snapshot).replay?.frames.count == 3)
@@ -130,14 +118,14 @@ struct ViewerActionViewsTests {
     clock.advance(by: .milliseconds(500))
     viewer.send(.togglePlay)
     for index in 1...2 {
-      try await clock.untilSleeping(for: ViewerActionViews.hold, "the replay never waited on its frame")
-      clock.advance(by: ViewerActionViews.hold)
+      try await clock.untilSleeping(for: ViewerPictureViews.hold, "the replay never waited on its frame")
+      clock.advance(by: ViewerPictureViews.hold)
       try await settle("the replay never moved on") {
         ViewerPresenter.activity(viewer.snapshot).replay?.index == index
       }
     }
-    try await clock.untilSleeping(for: ViewerActionViews.hold, "the replay never waited on its last frame")
-    clock.advance(by: ViewerActionViews.hold)
+    try await clock.untilSleeping(for: ViewerPictureViews.hold, "the replay never waited on its last frame")
+    clock.advance(by: ViewerPictureViews.hold)
     try await settle("the replay never stopped") {
       ViewerPresenter.activity(viewer.snapshot).replay?.isPlaying == false
     }
@@ -147,7 +135,7 @@ struct ViewerActionViewsTests {
     let replay = try #require(ViewerPresenter.activity(viewer.snapshot).replay)
     #expect(replay.isPlaying && replay.index == 0, "Play on the last frame starts again")
     viewer.send(.closeReplay)
-    #expect(viewer.panesModel.actions.playing == nil)
+    #expect(viewer.panesModel.pictures.playing == nil)
   }
 
   @Test("the replay stops playing while the window leaves Activity, and the frames step by hand")
@@ -155,7 +143,7 @@ struct ViewerActionViewsTests {
     let service = ScriptedService()
     let viewer = try await Self.onActivity(service)
     defer { viewer.close() }
-    let moment = try #require(ViewerPresenter.activity(viewer.snapshot).days.first?.moments.first)
+    let moment = try #require(ViewerActivityFixtures.runs(ViewerPresenter.activity(viewer.snapshot)).first)
     viewer.send(.openReplay(moment.id))
     viewer.send(.nextFrame)
     viewer.send(.nextFrame)
@@ -165,9 +153,9 @@ struct ViewerActionViewsTests {
     viewer.send(.previousFrame)
     #expect(viewer.panes.activity.replay?.index == 0, "never before the first")
     viewer.send(.togglePlay)
-    #expect(viewer.panesModel.actions.playing != nil)
+    #expect(viewer.panesModel.pictures.playing != nil)
     viewer.send(.show(.apps))
-    #expect(viewer.panesModel.actions.playing == nil)
-    #expect(viewer.panesModel.actions.loads.isEmpty)
+    #expect(viewer.panesModel.pictures.playing == nil)
+    #expect(viewer.panesModel.pictures.loads.isEmpty)
   }
 }

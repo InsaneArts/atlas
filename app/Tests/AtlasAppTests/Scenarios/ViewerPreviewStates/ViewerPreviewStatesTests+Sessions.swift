@@ -62,6 +62,10 @@
           Self.onSessionsActivity(Self.sessionsLog, &snapshot)
           snapshot.session.chosenSession = .one(Self.claudeKey)
         },
+        "A step's picture": shown(working) { snapshot in
+          Self.onSessionsActivity(Self.sessionsLog, &snapshot)
+          snapshot.session.chosenSession = .one(Self.claudeKey)
+        },
         "Session chosen": shown(working, detail),
         "Clean up": shown(working) { snapshot in
           detail(&snapshot)
@@ -85,17 +89,6 @@
         },
         "Activity, one session, nothing yet": shown(working) { snapshot in
           Self.onSessionsActivity(ActivityLog(), &snapshot)
-          snapshot.session.chosenSession = .one(Self.claudeKey)
-        },
-        "Screenshots, one session": shown(working) { snapshot in
-          Self.onSessionsActivity(Self.sessionsLog, &snapshot)
-          Self.onShots(&snapshot)
-          snapshot.session.chosenSession = .one(Self.claudeKey)
-          snapshot.panes.sessions.list = HostSessionList(sessions: [Self.claudeRecord])
-        },
-        "Screenshots, one session, none yet": shown(working) { snapshot in
-          Self.onSessionsActivity(Self.sessionsLog, &snapshot)
-          Self.onShots(&snapshot)
           snapshot.session.chosenSession = .one(Self.claudeKey)
         },
         "Session cleaning up": shown(working) { snapshot in
@@ -356,7 +349,7 @@
       row("f1", "opened Notes", age: 12, verb: "open", app: notes, operation: "open"),
     ])
 
-    /// Pi · notes-sync's record: it started at 09:40 and ended 20 minutes before Activity was read.
+    /// Pi · notes-sync's record: it started at 09:40, took 12 actions and ended 20 minutes before Activity was read.
     static let piRecord = HostSessionRecord(
       key: "c0ffee5e5510",
       name: "Pi · notes-sync",
@@ -364,7 +357,8 @@
       folder: "notes-sync",
       startedAt: Date(timeIntervalSince1970: 1_792_662_000),
       endedAt: activityReadAt.addingTimeInterval(-20 * 60),
-      state: .ended
+      state: .ended,
+      actions: 12
     )
 
     /// Claude Code's session as `sessions.json` lists it: started at 09:12, seen two seconds ago, with Opie opened

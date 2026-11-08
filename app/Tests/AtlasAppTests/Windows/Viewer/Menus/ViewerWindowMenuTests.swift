@@ -52,13 +52,13 @@ struct ViewerWindowMenuTests {
     #expect(size.state == .on)
   }
 
-  @Test("Screen, Activity, Screenshots and Apps take ⌘1 to ⌘4 in the sidebar's order")
+  @Test("Screen, Activity and Apps take ⌘1 to ⌘3 in the sidebar's order")
   func placesTakeTheirNumbersInTheSidebarsOrder() throws {
     let places = MainMenu.view().items
       .filter { $0.action == #selector(ViewerMenuActions.showPlace(_:)) }
-    #expect(places.map(\.title) == ["Screen", "Activity", "Screenshots", "Apps"])
-    #expect(places.map(\.keyEquivalent) == ["1", "2", "3", "4"])
-    #expect(places.compactMap { ViewerPlace(menuTag: $0.tag) } == [.screen, .activity, .screenshots, .apps])
+    #expect(places.map(\.title) == ["Screen", "Activity", "Apps"])
+    #expect(places.map(\.keyEquivalent) == ["1", "2", "3"])
+    #expect(places.compactMap { ViewerPlace(menuTag: $0.tag) } == [.screen, .activity, .apps])
     #expect(places.allSatisfy { $0.keyEquivalentModifierMask == .command })
   }
 
@@ -379,9 +379,19 @@ struct ViewerWindowMenuTests {
     #expect(ended.state == .on)
   }
 
-  @Test("native Copy and Save follow the selected screenshot and fall back to the live picture after clearing")
-  func copyAndSaveFollowTheSelection() async throws {
+  @Test("native Copy and Save act on the picture sheet while it shows and on the live picture once it closes")
+  func copyAndSaveFollowTheSheet() async throws {
     let service = ScriptedService()
+    service.shots = [Screenshot(name: "one.png")]
+    service.activityLog = ActivityLog(entries: [
+      ActivityFixtures.row(
+        id: "s1",
+        says: "took a screenshot",
+        ageSeconds: 1,
+        operation: "screenshot",
+        capture: "one.png"
+      )
+    ])
     let viewer = ViewerController.scripted(service)
     let window = window(viewer)
     defer { window.close() }
@@ -390,13 +400,14 @@ struct ViewerWindowMenuTests {
     #expect(!window.validateMenuItem(copy))
     #expect(!window.validateMenuItem(save))
     #expect(save.title == ViewerWords.savePicture)
-    viewer.session.place = .screenshots
-    service.shots = [Screenshot(name: "one.png")]
-    await viewer.panesModel.readShots(viewer.panesModel.work.generation)
+    viewer.session.place = .activity
+    await viewer.panesModel.readActivity(viewer.panesModel.work.generation)
+    viewer.send(.openShot("one.png"))
+    try #require(viewer.panes.activity.sheet != nil, "the screenshot opened in the sheet")
     #expect(window.validateMenuItem(copy))
     #expect(window.validateMenuItem(save))
     #expect(save.title == ViewerWords.saveScreenshot)
-    viewer.send(.clearShotSelection)
+    viewer.send(.closePicture)
     #expect(!window.validateMenuItem(copy))
     #expect(!window.validateMenuItem(save))
     #expect(save.title == ViewerWords.savePicture)
@@ -404,8 +415,5 @@ struct ViewerWindowMenuTests {
     #expect(window.validateMenuItem(copy))
     #expect(window.validateMenuItem(save))
     #expect(save.title == ViewerWords.savePicture)
-    viewer.send(.selectShot("one.png"))
-    #expect(window.validateMenuItem(save))
-    #expect(save.title == ViewerWords.saveScreenshot)
   }
 }

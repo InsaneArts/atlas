@@ -64,12 +64,12 @@ struct ViewerPresenterActionTests {
         facts: ActionFacts(action: .click, outcome: .worked, display: Self.display, point: .init(x: 720, y: 225))
       )
     ])
-    let step = try #require(ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot)).first)
-    let mark = try #require(step.picture?.mark)
+    let step = try #require(ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot)).first)
+    #expect(step.hasPicture, "its picture button shows")
+    let mark = try #require(ViewerActivityFixtures.sheet(snapshot, row: "c1")?.mark)
     #expect(mark.shape == .click(clicks: 1))
     #expect(mark.spot == CGPoint(x: 0.5, y: 0.25))
     #expect(mark.tone == .worked && mark.note == nil)
-    #expect(step.picture?.repeats == 1)
   }
 
   @Test("typing shows what was typed on one line, and a password says so with eight dots and never its length")
@@ -91,16 +91,21 @@ struct ViewerPresenterActionTests {
         facts: ActionFacts(action: .type, display: Self.display, point: .init(x: 10, y: 10), text: long, length: 70)
       ),
     ])
-    let steps = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
-    let password = try #require(steps.first)
+    let steps = ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot))
+    let password = try #require(steps.last, "an opened run lists its steps oldest first")
     #expect(password.words == ViewerStepWords("Typed a password into", target: "Password"))
-    #expect(password.picture?.mark?.shape == .typing(text: "••••••••", detail: "A password"))
+    #expect(
+      ViewerActivityFixtures.sheet(snapshot, row: "c2")?.mark?.shape == .typing(text: "••••••••", detail: "A password")
+    )
     #expect(password.notKept, "a password's typing says it was not kept")
-    let typed = try #require(steps.last)
+    let typed = try #require(steps.first)
     #expect(typed.words.quote == "Release 0.1.1 is out: faster setup…")
     #expect(!typed.notKept)
     #expect(typed.words.text == "Typed “Release 0.1.1 is out: faster setup…” into Message")
-    #expect(typed.picture?.mark?.shape == .typing(text: long, detail: "Typed · 70 characters"))
+    #expect(
+      ViewerActivityFixtures.sheet(snapshot, row: "c1")?.mark?.shape
+        == .typing(text: long, detail: "Typed · 70 characters")
+    )
   }
 
   @Test("an action that failed, may not have finished or sent nothing is marked so, with why")
@@ -128,14 +133,14 @@ struct ViewerPresenterActionTests {
         facts: ActionFacts(action: .type, outcome: .notSent, reason: "another window was in front")
       ),
     ])
-    let marks = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
-      .compactMap(\.picture?.mark)
+    let marks = ["c3", "c2", "c1"]
+      .compactMap { ViewerActivityFixtures.sheet(snapshot, row: $0)?.mark }
     #expect(marks.map(\.tone) == [.failed, .uncertain, .notSent])
     #expect(marks.map(\.note) == ["No “Save” in this window", "May not have finished", "Another window was in front"])
     #expect(marks.allSatisfy { $0.spot == nil }, "no display, no spot")
   }
 
-  @Test("three scrolls fold into one step whose picture is the first before, counted, its pill saying how far")
+  @Test("three scrolls fold into one counted step whose picture is the oldest scroll's before, marked with the way")
   func foldedScrolls() throws {
     let scroll = ActionFacts(
       action: .scroll,
@@ -148,59 +153,68 @@ struct ViewerPresenterActionTests {
       Self.row("c2", "scrolled in TextEdit", age: 4, facts: scroll),
       Self.row("c1", "scrolled in TextEdit", age: 5, facts: scroll),
     ])
-    let steps = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
+    let steps = ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot))
     let step = try #require(steps.first)
     #expect(steps.count == 1)
     #expect(step.words.count == "×3")
-    #expect(step.picture?.repeats == 3)
-    #expect(step.picture?.shot.name == "1792665005000000000-before.jpg", "the oldest scroll's")
-    #expect(step.picture?.mark?.shape == .scroll(arrow: .down, label: "Down ×3"))
+    #expect(step.hasPicture)
+    #expect(step.id == "c1", "the oldest scroll's")
+    let sheet = try #require(ViewerActivityFixtures.sheet(snapshot, row: step.id))
+    #expect(sheet.id == "c1")
+    #expect(sheet.position == "1 of 1")
+    #expect(sheet.mark?.shape == .scroll(arrow: .down, label: "Down"))
   }
 
-  @Test("a step's picture opens large over the window, steps through each repeat, and compares with the after")
-  func largeView() throws {
+  @Test("a step's picture opens in the sheet, steps through every step's picture, and offers After only where it can")
+  func pictureSheetOfASteps() throws {
     let click = ActionFacts(action: .click, display: Self.display, point: .init(x: 720, y: 450))
     var snapshot = try ViewerActivityFixtures.onActivity([
-      Self.row("c3", "clicked in TextEdit", age: 3, facts: click, after: "1792665099500000000-after.jpg"),
-      Self.row("c2", "clicked in TextEdit", age: 4, facts: click, after: "1792665098000000000-before.jpg"),
-      Self.row("c1", "clicked in TextEdit", age: 5, facts: click),
+      Self.row(
+        "c3",
+        "clicked Send in TextEdit",
+        age: 3,
+        label: "Send",
+        facts: click,
+        after: "1792665099500000000-after.jpg"
+      ),
+      Self.row(
+        "c2",
+        "clicked Name in TextEdit",
+        age: 4,
+        label: "Name",
+        facts: click,
+        after: "1792665098000000000-before.jpg"
+      ),
+      Self.row("c1", "clicked Bold in TextEdit", age: 5, label: "Bold", facts: click),
     ])
-    let moment = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first)
-    snapshot.panes.activity.action = ViewerActionFocus(moment: moment.id, row: "c1")
-    let first = try #require(ViewerPresenter.activity(snapshot).large)
+    let first = try #require(ViewerActivityFixtures.sheet(snapshot, row: "c1"))
     #expect(first.id == "c1")
-    #expect(!first.hasAfter && first.shownCompare == .before, "no picture after it, nothing to compare")
+    #expect(!first.hasAfter && first.shownSide == .before, "no picture after it, nothing to compare")
     #expect(!first.canGoBack && first.canGoForward)
-    #expect(first.context.hasSuffix("step 1 of 3"))
+    #expect(first.position == "1 of 3")
+    #expect(first.run == "in this TextEdit run")
     #expect(first.mark?.shape == .click(clicks: 1))
+    #expect(first.title == ViewerStepWords("Clicked", target: "Bold"))
 
-    snapshot.panes.activity.action?.row = "c3"
-    snapshot.panes.activity.action?.showsChanges = true
-    let last = try #require(ViewerPresenter.activity(snapshot).large)
-    #expect(last.hasAfter && last.shownCompare == .slide)
+    let last = try #require(ViewerActivityFixtures.sheet(snapshot, row: "c3", side: .after))
+    #expect(last.hasAfter && last.shownSide == .after)
     #expect(last.canGoBack && !last.canGoForward)
-    #expect(last.changes == nil, "until compared")
-    #expect(last.details.map(\.title) == ["What", "Where", "Agent", "Outcome", "Before", "After"])
-    #expect(last.details.last?.value == "Taken after the action", "no time where the service gave none")
-    #expect(last.afterLabel == "After")
+    #expect(last.position == "3 of 3")
+    #expect(last.line.hasPrefix("TextEdit · "))
+    #expect(!last.line.contains(ViewerWords.justAfter), "no time where the service gave none")
+    #expect(last.line.hasSuffix(" · Claude Code · understudy"))
 
-    let key = ViewerActivityFacts.changesKey(
-      before: "1792665003000000000-before.jpg",
-      after: "1792665099500000000-after.jpg"
-    )
-    snapshot.panes.activity.changes[key] = [CGRect(x: 0, y: 0, width: 0.5, height: 0.5)]
-    #expect(ViewerPresenter.activity(snapshot).large?.changes?.count == 1)
-
-    snapshot.panes.activity.action = nil
-    #expect(ViewerPresenter.activity(snapshot).large == nil)
+    let moment = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first)
+    snapshot.panes.activity.sheet = ViewerPictureFocus(run: moment.id, item: .before("gone"), everyStep: true)
+    #expect(ViewerPresenter.activity(snapshot).sheet == nil, "a picture its run no longer holds shows no sheet")
   }
 
-  @Test("a picture Atlas took after an action shows when it was taken and how long after the picture before")
+  @Test("a picture Atlas took after an action says when it was taken, just after the step")
   func afterTime() throws {
     let at = ActivityFixtures.readAt
       .addingTimeInterval(-3)
     let click = ActionFacts(action: .click, display: Self.display, point: .init(x: 720, y: 450), at: at)
-    var snapshot = try ViewerActivityFixtures.onActivity([
+    let snapshot = try ViewerActivityFixtures.onActivity([
       Self.row(
         "c2",
         "clicked in TextEdit",
@@ -215,17 +229,15 @@ struct ViewerPresenterActionTests {
         age: 5,
         facts: click,
         after: "1792665099500000000-after.jpg",
-        afterAt: at.addingTimeInterval(1.02)
+        afterAt: at.addingTimeInterval(61)
       ),
     ])
-    let moment = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first)
-    snapshot.panes.activity.action = ViewerActionFocus(moment: moment.id, row: "c2")
-    let slower = try #require(ViewerPresenter.activity(snapshot).large)
-    let time = ViewerPresenter.hundredths(at.addingTimeInterval(1.6), snapshot)
-    #expect(slower.afterLabel == "After · \(time)")
-    #expect(slower.details.last?.value == "\(time), 1.6 seconds later")
-    snapshot.panes.activity.action?.row = "c1"
-    #expect(ViewerPresenter.activity(snapshot).large?.details.last?.value.hasSuffix(", a second later") == true)
+    let before = try #require(ViewerActivityFixtures.sheet(snapshot, row: "c2"))
+    let beforeTime = ViewerPresenter.clock(at, snapshot)
+    #expect(before.line == "TextEdit · \(beforeTime), \(ViewerWords.justBefore) · Claude Code · understudy")
+    let after = try #require(ViewerActivityFixtures.sheet(snapshot, row: "c1", side: .after))
+    let afterTime = ViewerPresenter.clock(at.addingTimeInterval(61), snapshot)
+    #expect(after.line == "TextEdit · \(afterTime), \(ViewerWords.justAfter) · Claude Code · understudy")
   }
 
   @Test("a replay's frames are each step's marked picture before it, oldest first, then the screen after the last")
@@ -243,9 +255,7 @@ struct ViewerPresenterActionTests {
       Self.row("c1", "clicked Name in TextEdit", age: 5, label: "Name", facts: click),
     ])
     let moment = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first)
-    let header = ViewerPresenter.activity(snapshot)
-      .days
-      .flatMap(\.moments)
+    let header = ViewerActivityFixtures.runs(ViewerActivityFixtures.opened(snapshot))
       .first
     #expect(header?.canReplay == true)
     snapshot.panes.activity.replay = ViewerReplayFocus(moment: moment.id, index: 1)
@@ -281,8 +291,8 @@ struct ViewerPresenterActionTests {
         facts: ActionFacts(action: .click, display: Self.display, point: .init(x: 720, y: 780), element: element)
       ),
     ])
-    let marks = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
-      .compactMap(\.picture?.mark)
+    let marks = ["c2", "c1"]
+      .compactMap { ViewerActivityFixtures.sheet(snapshot, row: $0)?.mark }
     let click = try #require(marks.last)
     let area = try #require(click.area)
     #expect(abs(area.minX - 0.25) < 0.0001 && abs(area.minY - 0.79) < 0.0001)
@@ -309,8 +319,8 @@ struct ViewerPresenterActionTests {
         facts: ActionFacts(action: .click, display: Self.display, point: .init(x: 720, y: 450))
       ),
     ])
-    let marks = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
-      .compactMap(\.picture?.mark)
+    let marks = ["c2", "c1"]
+      .compactMap { ViewerActivityFixtures.sheet(snapshot, row: $0)?.mark }
     #expect(marks.map(\.area) == [nil, nil])
     #expect(marks.last?.spot == CGPoint(x: 0.5, y: 0.5))
   }
@@ -323,8 +333,8 @@ struct ViewerPresenterActionTests {
     #expect(ViewerPresenter.share(ActionFacts.Frame(x: 1500, y: 10, width: 20, height: 20), of: display) == nil)
   }
 
-  @Test("an action shown large says where it went by app, window and element, and who did it in which task")
-  func largeViewNamesWindowAndTask() throws {
+  @Test("a step's picture in the sheet says what was done, then its app, when and whose session on one line")
+  func sheetNamesTheStep() throws {
     let facts = ActionFacts(
       action: .key,
       display: Self.display,
@@ -333,19 +343,28 @@ struct ViewerPresenterActionTests {
       window: "Release notes",
       task: "Post the 0.1.1 release note"
     )
-    var snapshot = try ViewerActivityFixtures.onActivity([
-      Self.row("k1", "pressed ⏎ in TextEdit", age: 3, facts: facts)
+    let snapshot = try ViewerActivityFixtures.onActivity([
+      ActivityFixtures.row(
+        id: "k1",
+        says: "pressed ⏎ in TextEdit",
+        ageSeconds: 3,
+        session: ViewerActivityFixtures.claude,
+        verb: "key",
+        app: "TextEdit",
+        label: "⏎",
+        bundleId: "com.apple.TextEdit",
+        keys: [["⏎"]],
+        before: "1792665003000000000-before.jpg",
+        facts: facts
+      )
     ])
-    let moment = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first)
-    snapshot.panes.activity.action = ViewerActionFocus(moment: moment.id, row: "k1")
-    let large = try #require(ViewerPresenter.activity(snapshot).large)
-    let details = Dictionary(uniqueKeysWithValues: large.details.map { ($0.title, $0.value) })
-    #expect(details["Where"] == "TextEdit › Release notes › Message")
-    #expect(details["Agent and task"] == "Claude Code · understudy\nPost the 0.1.1 release note")
-    #expect(details["Agent"] == nil)
-    #expect(large.context == "Claude Code · understudy · Post the 0.1.1 release note · TextEdit · step 1 of 1")
-    #expect(large.icon != nil)
-    #expect(large.mark?.area != nil && large.mark?.spot == nil, "keys ring the element with focus")
+    let sheet = try #require(ViewerActivityFixtures.sheet(snapshot, row: "k1"))
+    let taken = ViewerPresenter.clock(Date(timeIntervalSince1970: 1_792_665_003), snapshot)
+    #expect(sheet.title.text == "Pressed ⏎ Return in Message")
+    #expect(sheet.line == "TextEdit · \(taken), \(ViewerWords.justBefore) · Claude Code · understudy")
+    #expect(sheet.position == "1 of 1")
+    #expect(sheet.icon != .symbol(.terminal), "its app's icon leads it")
+    #expect(sheet.mark?.area != nil && sheet.mark?.spot == nil, "keys ring the element with focus")
   }
 
   @Test("keys pressed say the element with focus after them where Atlas named it, and stand alone where it did not")
@@ -376,15 +395,15 @@ struct ViewerPresenterActionTests {
       ),
       pressed("k1", age: 5, element: nil),
     ])
-    let steps = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
-    let named = try #require(steps.first)
+    let steps = ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot))
+    let named = try #require(steps.last, "an opened run lists its steps oldest first")
     #expect(
       named.words == ViewerStepWords("Pressed", joiner: "in", target: "Message", keys: [["⏎"]], keyName: "Return")
     )
     #expect(named.words.text == "Pressed ⏎ Return in Message")
     let mark = ViewerPresenter.actionMark(pressed("k3", age: 1, element: message), repeats: 1, tone: .worked)
     #expect(mark?.shape == .keys([["⏎"]], name: "Return"), "the mark's keycaps say the name too")
-    #expect(steps.last?.words == ViewerStepWords("Pressed", keys: [["⏎"]], keyName: "Return"))
+    #expect(steps.first?.words == ViewerStepWords("Pressed", keys: [["⏎"]], keyName: "Return"))
   }
 
   @Test("a lone key whose cap is a symbol is named, and a shortcut or a key whose cap says its name is not")

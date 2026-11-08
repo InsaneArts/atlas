@@ -106,8 +106,8 @@ struct ViewerPresenterSessionMenuTests {
     let recover = try Self.item("Recover…", in: needsYou)
     #expect(recover.isEnabled && snapshot.helperMenu.canRecover, "set aside, it can be chosen as the Helper menu's")
     #expect(!Self.titles(try Self.row("5d21e9a04c3f", snapshot).menu).contains("Recover…"))
-    #expect(Self.titles(needsYou).prefix(2) == ["Show Activity", "Show Screenshots"])
-    #expect(try Self.item("Show Screenshots", in: needsYou).command == .showScreenshots(session: Self.key))
+    #expect(Self.titles(needsYou).prefix(2) == ["Show Activity", "Recover…"])
+    #expect(try Self.item("Show Activity", in: needsYou).command == .showActivity(session: Self.key))
   }
 
   @Test("a row offers Clean Up only when its session left work to clean up")
@@ -148,7 +148,7 @@ struct ViewerPresenterSessionMenuTests {
   func anUnreadListSaysSo() throws {
     var snapshot = try ViewerSnapshot.listing([SessionReplies.claudeActing, SessionReplies.terminalIdle])
     snapshot.panes.sessions.list = HostSessionList(sessions: [
-      HostSessionRecord(key: "", name: "Terminal", host: .terminal)
+      HostSessionRecord(key: "", name: "Terminal", host: .terminal, actions: 1)
     ])
     #expect(!(try Self.row("", snapshot).help.contains("Sessions:")))
     snapshot.panes.sessions.failure = "The service did not answer"

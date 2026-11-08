@@ -17,20 +17,20 @@ import Testing
 )
 @MainActor
 struct ActivityFoldFocusTests {
-  @Test("folding a moment moves focus from its retained Show more button to the header and skips the invisible action")
+  @Test("folding a run moves focus from its retained Replay button to its row and skips the invisible steps")
   func foldedStepsCannotKeepKeyboardFocus() async throws {
-    var moment = ViewerActivityMoment(
-      id: "moment",
+    var run = ViewerOutlineRun(
+      id: "run",
       icon: .atlas,
-      title: "Commands",
+      name: "Commands",
+      summary: "Ran a command · 1 action",
       time: "10:21",
-      span: "9 actions",
-      age: "now",
-      isOpen: true
+      isOpen: true,
+      canReplay: true,
+      steps: [ViewerActivityStep(id: "step", kind: .command, words: ViewerStepWords("Ran a command"))]
     )
-    moment.more = ViewerMoreSteps(moment: moment.id, count: 1)
     var sent: [ViewerEvent] = []
-    let hosting = NSHostingView(rootView: ActivityMomentBlock(moment: moment, send: { sent.append($0) }))
+    let hosting = NSHostingView(rootView: ActivityRunBlock(run: run, level: 0, send: { sent.append($0) }))
     let window = NSWindow(
       contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
       styleMask: .titled,
@@ -43,21 +43,21 @@ struct ActivityFoldFocusTests {
     window.makeKeyAndOrderFront(nil)
     try await Self.render(hosting) { Self.focusedLabel() != nil }
     for _ in 0..<10 {
-      if Self.focusedLabel() == "Show 1 more" { break }
+      if Self.focusedLabel() == "Replay" { break }
       window.selectNextKeyView(nil)
       hosting._renderForTest(interval: .zero)
       await afterQueuedWork()
     }
-    try #require(Self.focusedLabel() == "Show 1 more")
-    moment.isOpen = false
-    moment.more = nil
-    hosting.rootView = ActivityMomentBlock(moment: moment, send: { sent.append($0) })
-    try await Self.render(hosting) { Self.focusedLabel() == moment.label }
+    try #require(Self.focusedLabel() == "Replay")
+    run.isOpen = false
+    run.steps = []
+    hosting.rootView = ActivityRunBlock(run: run, level: 0, send: { sent.append($0) })
+    try await Self.render(hosting) { Self.focusedLabel() == run.label }
     for _ in 0..<4 {
       window.selectNextKeyView(nil)
       hosting._renderForTest(interval: .zero)
       await afterQueuedWork()
-      #expect(Self.focusedLabel() != "Show 1 more", "retained rows cannot enter the keyboard loop")
+      #expect(Self.focusedLabel() != "Replay", "retained rows cannot enter the keyboard loop")
     }
     #expect(sent.isEmpty)
   }

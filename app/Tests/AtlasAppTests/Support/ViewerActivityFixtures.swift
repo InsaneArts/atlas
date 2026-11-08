@@ -113,21 +113,62 @@ enum ViewerActivityFixtures {
       ]
   }
 
-  /// The moments a pane lists.
+  /// The sessions a pane lists.
   ///
   /// - Parameter activity: The pane.
-  /// - Returns: Its moments, in order.
-  static func moments(_ activity: ViewerActivityState) -> [ViewerActivityMoment] {
-    activity.days.flatMap(\.moments)
+  /// - Returns: Its sessions, in order.
+  static func sessions(_ activity: ViewerActivityState) -> [ViewerOutlineSession] {
+    activity.days.flatMap(\.sessions)
   }
 
-  /// The steps a pane lists.
+  /// The runs a pane lists.
+  ///
+  /// - Parameter activity: The pane.
+  /// - Returns: Its runs, in order.
+  static func runs(_ activity: ViewerActivityState) -> [ViewerOutlineRun] {
+    activity.days
+      .flatMap(\.sessions)
+      .flatMap(\.runs)
+  }
+
+  /// The steps a pane lists in its opened runs.
   ///
   /// - Parameter activity: The pane.
   /// - Returns: Its steps, in order.
   static func steps(_ activity: ViewerActivityState) -> [ViewerActivityStep] {
-    activity.days
-      .flatMap(\.moments)
+    runs(activity)
       .flatMap(\.steps)
+  }
+
+  /// The pane with every run opened, as the person would open each to read its steps.
+  ///
+  /// - Parameter snapshot: The facts.
+  /// - Returns: The pane.
+  static func opened(_ snapshot: ViewerSnapshot) -> ViewerActivityState {
+    var snapshot = snapshot
+    for moment in ViewerPresenter.activityMoments(snapshot)?.moments ?? [] {
+      snapshot.panes.activity.choices[moment.id] = true
+    }
+    return ViewerPresenter.activity(snapshot)
+  }
+
+  /// The picture sheet opened on the screen just before a row, as its step's picture button opens it.
+  ///
+  /// - Parameters:
+  ///   - snapshot: The facts.
+  ///   - row: The row that kept the picture.
+  ///   - side: Which of its pictures shows; before by default.
+  /// - Returns: The sheet, or nil when no run holds the row.
+  static func sheet(
+    _ snapshot: ViewerSnapshot,
+    row: String,
+    side: ViewerPictureSide = .before
+  ) -> ViewerPictureSheet? {
+    var snapshot = snapshot
+    let run = ViewerPresenter.activityMoments(snapshot)?.moments
+      .first { $0.runs.contains { line in line.members.contains { $0.id == row } } }
+    guard let run else { return nil }
+    snapshot.panes.activity.sheet = ViewerPictureFocus(run: run.id, item: .before(row), everyStep: true, side: side)
+    return ViewerPresenter.activity(snapshot).sheet
   }
 }

@@ -1,9 +1,11 @@
 #if DEBUG
   extension PreviewStates {
     /// Activity with every session's work: Claude Code working, Codex's ended session folded, and the person's own
-    /// clicks.
+    /// clicks; the sidebar and the header title each session by what it did.
     @MainActor public static let viewerActivityBySession: ViewerState = {
       var state = viewerSessions
+      state.sidebar.sessions = titledSessions
+      state.header.who = SessionSamples.claudeTitle
       state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 14])
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
@@ -21,9 +23,9 @@
         icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
         liveCount: 3,
         groups: [
-          ViewerSessionGroup(.needsYou, rows: [needsYouRows[0]]),
-          ViewerSessionGroup(.working, rows: [needsYouRows[1]]),
-          ViewerSessionGroup(.idle, rows: [sessionRows[2]]),
+          ViewerSessionGroup(.needsYou, rows: [titledNeedsYouRows[0]]),
+          ViewerSessionGroup(.working, rows: [titledNeedsYouRows[1]]),
+          ViewerSessionGroup(.idle, rows: [titledSessionRows[2]]),
         ]
       )
       state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 14])

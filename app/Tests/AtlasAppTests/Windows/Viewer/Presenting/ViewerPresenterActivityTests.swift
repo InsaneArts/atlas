@@ -47,60 +47,79 @@ struct ViewerPresenterActivityTests {
     #expect(symbols.count == ViewerActivityKind.allCases.count)
   }
 
-  @Test("consecutive actions in one app form one moment under its icon, its steps never naming the app")
-  func actionsInOneAppFormOneMoment() throws {
-    let activity = ViewerPresenter.activity(
-      try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
-    )
-    let moments = ViewerActivityFixtures.moments(activity)
-    #expect(moments.map(\.title) == ["TextEdit"])
-    #expect(moments.first?.isOpen == true)
-    #expect(moments.first?.icon == .app(.monogram(AppMonogram(name: "TextEdit"))))
-    let words = ViewerActivityFixtures.steps(activity)
+  @Test("consecutive actions in one app form one run under its icon, folded under All, its steps never naming the app")
+  func actionsInOneAppFormOneRun() throws {
+    let snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
+    let runs = ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot))
+    #expect(runs.map(\.name) == ["TextEdit"])
+    #expect(runs.first?.isOpen == false, "under All a run starts folded")
+    #expect(runs.first?.steps.isEmpty == true)
+    #expect(runs.first?.icon == .app(.monogram(AppMonogram(name: "TextEdit"))))
+    let words = ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot))
       .map(\.words.text)
-    #expect(words == ["Pressed ⌘S", "Typed into Name", "Clicked Save", "Opened TextEdit"])
+    #expect(words == ["Opened TextEdit", "Clicked Save", "Typed into Name", "Pressed ⌘S"], "oldest first")
+  }
+
+  @Test("an opened run's steps show their minute only where it changes")
+  func stepsShowTheMinuteWhereItChanges() throws {
+    let log = [42.0, 72, 112, 117]
+      .enumerated()
+      .map { index, age in
+        ActivityFixtures.row(
+          id: "c\(index)",
+          says: "clicked Item \(index) in TextEdit",
+          ageSeconds: age,
+          verb: "click",
+          app: "TextEdit",
+          label: "Item \(index)"
+        )
+      }
+    let snapshot = try ViewerActivityFixtures.onActivity(log, sessions: [])
+    let steps = ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot))
+    #expect(steps.map(\.id) == ["c3", "c2", "c1", "c0"])
+    #expect(steps.map(\.time) == ["10:29", "", "10:30", "10:31"])
   }
 
   @Test("a key press shows its keys as caps")
   func aKeyPressShowsItsKeysAsCaps() throws {
     let steps = ViewerActivityFixtures.steps(
-      ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: []))
+      ViewerActivityFixtures.opened(
+        try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
+      )
     )
-    let pressed = try #require(steps.first)
+    let pressed = try #require(steps.last)
     #expect(pressed.words.verb == "Pressed")
     #expect(pressed.words.keys == [["⌘", "S"]])
     #expect(pressed.words.target.isEmpty, "the chord is drawn as caps, never as words too")
     #expect(pressed.kind == .keys)
   }
 
-  @Test("an action shows the picture taken right before it, with its thumbnail once read, and one without shows none")
-  func anActionShowsItsPictureBefore() throws {
+  @Test("a step that kept a picture of the screen before it offers its picture button, and one without offers none")
+  func aStepOffersItsPictureBefore() throws {
     let name = "1792665100000000000-before.jpg"
-    var snapshot = try ViewerActivityFixtures.onActivity(
+    let snapshot = try ViewerActivityFixtures.onActivity(
       [
         ActivityFixtures.row(id: "c2", says: "clicked Save in TextEdit", ageSeconds: 1, verb: "click", before: name),
         ActivityFixtures.row(id: "c1", says: "scrolled in TextEdit", ageSeconds: 3, verb: "scroll"),
       ],
       sessions: []
     )
-    let steps = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
-    #expect(steps.map(\.picture?.shot.name) == [name, nil])
-    #expect(steps.first?.picture?.shot.thumbnail == nil, "until it is read")
-
-    let picture = DesktopPicture(id: name, image: try SettingsControllerTests.image())
-    snapshot.panes.thumbnails.keep(picture, for: name)
-    let read = ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot))
-    #expect(read.first?.picture?.shot.thumbnail == picture)
+    let steps = ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot))
+    #expect(steps.map(\.id) == ["c1", "c2"])
+    #expect(steps.map(\.hasPicture) == [false, true])
+    #expect(steps.allSatisfy { $0.inPlace == nil }, "only a screenshot's step shows a picture in place")
   }
 
   @Test("a typed action names its field only when the row names one")
   func aTypedActionNamesItsFieldOnlyWhenTheRowDoes() throws {
     let steps = ViewerActivityFixtures.steps(
-      ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: []))
+      ViewerActivityFixtures.opened(
+        try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
+      )
     )
-    #expect(steps[1].words == ViewerStepWords("Typed into", target: "Name"))
+    #expect(steps[2].words == ViewerStepWords("Typed into", target: "Name"))
     let plain = ViewerActivityFixtures.steps(
-      ViewerPresenter.activity(
+      ViewerActivityFixtures.opened(
         try ViewerActivityFixtures.onActivity(
           [ActivityFixtures.row(id: "t1", says: "typed in TextEdit", ageSeconds: 0, verb: "type", app: "TextEdit")],
           sessions: []
@@ -128,7 +147,7 @@ struct ViewerPresenterActivityTests {
       verb: verb,
       app: "TextEdit"
     )
-    let activity = ViewerPresenter.activity(try ViewerActivityFixtures.onActivity([row], sessions: []))
+    let activity = ViewerActivityFixtures.opened(try ViewerActivityFixtures.onActivity([row], sessions: []))
     #expect(ViewerActivityFixtures.steps(activity).first?.words.text == Words.leadingCapital(words))
     #expect(ViewerActivityFixtures.steps(activity).first?.kind == .window)
   }
@@ -145,19 +164,19 @@ struct ViewerPresenterActivityTests {
       ),
       ActivityFixtures.row(id: "r1", says: "ran rm -rf build", ageSeconds: 5, operation: "run"),
     ]
-    let activity = ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(log, sessions: []))
+    let activity = ViewerActivityFixtures.opened(try ViewerActivityFixtures.onActivity(log, sessions: []))
     #expect(
-      ViewerActivityFixtures.moments(activity)
-        .map(\.title) == ["Commands"]
+      ViewerActivityFixtures.runs(activity)
+        .map(\.name) == ["Commands"]
     )
     #expect(
       ViewerActivityFixtures.steps(activity)
-        .map(\.words.text) == ["A command failed", "Ran a command"]
+        .map(\.words.text) == ["Ran a command", "A command failed"]
     )
   }
 
-  @Test("a moment's header never shows a window's title")
-  func aMomentsHeaderNeverShowsAWindowsTitle() throws {
+  @Test("a run's row never shows a window's title")
+  func aRunsRowNeverShowsAWindowsTitle() throws {
     var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
     snapshot.panes.apps.apps = [
       HelperApp(
@@ -172,8 +191,8 @@ struct ViewerPresenterActivityTests {
     #expect(!shown.contains("Secret plan"), "no window's title reaches Activity")
   }
 
-  @Test("a folded moment says its app, its count and its span")
-  func aFoldedMomentSaysItsAppCountAndSpan() throws {
+  @Test("a folded run says its app, what was done there, its count and its span")
+  func aFoldedRunSaysWhatItDid() throws {
     let older = (0..<9)
       .reversed()
       .map {
@@ -196,18 +215,19 @@ struct ViewerPresenterActivityTests {
           app: "Notes"
         )
       ] + older
-    let moments = ViewerActivityFixtures.moments(
+    let runs = ViewerActivityFixtures.runs(
       ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(log, sessions: []))
     )
-    let folded = try #require(moments.last)
-    #expect(folded.title == "TextEdit")
+    #expect(runs.map(\.name) == ["Notes", "TextEdit"], "newest first")
+    let folded = try #require(runs.last)
     #expect(!folded.isOpen)
-    #expect(folded.span == "9 actions · 10:21–10:24")
-    #expect(folded.age == "7 min")
+    #expect(folded.summary == "Clicked · 9 actions")
+    #expect(folded.time == "10:21–10:24")
+    #expect(folded.label == "TextEdit, Clicked · 9 actions, 10:21–10:24")
   }
 
-  @Test("opening a folded moment keeps it open as new actions arrive")
-  func openingAFoldedMomentKeepsItOpen() throws {
+  @Test("opening a folded run keeps it open as new actions arrive")
+  func openingAFoldedRunKeepsItOpen() throws {
     let older = (0..<3)
       .map {
         ActivityFixtures.row(
@@ -219,10 +239,9 @@ struct ViewerPresenterActivityTests {
         )
       }
     var snapshot = try ViewerActivityFixtures.onActivity(older, sessions: [])
-    var moment = try #require(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).first)
-    snapshot.panes.activity.choices[moment.id] = false
-    #expect(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).first?.isOpen == false)
-    snapshot.panes.activity.choices[moment.id] = true
+    var run = try #require(ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).first)
+    #expect(!run.isOpen)
+    snapshot.panes.activity.choices[run.id] = true
     let newer = ActivityFixtures.row(
       id: "e9",
       says: "clicked in TextEdit",
@@ -242,12 +261,54 @@ struct ViewerPresenterActivityTests {
         ), newer,
       ] + older
     )
-    moment = try #require(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).last)
-    #expect(moment.title == "TextEdit")
-    #expect(moment.isOpen, "the person's choice outlasts newer actions")
+    run = try #require(ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).last)
+    #expect(run.name == "TextEdit")
+    #expect(run.isOpen, "the person's choice outlasts newer actions")
   }
 
-  @Test("the filters count the problems and screenshots there are")
+  @Test("a folded run shows its problem lines and its newest three pictures, with a link naming them all")
+  func aFoldedRunShowsProblemsAndPictures() throws {
+    let names = (1...5)
+      .map { "17926650\(90 + $0)000000000-capture.png" }
+    let shots =
+      names
+      .enumerated()
+      .map { index, name in
+        ActivityFixtures.row(
+          id: "s\(index)",
+          says: "took a screenshot",
+          ageSeconds: Double(10 - index),
+          operation: "screenshot",
+          capture: name
+        )
+      }
+    let failed = ActivityFixtures.row(
+      id: "r1",
+      says: "ran swift build",
+      outcome: .failed,
+      ageSeconds: 12,
+      operation: "run"
+    )
+    var snapshot = try ViewerActivityFixtures.onActivity(shots.reversed() + [failed], sessions: [])
+    snapshot.panes.shots.shots = names.reversed()
+      .map { Screenshot(name: $0) }
+    let run = try #require(ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).first)
+    #expect(!run.isOpen)
+    #expect(run.name == "Commands")
+    #expect(run.problems == "1 problem")
+    #expect(run.problemSteps.map(\.id) == ["r1"])
+    #expect(run.problemSteps.first?.mark == .failed)
+    let strip = try #require(run.strip)
+    #expect(strip.tiles.map(\.id) == Array(names.reversed().prefix(3)), "the newest three")
+    #expect(strip.total == 5)
+    #expect(strip.hasLink && strip.link == "5 pictures")
+
+    snapshot.panes.activity.pictureRuns[run.id] = false
+    let grid = try #require(ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).first?.grid)
+    #expect(grid.tiles.count == 5 && grid.more == 0, "a run's pictures opened in place, every one while few")
+  }
+
+  @Test("the filters count the runs with problems and with pictures")
   func theFiltersCountWhatWasDone() throws {
     let log =
       ViewerActivityFixtures.textEditLog + [
@@ -273,8 +334,8 @@ struct ViewerPresenterActivityTests {
     )
     snapshot.session.search.query = "notes"
     #expect(
-      ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot))
-        .map(\.title) == ["Notes"]
+      ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot))
+        .map(\.name) == ["Notes"]
     )
     snapshot.session.search.query = "nothing like it"
     let none = ViewerPresenter.activity(snapshot)
@@ -283,8 +344,8 @@ struct ViewerPresenterActivityTests {
     #expect(none.showsFilters, "a search that finds nothing keeps the filters")
   }
 
-  @Test("one session's pane lists only its moments, under its name")
-  func oneSessionListsOnlyItsMoments() throws {
+  @Test("one session's pane lists only its runs, under its name, with no row of its own")
+  func oneSessionListsOnlyItsRuns() throws {
     var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.mixedLog)
     snapshot.session.chosenSession = .one("3f9a1c07b2e4")
     let activity = ViewerPresenter.activity(snapshot)
@@ -292,12 +353,12 @@ struct ViewerPresenterActivityTests {
     #expect(activity.title == "Claude Code · understudy")
     #expect(activity.meta == "6 actions today")
     #expect(
-      ViewerActivityFixtures.moments(activity)
-        .map(\.title) == ["Opie"]
+      ViewerActivityFixtures.runs(activity)
+        .map(\.name) == ["Opie"]
     )
     #expect(
-      ViewerActivityFixtures.moments(activity).allSatisfy { $0.session == nil },
-      "one session's moments need no name"
+      ViewerActivityFixtures.sessions(activity).allSatisfy { !$0.showsHead && $0.isOpen },
+      "the header names the session already"
     )
   }
 
@@ -308,19 +369,19 @@ struct ViewerPresenterActivityTests {
       ViewerActivityFixtures.claude: HostSessionSummary(name: "Claude Code · history", host: .claude),
       ViewerActivityFixtures.codex: HostSessionSummary(name: "Codex · history", host: .codex),
     ]
-    let moments = ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot))
-    let claude = try #require(moments.first { $0.title == "Opie" && $0.session?.name == "Claude Code · history" })
-    let codex = try #require(moments.first { $0.title == "Notes" })
-    #expect(claude.session?.icon != nil)
-    #expect(codex.session?.icon != nil)
-    #expect(claude.label.contains("Claude Code · history"))
-    #expect(codex.label.contains("Codex · history"))
+    let sessions = ViewerActivityFixtures.sessions(ViewerPresenter.activity(snapshot))
+    let claude = try #require(sessions.first { $0.runs.first?.name == "Opie" || $0.label.contains("Claude Code") })
+    let codex = try #require(sessions.first { $0.label.contains("Codex") })
+    #expect(claude.icon != nil)
+    #expect(codex.icon != nil)
+    #expect(claude.label.hasPrefix("Claude Code · history, Opie"))
+    #expect(codex.label.hasPrefix("Codex · history, Notes"))
     snapshot.reading.hasStatus = false
     snapshot.session.chosenSession = .one(ViewerActivityFixtures.claude)
-    #expect(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).allSatisfy { $0.session == nil })
+    #expect(ViewerActivityFixtures.sessions(ViewerPresenter.activity(snapshot)).allSatisfy { !$0.showsHead })
   }
 
-  @Test("only the causing session's uncertain step offers Recover, and its moment stays open")
+  @Test("only the causing session's uncertain step offers Recover, and its run and session stay open")
   func onlyTheCausersUncertainStepOffersRecover() throws {
     let log = [
       ActivityFixtures.row(
@@ -349,8 +410,12 @@ struct ViewerPresenterActivityTests {
       state: "needsYou",
       pending: 1
     )
+    let shown = ViewerPresenter.activity(snapshot)
     snapshot.panes.activity.choices = Dictionary(
-      uniqueKeysWithValues: ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).map { ($0.id, false) }
+      uniqueKeysWithValues: ViewerActivityFixtures.runs(shown).map { ($0.id, false) }
+    )
+    snapshot.panes.activity.sessionChoices = Dictionary(
+      uniqueKeysWithValues: ViewerActivityFixtures.sessions(shown).map { ($0.id, false) }
     )
     let activity = ViewerPresenter.activity(snapshot)
     let offering = ViewerActivityFixtures.steps(activity)
@@ -361,10 +426,15 @@ struct ViewerPresenterActivityTests {
       ViewerActivityFixtures.steps(activity).first?.problem?.why
         == "May not have finished. Every session waits until you recover."
     )
-    #expect(ViewerActivityFixtures.moments(activity).first?.canFold == false, "the moment holding it offers no fold")
+    let held = try #require(ViewerActivityFixtures.runs(activity).first { $0.steps.contains { $0.id == "c1" } })
+    #expect(held.isOpen && !held.canFold, "the run holding it offers no fold")
+    #expect(
+      ViewerActivityFixtures.sessions(activity).first { $0.runs.contains { $0.id == held.id } }?.isOpen == true,
+      "the session holding it stays open though folded"
+    )
   }
 
-  @Test("a lone session's unresolved action holds its folded moment open and offers recovery")
+  @Test("a lone session's unresolved action holds its folded run open and offers recovery")
   func oneSessionCannotFoldAwayRecovery() throws {
     var snapshot = try ViewerActivityFixtures.onActivity(
       [
@@ -383,12 +453,12 @@ struct ViewerPresenterActivityTests {
       state: "needsYou",
       pending: 1
     )
-    let first = try #require(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).first)
+    let first = try #require(ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).first)
     snapshot.panes.activity.choices[first.id] = false
     let activity = ViewerPresenter.activity(snapshot)
     #expect(snapshot.reading.statusReading.causer == nil, "one session needs no session label")
-    #expect(ViewerActivityFixtures.moments(activity).first?.isOpen == true)
-    #expect(ViewerActivityFixtures.moments(activity).first?.canFold == false)
+    #expect(ViewerActivityFixtures.runs(activity).first?.isOpen == true)
+    #expect(ViewerActivityFixtures.runs(activity).first?.canFold == false)
     #expect(
       ViewerActivityFixtures.steps(activity)
         .filter(\.offersRecovery)
@@ -396,20 +466,18 @@ struct ViewerPresenterActivityTests {
     )
   }
 
-  @Test("an aggregated personal input row has the same action total in its moment, Library and VoiceOver summary")
+  @Test("an aggregated personal input row has the same action total in its run, Library and VoiceOver summary")
   func personalInputCountsAgreeAcrossTheViewer() throws {
     let row = ActivityFixtures.row(id: "personal", says: "sent 2107 actions", actor: .you, ageSeconds: 0, count: 2107)
     var snapshot = try ViewerActivityFixtures.onActivity([row], sessions: [])
     let activity = ViewerPresenter.activity(snapshot)
-    #expect(ViewerActivityFixtures.moments(activity).first?.span.hasPrefix("2107 actions ·") == true)
+    let session = try #require(ViewerActivityFixtures.sessions(activity).first)
+    #expect(session.agent == "You")
+    #expect(session.summary == ViewerWords.actions(2107), "a run in no app says what was done, its session how much")
+    #expect(session.label.contains(ViewerWords.actions(2107)))
     #expect(activity.meta == "2107 actions today")
     #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 2107)
-
-    let moment = try #require(ViewerActivityFixtures.moments(activity).first)
-    snapshot.panes.activity.choices[moment.id] = false
-    let folded = try #require(ViewerActivityFixtures.moments(ViewerPresenter.activity(snapshot)).first)
-    #expect(!folded.isOpen)
-    #expect(folded.label.contains("2107 actions"))
+    #expect(ViewerActivityFixtures.runs(activity).first?.isOpen == false)
 
     snapshot.panes.activity.filter = .problems
     snapshot.session.search.query = "no match"
@@ -430,7 +498,7 @@ struct ViewerPresenterActivityTests {
     snapshot.session.chosenSession = .one(ViewerActivityFixtures.claude)
     let activity = ViewerPresenter.activity(snapshot)
     #expect(activity.meta == "7 actions today")
-    #expect(ViewerActivityFixtures.moments(activity).first?.span.hasPrefix("7 actions ·") == true)
+    #expect(ViewerActivityFixtures.sessions(activity).first?.summary.contains("7 actions") == true)
     #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 7)
   }
 
@@ -449,7 +517,7 @@ struct ViewerPresenterActivityTests {
       ),
     ]
     var snapshot = try ViewerActivityFixtures.onActivity(log, sessions: [])
-    let step = try #require(ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot)).last)
+    let step = try #require(ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot)).first)
     #expect(step.mark == .notSent)
     #expect(step.kind == .typing)
     #expect(
@@ -474,13 +542,13 @@ struct ViewerPresenterActivityTests {
       )
     ]
     let snapshot = try ViewerActivityFixtures.onActivity(log, sessions: [])
-    let step = try #require(ViewerActivityFixtures.steps(ViewerPresenter.activity(snapshot)).first)
+    let step = try #require(ViewerActivityFixtures.steps(ViewerActivityFixtures.opened(snapshot)).first)
     #expect(step.mark == .notSent)
     #expect(step.kind == .typing)
     #expect(step.problem?.why == "Atlas couldn't read which app was in front.")
   }
 
-  @Test("a personal moment's follow-up names the person after its step has removed the actor prefix")
+  @Test("a personal run's follow-up names the person after its step has removed the actor prefix")
   func personalFollowUpsKeepTheirActor() throws {
     let log = [
       ActivityFixtures.row(
@@ -504,9 +572,122 @@ struct ViewerPresenterActivityTests {
       ),
     ]
     let steps = ViewerActivityFixtures.steps(
-      ViewerPresenter.activity(try ViewerActivityFixtures.onActivity(log, sessions: []))
+      ViewerActivityFixtures.opened(try ViewerActivityFixtures.onActivity(log, sessions: []))
     )
-    #expect(steps.last?.problem?.next == "Then you clicked Cancel.")
+    #expect(steps.first?.problem?.next == "Then you clicked Cancel.")
   }
 
+  @Test("sessions group by day, newest first, under a heading only while the outline spans more than one day")
+  func sessionsGroupByDay() throws {
+    let today = ActivityFixtures.row(id: "t1", says: "opened Notes", ageSeconds: 10, operation: "open", app: "Notes")
+    let yesterday = ActivityFixtures.row(
+      id: "y1",
+      says: "opened Safari",
+      ageSeconds: 90_000,
+      operation: "open",
+      app: "Safari"
+    )
+    let one = ViewerPresenter.activity(try ViewerActivityFixtures.onActivity([today], sessions: []))
+    #expect(one.days.map(\.title) == [""])
+    let two = ViewerPresenter.activity(try ViewerActivityFixtures.onActivity([today, yesterday], sessions: []))
+    #expect(two.days.map(\.title) == [ViewerWords.todayGroup, ViewerWords.yesterdayGroup])
+    #expect(two.days.map { $0.sessions.map(\.summary) } == [["Notes · 1 action"], ["Safari · 1 action"]])
+  }
+
+  @Test("a working session opens, an ended one folds to its newest pictures under All, and a filter opens it")
+  func sessionsOpenWhileWorkingOrFiltered() throws {
+    let shot = "1792665100000000000-capture.png"
+    let log = [
+      ActivityFixtures.row(
+        id: "c1",
+        says: "clicked in Opie",
+        ageSeconds: 2,
+        session: ViewerActivityFixtures.claude,
+        verb: "click",
+        app: "Opie"
+      ),
+      ActivityFixtures.row(
+        id: "s1",
+        says: "took a screenshot",
+        ageSeconds: 30,
+        operation: "screenshot",
+        session: ViewerActivityFixtures.codex,
+        capture: shot
+      ),
+    ]
+    var snapshot = try ViewerActivityFixtures.onActivity(log, sessions: [SessionReplies.claudeActing])
+    snapshot.panes.shots.shots = [Screenshot(name: shot)]
+    let all = ViewerActivityFixtures.sessions(ViewerPresenter.activity(snapshot))
+    let claude = try #require(all.first)
+    let codex = try #require(all.last)
+    #expect(all.count == 2)
+    #expect(claude.isWorking && claude.isOpen && !claude.runs.isEmpty)
+    #expect(!codex.isWorking && !codex.isOpen && codex.runs.isEmpty)
+    #expect(codex.strip?.tiles.map(\.id) == [shot])
+    #expect(codex.strip?.opensSession == true)
+    snapshot.panes.activity.filter = .pictures
+    let pictures = ViewerActivityFixtures.sessions(ViewerPresenter.activity(snapshot))
+    #expect(pictures.map(\.id) == [codex.id], "only the session that took a picture")
+    #expect(pictures.first?.isOpen == true, "a filter opens the session on what it kept")
+    #expect(pictures.first?.runs.first?.isOpen == true, "and its runs")
+    snapshot.panes.activity.sessionChoices[codex.id] = false
+    #expect(ViewerActivityFixtures.sessions(ViewerPresenter.activity(snapshot)).first?.isOpen == false)
+  }
+
+  @Test("a long day lists five sessions, then a row naming the rest, which lists them all")
+  func aLongDayListsFiveSessions() throws {
+    let log = (0..<7)
+      .map { index in
+        ActivityFixtures.row(
+          id: "r\(index)",
+          says: "clicked in Notes",
+          ageSeconds: Double(index * 60),
+          session: "5d0c77aa1e0\(index)",
+          verb: "click",
+          app: "Notes"
+        )
+      }
+    var snapshot = try ViewerActivityFixtures.onActivity(log, sessions: [])
+    let day = try #require(ViewerPresenter.activity(snapshot).days.first)
+    #expect(day.sessions.count == ViewerWords.mostSessions)
+    let more = try #require(day.more)
+    #expect(more.title == "2 more sessions today")
+    snapshot.panes.activity.shownDays.insert(more.day)
+    let shown = try #require(ViewerPresenter.activity(snapshot).days.first)
+    #expect(shown.sessions.count == 7)
+    #expect(shown.more == nil)
+  }
+
+  @Test("a screenshot opened steps through its run's screenshots, and a step's picture through every step's picture")
+  func theSheetStepsThroughItsRun() throws {
+    let shot = "1792665100000000000-capture.png"
+    let log = [
+      ActivityFixtures.row(id: "s1", says: "took a screenshot", ageSeconds: 2, operation: "screenshot", capture: shot),
+      ActivityFixtures.row(
+        id: "c1",
+        says: "ran a command",
+        ageSeconds: 5,
+        operation: "run",
+        before: "1792665097000000000-before.jpg"
+      ),
+    ]
+    var snapshot = try ViewerActivityFixtures.onActivity(log, sessions: [])
+    snapshot.panes.shots.shots = [Screenshot(name: shot)]
+    let run = try #require(ViewerPresenter.activityMoments(snapshot)?.moments.first)
+    snapshot.panes.activity.sheet = ViewerPictureFocus(run: run.id, item: .shot(shot), everyStep: false)
+    let fromShot = try #require(ViewerPresenter.activity(snapshot).sheet)
+    #expect(fromShot.id == shot)
+    #expect(fromShot.title == ViewerStepWords(ViewerWords.tookScreenshot))
+    #expect(fromShot.position == "1 of 1", "the run's screenshots alone")
+    #expect(!fromShot.hasAfter && fromShot.mark == nil)
+    let strip = ViewerActivityFixtures.runs(ViewerPresenter.activity(snapshot)).first?.strip
+    #expect(strip?.tiles.first?.isCurrent == true, "its picture in the outline is marked as the one shown")
+
+    snapshot.panes.activity.sheet = ViewerPictureFocus(run: run.id, item: .before("c1"), everyStep: true)
+    let fromStep = try #require(ViewerPresenter.activity(snapshot).sheet)
+    #expect(fromStep.id == "c1")
+    #expect(fromStep.position == "1 of 2", "every step's picture, the screenshot among them")
+    #expect(fromStep.canGoForward && !fromStep.canGoBack)
+    #expect(fromStep.run == "in this Commands run")
+  }
 }

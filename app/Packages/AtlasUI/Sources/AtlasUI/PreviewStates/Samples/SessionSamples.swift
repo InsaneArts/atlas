@@ -24,6 +24,19 @@
     static let piName = "Pi · notes-sync"
     /// Terminal's name.
     static let terminalName = "Terminal"
+    /// The live sessions' names, in the service's order: Claude Code, Codex, Cursor and Terminal.
+    static let names = [claudeName, codexName, cursorName, terminalName]
+
+    /// Claude Code's title, from what it mostly did.
+    static let claudeTitle = "Clicking in Opie"
+    /// Codex's title, from what it mostly did.
+    static let codexTitle = "Typing in Notes"
+    /// Cursor's title, from what it mostly did.
+    static let cursorTitle = "Opened Opie"
+    /// Terminal's title, from what its commands mostly did.
+    static let terminalTitle = "Ran a command"
+    /// The live sessions' titles, in the service's order, as the sessions' log reads them.
+    static let titles = [claudeTitle, codexTitle, cursorTitle, terminalTitle]
 
     /// Claude Code's logo.
     static let claudeIcon = RowIcon.app(AgentLogos.claude)
