@@ -251,10 +251,11 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
             ends: 0,
             picture: None,
         };
+        let frame = ask.question["frame"].clone();
         let id = asks.ask(ask, now_ms())?;
         if let Some(raw) = client.take_for_ask() {
             // A question goes up without its picture when it can't be kept.
-            let _ = keep_picture(&asks, &id, &raw, now_ms());
+            let _ = keep_picture(&asks, &id, &raw, &frame);
         }
         let _shown = Shown {
             asks: asks.clone(),
@@ -502,11 +503,12 @@ pub(crate) fn asks_person(outcome: &Result<Value>) -> bool {
 }
 
 /// Keep `raw` as ask `id`'s picture, encoded as the action pictures are.
+/// `frame` is where its element is in it: the two go up together.
 fn keep_picture(
     asks: &atlas_control::asks::Asks,
     id: &str,
     raw: &crate::before::Raw,
-    now: u64,
+    frame: &Value,
 ) -> Result<()> {
     let (width, height) = (raw.width as usize, raw.height as usize);
     let (jpeg, _, _) = crate::helper_info::jpeg_rgb(
@@ -514,7 +516,7 @@ fn keep_picture(
         (width, height, width.saturating_mul(3)),
         (crate::before::SIDE, crate::before::QUALITY),
     )?;
-    asks.keep_picture(id, &jpeg, now)
+    asks.keep_picture(id, &jpeg, frame)
 }
 
 /// Whether the agent session that asked `ask` still waits on it: its host

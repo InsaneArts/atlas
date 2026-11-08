@@ -379,10 +379,16 @@ fn a_permit_is_taken_once_by_its_own_session_for_its_own_action() {
     );
 }
 
+/// A frame, as the input service reads one.
+fn frame(x: f64) -> Value {
+    json!({"x": x, "y": 20.0, "width": 80.0, "height": 24.0})
+}
+
 #[test]
 fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
     let folder = tempfile::tempdir().unwrap();
     let asks = asks(folder.path());
+    let now = atlas_core::time::now_ms();
     let picture = |id: &str| folder.path().join(format!("h.asks/{id}.jpg"));
     let pictured = |batch: &str, process| {
         let id = asks
@@ -391,10 +397,10 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
                     process,
                     ..question("s1", batch)
                 },
-                1_000,
+                now,
             )
             .unwrap();
-        asks.keep_picture(&id, b"jpeg", 1_000).unwrap();
+        asks.keep_picture(&id, b"jpeg", &frame(10.0)).unwrap();
         assert!(picture(&id).exists(), "while it is up");
         id
     };
@@ -407,39 +413,76 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
         assert_eq!(mode & 0o777, 0o600);
         // Answered through the person's own route, with no command left to
         // take the question down.
-        asks.answer(&id, answer, true, 2_000).unwrap();
+        asks.answer(&id, answer, true, now).unwrap();
         assert!(!picture(&id).exists(), "{answer:?}");
         answered.push(id);
     }
-    let shown = asks.open(2_000);
     assert!(
-        shown.iter().all(|ask| ask.picture.is_none()),
+        asks.open(now).iter().all(|ask| ask.picture.is_none()),
         "no card names it"
     );
-    asks.keep_picture(&answered[0], b"jpeg", 2_000).unwrap();
+    asks.keep_picture(&answered[0], b"jpeg", &frame(10.0))
+        .unwrap();
     assert!(!picture(&answered[0]).exists(), "none for one answered");
 
     let expired = pictured("b3", None);
-    assert!(asks.open(1_000 + millis(LIFE)).is_empty());
+    assert!(asks.open(now + millis(LIFE)).is_empty());
     assert!(!picture(&expired).exists(), "ran out");
 
     let gone = atlas_core::process::Instance::new(812, [1, 0]);
     let ended = pictured("b4", Some(gone));
-    asks.close_unless(2_000, |ask| ask.process != Some(gone));
+    asks.close_unless(now, |ask| ask.process != Some(gone));
     assert!(!picture(&ended).exists(), "its session ended");
-    asks.keep_picture(&ended, b"jpeg", 2_000).unwrap();
+    asks.keep_picture(&ended, b"jpeg", &frame(10.0)).unwrap();
     assert!(!picture(&ended).exists(), "never kept for one that is down");
 }
 
 #[test]
-fn a_question_that_ran_out_between_joining_and_its_picture_goes_and_gets_none() {
+fn a_rerun_that_joins_replaces_the_picture_and_its_frame_together() {
     let folder = tempfile::tempdir().unwrap();
     let asks = asks(folder.path());
-    let id = asks.ask(question("s1", "b1"), 1_000).unwrap();
-    // A rerun joins it just before it ends; its picture comes after.
-    assert_eq!(asks.ask(question("s1", "b1"), millis(LIFE)).unwrap(), id);
-    asks.keep_picture(&id, b"jpeg", 1_000 + millis(LIFE))
+    let now = atlas_core::time::now_ms();
+    let asked = |x| {
+        let mut ask = question("s1", "b1");
+        ask.question["frame"] = frame(x);
+        asks.ask(ask, now).unwrap()
+    };
+    let id = asked(10.0);
+    asks.keep_picture(&id, b"first", &frame(10.0)).unwrap();
+    // The element moved; the rerun that joins brings both anew.
+    assert_eq!(asked(300.0), id);
+    assert_eq!(
+        asks.open(now)[0].question["frame"],
+        frame(10.0),
+        "not one alone"
+    );
+    asks.keep_picture(&id, b"second", &frame(300.0)).unwrap();
+    assert_eq!(asks.open(now)[0].question["frame"], frame(300.0));
+    let kept = fs::read(folder.path().join(format!("h.asks/{id}.jpg"))).unwrap();
+    assert_eq!(kept, b"second");
+}
+
+#[test]
+fn a_question_that_runs_out_while_its_picture_waits_for_the_lock_goes_and_gets_none() {
+    let folder = tempfile::tempdir().unwrap();
+    let asks = asks(folder.path());
+    // It ends a moment from now.
+    let id = asks
+        .ask(
+            question("s1", "b1"),
+            atlas_core::time::now_ms() + 150 - millis(LIFE),
+        )
         .unwrap();
+    let held = asks.lock().unwrap();
+    let publishing = std::thread::spawn({
+        let asks = asks.clone();
+        let id = id.clone();
+        move || asks.keep_picture(&id, b"jpeg", &frame(10.0)).unwrap()
+    });
+    // It runs out while the publication waits.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    drop(held);
+    publishing.join().unwrap();
     assert!(!folder.path().join(format!("h.asks/{id}.jpg")).exists());
     assert!(
         !folder.path().join(format!("h.asks/{id}.json")).exists(),

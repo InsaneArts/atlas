@@ -334,15 +334,26 @@ impl Client {
         // attempt allowed after it takes its own. A lost reply may follow
         // input that was sent, so its picture is kept.
         if let Some(picture) = picture
-            && let Mutation::Input { actions, epoch, .. } = &mutation
+            && let Mutation::Input {
+                actions,
+                epoch,
+                expect,
+                ..
+            } = &mutation
         {
             if reply.as_ref().is_ok_and(gated) {
                 if let Some(doing) = &self.doing {
                     doing.before().reset();
                 }
                 // What the person is asked about shows it, in their question
-                // alone: never in activity.
-                if crate::asking::asks_person(&reply) {
+                // alone: never in activity. Not when the input service brought
+                // an app or window forward first, for a target or a
+                // referenced element: then the screen is taken afresh.
+                let prepared = expect.is_some()
+                    || actions.actions().iter().any(|action| {
+                        matches!(action, atlas_core::actions::Action::Reference { .. })
+                    });
+                if crate::asking::asks_person(&reply) && !prepared {
                     self.keep_for_ask(picture);
                 }
             } else {

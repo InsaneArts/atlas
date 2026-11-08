@@ -405,16 +405,19 @@ impl Asks {
         atlas_core::files::save_private(&self.folder.join("permits"), &serde_json::to_vec(permits)?)
     }
 
-    /// Keep `jpeg` as ask `id`'s picture, private, while the ask is up and
-    /// unanswered at `now`: it goes with the ask, however that ends, and
-    /// with the person's answer.
+    /// Keep `jpeg` as ask `id`'s picture, private, with `frame`, where its
+    /// element is in it, both at once, while the ask is up and unanswered:
+    /// it goes with the ask, however that ends, and with the person's
+    /// answer.
     ///
     /// # Errors
     ///
     /// Returns file errors; the ask then has no picture.
-    pub fn keep_picture(&self, id: &str, jpeg: &[u8], now: u64) -> Result<()> {
+    pub fn keep_picture(&self, id: &str, jpeg: &[u8], frame: &Value) -> Result<()> {
         let name = format!("{id}.jpg");
         let _locked = self.lock()?;
+        // Read once the lock is held: a wait for it may outlast the ask.
+        let now = atlas_core::time::now_ms();
         let Some(mut ask) = self.read(id) else {
             return Ok(());
         };
@@ -429,6 +432,7 @@ impl Asks {
         }
         atlas_core::files::save_private(&self.folder.join(&name), jpeg)?;
         ask.picture = Some(name);
+        ask.question["frame"] = frame.clone();
         atlas_core::files::save_private(
             &self.folder.join(format!("{id}.json")),
             &serde_json::to_vec(&ask)?,

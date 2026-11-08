@@ -638,7 +638,11 @@ async fn a_lost_reply_keeps_its_picture_and_only_a_refusal_proven_to_send_nothin
 #[tokio::test]
 async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_whatever_the_setting()
 {
-    for keeping in [true, false] {
+    // A referenced click is brought forward first: its picture is taken
+    // afresh, the one before it never reused.
+    let referenced = json!([{"type": "reference", "ref": "8123abc.12"}]);
+    for (keeping, actions) in [(true, key()), (false, key()), (true, referenced)] {
+        let fresh = !keeping || actions != key();
         let directory = tempfile::tempdir().unwrap();
         let (mut client, helper) = agent(directory.path(), Pictures::Taken, "key");
         client.config.activity.pictures_before_actions = keeping;
@@ -655,7 +659,7 @@ async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_wh
         let outcome = helper
             .serve(
                 crate::asking::after_asking(&client, async || {
-                    client.input(&key(), None, None).await
+                    client.input(&actions, None, None).await
                 }),
                 |request| match request["op"].as_str() {
                     Some("input") => Some(refused.clone()),
@@ -664,7 +668,7 @@ async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_wh
             )
             .await;
 
-        if !keeping {
+        if fresh {
             // Taken only once the input was let go of and control with it,
             // so the person taking over never waits for it.
             let log = helper.log();
