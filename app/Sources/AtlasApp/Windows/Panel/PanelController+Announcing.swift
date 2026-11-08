@@ -1,7 +1,7 @@
 import AtlasStatus
 
 /// What VoiceOver hears from the open panel: only a state that asks something of the person, once it has held for
-/// ``PanelController/announceAfter``, as in the main window. Working and Idle, and every reading that says the same
+/// ``StatusAnnouncer/after``, as in the main window. Working and Idle, and every reading that says the same
 /// again, say nothing.
 extension PanelController {
   /// What VoiceOver should say about the helper now: its word and line while it asks something of the person (it
@@ -19,34 +19,25 @@ extension PanelController {
     }
   }
 
-  /// Says `text` once it has held for ``announceAfter`` on the panel's clock; a newer one, or none, calls it off. The
-  /// same text again changes nothing.
+  /// Says `text` once it has held on the panel's clock; a newer one, or none, calls it off. The same text again
+  /// changes nothing.
   ///
   /// - Parameter text: What VoiceOver should say now, from ``askingStatus``.
   func announceSoon(_ text: String?) {
-    guard text != askedBefore else { return }
-    askedBefore = text
-    announcing?.cancel()
-    announcing = nil
-    guard let text else {
-      if session.announcement != nil { session.announcement = nil }
-      return
-    }
-    let clock = clock
-    // Unstructured, as the state settles while the panel goes on.
-    announcing = Task { [weak self] in
-      try? await clock.sleep(for: Self.announceAfter)
-      guard let self, !Task.isCancelled else { return }
-      session.announcement = text
-    }
+    announcer.soon(text, clock: clock) { [weak self] text in self?.announce(text) }
   }
 
   /// Calls off what waits to be said, and takes the state the panel opens on as already heard, since VoiceOver reads
   /// the panel as it opens.
   func restartAnnouncements() {
-    announcing?.cancel()
-    announcing = nil
-    if session.announcement != nil { session.announcement = nil }
-    askedBefore = askingStatus
+    announcer.restart(heard: askingStatus)
+    announce(nil)
+  }
+
+  /// Hands VoiceOver `text`, or nothing.
+  ///
+  /// - Parameter text: What VoiceOver should say; nil for nothing.
+  private func announce(_ text: String?) {
+    if text != nil || session.announcement != nil { session.announcement = text }
   }
 }

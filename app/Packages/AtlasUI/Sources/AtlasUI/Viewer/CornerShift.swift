@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// How the mini screen comes and goes in its corner: growing out of the stage's picture as the Screen is
-/// left, it arrives whole, since it is that picture moving; arriving on its own, as from Screenshots or with
+/// left, it arrives whole, since it is that picture moving; arriving on its own, as from another list or with
 /// the first picture, it fades in from a little smaller on ``Motion/arrive``; it always leaves by fading,
 /// quickly, over the picture it turns back into. Under Reduce Motion it only crossfades, over 0.15 seconds.
 struct CornerShift: ViewModifier {

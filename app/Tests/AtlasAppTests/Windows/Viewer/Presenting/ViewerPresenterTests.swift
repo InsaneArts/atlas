@@ -232,7 +232,7 @@ struct ViewerPresenterTests {
 
   @Test(
     "the screen in the corner of every list reads paused while the picture is",
-    arguments: [ViewerPlace.activity, .screenshots, .apps]
+    arguments: [ViewerPlace.activity, .apps]
   )
   func theMiniScreenFollowsThePause(place: ViewerPlace) throws {
     var snapshot = watching(try status(["overview": ["mode": "observing", "state": "idle"]]))

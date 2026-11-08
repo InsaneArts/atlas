@@ -8,7 +8,7 @@ import CoreGraphics
 struct ViewerSession {
   /// The place shown: the Screen, or a list from the Library.
   var place = ViewerPlace.screen
-  /// Whose work Activity and Screenshots show: every host session's, or one's.
+  /// Whose work Activity shows: every host session's, or one's.
   var chosenSession = ViewerSessionChoice.all
   /// Whether the person hid the sidebar, which the next window remembers.
   var sidebarHidden = false
@@ -21,9 +21,6 @@ struct ViewerSession {
   var fit = ViewerFit()
   /// Whether the person is resizing the window now.
   var liveResizing = false
-  /// How many screenshots stood to a row as the resize under way began, which the grid keeps until it ends; nil while
-  /// no resize is under way.
-  var heldShotColumns: Int?
   /// Whether Ended is open in the sidebar, listing every session that ended.
   var endedShown = false
   /// The sidebar's search: whether it is open, its query, and Find's asks for its focus.

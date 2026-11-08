@@ -1,7 +1,8 @@
 import Foundation
 
 extension ActivityLog {
-  /// One thing done in the helper, as shown: no typed text, command, coordinates or window title.
+  /// One thing done in the helper, as shown: no command or window title, and typed text and coordinates only in the
+  /// facts that mark its pictures.
   public struct Entry: Decodable, Equatable, Sendable, Identifiable {
     /// Names the row; never reused for another. A running command's row is replaced by one with a new id.
     public var id: String
@@ -38,6 +39,15 @@ extension ActivityLog {
     public var bundleId: String?
     /// A key press's chords as keycaps, such as `[["⌘", "S"]]`; none for any other row.
     public var keys: [[String]]
+    /// The picture taken right before an agent's action, by Atlas's own file name, when the service says.
+    public var before: String?
+    /// The picture of the screen right after it, by its file name: one Atlas took after it, or the next action's
+    /// picture before, when the service says.
+    public var after: String?
+    /// When the picture after it was taken; nil when there is none or the service did not say.
+    public var afterAt: Date?
+    /// What Atlas recorded to mark the spot on its pictures; nil when it recorded nothing.
+    public var facts: ActionFacts?
 
     /// The key of the host session an agent's row came from: Terminal's empty key for one no host named.
     public var sessionKey: String { session ?? "" }
@@ -66,6 +76,10 @@ extension ActivityLog {
     ///   - label: The control it named, or the keys it pressed.
     ///   - bundleId: The bundle identifier of the app it acted in.
     ///   - keys: A key press's chords as keycaps.
+    ///   - before: The picture taken right before an agent's action, by its file name.
+    ///   - after: The picture of the screen right after it, by its file name.
+    ///   - afterAt: When the picture after it was taken.
+    ///   - facts: What Atlas recorded to mark the spot on its pictures.
     public init(
       id: String,
       logicalId: String? = nil,
@@ -83,7 +97,11 @@ extension ActivityLog {
       app: String? = nil,
       label: String? = nil,
       bundleId: String? = nil,
-      keys: [[String]] = []
+      keys: [[String]] = [],
+      before: String? = nil,
+      after: String? = nil,
+      afterAt: Date? = nil,
+      facts: ActionFacts? = nil
     ) {
       self.id = id
       self.logicalId = logicalId ?? id
@@ -102,6 +120,10 @@ extension ActivityLog {
       self.label = label
       self.bundleId = bundleId
       self.keys = keys
+      self.before = before
+      self.after = after
+      self.afterAt = afterAt
+      self.facts = facts
     }
 
     /// The fields of one `activity` row this app reads.
@@ -110,6 +132,8 @@ extension ActivityLog {
       case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count, session, capture, nothingSent
       /// The fields that name what it did and where.
       case verb, app, label, bundleId, keys
+      /// The pictures taken right before and right after it, and what was recorded to mark them.
+      case before, after, afterAt, facts
       /// Whether input was partly sent before a refusal.
       case partial
       /// The action's identity across successive rows.
@@ -146,6 +170,10 @@ extension ActivityLog {
       label = container.lenientText(.label)
       bundleId = container.lenientText(.bundleId)
       keys = (try? container.decodeIfPresent([[String]].self, forKey: .keys)) ?? []
+      before = container.lenientText(.before)
+      after = container.lenientText(.after)
+      afterAt = after == nil ? nil : container.lenientDate(milliseconds: .afterAt)
+      facts = try? container.decodeIfPresent(ActionFacts.self, forKey: .facts)
     }
   }
 }

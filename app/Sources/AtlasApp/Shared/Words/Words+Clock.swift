@@ -1,8 +1,8 @@
 import Foundation
 
 extension Words {
-  /// A time of day to the second, on the person's own 12- or 24-hour clock, as the Activity and Screenshots tabs
-  /// list it.
+  /// A time of day to the second, on the person's own 12- or 24-hour clock, as Activity and the picture sheet say
+  /// it.
   ///
   /// - Parameters:
   ///   - date: The moment.
@@ -18,7 +18,8 @@ extension Words {
     return date.formatted(style)
   }
 
-  /// A time of day to the minute, on the person's own 12- or 24-hour clock, as an Activity moment says when it started.
+  /// A time of day to the minute, on the person's own 12- or 24-hour clock, as a replay and a session's title say
+  /// when it started.
   ///
   /// - Parameters:
   ///   - date: The moment.

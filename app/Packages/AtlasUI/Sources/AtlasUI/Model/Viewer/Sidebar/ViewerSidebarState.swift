@@ -1,5 +1,5 @@
 /// The sidebar at the window's leading edge: how it stands, whether it shows whole over the card, the search in its top
-/// bar, the host sessions whose work Activity and Screenshots show, the Library at its foot and the helper's health
+/// bar, the host sessions whose work Activity shows, the Library at its foot and the helper's health
 /// under it.
 public struct ViewerSidebarState: Equatable, Sendable {
   /// Whether it shows beside the card or hides.

@@ -16,6 +16,7 @@ import AtlasUI
 /// - `ATLAS_RENDER_NOTICE` (`setUp` or `runningAgain`) draws one of the helper's notices instead.
 /// - `ATLAS_RENDER_SESSIONS` (`one`, `two`, `waiting`, `needsYou` or `more`) shows that many agents at work, each in
 ///   its own host session (``PanelRenderSessions``), in place of the live sessions and rows.
+/// - `ATLAS_RENDER_SERVICE_NOTE=1` shows the note that a macOS service in the helper slowly slows the Mac.
 /// - `ATLAS_RENDER_PREVIEW=1` shows a set-up Mac: the helper's names and display, three recent actions, Open at Login
 ///   and, in a debug build, the sample screen when the live one gives none.
 struct PanelRenderOverrides: Equatable, Sendable {
@@ -43,6 +44,8 @@ struct PanelRenderOverrides: Equatable, Sendable {
   var showsEverything: Bool
   /// The host sessions to show in place of the live ones; nil keeps them.
   var sessions: PanelRenderSessions?
+  /// Whether the note that a macOS service in the helper slowly slows the Mac shows.
+  var serviceNote: Bool
 
   /// Reads the overrides from an environment.
   ///
@@ -72,6 +75,7 @@ struct PanelRenderOverrides: Equatable, Sendable {
     notice = environment["ATLAS_RENDER_NOTICE"].flatMap(NoticeRender.init(rawValue:))
     showsEverything = environment["ATLAS_RENDER_PREVIEW"] == "1"
     sessions = environment["ATLAS_RENDER_SESSIONS"].flatMap(PanelRenderSessions.init(rawValue:))
+    serviceNote = environment["ATLAS_RENDER_SERVICE_NOTE"] == "1"
   }
 
   /// The alert window's alert to draw, as its controller would hold it, over the panel's overview; nil draws the
@@ -116,6 +120,10 @@ struct PanelRenderOverrides: Equatable, Sendable {
       shown.status.overview.state = Self.state(of: mode, recoverable: shown.status.overview.recoverable)
       shown.status.overview.label = ""
       shown.status.overview.reason = ""
+    }
+    if serviceNote {
+      shown.status.restartingService = .restarting
+      shown.serviceNoteDismissed = false
     }
     if connecting {
       // Before the first answer the panel holds nothing the service said, and no picture.

@@ -6,7 +6,7 @@ use super::{
     Status, Unread, Within, absent, ffi,
     keyboard::{Ask, BUSY_PAUSE, Live, PARENTS, REQUEST, Reader, UnknownNames, remaining},
 };
-use crate::native::focus::{CHECK_BUDGET, FIELDS, Need, Reason, refused};
+use crate::native::focus::{CHECK_BUDGET, FIELDS, Need, Reason, field_of, refused};
 use atlas_core::{
     actions::Expect,
     error::{Code, Error, Result},
@@ -582,12 +582,14 @@ impl<A: Backend> Reader<A> {
         }
     }
 
+    /// Admit `candidate` as a window input may go to, or one in the way;
+    /// once admitted, the subrole it read.
     fn admit_window(
         &mut self,
         candidate: &A::Element,
         parent: Option<&A::Element>,
         scope: &Scope<'_, A::Element>,
-    ) -> Result<()> {
+    ) -> Result<Option<String>> {
         let (window, pid, explicit) = (scope.window, scope.pid, scope.explicit);
         self.owned(candidate, pid)?;
         let role = self.text(candidate, "AXRole")?;
@@ -597,7 +599,7 @@ impl<A: Backend> Reader<A> {
             return Err(Unread::Withheld.error());
         }
         if explicit && window == Some(candidate) {
-            return Ok(());
+            return Ok(subrole);
         }
         if parent.is_some() || role.as_deref() == Some("AXSheet") {
             // Attached sheets have direct parent evidence. A separately listed
@@ -610,7 +612,7 @@ impl<A: Backend> Reader<A> {
             if window.is_none() || window == Some(&parent) || window == Some(candidate) {
                 return Err(refused(Reason::Sheet));
             }
-            return Ok(());
+            return Ok(subrole);
         }
         if modal == Some(true) || subrole.as_deref() == Some("AXSystemDialog") {
             return Err(refused(Reason::Sheet));
@@ -618,27 +620,33 @@ impl<A: Backend> Reader<A> {
         if subrole.as_deref() == Some("AXDialog") && modal.is_none() {
             return Err(Unread::Failed.error());
         }
-        Ok(())
+        Ok(subrole)
     }
 
-    /// Walk up from the focused element to the window that holds it.
+    /// Walk up from the focused element to the window that holds it; once
+    /// admitted, the field the focused element is, from the role and
+    /// subrole this walk read of it.
     fn admit_focus_path(
         &mut self,
         mut element: A::Element,
         focused: Option<&A::Element>,
         scope: &Scope<'_, A::Element>,
-    ) -> Result<()> {
-        for _ in 0..PARENTS {
+    ) -> Result<Option<&'static str>> {
+        let mut field = None;
+        for step in 0..PARENTS {
             self.owned(&element, scope.pid)?;
             if Some(&element) == scope.window {
-                return Ok(());
+                return Ok(field);
             }
             let role = self.text(&element, "AXRole")?;
             if role.as_deref() == Some("AXApplication") {
-                return Ok(());
+                return Ok(field);
             }
             let parent = parent_of(&scope.refs, &element);
-            self.admit_window(&element, parent, scope)?;
+            let subrole = self.admit_window(&element, parent, scope)?;
+            if step == 0 {
+                field = field_of(role.as_deref(), subrole.as_deref());
+            }
             if parent.is_some() || matches!(role.as_deref(), Some("AXWindow" | "AXSheet")) {
                 if role.as_deref() != Some("AXSheet")
                     && parent.is_none()
@@ -647,7 +655,7 @@ impl<A: Backend> Reader<A> {
                 {
                     return Err(Unread::Failed.error());
                 }
-                return Ok(());
+                return Ok(field);
             }
             element = self
                 .reference(&element, "AXParent")?
@@ -813,7 +821,9 @@ impl<A: Backend> Target<A> {
         })
     }
 
-    fn admit(&mut self, expect: &Expect) -> Result<()> {
+    /// Admit input to the app `expect` names; once admitted, the field its
+    /// focused element is, as the walk up from it read it, when it is one.
+    fn admit(&mut self, expect: &Expect) -> Result<Option<&'static str>> {
         // Only an explicit selection grants the unrelated-document exemption.
         // An app-only command follows the current keyboard destination.
         let reader = &mut self.reader;
@@ -861,10 +871,10 @@ impl<A: Backend> Target<A> {
                 reader.admit_window(&sheet, Some(current), &scope)?;
             }
         }
-        if let Some(element) = reader.focused_element(app)? {
-            reader.admit_focus_path(element, focused.as_ref(), &scope)?;
+        match reader.focused_element(app)? {
+            Some(element) => reader.admit_focus_path(element, focused.as_ref(), &scope),
+            None => Ok(None),
         }
-        Ok(())
     }
 
     /// A window both named and pointed at must lie under the point.
@@ -1004,8 +1014,11 @@ impl<A: Backend> Target<A> {
     ) -> Result<Option<&'static str>> {
         self.admit(expect)?;
         self.verify(deadline, verify)?;
-        self.admit(expect)?;
-        self.verify(deadline, verify)
+        let focused = self.admit(expect)?;
+        let role = self.verify(deadline, verify)?;
+        // Keys go where the app's focus is: with no field named, admission's
+        // own read of the focused element says which field that is.
+        Ok(role.or(focused.filter(|_| self.point.is_none())))
     }
 }
 
@@ -1044,7 +1057,9 @@ pub(in crate::native) fn admitted(expect: &Expect, deadline: Instant) -> Result<
 }
 
 fn admitted_by<A: Backend>(ask: A, expect: &Expect, deadline: Instant) -> Result<()> {
-    Target::resolve(ask, expect, Need::Nothing, deadline)?.admit(expect)
+    Target::resolve(ask, expect, Need::Nothing, deadline)?
+        .admit(expect)
+        .map(|_| ())
 }
 
 pub(in crate::native) fn bring(

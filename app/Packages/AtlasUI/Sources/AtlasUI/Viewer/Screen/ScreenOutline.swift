@@ -63,7 +63,9 @@ struct ScreenOutline: View {
   #Preview("Show on screen") {
     if let outline = PreviewStates.viewerShowOnScreen.screen.outline, let picture = SampleDesktop.picture {
       ZStack {
-        PictureFrame(picture: picture)
+        Image(decorative: picture.image, scale: 1)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
         ScreenOutline(
           outline: outline,
           picture: CGSize(width: picture.image.width, height: picture.image.height)
@@ -85,7 +87,9 @@ struct ScreenOutline: View {
         Toggle(String("At the right edge"), isOn: $atEdge)
       } content: {
         ZStack {
-          PictureFrame(picture: picture)
+          Image(decorative: picture.image, scale: 1)
+            .resizable()
+            .aspectRatio(contentMode: .fit)
           ScreenOutline(
             outline: atEdge ? edge : middle,
             picture: CGSize(width: picture.image.width, height: picture.image.height)

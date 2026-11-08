@@ -35,6 +35,7 @@ fn choosing_the_configured_helper_again_bypasses_the_replacement_refusal() {
         identity_probe: "/unused/atlas".into(),
         input_socket: "/unused/input.sock".into(),
         output_dir: "/unused/runs".into(),
+        activity: Default::default(),
     };
     let keep = |_: u32, _: &Config| Err(problem("The configured helper is in use"));
     assert!(check_choice(501, Some(502), &config, keep).is_ok());
@@ -360,6 +361,7 @@ fn a_helper_answers_only_while_its_socket_listens() {
         identity_probe: dir.path().join("atlas"),
         input_socket: dir.path().join("input.sock"),
         output_dir: dir.path().join("runs"),
+        activity: Default::default(),
     };
     assert!(!answers(&config), "no socket");
 

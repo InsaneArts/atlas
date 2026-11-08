@@ -20,10 +20,6 @@ final class PanelController {
   /// Between status readings with the panel closed: 5 s, often enough for the menu bar glyph to follow the helper's
   /// mode, rarely enough to cost nothing.
   static let closedEvery: Duration = .seconds(5)
-  /// How long a state that asks something of the person holds before VoiceOver hears it: 1 s, as in the main window,
-  /// so a state that passes at once is never said.
-  static let announceAfter: Duration = .seconds(1)
-
   /// The latest status the service reported: every field at its safe default, as a service that cannot be reached
   /// reads, before the first reading ends and after one that fails, which the panel shows alike.
   var status = ViewerStatus()
@@ -41,6 +37,8 @@ final class PanelController {
   var opensAtLogin: OpenAtLogin.State
   /// The icons found for Recent's apps, by their key's text (``AppIconKey/text``).
   var icons: [String: IconImage] = [:]
+  /// Whether the person said OK to the note that a macOS service in the helper slowly slows their Mac, as saved.
+  var serviceNoteDismissed: Bool
 
   /// The viewer service it reads and asks.
   @ObservationIgnored let service: any ViewerService
@@ -56,6 +54,8 @@ final class PanelController {
   @ObservationIgnored let loginItem: OpenAtLogin
   /// What the panel asks of the rest of the app.
   @ObservationIgnored let links: PanelLinks
+  /// Where the person's OK to the service note is kept.
+  @ObservationIgnored let preferences: PanelPreferences
   /// The clock the pauses between readings run on; a cancelled pause ends at once.
   @ObservationIgnored let clock: any Clock<Duration>
   /// The time now, which the snapshot carries.
@@ -72,11 +72,8 @@ final class PanelController {
   @ObservationIgnored var wantedAtLogin: Bool?
   /// Whether a change to Open at Login runs now: one at a time, so the system ends where the person last asked.
   @ObservationIgnored var changingAtLogin = false
-  /// What VoiceOver was last handed (``askingStatus``), so a reading that says the same again, or the panel opening
-  /// on it, says nothing more.
-  @ObservationIgnored var askedBefore: String?
-  /// The wait before the newest asking state is said; nil while none waits.
-  @ObservationIgnored var announcing: Task<Void, Never>?
+  /// What VoiceOver hears of the state (``askingStatus``), once it has held.
+  @ObservationIgnored let announcer = StatusAnnouncer()
 
   /// Creates a panel that has read nothing yet.
   ///
@@ -90,7 +87,9 @@ final class PanelController {
     clock = dependencies.clock
     wallClock = dependencies.wallClock
     appIcons = dependencies.icons
+    preferences = dependencies.preferences
     opensAtLogin = dependencies.loginItem.state
+    serviceNoteDismissed = dependencies.preferences.loadServiceNoteDismissed()
   }
 
   /// Everything the controller holds, as one value, with whether the main window holds control and which of the
@@ -109,7 +108,8 @@ final class PanelController {
       sound: actions.sound.button,
       opensAtLogin: opensAtLogin,
       date: wallClock(),
-      icons: icons
+      icons: icons,
+      serviceNoteDismissed: serviceNoteDismissed
     )
   }
 
@@ -159,8 +159,15 @@ final class PanelController {
     case .togglePause: togglePause()
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }
+    case .dismissServiceNote: dismissServiceNote()
     case .showMore: break
     }
+  }
+
+  /// OK on the service note: it goes now and never shows again.
+  func dismissServiceNote() {
+    serviceNoteDismissed = true
+    preferences.saveServiceNoteDismissed()
   }
 
   /// Marks the ⋯ menu open or closed, so its button draws pressed while it is open.

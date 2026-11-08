@@ -1123,8 +1123,22 @@ fn in_field(name: &str) -> Expect {
 #[test]
 fn keys_ask_for_nothing_inside_the_app_without_a_window_or_field() {
     let mut look = inside_with(typing(field("Email")), vec![document()]);
-    keys_with(&mut look).unwrap();
+    assert_eq!(keys_with(&mut look).unwrap(), None);
     assert_eq!(look.keyboard_reads, 0);
+}
+
+#[test]
+fn a_named_field_that_is_a_password_field_by_its_subrole_says_so() {
+    let password = Element {
+        subrole: Some("AXSecureTextField".to_owned()),
+        ..field("Password")
+    };
+    let mut look = inside_with(typing(password), vec![document()]);
+    assert_eq!(
+        expecting(&in_field("Password"), &mut look).unwrap(),
+        Some("AXSecureTextField")
+    );
+    assert_eq!(look.keyboard_reads, 1, "only the check's own read");
 }
 
 #[test]
@@ -2252,4 +2266,48 @@ fn absent_system_focus_accepts_the_menu_bar_owner_with_its_own_proof_and_still_c
         refusal(expecting(&expect(), &mut look))["reason"],
         "unreadable"
     );
+}
+
+#[test]
+fn a_read_whose_element_was_replaced_is_read_once_more_and_that_read_decides() {
+    let replaced = || {
+        refused(Reason::Unreadable).with_source(Asked {
+            call: "AXRole",
+            status: AXError::InvalidUIElement,
+        })
+    };
+    let later = Instant::now() + Duration::from_secs(1);
+    let mut reads = 0;
+    let read = read_again_if_replaced(later, || {
+        reads += 1;
+        if reads == 1 { Err(replaced()) } else { Ok(7) }
+    });
+    assert_eq!((read.unwrap(), reads), (7, 2));
+
+    let mut reads = 0;
+    let read: Result<()> = read_again_if_replaced(later, || {
+        reads += 1;
+        Err(replaced())
+    });
+    assert!(read.is_err(), "the second read decides");
+    assert_eq!(reads, 2, "and no third is made");
+
+    let mut reads = 0;
+    let read: Result<()> = read_again_if_replaced(Instant::now(), || {
+        reads += 1;
+        Err(replaced())
+    });
+    assert!(read.is_err());
+    assert_eq!(reads, 1, "no time is left for another");
+
+    let mut reads = 0;
+    let read: Result<()> = read_again_if_replaced(later, || {
+        reads += 1;
+        Err(refused(Reason::Unreadable).with_source(Asked {
+            call: "AXRole",
+            status: AXError::CannotComplete,
+        }))
+    });
+    assert!(read.is_err());
+    assert_eq!(reads, 1, "only a replaced element is read again");
 }

@@ -1,6 +1,5 @@
 // One top-level type per Swift source file. Nested domain and wire types remain owned by their enclosing type.
-import { fileURLToPath } from 'node:url';
-import { codeOnly, lineOf, packageFolders, run } from './swift-source.mjs';
+import { codeOnly, lineOf } from './swift-source.mjs';
 
 // Ignores comments, strings, extensions and nested declarations; conditional compilation does not create a scope.
 export function violations(text) {
@@ -25,13 +24,4 @@ export function violations(text) {
     } else first = match[1];
   }
   return found;
-}
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const folders = process.argv.slice(2);
-  run(
-    'types',
-    folders.length ? folders : ['app/Sources', ...packageFolders('Sources')],
-    violations,
-  );
 }

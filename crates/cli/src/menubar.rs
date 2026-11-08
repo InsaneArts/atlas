@@ -5,7 +5,7 @@
 //! runs `atlas` commands; it reaches nothing else. The capability URL
 //! travels on its stdin, never in argv, and closing stdin makes it quit.
 use atlas_core::{
-    app_bundle::{APP_EXECUTABLE, INSTALL_COMMAND, checkout, shipped_app},
+    app_bundle::{APP_EXECUTABLE, INSTALL_COMMAND, LOGIN_JOB, checkout, shipped_app},
     error::{Code, Error, Result},
     name::first_line,
 };
@@ -19,10 +19,6 @@ use tokio::{
     io::AsyncWriteExt,
     process::{Child, ChildStdin, Command},
 };
-
-/// The login agent that runs `atlas menubar` (see xtask); launchd names
-/// the job in XPC_SERVICE_NAME.
-pub const LOGIN_JOB: &str = "com.insanearts.atlas.menubar";
 
 /// Whether this process is the menu bar's login agent, which serves the
 /// menu bar itself rather than starting it.

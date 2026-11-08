@@ -16,7 +16,7 @@ atlas-core.workspace = true
 atlas-native.workspace = true
 base64.workspace = true
 libc.workspace = true
-nix = { workspace = true, features = ["fs", "process", "signal", "user"] }
+nix = { workspace = true, features = ["fs", "process", "signal", "socket", "user"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true

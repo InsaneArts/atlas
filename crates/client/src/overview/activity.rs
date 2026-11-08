@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 /// Why a failed action failed, in plain words, from the fixed code its row
 /// keeps; nil for an action that worked or a code with no plain reason.
-pub(super) fn reason(row: &Row) -> Option<&'static str> {
+pub(crate) fn reason(row: &Row) -> Option<&'static str> {
     if !row.failed() {
         return None;
     }

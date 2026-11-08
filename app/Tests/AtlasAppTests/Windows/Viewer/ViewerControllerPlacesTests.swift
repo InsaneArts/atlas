@@ -14,9 +14,9 @@ struct ViewerControllerPlacesTests {
     let viewer = try await ViewerController.watching(ScriptedService())
     viewer.send(.chooseLibrary(.activity))
     #expect(viewer.state.pane.place == .activity)
-    viewer.send(.chooseLibrary(.screenshots))
-    #expect(viewer.state.pane.place == .screenshots, "another list is a step sideways")
-    viewer.send(.chooseLibrary(.screenshots))
+    viewer.send(.chooseLibrary(.apps))
+    #expect(viewer.state.pane.place == .apps, "another list is a step sideways")
+    viewer.send(.chooseLibrary(.apps))
     #expect(viewer.state.pane.place == .screen)
     viewer.close()
   }
@@ -27,23 +27,23 @@ struct ViewerControllerPlacesTests {
     viewer.send(.chooseSession(.one("3f9a1c07b2e4")))
     #expect(viewer.session.chosenSession == .one("3f9a1c07b2e4"))
     #expect(viewer.state.pane.place == .activity)
-    viewer.send(.chooseLibrary(.screenshots))
+    viewer.send(.chooseLibrary(.apps))
     viewer.send(.chooseSession(.all))
     #expect(viewer.session.chosenSession == .all)
-    #expect(viewer.state.pane.place == .screenshots, "every session's work shows where the window is")
+    #expect(viewer.state.pane.place == .apps, "every session's work shows where the window is")
     viewer.close()
   }
 
   @Test("choosing a session narrows the list that shows, and opens Activity only from the Screen")
   func choosingASessionNarrowsTheListThatShows() async throws {
     let viewer = try await ViewerController.watching(ScriptedService())
-    viewer.send(.chooseLibrary(.screenshots))
+    viewer.send(.chooseLibrary(.apps))
     viewer.send(.chooseSession(.one("3f9a1c07b2e4")))
     #expect(viewer.session.chosenSession == .one("3f9a1c07b2e4"))
-    #expect(viewer.state.pane.place == .screenshots, "the screenshots narrow to the session")
-    viewer.send(.chooseLibrary(.apps))
+    #expect(viewer.state.pane.place == .apps, "the apps narrow to the session")
+    viewer.send(.chooseLibrary(.activity))
     viewer.send(.chooseSession(.all))
-    #expect(viewer.state.pane.place == .apps)
+    #expect(viewer.state.pane.place == .activity)
     viewer.close()
   }
 
@@ -52,7 +52,7 @@ struct ViewerControllerPlacesTests {
     #expect(!ViewerController.opensActivity(for: .one("3f9a1c07b2e4"), from: .screen, holdingControl: true))
     #expect(ViewerController.opensActivity(for: .one("3f9a1c07b2e4"), from: .screen, holdingControl: false))
     #expect(!ViewerController.opensActivity(for: .all, from: .screen, holdingControl: false))
-    for place in [ViewerPlace.activity, .screenshots, .apps] {
+    for place in [ViewerPlace.activity, .apps] {
       let opens = ViewerController.opensActivity(for: .one("3f9a1c07b2e4"), from: place, holdingControl: false)
       #expect(!opens, "\(place)")
     }

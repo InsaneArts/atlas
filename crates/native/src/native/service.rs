@@ -48,7 +48,7 @@ const MAX_REQUEST: usize = 64 * 1024;
 /// app, with the Dock covering where it takes clicks, and the window and
 /// field it names, reading an app's elements as looks a click can name, and
 /// acting on an element of a look through Accessibility.
-const CAPABILITIES: [&str; 8] = [
+const CAPABILITIES: [&str; 9] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,
@@ -57,6 +57,7 @@ const CAPABILITIES: [&str; 8] = [
     atlas_core::session::FOCUS_FIELD,
     atlas_core::session::LOOKS,
     atlas_core::session::ELEMENT_ACTIONS,
+    atlas_core::session::TYPED_FIELDS,
 ];
 
 struct Service {
@@ -79,6 +80,9 @@ struct Service {
     /// Present while the person has stopped agents, so a stop outlives a
     /// restart of this service (recovery starts a new one).
     stop_marker: PathBuf,
+    /// Where a read of an app's elements is told to the helper's other
+    /// processes, as the engine tells of input.
+    activity: PathBuf,
 }
 
 /// A file by path and (device, inode).
@@ -190,12 +194,15 @@ impl Service {
         let epoch = proven(expected?)?;
         let expect =
             expect?.ok_or_else(|| Error::new(Code::Input, "A look names the app it reads"))?;
-        let read = tokio::task::spawn_blocking(move || super::ax::read(&expect))
-            .await
-            .map_err(|cause| {
-                Error::new(Code::Elements, "The accessibility read did not finish")
-                    .with_source(cause)
-            })??;
+        let activity = self.activity.clone();
+        let read = tokio::task::spawn_blocking(move || {
+            let _acting = super::activity::acting(&activity);
+            super::ax::read(&expect)
+        })
+        .await
+        .map_err(|cause| {
+            Error::new(Code::Elements, "The accessibility read did not finish").with_source(cause)
+        })??;
 
         // A session or display that changed while the app was read keeps
         // nothing of it.
@@ -442,6 +449,11 @@ impl Service {
             reply["mechanism"] = json!("accessibility");
             reply["verification"] = json!(acted.verification);
         }
+        // The element a referenced click or an action on an element reached,
+        // as it was met just before: for the mark on the picture before it.
+        if let Some(reached) = &done.reached {
+            reply["element"] = json!(reached);
+        }
 
         cancellation.owner = None;
         Ok(reply)
@@ -464,6 +476,9 @@ impl Service {
         let outcome = self
             .operations
             .start(on_engine(engine, move |engine| {
+                // Work that keeps input out ends first; a Stop meanwhile is
+                // seen as the grant is checked.
+                let acting = engine.acting();
                 runtime.block_on(async move {
                     drop(grant.authorize()?);
                     engine.grant = Some(grant);
@@ -474,6 +489,7 @@ impl Service {
                     engine.dock_pressed = false;
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
                     engine.target = None;
+                    engine.keep_while_held(acting);
                     Ok::<_, Error>(result.map(|done| (done, engine.dock_pressed)))
                 })
             }))
@@ -596,6 +612,8 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
     }
 
     let mut engine = Engine::new(uid)?;
+    let activity = super::activity::beside(&socket);
+    engine.activity = Some(activity.clone());
     // Until this process has listed the window server's windows, asking
     // Accessibility which app has keyboard focus fails at once, so the first
     // checked keys would be refused. Listing them only reads; nothing is posted.
@@ -630,6 +648,7 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         operations: Operations::default(),
         gate,
         stop_marker,
+        activity,
     });
     service.listen(&listener, controller_uid).await
 }

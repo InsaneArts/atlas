@@ -12,6 +12,8 @@ struct SettingsSnapshot {
   var notify = false
   /// The helper's sound, as every window shows it.
   var sound = HelperSoundButton()
+  /// The pictures of agent actions.
+  var pictures = SettingsPictures()
   /// What the rest of the app says now.
   var facts = SettingsFacts()
 }

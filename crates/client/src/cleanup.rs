@@ -279,7 +279,7 @@ async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
         Some(host) if client.actor == Actor::Agent => Adopter::Session(host.key().clone()),
         _ => Adopter::Person,
     });
-    apply(
+    let applied = apply(
         &live::Live::acting(client, &ownership, unknown),
         output,
         scope,
@@ -287,7 +287,10 @@ async fn apply_scope(client: &Client, scope: &Scope) -> Result<Value> {
         client.actor,
         adopter,
     )
-    .await
+    .await?;
+    // The pictures taken before its actions go with its work.
+    crate::before::forget(output, &scope.session, scope.task.as_ref());
+    Ok(applied)
 }
 
 /// Clean up `scope`'s work: settle what earlier cleanups finished, then

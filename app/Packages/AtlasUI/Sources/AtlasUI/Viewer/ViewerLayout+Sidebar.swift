@@ -82,7 +82,7 @@ extension ViewerLayout {
   static let endedHeadingCorner = endedHeadingHeight / 2
   /// Ended's inset round its button: 6 above and 2 under, so its line stands where another heading's does.
   static let endedHeadingInset = EdgeInsets(top: Spacing.xsPlus, leading: .zero, bottom: Spacing.half, trailing: .zero)
-  /// 18: the room a Library row's symbol takes, so the three words start in line.
+  /// 18: the room a Library row's symbol takes, so the words start in line.
   static let librarySymbol = IconSize.sPlus
   /// 8: above and below the helper's line.
   static let helperInset = Spacing.s

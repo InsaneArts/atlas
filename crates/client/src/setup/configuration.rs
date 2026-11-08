@@ -22,6 +22,7 @@ pub fn proposed(helper: &account::Account) -> Result<Config> {
         identity_probe: "/Users/Shared/Atlas/atlas".into(),
         input_socket: layout.input_socket(),
         output_dir: config::home()?.join("Library/Application Support/Atlas/runs"),
+        activity: config::Activity::default(),
     })
 }
 

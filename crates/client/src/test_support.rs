@@ -13,7 +13,7 @@ mod requester;
 pub use executor::{
     Fixture, WORKER, executor_ready, executor_worker, interrupted_executor, pause_executor,
 };
-pub use helper::{Helper, completed, exited};
+pub use helper::{Helper, Pictures, completed, exited};
 pub use requester::{Requester, WATCHDOG};
 
 use crate::{
@@ -55,7 +55,8 @@ pub fn converse_until(
     crate::setup::executor::converse_until(stream, secret, deadline)
 }
 
-/// A client whose endpoints and controller state are entirely temporary.
+/// A client whose endpoints and controller state are entirely temporary. It
+/// keeps no pictures before actions unless a test turns them on.
 pub fn client(directory: &Path) -> Client {
     let mut client = Client::new(Config {
         helper_uid: UID,
@@ -63,6 +64,10 @@ pub fn client(directory: &Path) -> Client {
         identity_probe: directory.join("absent-probe"),
         input_socket: directory.join("absent-input.sock"),
         output_dir: directory.join("output"),
+        activity: atlas_core::config::Activity {
+            pictures_before_actions: false,
+            ..Default::default()
+        },
     })
     .unwrap();
     client.controller = Controller::at(UID, &directory.join("state"));

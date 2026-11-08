@@ -4,8 +4,7 @@
 struct ViewerPictureMenu: Equatable {
   /// Whether a picture shows, to copy, save or draw at actual size.
   var hasPicture: Bool
-  /// Whether Copy and Save act on a screenshot, shown large or selected in the Screenshots list, rather than the
-  /// picture.
+  /// Whether Copy and Save act on the picture sheet's picture rather than the screen's.
   var actsOnShot: Bool
   /// Whether the screen draws at actual size.
   var actualSize: Bool

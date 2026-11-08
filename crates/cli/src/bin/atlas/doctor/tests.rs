@@ -169,3 +169,143 @@ fn doctor_warns_when_the_helper_should_be_silent_and_is_not() {
     }
     assert_eq!(sound_warning(&json!({"ok": false})), None);
 }
+
+fn with_recorder(footprint: Value, failures: Value) -> Value {
+    let mut report = ready();
+    report["warnings"] = json!([]);
+    report["session"] = json!({"daemon": {"resources": {
+        "footprint": 1,
+        "screenRecorder": {"footprint": footprint, "resets": 0, "resetFailures": failures},
+    }}});
+    report
+}
+
+#[test]
+fn a_recorder_the_helper_cannot_restart_gets_a_warning_with_the_way_to_reset_it() {
+    // Atlas.app runs doctor as the person, verbose.
+    let asking = asker(Actor::Viewer, None, false);
+    let mut report = with_recorder(json!(6 * GIGABYTE + GIGABYTE / 2), json!(RECORDER_TRIES));
+    recorder_report(&mut report, asking);
+    let warning = "The helper's screen recorder is using 6.5 GB of memory and Atlas could not \
+                   restart it. Log the helper out and back in to reset it.";
+    assert_eq!(report["warnings"], json!([warning]));
+    assert_eq!(
+        atlas_client::capability::summary(report)["warnings"],
+        json!([warning])
+    );
+}
+
+#[test]
+fn a_large_screen_recorder_the_helper_restarts_on_its_own_gets_no_warning() {
+    for failures in [
+        json!(0),
+        json!(RECORDER_TRIES - 1),
+        Value::Null,
+        json!("3"),
+        json!(-1),
+    ] {
+        let mut report = with_recorder(json!(6 * GIGABYTE), failures.clone());
+        recorder_report(&mut report, Asker::Person);
+        assert_eq!(report["warnings"], json!([]), "{failures}");
+    }
+}
+
+/// A ready report with its list of warnings, as doctor builds one.
+fn warned() -> Value {
+    let mut report = ready();
+    report["warnings"] = json!([]);
+    report
+}
+
+fn restart(label: &str) -> console_agents::Restart {
+    console_agents::Restart {
+        label: label.to_owned(),
+        runs: 357,
+    }
+}
+
+#[test]
+fn an_unknown_screen_recorder_footprint_gets_no_warning() {
+    for footprint in [Value::Null, json!("6 GB"), json!(-1)] {
+        let mut report = with_recorder(footprint.clone(), json!(RECORDER_TRIES));
+        recorder_report(&mut report, Asker::Person);
+        assert_eq!(report["warnings"], json!([]), "{footprint}");
+    }
+}
+
+#[test]
+fn an_agents_verbose_report_keeps_the_figures_but_not_the_logout_warning() {
+    let own = Key::of(Host::Claude, "own");
+    for interactive in [false, true] {
+        for asking in [
+            asker(Actor::Agent, Some(&own), interactive),
+            asker(Actor::Agent, None, false),
+        ] {
+            let mut report = with_recorder(json!(6 * GIGABYTE), json!(RECORDER_TRIES));
+            recorder_report(&mut report, asking);
+            assert_eq!(report["warnings"], json!([]), "{asking:?}");
+            let recorder = &report["session"]["daemon"]["resources"]["screenRecorder"];
+            assert_eq!(recorder["footprint"], 6 * GIGABYTE);
+            assert_eq!(recorder["resetFailures"], RECORDER_TRIES);
+        }
+    }
+}
+
+#[test]
+fn a_service_slowing_the_mac_warns_without_making_the_helper_not_ready() {
+    let mut report = warned();
+    let restarts = [restart("com.apple.BTServer.cloudpairing")];
+    restarting_report(&mut report, Some(&restarts), Asker::Person, false);
+
+    assert_eq!(report["ready"], true);
+    assert_eq!(report["checks"], json!([]));
+    let warning = report["warnings"][0].as_str().unwrap().to_owned();
+    assert_eq!(warning, SLOWING);
+    assert!(warning.contains("can't turn it off"));
+    assert!(warning.contains("atlas logout"));
+    assert!(report.get("restartingJobs").is_none());
+    assert_eq!(
+        atlas_client::capability::summary(report)["warnings"][0],
+        *warning
+    );
+}
+
+#[test]
+fn other_restarting_jobs_or_an_unreadable_log_say_nothing_but_the_details() {
+    for restarts in [Some(vec![restart("com.apple.example")]), Some(vec![]), None] {
+        let mut report = warned();
+        restarting_report(&mut report, restarts.as_deref(), Asker::Person, false);
+        assert_eq!(report["warnings"], json!([]), "{restarts:?}");
+    }
+
+    let mut verbose = warned();
+    restarting_report(
+        &mut verbose,
+        Some(&[restart("com.apple.example")]),
+        Asker::Person,
+        true,
+    );
+    assert_eq!(verbose["warnings"], json!([]));
+    assert_eq!(
+        verbose["restartingJobs"],
+        json!([{"label": "com.apple.example", "runs": 357}])
+    );
+}
+
+#[test]
+fn an_agent_is_not_told_to_log_the_helper_out_but_keeps_the_details() {
+    let own = Key::of(Host::Claude, "own");
+    let restarts = [restart("com.apple.BTServer.cloudpairing")];
+    for asking in [
+        asker(Actor::Agent, Some(&own), true),
+        asker(Actor::Agent, None, false),
+    ] {
+        let mut report = warned();
+        restarting_report(&mut report, Some(&restarts), asking, true);
+        assert_eq!(report["warnings"], json!([]), "{asking:?}");
+        assert_eq!(
+            report["restartingJobs"][0]["label"],
+            "com.apple.BTServer.cloudpairing"
+        );
+    }
+}

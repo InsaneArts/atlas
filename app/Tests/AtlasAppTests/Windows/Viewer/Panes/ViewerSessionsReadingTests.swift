@@ -96,7 +96,7 @@ struct ViewerSessionsReadingTests {
       ]
     }
     service.sessionList = HostSessionList(sessions: [
-      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended)
+      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended, actions: 1)
     ])
     let viewer = try await ViewerController.watching(service)
     try await settle("the list was never read") { viewer.panes.sessions.list != nil }

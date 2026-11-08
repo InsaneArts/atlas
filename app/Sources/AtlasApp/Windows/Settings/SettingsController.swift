@@ -16,6 +16,9 @@ final class SettingsController {
   private(set) var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   private(set) var notify = false
+  /// The pictures of agent actions: shown, confirmed and being written, and how many this Mac holds. Written only by
+  /// the controller's own files.
+  var pictures = SettingsPictures()
   /// Counts the times the window came forward and a choice was kept where no other window shows it, so what the
   /// links read is read again then.
   private(set) var revision = 0
@@ -64,6 +67,7 @@ final class SettingsController {
       icons: icons,
       notify: notify,
       sound: actions.sound.button,
+      pictures: pictures,
       facts: SettingsFacts(
         status: helper.status,
         connecting: helper.connecting,
@@ -91,9 +95,9 @@ final class SettingsController {
     case .selectTab(let tab): selectTab(tab)
     case .paneHeight(let tab, let height): fit(tab, height: height)
     case .checkAgain: Task { await checkAgain() }
-    case .askSwitch: ask(.switchToHelper)
-    case .askRecover: ask(.recover)
-    case .askLogOut: ask(.logOut)
+    case .askSwitch: ask(.helper(.switchToHelper))
+    case .askRecover: ask(.helper(.recover))
+    case .askLogOut: ask(.helper(.logOut))
     case .closeLeftovers: Task { await closeLogin(.closeLeftovers) }
     case .closeHelper: Task { await closeLogin(.closeHelper) }
     case .connect(let id): Task { await connect(id) }
@@ -101,6 +105,7 @@ final class SettingsController {
     case .askForget(let path): askForget(path)
     case .checkForUpdates: Task { await checkForUpdates() }
     case .askInstall: askInstall()
+    case .askDeletePictures: ask(.deletePictures)
     case .gettingStarted: dependencies.links.gettingStarted()
     case .showAppInFinder: dependencies.revealFile(Bundle.main.bundlePath)
     case .showAgentFile(let id): showAgentFile(id)
@@ -110,8 +115,8 @@ final class SettingsController {
   }
 
   /// Writes what changed in the General pane where each value belongs: Open at Login through the panel's command,
-  /// the picture to the main window or its saved rate, muting the helper through `atlas sound`, and Notify me to the
-  /// saved choices.
+  /// the picture to the main window or its saved rate, muting the helper through `atlas sound`, the pictures of agent
+  /// actions to Atlas's settings, and Notify me to the saved choices.
   ///
   /// - Parameter general: The pane as the person left it.
   func update(_ general: SettingsGeneralState) {
@@ -129,6 +134,7 @@ final class SettingsController {
       // Unstructured, as an edit is synchronous: the change runs beside it.
       Task { await setHelperSound(muted: general.muteHelper) }
     }
+    updatePictures(general)
     if general.notify != notify {
       notify = general.notify
       dependencies.preferences.saveNotify(notify)
@@ -146,12 +152,14 @@ final class SettingsController {
     if tab == .agents { readAgents() }
   }
 
-  /// The window came forward: what the links read is read again, and the agents, the projects and the helper's
-  /// sound afresh.
+  /// The window came forward: what the links read is read again, and the agents, the projects, the helper's sound
+  /// and the pictures of agent actions afresh.
   func cameForward() {
     revision += 1
     readAgents()
+    // Unstructured, as coming forward is synchronous: the readings run beside it.
     Task { await readHelperSound() }
+    Task { await readPictures() }
   }
 
   /// The window closed: the agents reading under way stops. A command it started, such as a check for updates or a

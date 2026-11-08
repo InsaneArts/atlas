@@ -2,7 +2,7 @@
 //! are stopped, kept pending until a reply proves what they did, and cut
 //! short by a stop. A reply's completion is checked against its mutation.
 use super::{
-    Actor, Client,
+    Actor, Client, picture,
     record::{NOT_RECORDED, recorded_code},
     run::RUN_MARGIN,
 };
@@ -31,6 +31,8 @@ pub(crate) enum Mutation<'a> {
         actions: Batch<'a>,
         owner: &'a str,
         epoch: InputEpoch,
+        /// The picture before it, being taken since its session was known.
+        picture: Option<picture::Taking>,
         /// An agent's command names the app it acted in.
         app: bool,
         expect: Option<&'a Expect>,
@@ -66,6 +68,7 @@ impl Mutation<'_> {
                 epoch,
                 app,
                 expect,
+                ..
             } => {
                 let mut request = json!({
                     "op": "input",
@@ -239,7 +242,7 @@ impl Client {
     /// `observed_at` the frame it acts on must still be fresh.
     pub(crate) async fn mutate(
         &self,
-        mutation: Mutation<'_>,
+        mut mutation: Mutation<'_>,
         lease: Option<(&SharedLease, &str)>,
         observed_at: Option<Instant>,
         // Control to let go of once the request has reached the helper; its
@@ -263,12 +266,32 @@ impl Client {
             return Err(Error::stopped());
         }
 
+        // The picture before an agent's input is taken beside its preflight,
+        // and kept only when it is in hand before the input is sent: the
+        // input waits for it until its deadline at most, and goes either way.
+        let picture = match &mut mutation {
+            Mutation::Input { picture, .. } => picture.take(),
+            _ => None,
+        };
         // Connect without holding the lease. Release can cancel slow preflight.
         let connection = self.connect(&mutation).await?;
         let authorization = authorize(lease, observed_at).await?;
+        // The only picture ever saved or shown is the frame in hand here,
+        // before the input is sent. A frame later than this is never read:
+        // `taken` drops its task, and with it the frame, should the helper
+        // still take one after the input.
+        let picture = match picture {
+            Some(taking) => taking.taken().await,
+            None => None,
+        };
         let mut claim = self.claim(&mutation, lease.is_some(), command)?;
         let request = mutation.request();
         let sent = self.send(connection, &request, claim.as_ref()).await?;
+        if let Some(picture) = picture
+            && let Mutation::Input { actions, epoch, .. } = &mutation
+        {
+            self.keep_picture(picture, actions.actions(), epoch);
+        }
 
         drop(authorization);
         // A command an agent started lets go of control once its request is
@@ -284,7 +307,17 @@ impl Client {
         };
         mutation.validate(&reply)?;
 
-        self.settle(&request, reply, command, claim, started).await
+        let mut reply = self
+            .settle(&request, reply, command, claim, started)
+            .await?;
+        // What the input service says of the element an input reached is
+        // for the facts of its picture alone, kept as its row was written.
+        if matches!(mutation, Mutation::Input { .. })
+            && let Some(reply) = reply.as_object_mut()
+        {
+            reply.remove("element");
+        }
+        Ok(reply)
     }
 
     /// Where `mutation` goes: the input service for input, and the helper

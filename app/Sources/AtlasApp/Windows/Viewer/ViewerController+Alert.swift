@@ -8,7 +8,7 @@ extension ViewerController {
   /// The alert over the window now: the one asked for, else the recovery alert the helper's state calls for.
   var shownAlert: ViewerAlert? {
     if let asked = session.alert { return asked }
-    if case .alert = snapshot.recovery { return .recover }
+    if case .alert = snapshot.recovery { return .helper(.recover) }
     return nil
   }
 
@@ -19,7 +19,7 @@ extension ViewerController {
   func ask(_ alert: ViewerAlert) {
     guard !session.alertRunning, !session.recovering else { return say(HelperWords.waitForAction) }
     control.releaseControl()
-    if alert == .recover {
+    if alert == .helper(.recover) {
       session.recoveryLater = nil
       session.recoveryRefusal = nil
     }
@@ -33,7 +33,7 @@ extension ViewerController {
     if snapshot.offeredRecovery == nil {
       session.recoveryLater = nil
       // A refusal belongs to the alert it answered: once nothing needs recovery it is gone with it.
-      if session.alert != .recover { session.recoveryRefusal = nil }
+      if session.alert != .helper(.recover) { session.recoveryRefusal = nil }
     }
   }
 
@@ -44,7 +44,7 @@ extension ViewerController {
     guard !session.alertRunning, !session.recovering, let shown = shownAlert else { return }
     session.alert = nil
     session.recoveryRefusal = nil
-    if shown == .recover, let offered = snapshot.offeredRecovery {
+    if shown == .helper(.recover), let offered = snapshot.offeredRecovery {
       session.recoveryLater = RecoveryKey(offered, status: reading.status)
     }
   }
@@ -52,10 +52,10 @@ extension ViewerController {
   /// The alert's button that goes ahead: its command runs once, whatever else is pressed meanwhile.
   func confirmAlert() async {
     switch shownAlert {
-    case .recover: await recover()
-    case .switchToHelper: await run { await self.switchHelper() }
-    case .logOut: await run { await self.logOut(force: false) }
-    case .logOutAnyway: await run { await self.logOut(force: true) }
+    case .helper(.recover): await recover()
+    case .helper(.switchToHelper): await run { await self.switchHelper() }
+    case .helper(.logOut): await run { await self.logOut(force: false) }
+    case .helper(.logOutAnyway): await run { await self.logOut(force: true) }
     case .restart: await run { await self.restart() }
     case .cleanup(let key, _, _): await run { await self.cleanUp(key) }
     case nil: return
@@ -72,7 +72,7 @@ extension ViewerController {
     session.recoveryRefusal = nil
     let recovery = await actions.recover()
     if let recovery, recovery.outcome.ok {
-      session.alert = .recover
+      session.alert = .helper(.recover)
       session.recoveryDone = true
       say(nil)
       await doneHold.hold(on: dependencies.clock)
@@ -119,7 +119,7 @@ extension ViewerController {
     let controlled = reading.status.overview.mode == .controlling
     let outcome = await actions.logOut(force: force, revoking: controlled)
     if let outcome, outcome.isLogOutHeld, !force {
-      session.alert = .logOutAnyway
+      session.alert = .helper(.logOutAnyway)
       return
     }
     session.alert = nil

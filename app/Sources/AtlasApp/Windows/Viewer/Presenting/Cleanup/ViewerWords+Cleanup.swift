@@ -275,13 +275,4 @@ extension ViewerWords {
   private static func copies(_ count: Int) -> String {
     count == 1 ? "1 copy" : "\(count) copies"
   }
-
-  /// Names as one phrase.
-  ///
-  /// - Parameter names: The names, in order.
-  /// - Returns: "Probe", "Probe and Notes" or "Probe, Notes and Mail".
-  private static func listed(_ names: [String]) -> String {
-    guard let last = names.last, names.count > 1 else { return names.first ?? "" }
-    return "\(names.dropLast().joined(separator: ", ")) and \(last)"
-  }
 }

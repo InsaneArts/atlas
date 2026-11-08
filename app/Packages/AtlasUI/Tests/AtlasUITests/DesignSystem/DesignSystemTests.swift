@@ -111,8 +111,7 @@ struct DesignSystemTests {
       (
         "opacity",
         [
-          Opacity.tint, Opacity.tintStrong, Opacity.edgeTintQuiet, Opacity.disabled, Opacity.dimmed, Opacity.muted,
-          Opacity.edgeTint, Opacity.notYet,
+          Opacity.tint, Opacity.disabled, Opacity.muted, Opacity.notYet,
         ],
         true
       ),

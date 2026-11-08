@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// What leads an action or a moment, at a square side: the app's icon or its tile, Atlas's own icon, the person's
+/// What leads an action or a run, at a square side: the app's icon or its tile, Atlas's own icon, the person's
 /// blue mark, or a quiet tile with a glyph, all on the icon grid so they line up in one column at one size. An icon
 /// found later crossfades in place.
 struct ActivityGlyph: View {

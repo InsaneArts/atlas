@@ -21,7 +21,24 @@ impl Viewer {
     /// record follows the helper served on every read, so a move that failed
     /// is tried again.
     pub(super) async fn follow_settings(self: &Arc<Self>) {
+        let pictures = || {
+            let config = &self.client().config;
+            (config.output_dir.clone(), config.activity.keep())
+        };
+        let before = pictures();
         self.apply_settings().await;
+        let after = pictures();
+        if after != before {
+            let (moved, _) = after;
+            // Kept before the signal, which coalesces: a folder served only
+            // between two prunings is pruned all the same.
+            let mut outputs = unpoisoned(&self.outputs);
+            if !outputs.contains(&moved) {
+                outputs.push(moved);
+            }
+            drop(outputs);
+            self.output_moved.notify_one();
+        }
         self.move_record();
     }
 

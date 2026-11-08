@@ -185,6 +185,41 @@ fn activity_lists_this_sessions_rows_screenshots_copies_and_plans_only() {
 }
 
 #[test]
+fn activity_never_names_the_pictures_taken_around_an_action() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = client(directory.path());
+    let claude = session(Host::Claude, "left");
+    let folder = client.output_dir().unwrap().join(crate::before::FOLDER);
+    std::os::unix::fs::DirBuilderExt::mode(&mut fs::DirBuilder::new(), 0o700)
+        .create(&folder)
+        .unwrap();
+    for name in ["1-before.jpg", "2-before.jpg"] {
+        fs::write(folder.join(name), b"jpeg").unwrap();
+        fs::write(
+            folder.join(crate::before::after_name(name).unwrap()),
+            b"jpeg",
+        )
+        .unwrap();
+        let mut acting = client.clone().doing(Doing::new("click"));
+        acting.host_session = Some(claude.clone());
+        acting
+            .doing
+            .as_ref()
+            .unwrap()
+            .before()
+            .named(name.to_owned(), serde_json::Map::new());
+        acting.record_for_test(&json!({"op": "input"}), &json!({"ok": true}));
+    }
+
+    let reply = list(&client, Some(&claude), Scope::Own, 10).unwrap();
+    assert_eq!(reply["recent"].as_array().unwrap().len(), 2);
+    let text = reply.to_string();
+    for never in ["before", "after", "facts", "-before.jpg", "-after.jpg"] {
+        assert!(!text.contains(never), "{never}: {text}");
+    }
+}
+
+#[test]
 fn activity_after_compaction_finds_the_same_session() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());

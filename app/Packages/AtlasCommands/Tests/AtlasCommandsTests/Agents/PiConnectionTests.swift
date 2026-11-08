@@ -30,6 +30,6 @@ struct PiConnectionTests {
         from: Data(#"{"agents":[{"agent":"pi","ok":true}]}"#.utf8)
       )
     #expect(change.connected == [.pi])
-    #expect(!change.requiresRestart)
+    #expect(change.restarting.isEmpty)
   }
 }

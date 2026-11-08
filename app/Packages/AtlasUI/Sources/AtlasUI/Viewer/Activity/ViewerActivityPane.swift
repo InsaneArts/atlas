@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The Activity list inside the card, with no ground of its own: the filters at the top, then what was done in the
-/// helper as moments, newest first, each an app's run of work with its steps on one line under the app's icon, older
-/// moments folded to one row, a quiet heading over each day before today; or why nothing shows. The sidebar's search
+/// helper as an outline, newest first, of sessions, each app's runs in them and each run's steps, with pictures shown
+/// in place and a quiet heading over each day before today; or why nothing shows. The sidebar's search
 /// narrows it and says whose work it is. A new step fades in at the top while the rest move down, unless the person
 /// has scrolled down, when it comes with no motion and what they read stays where it is (``ActivityScroll``).
 /// It scrolls in the card's one list scroll (``CardScroll``), under the small screen.
@@ -66,7 +66,7 @@ struct ViewerActivityPane: View {
   #Preview("Interactive") {
     @Previewable @State var state = PreviewStates.viewerActivity
     InteractivePreview {
-      Text(verbatim: "Open or fold a moment, or pick a filter")
+      Text(verbatim: "Open or fold a session or a run, or pick a filter")
     } content: {
       if case .activity(let activity) = state.pane {
         ViewerActivityPane(state: activity) { event in

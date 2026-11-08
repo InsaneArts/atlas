@@ -35,6 +35,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case reload = "arrow.clockwise"
   /// The previous screenshot.
   case back = "chevron.left"
+  /// Up to sessions waiting at the top of a scrolled-down list.
+  case up = "chevron.up"
   /// The next screenshot, and the helper's allow pairing: the asking account handing over to Atlas.
   case next = "chevron.right"
   /// Copy.
@@ -67,6 +69,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case exclamation = "exclamationmark"
   /// A check that passed.
   case passed = "checkmark.circle.fill"
+  /// Something just done, such as a picture copied.
+  case done = "checkmark"
   /// The General settings.
   case gear = "gearshape"
   /// The helper's screen.
@@ -79,8 +83,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case list = "list.bullet"
   /// Apps, in the Library.
   case windows = "macwindow.on.rectangle"
-  /// Screenshots, in the Library.
+  /// A set of pictures, in the component samples.
   case photos = "photo.on.rectangle"
+  /// A picture: a step's picture button.
+  case photo
   /// Something locked.
   case lock
   /// A popup button's choices.
@@ -93,4 +99,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case hand = "hand.point.up.left"
   /// The drag ghost's hand, its fill.
   case handFill = "hand.point.up.left.fill"
+  /// A scroll mark's arrow, pointing the way the page moved.
+  case scrollArrow = "arrow.down"
+  /// Show changes: what changed between two pictures.
+  case changes = "square.grid.3x3.square"
 }

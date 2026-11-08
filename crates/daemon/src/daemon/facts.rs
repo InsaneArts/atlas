@@ -1,5 +1,6 @@
 //! The `hello` reply: who the daemon runs as, in which session, on which
 //! display, with which permissions.
+use super::recorder;
 use atlas_core::protocol::Census;
 use atlas_native::native::{accessibility_trusted as accessibility, capture, cf, resources};
 use objc2_core_graphics::{
@@ -82,8 +83,13 @@ pub(super) use atlas_native::native::manager_name;
 /// The daemon's hello: who and where the helper is, what it may do, and,
 /// when it keeps background jobs, how many may still run, are launching,
 /// or have records it cannot read, and whether it could not read them all
-/// (`jobs`).
-pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
+/// (`jobs`). Its resources include the screen recorder, when `recorder`
+/// has something to say of it.
+pub(super) fn hello(
+    manager: &str,
+    jobs: Option<Census>,
+    recorder: Option<recorder::Report>,
+) -> Value {
     use atlas_core::protocol::{
         APP_PARTS, JOBS, READ, RGB_STREAM, RGB_STREAM_HIGH_RES, RGB_STREAM_STOP, SCK_EXPERIMENTAL,
         SESSION_PIN, SESSION_PROOF, SOUND,
@@ -103,6 +109,10 @@ pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
     if jobs.is_some() {
         capabilities.push(JOBS);
     }
+    let mut usage = json!(resources::own());
+    if let (Some(fields), Some(recorder)) = (usage.as_object_mut(), recorder) {
+        fields.insert("screenRecorder".to_owned(), json!(recorder));
+    }
     let mut hello = json!({
         "ok": true,
         "op": "hello",
@@ -115,7 +125,7 @@ pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
         "session": {"managerName": manager, "onConsole": console_state()},
         "display": display(),
         "daemon": {"protocol": 1, "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
-            "capabilities": capabilities, "resources": resources::own()},
+            "capabilities": capabilities, "resources": usage},
     });
     if let Some(jobs) = jobs {
         hello["daemon"]["jobs"] = json!(jobs);
@@ -125,6 +135,7 @@ pub(super) fn hello(manager: &str, jobs: Option<Census>) -> Value {
     if let Some(stats) = capture::stream_diagnostics() {
         hello["daemon"]["captureStats"] = stats;
     }
+    hello["daemon"]["pictureStats"] = capture::picture_diagnostics();
     hello
 }
 

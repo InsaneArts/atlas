@@ -15,11 +15,6 @@ public struct AgentsChange: Decodable, Sendable {
   /// The agents, in the command's order.
   public let agents: [Agent]
 
-  /// Whether a successful change needs a host restart.
-  public var requiresRestart: Bool {
-    agents.contains { $0.ok == true && $0.restart == true }
-  }
-
   /// The successful connections whose hosts must be restarted, grouped as the app displays them.
   public var restarting: [AgentID] {
     let ids = Set(

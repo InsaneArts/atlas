@@ -66,13 +66,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     container.coordinator.dockMenu()
   }
 
-  /// The app is quitting: the screenshots dragged out of the main window leave no copy behind.
-  ///
-  /// - Parameter notification: The app's notification.
-  func applicationWillTerminate(_ notification: Notification) {
-    ShotDrag.emptyFolder()
-  }
-
   /// A line from `atlas menubar` on standard input: `viewer` opens the main window.
   ///
   /// - Parameter line: The line, as read.

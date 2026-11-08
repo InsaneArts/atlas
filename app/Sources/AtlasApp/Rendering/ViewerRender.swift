@@ -32,9 +32,6 @@
         sample("21-activity-nothing-yet", PreviewStates.viewerActivityEmpty),
         sample("22-apps", PreviewStates.viewerApps),
         sample("23-show-on-screen", PreviewStates.viewerShowOnScreen),
-        sample("24-screenshots", PreviewStates.viewerShots),
-        sample("25-screenshot-large", PreviewStates.viewerShotLarge),
-        sample("26-screenshots-none-yet", PreviewStates.viewerShotsEmpty),
         sample("27-activity-paused", PreviewStates.viewerActivityPaused),
         sample("28-apps-paused", PreviewStates.viewerAppsPaused),
         sample("29-show-on-screen-right-edge", PreviewStates.viewerShowOnScreenRightEdge),
@@ -49,14 +46,12 @@
         sample("41-control-command-runs", PreviewStates.viewerControlCommandRuns),
         sample("42-control-job-runs", PreviewStates.viewerControlJobRuns),
         sample("43-activity-one-session-empty", PreviewStates.viewerActivityOneSessionEmpty),
-        sample("44-screenshots-one-session", PreviewStates.viewerShotsOneSession),
-        sample("45-screenshots-one-session-empty", PreviewStates.viewerShotsOneSessionEmpty),
         sample("48-sidebar-by-state", PreviewStates.viewerSidebarByState),
         sample("49-sidebar-ended-folded", PreviewStates.viewerSidebarEndedFolded),
         sample("50-sidebar-search-open", PreviewStates.viewerSidebarSearch),
         sample("51-sidebar-hidden", PreviewStates.viewerSidebarHidden),
         sample("53-pip-top-left", inCorner(.topLeading, PreviewStates.viewerActivity)),
-        sample("54-pip-top-right-screenshots", inCorner(.topTrailing, PreviewStates.viewerShots)),
+        sample("54-pip-top-right-run-pictures", inCorner(.topTrailing, PreviewStates.viewerActivityShots)),
         sample("55-pip-bottom-left-apps-paused", inCorner(.bottomLeading, PreviewStates.viewerAppsPaused)),
         sample("56-helper-needs-setup", PreviewStates.viewerHelperNeedsSetup),
         sample("57-session-chosen", PreviewStates.viewerSessionChosen),
@@ -73,6 +68,10 @@
         sample("68-apps-copy-monogram", PreviewStates.viewerAppsCopy),
         sample("69-apps-hidden", PreviewStates.viewerAppsHidden),
         sample("70-apps-many", PreviewStates.viewerAppsMany),
+        sample("71-activity-run-pictures", PreviewStates.viewerActivityShots),
+        sample("72-activity-replay", PreviewStates.viewerActivityReplay),
+        sample("73-picture-sheet", PreviewStates.viewerPictureSheet),
+        sample("74-step-picture-sheet", PreviewStates.viewerStepPicture),
       ]
     }
 
@@ -91,36 +90,38 @@
     /// The render names, in order, for a test to list as its arguments.
     static var names: [String] { renders.map(\.name) }
 
-    /// The lists drawn as they end, each scrolled to its very end under the small screen, and the Screenshots grid's
-    /// own cases: many screenshots, a dark one selected, and every shape, at the standard size and in narrow windows.
+    /// The lists drawn as they end, each scrolled to its very end under the small screen, and the Activity outline's
+    /// own cases in narrow windows: every session, one session with a run open, a run's pictures, and the picture
+    /// sheet over a screenshot and over a step.
     static var listRenders: [PreviewState<ViewerState>] {
-      let narrow = shotWidths.flatMap { width in
-        [("screenshots", PreviewStates.viewerShots), ("screenshots-mixed", PreviewStates.viewerShotsMixed)]
-          .map { name, state in
-            let size = CGSize(width: width, height: PreviewStates.viewerSize.height)
-            return PreviewState(
-              name: "list-narrow-\(Int(width))-\(name)",
-              value: PreviewStates.viewer(state, fittedTo: size),
-              size: size
-            )
-          }
+      let narrow = outlineWidths.flatMap { width in
+        [
+          ("activity", PreviewStates.viewerActivity), ("session", PreviewStates.viewerActivityOneSession),
+          ("shots", PreviewStates.viewerActivityShots), ("picture", PreviewStates.viewerPictureSheet),
+          ("step", PreviewStates.viewerStepPicture),
+        ]
+        .map { name, state in
+          let size = CGSize(width: width, height: PreviewStates.viewerSize.height)
+          return PreviewState(
+            name: "list-narrow-\(Int(width))-\(name)",
+            value: PreviewStates.viewer(state, fittedTo: size),
+            size: size
+          )
+        }
       }
       return [
         sample("list-end-activity-many", PreviewStates.viewerActivityMany),
         sample("list-end-apps-many", PreviewStates.viewerAppsMany),
-        sample("list-end-screenshots-many", PreviewStates.viewerShotsMany),
-        sample("list-end-screenshots-many-top-right", inCorner(.topTrailing, PreviewStates.viewerShotsMany)),
-        sample("list-screenshots-many", PreviewStates.viewerShotsMany),
-        sample("list-screenshots-dark-selected", PreviewStates.viewerShotsDarkSelected),
-        sample("list-screenshots-mixed", PreviewStates.viewerShotsMixed),
+        sample("list-end-activity-many-top-right", inCorner(.topTrailing, PreviewStates.viewerActivityMany)),
       ] + narrow
     }
 
     /// The list render names, in order, for a test to list as its arguments.
     static var listNames: [String] { listRenders.map(\.name) }
 
-    /// The widths the Screenshots grid is drawn narrow at: one column, and two.
-    nonisolated static let shotWidths: [CGFloat] = [480, 760]
+    /// The widths the Activity outline is drawn narrow at: where a run's summary hides, and where Replay shows its
+    /// symbol alone and the sheet's buttons wrap.
+    nonisolated static let outlineWidths: [CGFloat] = [560, 400]
 
     /// Whether a list render shows its list scrolled to its very end.
     ///
@@ -212,16 +213,16 @@
     /// The narrow render names, in order, for a test to list as its arguments.
     static var narrowNames: [String] { narrowRenders.map(\.name) }
 
-    /// The four places' samples, the Screen first, and the sidebar hidden, which the frame renders draw at every size.
+    /// The three places' samples, the Screen first, and the sidebar hidden, which the frame renders draw at every size.
     private static var tabs: [(name: String, state: ViewerState)] {
       [
         ("screen", PreviewStates.viewerWorking), ("activity", PreviewStates.viewerActivity),
-        ("screenshots", PreviewStates.viewerShots), ("apps", PreviewStates.viewerApps),
+        ("apps", PreviewStates.viewerApps),
         ("sidebar-hidden", PreviewStates.viewerSidebarHidden),
       ]
     }
 
-    /// The sizes the frame renders draw the four places at: the window's first size, the standard one, the narrower
+    /// The sizes the frame renders draw the three places at: the window's first size, the standard one, the narrower
     /// steps, a tall one and two full screens, so every place can be seen to stand in the same card. The design check
     /// draws them; the tests draw each state once, at the standard size or a narrow one.
     private static let frameSizes: [(name: String, size: NSSize, fullScreen: Bool)] = [
@@ -338,8 +339,7 @@
         loop.run(until: wait)
         host.layoutSubtreeIfNeeded()
       }
-      guard let data = PNG.data(of: host, appearance: appearance) else { return false }
-      return (try? data.write(to: folder.appendingPathComponent("\(file).png"))) != nil
+      return PNG.write(host, to: folder.appendingPathComponent("\(file).png"), appearance: appearance)
     }
 
     /// The lists that scroll down in `view`: every scroll view under it taller inside than it shows.

@@ -27,13 +27,13 @@ struct ViewerControllerAnnouncementTests {
     await viewer.readingLoop.readStatus()
     // The paused viewer also waits for status and age ticks; the third sleeper is the announcement.
     try await clock.untilSleeping(3, "the window never subscribed")
-    clock.advance(by: ViewerController.announceAfter)
+    clock.advance(by: StatusAnnouncer.after)
     try await settle("the window never announced") { viewer.session.announcement?.hasPrefix("Stopped") == true }
     window.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: window))
     try await settle("the background window kept its announcement") { viewer.session.announcement == nil }
     window.windowDidBecomeKey(Notification(name: NSWindow.didBecomeKeyNotification, object: window))
     try await clock.untilSleeping(3, "regaining the keyboard never subscribed")
-    clock.advance(by: ViewerController.announceAfter)
+    clock.advance(by: StatusAnnouncer.after)
     try await settle("the focused window never announced again") { viewer.session.announcement != nil }
     viewer.setVisible(false)
     try await settle("the hidden window kept its announcement") { viewer.session.announcement == nil }
@@ -44,7 +44,7 @@ struct ViewerControllerAnnouncementTests {
     let clock = ManualClock()
     let viewer = ViewerController.scripted(ScriptedService(), clock: clock)
     viewer.announceSoon("Stopped")
-    try await clock.untilSleeping(for: ViewerController.announceAfter, "the announcement never waited")
+    try await clock.untilSleeping(for: StatusAnnouncer.after, "the announcement never waited")
     clock.advance(by: .milliseconds(500))
     viewer.announceSoon("Stopped")
     clock.advance(by: .milliseconds(500))
@@ -64,7 +64,7 @@ struct ViewerControllerAnnouncementTests {
     #expect(viewer.askingStatus == nil, "Working asks nothing of the person")
     viewer.announceSoon("Stopped, Resume when you're ready")
     try await clock.untilSleeping(3, "the announcement never waited")
-    clock.advance(by: ViewerController.announceAfter - .milliseconds(1))
+    clock.advance(by: StatusAnnouncer.after - .milliseconds(1))
     await Task.yield()
     #expect(viewer.state.announcement == nil, "it waits its second")
     clock.advance(by: .milliseconds(1))

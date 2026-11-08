@@ -98,6 +98,8 @@ public enum Motion {
     static let spin = Duration(seconds: 0.9)
     /// 1.6: one breath of the live badge.
     public static let breathe = Duration(seconds: 1.6)
+    /// 1.5: how long a button says what it just did, such as Copy saying Copied, before it reads as itself again.
+    public static let confirmHold = Duration(seconds: 1.5)
     /// 2.4: how long a toast stays.
     public static let toast = Duration(seconds: 2.4)
     /// 2.4: one turn of the ring tracing round Atlas's mark while the viewer connects.
@@ -127,6 +129,10 @@ public enum Motion {
     static let zoom = Spring(duration: 0.35, bounce: 0)
     /// A position indicator moving, such as the page dots: 0.3 seconds, no bounce.
     static let indicator = Spring(duration: 0.3, bounce: 0)
+    /// A sheet coming in over the window: 0.3 seconds, no bounce, so it turns back from where it is if closed at once.
+    static let present = Spring(duration: 0.3, bounce: 0)
+    /// A sheet going: 0.22 seconds, no bounce, a little quicker than it came.
+    static let close = Spring(duration: 0.22, bounce: 0)
   }
 
   /// The setup window's glide curve: it starts at once and lands softly, as a cubic Bézier's two control
@@ -325,6 +331,12 @@ public enum Motion {
 
   /// A position indicator moving, such as the page dots: ``Springs/indicator``, with no bounce.
   static var indicator: Animation { paced(.spring(Springs.indicator)) }
+
+  /// A sheet coming in: ``Springs/present``.
+  static var present: Animation { paced(.spring(Springs.present)) }
+
+  /// A sheet going: ``Springs/close``, a little quicker than it came.
+  static var close: Animation { paced(.spring(Springs.close)) }
 
   /// The shared fade for transitions under Reduce Motion: ease out over ``Duration/reduced``, with no
   /// movement. Callers can choose a fallback through ``animation(_:reduceMotion:)`` or

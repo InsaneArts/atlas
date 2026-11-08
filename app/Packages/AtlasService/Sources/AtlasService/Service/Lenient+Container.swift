@@ -36,6 +36,17 @@ extension KeyedDecodingContainer {
     max(0, (try? decodeIfPresent(Int.self, forKey: key)) ?? 0)
   }
 
+  /// Counts by name: each name kept with its count when that is a whole number of at least 1, and none when the map is
+  /// missing or of the wrong type.
+  ///
+  /// - Parameter key: The field.
+  /// - Returns: The counts.
+  func lenientCounts(_ key: Key) -> [String: Int] {
+    ((try? decodeIfPresent([String: Lenient<Int>].self, forKey: key)) ?? [:])
+      .compactMapValues(\.value)
+      .filter { !$0.key.isEmpty && $0.value > 0 }
+  }
+
   /// A moment written as milliseconds since 1970, or nil when it is missing, of the wrong type or not finite.
   ///
   /// - Parameter key: The field.
@@ -43,6 +54,19 @@ extension KeyedDecodingContainer {
   func lenientDate(milliseconds key: Key) -> Date? {
     (try? decodeIfPresent(Double.self, forKey: key))
       .flatMap { $0.isFinite ? Date(timeIntervalSince1970: $0 / 1000) : nil }
+  }
+
+  /// A finite number, for a value an object cannot do without.
+  ///
+  /// - Parameter key: The field.
+  /// - Returns: The number.
+  /// - Throws: `DecodingError` when it is missing, of the wrong type or not finite.
+  func finite(_ key: Key) throws -> Double {
+    let value = try decode(Double.self, forKey: key)
+    guard value.isFinite else {
+      throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "Not a finite number")
+    }
+    return value
   }
 
   /// A list, each element decoded on its own, so one odd element is dropped and the rest are kept; none when the

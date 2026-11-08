@@ -688,6 +688,27 @@ fn only_a_known_end_projects_to_ended_history() {
 }
 
 #[test]
+fn history_says_how_much_of_each_action_and_app_a_session_did() {
+    use crate::host_session::HostSession;
+    let now = u64::try_from(NOW / 1_000_000).unwrap();
+    let mut record = Record::new(&HostSession::new(Host::Codex, "busy").unwrap(), now, None);
+    record.counts = BTreeMap::from([("type".into(), 3), ("screenshot".into(), 2)]);
+    record.apps = BTreeMap::from([("TextEdit".into(), 3)]);
+    let history = HistorySource {
+        records: std::slice::from_ref(&record),
+        rows: &[],
+        captures: &BTreeSet::new(),
+        copies: &BTreeMap::new(),
+        tasks: &[],
+        now,
+    }
+    .history();
+    assert_eq!(history[0]["actions"], json!(5));
+    assert_eq!(history[0]["counts"], json!({"type": 3, "screenshot": 2}));
+    assert_eq!(history[0]["appCounts"], json!({"TextEdit": 3}));
+}
+
+#[test]
 fn pending_work_and_held_control_remain_independent() {
     let own = key("own");
     let holder = note(Some(&own), 1);

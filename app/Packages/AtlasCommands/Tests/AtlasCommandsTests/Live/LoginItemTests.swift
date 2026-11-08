@@ -7,111 +7,51 @@ import Testing
 @Suite("Login item")
 struct LoginItemTests {
   @Test(
-    "turning off an unregistered login item succeeds without unregistering",
-    arguments: [SMAppService.Status.notRegistered, .notFound]
+    "a change that already holds succeeds without a call, and one whose error leaves it holding succeeds after one",
+    arguments: [
+      (SMAppService.Status.notRegistered, SMAppService.Status.notRegistered, kSMErrorJobNotFound, false, [Bool]()),
+      (.notFound, .notFound, kSMErrorJobNotFound, false, []),
+      (.enabled, .enabled, kSMErrorAlreadyRegistered, true, []),
+      (.notRegistered, .enabled, kSMErrorAlreadyRegistered, true, [true]),
+      (.enabled, .notRegistered, kSMErrorJobNotFound, false, [false]),
+      (.enabled, .notFound, kSMErrorJobNotFound, false, [false]),
+    ]
   )
-  func turningOffAnUnregisteredLoginItem(status: SMAppService.Status) throws {
+  func aChangeThatHoldsSucceeds(
+    status: SMAppService.Status,
+    after: SMAppService.Status,
+    code: Int,
+    on: Bool,
+    calls: [Bool]
+  ) throws {
     let service = ScriptedLoginItemService(
       status: status,
-      statusAfterChange: status,
-      failure: NSError(domain: "SMAppServiceErrorDomain", code: kSMErrorJobNotFound)
+      statusAfterChange: after,
+      failure: NSError(domain: "SMAppServiceErrorDomain", code: code)
     )
 
     try LoginItem(service: service)
-      .set(false)
+      .set(on)
 
-    #expect(service.calls.isEmpty)
-  }
-
-  @Test("turning on an enabled login item succeeds without registering")
-  func turningOnAnEnabledLoginItem() throws {
-    let service = ScriptedLoginItemService(
-      status: .enabled,
-      statusAfterChange: .enabled,
-      failure: NSError(domain: "SMAppServiceErrorDomain", code: kSMErrorAlreadyRegistered)
-    )
-
-    try LoginItem(service: service)
-      .set(true)
-
-    #expect(service.calls.isEmpty)
-  }
-
-  @Test("an already registered error succeeds when the service is now enabled")
-  func anAlreadyRegisteredErrorReconciles() throws {
-    let service = ScriptedLoginItemService(
-      status: .notRegistered,
-      statusAfterChange: .enabled,
-      failure: NSError(domain: "SMAppServiceErrorDomain", code: kSMErrorAlreadyRegistered)
-    )
-
-    try LoginItem(service: service)
-      .set(true)
-
-    #expect(service.calls == [true])
+    #expect(service.calls == calls)
   }
 
   @Test(
-    "a job not found error succeeds when the service is now unregistered",
-    arguments: [SMAppService.Status.notRegistered, .notFound]
+    "a change fails with its error when the requested state does not hold, when the error is a real failure, or when it comes from another domain",
+    arguments: [
+      ("SMAppServiceErrorDomain", kSMErrorAlreadyRegistered, SMAppService.Status.requiresApproval, true),
+      ("SMAppServiceErrorDomain", kSMErrorJobNotFound, .requiresApproval, false),
+      ("SMAppServiceErrorDomain", kSMErrorInvalidSignature, .enabled, true),
+      ("SMAppServiceErrorDomain", kSMErrorInvalidSignature, .notRegistered, false),
+      (NSCocoaErrorDomain, kSMErrorAlreadyRegistered, .enabled, true),
+      (NSCocoaErrorDomain, kSMErrorJobNotFound, .notRegistered, false),
+    ]
   )
-  func aJobNotFoundErrorReconciles(status: SMAppService.Status) throws {
-    let service = ScriptedLoginItemService(
-      status: .enabled,
-      statusAfterChange: status,
-      failure: NSError(domain: "SMAppServiceErrorDomain", code: kSMErrorJobNotFound)
-    )
-
-    try LoginItem(service: service)
-      .set(false)
-
-    #expect(service.calls == [false])
-  }
-
-  @Test("a registration error still fails when the requested state does not hold", arguments: [true, false])
-  func anUnreconciledErrorFails(on: Bool) {
-    let failure = NSError(
-      domain: "SMAppServiceErrorDomain",
-      code: on ? kSMErrorAlreadyRegistered : kSMErrorJobNotFound
-    )
+  func aChangeFailsWithItsError(domain: String, code: Int, after: SMAppService.Status, on: Bool) {
+    let failure = NSError(domain: domain, code: code)
     let service = ScriptedLoginItemService(
       status: on ? .notRegistered : .enabled,
-      statusAfterChange: .requiresApproval,
-      failure: failure
-    )
-
-    #expect(throws: failure) {
-      try LoginItem(service: service)
-        .set(on)
-    }
-    #expect(service.calls == [on])
-  }
-
-  @Test("a real failure is preserved even when the requested state now holds", arguments: [true, false])
-  func aRealFailureIsPreserved(on: Bool) {
-    let failure = NSError(domain: "SMAppServiceErrorDomain", code: kSMErrorInvalidSignature)
-    let service = ScriptedLoginItemService(
-      status: on ? .notRegistered : .enabled,
-      statusAfterChange: on ? .enabled : .notRegistered,
-      failure: failure
-    )
-
-    #expect(throws: failure) {
-      try LoginItem(service: service)
-        .set(on)
-    }
-    #expect(service.calls == [on])
-  }
-
-  @Test("an error from another domain is preserved even when its code matches", arguments: [true, false])
-  func anUnrelatedErrorIsPreserved(on: Bool) {
-    let failure = NSError(
-      domain: NSCocoaErrorDomain,
-      code: on ? kSMErrorAlreadyRegistered : kSMErrorJobNotFound
-    )
-    let service = ScriptedLoginItemService(
-      status: on ? .notRegistered : .enabled,
-      statusAfterChange: on ? .enabled : .notRegistered,
+      statusAfterChange: after,
       failure: failure
     )
 

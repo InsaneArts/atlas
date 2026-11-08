@@ -115,7 +115,7 @@ struct ViewerControllerAlertTests {
     let viewer = try await ViewerController.watching(Self.needsYou(), commands: commands, clock: clock)
     viewer.send(.alertConfirm)
     try await clock.untilSleeping(for: Self.hold, "Recover never held on its done words")
-    viewer.ask(.logOut)
+    viewer.ask(.helper(.logOut))
     #expect(viewer.session.notice == HelperWords.waitForAction)
     clock.advance(by: Self.hold)
     try await settle("the alert never closed") { !viewer.session.recovering }

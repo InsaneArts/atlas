@@ -15,10 +15,12 @@
 pub mod activity_log;
 pub mod agent;
 pub mod app_selection;
+pub mod before;
 pub mod capability;
 pub mod cleanup;
 pub mod client;
 pub mod collect;
+pub mod console_agents;
 pub mod doing;
 pub mod environment;
 pub mod handoff;

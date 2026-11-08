@@ -29,19 +29,6 @@ struct ViewerLayoutTests {
     #expect(frame == CGRect(x: 200, y: 132.5, width: 100, height: 90))
     #expect(ViewerLayout.outlineFrame(frame, in: .zero, picture: CGSize(width: 1, height: 1)) == .zero)
   }
-
-  @Test(
-    "a large screenshot keeps its shape, no larger than 1040 by 650 and within the window beside its buttons and bar",
-    arguments: [
-      (CGSize(width: 16, height: 10), CGSize(width: 1440, height: 900), CGSize(width: 1040, height: 650)),
-      (CGSize(width: 16, height: 9), CGSize(width: 1440, height: 900), CGSize(width: 1040, height: 585)),
-      // 800 by 508 leaves 640 across beside Previous and Next, and 360 down, centred clear of the bar at its foot.
-      (CGSize(width: 16, height: 10), CGSize(width: 800, height: 508), CGSize(width: 576, height: 360)),
-    ] as [(CGSize, CGSize, CGSize)]
-  )
-  func largeShotSize(aspect: CGSize, window: CGSize, size: CGSize) {
-    #expect(ViewerLayout.largeShotSize(aspect: aspect, in: window) == size)
-  }
 }
 
 extension ViewerLayoutTests {
@@ -102,7 +89,7 @@ extension ViewerLayoutTests {
 
   @Test("a large screenshot's shade fades in over 0.2 seconds, with nothing blurred under it")
   func theLargeScreenshotsShadeOnlyFades() {
-    #expect(ViewerLayout.shotFade == Animation.easeOut(duration: 0.2))
-    #expect(ViewerLayout.shotScrim == 0.72)
+    #expect(ViewerLayout.replayFade == Animation.easeOut(duration: 0.2))
+    #expect(ViewerLayout.replayScrim == 0.72)
   }
 }

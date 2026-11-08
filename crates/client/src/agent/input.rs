@@ -126,7 +126,6 @@ pub(super) fn type_parts(batch: &str) -> Vec<String> {
 /// follow earlier text chunks; retain uncertainty and do not replay the text.
 pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>) -> Result<Value> {
     let batches = type_batches(text)?;
-
     let ownership = client.controller.acquire_beside_commands()?;
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
@@ -160,7 +159,10 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
 /// With a command under way, its terminal row describes all batches,
 /// including confirmed text before a later refusal. The reader replaces
 /// the individual batch rows with this one. Only action counts and the
-/// reply's safe projection are kept.
+/// reply's safe projection are kept: the field only when every batch sent
+/// named the same one. The whole text is noted for the facts beside the
+/// command's picture just before that row, when every batch's row has
+/// said which field it went into.
 pub(super) async fn type_recorded(
     client: &Client,
     batches: &[String],
@@ -169,6 +171,8 @@ pub(super) async fn type_recorded(
 ) -> Value {
     let started = Instant::now();
     let mut identity = json!({});
+    // The field each batch sent went into, as its reply says.
+    let mut fields = Vec::new();
     let (mut typed, mut confirmed) = (0, 0);
     let mut stopped = None;
     for batch in batches {
@@ -181,15 +185,18 @@ pub(super) async fn type_recorded(
             Ok(()) => send(&Value::Array(actions)).await,
             Err(stop) => Err(stop),
         };
-        if let Ok(reply) = &outcome {
-            if !reply["app"].is_null() {
-                identity["app"] = reply["app"].clone();
-                identity["bundleId"] = reply["bundleId"].clone();
-            }
-            if !reply["field"].is_null() {
-                identity["field"] = reply["field"].clone();
-            }
+        if let Ok(reply) = &outcome
+            && !reply["app"].is_null()
+        {
+            identity["app"] = reply["app"].clone();
+            identity["bundleId"] = reply["bundleId"].clone();
         }
+        // A batch that failed, or whose reply was lost, may have typed some
+        // of its text where nobody can tell.
+        fields.push(match &outcome {
+            Ok(reply) if reply["ok"] == true => reply["field"].clone(),
+            Ok(_) | Err(_) => Value::Null,
+        });
 
         let (error, performed, partial) = match outcome {
             Ok(reply) if reply["ok"] == true => {
@@ -227,9 +234,18 @@ pub(super) async fn type_recorded(
         return report;
     }
 
+    if let Some(first) = fields.first()
+        && !first.is_null()
+        && fields.iter().all(|field| field == first)
+    {
+        identity["field"] = first.clone();
+    }
     let mut reply = report.clone();
     if report["uncertain"] == true {
         reply["code"] = json!(Code::Uncertain);
+    }
+    if let Some(doing) = &client.doing {
+        doing.before().typing(&batches.concat());
     }
     for field in ["app", "bundleId", "field"] {
         if let Some(value) = identity.get(field) {

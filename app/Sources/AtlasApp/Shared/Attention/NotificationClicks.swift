@@ -41,16 +41,14 @@ nonisolated final class NotificationClicks: NSObject, UNUserNotificationCenterDe
     self.viewerShows = viewerShows
   }
 
-  /// What a response's action asks for: Recover recovers while Recover is offered; a dismissal does nothing; a click,
-  /// Open Atlas, or a Recover left from when it was offered opens Atlas.
+  /// What a response's action asks for: Recover recovers; a dismissal does nothing; a click, or any other action,
+  /// opens Atlas.
   ///
-  /// - Parameters:
-  ///   - action: The response's action identifier.
-  ///   - offersRecover: Whether Recover is offered (``NotificationWords/offersRecover``).
+  /// - Parameter action: The response's action identifier.
   /// - Returns: What to do.
-  static func answer(to action: String, offersRecover: Bool = NotificationWords.offersRecover) -> Answer {
+  static func answer(to action: String) -> Answer {
     switch action {
-    case NotificationWords.recoverAction where offersRecover: .recover
+    case NotificationWords.recoverAction: .recover
     case UNNotificationDismissActionIdentifier: .none
     default: .open
     }

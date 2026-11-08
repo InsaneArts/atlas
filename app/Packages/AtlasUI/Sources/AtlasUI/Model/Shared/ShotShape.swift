@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// The shape a screenshot's picture is drawn at wherever it shows, the Screenshots grid and an Activity step alike,
+/// The shape a screenshot's picture is drawn at wherever it shows, in the Activity outline and the picture sheet alike,
 /// so the whole screenshot shows, never cut or zoomed: its thumbnail's own once read, else the shape the screenshots
 /// list says, else 16:10.
 public enum ShotShape {

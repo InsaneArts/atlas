@@ -31,10 +31,13 @@
         PreviewState(name: "Activity", value: viewerActivity),
         PreviewState(name: "Activity, nothing yet", value: viewerActivityEmpty),
         PreviewState(name: "Activity, paused", value: viewerActivityPaused),
-        PreviewState(name: "Activity, a moment opened", value: viewerActivityOpened),
+        PreviewState(name: "Activity, a run opened", value: viewerActivityOpened),
         PreviewState(name: "Activity, problems", value: viewerActivityProblems),
         PreviewState(name: "Activity, days before", value: viewerActivityDays),
-        PreviewState(name: "Activity, many moments", value: viewerActivityMany),
+        PreviewState(name: "Activity, many sessions", value: viewerActivityMany),
+        PreviewState(name: "Activity, a run's pictures", value: viewerActivityShots),
+        PreviewState(name: "A picture", value: viewerPictureSheet),
+        PreviewState(name: "A step's picture", value: viewerStepPicture),
         PreviewState(name: "Apps", value: viewerApps),
         PreviewState(name: "Apps, paused", value: viewerAppsPaused),
         PreviewState(name: "Apps, one session", value: viewerAppsOneSession),
@@ -44,9 +47,6 @@
         PreviewState(name: "Apps, many", value: viewerAppsMany),
         PreviewState(name: "Show on screen", value: viewerShowOnScreen),
         PreviewState(name: "Show on screen, at the right edge", value: viewerShowOnScreenRightEdge),
-        PreviewState(name: "Screenshots", value: viewerShots),
-        PreviewState(name: "A screenshot, large", value: viewerShotLarge),
-        PreviewState(name: "Screenshots, none yet", value: viewerShotsEmpty),
         PreviewState(name: "Sessions", value: viewerSessions),
         PreviewState(name: "Sessions, one ended", value: viewerSessionsEnded),
         PreviewState(name: "Activity by session", value: viewerActivityBySession),
@@ -60,8 +60,6 @@
         PreviewState(name: "You have control, a command runs", value: viewerControlCommandRuns),
         PreviewState(name: "You have control, a job may run", value: viewerControlJobRuns),
         PreviewState(name: "Activity, one session, nothing yet", value: viewerActivityOneSessionEmpty),
-        PreviewState(name: "Screenshots, one session", value: viewerShotsOneSession),
-        PreviewState(name: "Screenshots, one session, none yet", value: viewerShotsOneSessionEmpty),
         PreviewState(name: "Session cleaning up", value: viewerSessionCleaningUp),
         PreviewState(name: "Session ended", value: viewerSessionEnded),
         PreviewState(name: "Sidebar by state", value: viewerSidebarByState),
@@ -195,13 +193,7 @@
           unseen: unseen,
           isChosen: place == .activity
         ),
-        ViewerLibraryRow(
-          place: .screenshots,
-          title: "Screenshots",
-          help: "Screenshots (⌘3)",
-          isChosen: place == .screenshots
-        ),
-        ViewerLibraryRow(place: .apps, title: "Apps", help: "Apps (⌘4)", isChosen: place == .apps),
+        ViewerLibraryRow(place: .apps, title: "Apps", help: "Apps (⌘3)", isChosen: place == .apps),
       ]
       return rows.map { row in
         var counted = row

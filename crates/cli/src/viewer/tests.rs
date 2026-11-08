@@ -1480,6 +1480,83 @@ async fn activity_json_reports_an_unreadable_log_and_recovers_after_it_is_replac
 }
 
 #[tokio::test]
+async fn activity_json_gives_the_app_each_kept_pictures_after_when_taken_and_facts() {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let output = viewer.client().output_dir().unwrap().to_path_buf();
+    let folder = output.join(atlas_client::before::FOLDER);
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&folder)
+        .unwrap();
+    let taken = atlas_core::time::timestamp() - 3_000_000_000;
+    let before = format!("{taken}-before.jpg");
+    let after = format!("{taken}-after.jpg");
+    let earlier = taken - 600_000_000;
+    let earlier_before = format!("{earlier}-before.jpg");
+    for file in [&before, &after, &earlier_before] {
+        std::fs::write(folder.join(file), b"jpeg").unwrap();
+    }
+    // A picture after an action says when it was taken by when it changed.
+    let after_taken = taken + 1_300_000_000;
+    std::fs::File::options()
+        .write(true)
+        .open(folder.join(&after))
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH
+                + std::time::Duration::from_nanos(u64::try_from(after_taken).unwrap()),
+        )
+        .unwrap();
+    std::fs::write(
+        folder.join(format!("{taken}-facts.json")),
+        json!({"action": "click", "outcome": "worked"}).to_string(),
+    )
+    .unwrap();
+    let ended = taken + 100_000_000;
+    let rows = [
+        json!({"at": ended.to_string(), "operation": "input", "ok": true, "actor": "agent",
+            "verb": "click", "command": "c1", "before": before}),
+        json!({"at": ended.to_string(), "operation": "input", "ok": true, "actor": "agent",
+            "verb": "click", "command": "c2", "before": "1-before.jpg"}),
+        json!({"at": (earlier + 100_000_000).to_string(), "operation": "input", "ok": true,
+            "actor": "agent", "verb": "click", "command": "c3", "before": earlier_before}),
+    ];
+    std::fs::write(
+        output.join(atlas_client::activity_log::FILE),
+        rows.iter()
+            .map(|row| format!("{row}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+
+    let (_, reply) = read_json(&viewer, "activity.json").await;
+    let listed = reply["activity"].as_array().unwrap();
+    let kept = listed.iter().find(|row| row["before"] == before).unwrap();
+    assert_eq!(kept["after"], after);
+    assert_eq!(kept["afterAt"], json!(after_taken / 1_000_000));
+    let followed = listed.iter().find(|row| row["logicalId"] == "c3").unwrap();
+    assert_eq!(
+        (&followed["after"], &followed["afterAt"]),
+        (&json!(before), &json!(taken / 1_000_000)),
+        "the next step's picture before, taken when its name says"
+    );
+    assert_eq!(
+        kept["facts"],
+        json!({"action": "click", "outcome": "worked"})
+    );
+    let gone = listed.iter().find(|row| row["logicalId"] == "c2").unwrap();
+    assert_eq!(
+        (&gone["before"], &gone["after"], &gone["afterAt"]),
+        (&Value::Null, &Value::Null, &Value::Null),
+        "a picture no longer kept is not named"
+    );
+    assert!(gone.get("facts").is_none());
+}
+
+#[tokio::test]
 async fn activity_json_never_carries_typed_text() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
@@ -1529,8 +1606,11 @@ async fn activity_json_never_carries_typed_text() {
         keys,
         [
             "actor",
+            "after",
+            "afterAt",
             "ageSeconds",
             "app",
+            "before",
             "bundleId",
             "capture",
             "count",
@@ -1810,7 +1890,7 @@ async fn reading_the_helpers_apps_and_windows_records_no_activity() {
 #[test]
 fn the_apps_activity_row_keeps_its_fields_and_values() {
     let dir = tempfile::tempdir().unwrap();
-    let line = r#"{"at":"90000000000","operation":"input","ok":false,"code":"focus-changed","reason":"window","partial":true,"verb":"click","app":"Opie","label":"Save","session":"0123456789ab","capture":"1-capture.png","actionCount":1,"actor":"agent","command":"c1"}"#;
+    let line = r#"{"at":"90000000000","operation":"input","ok":false,"code":"focus-changed","reason":"window","partial":true,"verb":"click","app":"Opie","label":"Save","session":"0123456789ab","capture":"1-capture.png","actionCount":1,"actor":"agent","command":"c1","before":"90000000000-before.jpg"}"#;
     std::fs::write(
         dir.path().join(atlas_client::activity_log::FILE),
         format!("{line}\n{{\"at\":\"1\",\"operation\":\"run\"}}\n"),
@@ -2120,6 +2200,63 @@ async fn screenshots_are_listed_newest_first_and_served_only_by_a_capture_name()
 }
 
 #[tokio::test]
+async fn a_picture_before_an_action_is_served_from_its_own_folder_by_its_own_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let output = viewer.client().output_dir().unwrap().to_path_buf();
+    let folder = output.join(atlas_client::before::FOLDER);
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+        .create(&folder)
+        .unwrap();
+    let png = atlas_native::native::capture::sample_png(640, 400);
+    let (jpeg, _, _) = atlas_client::helper_info::jpeg(&png, (640, 0.6)).unwrap();
+    std::fs::write(folder.join("1700000000000000000-before.jpg"), &jpeg).unwrap();
+    std::fs::write(output.join("1700000005000000000-before.jpg"), &jpeg).unwrap();
+    std::os::unix::fs::symlink(
+        folder.join("1700000000000000000-before.jpg"),
+        folder.join("1700000009000000000-before.jpg"),
+    )
+    .unwrap();
+    std::fs::write(folder.join("1700000000000000000-capture.png"), &png).unwrap();
+    std::fs::write(dir.path().join("u.toml"), SETTINGS).unwrap();
+
+    let (status, kind, body) = read(
+        &viewer,
+        "screenshot.png?name=1700000000000000000-before.jpg&size=full",
+    )
+    .await;
+    assert_eq!((status, kind.as_str()), (200, "image/jpeg"));
+    assert_eq!(body, jpeg, "as kept");
+    let (status, _, body) = read(
+        &viewer,
+        "screenshot.png?name=1700000000000000000-before.jpg",
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(&body[..2], [0xFF, 0xD8], "a thumbnail");
+
+    let (_, listed) = read_json(&viewer, "screenshots.json").await;
+    assert_eq!(
+        listed["screenshots"],
+        json!([]),
+        "never listed as a screenshot"
+    );
+    for query in [
+        "?name=1700000005000000000-before.jpg",
+        "?name=1700000009000000000-before.jpg",
+        "?name=before/1700000000000000000-before.jpg",
+        "?name=1700000000000000000-capture.png",
+    ] {
+        let (status, refused) = read_json(&viewer, &format!("screenshot.png{query}")).await;
+        assert_eq!(
+            (status, refused["code"].clone()),
+            (404, json!("bad-request")),
+            "{query}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn control_tokens_keep_their_validation_order_for_missing_and_non_string_fields()
 -> atlas_core::error::Result<()> {
     let directory = tempfile::tempdir()?;
@@ -2159,6 +2296,13 @@ async fn fresh_input_frame(viewer: &Viewer, key: &str) {
     let mut frames = viewer.frames.lock().await;
     frames.items.clear();
     frames.items.push_back((key.into(), Arc::new(frame)));
+}
+
+/// Whether the frame service has been told of sent input since it last was.
+async fn frame_service_told(viewer: &Viewer) -> bool {
+    tokio::time::timeout(Duration::ZERO, viewer.input_sent.notified())
+        .await
+        .is_ok()
 }
 
 #[tokio::test]
@@ -2312,6 +2456,7 @@ async fn raw_input_frame_refusals_clean_up_only_the_live_lease_without_dispatchi
             "{reply}"
         );
         assert_eq!(asked.try_recv().ok().as_deref(), Some("input"));
+        assert!(frame_service_told(&viewer).await);
         fresh_input_frame(&viewer, "observed").await;
         let revision = viewer.frames.lock().await.input_revision;
         let mut malformed = valid;
@@ -2333,7 +2478,48 @@ async fn raw_input_frame_refusals_clean_up_only_the_live_lease_without_dispatchi
         assert!(!viewer.lease.lock().await.active());
         assert!(client.controller.pending().unwrap().is_empty());
         assert_eq!(viewer.frames.lock().await.input_revision, revision);
+        assert!(
+            !frame_service_told(&viewer).await,
+            "refused input tells nothing"
+        );
     }
+}
+
+#[tokio::test]
+async fn input_tells_the_frame_service_before_the_helper_finishes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("input.sock");
+    let (mut asked, finish) = input_service(&socket, "input");
+    let viewer = http::configured(
+        client_with_input(dir.path(), &socket),
+        "127.0.0.1:1".into(),
+        None,
+    );
+    let client = viewer.client();
+    let owner = viewer.take_control(&client, &epoch()).await.unwrap();
+    assert_eq!(asked.recv().await.as_deref(), Some("acquire"));
+    fresh_input_frame(&viewer, "observed").await;
+    let sending = viewer.clone();
+    let typed = json!({"lease":owner,"frame":"observed","actions":[{"type":"type","text":"a"}]});
+    let input = tokio::spawn(async move { posted(&sending, "input", &typed).await });
+    // The helper has the input and has not answered it.
+    assert_eq!(asked.recv().await.as_deref(), Some("input"));
+    assert!(
+        frame_service_told(&viewer).await,
+        "told while the input is still running"
+    );
+    finish.notify_one();
+    let (status, reply) = input.await.unwrap();
+    assert_eq!(
+        (status, reply["performed"].clone()),
+        (200, json!(1)),
+        "{reply}"
+    );
+    assert!(
+        frame_service_told(&viewer).await,
+        "told again once it is done"
+    );
+    viewer.release(Some(&owner)).await.unwrap();
 }
 
 fn recovery_session(id: &str) -> atlas_core::host::HostSession {

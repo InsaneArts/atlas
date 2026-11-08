@@ -181,24 +181,28 @@ export function swiftFiles(folder) {
   return found.sort();
 }
 
-// Runs one checker over the Swift files under each of `folders`, given as
-// paths relative to the repository unless absolute. `check(text, file)`
-// returns { line, rule, message } problems; every problem fails the check.
-// CHECK_SWIFT_BASE names another base for the printed paths.
-export function run(checker, folders, check) {
+// Runs each of `rules`, { name, folders, check }, over the Swift files under
+// its folders, given as paths relative to the repository unless absolute.
+// `check(text, file)` returns { line, rule, message } problems; every problem
+// fails. Prints every rule's problems, then exits 1 when there were any; a
+// folder that does not exist exits 2 at once. CHECK_SWIFT_BASE names another
+// base for the printed paths.
+export function runAll(rules) {
   const base = process.env.CHECK_SWIFT_BASE ?? repository;
   const failures = [];
-  for (const folder of folders) {
-    const root = path.resolve(base, folder);
-    if (!fs.existsSync(root)) {
-      console.error(`check-swift-${checker}: ${root} does not exist`);
-      process.exit(2);
-    }
-    for (const file of swiftFiles(root)) {
-      const relative = path.relative(base, file).split(path.sep).join('/');
-      const text = fs.readFileSync(file, 'utf8');
-      for (const problem of check(text, relative)) {
-        failures.push(`${relative}:${problem.line}: ${problem.message}`);
+  for (const { name, folders, check } of rules) {
+    for (const folder of folders) {
+      const root = path.resolve(base, folder);
+      if (!fs.existsSync(root)) {
+        console.error(`check-swift-${name}: ${root} does not exist`);
+        process.exit(2);
+      }
+      for (const file of swiftFiles(root)) {
+        const relative = path.relative(base, file).split(path.sep).join('/');
+        const text = fs.readFileSync(file, 'utf8');
+        for (const problem of check(text, relative)) {
+          failures.push(`${relative}:${problem.line}: ${problem.message}`);
+        }
       }
     }
   }

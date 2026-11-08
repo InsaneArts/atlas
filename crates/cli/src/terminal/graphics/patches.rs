@@ -44,7 +44,7 @@ pub(super) fn upload(
 /// Never create a placement: the probe cannot display or disturb a picture.
 /// q=2 suppresses the base upload's response; only the root edit may say OK.
 pub(in super::super) fn patch_query(out: &mut impl Write) -> io::Result<()> {
-    upload_image(out, &[0, 0, 0], QUERY, Some((1, 1)))?;
+    upload_image(out, &[0, 0, 0], QUERY, (1, 1))?;
     upload(out, QUERY, &[1, 2, 3], (1, 1), (0, 0), 0)
 }
 

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// How Activity, Apps and Screenshots show and hide as the pane changes once each has been shown: the pane is kept, so
+/// How Activity and Apps show and hide as the pane changes once each has been shown: the pane is kept, so
 /// a switch back fades the one already built instead of building it again, which took the main thread 15 to 45
 /// milliseconds a switch. The shared ``PaneHandoff`` waits for the outgoing pane to disappear before admitting
 /// the latest destination. Each pane fades on ``PaneShift/arrival`` and ``PaneShift/departure``.

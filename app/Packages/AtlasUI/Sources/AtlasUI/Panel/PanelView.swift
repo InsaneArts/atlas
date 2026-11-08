@@ -22,10 +22,13 @@ public struct PanelView: View {
     self.send = send
   }
 
-  /// The header, the picture, Sessions while there are any, else Recent when there is any, then the buttons.
+  /// The header, the service note while it shows, the picture, Sessions while there are any, else Recent when there is any, then the buttons.
   public var body: some View {
     VStack(alignment: .leading, spacing: PanelLayout.gap) {
       PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
+      if state.showsServiceNote {
+        PanelServiceNote(send: send)
+      }
       PanelPicture(state: state.picture, send: send)
         .animation(PanelLayout.change, value: state.picture.look)
       if !state.sessions.isEmpty {
@@ -93,6 +96,12 @@ public struct PanelView: View {
 
   #Preview("Not ready") {
     PanelView(state: PreviewStates.panelNotReady) { _ in }
+      .panelCard()
+      .padding(Spacing.xxxl)
+  }
+
+  #Preview("Service note") {
+    PanelView(state: PreviewStates.panelServiceNote) { _ in }
       .panelCard()
       .padding(Spacing.xxxl)
   }

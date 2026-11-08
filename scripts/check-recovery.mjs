@@ -41,7 +41,7 @@ function call(request, socket = socketPath) {
 }
 async function cli(args) {
   return new Promise((resolve) => {
-    const child = spawn('./atlas', ['--json', ...args]);
+    const child = spawn('target/debug/atlas', ['--json', ...args]);
     let out = '',
       err = '';
     child.stdout.on('data', (b) => (out += b));
