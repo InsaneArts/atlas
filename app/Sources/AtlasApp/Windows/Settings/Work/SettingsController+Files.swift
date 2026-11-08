@@ -4,31 +4,44 @@ import AtlasService
 /// The Helper pane's "Your files": the home folder is read when the pane opens and on Check Again; Make Private runs at
 /// once and Undo… asks first; letting agents copy sign-ins in asks first, stopping them runs at once.
 extension SettingsController {
-  /// Reads how the home folder stands for the helper, and whether agents may copy sign-ins in.
+  /// Reads how the home folder stands for the helper, and whether agents may copy sign-ins in. A reading a change
+  /// overtook is dropped, as the change's own answer is newer; one that failed leaves both unknown, saying why.
   func readFiles() async {
+    let asked = files.generation
     let outcome = await dependencies.commands.run(.homeFiles)
-    take(outcome)
+    guard asked == files.generation else { return }
+    if let home = HomeFiles.of(outcome) {
+      keep(home)
+    } else {
+      files.home = nil
+      files.signInCopies = nil
+      files.problem = Words.sentence(outcome.message)
+    }
   }
 
-  /// Makes the home folder private from the helper, or opens it again once the person said Let It Open.
+  /// Makes the home folder private from the helper, or opens it again once the person said Let It Open. A failure
+  /// keeps what was known, saying why.
   ///
   /// - Parameter makePrivate: Whether to make it private.
   func changeHome(makePrivate: Bool) async {
-    guard !files.changing else { return }
-    files.changing = true
+    guard begin(home: true) else { return }
     let outcome = await dependencies.commands.run(makePrivate ? .makeHomePrivate : .openHome)
-    files.changing = false
-    take(outcome)
+    end()
+    if let home = HomeFiles.of(outcome) {
+      keep(home)
+    } else {
+      files.problem = Words.sentence(outcome.message)
+    }
   }
 
-  /// Lets agents copy sign-ins in, once the person said Allow, or stops them.
+  /// Lets agents copy sign-ins in, once the person said Allow, or stops them. A failure keeps what was known, saying
+  /// why.
   ///
   /// - Parameter allow: Whether agents may copy sign-ins in.
   func setSignInCopies(_ allow: Bool) async {
-    guard !files.changing else { return }
-    files.changing = true
+    guard begin(home: false) else { return }
     let outcome = await dependencies.commands.run(.copySignIns(allow))
-    files.changing = false
+    end()
     if let allowed = SignInCopies.of(outcome) {
       files.signInCopies = allowed
       files.problem = nil
@@ -49,16 +62,31 @@ extension SettingsController {
     }
   }
 
-  /// Keeps what a files command said, or its failure.
+  /// Starts a change, one at a time, overtaking any reading under way.
   ///
-  /// - Parameter outcome: The command's outcome.
-  private func take(_ outcome: Outcome) {
-    if let home = HomeFiles.of(outcome) {
-      files.home = home
-      files.signInCopies = home.signInCopies
-      files.problem = nil
-    } else {
-      files.problem = Words.sentence(outcome.message)
-    }
+  /// - Parameter home: Whether it changes the home folder, which its button shows.
+  /// - Returns: Whether it started; not while another runs.
+  private func begin(home: Bool) -> Bool {
+    guard !files.changing else { return false }
+    files.changing = true
+    files.changingHome = home
+    files.generation += 1
+    return true
+  }
+
+  /// Ends a change, overtaking any reading that started while it ran.
+  private func end() {
+    files.changing = false
+    files.changingHome = false
+    files.generation += 1
+  }
+
+  /// Keeps what a files command said of the home folder.
+  ///
+  /// - Parameter home: The home folder as it said.
+  private func keep(_ home: HomeFiles) {
+    files.home = home
+    files.signInCopies = home.signInCopies
+    files.problem = nil
   }
 }

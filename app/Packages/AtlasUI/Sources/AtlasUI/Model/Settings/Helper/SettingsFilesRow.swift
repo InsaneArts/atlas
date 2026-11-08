@@ -8,8 +8,12 @@ public struct SettingsFilesRow: Equatable, Sendable {
   public var detail: String
   /// The button's title: Undo… or Make Private.
   public var button: String
+  /// The longest title the button shows, either way, which holds its width as the title changes.
+  public var heldButton: String
   /// Whether the button takes presses now; it waits while a change runs.
   public var canRun: Bool
+  /// Whether this row's change runs now, which shows a spinner in the button's title's place.
+  public var isWorking: Bool
 
   /// Creates the row.
   ///
@@ -18,12 +22,24 @@ public struct SettingsFilesRow: Equatable, Sendable {
   ///   - title: What the row says.
   ///   - detail: The line under it.
   ///   - button: The button's title.
+  ///   - heldButton: The longest title the button shows; `button` by default.
   ///   - canRun: Whether the button takes presses now.
-  public init(isPrivate: Bool, title: String, detail: String, button: String, canRun: Bool) {
+  ///   - isWorking: Whether this row's change runs now; not by default.
+  public init(
+    isPrivate: Bool,
+    title: String,
+    detail: String,
+    button: String,
+    heldButton: String? = nil,
+    canRun: Bool,
+    isWorking: Bool = false
+  ) {
     self.isPrivate = isPrivate
     self.title = title
     self.detail = detail
     self.button = button
+    self.heldButton = heldButton ?? button
     self.canRun = canRun
+    self.isWorking = isWorking
   }
 }

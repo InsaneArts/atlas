@@ -7,6 +7,7 @@
         title: "Your home folder is private from the helper",
         detail: "Agents still open your builds: Atlas copies them in first",
         button: "Undo…",
+        heldButton: "Make Private",
         canRun: true
       ),
       signInCopies: false,
@@ -25,6 +26,15 @@
       signInCopies: false,
       canChangeSignIns: true
     )
+
+    /// Your files: Make Private runs, a spinner in its button's place.
+    static let settingsFilesWorking: SettingsFilesState = {
+      var state = settingsFilesOpen
+      state.home?.canRun = false
+      state.home?.isWorking = true
+      state.canChangeSignIns = false
+      return state
+    }()
 
     /// Your files: making the home folder private failed, saying the Terminal line that does it by hand.
     static let settingsFilesFailed: SettingsFilesState = {

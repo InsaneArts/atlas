@@ -83,6 +83,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case photos = "photo.on.rectangle"
   /// Something locked.
   case lock
+  /// A home folder private from the helper.
+  case lockFilled = "lock.fill"
+  /// Sign-ins and secrets.
+  case key
   /// A popup button's choices.
   case popup = "chevron.up.chevron.down"
   /// A menu that opens under its button.

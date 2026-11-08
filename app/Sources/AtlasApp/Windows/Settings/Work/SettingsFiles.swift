@@ -9,6 +9,11 @@ struct SettingsFiles: Equatable {
   var signInCopies: Bool?
   /// Whether a change runs now.
   var changing = false
+  /// Whether the home folder's own change runs now, which its button shows.
+  var changingHome = false
   /// What the last change or reading said when it failed; nil for nothing.
   var problem: String?
+  /// Counts the changes started and ended, so a reading that a change overtook is dropped: its answer may be older
+  /// than the change's own.
+  var generation = 0
 }

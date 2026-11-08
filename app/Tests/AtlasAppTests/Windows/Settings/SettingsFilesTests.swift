@@ -54,6 +54,43 @@ struct SettingsFilesTests {
     #expect(files?.status?.text.contains("chmod +a# 0") == true)
   }
 
+  @Test("a reading a change overtook is dropped, so an older answer never undoes the change's")
+  func aStaleReadingIsDropped() async throws {
+    let commands = ScriptedCommands(["onboarding files": Self.privateHome])
+    let gate = ReleaseSignal()
+    commands.whileRunning { arguments in
+      if arguments == Action.homeFiles.arguments {
+        await gate.wait()
+        commands.answer("onboarding files", Self.privateHome)
+      } else if arguments == Action.openHome.arguments {
+        commands.answer("onboarding files", Self.open)
+      }
+    }
+    let controller = SettingsController.scripted(commands: commands)
+    let reading = Task { await controller.readFiles() }
+    try await settle("the reading never started") { commands.ran.contains(Action.homeFiles.arguments) }
+    await controller.changeHome(makePrivate: false)
+    #expect(controller.state.helper.files?.home?.isPrivate == false)
+    gate.open()
+    await reading.value
+    #expect(controller.state.helper.files?.home?.isPrivate == false, "the older reading said private")
+  }
+
+  @Test("a reading that failed leaves the home folder and the switch unknown, saying why under the section")
+  func aFailedReadingIsUnknown() async {
+    let commands = ScriptedCommands(["onboarding files": Self.privateHome])
+    let controller = SettingsController.scripted(commands: commands)
+    await controller.readFiles()
+    #expect(controller.state.helper.files?.home != nil)
+    let missing = #"{"ok": false, "code": "identity", "error": "The helper account was not found"}"#
+    commands.answer("onboarding files", missing)
+    await controller.readFiles()
+    let files = controller.state.helper.files
+    #expect(files?.home == nil)
+    #expect(files?.signInCopies == nil)
+    #expect(files?.status == SettingsNote(text: "The helper account was not found.", kind: .problem))
+  }
+
   @Test("Undo… asks first, with Keep Private as the default, and runs only on Let It Open")
   func undoAsksFirst() async throws {
     let commands = ScriptedCommands(["onboarding files": Self.privateHome])
@@ -108,23 +145,62 @@ struct SettingsFilesTests {
   @Test("the offer's Make Private makes it private; Not Now only remembers it was offered")
   func theOfferDoesWhatThePersonChose() async {
     for makesPrivate in [true, false] {
-      let commands = ScriptedCommands(["onboarding files": Self.open])
+      let commands = ScriptedCommands([
+        "onboarding status": OnboardingReplies.finishedMac, "onboarding files": Self.open,
+      ])
       await HomeOffer.offer(commands: commands) { _ in makesPrivate }
       #expect(commands.ran.contains(Action.makeHomePrivate.arguments) == makesPrivate)
       #expect(commands.ran.contains(Action.homeOffered.arguments) == !makesPrivate)
     }
   }
 
+  @Test("the offer looks at the home folder only once setup is finished and it was never offered")
+  func theOfferReadsTheFactsFirst() async {
+    let finished = OnboardingReplies.finishedMac
+    let offered = finished.replacingOccurrences(
+      of: #""finished": true"#,
+      with: #""finished": true, "homePrivacyOffered": true"#
+    )
+    for status in [OnboardingReplies.checkingMac, offered, #"{"ok": false, "error": "no"}"#] {
+      let commands = ScriptedCommands(["onboarding status": status, "onboarding files": Self.open])
+      var asked = false
+      await HomeOffer.offer(commands: commands) { _ in
+        asked = true
+        return true
+      }
+      #expect(!asked)
+      #expect(commands.ran == [Action.onboardingStatus.arguments], "the home folder is never read")
+    }
+  }
+
+  @Test("a Make Private from the offer that failed says why once and settles the offer")
+  func aFailedOfferSettlesIt() async {
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.finishedMac, "onboarding files": Self.open,
+    ])
+    commands.whileRunning { arguments in
+      if arguments == Action.makeHomePrivate.arguments {
+        commands.answer("onboarding files", #"{"ok": false, "code": "io", "error": "Atlas couldn't"}"#)
+      }
+    }
+    var told: [String] = []
+    await HomeOffer.offer(commands: commands, ask: { _ in true }, tell: { told.append($0) })
+    #expect(told == ["Atlas couldn't."])
+    #expect(commands.ran.contains(Action.homeOffered.arguments))
+  }
+
   @Test("the offer stays quiet once the home folder is private")
   func theOfferStaysQuiet() async {
-    let commands = ScriptedCommands(["onboarding files": Self.privateHome])
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.finishedMac, "onboarding files": Self.privateHome,
+    ])
     var asked = false
     await HomeOffer.offer(commands: commands) { _ in
       asked = true
       return true
     }
     #expect(!asked)
-    #expect(commands.ran == [Action.homeFiles.arguments])
+    #expect(commands.ran == [Action.onboardingStatus.arguments, Action.homeFiles.arguments])
   }
 
   @Test("the offer says what the helper can open and that builds still open")

@@ -1,34 +1,51 @@
 import AppKit
 import AtlasCommands
+import AtlasOnboarding
 
 /// The one-time offer, as Atlas starts in the menu bar, to keep the home folder private from the helper, for people who
-/// set Atlas up before setup asked. It reads the home folder once per launch and asks only while it is open and was
-/// never offered for this helper; Make Private and Not Now both settle it. A standard system alert, with Atlas's icon.
+/// set Atlas up before setup asked. Once per launch it reads setup's facts, and only once setup is finished and the
+/// offer was never made for this helper does it look at the home folder, asking while that is open. Make Private and
+/// Not Now both settle it, and so does a Make Private that failed, which says why. A standard system alert, with
+/// Atlas's icon.
 enum HomeOffer {
   /// The default button: make the home folder private.
   private static let makePrivate = "Make Private"
   /// The way out: ask again never.
   private static let notNow = "Not Now"
 
-  /// Reads the home folder and, while it should, asks; then does what the person chose.
+  /// Reads setup's facts and the home folder and, while it should, asks; then does what the person chose.
   ///
   /// - Parameters:
   ///   - commands: The `atlas` command line.
   ///   - ask: Asks the person, answering whether they chose Make Private; the system alert by default.
+  ///   - tell: Says why Make Private failed; the system alert by default.
   @MainActor static func offer(
     commands: any CommandRunning,
-    ask: @MainActor (HomeFiles) -> Bool = Self.asks
+    ask: @MainActor (HomeFiles) -> Bool = Self.asks,
+    tell: @MainActor (String) -> Void = Self.tells
   ) async {
-    guard let files = HomeFiles.of(await commands.run(.homeFiles)), offers(files) else { return }
+    let status = await commands.run(.onboardingStatus)
+    guard status.ok, let facts = OnboardingFacts(json: status.reply), due(facts),
+      let files = HomeFiles.of(await commands.run(.homeFiles)), offers(files)
+    else { return }
     guard ask(files) else {
       _ = await commands.run(.homeOffered)
       return
     }
     let made = await commands.run(.makeHomePrivate)
     guard !made.ok else { return }
+    // Asked and answered: a failure settles it too, and says why once.
+    _ = await commands.run(.homeOffered)
+    tell(Words.sentence(made.message))
+  }
+
+  /// Says why Make Private failed, with the system alert.
+  ///
+  /// - Parameter message: What the command said.
+  @MainActor static func tells(_ message: String) {
     let failure = NSAlert()
     failure.messageText = SettingsWords.homeNotMadePrivate
-    failure.informativeText = Words.sentence(made.message)
+    failure.informativeText = message
     failure.icon = AppIconImage.icon
     failure.runModal()
   }
@@ -40,6 +57,14 @@ enum HomeOffer {
   @MainActor static func asks(_ files: HomeFiles) -> Bool {
     let alert = alert(files)
     return alert.runModal() == .alertFirstButtonReturn
+  }
+
+  /// Whether the home folder is worth a look: setup is finished, and the offer was never made for this helper.
+  ///
+  /// - Parameter facts: What setup's status said.
+  /// - Returns: Whether to look.
+  static func due(_ facts: OnboardingFacts) -> Bool {
+    facts.finished && !facts.homePrivacyOffered
   }
 
   /// Whether to ask: the home folder is open to the helper, and keeping it private was never offered for it.

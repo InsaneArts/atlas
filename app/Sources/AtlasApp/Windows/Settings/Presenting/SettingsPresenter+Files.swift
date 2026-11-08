@@ -2,7 +2,8 @@ import AtlasUI
 
 extension SettingsPresenter {
   /// The Helper pane's "Your files" section: the home folder's row once read, private with Undo… or open with Make
-  /// Private, the sign-ins switch once known, and a change's spinner or failure; nil until Atlas has said anything.
+  /// Private, its button holding the longer title's width and showing a spinner while its change runs, the sign-ins
+  /// switch once known, and what failed; nil until Atlas has said anything.
   ///
   /// - Parameter files: What the controller knows of the person's files.
   /// - Returns: The section, or nil for none yet.
@@ -14,13 +15,12 @@ extension SettingsPresenter {
         title: home.private ? SettingsWords.homePrivate : SettingsWords.homeOpen(home.readable),
         detail: home.private ? SettingsWords.homePrivateDetail : SettingsWords.homeOpenDetail(home.examples),
         button: home.private ? SettingsWords.undo : SettingsWords.makePrivate,
-        canRun: !files.changing
+        heldButton: SettingsWords.makePrivate,
+        canRun: !files.changing,
+        isWorking: files.changingHome
       )
     }
-    let status =
-      files.changing
-      ? SettingsNote(text: SettingsWords.changingFiles, kind: .working)
-      : files.problem.map { SettingsNote(text: $0, kind: .problem) }
+    let status = files.problem.map { SettingsNote(text: $0, kind: .problem) }
     return SettingsFilesState(
       home: home,
       signInCopies: files.signInCopies,
