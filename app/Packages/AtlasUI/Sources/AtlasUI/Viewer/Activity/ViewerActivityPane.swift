@@ -11,16 +11,20 @@ struct ViewerActivityPane: View {
   let state: ViewerActivityState
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
+  @Environment(\.motionReduced) private var reduceMotion
 
-  /// The list, or why there is nothing to list.
+  /// The list, or why there is nothing to list; one gives way to the other as a list gives way to another
+  /// (``ActivityMotion/swap(isAtTop:reduceMotion:)``), each fading in the same place.
   var body: some View {
-    Group {
+    ZStack(alignment: .top) {
       if let empty = state.empty, !state.showsFilters {
         EmptyMessage(state: empty, size: .stage, ground: .pane, symbol: .list)
+          .transition(ActivityMotion.swap(isAtTop: true, reduceMotion: reduceMotion))
       } else {
-        CardScroll {
+        CardScroll(list: state.list) {
           ActivityListContent(state: state, send: send)
         }
+        .transition(ActivityMotion.swap(isAtTop: true, reduceMotion: reduceMotion))
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

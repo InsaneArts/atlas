@@ -50,7 +50,7 @@ struct ViewerMotionPoseTests {
   @MainActor
   @Test("a list change's key frames stand in the middle of each beat, in order, and the last once all has settled")
   func aListChangesFramesStandInEachBeat() throws {
-    let pose = try #require(PreviewStates.viewerMotion.first { $0.name == "filter-problems" })
+    let pose = try #require(PreviewStates.viewerMotion.first { $0.name == "run-arrive" })
     let moments = ViewerMotionPose.quarters
       .map(pose.moment(at:))
     #expect(moments == moments.sorted())

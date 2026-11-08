@@ -49,6 +49,15 @@
       return state
     }()
 
+    /// Activity for Codex alone, chosen in the sidebar after Claude Code: other runs from the first row down.
+    @MainActor public static let viewerActivityOtherSession: ViewerState = {
+      var state = viewerActivityBySession
+      state.sidebar.sessions.chosen = .one(SessionSamples.codexKey)
+      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 3])
+      state.pane = .activity(otherSessionActivity)
+      return state
+    }()
+
     /// One agent's typing refused because another app was in front: a quiet grey callout, no problem, its reason and
     /// the retry that worked.
     @MainActor public static let viewerFocusChanged: ViewerState = {

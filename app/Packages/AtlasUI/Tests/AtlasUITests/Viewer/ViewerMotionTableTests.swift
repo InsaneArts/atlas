@@ -54,10 +54,6 @@ struct ViewerMotionTableTests {
         ActivityMotion.fold(reduceMotion: true)
       ),
       (
-        "Activity filter", ActivityMotion.filter(reduceMotion: false), Motion.listMove,
-        ActivityMotion.filter(reduceMotion: true)
-      ),
-      (
         "moment header", ActivityMotion.header(reduceMotion: false), Motion.state,
         ActivityMotion.header(reduceMotion: true)
       ),

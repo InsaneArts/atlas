@@ -9,17 +9,20 @@ struct ActivityArrivalsTests {
   ///
   /// - Parameters:
   ///   - sessions: The sessions' identities.
+  ///   - chosen: Whose work the list shows.
   ///   - filter: The filter chosen.
   ///   - query: The sidebar's search.
   /// - Returns: The pane.
   static func state(
     _ sessions: [String],
+    chosen: ViewerSessionChoice = .all,
     filter: ViewerActivityFilter = .all,
     query: String = ""
   ) -> ViewerActivityState {
     var filters = PreviewStates.activityFilters()
     filters.selected = filter
     return ViewerActivityState(
+      session: chosen,
       meta: "",
       filters: filters,
       days: [
@@ -71,6 +74,28 @@ struct ActivityArrivalsTests {
     arrivals.meet(Self.state(["b"], query: "Chrome"), isAtTop: false)
     #expect(arrivals.waiting(in: Self.state(["a", "b"]), isAtTop: false).isEmpty, "a search cleared")
     #expect(ActivityArrivals.words(1) == "1 new session")
+  }
+
+  @Test("a new session choice swaps the list without arrivals, even between sessions of one name")
+  func aNewSessionChoiceSwapsTheList() {
+    var arrivals = ActivityArrivals()
+    arrivals.meet(Self.state(["a"], chosen: .one("first")), isAtTop: false)
+    let other = Self.state(["new 2", "new 1", "a"], chosen: .one("second"))
+    #expect(other.title == Self.state(["a"], chosen: .one("first")).title, "both sessions go by one name")
+    #expect(arrivals.waiting(in: other, isAtTop: false).isEmpty)
+    arrivals.meet(other, isAtTop: false)
+    let more = Self.state(["newer", "new 2", "new 1", "a"], chosen: .one("second"))
+    #expect(arrivals.waiting(in: more, isAtTop: false) == ["newer"], "new work in the new list still waits")
+  }
+
+  @Test("a new tab swaps the list without arrivals")
+  func aNewTabSwapsTheList() {
+    var arrivals = ActivityArrivals()
+    arrivals.meet(Self.state(["a"]), isAtTop: false)
+    let problems = Self.state(["new", "a"], filter: .problems)
+    #expect(arrivals.waiting(in: problems, isAtTop: false).isEmpty)
+    #expect(problems.list != Self.state(["a"]).list)
+    #expect(problems.list == ViewerActivityListKey(session: .all, filter: .problems))
   }
 
   @Test("a day left with only waiting sessions is not shown")

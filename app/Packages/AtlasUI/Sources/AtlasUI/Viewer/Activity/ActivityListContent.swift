@@ -19,19 +19,20 @@ struct ActivityListContent: View {
   /// 48: above and below an empty filtered list's message.
   private static let emptyInset: CGFloat = 48
 
-  /// The filters and the outline inside the shared scroll, with a line at the top for the sessions waiting there.
+  /// The filters and the list inside the shared scroll, with a line at the top for the sessions waiting there. The
+  /// list under the filters is one piece for each session and filter (``ViewerActivityState/list``): another takes its
+  /// place whole (``ActivityMotion/swap(isAtTop:reduceMotion:)``), the two standing in the same place as they fade, so
+  /// none of its rows comes in as new work does.
   var body: some View {
     let waiting = arrivals.waiting(in: state, isAtTop: isAtTop)
     return VStack(alignment: .leading, spacing: .zero) {
       if state.showsFilters {
         filters
       }
-      if let empty = state.empty {
-        EmptyMessage(state: empty, size: .regular, ground: .pane, symbol: .list)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, Self.emptyInset)
-      } else {
-        rows(ActivityArrivals.shown(state.days, without: waiting))
+      ZStack(alignment: .topLeading) {
+        list(without: waiting)
+          .id(state.list)
+          .transition(ActivityMotion.swap(isAtTop: isAtTop, reduceMotion: reduceMotion))
       }
     }
     .padding(.horizontal, ViewerLayout.swapInset)
@@ -73,14 +74,27 @@ struct ActivityListContent: View {
     .padding(.vertical, ViewerLayout.filtersAround)
   }
 
-  /// The filters' track.
+  /// The filters' track, whose thumb slides on its own clock; the list swaps as the filter changes.
   private var tabs: some View {
     Tabs(state: state.filters, style: .segment) { filter in
-      withAnimation(ActivityMotion.filter(reduceMotion: reduceMotion)) {
-        send(.filterActivity(filter))
-      }
+      send(.filterActivity(filter))
     }
     .fixedSize()
+  }
+
+  /// What the list shows under the filters: its days and sessions, or why the filter or the search leaves nothing.
+  ///
+  /// - Parameter waiting: The sessions waiting above, which it leaves out.
+  /// - Returns: The list.
+  @ViewBuilder
+  private func list(without waiting: Set<String>) -> some View {
+    if let empty = state.empty {
+      EmptyMessage(state: empty, size: .regular, ground: .pane, symbol: .list)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Self.emptyInset)
+    } else {
+      rows(ActivityArrivals.shown(state.days, without: waiting))
+    }
   }
 
   /// The days holding more sessions than they show.
@@ -142,7 +156,7 @@ struct ActivityListContent: View {
     .scrollTargetLayout()
     .onChange(of: foldedDays, initial: true) { _, days in drawnFolded = days }
     .transaction(value: state.newest) { transaction in
-      // A change the person made keeps the animation it was made in, so a filter's rows wait for those leaving.
+      // A change the person made keeps the animation it was made in, such as a session opening on the fold's spring.
       transaction.animation = Motion.layout(
         transaction.animation ?? ActivityScroll.moving(isAtTop: isAtTop, reduceMotion: reduceMotion),
         reduceMotion: reduceMotion

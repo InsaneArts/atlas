@@ -324,6 +324,20 @@ struct ViewerPresenterSessionsTests {
     #expect(unread.shownSessions == .one("3f9a1c07b2e4"), "before the first reading the choice holds")
   }
 
+  @Test("Activity names whose work it lists, so a new session choice is another list")
+  func activityNamesTheSessionShown() throws {
+    var snapshot = try ViewerSnapshot.listing(Self.three)
+    #expect(ViewerPresenter.activity(snapshot).list == ViewerActivityListKey(session: .all, filter: .all))
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
+    snapshot.panes.activity.filter = .problems
+    #expect(
+      ViewerPresenter.activity(snapshot).list
+        == ViewerActivityListKey(session: .one("3f9a1c07b2e4"), filter: .problems)
+    )
+    snapshot.session.chosenSession = .one("c0ffee5e5510")
+    #expect(ViewerPresenter.activity(snapshot).session == .all, "a session gone shows every session's work")
+  }
+
   @Test("the header names the session that has the helper, and gives way to pause and control")
   func theHeaderNamesTheHolder() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)

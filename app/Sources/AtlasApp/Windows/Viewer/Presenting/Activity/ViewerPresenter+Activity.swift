@@ -4,9 +4,9 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The Activity pane: whose work it lists and today's count for VoiceOver, the filters with their problem and
-  /// picture counts, and the outline of sessions, runs and steps, narrowed by the filter and the sidebar's search, or
-  /// why nothing shows. Runs form from every row in scope before the filter, so each keeps its identity whichever
+  /// The Activity pane: whose work it lists, so a new session choice swaps the list rather than bringing rows in, and
+  /// today's count for VoiceOver, the filters with their problem and picture counts, and the outline of sessions, runs
+  /// and steps, narrowed by the filter and the sidebar's search, or why nothing shows. Runs form from every row in scope before the filter, so each keeps its identity whichever
   /// filter shows it. With nothing in the log yet there is nothing to filter. Times are the person's own clock. The
   /// picture sheet, or a run replayed, covers the window.
   ///
@@ -27,6 +27,7 @@ extension ViewerPresenter {
       }
       return ViewerActivityState(
         title: title,
+        session: snapshot.shownSessions,
         meta: "",
         filters: activityFilters(facts.filter, counts: [:]),
         days: [],
@@ -45,6 +46,7 @@ extension ViewerPresenter {
     let days = returningFocus(activityDays(shown, moments: moments, snapshot), snapshot)
     return ViewerActivityState(
       title: title,
+      session: snapshot.shownSessions,
       meta: log.entries.isEmpty ? "" : ViewerWords.actionsToday(rules.countToday(in: scope)),
       filters: activityFilters(facts.filter, counts: counts),
       days: days,

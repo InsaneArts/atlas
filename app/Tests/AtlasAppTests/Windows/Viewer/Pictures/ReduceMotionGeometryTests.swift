@@ -33,8 +33,8 @@ struct ReduceMotionGeometryTests {
     #expect(frames.allSatisfy { $0 == final }, "opacity changes must never move the age")
   }
 
-  @Test("filtering places surviving runs at their final geometry throughout the opacity fade")
-  func filteringCommitsGeometryAtOnce() throws {
+  @Test("narrowing the list places surviving runs at their final geometry throughout the opacity fade")
+  func narrowingCommitsGeometryAtOnce() throws {
     let previous = Motion.Pose.moment
     Motion.Pose.hold(at: -5)
     defer { Motion.Pose.hold(at: previous) }
@@ -51,7 +51,7 @@ struct ReduceMotionGeometryTests {
     Motion.Pose.hold(at: .zero)
     host.render()
     let initial = try #require(host.frames["run \(chrome.id)"])
-    withAnimation(ActivityMotion.filter(reduceMotion: true)) { host.show(next) }
+    host.show(next)
     var frames: [CGRect] = []
     for time in [0.0, 0.04, 0.08, 0.15, 1.0] {
       Motion.Pose.hold(at: time)

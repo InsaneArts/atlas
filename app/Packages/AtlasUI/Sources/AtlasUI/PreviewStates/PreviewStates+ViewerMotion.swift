@@ -44,8 +44,9 @@
     }
 
     /// Activity's: the Chrome run opening and folding again as the person asks, and the live session folding into its
-    /// pictures and opening out of them again, each in tenths; a new run arriving at the top of the
-    /// live session; and the Problems filter chosen, which keeps only the run with the failed press.
+    /// pictures and opening out of them again, each in tenths; a new run arriving at the top of the live session; and,
+    /// on the clock, Codex chosen in the sidebar after Claude Code, and the Problems filter chosen, each swapping the
+    /// whole list.
     @MainActor private static var activityMotion: [ViewerMotionPose] {
       [
         ViewerMotionPose(
@@ -92,12 +93,20 @@
           lead: .list(Motion.Springs.state)
         ),
         ViewerMotionPose(
-          "filter-problems",
+          "session-choose",
+          from: viewerActivityOneSession,
+          to: viewerActivityOtherSession,
+          size: viewerSize,
+          lead: .clock,
+          steps: ViewerMotionPose.clockMoments
+        ),
+        ViewerMotionPose(
+          "filter-choose",
           from: viewerActivity,
           to: viewerActivityProblems,
           size: viewerSize,
-          lead: .list(Motion.Springs.state),
-          animation: { ActivityMotion.filter(reduceMotion: false) }
+          lead: .clock,
+          steps: ViewerMotionPose.clockMoments
         ),
       ]
     }

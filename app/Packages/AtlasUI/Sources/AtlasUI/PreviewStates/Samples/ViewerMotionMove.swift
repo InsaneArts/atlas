@@ -43,8 +43,9 @@
     /// The move's title, which identifies it.
     var id: String { rawValue }
 
-    /// The animation the move runs in, as the view wraps the person's own change: opening or folding a run, its pictures
-    /// opening in place and choosing a filter; none for the rest, which only the views' own animations move, as when the window reads.
+    /// The animation the move runs in, as the view wraps the person's own change: opening or folding a run and its
+    /// pictures opening in place; none for the rest, which only the views' own animations move, as when the window
+    /// reads or a filter swaps the list.
     ///
     /// - Parameters:
     ///   - state: The window as it is.
@@ -53,7 +54,6 @@
     func animation(on state: ViewerState, reduceMotion: Bool) -> Animation? {
       switch self {
       case .run, .pictures: ActivityMotion.fold(reduceMotion: reduceMotion)
-      case .problems: ActivityMotion.filter(reduceMotion: reduceMotion)
       default: nil
       }
     }
