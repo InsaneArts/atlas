@@ -220,7 +220,7 @@ struct ViewerWindowMenuTests {
     viewer.cancelAlert()
     #expect(window.validateMenuItem(recover))
     window.askRecover(nil)
-    #expect(viewer.session.alert == .recover)
+    #expect(viewer.session.alert == .helper(.recover))
   }
 
   @Test("native Find opens the sidebar's search wherever the window is, showing a hidden sidebar first")

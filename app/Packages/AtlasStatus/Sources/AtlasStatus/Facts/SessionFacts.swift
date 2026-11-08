@@ -6,8 +6,4 @@ public struct SessionFacts: Equatable, Sendable {
   public let display: ViewerStatus.Size?
   /// Whether the helper's input is ready.
   public let input: Input
-  /// Whether this viewer could take control now, and if not, why.
-  let control: Control
-  /// Actions of unknown outcome, waiting for recovery.
-  let pending: Int
 }

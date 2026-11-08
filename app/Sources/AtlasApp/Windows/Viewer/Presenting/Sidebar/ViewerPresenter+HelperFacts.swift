@@ -12,7 +12,7 @@ extension ViewerPresenter {
   /// - Returns: The facts, in order.
   static func helperFacts(_ snapshot: ViewerSnapshot) -> [Fact] {
     let reading = snapshot.reading.statusReading
-    let facts = reading.facts(holdingControl: snapshot.holdingControl)
+    let facts = reading.facts
     return [
       Fact(name: ViewerWords.accountRow, value: account(snapshot.reading.status)),
       Fact(name: ViewerWords.stateRow, value: facts.input.word),

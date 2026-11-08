@@ -54,7 +54,7 @@ struct HelperCommandsAlertTests {
     viewer.send(.askSwitch)
     viewer.send(.alertConfirm)
     try await settle("the switch never started") { viewer.session.alertRunning }
-    viewer.ask(.logOut)
+    viewer.ask(.helper(.logOut))
     #expect(viewer.session.notice == HelperWords.waitForAction)
     gate.open()
     try await settle("the switch never ended") { !viewer.session.alertRunning }

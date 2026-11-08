@@ -95,9 +95,9 @@ final class SettingsController {
     case .selectTab(let tab): selectTab(tab)
     case .paneHeight(let tab, let height): fit(tab, height: height)
     case .checkAgain: Task { await checkAgain() }
-    case .askSwitch: ask(.switchToHelper)
-    case .askRecover: ask(.recover)
-    case .askLogOut: ask(.logOut)
+    case .askSwitch: ask(.helper(.switchToHelper))
+    case .askRecover: ask(.helper(.recover))
+    case .askLogOut: ask(.helper(.logOut))
     case .closeLeftovers: Task { await closeLogin(.closeLeftovers) }
     case .closeHelper: Task { await closeLogin(.closeHelper) }
     case .connect(let id): Task { await connect(id) }

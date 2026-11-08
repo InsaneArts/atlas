@@ -9,7 +9,7 @@ struct SessionFactsInputWordTests {
   @Test("an input service that does not answer reads Not answering")
   func notAnswering() throws {
     let facts = StatusReading(try status([:]))
-      .facts(holdingControl: false)
+      .facts
     #expect(facts.input == .notAnswering)
     #expect(facts.input.word == "Not answering")
   }

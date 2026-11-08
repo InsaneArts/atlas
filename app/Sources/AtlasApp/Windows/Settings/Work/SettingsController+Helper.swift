@@ -87,7 +87,7 @@ extension SettingsController {
     let controlled = dependencies.links.status().status.overview.mode == .controlling
     let outcome = await actions.logOut(force: force, revoking: controlled)
     if let outcome, outcome.isLogOutHeld, !force {
-      session.alert = .logOutAnyway
+      session.alert = .helper(.logOutAnyway)
       return
     }
     session.alert = nil

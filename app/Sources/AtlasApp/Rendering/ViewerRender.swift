@@ -339,8 +339,7 @@
         loop.run(until: wait)
         host.layoutSubtreeIfNeeded()
       }
-      guard let data = PNG.data(of: host, appearance: appearance) else { return false }
-      return (try? data.write(to: folder.appendingPathComponent("\(file).png"))) != nil
+      return PNG.write(host, to: folder.appendingPathComponent("\(file).png"), appearance: appearance)
     }
 
     /// The lists that scroll down in `view`: every scroll view under it taller inside than it shows.

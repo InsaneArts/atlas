@@ -50,7 +50,6 @@ struct StatusReadingTests {
     #expect(try overview("recovering").controlBlocked == .recovery)
     #expect(try overview("observing").controlBlocked == nil)
     #expect(try overview("stopped").controlBlocked == nil, "the person may take over while agents are stopped")
-    #expect(try overview("stopped").availability(holdingControl: false) == .available)
     #expect(try overview("recovering").recoveryOffered(holdingControl: false))
     #expect(try !overview("recovering").recoveryOffered(holdingControl: true))
   }
@@ -161,8 +160,8 @@ struct StatusReadingTests {
     #expect(rows.map(\.detail) == [.helperSilent("The helper is logged out"), .notKnown])
   }
 
-  @Test("a reading that holds control reports the helper ready, without words")
-  func holdingControl() throws {
+  @Test("a reading reports the helper's display and that its input is ready, without words")
+  func displayAndReadyInput() throws {
     let reading = StatusReading(
       try status([
         "overview": ["display": ["width": 2560, "height": 1440], "pending": 2, "mode": "controlling"],
@@ -170,30 +169,15 @@ struct StatusReadingTests {
       ])
     )
     #expect(
-      reading.facts(holdingControl: true)
-        == SessionFacts(
-          display: .init(width: 2560, height: 1440),
-          input: .ready,
-          control: .thisWindow,
-          pending: 2
-        )
+      reading.facts == SessionFacts(display: .init(width: 2560, height: 1440), input: .ready)
     )
   }
 
-  @Test("the session facts say whether input answers and whether this viewer could take control")
+  @Test("the session facts say whether input answers")
   func facts() throws {
     let reachable = try status(["session": ["inputService": ["ok": true, "ready": false, "pid": 42]]])
-    #expect(StatusReading(reachable).facts(holdingControl: false).input == .notReady)
-    #expect(StatusReading(try status([:])).facts(holdingControl: false).input == .notAnswering)
-    let recovering = StatusReading(try status(["overview": ["mode": "recovering"]]))
-    #expect(recovering.facts(holdingControl: true).control == .afterRecovery, "a held lease is not control now")
-    for (mode, expected) in [
-      ("observing", SessionFacts.Control.available), ("agent", .available), ("controlling", .anotherWindow),
-      ("recovering", .afterRecovery), ("blocked", .notReady), ("unavailable", .notReady), ("loggedOut", .loggedOut),
-    ] {
-      let reading = try status(["overview": ["mode": mode]])
-      #expect(StatusReading(reading).facts(holdingControl: false).control == expected)
-    }
+    #expect(StatusReading(reachable).facts.input == .notReady)
+    #expect(StatusReading(try status([:])).facts.input == .notAnswering)
   }
 
   @Test("a helper that isn't ready gives its failed check, never the step its reason names")

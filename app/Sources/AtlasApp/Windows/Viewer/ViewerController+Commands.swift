@@ -18,9 +18,9 @@ extension ViewerController {
       readingLoop.setRate(ViewerPictureRate.allCases[index])
     case .checkAgain: Task { await checkAgain() }
     case .openSettings: dependencies.openSettings()
-    case .askRecover: ask(.recover)
-    case .askSwitch: ask(.switchToHelper)
-    case .askLogOut: ask(.logOut)
+    case .askRecover: ask(.helper(.recover))
+    case .askSwitch: ask(.helper(.switchToHelper))
+    case .askLogOut: ask(.helper(.logOut))
     case .askCleanup(let key): Task { await askCleanup(key) }
     case .sendKey(let index): sendKey(at: index)
     case .showActivity(let key): show(.activity, of: key)

@@ -32,15 +32,8 @@ final class ViewerController {
     [weak self] list in
     await self?.sessionsRead(list)
   }
-  /// Waits for a state that asks something of the person to hold before VoiceOver says it.
-  @ObservationIgnored private var announcing: Task<Void, Never>?
-
-  /// The asking text already scheduled or spoken; unchanged readings never restart its hold.
-  @ObservationIgnored private var announcedStatus: String?
-
-  /// 1 s: how long a state that asks something of the person holds before VoiceOver says it, so a state that flickers
-  /// says nothing and two in a row say only the last.
-  static let announceAfter: Duration = .seconds(1)
+  /// What VoiceOver hears of a state that asks something of the person, once it has held.
+  @ObservationIgnored private let announcer = StatusAnnouncer()
 
   /// Creates a viewer that has read nothing yet, with the person's saved rate, corner and sidebar.
   ///
@@ -132,9 +125,9 @@ final class ViewerController {
     case .search(let query): search(query)
     case .closeSearch: closeSearch()
     case .openSettings: dependencies.openSettings()
-    case .askRecover: ask(.recover)
-    case .askSwitch: ask(.switchToHelper)
-    case .askLogOut: ask(.logOut)
+    case .askRecover: ask(.helper(.recover))
+    case .askSwitch: ask(.helper(.switchToHelper))
+    case .askLogOut: ask(.helper(.logOut))
     case .askRestart: ask(.restart)
     case .alertConfirm: Task { await confirmAlert() }
     case .alertCancel: cancelAlert()
@@ -189,23 +182,12 @@ final class ViewerController {
     }
   }
 
-  /// Says `text` once it has held for ``announceAfter`` on the window's clock; a newer one, or none, calls it off.
+  /// Says `text` once it has held on the window's clock; a newer one, or none, calls it off.
   ///
   /// - Parameter text: What VoiceOver should say now, from ``askingStatus``.
   func announceSoon(_ text: String?) {
-    guard text != announcedStatus else { return }
-    announcedStatus = text
-    announcing?.cancel()
-    announcing = nil
-    guard let text else {
-      if session.announcement != nil { session.announcement = nil }
-      return
-    }
-    let clock = dependencies.clock
-    // Unstructured, as the state settles while the window goes on.
-    announcing = Task { [weak self] in
-      try? await clock.sleep(for: Self.announceAfter)
-      guard let self, !Task.isCancelled else { return }
+    announcer.soon(text, clock: dependencies.clock) { [weak self] text in
+      guard let self, text != nil || session.announcement != nil else { return }
       session.announcement = text
     }
   }

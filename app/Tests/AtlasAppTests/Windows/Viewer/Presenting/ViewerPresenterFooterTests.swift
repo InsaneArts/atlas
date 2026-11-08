@@ -182,9 +182,9 @@ struct ViewerPresenterFooterTests {
   @Test("Recover asked by the person offers Cancel, while automatic recovery offers Not Now")
   func recoveryCancellationFollowsWhoAsked() throws {
     var snapshot = watching(try status(["overview": ["mode": "recovering", "state": "needsYou"]]))
-    let automatic = ViewerPresenter.alert(.recover, snapshot: snapshot)
+    let automatic = ViewerPresenter.alert(.helper(.recover), snapshot: snapshot)
     #expect(automatic.buttons.first { $0.id == .cancel }?.title == "Not Now")
-    snapshot.session.alert = .recover
+    snapshot.session.alert = .helper(.recover)
     let asked = try #require(ViewerPresenter.alert(snapshot))
     #expect(asked.buttons.first { $0.id == .cancel }?.title == "Cancel")
   }
