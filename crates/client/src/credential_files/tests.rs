@@ -437,3 +437,25 @@ fn a_store_behind_a_linked_library_and_an_unlistable_folder_is_refused_by_its_pa
     fs::set_permissions(&google, fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(refused, [true, true]);
 }
+
+#[test]
+fn nothing_is_refused_while_the_person_lets_agents_copy_sign_ins_in() {
+    let home = tempfile::tempdir().unwrap();
+    let key = home.path().join(".ssh/id_ed25519");
+
+    assert_eq!(
+        refuse_at([key.as_path()], Some(home.path()))
+            .unwrap_err()
+            .code,
+        Code::Credentials
+    );
+    assert!(crate::sign_in_copies::set_in(home.path(), true, true).unwrap());
+    refuse_at([key.as_path()], Some(home.path())).unwrap();
+    assert!(!crate::sign_in_copies::set_in(home.path(), false, false).unwrap());
+    assert_eq!(
+        refuse_at([key.as_path()], Some(home.path()))
+            .unwrap_err()
+            .code,
+        Code::Credentials
+    );
+}

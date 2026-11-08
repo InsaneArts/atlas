@@ -1,8 +1,8 @@
 //! Command execution, activity attribution and helper-change policy.
 use super::{
     cli::{
-        self, AgentPicks, AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, JobCommand,
-        OnOff, OnboardingCommand, WindowState,
+        self, AgentPicks, AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, HomeFiles,
+        JobCommand, OnOff, OnboardingCommand, SignInCopies, WindowState,
     },
     doctor, help,
     output::{self, print},
@@ -692,6 +692,19 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
         OnboardingCommand::Close { helper: true } => onboarding::close_helper(config),
         OnboardingCommand::Finish => onboarding::finish(config).await,
         OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
+        OnboardingCommand::Files { change } => onboarding::files(
+            config,
+            change.map(|change| match change {
+                HomeFiles::Private => onboarding::HomeChange::Private,
+                HomeFiles::Open => onboarding::HomeChange::Open,
+                HomeFiles::Offered => onboarding::HomeChange::Offered,
+            }),
+            actor() == Actor::Viewer,
+        ),
+        OnboardingCommand::SignIns { choice } => onboarding::sign_ins(
+            choice.map(|choice| choice == SignInCopies::Allow),
+            actor() == Actor::Viewer,
+        ),
     }
 }
 

@@ -337,6 +337,15 @@ pub async fn run(
     if !yes {
         confirm(&found, config_path, keep_config, &facts, ask, progress)?;
     }
+    if let Some(name) = &found.helper {
+        for line in home_note(
+            name,
+            atlas_client::home_privacy::entry_index(name),
+            remove_helper,
+        ) {
+            progress(Progress::Say(&line));
+        }
+    }
 
     let mut live = Live {
         found: &found,
@@ -965,6 +974,29 @@ fn confirm(
     }
 
     Ok(())
+}
+
+/// What uninstall says while the home folder is private from the helper
+/// `name`, its entry at `index`: it stays, as only the person opens the home
+/// folder, and how to open it. Once the account is deleted its name no longer
+/// works in `chmod`, so the entry's place is given too.
+fn home_note(name: &str, index: Option<usize>, remove_helper: bool) -> Vec<String> {
+    let Some(index) = index else {
+        return Vec::new();
+    };
+    let mut lines = vec![
+        "Your home folder stays private from the helper.".to_owned(),
+        format!(
+            "To let it open your home folder again, run: {}",
+            atlas_client::home_privacy::undo_line(name)
+        ),
+    ];
+    if remove_helper {
+        lines.push(format!(
+            "Once the helper is deleted, run instead: chmod -a# {index} ~ (check with ls -le ~ first)"
+        ));
+    }
+    lines
 }
 
 /// Why the helper cannot settle an action whose outcome is unknown: its

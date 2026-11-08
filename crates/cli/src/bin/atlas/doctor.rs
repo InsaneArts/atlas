@@ -124,6 +124,13 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
         asker(client.actor, session, ui::interactive()),
     );
     if verbose || ui::human() {
+        // What the helper can open in the person's home folder: for the
+        // person, never in an agent's compact reply.
+        if let Ok(Ok(files)) =
+            tokio::task::spawn_blocking(move || atlas_client::home_privacy::status(uid)).await
+        {
+            report["files"] = json!(files);
+        }
         report
     } else {
         atlas_client::capability::summary(report)

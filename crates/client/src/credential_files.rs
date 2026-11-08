@@ -4,7 +4,8 @@
 //! home folder or by its file name anywhere, and a folder that holds such a
 //! folder is refused too. Nothing is read. A hard link or a renamed copy of
 //! a store is not recognized, and a folder is not searched for files named
-//! like one.
+//! like one. Nothing is refused while the person lets agents copy sign-ins
+//! in ([`crate::sign_in_copies`]).
 use atlas_core::error::{Code, Error, Result};
 use std::{
     collections::VecDeque,
@@ -117,8 +118,16 @@ const ENV_EXAMPLES: &[&str] = &[".env.example", ".env.sample", ".env.template"];
 /// Returns a `credentials` refusal naming the store and the selection's file
 /// name, never its full path.
 pub(crate) fn refuse<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<()> {
-    let home = atlas_core::config::home().ok();
-    refuse_in(paths, home.as_deref())
+    refuse_at(paths, atlas_core::config::home().ok().as_deref())
+}
+
+/// [`refuse`] for the person whose home folder is `home`: nothing is refused
+/// while they let agents copy sign-ins in.
+fn refuse_at<'a>(paths: impl IntoIterator<Item = &'a Path>, home: Option<&Path>) -> Result<()> {
+    if home.is_some_and(crate::sign_in_copies::allowed_in) {
+        return Ok(());
+    }
+    refuse_in(paths, home)
 }
 
 /// [`refuse`] with `home` as the home folder; with none, only the store

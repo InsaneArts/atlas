@@ -137,6 +137,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
         "acceptance": acceptance,
         "finished": finished,
         "menubarLogin": crate::menubar::login_decided(),
+        "homePrivacyOffered": atlas_client::home_privacy::offered(helper.uid),
         "leftoverLogins": leftovers,
         "blockers": blockers,
     }))
