@@ -480,3 +480,68 @@ async fn a_message_preview_is_gone_from_disk_once_its_wait_ends_however_it_ends(
         "{left:?}"
     );
 }
+
+#[tokio::test]
+async fn a_typed_step_the_person_allowed_after_a_stop_is_typed_once_without_asking_again() {
+    use atlas_core::session::{ASKS, FOCUS_APP, TYPED_FIELDS};
+    let dir = tempfile::tempdir().unwrap();
+    let (mut client, helper) =
+        crate::test_support::Helper::client(dir.path(), atlas_core::test_support::UID);
+    client.listed = Some(Listed::Accounts(vec![github()]));
+    let helper = helper.serving_input(&client, &[FOCUS_APP, TYPED_FIELDS, ASKS]);
+    // The person allowed, just this once, the line break that stopped a request.
+    let stopped = atlas_core::actions::Action::Type {
+        text: "\n".to_owned(),
+    };
+    let asks = client.controller.asks();
+    asks.permit(
+        Permit {
+            session: "terminal".to_owned(),
+            process: None,
+            account: json!({"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}),
+            action: stopped.digest(),
+            target: json!({"window": 7}),
+            value: None,
+            ends: u64::MAX,
+        },
+        now_ms(),
+    )
+    .unwrap();
+
+    let mut inputs = Vec::new();
+    let typed = helper
+        .serve(
+            crate::agent::type_text(&client, "\n", None),
+            |request| match request["op"].as_str() {
+                Some("input") => {
+                    inputs.push(request["asking"].clone());
+                    if request["asking"]["dry"] == true {
+                        Some(json!({"ok": true, "performed": 0, "dry": true}))
+                    } else {
+                        Some(json!({"ok": true, "performed": 1}))
+                    }
+                }
+                _ => Some(json!({"ok": true})),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(typed["ok"], true, "{typed}");
+    assert_eq!(inputs.len(), 2, "the check, then the text");
+    for asking in &inputs {
+        assert!(
+            asking["grants"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|grant| grant["scope"] == "permit"),
+            "the permit goes with the check and with the text: {asking}"
+        );
+    }
+    assert!(
+        asks.take_permits("terminal", None, &[stopped.digest()], now_ms())
+            .unwrap()
+            .is_empty(),
+        "spent by the text it covered"
+    );
+}

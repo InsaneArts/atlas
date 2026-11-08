@@ -110,6 +110,10 @@ pub struct Client {
     /// A local stand-in's socket peer, separate from its reported helper UID.
     #[cfg(any(test, feature = "test-support"))]
     pub input_peer_uid: Option<u32>,
+    /// A test's stand-in for the person's account list; none never reads
+    /// theirs.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) listed: Option<crate::sign_ins::Listed>,
     pub controller: Controller,
     pub actor: Actor,
     /// What the command acting through this client does, for the log.
@@ -158,6 +162,8 @@ impl Client {
             },
             #[cfg(any(test, feature = "test-support"))]
             input_peer_uid: None,
+            #[cfg(any(test, feature = "test-support"))]
+            listed: None,
             installed: BuildCache::default(),
             actor: Actor::Agent,
             doing: None,

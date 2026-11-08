@@ -32,9 +32,12 @@ pub(crate) fn policy(client: &Client) -> Option<Value> {
 pub(crate) fn policy_for(client: &Client, actions: &[Action]) -> (Option<Value>, Vec<Permit>) {
     // Tests never read the person's own accounts on the Mac running them,
     // this crate's or any crate's built with its test support.
-    if cfg!(any(test, feature = "test-support")) {
-        return (None, Vec::new());
-    }
+    #[cfg(any(test, feature = "test-support"))]
+    return match client.listed.clone() {
+        Some(listed) => policy_by(client, listed, actions),
+        None => (None, Vec::new()),
+    };
+    #[cfg(not(any(test, feature = "test-support")))]
     policy_by(client, crate::sign_ins::listed(), actions)
 }
 
@@ -96,9 +99,13 @@ fn policy_by(
 }
 
 /// Give `permits` back for a later request: the one that took them was
-/// proven, by `outcome`, to have sent nothing.
+/// proven, by `outcome`, to have sent nothing, a typing command's check
+/// included, which only judges.
 pub(crate) fn return_permits(client: &Client, permits: Vec<Permit>, outcome: &Result<Value>) {
-    if !permits.is_empty() && sent_nothing(outcome) {
+    let checked = outcome
+        .as_ref()
+        .is_ok_and(|reply| reply["ok"] == true && reply["dry"] == true && reply["performed"] == 0);
+    if !permits.is_empty() && (checked || sent_nothing(outcome)) {
         // One that can't be given back is spent: the person is asked again.
         let _ = client.controller.asks().return_permits(permits, now_ms());
     }
