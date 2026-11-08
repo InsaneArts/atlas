@@ -977,19 +977,24 @@ fn confirm(
 }
 
 /// What uninstall says while the home folder is private from the helper
-/// `name`, its entry at `index`: it stays, as only the person opens the home
+/// `name`, its entry at `index` (unreadable: perhaps): it stays, as only the person opens the home
 /// folder, and how to open it. Once the account is deleted its name no longer
 /// works in `chmod`, so the entry's place is given too.
-fn home_note(name: &str, index: Option<usize>, remove_helper: bool) -> Vec<String> {
-    let Some(index) = index else {
-        return Vec::new();
+fn home_note(name: &str, index: Result<Option<usize>>, remove_helper: bool) -> Vec<String> {
+    let undo = atlas_client::home_privacy::undo_line(name);
+    let index = match index {
+        Ok(None) => return Vec::new(),
+        Ok(Some(index)) => index,
+        // Unreadable: it may be set, so say how to undo it, by name.
+        Err(_) => {
+            return vec![format!(
+                "If your home folder is private from the helper, run this to open it again: {undo}"
+            )];
+        }
     };
     let mut lines = vec![
         "Your home folder stays private from the helper.".to_owned(),
-        format!(
-            "To let it open your home folder again, run: {}",
-            atlas_client::home_privacy::undo_line(name)
-        ),
+        format!("To let it open your home folder again, run: {undo}"),
     ];
     if remove_helper {
         lines.push(format!(

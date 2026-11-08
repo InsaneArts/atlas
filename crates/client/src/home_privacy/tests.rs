@@ -22,8 +22,30 @@ fn a_home_with_only_the_everyone_entry_is_open() {
 fn the_helpers_deny_first_or_after_a_deny_makes_it_private() {
     let first = listing(&["user:helper deny list,search", "group:everyone deny delete"]);
     let second = listing(&["group:everyone deny delete", "user:helper deny search,list"]);
-    assert_eq!(deciding_deny(&first, "helper"), Some(0));
-    assert_eq!(deciding_deny(&second, "helper"), Some(1));
+    assert!(private_in(&first, "helper"));
+    assert!(private_in(&second, "helper"));
+    assert_eq!(ours(&second, "helper"), Some(1));
+}
+
+#[test]
+fn a_subject_with_spaces_is_read_whole() {
+    let spaced = listing(&[
+        "group:Domain Users allow list,search",
+        "user:helper deny list,search",
+    ]);
+    assert!(!private_in(&spaced, "helper"));
+    assert_eq!(ours(&spaced, "helper"), Some(1));
+}
+
+#[test]
+fn atlas_finds_its_entry_even_where_it_decides_nothing() {
+    let overridden = listing(&["user:helper allow list", "user:helper deny list,search"]);
+    assert!(!private_in(&overridden, "helper"));
+    assert_eq!(ours(&overridden, "helper"), Some(1));
+    assert_eq!(
+        ours(&listing(&["group:everyone deny delete"]), "helper"),
+        None
+    );
 }
 
 #[test]
@@ -135,4 +157,20 @@ fn the_undo_line_names_the_helpers_entry() {
         undo_line("helper"),
         "chmod -a \"user:helper deny list,search\" ~"
     );
+}
+
+#[test]
+fn a_home_that_denies_the_helper_going_in_hides_its_folders() {
+    assert!(denies_search(
+        &listing(&["user:helper deny search"]),
+        "helper"
+    ));
+    assert!(!denies_search(
+        &listing(&["group:staff allow search", "user:helper deny search"]),
+        "helper"
+    ));
+    assert!(!denies_search(
+        &listing(&["user:helper deny list"]),
+        "helper"
+    ));
 }

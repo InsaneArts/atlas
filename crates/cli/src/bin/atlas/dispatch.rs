@@ -692,15 +692,18 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
         OnboardingCommand::Close { helper: true } => onboarding::close_helper(config),
         OnboardingCommand::Finish => onboarding::finish(config).await,
         OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
-        OnboardingCommand::Files { change } => onboarding::files(
-            config,
-            change.map(|change| match change {
+        OnboardingCommand::Files { change } => {
+            let change = change.map(|change| match change {
                 HomeFiles::Private => onboarding::HomeChange::Private,
                 HomeFiles::Open => onboarding::HomeChange::Open,
                 HomeFiles::Offered => onboarding::HomeChange::Offered,
-            }),
-            actor() == Actor::Viewer,
-        ),
+            });
+            let (config, by_person) = (config.to_path_buf(), actor() == Actor::Viewer);
+            // `ls` and `chmod` wait on their own, off the command's async work.
+            tokio::task::spawn_blocking(move || onboarding::files(&config, change, by_person))
+                .await
+                .map_err(|error| Error::new(Code::Io, error.to_string()))?
+        }
         OnboardingCommand::SignIns { choice } => onboarding::sign_ins(
             choice.map(|choice| choice == SignInCopies::Allow),
             actor() == Actor::Viewer,

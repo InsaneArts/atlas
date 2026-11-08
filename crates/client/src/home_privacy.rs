@@ -47,8 +47,13 @@ pub fn status(helper_uid: u32) -> Result<Files> {
             examples: Vec::new(),
         });
     }
-    let groups = helper.groups()?;
-    let (readable, examples) = readable_in(&list(&["-laen"], &home)?, helper_uid, &groups);
+    // A home the helper may not go into hides everything in it, whatever
+    // the folders inside allow.
+    let (readable, examples) = if denies_search(&entries, &helper.name) {
+        (0, Vec::new())
+    } else {
+        readable_in(&list(&["-laen"], &home)?, helper_uid, &helper.groups()?)
+    };
     Ok(Files {
         private: false,
         readable,
@@ -62,28 +67,37 @@ pub fn status(helper_uid: u32) -> Result<Files> {
 /// # Errors
 ///
 /// Returns `io` with the Terminal line that does it by hand when the change
-/// fails or doesn't hold.
+/// fails, can't be checked or doesn't hold.
 pub fn make_private(helper_uid: u32) -> Result<Files> {
     let helper = Helper::of(helper_uid)?;
     let home = atlas_core::config::home()?;
     let entry = format!("user:{} {DENIED}", helper.name);
-    if !private_in(&list(&["-lde"], &home)?, &helper.name) {
-        change(&["+a#", "0", &entry], &home)?;
+    let failed = |cause: Option<Error>| {
+        let error = by_hand("make your home folder private", "+a# 0", &entry);
+        match cause {
+            Some(cause) => error.with_source(cause),
+            None => error,
+        }
+    };
+    let entries = list(&["-lde"], &home).map_err(|cause| failed(Some(cause)))?;
+    if !private_in(&entries, &helper.name) {
+        change(&["+a#", "0", &entry], &home).map_err(|cause| failed(Some(cause)))?;
     }
-    let files = status(helper_uid)?;
+    let files = status(helper_uid).map_err(|cause| failed(Some(cause)))?;
     if !files.private {
-        return Err(by_hand("make your home folder private", "+a# 0", &entry));
+        return Err(failed(None));
     }
     mark_offered(helper_uid);
     Ok(files)
 }
 
 /// Let the helper `helper_uid` open the home folder again: the person only.
+/// Every entry Atlas added goes, wherever it is in the list.
 ///
 /// # Errors
 ///
 /// Returns `stopped` when an agent asks, and `io` with the Terminal line
-/// when the change fails or doesn't hold.
+/// when the change fails, can't be checked or doesn't hold.
 pub fn open(helper_uid: u32, by_person: bool) -> Result<Files> {
     if !by_person {
         return Err(Error::new(
@@ -94,16 +108,32 @@ pub fn open(helper_uid: u32, by_person: bool) -> Result<Files> {
     let helper = Helper::of(helper_uid)?;
     let home = atlas_core::config::home()?;
     let entry = format!("user:{} {DENIED}", helper.name);
-    if private_in(&list(&["-lde"], &home)?, &helper.name) {
-        change(&["-a", &entry], &home)?;
+    let failed = |cause: Option<Error>| {
+        let error = by_hand("open your home folder again", "-a", &entry);
+        match cause {
+            Some(cause) => error.with_source(cause),
+            None => error,
+        }
+    };
+    // `chmod -a` takes one matching entry away at a time.
+    for _ in 0..LINKS {
+        let entries = list(&["-lde"], &home).map_err(|cause| failed(Some(cause)))?;
+        if ours(&entries, &helper.name).is_none() {
+            break;
+        }
+        change(&["-a", &entry], &home).map_err(|cause| failed(Some(cause)))?;
     }
-    let files = status(helper_uid)?;
-    if files.private {
-        return Err(by_hand("open your home folder again", "-a", &entry));
+    let entries = list(&["-lde"], &home).map_err(|cause| failed(Some(cause)))?;
+    if ours(&entries, &helper.name).is_some() {
+        return Err(failed(None));
     }
+    let files = status(helper_uid).map_err(|cause| failed(Some(cause)))?;
     mark_offered(helper_uid);
     Ok(files)
 }
+
+/// How many entries of Atlas's own [`open`] removes at most.
+const LINKS: usize = 8;
 
 /// The Terminal line that removes the entry, for uninstall to show: Atlas
 /// never removes it there, as only the person opens the home folder.
@@ -112,26 +142,35 @@ pub fn undo_line(helper: &str) -> String {
     format!("chmod -a \"user:{helper} {DENIED}\" ~")
 }
 
-/// Whether the person's home folder carries the entry for `helper`, and its
-/// place in the list; `None` when it doesn't or can't be read.
-#[must_use]
-pub fn entry_index(helper: &str) -> Option<usize> {
-    let home = atlas_core::config::home().ok()?;
-    deciding_deny(&list(&["-lde"], &home).ok()?, helper)
+/// The place of Atlas's entry for `helper` in the person's home folder's
+/// list, or `None` when it carries none.
+///
+/// # Errors
+///
+/// Returns `io` when the list can't be read in time.
+pub fn entry_index(helper: &str) -> Result<Option<usize>> {
+    Ok(ours(
+        &list(&["-lde"], &atlas_core::config::home()?)?,
+        helper,
+    ))
 }
 
 /// Whether making the home folder private was offered for the helper
 /// `helper_uid`, as it is now: a replaced helper is offered it again.
 #[must_use]
 pub fn offered(helper_uid: u32) -> bool {
-    atlas_core::config::home().is_ok_and(|home| offered_in(&home, &identity_of(helper_uid)))
+    let (Ok(home), Some(identity)) = (atlas_core::config::home(), identity_of(helper_uid)) else {
+        return false;
+    };
+    offered_in(&home, &identity)
 }
 
 /// Remember that making the home folder private was offered for the helper
-/// `helper_uid`, whatever the person chose.
+/// `helper_uid`, whatever the person chose. Nothing is kept for a helper
+/// whose record can't be read, so it is offered again.
 pub fn mark_offered(helper_uid: u32) {
-    if let Ok(home) = atlas_core::config::home() {
-        mark_offered_in(&home, &identity_of(helper_uid));
+    if let (Ok(home), Some(identity)) = (atlas_core::config::home(), identity_of(helper_uid)) {
+        mark_offered_in(&home, &identity);
     }
 }
 
@@ -151,11 +190,15 @@ fn mark_offered_in(home: &Path, identity: &str) {
 }
 
 /// The helper as recorded when it was chosen: its GeneratedUID, which no
-/// later account gets, or its user ID when nothing is recorded.
-fn identity_of(helper_uid: u32) -> String {
-    match atlas_daemon::helper_setup::identity::on_file(helper_uid) {
-        atlas_daemon::helper_setup::identity::OnFile::Recorded(identity) => identity.generated_uid,
-        _ => format!("uid:{helper_uid}"),
+/// later account gets. With nothing recorded, a name that holds only while
+/// nothing is: choosing a helper records it, so the next one is offered
+/// again. `None` when the record can't be read.
+fn identity_of(helper_uid: u32) -> Option<String> {
+    use atlas_daemon::helper_setup::identity::{OnFile, on_file};
+    match on_file(helper_uid) {
+        OnFile::Recorded(identity) => Some(identity.generated_uid),
+        OnFile::Nothing => Some(format!("unrecorded:{helper_uid}")),
+        OnFile::Unreadable => None,
     }
 }
 
@@ -231,35 +274,63 @@ fn by_hand(what: &str, flag: &str, entry: &str) -> Error {
 
 /// Whether the `ls -lde` listing of the home folder shuts `helper` out.
 fn private_in(listing: &str, helper: &str) -> bool {
-    deciding_deny(listing, helper).is_some()
-}
-
-/// The place of the entry that shuts `helper` out, when one decides it.
-/// macOS takes entries in order, and the first that grants or denies a right
-/// decides it: so the helper's deny of both rights counts only when it applies
-/// to the folder itself and no earlier entry, for anyone, allows either.
-fn deciding_deny(listing: &str, helper: &str) -> Option<usize> {
     let subject = format!("user:{helper}");
-    for entry in listing.lines().skip(1).filter_map(Entry::parse) {
-        let grants = |right: &str| entry.rights.contains(&right);
+    for entry in entries(listing) {
         match entry.kind {
-            "allow" if grants("list") || grants("search") => return None,
+            "allow" if entry.grants("list") || entry.grants("search") => return false,
             "deny"
                 if entry.subject == subject
-                    && grants("list")
-                    && grants("search")
-                    && !grants("only_inherit") =>
+                    && entry.grants("list")
+                    && entry.grants("search")
+                    && entry.applies() =>
             {
-                return Some(entry.index);
+                return true;
             }
             _ => {}
         }
     }
-    None
+    false
+}
+
+/// Whether the listing denies `helper` going into the home folder before
+/// anything allows it, whatever else it denies.
+fn denies_search(listing: &str, helper: &str) -> bool {
+    let subject = format!("user:{helper}");
+    for entry in entries(listing) {
+        match entry.kind {
+            "allow" if entry.grants("search") => return false,
+            "deny" if entry.subject == subject && entry.grants("search") && entry.applies() => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// The place of the first entry Atlas adds for `helper`, wherever it is and
+/// whether or not it decides anything.
+fn ours(listing: &str, helper: &str) -> Option<usize> {
+    let subject = format!("user:{helper}");
+    entries(listing)
+        .find(|entry| {
+            entry.subject == subject
+                && entry.kind == "deny"
+                && entry.grants("list")
+                && entry.grants("search")
+        })
+        .map(|entry| entry.index)
+}
+
+/// The access entries of an `ls -le` listing of one item, in order.
+fn entries(listing: &str) -> impl Iterator<Item = Entry<'_>> {
+    listing.lines().skip(1).filter_map(Entry::parse)
 }
 
 /// One line of an access list, as `ls -le` prints it: ` 1: user:name deny
-/// list,search`, perhaps with `inherited` before the kind.
+/// list,search`, perhaps with `inherited` before the kind. macOS takes
+/// entries in order, and the first that grants or denies a right decides it.
+/// A subject's name may hold spaces, so a line is read from its right.
 struct Entry<'a> {
     index: usize,
     subject: &'a str,
@@ -270,19 +341,29 @@ struct Entry<'a> {
 impl<'a> Entry<'a> {
     fn parse(line: &'a str) -> Option<Self> {
         let (index, rest) = line.trim_start().split_once(": ")?;
-        let mut words = rest.split_whitespace();
-        let subject = words.next()?;
-        let kind = match words.next()? {
-            "inherited" => words.next()?,
-            kind => kind,
-        };
+        let mut words = rest.trim_end().rsplitn(3, ' ');
         let rights = words.next()?.split(',').collect();
+        let kind = words.next()?;
+        let subject = words.next()?.trim_end();
+        let subject = subject.strip_suffix(" inherited").unwrap_or(subject);
+        if !matches!(kind, "allow" | "deny") || subject.is_empty() {
+            return None;
+        }
         Some(Self {
             index: index.parse().ok()?,
             subject,
             kind,
             rights,
         })
+    }
+
+    fn grants(&self, right: &str) -> bool {
+        self.rights.contains(&right)
+    }
+
+    /// Whether it is about the item itself, not only what is made in it.
+    fn applies(&self) -> bool {
+        !self.grants("only_inherit")
     }
 }
 
