@@ -5,6 +5,16 @@ import SwiftUI
 /// disclosure column, a lead column, the text, an accessory and the time, which lines up at every level. A folded row
 /// and its key items are one box. Pictures take one of three framed 16:10 sizes.
 extension ViewerLayout {
+  /// 8: above the line for the sessions waiting at the top of a scrolled-down list.
+  static let waitingAbove = Spacing.s
+  /// 24: that line's height.
+  static let waitingHeight = ControlHeight.xs
+  /// 12: that line's inset at its sides.
+  static let waitingInset = Spacing.m
+  /// 4: between its chevron and its words.
+  static let waitingGap = Spacing.xs
+  /// 8: its chevron's size.
+  static let waitingChevron = Spacing.s
   /// 12: above and below the filters' track.
   static let filtersAround = Spacing.m
 
