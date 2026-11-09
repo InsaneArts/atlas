@@ -24,22 +24,6 @@ struct FooterSlotMotionTests {
     #expect(crossing.isEmpty, "the sound button was drawn over Stop: \(crossing)")
   }
 
-  /// One frame of a change in the footer: whether Stop's mark is drawn, and whether the sound button's mark is
-  /// drawn in Stop's capsule, clear of Stop's own mark and word.
-  struct Frame: CustomStringConvertible {
-    /// Seconds since the change.
-    let moment: TimeInterval
-    /// Whether Stop's mark is drawn.
-    let stopDrawn: Bool
-    /// Whether the sound button's mark is drawn inside Stop's capsule.
-    let soundInStop: Bool
-
-    /// The frame, for a failure to say.
-    var description: String {
-      String(format: "%.3f s: Stop %@, sound %@", moment, stopDrawn ? "drawn" : "-", soundInStop ? "in Stop" : "-")
-    }
-  }
-
   /// The centre of Stop's square in a standard window, in points from its top left.
   static let stopMark = CGPoint(x: 1215.5, y: 870)
   /// Points in Stop's capsule, before its square and after its word, where only another button's mark draws: across
@@ -58,7 +42,7 @@ struct FooterSlotMotionTests {
   ///   - next: What it shows after.
   /// - Returns: The frames.
   /// - Throws: When nothing was drawn.
-  static func frames(from first: ViewerState, to next: ViewerState) throws -> [Frame] {
+  static func frames(from first: ViewerState, to next: ViewerState) throws -> [FooterSlotFrame] {
     let previous = Motion.Pose.moment
     Motion.Pose.hold(at: -5)
     defer { Motion.Pose.hold(at: previous) }
@@ -74,7 +58,7 @@ struct FooterSlotMotionTests {
         host.render()
         let lit = try host.brightness(at: [stopMark] + stopRoom)
           .map { $0 > drawn }
-        return Frame(moment: moment, stopDrawn: lit[0], soundInStop: lit.dropFirst().contains(true))
+        return FooterSlotFrame(moment: moment, stopDrawn: lit[0], soundInStop: lit.dropFirst().contains(true))
       }
   }
 }
