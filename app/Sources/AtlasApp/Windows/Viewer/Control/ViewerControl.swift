@@ -74,6 +74,9 @@ final class ViewerControl {
   @ObservationIgnored private(set) var controlSince = 0
   /// Renews the lease and ends control over a stale picture.
   @ObservationIgnored var heartbeat: Task<Void, Never>?
+  /// The newest picture's id, kept past a lost picture, so a held button's release can still name the picture it was
+  /// pressed on.
+  @ObservationIgnored private(set) var lastFrame: String?
   /// The held sign-in's lease, while the person signs in with agents paused: every way control would go back, focus
   /// lost, the window covered or away from the Screen, only stops sending input, and the lease is renewed with no
   /// picture until Done or Cancel. Nil otherwise.
@@ -262,6 +265,7 @@ final class ViewerControl {
 
   /// A fresh picture arrived: the acquisition that waited for it goes on, as Take Control pressed now would.
   func pictureArrived() {
+    lastFrame = viewer?.reading.frame?.id ?? lastFrame
     // A picture back after a failed one lets a held sign-in's input go again.
     resumeIfEligible()
     guard let waited = pictureWait, waited == controlGeneration else { return }
@@ -316,6 +320,32 @@ final class ViewerControl {
       }
     }
     if let message { viewer?.say(message) }
+  }
+
+  /// Starts asking for a held sign-in, as an acquisition does: the window counts as taking control until the reply,
+  /// and ending control meanwhile, as closing the window does, calls the start off.
+  ///
+  /// - Returns: The start's number, which a newer one or an ending replaces.
+  func beginSignInStart() -> Int {
+    controlGeneration += 1
+    acquiring = true
+    return controlGeneration
+  }
+
+  /// Whether a start's reply is still wanted: nothing ended control or started anew since.
+  ///
+  /// - Parameter generation: The start's number.
+  /// - Returns: Whether to hold what it granted.
+  func wantsSignIn(_ generation: Int) -> Bool {
+    generation == controlGeneration && viewer != nil
+  }
+
+  /// A start that was refused, or called off: the window no longer counts as taking control, unless a newer one
+  /// does.
+  ///
+  /// - Parameter generation: The start's number.
+  func signInStartEnded(_ generation: Int) {
+    if generation == controlGeneration { acquiring = false }
   }
 
   /// Holds a sign-in's lease as control's own: an acquisition under way is called off, and input goes under it while
@@ -404,9 +434,33 @@ final class ViewerControl {
   ///
   /// - Parameter message: What the notice says, if anything.
   func suspend(_ message: String? = nil) {
-    guard signInLease != nil else { return releaseControl(message) }
-    clearInput()
+    guard let signInLease else { return releaseControl(message) }
+    releaseHeld(under: signInLease)
     if let message { viewer?.say(message) }
+  }
+
+  /// Stops what input holds under a held sign-in, keeping the queue, the lease and the hold: a button still down goes
+  /// up first, sent in turn after what was queued before it and answered as any input is, so the helper's button never
+  /// stays held while the person is away; then the gesture, the scrolling and the text being composed are dropped.
+  /// Input the window gives meanwhile waits for it to take input again (``canInput``).
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  private func releaseHeld(under lease: String) {
+    if let button = gesture.heldButton, let point = gesture.last, let frame = lastFrame,
+      let up = gesture.finish(button, at: point, modifiers: [], now: uptime())
+    {
+      if input.owner != lease { input.activate(lease) }
+      input.enqueue([up], frame: frame)
+    }
+    gesture.cancel()
+    composing = ""
+    wheel.reset()
+    wheelAt = nil
+    wheelHeardAt = nil
+    wheelSending?.cancel()
+    wheelSending = nil
+    inputReading?.cancel()
+    inputReading = nil
   }
 
   /// Input goes again under a held sign-in once the Screen can take it: the window shows and takes the keyboard, on
@@ -436,7 +490,7 @@ final class ViewerControl {
   var canInput: Bool {
     guard let viewer else { return false }
     return lease != nil && viewer.reading.frame != nil && !viewer.session.paused && focused && viewer.shown
-      && !pictureStale
+      && viewer.session.place == .screen && !pictureStale
   }
 
   /// Queues input for the helper, aimed at the picture on screen, while input may go.

@@ -23,12 +23,27 @@ extension ViewerController {
       control.releaseControl()
       if let refused = await actions.barrier.settle() { return refused }
     }
+    // Counted as control work, as an acquisition is: closing the window meanwhile calls it off, and a grant that
+    // comes after is cancelled before the work ends, so nothing waiting on it sees a hold nobody shows.
+    let generation = control.beginSignInStart()
     do {
-      let started = try await service.startSignIn(purpose.kind, site: site, browser: browser)
+      let started = try await actions.barrier.tracking { () async throws -> SignInStarted? in
+        let started = try await service.startSignIn(purpose.kind, site: site, browser: browser)
+        guard control.wantsSignIn(generation) else {
+          try? await service.cancelSignIn(lease: started.lease)
+          return nil
+        }
+        return started
+      }
+      guard let started else {
+        control.signInStartEnded(generation)
+        return SignInWords.calledOff
+      }
       session.signIn = ViewerSignIn(purpose: purpose, site: started.site, browser: started.browser)
       control.adoptSignIn(started.lease)
       return nil
     } catch {
+      control.signInStartEnded(generation)
       return error.localizedDescription
     }
   }

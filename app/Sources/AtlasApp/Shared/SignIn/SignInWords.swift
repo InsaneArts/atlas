@@ -7,6 +7,8 @@ enum SignInWords {
   static let underWay = "A sign-in is under way already. Finish it in Atlas's window first."
   /// What a sign-in says when Atlas's window couldn't open to hold it.
   static let noWindow = "Atlas couldn't open its window. Try again."
+  /// What a start says when Atlas's window closed before it began.
+  static let calledOff = "The sign-in was called off as Atlas's window closed. Start it again."
   /// The header's tag while agents can't see the screen.
   static let hidden = "Screen · Hidden from agents"
 

@@ -241,6 +241,45 @@ struct ViewerSignInTests {
     #expect(viewer.state.alert?.message == "Agents ask you before sending there.")
   }
 
+  @Test("closing the window during a slow start calls it off, and the late grant is cancelled, never held")
+  func closingDuringAStartCallsItOff() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    service.hold.insert("sign-in/start")
+    let starting = Task { await viewer.startSignIn(.signIn, site: "github.com", browser: nil) }
+    try await settle("the start never reached the service") { service.held["sign-in/start"] != nil }
+    #expect(viewer.control.acquiring, "the start counts as taking control")
+    viewer.close()
+    #expect(!viewer.holdingControl && !viewer.control.acquiring, "closing ends the wait at once")
+    service.resume("sign-in/start")
+    #expect(await starting.value == SignInWords.calledOff)
+    _ = await viewer.actions.barrier.settle()
+    #expect(service.log.contains("cancel sign-in-lease"), "the late grant is cancelled")
+    #expect(viewer.control.signInLease == nil && viewer.session.signIn == nil)
+  }
+
+  @Test("suspending with a button down sends its release first, keeps the lease, and the next click works")
+  func aHeldButtonComesUpOnSuspend() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    let size = CGSize(width: 400, height: 300)
+    let middle = CGPoint(x: 200, y: 150)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    viewer.control.pointerDown(.left, at: middle, in: size, modifiers: [])
+    try await settle("the press was never sent") { service.actions.count == 1 }
+    viewer.control.lostFocus()
+    try await settle("the release was never sent") { service.actions.count == 2 }
+    #expect(
+      service.actions.last?.first.map { if case .pointer(.up, _, _, _, _, _) = $0 { true } else { false } } == true
+    )
+    #expect(viewer.control.signInLease == "sign-in-lease")
+    viewer.control.gainedFocus()
+    viewer.control.pointerDown(.left, at: middle, in: size, modifiers: [])
+    viewer.control.pointerUp(.left, at: middle, in: size, modifiers: [])
+    try await settle("the next click never went") { service.actions.count == 4 }
+    #expect(!service.log.contains { $0.hasPrefix("cancel") || $0.hasPrefix("release") })
+  }
+
   @Test("a start the service refuses says why and holds nothing")
   func aRefusalIsSaid() async throws {
     let service = ScriptedService()
