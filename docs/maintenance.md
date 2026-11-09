@@ -86,6 +86,8 @@ atlas uninstall
 
 The command shows what it will remove and asks before proceeding. It stops the managed helper job and menu bar, disconnects Atlas-owned integrations, removes its CLI link and moves Atlas.app to the Trash. It removes Atlas's staged app copies and other owned staging data. By default, it also removes the installed settings file and your `~/Library/Application Support/Atlas` directory, including default captures, logs and setup records. Save anything you need from that directory first.
 
+If you installed Atlas with Homebrew, run `brew uninstall --cask --force atlas` afterwards. It removes Homebrew's `atlas` link and its record of the cask; `--force` is needed because Atlas.app is already in the Trash.
+
 To keep those settings and records, use `atlas uninstall --keep-config`. This also preserves Atlas's caches. A checkout's configuration or another custom settings file is not removed by the normal installed-settings cleanup. A custom capture directory outside Application Support is not part of that directory's removal.
 
 To delete the helper account and its home files as well, choose this destructive option before uninstalling:
