@@ -460,3 +460,50 @@ fn an_agents_input_reply_never_carries_the_account_it_acted_in() {
     doing.note_account(account.clone(), Some(json!("trusted")));
     assert_eq!(doing.noted_account(), Some((account, Some(json!("once")))));
 }
+
+#[test]
+fn a_command_across_accounts_keeps_each_accounts_own_allowance() {
+    let doing = crate::doing::Doing::new("type");
+    let slack = json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com"}});
+    let github = json!({"name": "github.com", "key": {"kind": "site", "id": "github.com"}});
+    doing.note_account(slack.clone(), None);
+    doing.note_account(github.clone(), Some(json!("trusted")));
+    assert_eq!(
+        doing.noted_account(),
+        Some((github.clone(), Some(json!("trusted")))),
+        "never slack.com as Trusted"
+    );
+    doing.note_account(slack.clone(), Some(json!("trusted")));
+    assert_eq!(
+        doing.noted_account().unwrap().0,
+        github,
+        "a tie keeps the first"
+    );
+    doing.note_account(slack.clone(), Some(json!("task")));
+    assert_eq!(doing.noted_account(), Some((slack, Some(json!("task")))));
+}
+
+#[test]
+fn a_refused_inputs_row_still_names_the_account_of_what_ran_and_its_reply_never_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client_in(dir.path());
+    let doing = crate::doing::Doing::new("key");
+    client.doing = Some(doing.clone());
+    let account = json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com"}});
+    // A send allowed for the task ran; the action after it was refused.
+    let mut reply = json!({"ok": false, "code": "denied", "performed": 1,
+        "account": account, "allowed": "task"});
+    let row = client.row(
+        &json!({"op": "input", "actions": [{"type": "key"}, {"type": "type"}]}),
+        &reply,
+        Duration::ZERO,
+        crate::activity_log::Step::End,
+    );
+    assert_eq!(row.ok, Some(false));
+    assert_eq!(row.account.unwrap().name, "slack.com");
+    assert_eq!(row.allowed, Some(crate::activity_log::Allowed::Task));
+
+    client.keep_from_reply(&mut reply);
+    assert!(reply.get("account").is_none() && reply.get("allowed").is_none());
+    assert_eq!(reply["code"], "denied");
+}

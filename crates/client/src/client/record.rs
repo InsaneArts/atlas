@@ -405,7 +405,7 @@ impl Client {
     /// The activity row for `step` of `request`, unstamped. No input text, argv,
     /// coordinates, window titles, output or image payloads reach it: only
     /// what `Doing` names.
-    fn row(&self, request: &Value, reply: &Value, elapsed: Duration, step: Step) -> Row {
+    pub(super) fn row(&self, request: &Value, reply: &Value, elapsed: Duration, step: Step) -> Row {
         let start = step == Step::Start;
         let ok = worked(reply);
         let mut row = Row {

@@ -278,11 +278,15 @@ pub(crate) struct Noted {
 }
 
 impl Noted {
-    /// `self` with `later`, of a later action of the same request: the
-    /// first account it acted in, and the most the person had to allow.
+    /// `self` or `later`, of a later action of the same request: the
+    /// account whose action needed the most allowing, with its own
+    /// allowance, the earlier on a tie. One account's name never goes with
+    /// another's allowance.
     fn and(self, later: Option<Self>) -> Self {
-        let allowed = self.allowed.max(later.and_then(|later| later.allowed));
-        Self { allowed, ..self }
+        match later {
+            Some(later) if later.allowed > self.allowed => later,
+            _ => self,
+        }
     }
 }
 

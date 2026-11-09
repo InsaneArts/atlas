@@ -1427,3 +1427,68 @@ fn a_request_in_an_app_or_page_not_listed_notes_no_account() {
     assert_eq!(noted_by(&send, &asking, &mut look), None);
     assert_eq!(noted_by(&send, &Asking::default(), &mut look), None);
 }
+
+/// Slack's site and GitHub's, listed in Chrome at the levels given.
+fn slack_and_github(slack: Level, github: Level) -> Asking {
+    let mut asking = listing(Kind::Site, "slack.com", slack);
+    asking
+        .accounts
+        .extend(listing(Kind::Site, "github.com", github).accounts);
+    asking
+}
+
+#[test]
+fn a_request_across_accounts_notes_the_one_that_needed_the_most_allowing_with_its_own() {
+    let draft = actions(json!([{"type": "type", "text": "hi"}]));
+    let send = actions(json!([{"type": "key", "key": "return"}]));
+    let in_slack = || scripted(Target::default(), field("app.slack.com", true));
+    let in_github = || scripted(Target::default(), field("github.com", true));
+
+    // A draft in Slack, which asks but needed nothing, then a send in
+    // GitHub, which is Trusted: GitHub, as Trusted. Never Slack as Trusted.
+    let asking = slack_and_github(Level::Ask, Level::Trusted);
+    let both = [draft[0].clone(), send[0].clone()];
+    let mut checking = recheck(&both, &asking);
+    assert_eq!(checking.check(&both[0], &mut in_slack()), Decision::Free);
+    assert_eq!(checking.check(&both[1], &mut in_github()), Decision::Free);
+    let noted = checking.noted().unwrap();
+    assert_eq!(
+        (noted.key.id.as_str(), noted.allowed),
+        ("github.com", Some(Allowed::Trusted))
+    );
+
+    // Both Trusted: the first stands.
+    let asking = slack_and_github(Level::Trusted, Level::Trusted);
+    let mut checking = recheck(&both, &asking);
+    checking.check(&both[0], &mut in_slack());
+    checking.check(&both[1], &mut in_github());
+    assert_eq!(checking.noted().unwrap().key.id, "slack.com");
+}
+
+#[test]
+fn what_ran_before_a_refused_action_stays_noted() {
+    // A send allowed for the task in Slack, then a change in Look Only
+    // GitHub, which is refused.
+    let mut asking = slack_and_github(Level::Ask, Level::LookOnly);
+    asking.grants.push(Allowance::Task {
+        account: site("slack.com"),
+    });
+    let request = actions(json!([
+        {"type": "key", "key": "return"},
+        {"type": "type", "text": "lgtm"}
+    ]));
+    let mut checking = recheck(&request, &asking);
+    let mut in_slack = scripted(Target::default(), field("app.slack.com", true));
+    let mut in_github = scripted(Target::default(), field("github.com", true));
+    assert_eq!(checking.check(&request[0], &mut in_slack), Decision::Free);
+    assert!(matches!(
+        checking.check(&request[1], &mut in_github),
+        Decision::Deny { .. }
+    ));
+
+    let noted = checking.noted().unwrap();
+    assert_eq!(
+        (noted.key.id.as_str(), noted.allowed),
+        ("slack.com", Some(Allowed::Task))
+    );
+}

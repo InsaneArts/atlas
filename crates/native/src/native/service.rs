@@ -492,12 +492,17 @@ impl Service {
             gate: self.gate.clone(),
             owner: Some(owner),
         };
-        let (done, dock_pressed, noted) = match self
+        let (performed, noted) = self
             .execute(grant, actions, expect.clone(), typed, asking)
-            .await?
-        {
+            .await?;
+        let (done, dock_pressed) = match performed {
             Ok(done) => done,
-            Err(failure) => return Ok(failure.reply()),
+            // What ran before the failure still acted in its account.
+            Err(failure) => {
+                let mut reply = failure.reply();
+                note(&mut reply, noted);
+                return Ok(reply);
+            }
         };
 
         let acted = done.acted.as_ref();
@@ -533,14 +538,7 @@ impl Service {
         if let Some(reached) = &done.reached {
             reply["element"] = json!(reached);
         }
-        // The listed account it acted in and what let it, for its activity
-        // row: the client keeps it from the agent's reply.
-        if let Some(noted) = noted {
-            reply["account"] = json!(noted);
-            if let Some(allowed) = noted.allowed {
-                reply["allowed"] = json!(allowed);
-            }
-        }
+        note(&mut reply, noted);
 
         cancellation.owner = None;
         Ok(reply)
@@ -602,7 +600,7 @@ impl Service {
                     }
                     engine.target = None;
                     engine.keep_while_held(acting);
-                    Ok::<_, Error>(result.map(|done| (done, engine.dock_pressed, noted)))
+                    Ok::<_, Error>((result.map(|done| (done, engine.dock_pressed)), noted))
                 })
             }))
             .await?;
@@ -614,7 +612,24 @@ impl Service {
 }
 
 /// What a batch came to: see [`Service::execute`].
-type Performed = std::result::Result<(Done, bool, Option<asking::Noted>), Box<Failure>>;
+/// The listed account the actions that ran acted in comes with it, either
+/// way.
+type Performed = (
+    std::result::Result<(Done, bool), Box<Failure>>,
+    Option<asking::Noted>,
+);
+
+/// Name in `reply` the listed account a request's actions that ran acted
+/// in and what let them, for its activity row: the client keeps both from
+/// the agent's reply.
+fn note(reply: &mut Value, noted: Option<asking::Noted>) {
+    if let Some(noted) = noted {
+        reply["account"] = json!(noted);
+        if let Some(allowed) = noted.allowed {
+            reply["allowed"] = json!(allowed);
+        }
+    }
+}
 
 /// The recipient for the agent's activity log: Dock after AXPress, the app
 /// an action on an element acted in (process `acted`), otherwise the owner

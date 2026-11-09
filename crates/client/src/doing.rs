@@ -120,34 +120,33 @@ impl Doing {
     }
 
     /// Note the listed `account` its input acted in, as the input service
-    /// named it, and what `allowed` it: the first account, and once the
-    /// person allowed it, that it was.
+    /// named it, and what `allowed` it: of all its inputs, the account whose
+    /// action needed the most allowing, with its own allowance, the earlier
+    /// on a tie. One account's name never goes with another's allowance.
     pub(crate) fn note_account(
         &self,
         account: serde_json::Value,
         allowed: Option<serde_json::Value>,
     ) {
+        let rank = |allowed: &Option<serde_json::Value>| match allowed
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+        {
+            Some("once") => 3,
+            Some("task") => 2,
+            Some("trusted") => 1,
+            _ => 0,
+        };
         let mut noted = self
             .account
             .0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match noted.as_mut() {
-            None => *noted = Some((account, allowed)),
-            Some((_, kept)) => {
-                let rank = |allowed: &Option<serde_json::Value>| match allowed
-                    .as_ref()
-                    .and_then(serde_json::Value::as_str)
-                {
-                    Some("once") => 3,
-                    Some("task") => 2,
-                    Some("trusted") => 1,
-                    _ => 0,
-                };
-                if rank(&allowed) > rank(kept) {
-                    *kept = allowed;
-                }
-            }
+        if noted
+            .as_ref()
+            .is_none_or(|(_, kept)| rank(&allowed) > rank(kept))
+        {
+            *noted = Some((account, allowed));
         }
     }
 
