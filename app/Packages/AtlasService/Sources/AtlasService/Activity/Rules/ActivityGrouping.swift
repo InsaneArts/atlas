@@ -190,17 +190,17 @@ public struct ActivityGrouping: Sendable {
       && above.account == below.account && above.allowed == below.allowed
   }
 
-  /// Whether a row matches a search: in what was done, never in who did it.
+  /// Whether a row matches a search: in what was done or the listed account it was done in, never in who did it.
   ///
   /// - Parameters:
   ///   - entry: The row.
   ///   - query: The search; empty, or spaces alone, matches every row.
-  /// - Returns: Whether what the row did holds the search, ignoring case and accents.
+  /// - Returns: Whether what the row did, or its account's name, holds the search, ignoring case and accents.
   static func matches(_ entry: ActivityLog.Entry, query: String) -> Bool {
     let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !words.isEmpty else { return true }
     return done(entry)
-      .localizedStandardContains(words)
+      .localizedStandardContains(words) || entry.account?.name.localizedStandardContains(words) == true
   }
 
   /// What a line says: the person's own action after "You", anyone else's as a sentence's start.

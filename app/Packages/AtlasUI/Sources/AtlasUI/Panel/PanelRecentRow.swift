@@ -4,8 +4,9 @@ import SwiftUI
 /// so every row's words start at one edge; what was done, with the listed account it acted in after it, and on the
 /// right how long ago, whose digits count rather than jump while the unit stays, and which swaps by opacity when the
 /// words change, as from "now" to "1 s" or from seconds to minutes. Before the time, a badge saying what let it act
-/// in a listed account, a warning sign for what did not work, and a blue dot on the live row that cools away after a
-/// second; neither moves the words. Under Reduce Motion the dot only fades as it cools. VoiceOver reads it as one.
+/// in a listed account where the words fit whole beside it, a warning sign for what did not work, and a blue dot on
+/// the live row that cools away after a second; neither moves the words. Under Reduce Motion the dot only fades as it
+/// cools. VoiceOver reads it as one, the badge as its value.
 struct PanelRecentRow: View {
   /// The action.
   let entry: PanelRecentEntry
@@ -16,6 +17,27 @@ struct PanelRecentRow: View {
 
   /// Its mark if it carries state, what was done, and how long ago.
   var body: some View {
+    // The badge shows only where the words fit whole beside it; VoiceOver reads it either way, as the row's value.
+    ViewThatFits(in: .horizontal) {
+      row(showsBadge: true)
+      row(showsBadge: false)
+    }
+    .font(Typography.font(.callout))
+    .lineLimit(1)
+    .frame(minHeight: PanelLayout.recentRow)
+    .padding(.horizontal, PanelLayout.textInset)
+    .accessibilityElement(children: .combine)
+    .accessibilityValue(Text(verbatim: entry.allowance?.words ?? ""))
+    .onAppear(perform: cool)
+    .onChange(of: entry.isLive) { cool() }
+  }
+
+  /// The row's parts: its icon, what was done and the account it was done in, the live dot, the badge when asked, the
+  /// warning sign and the time. The words give way first, then the account.
+  ///
+  /// - Parameter showsBadge: Whether what let it act in its account shows.
+  /// - Returns: The row's parts.
+  private func row(showsBadge: Bool) -> some View {
     HStack(spacing: .zero) {
       ActivityGlyph(icon: entry.icon, side: PanelLayout.recentIcon)
         .padding(.trailing, Spacing.s)
@@ -33,9 +55,10 @@ struct PanelRecentRow: View {
         .opacity(isGlowing ? 1 : 0)
         .frame(width: holdsDot ? IconSize.xxs : .zero, alignment: .trailing)
         .padding(.leading, holdsDot ? Spacing.s : .zero)
-      if let allowance = entry.allowance {
+      if showsBadge, let allowance = entry.allowance {
         AllowanceTag(badge: allowance)
           .padding(.leading, Spacing.s)
+          .accessibilityHidden(true)
       }
       if entry.isFailed {
         ActivityMark(kind: .failed)
@@ -53,13 +76,6 @@ struct PanelRecentRow: View {
       .animation(Motion.textSwap, value: entry.when)
       .padding(.leading, Spacing.s)
     }
-    .font(Typography.font(.callout))
-    .lineLimit(1)
-    .frame(minHeight: PanelLayout.recentRow)
-    .padding(.horizontal, PanelLayout.textInset)
-    .accessibilityElement(children: .combine)
-    .onAppear(perform: cool)
-    .onChange(of: entry.isLive) { cool() }
   }
 
   /// Whether the blue dot shows: on the live row until it cools.

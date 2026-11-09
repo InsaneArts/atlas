@@ -76,7 +76,8 @@
         sample("72-activity-replay", PreviewStates.viewerActivityReplay),
         sample("73-picture-sheet", PreviewStates.viewerPictureSheet),
         sample("74-step-picture-sheet", PreviewStates.viewerStepPicture),
-        sample("75-activity-allowed", PreviewStates.viewerActivityAllowed),
+        sample("79-activity-allowed", PreviewStates.viewerActivityAllowed),
+        sample("80-activity-allowed-mixed", PreviewStates.viewerActivityAllowedMixed),
       ]
     }
 
@@ -103,7 +104,7 @@
         [
           ("activity", PreviewStates.viewerActivity), ("session", PreviewStates.viewerActivityOneSession),
           ("shots", PreviewStates.viewerActivityShots), ("picture", PreviewStates.viewerPictureSheet),
-          ("step", PreviewStates.viewerStepPicture),
+          ("step", PreviewStates.viewerStepPicture), ("allowed", PreviewStates.viewerActivityAllowedMixed),
         ]
         .map { name, state in
           let size = CGSize(width: width, height: PreviewStates.viewerSize.height)

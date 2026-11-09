@@ -74,6 +74,8 @@
     case lineSwapLines = "line-swap-lines"
     /// A session icon's badge, acting, waiting, needing the person and none.
     case stateBadgeStates = "state-badge-states"
+    /// Recent's rows with the account each acted in and what let it act there, at the panel's width and narrow.
+    case recentRows = "recent-rows"
     /// The panel asking before an agent sends: a message, a named click, a click with no name, a password, a
     /// question offering Allow for This Task and Deny alone, and what the person allowed.
     case panelAsks = "panel-asks"

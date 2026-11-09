@@ -63,6 +63,63 @@
       allowance: trustedAccount
     )
 
+    /// Claude Code's run in Chrome across sites, opened: each step in a listed account names it beside its words,
+    /// a search outside any names none, and the run, in no one account, keeps the browser's name and no badge.
+    @MainActor static let mixedRunOpen = ViewerOutlineRun(
+      id: "run.chrome.sites",
+      icon: sampleApp(SampleAppIcons.safari, "Google Chrome"),
+      name: "Google Chrome",
+      summary: "Clicked and typed · 4 actions",
+      time: "02:14–02:16",
+      isOpen: true,
+      canReplay: true,
+      steps: [
+        ViewerActivityStep(
+          id: "step.sites.search",
+          kind: .pointer,
+          words: ViewerStepWords("Clicked", target: "Search"),
+          time: "02:14",
+          hasPicture: true
+        ),
+        ViewerActivityStep(
+          id: "step.sites.merge",
+          kind: .pointer,
+          words: ViewerStepWords("Clicked", target: "Merge pull request"),
+          hasPicture: true,
+          account: "github.com",
+          allowance: trustedAccount
+        ),
+        ViewerActivityStep(
+          id: "step.sites.type",
+          kind: .typing,
+          words: ViewerStepWords("Typed", quote: "Ship it after the release notes", joiner: "into", target: "Comment"),
+          time: "02:15",
+          hasPicture: true,
+          account: "staging.acme.dev",
+          allowance: allowedOnce
+        ),
+        ViewerActivityStep(
+          id: "step.sites.pulls",
+          kind: .pointer,
+          words: ViewerStepWords("Clicked", target: "Pull requests"),
+          time: "02:16",
+          hasPicture: true,
+          account: "github.com"
+        ),
+      ]
+    )
+
+    /// Activity with Claude Code's run across sites opened, each step naming the account it acted in.
+    @MainActor public static let viewerActivityAllowedMixed: ViewerState = {
+      var state = viewerActivity
+      var session = claudeSession
+      session.runs = [mixedRunOpen, githubRunOpen] + session.runs
+      var activity = workingActivity
+      activity.days[0].sessions = [session]
+      state.pane = .activity(activity)
+      return state
+    }()
+
     /// Activity with Claude Code's run on github.com opened, each step saying what let it act there, and its Trusted
     /// Slack run folded under it.
     @MainActor public static let viewerActivityAllowed: ViewerState = {
