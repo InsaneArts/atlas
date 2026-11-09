@@ -87,6 +87,14 @@ impl Viewer {
         let now = atlas_core::time::timestamp();
         let overview = atlas_client::overview::overview(&doctor, active, pending, &activity, now);
         let mut status = atlas_client::overview::Reading::new(doctor, overview, active, now);
+        // The recent rows as the person's app shows them, with the account
+        // each acted in: an agent's status never carries it.
+        status.value["overview"]["activity"] = json!(
+            activity
+                .iter()
+                .map(|row| atlas_client::overview::shown_to_person(row, now))
+                .collect::<Vec<_>>()
+        );
         atlas_client::overview::add_host_sessions(&mut status, &client, now).await;
 
         if let Some(name) = status.value["overview"]["account"].as_str() {
@@ -506,7 +514,7 @@ async fn account_title(
 /// never typed text, argv, coordinates or titles, which the log never keeps
 /// either.
 pub(super) fn activity_row(row: &atlas_client::activity_log::Row, now: u128) -> Value {
-    let shown = atlas_client::overview::shown(row, now);
+    let shown = atlas_client::overview::shown_to_person(row, now);
     let keys = shown.keys();
     let mut fields = json!(shown);
     rename(&mut fields, "actionCount", "count");

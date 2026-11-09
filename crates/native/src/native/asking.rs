@@ -255,6 +255,37 @@ pub(crate) trait Look {
     fn unmoved(&mut self) -> bool;
 }
 
+/// What let an agent's input go in a listed account, weakest first: the
+/// account is Trusted, the person allowed the rest of the task there, or
+/// allowed this once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum Allowed {
+    Trusted,
+    Task,
+    Once,
+}
+
+/// The listed account an agent's request acted in, and what let it act
+/// there, for its activity row alone: never the agent's reply.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct Noted {
+    /// The account's name, as the person reads it.
+    pub(crate) name: String,
+    pub(crate) key: AccountKey,
+    #[serde(skip)]
+    pub(crate) allowed: Option<Allowed>,
+}
+
+impl Noted {
+    /// `self` with `later`, of a later action of the same request: the
+    /// first account it acted in, and the most the person had to allow.
+    fn and(self, later: Option<Self>) -> Self {
+        let allowed = self.allowed.max(later.and_then(|later| later.allowed));
+        Self { allowed, ..self }
+    }
+}
+
 /// What the gate decided of a request.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Decision {
@@ -382,13 +413,26 @@ pub(crate) struct Recheck {
     /// The permit the action under way spent as it started, which covers
     /// its further events and no other action.
     spent: Option<Allowance>,
+    /// The listed account the request acted in so far, and what let it.
+    noted: Option<Noted>,
 }
 
 impl Recheck {
+    /// The listed account the request acted in, and what let it act there.
+    pub(crate) fn noted(&self) -> Option<&Noted> {
+        self.noted.as_ref()
+    }
+
     /// Before `action`, the next one: judged where it lands now. A permit
     /// that covers it is spent: another action like it asks again.
     pub(crate) fn check(&mut self, action: &Action, look: &mut impl Look) -> Decision {
-        let (decision, by) = judged(action, &self.asking, look, &self.batch, self.pressed);
+        let (decision, by, noted) = judged(action, &self.asking, look, &self.batch, self.pressed);
+        if decision == Decision::Free {
+            self.noted = match self.noted.take() {
+                Some(earlier) => Some(earlier.and(noted)),
+                None => noted,
+            };
+        }
         self.spent = by
             .filter(|at| matches!(self.asking.grants.get(*at), Some(Allowance::Permit { .. })))
             .map(|at| self.asking.grants.remove(at));
@@ -445,6 +489,7 @@ pub(crate) fn recheck(actions: &[Action], asking: &Asking) -> Recheck {
         current: None,
         held: None,
         spent: None,
+        noted: None,
     }
 }
 
@@ -462,6 +507,21 @@ fn judge(
     judged(action, asking, look, batch, pressed).0
 }
 
+/// What [`judged`] found: the decision, which of the grants let it go by
+/// its place, and the listed account it acts in with what let it.
+type Judged = (Decision, Option<usize>, Option<Noted>);
+
+/// `found` as noted, when it is a listed account Atlas could tell, with
+/// what let the action go there.
+fn noted(found: &Found, allowed: Option<Allowed>) -> Option<Noted> {
+    let real = found.known && found.key != AccountKey::any() && found.key != AccountKey::unread();
+    real.then(|| Noted {
+        name: found.name.clone(),
+        key: found.key.clone(),
+        allowed,
+    })
+}
+
 /// [`judge`], with which of `asking`'s grants, by its place, let it go.
 fn judged(
     action: &Action,
@@ -469,7 +529,7 @@ fn judged(
     look: &mut impl Look,
     batch: &str,
     pressed: bool,
-) -> (Decision, Option<usize>) {
+) -> Judged {
     let target = target(action, look);
     let drop = match action {
         Action::Drag { to_x, to_y, .. } => Some(look.at_point(*to_x, *to_y)),
@@ -495,10 +555,14 @@ fn judged(
                 account: strict.name.clone(),
             },
             None,
+            None,
         );
     }
+    // The account it acts in, Trusted said whatever it does there.
+    let trusted = |found: &Found| (found.level == Level::Trusted).then_some(Allowed::Trusted);
+    let acted_in = found.first().and_then(|first| noted(first, trusted(first)));
     let Some(what) = asks(action, &target, pressed) else {
-        return (Decision::Free, None);
+        return (Decision::Free, None, acted_in);
     };
     // A task grant covers one account by name: never while the list can't
     // be read, when every app stands for any account.
@@ -516,7 +580,14 @@ fn judged(
         })
         .collect();
     let Some(first) = open.first() else {
-        return (Decision::Free, None);
+        // Nothing left to ask: a task grant covered each end that asks, or
+        // every end is Trusted.
+        let covered = found.iter().find(|found| found.level == Level::Ask);
+        let noted = match covered {
+            Some(covered) => noted(covered, Some(Allowed::Task)),
+            None => acted_in,
+        };
+        return (Decision::Free, None, noted);
     };
     let known = open.iter().all(|found| found.known);
     let message = (what == "send-key" && target.editable && !target.secure).then(|| look.message());
@@ -530,7 +601,7 @@ fn judged(
     };
     let by = allowed(asking, action, &first.key, batch, &bound, message.as_ref());
     if pinned && by.is_some() {
-        return (Decision::Free, by);
+        return (Decision::Free, by, noted(first, Some(Allowed::Once)));
     }
     let asked = Decision::Ask(Box::new(Question {
         once: pinned,
@@ -546,7 +617,7 @@ fn judged(
             message,
         )
     }));
-    (asked, None)
+    (asked, None, None)
 }
 
 /// Whether a press is held after `action`, when one was before it as

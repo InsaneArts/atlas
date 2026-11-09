@@ -1362,3 +1362,68 @@ fn a_referenced_elements_question_shows_it_where_it_was_just_met_or_nowhere() {
     );
     assert_eq!(frame(None), None, "not where a look saw it");
 }
+
+/// What a request of `actions` that went says it acted in, as its check
+/// before each action found it.
+fn noted_by(actions: &[Action], asking: &Asking, look: &mut Scripted) -> Option<Noted> {
+    let mut checking = recheck(actions, asking);
+    for action in actions {
+        assert_eq!(checking.check(action, look), Decision::Free, "{action:?}");
+    }
+    checking.noted().cloned()
+}
+
+#[test]
+fn a_request_that_went_says_its_listed_account_and_what_let_it_go() {
+    let send = actions(json!([{"type": "key", "key": "return"}]));
+    let draft = actions(json!([{"type": "type", "text": "hi"}]));
+    let mut look = scripted(Target::default(), field("app.slack.com", true));
+
+    // Trusted, whatever it does there.
+    let trusted = listing(Kind::Site, "slack.com", Level::Trusted);
+    for request in [&send, &draft] {
+        let noted = noted_by(request, &trusted, &mut look).unwrap();
+        assert_eq!(noted.name, "slack.com");
+        assert_eq!(noted.key, site("slack.com"));
+        assert_eq!(noted.allowed, Some(Allowed::Trusted));
+    }
+
+    // Allowed for the task.
+    let mut tasked = listing(Kind::Site, "slack.com", Level::Ask);
+    tasked.grants.push(Allowance::Task {
+        account: site("slack.com"),
+    });
+    assert_eq!(
+        noted_by(&send, &tasked, &mut look).unwrap().allowed,
+        Some(Allowed::Task)
+    );
+
+    // Allowed once.
+    let asking = listing(Kind::Site, "slack.com", Level::Ask);
+    let Decision::Ask(question) = decide(&send, &asking, &mut look) else {
+        panic!("Return asks");
+    };
+    let mut onced = asking.clone();
+    onced.grants.push(once(&question));
+    assert_eq!(
+        noted_by(&send, &onced, &mut look).unwrap().allowed,
+        Some(Allowed::Once)
+    );
+
+    // A draft in an account that asks went with nothing to allow.
+    let noted = noted_by(&draft, &asking, &mut look).unwrap();
+    assert_eq!((noted.name.as_str(), noted.allowed), ("slack.com", None));
+    assert_eq!(
+        serde_json::to_value(&noted).unwrap(),
+        json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com", "browser": CHROME}})
+    );
+}
+
+#[test]
+fn a_request_in_an_app_or_page_not_listed_notes_no_account() {
+    let send = actions(json!([{"type": "key", "key": "return"}]));
+    let mut look = scripted(Target::default(), field("example.com", true));
+    let asking = listing(Kind::Site, "slack.com", Level::Trusted);
+    assert_eq!(noted_by(&send, &asking, &mut look), None);
+    assert_eq!(noted_by(&send, &Asking::default(), &mut look), None);
+}

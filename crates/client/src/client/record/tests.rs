@@ -74,3 +74,49 @@ async fn input_on_either_side_of_local_midnight_stays_separate_when_buffered_and
     assert_eq!(shown[1].at_ms(), Some(midnight - 1));
     assert!(shown.iter().all(|row| row.action_count == Some(2)));
 }
+
+/// An agent's click in a command, as its row is made from `reply`.
+fn clicked(reply: Value) -> Row {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client_in(directory.path());
+    client.doing = Some(crate::doing::Doing::new("click"));
+    client.row(
+        &json!({"op": "input", "actions": [{"type": "click"}]}),
+        &reply,
+        Duration::ZERO,
+        Step::End,
+    )
+}
+
+#[test]
+fn an_agents_input_row_names_the_listed_account_and_what_let_it_act_there() {
+    let account = json!({"name": "github.com",
+        "key": {"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}});
+    for (allowed, kept) in [
+        ("once", activity_log::Allowed::Once),
+        ("task", activity_log::Allowed::Task),
+        ("trusted", activity_log::Allowed::Trusted),
+    ] {
+        let row = clicked(json!({"ok": true, "app": "Google Chrome",
+            "account": account, "allowed": allowed}));
+        assert_eq!(row.account.as_ref().unwrap().name, "github.com");
+        assert_eq!(row.allowed, Some(kept), "{allowed}");
+        assert_eq!(crate::doing::says_to_person(&row), "clicked on github.com");
+        assert_eq!(crate::doing::says(&row), "clicked in Google Chrome");
+    }
+    // In an account that asks, a click that sent nothing needed allowing.
+    let row = clicked(json!({"ok": true, "account": account}));
+    assert!(row.account.is_some());
+    assert_eq!(row.allowed, None);
+}
+
+#[test]
+fn an_unlisted_app_or_an_allowance_without_its_account_names_none() {
+    let row = clicked(json!({"ok": true, "app": "TextEdit"}));
+    assert_eq!((row.account, row.allowed), (None, None));
+    let row = clicked(json!({"ok": true, "app": "TextEdit", "allowed": "trusted"}));
+    assert_eq!((row.account, row.allowed), (None, None));
+    let row =
+        clicked(json!({"ok": true, "account": {"name": " ", "key": {"kind": "app", "id": "x"}}}));
+    assert_eq!(row.account, None, "a blank name is no account");
+}

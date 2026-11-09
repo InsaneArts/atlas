@@ -492,7 +492,7 @@ impl Service {
             gate: self.gate.clone(),
             owner: Some(owner),
         };
-        let (done, dock_pressed) = match self
+        let (done, dock_pressed, noted) = match self
             .execute(grant, actions, expect.clone(), typed, asking)
             .await?
         {
@@ -532,6 +532,14 @@ impl Service {
         // as it was met just before: for the mark on the picture before it.
         if let Some(reached) = &done.reached {
             reply["element"] = json!(reached);
+        }
+        // The listed account it acted in and what let it, for its activity
+        // row: the client keeps it from the agent's reply.
+        if let Some(noted) = noted {
+            reply["account"] = json!(noted);
+            if let Some(allowed) = noted.allowed {
+                reply["allowed"] = json!(allowed);
+            }
         }
 
         cancellation.owner = None;
@@ -582,7 +590,11 @@ impl Service {
                         engine.recheck = Some(asking::recheck(&actions, asking));
                     }
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
-                    engine.recheck = None;
+                    // The account it acted in, for its activity row.
+                    let noted = engine
+                        .recheck
+                        .take()
+                        .and_then(|recheck| recheck.noted().cloned());
                     // Part of the batch's own work, so giving control back
                     // waits for it before it reads what was seen.
                     if typed && result.is_ok() {
@@ -590,7 +602,7 @@ impl Service {
                     }
                     engine.target = None;
                     engine.keep_while_held(acting);
-                    Ok::<_, Error>(result.map(|done| (done, engine.dock_pressed)))
+                    Ok::<_, Error>(result.map(|done| (done, engine.dock_pressed, noted)))
                 })
             }))
             .await?;
@@ -602,7 +614,7 @@ impl Service {
 }
 
 /// What a batch came to: see [`Service::execute`].
-type Performed = std::result::Result<(Done, bool), Box<Failure>>;
+type Performed = std::result::Result<(Done, bool, Option<asking::Noted>), Box<Failure>>;
 
 /// The recipient for the agent's activity log: Dock after AXPress, the app
 /// an action on an element acted in (process `acted`), otherwise the owner

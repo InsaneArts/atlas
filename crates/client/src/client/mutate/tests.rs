@@ -437,3 +437,26 @@ async fn an_environment_runs_leftover_work_keeps_the_person_from_signing_in() {
         nix::sys::signal::Signal::SIGKILL,
     );
 }
+
+#[test]
+fn an_agents_input_reply_never_carries_the_account_it_acted_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client_in(dir.path());
+    let doing = crate::doing::Doing::new("type");
+    client.doing = Some(doing.clone());
+    let account = json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com"}});
+    let mut reply = json!({"ok": true, "performed": 1, "account": account, "allowed": "task",
+        "element": {"role": "AXButton"}});
+
+    client.keep_from_reply(&mut reply);
+
+    assert_eq!(reply, json!({"ok": true, "performed": 1}));
+    assert_eq!(
+        doing.noted_account(),
+        Some((account.clone(), Some(json!("task"))))
+    );
+    // A later batch allowed once says so; a weaker one never lowers it.
+    doing.note_account(account.clone(), Some(json!("once")));
+    doing.note_account(account.clone(), Some(json!("trusted")));
+    assert_eq!(doing.noted_account(), Some((account, Some(json!("once")))));
+}

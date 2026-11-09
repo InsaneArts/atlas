@@ -367,13 +367,32 @@ impl Client {
             .settle(&request, reply, command, claim, started)
             .await?;
         // What the input service says of the element an input reached is
-        // for the facts of its picture alone, kept as its row was written.
-        if matches!(mutation, Mutation::Input { .. })
-            && let Some(reply) = reply.as_object_mut()
-        {
-            reply.remove("element");
+        // for the facts of its picture alone, and the account it acted in
+        // and what let it are for its activity row alone: kept as its row
+        // was written, never in the reply. A command that types in batches
+        // keeps the account for the row that stands for them all.
+        if matches!(mutation, Mutation::Input { .. }) {
+            self.keep_from_reply(&mut reply);
         }
         Ok(reply)
+    }
+
+    /// Take from an input's `reply`, its row written, what is for that row
+    /// and its picture alone: the element it reached, and the listed
+    /// account it acted in with what let it, noted for the row that stands
+    /// for all of a command's batches.
+    pub(super) fn keep_from_reply(&self, reply: &mut Value) {
+        let Some(reply) = reply.as_object_mut() else {
+            return;
+        };
+        reply.remove("element");
+        let account = reply.remove("account");
+        let allowed = reply.remove("allowed");
+        if let Some(doing) = &self.doing
+            && let Some(account) = account
+        {
+            doing.note_account(account, allowed);
+        }
     }
 
     /// Where `mutation` goes: the input service for input, and the helper

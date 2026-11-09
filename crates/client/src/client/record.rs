@@ -454,6 +454,14 @@ impl Client {
             // The picture before its first input, once saved: never one
             // still being written.
             row.before = self.doing.as_ref().and_then(|doing| doing.before().name());
+            // The listed account its input acted in, as the input service
+            // found it, and what let it act there: never for an app or site
+            // the person didn't list.
+            row.account = activity_log::Account::of(&reply["account"]);
+            row.allowed = row
+                .account
+                .as_ref()
+                .and_then(|_| serde_json::from_value(reply["allowed"].clone()).ok());
         }
 
         // A collection says how many files and bytes it kept, never which.

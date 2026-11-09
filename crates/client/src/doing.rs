@@ -80,7 +80,27 @@ pub struct Doing {
     /// The picture taken before its first input, which its rows name once
     /// saved.
     before: crate::before::Slot,
+    /// The listed account its input acted in and what let it, as the input
+    /// service said: for the row that stands for all its steps.
+    account: Noted,
 }
+
+/// The account a command's input acted in, as the input service named it,
+/// and what let it act there.
+type AccountNote = (serde_json::Value, Option<serde_json::Value>);
+
+/// The account a command's input acted in and what let it, shared by the
+/// clients of one command.
+#[derive(Clone, Debug, Default)]
+struct Noted(std::sync::Arc<std::sync::Mutex<Option<AccountNote>>>);
+
+impl PartialEq for Noted {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Noted {}
 
 impl Doing {
     /// A command doing `verb`, naming nothing yet.
@@ -95,7 +115,49 @@ impl Doing {
             field: None,
             command,
             before: crate::before::Slot::default(),
+            account: Noted::default(),
         }
+    }
+
+    /// Note the listed `account` its input acted in, as the input service
+    /// named it, and what `allowed` it: the first account, and once the
+    /// person allowed it, that it was.
+    pub(crate) fn note_account(
+        &self,
+        account: serde_json::Value,
+        allowed: Option<serde_json::Value>,
+    ) {
+        let mut noted = self
+            .account
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match noted.as_mut() {
+            None => *noted = Some((account, allowed)),
+            Some((_, kept)) => {
+                let rank = |allowed: &Option<serde_json::Value>| match allowed
+                    .as_ref()
+                    .and_then(serde_json::Value::as_str)
+                {
+                    Some("once") => 3,
+                    Some("task") => 2,
+                    Some("trusted") => 1,
+                    _ => 0,
+                };
+                if rank(&allowed) > rank(kept) {
+                    *kept = allowed;
+                }
+            }
+        }
+    }
+
+    /// The account its input acted in, and what let it, as noted.
+    pub(crate) fn noted_account(&self) -> Option<AccountNote> {
+        self.account
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// The picture taken before its first input.
@@ -370,17 +432,30 @@ fn worded(done: &str, action: &str) -> (String, String) {
 }
 
 /// What a recorded row did, after who did it ("clicked Save in TextEdit"),
-/// or what could not be done.
+/// or what could not be done: naming the app, as any reader may be told.
 pub fn says(row: &Row) -> String {
+    says_on(row, None)
+}
+
+/// [`says`] as the person's own app words it: a browser's action in a site
+/// they listed happened on that site, not in the browser ("clicked Merge
+/// on github.com"). Which sites they listed is theirs alone.
+pub fn says_to_person(row: &Row) -> String {
+    says_on(row, row.account.as_ref().and_then(|account| account.site()))
+}
+
+/// [`says`], naming `site` in place of the app when there is one.
+fn says_on(row: &Row, site: Option<&str>) -> String {
     if row.under_way() {
         return doing(row);
     }
 
     let app = row.app.as_deref();
     let label = row.label.as_deref();
-    let within = |text: &str| match app {
-        Some(app) => format!("{text} in {app}"),
-        None => text.to_owned(),
+    let within = |text: &str| match (site, app) {
+        (Some(site), _) => format!("{text} on {site}"),
+        (None, Some(app)) => format!("{text} in {app}"),
+        (None, None) => text.to_owned(),
     };
     let on_label = |verb: &str| match label {
         Some(label) => within(&format!("{verb} {label}")),

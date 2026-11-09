@@ -4554,3 +4554,25 @@ async fn a_persons_launch_is_never_sent_when_their_lease_runs_out_while_the_help
     drop(ownership);
     lease.lock().await.release();
 }
+
+#[tokio::test]
+async fn a_typing_commands_row_names_the_account_its_batches_acted_in_and_its_report_never_does() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    let doing = crate::doing::Doing::new("type");
+    client.doing = Some(doing.clone());
+    let interrupt = Interrupt::new_for_test(Duration::from_secs(10));
+    let batches = type_batches(&"z".repeat(64 * 2)).unwrap();
+    let account = json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com"}});
+    // Each batch's reply, its account already taken for its own row.
+    let report = type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
+        doing.note_account(account.clone(), Some(json!("trusted")));
+        Ok(json!({"ok": true, "performed": actions.as_array().unwrap().len()}))
+    })
+    .await;
+
+    assert!(report.get("account").is_none() && report.get("allowed").is_none());
+    let rows = crate::activity_log::recent(client.output_dir().unwrap(), 1);
+    assert_eq!(rows[0].account.as_ref().unwrap().name, "slack.com");
+    assert_eq!(rows[0].allowed, Some(crate::activity_log::Allowed::Trusted));
+}

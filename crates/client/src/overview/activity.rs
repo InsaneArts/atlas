@@ -107,6 +107,12 @@ pub struct Shown {
     /// The bundle identifier of the app it acted in, as the row keeps it.
     pub(crate) bundle_id: Option<String>,
     pub(crate) label: Option<String>,
+    /// The listed account it acted in, and what let it act there: in the
+    /// person's own app alone ([`shown_to_person`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) account: Option<crate::activity_log::Account>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) allowed: Option<crate::activity_log::Allowed>,
     /// The host session's key and the screenshot's file name, as the row
     /// keeps them; apps name the session from their own list.
     pub session: Option<String>,
@@ -144,6 +150,8 @@ pub fn shown(row: &Row, now: u128) -> Shown {
         app: row.app.clone(),
         bundle_id: row.bundle_id.clone(),
         label: row.label.clone(),
+        account: None,
+        allowed: None,
         session: row.session.clone(),
         capture: row.capture.clone(),
         nothing_sent: row.coded(Code::FocusChanged) && row.partial != Some(true),
@@ -155,5 +163,17 @@ pub fn shown(row: &Row, now: u128) -> Shown {
         age_seconds: row
             .age(now)
             .map(|nanos| u64::try_from(nanos / 1_000_000_000).unwrap_or(u64::MAX)),
+    }
+}
+
+/// [`shown`] as the person's own app shows it: with the listed account it
+/// acted in and what let it act there, and a browser's action said on its
+/// site. No agent is shown either.
+pub fn shown_to_person(row: &Row, now: u128) -> Shown {
+    Shown {
+        account: row.account.clone(),
+        allowed: row.account.as_ref().and(row.allowed),
+        says: crate::doing::says_to_person(row),
+        ..shown(row, now)
     }
 }

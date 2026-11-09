@@ -6,7 +6,7 @@ mod sessions;
 
 use crate::host_session::reading::SessionFacts;
 pub(crate) use activity::reason;
-pub use activity::shown;
+pub use activity::{shown, shown_to_person};
 pub use sessions::{add_host_sessions, add_sessions_for};
 
 use crate::{

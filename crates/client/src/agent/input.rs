@@ -305,6 +305,16 @@ pub(super) async fn type_recorded(
             reply[field] = value.clone();
         }
     }
+    // The listed account its batches acted in, for this row alone: this
+    // reply is recorded, never returned.
+    if let Some(doing) = &client.doing
+        && let Some((account, allowed)) = doing.noted_account()
+    {
+        reply["account"] = account;
+        if let Some(allowed) = allowed {
+            reply["allowed"] = allowed;
+        }
+    }
     // Count the requested input actions without copying any typed text into
     // the recording request. This request is never sent to the helper.
     let actions: Vec<Value> = batches
