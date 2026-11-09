@@ -32,9 +32,6 @@ public struct ActivityRun: Equatable, Sendable, Identifiable {
   /// The picture taken right before the first of its rows that kept one, by its file name.
   public var firstBefore: String? { pictured?.before }
 
-  /// The picture right after its last row, by its file name.
-  public var lastAfter: String? { members.last?.after }
-
   /// Creates a line.
   ///
   /// - Parameters:
