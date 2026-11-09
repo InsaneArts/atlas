@@ -720,6 +720,12 @@ async fn a_credit_after_a_profile_change_is_retired_and_the_pair_lives_on() {
 
 #[tokio::test]
 async fn a_picture_committed_after_its_freshness_names_no_input() {
+    let folder = tempfile::tempdir().unwrap();
+    let controller = atlas_control::Controller::at(505, &folder.path().join("state"));
+    let privacy = Privacy {
+        visible: Arc::new(move || controller.screen_visible().ok()),
+        exempt: Arc::new(|_| false),
+    };
     let now = Instant::now();
     let committed = now + Duration::from_millis(40);
     let (service, bootstrap) = (Hex32::random(), Hex64::random());
@@ -768,8 +774,14 @@ async fn a_picture_committed_after_its_freshness_names_no_input() {
     let mut scripted = Scripted::default();
     let mut picture = scripted.acquire(&budget).await.unwrap();
     picture.at = now - Duration::from_millis(480);
+    picture.visible = (privacy.visible)();
     let sent = std::sync::Arc::new(picture);
-    let source = source::spawn(scripted, budget, Arc::new(tokio::sync::Notify::new()));
+    let source = source::spawn(
+        scripted,
+        budget,
+        Arc::new(tokio::sync::Notify::new()),
+        privacy.visible.clone(),
+    );
     let latest = source.answers.borrow().clone();
     let (events, _incoming) = mpsc::channel(32);
     let witnessed = Arc::new(Mutex::new(Vec::new()));
@@ -784,6 +796,7 @@ async fn a_picture_committed_after_its_freshness_names_no_input() {
         epoch: None,
         failing: false,
         witness: Arc::new(move |key, _, _| record.lock().unwrap().push(key.to_owned())),
+        privacy,
         connections: HashMap::new(),
         observers: HashMap::new(),
         events,
@@ -860,6 +873,7 @@ async fn a_picture_committed_after_its_freshness_names_no_input() {
         .await
         .unwrap();
     fresh.at = committed;
+    fresh.visible = (broker.privacy.visible)();
     observer.sent = Some(Arc::new(fresh));
     let settle = Settle {
         credit_id: credit,
