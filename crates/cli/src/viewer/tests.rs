@@ -242,11 +242,12 @@ async fn the_person_stops_and_resumes_agents_through_the_viewer() {
     let dir = tempfile::tempdir().unwrap();
     let (viewer, server) = served(dir.path(), CONNECTIONS).await;
     let url = viewer.url.clone();
+    let secret = viewer.app_secret.clone();
 
     // No input service runs here: the Stop is kept on the person's side
     // all the same, and says the service did not hear it.
     let replies = tokio::task::spawn_blocking(move || {
-        [true, false].map(|on| post_local(&url, "control/hold", &json!({"on": on})))
+        [true, false].map(|on| post_local_as_app(&url, &secret, "control/hold", &json!({"on": on})))
     })
     .await
     .unwrap();
@@ -269,8 +270,10 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
     let dir = tempfile::tempdir().unwrap();
     let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
     let client = viewer.client();
+    let secret = viewer.app_secret.clone();
     tokio::time::timeout(Duration::from_secs(5), async {
-        let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
+        let (status, reply) =
+            posted_as(&viewer, "control/hold", &json!({"on": true}), &secret).await;
         assert_eq!(status, 200, "{reply}");
         assert_eq!(reply["held"], true);
         assert!(client.controller.stop_noted());
@@ -286,7 +289,7 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
 
         for stopped in [true, false] {
             let body = format!(r#"{{"on":{stopped},"other":1,"other":2}}"#);
-            let (status, reply) = posted_raw(&viewer, "control/hold", &body).await;
+            let (status, reply) = posted_with(&viewer, "control/hold", &body, Some(&secret)).await;
             assert_eq!(status, 200, "{reply}");
             assert_eq!(reply["held"], stopped);
             if stopped {
@@ -308,7 +311,8 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
                 r#"{"on":[]}"#,
                 r#"{"on":{}}"#,
             ] {
-                let (status, reply) = posted_raw(&viewer, "control/hold", body).await;
+                let (status, reply) =
+                    posted_with(&viewer, "control/hold", body, Some(&secret)).await;
                 let Ok(wire) = serde_json::from_str::<serde_json::Value>(body) else {
                     panic!("invalid stop fixture");
                 };
@@ -317,7 +321,7 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
                     assert_eq!(reply["held"], on, "{body}");
                     assert_eq!(client.controller.stop_noted(), on, "{body}");
                     let (status, reply) =
-                        posted(&viewer, "control/hold", &json!({"on": stopped})).await;
+                        posted_as(&viewer, "control/hold", &json!({"on": stopped}), &secret).await;
                     assert_eq!(status, 200, "{reply}");
                     if stopped {
                         assert!(std::fs::write(&marker, b"stop").is_ok());
@@ -2910,4 +2914,48 @@ async fn while_the_person_signs_in_only_the_app_reads_the_screen_or_its_windows(
     assert_eq!(controller.private_hold(), Some(hold));
     controller.end_private().unwrap();
     lease.release();
+}
+
+#[tokio::test]
+async fn the_persons_questions_and_resume_are_the_apps_and_stop_is_anyones() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    let asks = |secret: Option<String>| {
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("{}asks.json", viewer.prefix))
+            .header("host", &viewer.authority);
+        if let Some(secret) = secret {
+            request = request.header(http::APP_SECRET_HEADER, secret);
+        }
+        respond(viewer.clone(), request.body(Body::empty()).unwrap())
+    };
+    let refused = asks(None).await;
+    assert_eq!(refused.status().as_u16(), 403);
+    let body = to_bytes(refused.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["code"], "permission");
+    assert_eq!(
+        asks(Some(viewer.app_secret.clone()))
+            .await
+            .status()
+            .as_u16(),
+        200
+    );
+
+    let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(viewer.client().controller.stop_noted());
+
+    for body in [r#"{"on":false}"#, r#"{"on":true,"on":false}"#] {
+        let (status, reply) = posted_raw(&viewer, "control/hold", body).await;
+        assert_eq!(status, 403, "{body}: {reply}");
+        assert_eq!(reply["code"], "permission");
+        assert!(viewer.client().controller.stop_noted(), "the Stop stands");
+    }
+
+    let secret = viewer.app_secret.clone();
+    let (status, reply) = posted_as(&viewer, "control/hold", &json!({"on": false}), &secret).await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(!viewer.client().controller.stop_noted());
 }

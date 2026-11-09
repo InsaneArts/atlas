@@ -349,12 +349,14 @@ routes! {
 }
 
 impl Route {
-    /// Whether only the Atlas app may ask for it: the person's own
-    /// answers, accounts and sign-ins, and the menu bar's emergency stop,
-    /// which ends a sign-in. Taking, renewing, giving back and using
-    /// control, and Stop, stay open to the terminal viewer too.
+    /// Whether only the Atlas app may ask for it: the person's questions
+    /// with what would be sent, their answers, accounts and sign-ins, and
+    /// the menu bar's emergency stop, which ends a sign-in. Taking,
+    /// renewing, giving back and using control, and Stop, stay open to the
+    /// terminal viewer too; Resume is the app's alone, by its body.
     fn app_only(self) -> bool {
         match self {
+            Self::Read(Read::Asks) => true,
             Self::Change(
                 Change::Revoke
                 | Change::AddAccount
@@ -473,6 +475,10 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
             Err(response) => response,
         },
         Some(Route::Change(change)) => match read_body(request).await {
+            // Resume is the person's: only the app may lift a Stop.
+            Ok(body) if change == Change::Hold && body["on"] == false && !app => {
+                json_response(403, json!(not_the_app()))
+            }
             Ok(body) => apply(&viewer, change, &body).await,
             Err(response) => response,
         },
