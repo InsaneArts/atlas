@@ -127,8 +127,9 @@ final class ViewerPictureViews {
     copying = Task { [weak self, service] in
       let data = try? await service.screenshot(name: name, full: true)
       let png = if let data { await ImageEncoding.png(data) } else { Data?.none }
-      guard !Task.isCancelled, let self, let png else { return }
+      guard !Task.isCancelled, let self, shownPicture() == name else { return }
       copying = nil
+      guard let png else { return failed() }
       if outlet.save(png, file) == false { failed() }
     }
   }

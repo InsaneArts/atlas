@@ -720,34 +720,179 @@ async fn a_credit_after_a_profile_change_is_retired_and_the_pair_lives_on() {
 
 #[tokio::test]
 async fn a_picture_committed_after_its_freshness_names_no_input() {
-    let broker = Running::start(Scripted::default()).await;
-    let mut client = Client_::pair(&broker).await;
-    broker.source.aged.store(480, Ordering::SeqCst);
-    let subscribed = client.subscribe().await;
-    client.credit(&subscribed, 1, Barrier::Subscribe).await;
-    let (_, _, reference) = client.picture().await;
-    tokio::time::sleep(Duration::from_millis(40)).await;
-    let settle = Settle {
-        credit_id: Positive::new(1).unwrap(),
-        reference,
-    };
-    let request = client.request();
-    client.control.send(Kind::Decoded, request, &settle).await;
-    client.control.expect::<Settle>(Kind::DecodedAck).await;
-    let request = client.request();
-    client.control.send(Kind::Commit, request, &settle).await;
-    let (error, got): (ErrorMetadata, _) = client.control.expect(Kind::Error).await;
-    assert_eq!(error.disposition, Disposition::CreditRetired);
-    assert_eq!(got.head.request, request);
-    assert!(broker.witnessed.lock().unwrap().is_empty());
-    broker.source.aged.store(0, Ordering::SeqCst);
-    client.credit(&subscribed, 2, Barrier::Ordinary).await;
-    let (_, _, reference) = client.picture().await;
-    client.settle(2, reference).await;
-    assert_eq!(
-        broker.witnessed.lock().unwrap().len(),
-        1,
-        "the next one counts"
+    let now = Instant::now();
+    let committed = now + Duration::from_millis(40);
+    let (service, bootstrap) = (Hex32::random(), Hex64::random());
+    let mut gate = Gate::new(
+        service.clone(),
+        bootstrap.clone(),
+        vec![Right::Observe],
+        vec![UpdateKind::Full],
     );
-    broker.shut().await;
+    let (client, server) = UnixStream::pair().unwrap();
+    let uid = nix::unistd::getuid().as_raw();
+    let welcome = gate
+        .hello(
+            auth::peer(&server, uid).unwrap(),
+            &Hello {
+                protocol_major: 1,
+                service_instance: service,
+                bootstrap_capability: bootstrap,
+                client_challenge: Hex32::random(),
+                role: Role::Observer,
+                client_kind: ClientKind::Terminal,
+                requested_rights: vec![Right::Observe],
+                offered_updates: vec![UpdateKind::Full],
+            },
+            now,
+        )
+        .unwrap();
+    let reference = Ref {
+        service_instance: welcome.service_instance.clone(),
+        observer_id: welcome.observer_id.clone(),
+        observer_generation: welcome.observer_generation,
+        stream_generation: Positive::new(1).unwrap(),
+        geometry_generation: Positive::new(1).unwrap(),
+        source_sequence: Positive::new(1).unwrap(),
+        image_sequence: Positive::new(1).unwrap(),
+        frame_key: Hex64::random(),
+        view_generation: Positive::new(1).unwrap(),
+    };
+    let credit = Positive::new(1).unwrap();
+    let mut subscription = Subscription::default();
+    subscription.subscribe().unwrap();
+    subscription.credit(credit, now).unwrap();
+    assert_eq!(subscription.select(reference.clone(), now), Some(credit));
+    subscription.delivered(credit, now);
+    let budget = Budget::new(BROKER_PIXELS);
+    let mut scripted = Scripted::default();
+    let mut picture = scripted.acquire(&budget).await.unwrap();
+    picture.at = now - Duration::from_millis(480);
+    let sent = std::sync::Arc::new(picture);
+    let source = source::spawn(scripted, budget, Arc::new(tokio::sync::Notify::new()));
+    let latest = source.answers.borrow().clone();
+    let (events, _incoming) = mpsc::channel(32);
+    let witnessed = Arc::new(Mutex::new(Vec::new()));
+    let record = witnessed.clone();
+    let mut broker = Broker {
+        controller: uid,
+        gate,
+        source,
+        latest,
+        wanted: 0,
+        profile: None,
+        epoch: None,
+        failing: false,
+        witness: Arc::new(move |key, _, _| record.lock().unwrap().push(key.to_owned())),
+        connections: HashMap::new(),
+        observers: HashMap::new(),
+        events,
+        next: 0,
+    };
+    broker.accept(server, Lane::Control);
+    broker.observers.insert(
+        1,
+        Observer {
+            welcome,
+            frame: None,
+            half: None,
+            paired: None,
+            subscription,
+            subscribing: None,
+            subscribed: true,
+            waiting: None,
+            last_sequence: 1,
+            sent: Some(sent),
+        },
+    );
+    let mut client = Side_ {
+        stream: client,
+        decoder: Decoder::new(Lane::Control),
+        pending: Vec::new(),
+    };
+    let settle = Settle {
+        credit_id: credit,
+        reference: reference.clone(),
+    };
+    broker
+        .acknowledge(
+            1,
+            1,
+            credit,
+            Ack::Decoded(reference.clone()),
+            Kind::DecodedAck,
+            &settle,
+            now,
+        )
+        .unwrap();
+    client.expect::<Settle>(Kind::DecodedAck).await;
+    broker
+        .acknowledge(
+            1,
+            2,
+            credit,
+            Ack::Commit(reference),
+            Kind::CommitAck,
+            &settle,
+            committed,
+        )
+        .unwrap();
+    let (error, got): (ErrorMetadata, _) = client.expect(Kind::Error).await;
+    assert_eq!(error.failure.reason, Reason::SourceStale);
+    assert_eq!(error.disposition, Disposition::CreditRetired);
+    assert_eq!(got.head.request, 2);
+    assert!(witnessed.lock().unwrap().is_empty());
+
+    let credit = Positive::new(2).unwrap();
+    let mut reference = settle.reference;
+    reference.image_sequence = credit;
+    reference.source_sequence = credit;
+    reference.frame_key = Hex64::random();
+    let observer = broker.observers.get_mut(&1).unwrap();
+    observer.subscription.credit(credit, committed).unwrap();
+    assert_eq!(
+        observer.subscription.select(reference.clone(), committed),
+        Some(credit)
+    );
+    observer.subscription.delivered(credit, committed);
+    let mut fresh = Scripted::default()
+        .acquire(&Budget::new(BROKER_PIXELS))
+        .await
+        .unwrap();
+    fresh.at = committed;
+    observer.sent = Some(Arc::new(fresh));
+    let settle = Settle {
+        credit_id: credit,
+        reference: reference.clone(),
+    };
+    broker
+        .acknowledge(
+            1,
+            3,
+            credit,
+            Ack::Decoded(reference.clone()),
+            Kind::DecodedAck,
+            &settle,
+            committed,
+        )
+        .unwrap();
+    client.expect::<Settle>(Kind::DecodedAck).await;
+    broker
+        .acknowledge(
+            1,
+            4,
+            credit,
+            Ack::Commit(reference.clone()),
+            Kind::CommitAck,
+            &settle,
+            committed,
+        )
+        .unwrap();
+    client.expect::<Settle>(Kind::CommitAck).await;
+    assert_eq!(
+        *witnessed.lock().unwrap(),
+        vec![reference.frame_key.as_str()]
+    );
+    let Broker { source, .. } = broker;
+    source.close().await;
 }

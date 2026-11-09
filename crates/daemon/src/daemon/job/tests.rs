@@ -80,6 +80,37 @@ fn judged(expect: Option<&Expected>, leader: Option<Info>, members: &[Info]) -> 
 }
 
 #[test]
+fn a_descendant_report_reads_each_process_session_once_and_refreshes_it_next_time() {
+    let job = leader().instance;
+    let processes = vec![
+        process(9000, later(4), 9000, 1),
+        process(4315, later(3), 9000, 4314),
+        process(4314, later(2), 9000, 4313),
+        process(4313, later(1), 4312, 4312),
+        leader(),
+    ];
+    let calls = std::cell::RefCell::new(std::collections::HashMap::<i32, usize>::new());
+    let mut noted = Vec::new();
+    let read = |pid| {
+        *calls.borrow_mut().entry(pid).or_default() += 1;
+        None
+    };
+    observe(&mut noted, &job, &processes, read);
+    assert_eq!(noted.len(), 4);
+    assert!(
+        calls.borrow().values().all(|count| *count == 1),
+        "{:?}",
+        calls.borrow()
+    );
+    observe(&mut noted, &job, &processes, read);
+    assert_eq!(
+        calls.borrow()[&9000],
+        2,
+        "a later report reads fresh session facts"
+    );
+}
+
+#[test]
 fn a_matching_job_is_signalled_only_through_its_own_group() {
     let members = [leader(), process(4313, later(1), 4312, 4312)];
     let expected = record().expected().unwrap();

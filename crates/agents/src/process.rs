@@ -105,29 +105,41 @@ pub fn stop_running() {
 /// every tool is confirmed ended, or `bound` after the kill at most; a
 /// leader not yet reaped stays held.
 fn stop_all(registry: &Registry, grace: Duration, bound: Duration) {
-    let groups = halt(registry);
-    if groups.is_empty() {
+    if halt(registry).is_empty() {
         return;
     }
     let deadline = Instant::now() + grace + bound;
 
-    signal_groups(&groups, nix::sys::signal::Signal::SIGTERM);
+    signal_groups(registry, nix::sys::signal::Signal::SIGTERM);
     let mut tools = registry.settled(grace);
     tools.ending = true;
-    let groups = tools.groups.clone();
     drop(tools);
-    signal_groups(&groups, nix::sys::signal::Signal::SIGKILL);
+    signal_groups(registry, nix::sys::signal::Signal::SIGKILL);
 
     let held = std::mem::take(&mut registry.settled(bound).held);
     let unresolved = reap_held(registry, held, deadline);
     locked(registry).held.extend(unresolved);
 }
 
-/// Send `signal` to each of `groups`, as far as it reaches: a supervisor or
+/// Send `signal` to each currently reserved group: a supervisor or
 /// the held-leader reaping confirms each end.
-fn signal_groups(groups: &[i32], signal: nix::sys::signal::Signal) {
-    for group in groups {
+fn signal_groups(registry: &Registry, signal: nix::sys::signal::Signal) {
+    signal_groups_using(registry, signal, |group, signal| {
         let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(*group), signal);
+    });
+}
+
+/// Registry lock order: a signal and reaping/retirement share this lock.
+/// No numeric snapshot survives it; grace waits and blocking work do not
+/// hold it. Each listed leader therefore stays unreaped through the post.
+fn signal_groups_using(
+    registry: &Registry,
+    signal: nix::sys::signal::Signal,
+    mut post: impl FnMut(&i32, nix::sys::signal::Signal),
+) {
+    let tools = locked(registry);
+    for group in &tools.groups {
+        post(group, signal);
     }
 }
 
@@ -141,21 +153,23 @@ fn reap_held(registry: &Registry, mut held: Vec<Child>, deadline: Instant) -> Ve
     }
 
     loop {
-        let mut ended = Vec::new();
+        let mut tools = locked(registry);
         held.retain_mut(|child| match child.try_wait() {
             Ok(Some(_)) => {
-                ended.extend(i32::try_from(child.id()).ok());
+                tools
+                    .groups
+                    .retain(|group| i32::try_from(child.id()).ok() != Some(*group));
                 false
             }
             Err(error) if lost(&error) => {
-                ended.extend(i32::try_from(child.id()).ok());
+                tools
+                    .groups
+                    .retain(|group| i32::try_from(child.id()).ok() != Some(*group));
                 false
             }
             Ok(None) | Err(_) => true,
         });
-        locked(registry)
-            .groups
-            .retain(|group| !ended.contains(group));
+        drop(tools);
         if held.is_empty() || Instant::now() >= deadline {
             return held;
         }
@@ -212,11 +226,21 @@ struct Tool {
 impl Tool {
     /// Whether the leader has exited, without waiting.
     fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        let mut tools = locked(self.running.tools);
         #[cfg(test)]
-        if let Some(error) = self.faults.try_wait() {
-            return Err(error);
+        let waited = self
+            .faults
+            .try_wait()
+            .map_or_else(|| self.leader.try_wait(), Err);
+        #[cfg(not(test))]
+        let waited = self.leader.try_wait();
+        if matches!(&waited, Ok(Some(_))) || waited.as_ref().is_err_and(lost) {
+            if let Some(group) = self.running.group.take() {
+                tools.groups.retain(|running| *running != group);
+            }
+            self.running.tools.changed.notify_all();
         }
-        self.leader.try_wait()
+        waited
     }
 
     /// Wait for the leader to exit, and reap it.
@@ -225,7 +249,12 @@ impl Tool {
         if let Some(error) = self.faults.wait() {
             return Err(error);
         }
-        self.leader.wait()
+        loop {
+            match self.try_wait()? {
+                Some(status) => return Ok(status),
+                None => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
     }
 
     /// Kill everything in the leader's process group, then the leader through
@@ -233,6 +262,11 @@ impl Tool {
     /// Neither finding nothing to signal is a failure: the leader is
     /// unreaped, so its process ID is still its own, and it has exited.
     fn kill(&mut self) -> std::io::Result<()> {
+        if self.running.group.is_none() {
+            return Err(std::io::Error::from_raw_os_error(
+                nix::errno::Errno::ECHILD as i32,
+            ));
+        }
         #[cfg(test)]
         if let Some(error) = self.faults.signal() {
             return Err(error);
@@ -341,6 +375,14 @@ pub(super) fn exec_in(
     limit: Duration,
     cwd: Option<&Path>,
 ) -> Result<Output> {
+    let tool = start(&RUNNING, &mut command(agent, argv, cwd))?;
+
+    supervise(agent, tool, limit)
+}
+
+/// The tool's arguments and environment, with one absolute config home
+/// shared by Atlas's reader and the tool's writer.
+fn command(agent: Agent, argv: &[impl AsRef<std::ffi::OsStr>], cwd: Option<&Path>) -> Command {
     use std::os::unix::process::CommandExt;
 
     let (executable, path) = executable(agent);
@@ -356,10 +398,11 @@ pub(super) fn exec_in(
         .process_group(0);
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
+        if agent == Agent::Pi {
+            command.env("PI_CODING_AGENT_DIR", cwd);
+        }
     }
-    let tool = start(&RUNNING, &mut command)?;
-
-    supervise(agent, tool, limit)
+    command
 }
 
 /// A process group Atlas started, listed while it is waited for, so

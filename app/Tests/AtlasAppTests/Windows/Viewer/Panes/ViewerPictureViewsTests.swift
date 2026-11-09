@@ -88,6 +88,34 @@ struct ViewerPictureViewsTests {
     #expect(viewer.panes.activity.pictures.isEmpty)
   }
 
+  @Test("Save reports a failed picture read or invalid image without opening a save panel", arguments: [false, true])
+  func saveReportsPictureFailure(requestFails: Bool) async throws {
+    let service = ScriptedService()
+    var saves = 0
+    var failures = 0
+    let viewer = try await Self.onActivity(
+      service,
+      shotOutlet: ShotOutlet(
+        copy: { _, _ in true },
+        reveal: { _ in true },
+        save: { _, _ in
+          saves += 1
+          return true
+        }
+      )
+    )
+    defer { viewer.close() }
+    viewer.send(.openAction("c2"))
+    service.shotData[Self.names.second] = Data("not an image".utf8)
+    if requestFails { service.fail = ["screenshot"] }
+    viewer.panesModel.pictures.save { failures += 1 }
+    let saving = try #require(viewer.panesModel.pictures.copying)
+    await saving.value
+    #expect(failures == 1)
+    #expect(saves == 0)
+    #expect(viewer.panesModel.pictures.copying == nil)
+  }
+
   @Test("a sheet or replay whose run is gone is let go, and their keys go back to the window")
   func staleFocusLetGo() async throws {
     let service = ScriptedService()

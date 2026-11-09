@@ -132,7 +132,7 @@ pub(crate) fn intact(output: &Path, task: Option<&Key>, receipt: &ReceiptId) -> 
         .join("receipt.json");
     let read = atlas_core::files::read_own(&path, 1024 * 1024)
         .and_then(|bytes| serde_json::from_slice::<Receipt>(&bytes).ok())
-        .filter(|read| read.receipt == *receipt);
+        .filter(|read| read.receipt == *receipt && read.version == VERSION);
     let Some(read) = read else {
         return Intact {
             unknown: true,

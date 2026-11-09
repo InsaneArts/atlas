@@ -2,6 +2,25 @@ use super::*;
 use crate::test_support::child::{Child, Processes, RUN};
 use tokio::sync::mpsc;
 
+#[tokio::test]
+async fn an_exited_leader_remains_unreaped_through_the_last_group_cleanup_signal() {
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command.args(["-c", "exit 7"]).process_group(0);
+    let mut child = atlas_core::spawn::spawn_async(&mut command).unwrap();
+    let pid = child.id().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), child_exited(&child))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(atlas_core::process::child_exited(pid).unwrap());
+    end_group(Pid::from_raw(i32::try_from(pid).unwrap())).await;
+    assert!(
+        atlas_core::process::child_exited(pid).unwrap(),
+        "cleanup retains the original leader reservation"
+    );
+    assert_eq!(child.wait().await.unwrap().code(), Some(7));
+}
+
 #[test]
 fn commands_search_where_readiness_looks() {
     let path = search_path(Some(Path::new("/Users/helper")));

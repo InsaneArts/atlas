@@ -303,27 +303,9 @@ fn poll_pipes(
     .map_err(Into::into)
 }
 
-#[allow(unsafe_code, reason = "nix does not expose waitid on macOS")]
 fn observe_exit(child: &Child) -> io::Result<bool> {
     observe_exit_using(child, |pid| {
-        // SAFETY: an all-zero siginfo_t is valid initialized stack storage.
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        // SAFETY: pid is the owned, positive, unreaped child's PID. info is
-        // initialized, correctly aligned and live throughout waitid. WNOWAIT
-        // preserves child/group identity; the return and si_pid are checked.
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                pid,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: waitid succeeded and info is initialized siginfo_t storage.
-        Ok(unsafe { info.si_pid() })
+        crate::process::child_exited(pid).map(|exited| if exited { pid as i32 } else { 0 })
     })
 }
 

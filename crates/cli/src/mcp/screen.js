@@ -13,6 +13,9 @@ const STATUS_META = 'atlas/status';
 /** How often the person's control is kept, in milliseconds: well inside
  * the ten seconds it lasts, so a closed view lets go soon. */
 const KEEP_EVERY = 3000;
+/** Like the native viewer, visible personal control needs a displayed
+ * picture confirmed within 6.5 seconds. Backend input guards still apply. */
+const PICTURE_FRESH = 6500;
 /** How long recent actions stay as captions over the screen, in seconds. */
 const CAPTION_SECONDS = 60;
 /** Rows newer than this many seconds are under "Now" in the activity. */
@@ -314,7 +317,10 @@ function merge(current, result) {
   if (typeof structured.canControl === 'boolean') next.canControl = structured.canControl;
   if (typeof structured.control === 'boolean') next.ours = structured.control;
   if (typeof structured.streaming === 'boolean') next.streaming = structured.streaming;
-  if (next.ours && !current.ours) next.displayed = null;
+  if (next.ours && !current.ours) {
+    next.displayed = null;
+    next.pictureExpired = false;
+  }
   // A paused picture stays, except while the person controls the helper.
   const paused = current.picture === 'paused' && current.frame && !next.ours;
   if (frame && !paused) {
@@ -331,7 +337,11 @@ function merge(current, result) {
 
 /** The observation input may name, once its picture is on screen. */
 function inputFrame(model) {
-  return model.ours && !model.stale && model.points && model.displayed === model.frame
+  return model.ours &&
+    !model.stale &&
+    !model.pictureExpired &&
+    model.points &&
+    model.displayed === model.frame
     ? model.frame && model.frame.key
     : null;
 }
@@ -611,6 +621,8 @@ if (typeof document !== 'undefined') {
   let timer = null;
   let keeper = null;
   let panelTimer = null;
+  let pictureTimer = null;
+  let pictureSeenAt = null;
   let superseded = false;
   let started = false;
   let busy = false;
@@ -627,6 +639,9 @@ if (typeof document !== 'undefined') {
   let inlineExpanded = false;
   let lastSize = '';
   const thumbs = new Map();
+  const thumbnailWaiters = new Map();
+  const thumbnailQueue = [];
+  let thumbnailsReading = 0;
   let opening = 0;
 
   const send = (message) => window.parent.postMessage({ jsonrpc: '2.0', ...message }, '*');
@@ -775,7 +790,9 @@ if (typeof document !== 'undefined') {
           image.complete &&
           image.naturalWidth > 0
         ) {
+          const newlyDisplayed = model.displayed !== frame;
           model.displayed = frame;
+          if (newlyDisplayed) sawPicture();
           showButtons();
         }
       };
@@ -961,6 +978,8 @@ if (typeof document !== 'undefined') {
       } else {
         const wasOurs = model.ours;
         model = merge(model, result);
+        if (result?.structuredContent?.unchanged && model.displayed === model.frame && !model.stale)
+          sawPicture();
         if (wasOurs && !model.ours) controlEnded('Control ended');
         else note(model.stale ? "The helper's screen isn't available right now" : '');
         keepControl();
@@ -1013,8 +1032,38 @@ if (typeof document !== 'undefined') {
   // unwatched.
   let hiddenSince = null;
   let keeping = false;
+  const checkPicture = () => {
+    clearTimeout(pictureTimer);
+    if (!model.ours || superseded || model.pictureExpired) return;
+    // Hidden cards retain their existing, separately bounded hold policy.
+    if (document.hidden) {
+      pictureTimer = setTimeout(checkPicture, KEEP_EVERY);
+      return;
+    }
+    const remaining = PICTURE_FRESH - (performance.now() - pictureSeenAt);
+    if (remaining > 0) {
+      pictureTimer = setTimeout(checkPicture, remaining);
+      return;
+    }
+    model.pictureExpired = true;
+    model.stale = true;
+    clearWheel();
+    queue.length = 0;
+    stopKeeping();
+    render();
+    const releasing = taking + 1;
+    giveBack().then(() => {
+      if (!superseded && taking === releasing && !model.ours)
+        note('Control ended because the picture stopped updating');
+    });
+  };
+  const sawPicture = () => {
+    pictureSeenAt = performance.now();
+    if (model.ours && keeper) checkPicture();
+  };
   const keepControl = () => {
-    if (!model.ours || keeper || superseded) return;
+    if (!model.ours || keeper || superseded || model.pictureExpired) return;
+    pictureSeenAt = performance.now();
     keeper = setInterval(async () => {
       if (document.hidden) {
         hiddenSince = hiddenSince || Date.now();
@@ -1037,17 +1086,26 @@ if (typeof document !== 'undefined') {
       }
       keeping = false;
     }, KEEP_EVERY);
+    checkPicture();
   };
 
   const stopKeeping = () => {
     clearInterval(keeper);
     keeper = null;
+    clearTimeout(pictureTimer);
+    pictureTimer = null;
+    pictureSeenAt = null;
   };
 
   // The view is done (the app took it down, or a newer card shows the
   // helper): nothing more is asked, kept or sent from it.
   const retire = () => {
     superseded = true;
+    clearWheel();
+    for (const waiting of thumbnailQueue.splice(0)) {
+      thumbnailWaiters.delete(waiting.name);
+      waiting.resolve(null);
+    }
     dismiss();
     taking += 1;
     clearTimeout(timer);
@@ -1060,6 +1118,7 @@ if (typeof document !== 'undefined') {
   };
 
   const controlEnded = (why) => {
+    clearWheel();
     model.ours = false;
     stopKeeping();
     queue.length = 0;
@@ -1104,6 +1163,7 @@ if (typeof document !== 'undefined') {
   // still waiting; control is kept until it has been given back.
   const giveBack = async () => {
     taking += 1;
+    clearWheel();
     queue.length = 0;
     releasePointer(true);
     epoch += 1;
@@ -1252,7 +1312,33 @@ if (typeof document !== 'undefined') {
 
   // Scrolling gathers for a moment, then goes as whole lines in one action.
   let wheelKept = { x: 0, y: 0 };
-  const wheel = { dx: 0, dy: 0, at: null, timer: null };
+  const wheel = { dx: 0, dy: 0, at: null, frame: null, points: null, timer: null };
+  const clearWheel = () => {
+    clearTimeout(wheel.timer);
+    Object.assign(wheel, { dx: 0, dy: 0, at: null, frame: null, points: null, timer: null });
+    wheelKept = { x: 0, y: 0 };
+  };
+  const flushWheel = () => {
+    const { dx, dy, at, frame, points } = wheel;
+    clearTimeout(wheel.timer);
+    Object.assign(wheel, { dx: 0, dy: 0, at: null, frame: null, points: null, timer: null });
+    if (
+      !at ||
+      !(dx || dy) ||
+      !model.ours ||
+      model.stale ||
+      model.pictureExpired ||
+      superseded ||
+      points?.width !== model.points?.width ||
+      points?.height !== model.points?.height
+    )
+      return;
+    const most = (value) => Math.max(-100, Math.min(100, value));
+    // Like queued pointer releases, gathered motion keeps the observation
+    // it was mapped against; the backend still checks its lease and epoch.
+    queue.push({ frame, action: { type: 'scroll', ...at, dx: most(dx), dy: most(dy) } });
+    pump();
+  };
   screen.addEventListener(
     'wheel',
     (event) => {
@@ -1261,19 +1347,16 @@ if (typeof document !== 'undefined') {
       const point = pointAt(imageRect(), event.clientX, event.clientY, model.points);
       if (!point) return;
       event.preventDefault();
+      if (wheel.timer && wheel.frame !== frame) flushWheel();
       const lines = scrolled(wheelKept, event.deltaX, event.deltaY, event.deltaMode);
       wheelKept = lines.kept;
       wheel.dx += lines.dx;
       wheel.dy += lines.dy;
       wheel.at = point;
       if (wheel.timer) return;
-      wheel.timer = setTimeout(() => {
-        const most = (value) => Math.max(-100, Math.min(100, value));
-        const { dx, dy, at } = wheel;
-        Object.assign(wheel, { dx: 0, dy: 0, timer: null });
-        if (at && (dx || dy) && frame === inputFrame(model))
-          enqueue({ type: 'scroll', ...at, dx: most(dx), dy: most(dy) });
-      }, 60);
+      wheel.frame = frame;
+      wheel.points = { ...model.points };
+      wheel.timer = setTimeout(flushWheel, 60);
     },
     { passive: false },
   );
@@ -1492,18 +1575,40 @@ if (typeof document !== 'undefined') {
     );
   };
 
-  const thumbnail = async (name) => {
-    if (superseded) return null;
-    if (thumbs.has(name)) return thumbs.get(name);
-    try {
-      const result = await call('screenshot', { name });
-      if (superseded) return null;
-      const image = result && result._meta && result._meta[FRAME_META];
-      const source = image ? `data:${image.mimeType};base64,${image.data}` : null;
-      if (source) thumbs.set(name, source);
-      return source;
-    } catch (error) {
-      return null;
+  const thumbnail = (name) => {
+    if (superseded) return Promise.resolve(null);
+    if (thumbs.has(name)) return Promise.resolve(thumbs.get(name));
+    if (thumbnailWaiters.has(name)) return thumbnailWaiters.get(name);
+    let resolve;
+    const waiting = new Promise((done) => {
+      resolve = done;
+    });
+    thumbnailWaiters.set(name, waiting);
+    thumbnailQueue.push({ name, resolve });
+    readThumbnails();
+    return waiting;
+  };
+
+  const readThumbnails = () => {
+    while (!superseded && thumbnailsReading < 2 && thumbnailQueue.length) {
+      const { name, resolve } = thumbnailQueue.shift();
+      thumbnailsReading += 1;
+      (async () => {
+        let source = null;
+        try {
+          const result = await call('screenshot', { name });
+          const image = !superseded && result?._meta?.[FRAME_META];
+          source = image ? `data:${image.mimeType};base64,${image.data}` : null;
+          if (source) thumbs.set(name, source);
+        } catch (_) {
+          // A failed preview stays empty; a later refresh can request it again.
+        } finally {
+          thumbnailsReading -= 1;
+          thumbnailWaiters.delete(name);
+          resolve(source);
+          readThumbnails();
+        }
+      })();
     }
   };
 
@@ -1654,6 +1759,12 @@ if (typeof document !== 'undefined') {
         if (guardRequired || message.params?.structuredContent?.guardAppControls === true)
           await observeGuard(message.params);
         model = merge(model, message.params);
+        if (
+          message.params?.structuredContent?.unchanged &&
+          model.displayed === model.frame &&
+          !model.stale
+        )
+          sawPicture();
         keepControl();
         render();
         // The tool that showed the view brings no screen: ask for it once
