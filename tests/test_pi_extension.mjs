@@ -28,7 +28,6 @@ test('Pi exposes Atlas tools directly and loads only the Atlas skill', () => {
   const { servers } = host();
   const server = servers.get('atlas');
   assert.equal(server.exposure, 'hidden');
-  assert.deepEqual(server.toolExposure, { atlas_status: 'direct', show_screen: 'direct' });
   assert.ok(server.command.endsWith('/agents/atlas/scripts/atlas'));
   assert.deepEqual(server.args, ['mcp']);
   const manifest = JSON.parse(
@@ -36,6 +35,25 @@ test('Pi exposes Atlas tools directly and loads only the Atlas skill', () => {
   );
   assert.deepEqual(manifest.pi.skills, ['./skills/atlas']);
   assert.deepEqual(manifest.pi.extensions, ['./pi/atlas.ts']);
+});
+
+test('Pi exposes every model-facing catalog tool and keeps app-only tools hidden', () => {
+  // Rust checks this fixture against the actual catalog, including visibility.
+  const catalog = JSON.parse(
+    readFileSync(new URL('../crates/cli/src/mcp/tools.fixture.json', import.meta.url)),
+  );
+  const modelTools = catalog.filter((tool) => {
+    const visibility = tool._meta?.ui?.visibility;
+    return visibility
+      ? visibility.includes('model')
+      : tool._meta?.['openai/visibility'] !== 'private';
+  });
+  const server = host().servers.get('atlas');
+  assert.equal(server.exposure, 'hidden');
+  assert.deepEqual(
+    server.toolExposure,
+    Object.fromEntries(modelTools.map((tool) => [tool.name, 'direct'])),
+  );
 });
 
 test('the brief is shared by concurrent turns and refreshed for a new session', async () => {
