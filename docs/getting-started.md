@@ -20,6 +20,16 @@ curl -fsSL https://atlas.insanearts.io/install.sh | sh
 
 The installer checks the download's checksum, Developer ID signature and notarization. It installs `/Applications/Atlas.app`, links the `atlas` command into `~/.local/bin` and opens Atlas for setup.
 
+To install with Homebrew instead, trust the InsaneArts tap, then install the cask. Homebrew checks the same checksum and notarization, installs `/Applications/Atlas.app` and links `atlas` into its own `bin` folder. Open Atlas from Applications to set it up, or run `atlas init`.
+
+```sh
+brew tap insanearts/tap
+brew trust insanearts/tap
+brew install --cask insanearts/tap/atlas
+```
+
+Either way, Atlas updates itself with `atlas update`; `brew upgrade` leaves it alone.
+
 If your shell cannot find `atlas`, add that directory to your shell's `PATH`. For the current terminal:
 
 ```sh
