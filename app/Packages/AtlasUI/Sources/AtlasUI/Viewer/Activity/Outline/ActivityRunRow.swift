@@ -2,7 +2,8 @@ import SwiftUI
 
 /// An app run's row, 32 high: its disclosure, the app's icon at 16, its name, what was done there, its problems in
 /// orange, what let its steps act in a listed account, Replay while it is open, and its time with a blue dot while it
-/// runs. The summary gives way first, then the name; the problems, the badge, Replay and the time never truncate. On a narrow card the summary hides and the problems stay.
+/// runs. The summary gives way first, then the name; the problems, Replay and the time never truncate, and the badge
+/// shows only where the words fit whole beside it. On a narrow card the summary hides and the problems stay.
 struct ActivityRunRow: View {
   /// The run.
   let run: ViewerOutlineRun
@@ -56,8 +57,12 @@ struct ActivityRunRow: View {
         .padding(.leading, ViewerLayout.outlineDisclosureGap)
         .padding(.trailing, ViewerLayout.outlineLeadGap)
       HStack(alignment: .firstTextBaseline, spacing: ViewerLayout.outlineTimeGap) {
-        words
-          .frame(maxWidth: .infinity, alignment: .leading)
+        // The badge shows only where the words fit whole beside it; VoiceOver reads it in the run's label either way.
+        ViewThatFits(in: .horizontal) {
+          words(showsBadge: true)
+          words(showsBadge: false)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         if run.isOpen, run.canReplay {
           ActivityReplayButton(run: run.id, send: send)
             .transition(.opacity)
@@ -69,8 +74,11 @@ struct ActivityRunRow: View {
     .lineLimit(1)
   }
 
-  /// The name, the summary, the problems and what let its steps act in a listed account, on one line.
-  private var words: some View {
+  /// The name, the summary, the problems and, when asked, what let its steps act in a listed account, on one line.
+  ///
+  /// - Parameter showsBadge: Whether what let its steps act there shows.
+  /// - Returns: The line.
+  private func words(showsBadge: Bool) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: .zero) {
       Text(verbatim: run.name)
         .font(Typography.font(.body, weight: .medium))
@@ -92,7 +100,7 @@ struct ActivityRunRow: View {
           .padding(.leading, ViewerLayout.runProblemGap)
           .layoutPriority(2)
       }
-      if let allowance = run.allowance {
+      if showsBadge, let allowance = run.allowance {
         AllowanceTag(badge: allowance)
           .padding(.leading, ViewerLayout.runProblemGap)
           .layoutPriority(2)

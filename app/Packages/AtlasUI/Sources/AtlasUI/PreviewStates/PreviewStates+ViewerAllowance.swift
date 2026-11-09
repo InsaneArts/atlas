@@ -109,11 +109,24 @@
       ]
     )
 
-    /// Activity with Claude Code's run across sites opened, each step naming the account it acted in.
+    /// Claude Code's run on staging.acme.dev, folded: the person allowed it for the task, which its row says where
+    /// the title fits whole beside it.
+    @MainActor static let stagingRunAllowed = ViewerOutlineRun(
+      id: "run.staging",
+      icon: sampleApp(SampleAppIcons.safari, "Google Chrome"),
+      name: "staging.acme.dev",
+      summary: "Clicked · 2 actions",
+      time: "02:13",
+      account: "staging.acme.dev",
+      allowance: allowedForTask
+    )
+
+    /// Activity with Claude Code's run across sites opened, each step naming the account it acted in, and a folded run
+    /// in one site allowed for the task.
     @MainActor public static let viewerActivityAllowedMixed: ViewerState = {
       var state = viewerActivity
       var session = claudeSession
-      session.runs = [mixedRunOpen, githubRunOpen] + session.runs
+      session.runs = [mixedRunOpen, stagingRunAllowed, githubRunOpen] + session.runs
       var activity = workingActivity
       activity.days[0].sessions = [session]
       state.pane = .activity(activity)
