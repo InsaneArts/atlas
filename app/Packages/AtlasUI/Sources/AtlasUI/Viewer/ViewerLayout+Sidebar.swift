@@ -81,10 +81,6 @@ extension ViewerLayout {
   static let helperTileCorner = helperTile / 4
   /// 14: Atlas's orbit across its tile.
   static let helperMark = IconSize.xsPlus
-  /// 10: the helper row's highlight corner: a rounded rectangle under the foot, set apart from the sessions' capsules.
-  static let helperRowCorner = Radius.medium
-  /// 6: from the hairline over the helper's row to the row.
-  static let helperRuleGap = Spacing.xsPlus
   /// 6: how far a row of Ended rises from as it comes in, from under its heading, and sinks to as it goes.
   static let endedRise = Spacing.xsPlus
   /// 12: how far past a threshold the window must go to cross back, so a window held near one never flickers between

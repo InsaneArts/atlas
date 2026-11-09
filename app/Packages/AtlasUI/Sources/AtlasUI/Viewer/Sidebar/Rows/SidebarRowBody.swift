@@ -10,8 +10,6 @@ struct SidebarRowBody: View {
   let isSelected: Bool
   /// The row's least height.
   let height: CGFloat
-  /// The highlight's corner; nil rounds it into a capsule, as every session's row.
-  var corner: CGFloat?
   /// Whether the pointer is over the row.
   @State private var isHovered = false
   @Environment(\.hoverPaused) private var hoverPaused
@@ -22,7 +20,7 @@ struct SidebarRowBody: View {
       .frame(width: ViewerLayout.rowContentWidth, alignment: .leading)
       .padding(.horizontal, ViewerLayout.sidebarRowInset)
       .frame(minHeight: height)
-      .contentShape(shape)
+      .contentShape(Capsule())
       .background { highlight }
       .onHover { isHovered = $0 }
       .animation(CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed), value: configuration.isPressed)
@@ -36,7 +34,7 @@ struct SidebarRowBody: View {
       if isSelected {
         SidebarSelectionPill()
       } else {
-        shape
+        Capsule()
           .fill(fill)
       }
     }
@@ -44,12 +42,6 @@ struct SidebarRowBody: View {
   }
 
   /// A row's fill while not chosen: the pressed one while pressed, the hover one under the pointer, else none.
-  /// The highlight's shape: a capsule, or a rounded rectangle with ``corner``.
-  private var shape: AnyShape {
-    guard let corner else { return AnyShape(Capsule()) }
-    return AnyShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-  }
-
   private var fill: Color {
     if configuration.isPressed { return .fillControlOn }
     return isLit ? .fillRowHover : .clear

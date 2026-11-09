@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The sidebar's content, straight on the window's recessed ground as a source list stands, with no border: the top
-/// bar with the search, All sessions and each section's sessions, then, under a hairline, the helper's row at its foot,
+/// bar with the search, All sessions and each section's sessions, then the helper's row at its foot,
 /// which stays put. The sessions scroll in their own room, which ends a section's gap above the foot: a row is cut at
 /// that edge, never drawn under the foot, and fades out over its last points into the ground, so a cut row reads as
 /// scrolled rather than broken; scrolled to its end, the last row stands clear of the fade. In a short window the
@@ -49,13 +49,9 @@ struct ViewerSidebar: View {
       .scrollBounceBehavior(.basedOnSize)
       .mask { fadingEdge }
       .frame(maxHeight: .infinity, alignment: .top)
-      VStack(alignment: .leading, spacing: ViewerLayout.helperRuleGap) {
-        SeparatorLine()
-          .padding(.horizontal, ViewerLayout.sidebarRowInset)
-        foot
-      }
-      .padding(.horizontal, ViewerLayout.sidebarInset)
-      .padding(.top, ViewerLayout.footGap)
+      foot
+        .padding(.horizontal, ViewerLayout.sidebarInset)
+        .padding(.top, ViewerLayout.footGap)
     }
     .padding(.top, ViewerLayout.sidebarTopInset)
     .padding(.bottom, ViewerLayout.sidebarInset)

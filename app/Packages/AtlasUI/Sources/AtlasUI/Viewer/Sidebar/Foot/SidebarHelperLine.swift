@@ -1,11 +1,11 @@
 import SwiftUI
 
-/// The helper's health, last in the sidebar, as one of its rows: the same height, insets and hover as a session's, its
-/// highlight a rounded rectangle, with Atlas's mark and its dot and a title over a line, such as "Atlas is ready" over
-/// "Helper atlas · 1440 × 900". A click anywhere on it opens the helper's menu, the row held pressed while the menu is open:
-/// every fact about the helper, read-only, then Check Again, Open Settings on Helper…, Recover…, Switch… and Log
-/// Out…. In a short window the mark and its dot stand alone in a circle that opens the same menu. VoiceOver reads the
-/// title and the line, and offers the menu as a pop-up button's.
+/// The helper's health, last in the sidebar, as one of its rows: the same height, insets, capsule and hover as a
+/// session's, with Atlas's mark and its dot and a title over a line, such as "Atlas is ready" over "Helper atlas ·
+/// 1440 × 900". A click anywhere on it opens the helper's menu, the row held pressed while the menu is open: every
+/// fact about the helper, read-only, then Check Again, Open Settings on Helper…, Recover…, Switch… and Log Out…. In a
+/// short window the mark and its dot stand alone in a circle that opens the same menu. VoiceOver reads the title and
+/// the line, and offers the menu as a pop-up button's.
 struct SidebarHelperLine: View {
   /// The helper's health.
   let helper: ViewerHelperLine
@@ -29,9 +29,7 @@ struct SidebarHelperLine: View {
       menu {
         SidebarHelperLabel(helper: helper)
       }
-      .buttonStyle(
-        SidebarRowStyle(isSelected: false, height: ViewerLayout.sidebarRowHeight, corner: ViewerLayout.helperRowCorner)
-      )
+      .buttonStyle(SidebarRowStyle(isSelected: false, height: ViewerLayout.sidebarRowHeight))
     }
   }
 
