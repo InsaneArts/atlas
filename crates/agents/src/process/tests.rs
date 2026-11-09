@@ -178,6 +178,7 @@ fn no_tool_starts_once_atlas_is_stopping() {
 struct ProcessFixture {
     group: nix::unistd::Pid,
     cancel: std::sync::mpsc::Sender<()>,
+    watchdog_fired: Arc<std::sync::atomic::AtomicBool>,
     watchdog: Option<std::thread::JoinHandle<()>>,
     worker: Option<std::thread::JoinHandle<()>>,
     result: std::sync::mpsc::Receiver<Result<Output>>,
@@ -209,8 +210,11 @@ impl ProcessFixture {
     fn supervising(tool: Tool, limit: Duration) -> Self {
         let group = nix::unistd::Pid::from_raw(i32::try_from(tool.leader.id()).unwrap());
         let (cancel, cancelled) = std::sync::mpsc::channel();
+        let watchdog_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fired = Arc::clone(&watchdog_fired);
         let watchdog = std::thread::spawn(move || {
             if cancelled.recv_timeout(Duration::from_secs(5)).is_err() {
+                fired.store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
             }
         });
@@ -222,6 +226,7 @@ impl ProcessFixture {
         Self {
             group,
             cancel,
+            watchdog_fired,
             watchdog: Some(watchdog),
             worker: Some(worker),
             result,
@@ -374,6 +379,12 @@ while (1) { sleep 30 }
     assert!(
         descendant.instance.ended(),
         "shutdown escalation must end the TERM-resistant descendant"
+    );
+    assert!(
+        !fixture
+            .watchdog_fired
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "the watchdog must not rescue shutdown escalation"
     );
     assert!(locked(tools).groups.is_empty());
     assert!(locked(tools).held.is_empty());
