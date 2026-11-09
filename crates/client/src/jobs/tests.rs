@@ -969,7 +969,7 @@ async fn removing_the_socket_after_a_stop_was_sent_does_not_acknowledge_its_outc
 
 #[tokio::test]
 async fn an_incomplete_stop_of_every_job_is_said_at_logout() {
-    use atlas_core::record_folder::LISTED;
+    use atlas_core::record_folder::CLEANUP_ENTRIES;
     use atlas_daemon::daemon::job::Jobs;
 
     let dir = tempfile::tempdir().unwrap();
@@ -982,8 +982,8 @@ async fn an_incomplete_stop_of_every_job_is_said_at_logout() {
         nix::unistd::getuid().as_raw(),
     )
     .unwrap();
-    // More entries than one scan of the records reads.
-    for index in 0..LISTED {
+    // Exhaust the complete pass too; its lock file adds one more entry.
+    for index in 0..CLEANUP_ENTRIES {
         std::fs::write(daemon.join(format!("jobs/unrelated-{index}")), "").unwrap();
     }
     stand_in(&client.config.socket_path, move |request| {

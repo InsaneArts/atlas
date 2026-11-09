@@ -17,7 +17,7 @@ use std::{
 };
 
 /// The most records kept; the oldest ended ones go first.
-const RECORDS_MAX: usize = 64;
+pub(super) const RECORDS_MAX: usize = 64;
 /// How long an ended job's record and log are kept.
 const KEEP: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
@@ -88,20 +88,39 @@ impl Store {
     /// all jobs.
     pub(super) fn scan(&self) -> Scan {
         let listing = self.folder.listing(LISTED);
-        let mut ids = listing.keys;
-        for id in self.unwritten.keys() {
-            if !ids.contains(id) {
-                ids.push(id.clone());
+        let mut scan = if !listing.complete {
+            // The jobs' State lock precedes the folder lock taken by this bounded
+            // complete pass. Neither lock crosses an async suspension. A failed
+            // pass drops its partial records and retains incomplete coverage below.
+            match self
+                .folder
+                .newest_complete(|id, bytes| Some(decode(id, bytes)))
+            {
+                Ok(found) => Scan {
+                    found,
+                    complete: true,
+                },
+                Err(_) => self.listed_scan(listing.keys, false),
+            }
+        } else {
+            self.listed_scan(listing.keys, true)
+        };
+        for (id, record) in &self.unwritten {
+            let replacement = Found::Record(Box::new(record.clone()));
+            match scan.found.iter_mut().find(|found| found.id() == id) {
+                Some(found) => *found = replacement,
+                None => scan.found.push(replacement),
             }
         }
+        scan
+    }
+
+    fn listed_scan(&self, ids: Vec<JobId>, complete: bool) -> Scan {
         let found = ids
             .into_iter()
             .map(|id| self.read(&id).unwrap_or(Found::Unreadable(id)))
             .collect();
-        Scan {
-            found,
-            complete: listing.complete,
-        }
+        Scan { found, complete }
     }
 
     /// The record of `id`: none when there is none, unreadable when it does
@@ -114,15 +133,11 @@ impl Store {
         if !self.folder.holds(id) {
             return None;
         }
-        let record = self
-            .folder
-            .read(id)
-            .and_then(|bytes| serde_json::from_slice::<Record>(&bytes).ok())
-            .filter(|record| record.id == *id && record.sound());
-        Some(match record {
-            Some(record) => Found::Record(Box::new(record)),
-            None => Found::Unreadable(id.clone()),
-        })
+        Some(
+            self.folder
+                .read(id)
+                .map_or_else(|| Found::Unreadable(id.clone()), |bytes| decode(id, &bytes)),
+        )
     }
 
     /// Keep `record`: written whole, or held in memory when the write
@@ -176,11 +191,17 @@ impl Store {
     /// discard it and the previous durable record. Nothing is removed while
     /// a scan cannot account for every record. Whether it pruned.
     pub(super) fn prune(&mut self, now: u64) -> bool {
-        let week = atlas_core::time::ms(KEEP);
         let scan = self.scan();
+        self.prune_scanned(now, scan)
+    }
+
+    /// Prune an inventory just read under the jobs' State lock, without another scan.
+    pub(super) fn prune_scanned(&mut self, now: u64, scan: Scan) -> bool {
         if !scan.complete {
             return false;
         }
+        let week = atlas_core::time::ms(KEEP);
+        let total = scan.found.len();
         let mut ended: Vec<(u64, JobId)> = scan
             .found
             .into_iter()
@@ -202,7 +223,6 @@ impl Store {
             })
             .collect();
         ended.sort();
-        let total = self.folder.listed(LISTED).len();
         let mut over = total.saturating_sub(RECORDS_MAX);
         for (at, id) in ended {
             if now.saturating_sub(at) > week || over > 0 {
@@ -220,4 +240,14 @@ fn left_may_run(record: &Record) -> bool {
     record.ended.as_ref().is_some_and(|ended| {
         atlas_core::protocol::left_may_run(&ended.left, record.pgid, record.uid)
     })
+}
+
+fn decode(id: &JobId, bytes: &[u8]) -> Found {
+    match serde_json::from_slice::<Record>(bytes)
+        .ok()
+        .filter(|record| record.id == *id && record.sound())
+    {
+        Some(record) => Found::Record(Box::new(record)),
+        None => Found::Unreadable(id.clone()),
+    }
 }
