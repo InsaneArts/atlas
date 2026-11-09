@@ -296,7 +296,7 @@ fn an_exited_tool_returns_while_its_descendant_holds_both_pipes() {
 
 #[test]
 fn stopping_atlas_kills_a_resistant_descendant_after_its_leader_exits_on_term() {
-    use std::{io::BufRead, os::unix::net::UnixListener, os::unix::process::CommandExt};
+    use std::{os::unix::net::UnixListener, os::unix::process::CommandExt};
 
     let tools = fresh_tools();
     let directory = tempfile::tempdir().unwrap();
@@ -341,7 +341,7 @@ while (1) { sleep 30 }
     // The child acknowledges its TERM disposition before the leader publishes
     // readiness. The outer watchdog owns the whole group on every failure path.
     let deadline = Instant::now() + Duration::from_secs(4);
-    let stream = loop {
+    let mut stream = loop {
         match ready.accept() {
             Ok((stream, _)) => break stream,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -351,17 +351,28 @@ while (1) { sleep 30 }
             Err(error) => panic!("the readiness connection failed: {error}"),
         }
     };
-    // macOS accepts with the listener's nonblocking mode; the read below
-    // must instead wait for readiness within its timeout.
-    stream.set_nonblocking(false).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
-    let mut said = String::new();
-    std::io::BufReader::new(stream)
-        .read_line(&mut said)
-        .unwrap();
-    let descendant = said.trim().parse().unwrap();
+    // A peer may close before accept; macOS then rejects SO_RCVTIMEO.
+    // Keep every read nonblocking and bound the whole readiness message.
+    stream.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut said = Vec::new();
+    let mut byte = [0];
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the readiness message did not arrive"
+        );
+        match stream.read(&mut byte) {
+            Ok(1) if byte[0] == b'\n' => break,
+            Ok(1) => said.push(byte[0]),
+            Ok(_) => panic!("the readiness connection closed before its message ended"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("the readiness read failed: {error}"),
+        }
+    }
+    let descendant = std::str::from_utf8(&said).unwrap().trim().parse().unwrap();
     let descendant = atlas_core::process::info(descendant)
         .unwrap()
         .expect("the ready descendant is running");
