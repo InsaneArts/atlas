@@ -101,6 +101,8 @@
         snapshot.reading.frameAt = snapshot.now
       }
       change(&snapshot)
+      // As the window holds it once the log for whose work shows is read.
+      snapshot.panes.activity.scope = ActivityScope(snapshot.shownSessions)
       return ViewerPresenter.state(snapshot)
     }
 

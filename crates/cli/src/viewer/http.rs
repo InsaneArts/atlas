@@ -500,7 +500,10 @@ async fn mutation_reply(viewer: &Viewer, owner: Option<&str>, outcome: Result<Va
 async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>) -> Response {
     match read {
         Read::Status => json_response(200, viewer.status().await),
-        Read::Activity => read_reply(viewer.activity().await),
+        Read::Activity => match viewer.activity(query).await {
+            Err(error) if error.code == Code::Input => json_response(400, json!(error)),
+            outcome => read_reply(outcome),
+        },
         Read::Sessions => read_reply(viewer.sessions().await),
         Read::Cleanup => match viewer.cleanup_preview(query).await {
             Err(error) if error.code == Code::Input => json_response(400, json!(error)),

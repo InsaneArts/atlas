@@ -57,6 +57,14 @@ pub struct Record {
     /// mostly worked in, kept once its activity rows have rotated away.
     #[serde(default)]
     pub apps: BTreeMap<String, u64>,
+    /// When its newest activity row was written, in milliseconds since
+    /// 1970: none before it wrote one.
+    #[serde(default)]
+    pub(crate) logged: Option<u64>,
+    /// Whether `logged` was kept from the session's first command: false
+    /// in a record an older build made, which says nothing of its rows.
+    #[serde(default)]
+    pub(crate) logs_rows: bool,
     /// Its screenshots' file names, newest first.
     #[serde(default)]
     pub screenshots: Vec<Capture>,
@@ -85,6 +93,8 @@ impl Record {
             previous: None,
             counts: BTreeMap::new(),
             apps: BTreeMap::new(),
+            logged: None,
+            logs_rows: true,
             screenshots: Vec::new(),
             copies: Vec::new(),
             plans: Vec::new(),

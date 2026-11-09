@@ -22,6 +22,10 @@ extension ViewerWords {
   static let noActivity = "Nothing has happened yet"
   /// Nothing has been done in the helper: the sentence.
   static let noActivityMessage = "What agents and you do in the helper shows up here."
+  /// A session whose steps were all cleared from the log: the headline.
+  static let stepsCleared = "Steps were cleared"
+  /// A session whose steps were all cleared from the log: the sentence.
+  static let stepsClearedMessage = "This session's steps were cleared to save space."
   /// A search that matches nothing: the sentence.
   static let noActivityMatchMessage = "Search looks at what was done and where, such as “clicked” or “Opie”."
   /// Problems, with none: the headline.

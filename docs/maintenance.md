@@ -72,7 +72,7 @@ For an interrupted setup or a managed-layout repair, `atlas setup` inspects the 
 
 ## Records Atlas keeps
 
-Atlas keeps an activity log in its output directory, and records of every action whose outcome is not known yet in your account's cache; the helper keeps its background-job records and output, and its held-input journal, beside its sockets ([Where data lives](configuration.md#where-data-lives)). The activity log names what was done, never typed text, window titles or command output. Pending actions, the held-input journal and unresolved job records are recovery evidence: never delete them to free space or to get past an error.
+Atlas keeps an activity log in its output directory, and records of every action whose outcome is not known yet in your account's cache; the helper keeps its background-job records and output, and its held-input journal, beside its sockets ([Where data lives](configuration.md#where-data-lives)). The activity log names what was done, never typed text, window titles or command output. It keeps the last 30 days of steps, in 64 MB at most; the oldest go first. Pending actions, the held-input journal and unresolved job records are recovery evidence: never delete them to free space or to get past an error.
 
 ## Uninstall
 

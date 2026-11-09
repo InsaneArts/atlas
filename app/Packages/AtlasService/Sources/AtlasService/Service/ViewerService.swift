@@ -72,6 +72,14 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service cannot be read or refuses.
   func activity() async throws(ServiceError) -> ActivityLog
 
+  /// Reads what one host session did in the helper: its newest rows from every file the log keeps, and whether they
+  /// were all cleared to save space. Reading it records nothing.
+  ///
+  /// - Parameter session: The session's key; empty for Terminal, the agents' commands no host named.
+  /// - Returns: The session's rows, newest first, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` when the service cannot be read or refuses.
+  func activity(of session: String) async throws(ServiceError) -> ActivityLog
+
   /// Reads the screenshots agents took in the helper, and the folder they are kept in.
   ///
   /// - Returns: The screenshots, newest first, and their folder, every missing field at its safe default.

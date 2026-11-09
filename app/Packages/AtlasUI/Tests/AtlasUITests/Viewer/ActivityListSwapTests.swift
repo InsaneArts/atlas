@@ -37,4 +37,15 @@ struct ActivityListSwapTests {
     state.session = .all
     #expect(state.list == ViewerActivityListKey(session: .all, filter: .typing))
   }
+
+  @MainActor
+  @Test("the chosen session's own reading arriving is another list, never new work in the one shown")
+  func theChoicesOwnReadingIsAnotherList() {
+    var state = PreviewStates.oneSessionActivity
+    state.settled = false
+    let held = state.list
+    state.settled = true
+    #expect(state.list != held, "its rows replace the held ones as one list")
+    #expect(state.list == ViewerActivityListKey(session: .one(SessionSamples.claudeKey), filter: .all))
+  }
 }

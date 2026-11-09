@@ -28,6 +28,32 @@ extension ViewerClient {
     return try await Self.decodedReply { () throws(ServiceError) in try Self.activity(data, response: response) }
   }
 
+  /// Reads `activity.json` for one session.
+  ///
+  /// - Parameter session: The session's key; empty for Terminal.
+  /// - Returns: The session's rows, newest first, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` with the service's error, such as for a key it does not take, or when it cannot be
+  ///   read.
+  public func activity(of session: String) async throws(ServiceError) -> ActivityLog {
+    let (data, response) = try await fetched(activityRequest(session: session), limit: Self.listLimit)
+    return try await Self.decodedReply { () throws(ServiceError) in try Self.activity(data, response: response) }
+  }
+
+  /// A GET of `activity.json` for `session`, the key percent-encoded.
+  ///
+  /// - Parameter session: The session's key; empty for Terminal.
+  /// - Returns: The request.
+  /// - Throws: ``ServiceError`` when the key cannot be put in a URL.
+  func activityRequest(session: String) throws(ServiceError) -> URLRequest {
+    let route = base.appendingPathComponent("activity.json")
+    guard let encoded = session.addingPercentEncoding(withAllowedCharacters: Self.unreserved),
+      var components = URLComponents(url: route, resolvingAgainstBaseURL: false)
+    else { throw ServiceError("No such session") }
+    components.percentEncodedQuery = "session=\(encoded)"
+    guard let url = components.url else { throw ServiceError("No such session") }
+    return request(to: url)
+  }
+
   /// Reads `screenshots.json`.
   ///
   /// - Returns: The screenshots, newest first, and their folder, every missing field at its safe default.

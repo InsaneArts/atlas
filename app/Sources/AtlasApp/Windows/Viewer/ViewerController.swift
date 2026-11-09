@@ -287,8 +287,9 @@ final class ViewerController {
     session.fullScreen = fullScreen
   }
 
-  /// Shows every host session's work, or one's, in Activity; the list of sessions is read again for it. A
-  /// picture in the sheet goes, as its run may no longer be among those listed.
+  /// Shows every host session's work, or one's, in Activity; the list of sessions is read again for it, and
+  /// Activity at once while it shows, as its log is the chosen session's own. A picture in the sheet goes, as its run
+  /// may no longer be among those listed.
   ///
   /// - Parameter choice: Whose work.
   func chooseSession(_ choice: ViewerSessionChoice) {
@@ -296,6 +297,7 @@ final class ViewerController {
     session.chosenSession = choice
     panesModel.sendPane(.closePicture)
     panesModel.followSessions(readNow: true)
+    if session.place == .activity { panesModel.followPane() }
   }
 
   /// The screen took the keyboard, or gave it up.

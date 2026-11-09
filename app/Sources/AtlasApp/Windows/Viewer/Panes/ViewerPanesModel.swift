@@ -136,16 +136,22 @@ final class ViewerPanesModel {
     }
   }
 
-  /// Reads the log, and the screenshots while the log has a screenshot's row. A reply overtaken by a newer start or
-  /// stop has no effect; a failure is kept until a reading succeeds, and a cancelled request says nothing. A later
-  /// reading of the same log, while the pane shows, changes nothing (``unchanged(_:readAt:number:)``). The screenshots
-  /// are listed again only with a changed log, while the picture sheet shows (its Show in Finder acts on their folder),
-  /// or until a listing has worked and found every screenshot row's capture (``shotsFound(readAt:)``).
+  /// Reads the log, the chosen session's own while one shows, and the screenshots while the log has a screenshot's
+  /// row. A reply overtaken by a newer start or stop has no effect; a failure is kept until a reading succeeds, and a
+  /// cancelled request says nothing. A later reading of the same log, while the pane shows, changes nothing
+  /// (``unchanged(_:readAt:number:)``). The screenshots are listed again only with a changed log, while the picture
+  /// sheet shows (its Show in Finder acts on their folder), or until a listing has worked and found every screenshot
+  /// row's capture (``shotsFound(readAt:)``).
   ///
   /// - Parameter number: The reading's generation.
   func readActivity(_ number: Int) async {
+    let scope = ActivityScope(viewer?.snapshot.shownSessions ?? .all)
     do {
-      let log = try await service.activity()
+      let log =
+        switch scope {
+        case .all: try await service.activity()
+        case .session(let key): try await service.activity(of: key)
+        }
       // Each row's age counts back from the moment the log arrived, never from after the screenshots' reply.
       let readAt = wallClock()
       // The screenshots' list sizes and finds the pictures: wanted while the log names a screenshot or a picture shows.
@@ -153,17 +159,19 @@ final class ViewerPanesModel {
         panes.activity.sheet != nil || log.entries.contains { $0.operation == ActivityGrouping.screenshotOperation }
       let lists =
         wantsShots
-        && (panes.activity.sheet != nil || !unchanged(log, readAt: readAt, number: number)
+        && (panes.activity.sheet != nil || panes.activity.scope != scope
+          || !unchanged(log, readAt: readAt, number: number)
           || !shotsFound(readAt: readAt))
       let list = lists ? try? await service.screenshots() : nil
       guard number == work.generation else { return }
       if lists { shotsListed = list != nil }
       if let list { keep(list) }
-      if unchanged(log, readAt: readAt, number: number) {
+      if panes.activity.scope == scope, unchanged(log, readAt: readAt, number: number) {
         return followUnchanged(log)
       }
       activityRead = number
       panes.activity.log = log
+      panes.activity.scope = scope
       panes.activity.readAt = readAt
       let preparation = ViewerActivityPreparation(
         log: log,
