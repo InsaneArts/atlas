@@ -18,8 +18,9 @@ struct FooterSlotMotionTests {
       at: Self.neighboursMoving,
       of: Self.stopMark
     )
+    let curve = try Self.curve(from: PreviewStates.viewerControl, to: PreviewStates.viewerWorking)
     #expect(settled > Self.lit, "Stop's mark is drawn once settled")
-    #expect(moving < Self.unlit, "Stop is drawn while its neighbours still slide over its place")
+    #expect(moving < Self.unlit, "Stop is drawn while its neighbours still slide over its place: \(curve)")
   }
 
   @Test("the buttons beside Stop hold still until it has faded")
@@ -31,8 +32,9 @@ struct FooterSlotMotionTests {
       at: Self.stopLeaving,
       of: Self.soundMark
     )
+    let curve = try Self.curve(from: PreviewStates.viewerWorking, to: PreviewStates.viewerControl)
     #expect(settled > Self.lit, "the sound button's mark is drawn once settled")
-    #expect(leaving > Self.lit, "the sound button moved while Stop was still fading")
+    #expect(leaving > Self.lit, "the sound button moved while Stop was still fading: \(curve)")
   }
 
   /// The centre of Stop's square in a standard window, in points from its top left.
@@ -47,6 +49,28 @@ struct FooterSlotMotionTests {
   static let lit: CGFloat = 0.7
   /// Brightness at most where no mark is drawn on the dark card.
   static let unlit: CGFloat = 0.4
+
+  /// How bright Stop's mark and the sound button's mark are at each twentieth of a second of the change from `first`
+  /// to `next`, for a failure to say.
+  ///
+  /// - Parameters:
+  ///   - first: What the window shows before the change.
+  ///   - next: What it shows after.
+  /// - Returns: Each moment with the two brightnesses.
+  /// - Throws: When nothing was drawn.
+  static func curve(from first: ViewerState, to next: ViewerState) throws -> [String] {
+    try stride(from: TimeInterval.zero, through: curveEnd, by: curveStep)
+      .map { moment in
+        let stop = try brightness(from: first, to: next, at: moment, of: stopMark)
+        let sound = try brightness(from: first, to: next, at: moment, of: soundMark)
+        return String(format: "%.2f s: Stop %.2f, sound %.2f", moment, stop, sound)
+      }
+  }
+
+  /// 0.5 seconds: past the last beat of a slot's change.
+  static let curveEnd: TimeInterval = 0.5
+  /// 0.05 seconds: between the moments a curve reads.
+  static let curveStep: TimeInterval = 0.05
 
   /// How bright `point` is in the settled dark window showing `state`.
   ///

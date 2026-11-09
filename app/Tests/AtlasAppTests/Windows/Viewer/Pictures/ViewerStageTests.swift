@@ -18,14 +18,19 @@ struct ViewerStageTests {
     let list = try #require(host.scrollViews.first, "Activity has its list")
     list.contentView.scroll(to: NSPoint(x: 0, y: Self.scrolled))
     list.reflectScrolledClipView(list.contentView)
+    var steps = ["scrolled: \(Self.describe(list))"]
     host.show(PreviewStates.viewerWorking)
+    steps.append("screen: \(Self.describe(list))")
     Self.settle(host)
+    steps.append("screen settled: \(Self.describe(list))")
     host.show(try Self.activity(lines: 80))
+    steps.append("activity: \(Self.describe(list))")
     Self.settle(host)
+    steps.append("activity settled: \(Self.describe(list))")
     // Activity's list is all there is: nothing was built again, and nothing old is still leaving.
     #expect(host.scrollViews.count == 1)
     #expect(host.scrollViews.contains { $0 === list }, "Activity's list was built again")
-    #expect(list.contentView.bounds.origin.y == Self.scrolled, "the list lost its place")
+    #expect(list.contentView.bounds.origin.y == Self.scrolled, "the list lost its place: \(steps)")
   }
 
   @Test("Activity hidden behind the Screen keeps its list as it was laid out")
@@ -36,10 +41,14 @@ struct ViewerStageTests {
     let host = ViewerHost(try Self.activity(lines: 80))
     let list = try #require(host.scrollViews.first, "Activity has its list")
     let laidOut = try #require(list.documentView?.frame)
+    let before = Self.describe(list)
     host.show(PreviewStates.viewerWorking)
     Self.settle(host)
     // The small screen leaves with Activity, but the hidden list keeps the room it kept under it.
-    #expect(list.documentView?.frame == laidOut, "the hidden list was laid out again")
+    #expect(
+      list.documentView?.frame == laidOut,
+      "the hidden list was laid out again: \(before) became \(Self.describe(list))"
+    )
   }
 
   @Test("Activity with no small screen keeps its list as it was laid out behind a Screen with no picture")
@@ -55,10 +64,32 @@ struct ViewerStageTests {
     let host = ViewerHost(activity)
     let list = try #require(host.scrollViews.first, "Activity has its list")
     let laidOut = try #require(list.documentView?.frame)
+    let before = Self.describe(list)
     host.show(screen)
     Self.settle(host)
     // No picture, so no small screen comes back over the list: it keeps no room for one.
-    #expect(list.documentView?.frame == laidOut, "the hidden list was laid out again")
+    #expect(
+      list.documentView?.frame == laidOut,
+      "the hidden list was laid out again: \(before) became \(Self.describe(list))"
+    )
+  }
+
+  /// How `list` stands, for a failure to say: where it is scrolled, its content's frame, its visible width, and its
+  /// scroll bar.
+  ///
+  /// - Parameter list: The list's scroll view.
+  /// - Returns: The description.
+  static func describe(_ list: NSScrollView) -> String {
+    let scroller = list.verticalScroller
+    return [
+      "offset \(list.contentView.bounds.origin.y)",
+      "content \(list.documentView?.frame ?? .zero)",
+      "visible width \(list.contentView.frame.width)",
+      "scroller \(list.hasVerticalScroller) hidden \(scroller?.isHidden ?? true)",
+      "style \(list.scrollerStyle.rawValue) of \(NSScroller.preferredScrollerStyle.rawValue)",
+      "autohides \(list.autohidesScrollers)",
+    ]
+    .joined(separator: ", ")
   }
 
   /// Lets every animation of the change just made finish, holding the moment well past the longest, then draws.
