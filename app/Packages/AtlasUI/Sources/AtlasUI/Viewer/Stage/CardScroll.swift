@@ -8,8 +8,9 @@ import SwiftUI
 /// in above, or the list changing around the row scrolled to, leave what the person reads where it is; at the top the
 /// list stays at the top, so new rows show. A list can hold back rows arriving above a person scrolled down, under a
 /// quiet line at its top saying what waits (``View/listWaiting(_:)``); pressing it takes the list to its top. Another
-/// list taking this one's place, such as another session's, shows from its top. The
-/// scroll bar hides while the pane fades in or out. The rows keep one width whether a scroll bar that takes room shows or not (``CardScrollRoom/scrollerGutter(_:)``), so a list growing
+/// list taking this one's place, such as another session's, shows from its top. An
+/// overlay scroll bar hides while the pane fades in or out; a classic one, which takes room, stays and fades with the
+/// pane, so a pane hidden and shown again is never laid out again around it. The rows keep one width whether a scroll bar that takes room shows or not (``CardScrollRoom/scrollerGutter(_:)``), so a list growing
 /// past its height, or shrinking under it, never lays its rows out again mid-motion. A list supplies only its content,
 /// with `scrollTargetLayout()` on the stack whose rows hold the place.
 struct CardScroll<Content: View>: View {
@@ -59,7 +60,7 @@ struct CardScroll<Content: View>: View {
           .frame(width: width > gutter ? width - gutter : nil, alignment: .leading)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .scrollIndicators(paneSettled ? .automatic : .hidden)
+      .scrollIndicators(CardScrollRoom.showsScroller(settled: paneSettled, gutter: gutter) ? .automatic : .hidden)
       .scrollPosition(id: anchor, anchor: .top)
       .onPreferenceChange(CardScrollWaitingKey.self) { waiting = $0 }
       .overlay(alignment: .top) {
