@@ -23,8 +23,6 @@ extension ViewerLayout {
   static let toggleClearance = Spacing.s
   /// 44: a session's row, its 28-point icon and 8 above and below it.
   static let sidebarRowHeight = ControlHeight.xl
-  /// 32: a row of the Library.
-  static let libraryRowHeight = ControlHeight.m
   /// 2: between the sidebar's rows.
   static let sidebarRowGap = Spacing.half
   /// 10: a row's content inset inside its capsule, before the icon and after the words or the count.
@@ -37,20 +35,14 @@ extension ViewerLayout {
   static let sidebarLineGap = Spacing.hairline
   /// 22: each of the icons All sessions stacks.
   static let stackIcon: CGFloat = 22
-  /// 4: how far each icon behind the first peeks out past the one in front of it, so the first stands whole and the
-  /// others show only their edge, as a deck of cards does.
-  static let stackStep = Spacing.xs
+  /// 3: how far each icon behind the first peeks out past the one in front of it, so the first stands whole and the
+  /// others show only their edge, as a deck of cards does; a deck of three reaches a session's icon's width, so the
+  /// words beside it start where a session's do.
+  static let stackStep = (sidebarIcon - stackIcon) / 2
   /// 2: the soft shadow's blur each stacked icon casts on the one behind it.
   static let stackShadowRadius: CGFloat = 2
   /// 1: how far that shadow falls towards the icons behind.
   static let stackShadowOffset = Spacing.hairline
-  /// The room All sessions' icons take: a session's icon's, or the stack's reach where three stand wider.
-  ///
-  /// - Parameter count: How many icons stand in the stack.
-  /// - Returns: The width.
-  static func stackWidth(count: Int) -> CGFloat {
-    max(sidebarIcon, stackIcon + stackStep * CGFloat(max(count - 1, 0)))
-  }
   /// 5: how far a badge's frame reaches past its icon's bottom and trailing edges, so its dot stands 3 past them, its
   /// 2-point ring the rest.
   static let badgeReach: CGFloat = 5
@@ -65,7 +57,7 @@ extension ViewerLayout {
     bottom: Spacing.xsPlus,
     trailing: Spacing.sPlus
   )
-  /// 12: between the sessions' room and the Library under it, the gap a section's heading keeps above it.
+  /// 12: between the sessions' room and the hairline over the foot, the gap a section's heading keeps above it.
   static let footGap = headingInset.top
   /// 16: how far the sessions fade out at their room's lower edge; their last row ends that far up, so scrolled to the
   /// end it stands clear of the fade.
@@ -82,17 +74,13 @@ extension ViewerLayout {
   static let endedHeadingCorner = endedHeadingHeight / 2
   /// Ended's inset round its button: 6 above and 2 under, so its line stands where another heading's does.
   static let endedHeadingInset = EdgeInsets(top: Spacing.xsPlus, leading: .zero, bottom: Spacing.half, trailing: .zero)
-  /// 18: the room a Library row's symbol takes, so the words start in line.
-  static let librarySymbol = IconSize.sPlus
-  /// 8: above and below the helper's line.
-  static let helperInset = Spacing.s
-  /// 8: the helper's dot.
-  static let helperDot = Spacing.s
-  /// 8: between the helper's dot and its words.
-  static let helperGap = Spacing.s
-  /// 16: the corner of the helper line's fill under the pointer, half the most it stands tall, so the fill is a
-  /// capsule round the line.
-  static let helperCorner = ControlHeight.m / 2
+  /// About 22.5: the helper row's tile, the plate an app's icon draws in a session's icon's 28, so the tile stands the
+  /// size of the session icons above it and its words start where theirs do.
+  static let helperTile = SessionIcon.plate(sidebarIcon)
+  /// About 5.6: the helper tile's corner, a quarter of its side, as a session's tile rounds.
+  static let helperTileCorner = helperTile / 4
+  /// 14: Atlas's orbit across its tile.
+  static let helperMark = IconSize.xsPlus
   /// 6: how far a row of Ended rises from as it comes in, from under its heading, and sinks to as it goes.
   static let endedRise = Spacing.xsPlus
   /// 12: how far past a threshold the window must go to cross back, so a window held near one never flickers between
@@ -102,16 +90,13 @@ extension ViewerLayout {
   /// leaves the card 456 at 700 and 444 at 688, room for the footer's widest buttons beside a latest line of about
   /// 120, so the card is never cramped beside it.
   static let wholeSidebar = ViewerThreshold(risesAt: 700, room: fitRoom)
-  /// 420: the window's height under which the Library folds into a row of circles, opening again only at 432.
+  /// 420: the window's height under which the helper's row folds into its mark, opening again only at 432.
   static let tallSidebar = ViewerThreshold(fallsUnder: 420, room: fitRoom)
-  /// 8: above and below the Library folded into a row, so the row stands 44 high.
-  static let libraryRowInset = Spacing.s
-  /// 4: between the circles of the Library folded into a row.
-  static let libraryCircleGap = Spacing.xs
-  /// 28: each circle of the Library folded into a row, and the helper's dot's at its end.
-  static let libraryCircle = ControlHeight.s
-  /// The Library's unseen dot's inset in a circle's top-trailing corner, where a badge stands.
-  static let libraryCircleDot = Spacing.xs
+  /// 44: the circle the helper's mark stands alone in, in a short window, a row's height across.
+  static let helperCircle = sidebarRowHeight
+  /// 2: the circle's inset from the row's leading edge, so the mark in it stands where it does in the whole row, on the
+  /// session icons' axis.
+  static let helperCircleInset = sidebarRowInset + sidebarIcon / 2 - helperCircle / 2
 
   /// The room the sidebar takes at the window's leading edge: its width, or none while hidden. Its content keeps its
   /// width as it hides, so its rows are cut off by its narrowing edge rather than laid out again.

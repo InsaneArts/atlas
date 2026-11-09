@@ -4,7 +4,7 @@ import AtlasUI
 
 extension PanelController {
   /// Recent chooses its own apps; the shared repository coalesces their lookups with the viewer's and remembers
-  /// misses. Each reading refreshes its bounded snapshot, including live icons the viewer has since supplied.
+  /// misses. Each reading refreshes its bounded snapshot, including icons the viewer has found since.
   func wantRecentIcons() {
     let wants =
       isOpen

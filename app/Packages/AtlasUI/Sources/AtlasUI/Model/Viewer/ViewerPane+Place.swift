@@ -4,7 +4,6 @@ extension ViewerPane {
     switch self {
     case .screen: .screen
     case .activity: .activity
-    case .apps: .apps
     }
   }
 }

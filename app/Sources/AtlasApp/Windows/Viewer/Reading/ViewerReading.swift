@@ -12,9 +12,9 @@ struct ViewerReading {
   var hasStatus = false
   /// The latest picture's frame: its id, revision and display.
   var frame: (id: String, revision: String, display: ViewerStatus.Size)?
-  /// The picture the window is laid out with, ready to draw: the first since a picture came, or came at another size,
-  /// and each one while Apps shows; the panel's, until the first reading of the window's own. The live slots draw the
-  /// newest in its place (``LivePictureFeed``).
+  /// The picture the window is laid out with, ready to draw: the first since a picture came, or came at another size;
+  /// the panel's, until the first reading of the window's own. The live slots draw the newest in its place
+  /// (``LivePictureFeed``).
   var picture: DesktopPicture?
   /// The last picture drawn, kept when the picture is lost, so the stage keeps it behind its words, blurred,
   /// while the window connects again. Only drawn: input is never mapped through it.

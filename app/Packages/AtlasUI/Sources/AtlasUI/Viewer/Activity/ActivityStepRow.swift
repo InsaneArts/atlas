@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// One step of an opened run, or a folded run's problem line, on one 28-point line: its glyph in the lead column, what
-/// was done, a picture button when it kept a picture of the screen just before it, and its time when the minute
+/// was done, whole in its tooltip where a narrow card cuts it short, a picture button when it kept a picture of the screen just before it, and its time when the minute
 /// changed. A screenshot's step shows its picture framed in place under its line; the action of unknown outcome offers
 /// Show Screen and Recover… under it. Steps are not pressable, so they have no highlight.
 struct ActivityStepRow: View {
@@ -39,6 +39,7 @@ struct ActivityStepRow: View {
     HStack(alignment: .firstTextBaseline, spacing: ViewerLayout.outlineTimeGap) {
       HStack(alignment: .center, spacing: ViewerLayout.pictureButtonGap) {
         words
+          .help(Text(verbatim: step.label))
         if step.notKept {
           notKept
         }

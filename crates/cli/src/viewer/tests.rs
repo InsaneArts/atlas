@@ -9,11 +9,11 @@ use super::{
         respond,
     },
     local::{answering, exchange, reply_status},
-    reads::{ACTIVITY_ROWS, activity_row, listed_apps},
+    reads::{ACTIVITY_ROWS, activity_row},
     *,
 };
-use atlas_client::{client::AppList, overview::READ_DEADLINE};
-use atlas_core::{config::Config, files, screen::windows::Window, test_support::SETTINGS};
+use atlas_client::overview::READ_DEADLINE;
+use atlas_core::{config::Config, files, test_support::SETTINGS};
 use axum::{
     body::{Body, to_bytes},
     extract::Request,
@@ -1385,15 +1385,14 @@ async fn connections_that_never_name_the_viewer_close_soon() {
     server.abort();
 }
 
-/// The helper's activity, apps and screenshots answer only at the
+/// The helper's activity, sessions and screenshots answer only at the
 /// viewer's private address, from its own origin, within a free slot.
 #[tokio::test]
-async fn the_helpers_activity_apps_and_screenshots_answer_only_the_viewers_own_origin() {
+async fn the_helpers_activity_and_screenshots_answer_only_the_viewers_own_origin() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let routes = [
         "activity.json",
-        "apps.json",
         "screenshots.json",
         "sessions.json",
         "screenshot.png?name=1-capture.png",
@@ -1422,12 +1421,6 @@ async fn the_helpers_activity_apps_and_screenshots_answer_only_the_viewers_own_o
     assert_eq!(read_json(&viewer, "activity.json").await.0, 200);
     assert_eq!(read_json(&viewer, "screenshots.json").await.0, 200);
     assert_eq!(read_json(&viewer, "sessions.json").await.0, 200);
-    let (status, apps) = read_json(&viewer, "apps.json").await;
-    assert_eq!(
-        (status, apps["ok"].clone()),
-        (503, json!(false)),
-        "no helper"
-    );
     assert_eq!(read_json(&viewer, "screenshot.jpg").await.0, 404);
 
     let _busy = viewer
@@ -1760,105 +1753,9 @@ async fn activity_json_lists_the_newest_200_rows_by_ids_that_hold_across_reads()
     assert!(!ids.contains(second["activity"][0]["id"].as_str().unwrap()));
 }
 
-#[test]
-fn apps_json_lists_windows_front_to_back() {
-    let apps = json!([
-        {"name": "Finder", "pid": 1, "policy": "regular",
-            "executable": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"},
-        {"name": "Dock", "pid": 2, "policy": "accessory", "executable": "/x"},
-        {"name": "Opie", "pid": 3, "policy": "regular", "active": true,
-            "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
-        {"name": "Notes", "pid": 4, "policy": "regular",
-            "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
-    ]);
-    let window = |number: i64, pid: i64, title: &str| {
-        json!({"number": number, "pid": pid, "title": title, "layer": 0, "alpha": 1.0,
-            "bounds": {"x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0}})
-    };
-    let windows = json!([
-        window(31, 4, "QA checklist"),
-        window(12, 3, "Ring"),
-        window(7, 3, "Starter"),
-    ]);
-
-    let listed = listed_apps(
-        &AppList::decode(json!({"ok": true, "apps": apps})).unwrap(),
-        &serde_json::from_value::<Vec<Window>>(windows).unwrap(),
-    )
-    .unwrap();
-    let order = listed
-        .iter()
-        .map(|app| app["name"].as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        ["Notes", "Opie", "Finder"],
-        "by each app's front window"
-    );
-    assert_eq!(
-        listed[1],
-        json!({
-            "pid": 3, "name": "Opie", "bundle": "/Applications/Opie.app", "bundleId": null,
-            "front": true, "hidden": false, "launchedAt": null,
-            "windows": [
-                {"id": 12, "title": "Ring", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0,
-                    "order": 1},
-                {"id": 7, "title": "Starter", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0,
-                    "order": 2},
-            ],
-        })
-    );
-    assert_eq!(listed[2]["windows"], json!([]), "Finder has none");
-    assert_eq!(listed[2]["front"], false);
-}
-
-#[test]
-fn apps_name_their_bundle_id_whether_hidden_when_launched_and_their_windows_order() {
-    let apps = json!([
-        {"name": "Notes", "pid": 4, "policy": "regular", "hidden": true,
-            "bundleId": "com.apple.Notes", "launchedAt": 1_800_000_000_000_u64,
-            "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
-        {"name": "Probe", "pid": 5, "policy": "regular", "bundleId": "not an id",
-            "executable": "/Users/helper/Applications/Probe.app/Contents/MacOS/Probe"},
-    ]);
-    let window = |number: i64, pid: i64| {
-        json!({"number": number, "pid": pid, "title": "Secret plans", "layer": 0, "alpha": 1.0,
-            "bounds": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}})
-    };
-    let windows = json!([window(9, 5), window(8, 4), window(7, 5)]);
-
-    let listed = listed_apps(
-        &AppList::decode(json!({"ok": true, "apps": apps})).unwrap(),
-        &serde_json::from_value::<Vec<Window>>(windows).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(listed[0]["name"], "Probe");
-    assert_eq!(listed[0]["bundleId"], Value::Null, "only an identifier");
-    assert_eq!(listed[0]["hidden"], false);
-    let orders = |app: &Value| {
-        app["windows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|window| window["order"].clone())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(orders(&listed[0]), [json!(0), json!(2)]);
-    assert_eq!(listed[1]["bundleId"], "com.apple.Notes");
-    assert_eq!(listed[1]["hidden"], true);
-    assert_eq!(listed[1]["launchedAt"], 1_800_000_000_000_u64);
-    assert_eq!(
-        orders(&listed[1]),
-        [json!(1)],
-        "behind Probe's front window"
-    );
-}
-
 #[tokio::test]
 async fn reading_the_helpers_apps_and_windows_records_no_activity() {
     let dir = tempfile::tempdir().unwrap();
-    let viewer = unreachable(dir.path()).await;
-    assert_eq!(read_json(&viewer, "apps.json").await.0, 503, "no helper");
 
     let agent = client(dir.path()).doing(atlas_client::doing::Doing::new("screenshot"));
     let filter = atlas_client::agent::WindowFilter {

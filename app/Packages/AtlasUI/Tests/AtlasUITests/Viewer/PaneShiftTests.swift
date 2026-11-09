@@ -14,7 +14,7 @@ struct PaneShiftTests {
       #expect(ScreenZoom.opacity(isArriving: isArriving, isAway: true, zooms: false) == 0)
       #expect(ScreenZoom.opacity(isArriving: isArriving, isAway: false, zooms: false) == 1)
     }
-    // Every tab but the Screen is kept, and fades the same way.
-    #expect(ViewerPlace.keptPlaces == [.activity, .apps])
+    // Activity is kept, and fades the same way.
+    #expect(ViewerPlace.keptPlaces == [.activity])
   }
 }

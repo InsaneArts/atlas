@@ -4,8 +4,8 @@ import Observation
 
 /// The main window's one observed object: what this window is doing (the place, watching or paused, the alert asked)
 /// and the helper's facts, composed with its three parts, each with state of its own: ``control`` (the lease, its heartbeat and
-/// the input that belongs to it), ``readingLoop`` (the status and the picture) and ``panesModel`` (the Activity and
-/// Apps panes). Pictures stay in memory only. Every effect is a request to the viewer service or one of the helper's
+/// the input that belongs to it), ``readingLoop`` (the status and the picture) and ``panesModel`` (the Activity
+/// pane). Pictures stay in memory only. Every effect is a request to the viewer service or one of the helper's
 /// commands, which own the helper's safety; ``ViewerPresenter`` decides what the window shows from
 /// ``snapshot``. Its own parts are in `ViewerController+Places`, `+Sidebar`, `+Size`, `+Sessions`, `+Picture`,
 /// `+Alert`, `+Cleanup` and `+Helper`.
@@ -13,7 +13,7 @@ import Observation
 final class ViewerController {
   /// What this window is doing. Written only by the controller's own files; the shells call its methods.
   var session = ViewerSession()
-  /// What the helper line's tooltip lists that the status does not carry. Written only by the controller's own files.
+  /// What the helper row's menu lists that the status does not carry. Written only by the controller's own files.
   var helperFacts = ViewerHelperFacts()
   /// The window is on screen.
   private(set) var shown = false
@@ -27,7 +27,7 @@ final class ViewerController {
   @ObservationIgnored private(set) lazy var control = ViewerControl(viewer: self, dependencies: dependencies)
   /// The status and the picture, read one at a time while the window shows, and the picture's rate.
   @ObservationIgnored private(set) lazy var readingLoop = ViewerReadingLoop(viewer: self, dependencies: dependencies)
-  /// The Activity and Apps panes, and the thumbnails they share.
+  /// The Activity pane, and its thumbnails.
   @ObservationIgnored private(set) lazy var panesModel = ViewerPanesModel(viewer: self, dependencies: dependencies) {
     [weak self] list in
     await self?.sessionsRead(list)
@@ -113,7 +113,7 @@ final class ViewerController {
   /// What the last reading showed.
   var reading: ViewerReading { readingLoop.reading }
 
-  /// What the Activity and Apps panes hold.
+  /// What the Activity pane holds.
   var panes: ViewerPanes { panesModel.panes }
 
   /// Whether this window holds control.
@@ -128,9 +128,6 @@ final class ViewerController {
     case .show(let place):
       setOverlayShown(false)
       show(place)
-    case .chooseLibrary(let place):
-      setOverlayShown(false)
-      chooseLibrary(place)
     case .menu(let command): perform(command)
     case .togglePause: togglePause()
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
@@ -157,7 +154,7 @@ final class ViewerController {
     case .alertCancel: cancelAlert()
     case .moveCorner(let corner): moveCorner(corner)
     case .filterActivity, .toggleSession, .toggleRun, .showRunPictures, .showAllRunPictures, .hideRunPictures,
-      .showDaySessions, .showWindow, .clearOutline, .thumbnailNeeded, .openShot, .openAction, .previousPicture,
+      .showDaySessions, .thumbnailNeeded, .openShot, .openAction, .previousPicture,
       .nextPicture, .pictureSide, .copyPicture, .showPictureInFinder, .closePicture, .openReplay, .replayFrame,
       .previousFrame, .nextFrame, .togglePlay, .closeReplay:
       panesModel.sendPane(event)
@@ -290,7 +287,7 @@ final class ViewerController {
     session.fullScreen = fullScreen
   }
 
-  /// Shows every host session's work, or one's, in Activity and Apps; the list of sessions is read again for it. A
+  /// Shows every host session's work, or one's, in Activity; the list of sessions is read again for it. A
   /// picture in the sheet goes, as its run may no longer be among those listed.
   ///
   /// - Parameter choice: Whose work.

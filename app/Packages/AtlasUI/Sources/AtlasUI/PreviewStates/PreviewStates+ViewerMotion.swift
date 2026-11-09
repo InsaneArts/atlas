@@ -3,13 +3,13 @@
 
   extension PreviewStates {
     /// The main window's transitions drawn as key frames, each spaced along the move that travels furthest, or a
-    /// list's change along its beats: the window's own, then Activity's and Apps'.
+    /// list's change along its beats: the window's own, then Activity's.
     @MainActor public static var viewerMotion: [ViewerMotionPose] {
-      windowMotion + activityMotion + appsMotion
+      windowMotion + activityMotion
     }
 
     /// The sidebar hiding, the Screen turning into Activity with the picture shrinking into its corner, Give Back
-    /// turning the footer back into Take Control, and Ended opening.
+    /// turning the footer back into Take Control and Take Control turning it into Give Back, and Ended opening.
     @MainActor private static var windowMotion: [ViewerMotionPose] {
       [
         ViewerMotionPose(
@@ -20,9 +20,9 @@
           lead: .spring(Motion.Springs.slide)
         ),
         ViewerMotionPose(
-          "library-zoom",
+          "activity-zoom",
           from: viewerWorking,
-          to: viewer(viewerWorking, applying: .chooseLibrary(.activity)),
+          to: viewer(viewerWorking, applying: .show(.activity)),
           size: viewerSize,
           lead: .spring(Motion.Springs.zoom)
         ),
@@ -30,6 +30,13 @@
           "give-back",
           from: viewerControl,
           to: viewer(viewerControl, applying: .giveBack),
+          size: viewerSize,
+          lead: .spring(Motion.Springs.state)
+        ),
+        ViewerMotionPose(
+          "take-control",
+          from: viewerWorking,
+          to: viewer(viewerWorking, applying: .takeControl),
           size: viewerSize,
           lead: .spring(Motion.Springs.state)
         ),
@@ -44,8 +51,9 @@
     }
 
     /// Activity's: the Chrome run opening and folding again as the person asks, and the live session folding into its
-    /// pictures and opening out of them again, each in tenths; a new run arriving at the top of the
-    /// live session; and the Problems filter chosen, which keeps only the run with the failed press.
+    /// pictures and opening out of them again, each in tenths; a new run arriving at the top of the live session; and,
+    /// on the clock, Codex chosen in the sidebar after Claude Code, and the Problems filter chosen, each swapping the
+    /// whole list.
     @MainActor private static var activityMotion: [ViewerMotionPose] {
       [
         ViewerMotionPose(
@@ -92,12 +100,20 @@
           lead: .list(Motion.Springs.state)
         ),
         ViewerMotionPose(
-          "filter-problems",
+          "session-choose",
+          from: viewerActivityOneSession,
+          to: viewerActivityOtherSession,
+          size: viewerSize,
+          lead: .clock,
+          steps: ViewerMotionPose.clockMoments
+        ),
+        ViewerMotionPose(
+          "filter-choose",
           from: viewerActivity,
           to: viewerActivityProblems,
           size: viewerSize,
-          lead: .list(Motion.Springs.state),
-          animation: { ActivityMotion.filter(reduceMotion: false) }
+          lead: .clock,
+          steps: ViewerMotionPose.clockMoments
         ),
       ]
     }
@@ -146,39 +162,5 @@
       return viewer(state, applying: .toggleSession(session.id, opens: !session.isOpen))
     }
 
-    /// Apps': Opie coming to the front over Safari, Notes opening and quitting, and Notes moving from Already open to
-    /// the agents' apps once the helper learns an agent opened it.
-    @MainActor private static var appsMotion: [ViewerMotionPose] {
-      [
-        ViewerMotionPose(
-          "apps-front",
-          from: viewerAppsSafariFront,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .spring(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-open",
-          from: viewerAppsBeforeNotes,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-quit",
-          from: viewerApps,
-          to: viewerAppsBeforeNotes,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-move",
-          from: viewerAppsNotesAlreadyOpen,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-      ]
-    }
   }
 #endif

@@ -133,20 +133,6 @@ struct ViewerRedrawTests {
     #expect(!again)
   }
 
-  @Test("while Apps shows, every live picture presents the window, as its cards are cut from each")
-  func whileAppsShowsEveryLivePicturePresentsTheWindow() async throws {
-    let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service)
-    defer { viewer.close() }
-    Self.show(try Self.picture("before Apps"), in: viewer, service: service)
-    viewer.send(.show(.apps))
-    #expect(viewer.reading.picture?.id == viewer.reading.frame?.id, "Apps starts from the newest picture")
-    let next = try Self.picture("next")
-    let presented = try await Self.presents(viewer) { Self.show(next, in: viewer, service: service) }
-    #expect(presented)
-    #expect(viewer.reading.picture == next)
-  }
-
   @Test("a clock tick doesn't present the window again")
   func aClockTickDoesntPresentTheWindowAgain() async throws {
     let service = ScriptedService()

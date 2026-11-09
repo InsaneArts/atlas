@@ -25,7 +25,7 @@
     /// Switch to the Helper… asks first, over a logged-out helper.
     @MainActor public static let viewerSwitch: ViewerState = {
       var state = viewerLoggedOut
-      state.sidebar.helper.menu = viewerHelperMenu(alertUp: true)
+      state.sidebar.helper.menu = viewerHelperMenu(facts: viewerHelperFacts(newest: "—"), alertUp: true)
       state.alert = AlertCardState(
         title: "Switch to the helper?",
         message:

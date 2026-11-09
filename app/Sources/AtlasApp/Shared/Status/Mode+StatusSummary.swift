@@ -10,17 +10,12 @@ extension Mode {
   ///
   /// - Parameters:
   ///   - reading: What the window last read.
-  ///   - app: The app whose window the screen outlines, which Idle says next; nil for none.
   ///   - reconnecting: Whether answers came before and stopped, so connecting reads as Reconnecting….
   /// - Returns: The word, its colour, its mark and the window's line.
-  func windowSummary(
-    _ reading: StatusReading,
-    showing app: String? = nil,
-    reconnecting: Bool = false
-  ) -> StatusSummary {
+  func windowSummary(_ reading: StatusReading, reconnecting: Bool = false) -> StatusSummary {
     let line =
       switch kind {
-      case .idle: app.map(Words.showingLine(app:)) ?? reading.idleLine
+      case .idle: reading.idleLine
       case .working: reading.workingLine(withAge: false)
       case .control: reading.controlLine
       case .needsYou: reading.needsYouLine

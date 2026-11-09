@@ -51,7 +51,7 @@ struct SidebarFrameTests {
 
   @Test("exactly one pill stands under the chosen row from the first frame of a new choice")
   func exactlyOnePillFromTheFirstFrame() throws {
-    let all = PreviewStates.viewerSessions
+    let all = PreviewStates.viewerActivityBySession
     var last = all
     let chosen = try #require(all.sidebar.sessions.groups.last?.rows.last)
     last.sidebar.sessions.chosen = .one(chosen.id)
@@ -66,15 +66,15 @@ struct SidebarFrameTests {
     #expect(first == settled)
   }
 
-  @Test("the session rows end above the Library and never reach under it")
-  func theRowsEndAboveTheLibrary() throws {
+  @Test("the session rows end above the foot and never reach under it")
+  func theRowsEndAboveTheFoot() throws {
     let host = ViewerHost(PreviewStates.viewerSidebarMany)
     let list = try #require(host.sidebarScrollViews.first, "the sessions scroll in their own room")
     let room = host.frameFromTop(of: list)
     let window = PreviewStates.viewerSize.height
     #expect(room.maxY < window - Self.footGap, "the room ends above the foot")
-    // Between the room's lower edge and the Library, the gap a section keeps: only the sidebar's ground, across the
-    // rows' width, so no row is drawn there and the Library's heading starts below it.
+    // Between the room's lower edge and the foot, the gap a section keeps: only the sidebar's ground, across the
+    // rows' width, so no row is drawn there and the foot starts below it.
     let gap = (0..<Int(Self.footGap))
       .map { room.maxY + CGFloat($0) }
     for y in gap {
@@ -110,7 +110,7 @@ struct SidebarFrameTests {
     return runs
   }
 
-  /// 12: the gap a section keeps above the Library, between the sessions' room and the foot.
+  /// 12: the gap a section keeps between the sessions' room and the foot.
   static let footGap: CGFloat = 12
   /// Lines down the sidebar from the rows' icons to past their words, from 20 to 200 every 6.
   static let wordColumns = stride(from: CGFloat(20), through: 200, by: 6)

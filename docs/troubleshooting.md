@@ -79,7 +79,7 @@ If the native viewer works but an embedded card fails, check the host and connec
 
 Cursor's embedded view establishes private authority before enabling person-operated controls because the tested IDE exposes app-only control schemas to its agent. Use **Controls** to expand its inline card. If the view says its authority expired or is unavailable, reload the view; Atlas will not silently reauthorize a stale card. Close unused cards if the connection has reached its view limit. Unconfirmed cleanup remains retained for recovery. The Agent CLI offers observations and uses the native viewing route. Person-operated embedded control qualification is still in progress.
 
-For Apps, Activity or Screenshots errors, keep the pane's exact message. Check the corresponding observation where available, such as `atlas apps`, and compare the native viewer with the embedded card. Avoid reinstalling the helper merely because one host cannot load a pane.
+For Activity or Screenshots errors, keep the pane's exact message. Check the corresponding observation where available, such as `atlas activity`, and compare the native viewer with the embedded card. Avoid reinstalling the helper merely because one host cannot load a pane.
 
 If `monitor` reports `port-in-use`, choose a free local port with `atlas monitor --port PORT`, replacing `PORT` with that number. Do not stop an unrelated process just to free the default port.
 

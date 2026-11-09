@@ -1,19 +1,24 @@
 import SwiftUI
 
-/// The one scroll view every list in the card scrolls in, Activity and Apps alike, by the rules in
+/// The one scroll view every list in the card scrolls in, Activity's, by the rules in
 /// ``CardScrollRoom``: the small screen floats over the list, which scrolls the pane's whole height under it and
 /// keeps its band as room at the end it floats over, so the last row, or the first, scrolls wholly clear of it, with
 /// nothing faded and nothing ended early. Headings scroll with their rows. A step to a row scrolls it into view only
 /// as far as it must, clear of the small screen (``View/listSelection(_:isSelected:)``). Scrolled down, rows coming
 /// in above, or the list changing around the row scrolled to, leave what the person reads where it is; at the top the
 /// list stays at the top, so new rows show. A list can hold back rows arriving above a person scrolled down, under a
-/// quiet line at its top saying what waits (``View/listWaiting(_:)``); pressing it takes the list to its top. The
-/// scroll bar hides while the pane fades in or out. The rows keep one width whether a scroll bar that takes room shows or not (``CardScrollRoom/scrollerGutter(_:)``), so a list growing
+/// quiet line at its top saying what waits (``View/listWaiting(_:)``); pressing it takes the list to its top. Another
+/// list taking this one's place, such as another session's, shows from its top. An
+/// overlay scroll bar hides while the pane fades in or out; a classic one, which takes room, stays and fades with the
+/// pane, so a pane hidden and shown again is never laid out again around it. The rows keep one width whether a scroll bar that takes room shows or not (``CardScrollRoom/scrollerGutter(_:)``), so a list growing
 /// past its height, or shrinking under it, never lays its rows out again mid-motion. A list supplies only its content,
 /// with `scrollTargetLayout()` on the stack whose rows hold the place.
 struct CardScroll<Content: View>: View {
   /// The selected row to scroll into view as the person steps to it; nil for a list with no selection.
   var reveal: CardScrollReveal?
+  /// Which list the content is, whose change brings another list that shows from its top; nil for a list that is
+  /// never replaced.
+  var list: AnyHashable?
   /// The list's content.
   @ViewBuilder let content: Content
   /// The row the person last scrolled to the top of the list.
@@ -30,6 +35,7 @@ struct CardScroll<Content: View>: View {
   @State private var gutter = CardScrollRoom.scrollerGutter(NSScroller.preferredScrollerStyle)
   @Environment(\.miniClearance) private var clearance
   @Environment(\.paneSettled) private var paneSettled
+  @Environment(\.paneShows) private var paneShows
   @Environment(\.cardScrollPlacement) private var placement
   @Environment(\.motionReduced) private var reduceMotion
 
@@ -38,6 +44,8 @@ struct CardScroll<Content: View>: View {
     ScrollViewReader { scroll in
       ScrollView {
         content
+          // The rows, not the scroll view: a disabled scroll view drops its scroll bar.
+          .disabled(!paneShows)
           .environment(\.listIsAtTop, isAtTop)
           .padding(CardScrollRoom.contentInsets(clearance))
           .background {
@@ -55,7 +63,7 @@ struct CardScroll<Content: View>: View {
           .frame(width: width > gutter ? width - gutter : nil, alignment: .leading)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .scrollIndicators(paneSettled ? .automatic : .hidden)
+      .scrollIndicators(CardScrollRoom.showsScroller(settled: paneSettled, gutter: gutter) ? .automatic : .hidden)
       .scrollPosition(id: anchor, anchor: .top)
       .onPreferenceChange(CardScrollWaitingKey.self) { waiting = $0 }
       .overlay(alignment: .top) {
@@ -73,6 +81,8 @@ struct CardScroll<Content: View>: View {
             )
           }
         }
+        // Like the rows, the line takes no press or keyboard focus while its pane is hidden.
+        .disabled(!paneShows)
         // Only the line fades in and out: the rows keep the animation their own change brings.
         .animation(
           Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced),
@@ -94,6 +104,21 @@ struct CardScroll<Content: View>: View {
       .onChange(of: reveal?.request) { _, _ in
         show(reveal?.id, in: scroll)
       }
+      .onChange(of: list) { _, _ in
+        showTop(in: scroll)
+      }
+    }
+  }
+
+  /// Takes the list to its top at once and forgets the row scrolled to, as another list takes this one's place.
+  ///
+  /// - Parameter scroll: The list's scroll view.
+  private func showTop(in scroll: ScrollViewProxy) {
+    scrolledTo = nil
+    var still = Transaction()
+    still.disablesAnimations = true
+    withTransaction(still) {
+      scroll.scrollTo(CardScrollRoom.top, anchor: .top)
     }
   }
 

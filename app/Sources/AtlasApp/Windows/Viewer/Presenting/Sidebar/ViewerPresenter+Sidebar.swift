@@ -11,7 +11,7 @@ extension ViewerPresenter {
 
   /// The sidebar: hidden while the person hid it, else beside the card, until the window's width hides it
   /// (``ViewerState/fitted(_:)``); shown over the card while the toggle or Find showed it there; its search; the
-  /// sessions; the Library; and the helper's health.
+  /// sessions; and the helper's health.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The sidebar.
@@ -21,7 +21,6 @@ extension ViewerPresenter {
       overlay: snapshot.session.overlayShown,
       search: snapshot.session.search,
       sessions: sessions(snapshot),
-      library: library(snapshot),
       helper: helperLine(snapshot)
     )
   }
@@ -87,7 +86,8 @@ extension ViewerPresenter {
       groups.append(ViewerSessionGroup(.ended, rows: drawn))
     }
     return ViewerSessionsState(
-      chosen: chosen,
+      // The Screen draws no row chosen; choosing one opens its Activity.
+      chosen: snapshot.session.place == .activity ? chosen : nil,
       icons: icons,
       liveCount: live.filter(\.isLive).count,
       groups: groups,

@@ -50,89 +50,18 @@ struct AppIconRepositoryTests {
     #expect(gate.maximumActive == 2)
   }
 
-  @Test("a live icon supersedes a pending bundle-id lookup before either window receives a result")
-  func supersedesPendingEvidence() async throws {
-    let gate = IconLookupGate()
-    defer { gate.release() }
-    let image = try found("live")
-    let stale = try found("stale")
-    let served = Data([1, 2, 3])
-    let repository = AppIconRepository { want in
-      await gate.read()
-      if !want.isLive { return stale }
-      return want.bundle == "/Applications/Shared.app" && want.served == served ? image : nil
-    }
-    let weak = try want("shared")
-    let panel = Task { await repository.find(weak) }
-    try await settle("the weaker lookup never started") { gate.count == 1 }
-    var bundled = weak
-    bundled.bundle = "/Applications/Shared.app"
-    let bundleWant = bundled
-    let bundle = Task { await repository.find(bundleWant) }
-    try await settle("the bundle evidence never joined") { repository.waiterCount == 2 }
-    var live = weak
-    live.served = served
-    let liveWant = live
-    let viewer = Task { await repository.find(liveWant) }
-    let duplicate = Task { await repository.find(liveWant) }
-    try await settle("the service evidence never joined") { repository.waiterCount == 4 }
-    #expect(repository.cachedCount == 0)
-    gate.release()
-    for task in [panel, bundle, viewer, duplicate] {
-      #expect(await task.value?.sha == "live")
-    }
-    #expect(gate.count == 2, "all live evidence is processed together after the weaker read")
-    #expect(await repository.find(liveWant)?.sha == "live")
-    #expect(gate.count == 2)
-  }
-
-  @Test("live evidence replaces a queued weaker lookup before it uses a source slot")
-  func upgradesQueuedEvidence() async throws {
-    let gate = IconLookupGate()
-    defer { gate.release() }
-    let image = try found("live")
-    let repository = AppIconRepository { want in
-      await gate.read()
-      return want.isLive ? image : nil
-    }
-    let blockers = try (0..<2)
-      .map { try want(String($0)) }
-    let blocking = blockers.map { want in Task { await repository.find(want) } }
-    try await settle("the source slots never filled") { gate.count == 2 }
-    let weak = try want("queued")
-    let panel = Task { await repository.find(weak) }
-    try await settle("the weaker request never queued") { repository.waiterCount == 3 }
-    var live = weak
-    live.served = Data([1])
-    let liveWant = live
-    let viewer = Task { await repository.find(liveWant) }
-    try await settle("the live evidence never joined the queue") { repository.waiterCount == 4 }
-    gate.release()
-    for task in blocking { _ = await task.value }
-    #expect(await panel.value?.sha == "live")
-    #expect(await viewer.value?.sha == "live")
-    #expect(gate.count == 3, "the queued weaker lookup was replaced rather than run")
-  }
-
-  @Test("a live icon supersedes a recorded miss and unchanged live evidence is read only once")
-  func retriesMissesWithLiveEvidence() async throws {
+  @Test("a recorded miss is read only once")
+  func readsAMissOnce() async throws {
     let gate = IconLookupGate()
     gate.release()
-    let image = try found("live")
-    let repository = AppIconRepository { want in
+    let repository = AppIconRepository { _ in
       await gate.read()
-      return want.isLive ? image : nil
+      return nil
     }
-    let weak = try want("missing")
-    #expect(await repository.find(weak) == nil)
-    #expect(await repository.find(weak) == nil)
+    let missing = try want("missing")
+    #expect(await repository.find(missing) == nil)
+    #expect(await repository.find(missing) == nil)
     #expect(gate.count == 1)
-    var live = weak
-    live.served = Data([1])
-    #expect(await repository.find(live)?.sha == "live")
-    #expect(await repository.find(live)?.sha == "live")
-    #expect(await repository.find(weak)?.sha == "live")
-    #expect(gate.count == 2)
   }
 
   @Test("the decoded cache never holds more than its bound and evicts the least recently used entry")
@@ -161,30 +90,6 @@ struct AppIconRepositoryTests {
       #expect(repository.cachedCount == 3)
       #expect(repository.images.count == 3, "window snapshots cannot accumulate evicted images")
     }
-  }
-
-  @Test("unreadable new live evidence preserves an icon that was already drawn")
-  func keepsAnEarlierImageWhenNewEvidenceMisses() async throws {
-    let gate = IconLookupGate()
-    defer { gate.release() }
-    let image = try found("earlier")
-    let repository = AppIconRepository { want in
-      guard want.isLive else { return image }
-      await gate.read()
-      return nil
-    }
-    let weak = try want("earlier")
-    #expect(await repository.find(weak)?.sha == "earlier")
-    var live = weak
-    live.served = Data([1])
-    let liveWant = live
-    let refresh = Task { await repository.find(liveWant) }
-    try await settle("the live refresh never started") { gate.count == 1 }
-    #expect(repository.images[weak.key.text] != nil, "refreshing does not temporarily drop the drawn image")
-    gate.release()
-    #expect(await refresh.value?.sha == "earlier")
-    #expect(await repository.find(liveWant)?.sha == "earlier")
-    #expect(gate.count == 1)
   }
 
   @Test("recorded misses share the memory bound")

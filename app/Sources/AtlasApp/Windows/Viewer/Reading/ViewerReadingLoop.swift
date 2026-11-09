@@ -298,15 +298,13 @@ final class ViewerReadingLoop {
       control.releaseControl(ViewerWords.releasedElsewhere)
     }
     viewer.forgetRecoveryOnceNoneNeeded()
-    viewer.noteActivitySeen()
     // Discover and refresh session history; the pane model decides when live sessions also need polling.
     viewer.panesModel.followSessions()
   }
 
   /// Shows a new picture, read with a status that says whether the helper takes input. A picture from a changed
   /// helper ends control first, when this viewer holds or asks for it. The picture goes to the live slots (``feed``);
-  /// the window presents again only when it comes at another size or its frame names another display, and with every
-  /// picture while Apps shows, whose cards are cut from each one.
+  /// the window presents again only when it comes at another size or its frame names another display.
   ///
   /// - Parameters:
   ///   - frame: The picture's frame.
@@ -327,7 +325,7 @@ final class ViewerReadingLoop {
     newestAt = uptime()
     newestPicture = decoded.picture
     feed.show(decoded.picture)
-    if !laysOutLike(decoded.picture) || viewer?.session.place == .apps {
+    if !laysOutLike(decoded.picture) {
       shown.picture = decoded.picture
       shown.lastPicture = decoded.picture
     }
@@ -376,13 +374,6 @@ final class ViewerReadingLoop {
   /// The picture on screen now, the newest the live slots draw; nil while there is none.
   private var drawnPicture: DesktopPicture? {
     shown.picture.map { newestPicture ?? $0 }
-  }
-
-  /// Apps shows: its cards are cut from the picture the window is laid out with, so that is the newest from now on.
-  func layOutWithNewest() {
-    guard let newest = drawnPicture, shown.picture?.id != newest.id else { return }
-    shown.picture = newest
-    shown.lastPicture = newest
   }
 
   /// Rings the waiting stage's mark once the window has waited ``Motion/Duration/appearDelay`` for a picture,

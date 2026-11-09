@@ -62,16 +62,4 @@ struct ViewerPresenterAppIconsTests {
     )
     #expect(recent.first?.icon == .app(.monogram(AppMonogram(name: "Notes"))))
   }
-
-  @Test("a copy only the helper can read draws its initial")
-  func copyDrawsItsInitial() {
-    let copy = HelperApp(
-      pid: 9,
-      name: "Probe",
-      bundle: "/Users/atlas-helper/Library/Application Support/Atlas/Copies/Probe.app",
-      bundleId: "test.atlas.probe"
-    )
-    let card = ViewerPresenter.appCard(copy, showsOrigin: true, ViewerSnapshot.presenterSample)
-    #expect(card.icon == .monogram(AppMonogram(letter: "P", tint: MonogramTint(name: "Probe"))))
-  }
 }
