@@ -113,6 +113,9 @@ struct Viewer {
     /// The app this viewer serves, as macOS names its process once started:
     /// the frame service shows it the screen while agents may not see it.
     app_process: std::sync::Mutex<Option<atlas_core::process::Instance>>,
+    /// The secret the app names itself by, given only to the app this
+    /// viewer starts, on its standard input; never written anywhere.
+    app_secret: String,
 }
 
 impl Viewer {

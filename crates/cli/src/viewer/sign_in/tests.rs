@@ -121,6 +121,9 @@ enum Fails {
     Job,
     /// The browser can't be opened.
     Open,
+    /// The helper saw the person type a password into another site, and
+    /// says so as control ends.
+    Typed,
 }
 
 /// A viewer of a stand-in helper with an input service, keeping the
@@ -163,6 +166,8 @@ fn step(steps: &Mutex<Vec<String>>, fails: Fails, request: &Value) -> Option<Val
             exited(1, "Unable to find application named 'Google Chrome'")
         }
         open if open.starts_with("open ") => completed(""),
+        "release" if fails == Fails::Typed => json!({"ok": true, "signedIn":
+            {"app": "com.google.Chrome", "name": "Google Chrome", "host": "gitlab.com"}}),
         _ => json!({"ok": true}),
     })
 }
@@ -317,14 +322,16 @@ async fn cancel_ends_the_hold_and_control_and_adds_nothing() {
         .unwrap();
     let lease = reply["lease"].as_str().unwrap().to_owned();
 
+    // The person typed a password before giving up: it is never listed.
     let cancelled = helper
         .serve(viewer.sign_in_cancel(&lease), |request| {
-            step(&steps, Fails::Nothing, request)
+            step(&steps, Fails::Typed, request)
         })
         .await
         .unwrap();
 
     assert_eq!(cancelled["ended"], true);
+    assert_eq!(steps.lock().unwrap().last().unwrap(), "release");
     nothing_left(&viewer).await;
     assert_eq!(
         sign_ins::listed_in(&directory.path().join("home")),
@@ -423,8 +430,9 @@ async fn a_hold_that_cant_be_set_is_undone_before_anything_opens() {
     let (viewer, helper) = viewer_of(directory.path());
     let steps = Mutex::new(Vec::new());
     let controller = viewer.client().controller.clone();
-    // A folder where the hold's marker goes: it can't be written.
-    let marker = controller.private_path().to_owned();
+    // A folder where the screen's privacy generation goes: the hold can't
+    // be counted, so it never begins.
+    let marker = controller.private_generation_path().to_owned();
     std::fs::create_dir_all(&marker).unwrap();
 
     let refused = started(&viewer, &helper, &steps, HoldKind::SignIn, Fails::Nothing).await;
@@ -534,4 +542,86 @@ async fn the_status_says_which_site_the_person_signs_in_to() {
         .await
         .ok();
     assert_eq!(viewer.client().controller.private_hold(), None);
+}
+
+#[tokio::test]
+async fn done_adds_only_the_site_signed_in_to_whatever_else_was_typed() {
+    let directory = tempfile::tempdir().unwrap();
+    let (viewer, helper) = viewer_of(directory.path());
+    let steps = Mutex::new(Vec::new());
+    let reply = started(&viewer, &helper, &steps, HoldKind::SignIn, Fails::Nothing)
+        .await
+        .unwrap();
+    let lease = reply["lease"].as_str().unwrap().to_owned();
+
+    helper
+        .serve(viewer.sign_in_done(&lease), |request| {
+            step(&steps, Fails::Typed, request)
+        })
+        .await
+        .unwrap();
+
+    let Listed::Accounts(accounts) = sign_ins::listed_in(&directory.path().join("home")) else {
+        panic!("the list can be read");
+    };
+    let ids: Vec<_> = accounts.iter().map(|account| account.id.as_str()).collect();
+    assert_eq!(ids, ["github.com"]);
+}
+
+#[tokio::test]
+async fn a_frame_read_during_a_sign_in_is_never_shown_from_the_cache_to_anyone_but_the_app() {
+    let directory = tempfile::tempdir().unwrap();
+    let (viewer, helper) = viewer_of(directory.path());
+    let client = viewer.client();
+    let steps = Mutex::new(Vec::new());
+    let epoch = helper
+        .serve(client.identity(), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .unwrap()
+        .epoch;
+    let frame = || atlas_core::screen::frame::Frame {
+        png: Arc::from(&b"the password page"[..]),
+        width: 1,
+        height: 1,
+        epoch: epoch.clone(),
+        at: std::time::Instant::now(),
+    };
+
+    // Read while the screen was hidden, and still recent once it is shown.
+    viewer
+        .frames
+        .lock()
+        .await
+        .keep_for_test("private", frame(), None);
+    let refused = helper
+        .serve(viewer.shown_frame(), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .err()
+        .expect("refused");
+    assert_eq!(refused.code, Code::Busy);
+    let (key, _) = helper
+        .serve(viewer.frame(), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .unwrap();
+    assert_eq!(key, "private", "the app is shown it");
+
+    let visible = client.controller.screen_visible().unwrap();
+    viewer
+        .frames
+        .lock()
+        .await
+        .keep_for_test("shown", frame(), Some(visible));
+    let (key, _) = helper
+        .serve(viewer.shown_frame(), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .unwrap();
+    assert_eq!(key, "shown");
 }

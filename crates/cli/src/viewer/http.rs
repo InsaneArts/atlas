@@ -42,6 +42,9 @@ const HEADER_DEADLINE: Duration = Duration::from_secs(15);
 pub(super) const FIRST_REQUEST: Duration = Duration::from_secs(3);
 /// The largest request body, in bytes.
 const MAX_BODY: usize = 32768;
+/// The header the Atlas app names itself by on every request: the secret
+/// the viewer gave it on its standard input when it started it.
+pub(super) const APP_SECRET_HEADER: &str = "x-atlas-app-secret";
 
 /// Bind the viewer for `client` on `port` (0 picks a free one). With
 /// `settings`, it follows that file when it names another helper.
@@ -105,6 +108,7 @@ pub(super) fn configured(
         accounts_home: std::sync::Mutex::new(atlas_core::config::home().ok()),
         sign_in: Mutex::new(None),
         app_process: std::sync::Mutex::new(None),
+        app_secret: atlas_core::name::random_hex(64),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
         icons: helper_info::Icons::default(),
@@ -345,6 +349,41 @@ routes! {
 }
 
 impl Route {
+    /// Whether only the Atlas app may ask for it: the person's own
+    /// answers, accounts and sign-ins, and the menu bar's emergency stop,
+    /// which ends a sign-in. Taking, renewing, giving back and using
+    /// control, and Stop, stay open to the terminal viewer too.
+    fn app_only(self) -> bool {
+        match self {
+            Self::Change(
+                Change::Revoke
+                | Change::AddAccount
+                | Change::RemoveAccount
+                | Change::SetLevel
+                | Change::Answer
+                | Change::EndAllowed
+                | Change::SignInStart
+                | Change::ForgetStart
+                | Change::ResetStart
+                | Change::SignInRenew
+                | Change::SignInDone
+                | Change::SignInCancel,
+            ) => true,
+            Self::Service
+            | Self::Read(_)
+            | Self::OpenViewer
+            | Self::Change(
+                Change::Recover
+                | Change::Cleanup
+                | Change::Hold
+                | Change::Input
+                | Change::Acquire
+                | Change::Renew
+                | Change::Release,
+            ) => false,
+        }
+    }
+
     /// Whether it ends control or stops agents, which have slots of their
     /// own.
     fn urgent(self) -> bool {
@@ -407,6 +446,13 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
         );
     }
 
+    // The app names itself by the secret only it was given.
+    let app = header(request.headers(), APP_SECRET_HEADER)
+        .is_some_and(|given| same_secret(given.as_bytes(), viewer.app_secret.as_bytes()));
+    if route.is_some_and(Route::app_only) && !app {
+        return json_response(403, json!(not_the_app()));
+    }
+
     // Ending control has slots of its own, so a busy viewer still lets go.
     let slots = if route.is_some_and(Route::urgent) {
         &viewer.urgent
@@ -421,7 +467,7 @@ pub(super) async fn respond(viewer: Arc<Viewer>, request: Request) -> Response {
     };
 
     match route {
-        Some(Route::Read(read)) => answer(&viewer, read, request.uri().query()).await,
+        Some(Route::Read(read)) => answer(&viewer, read, request.uri().query(), app).await,
         Some(Route::OpenViewer) => match read_body(request).await {
             Ok(_) => open_app_viewer(&viewer),
             Err(response) => response,
@@ -552,13 +598,16 @@ async fn mutation_reply(viewer: &Viewer, owner: Option<&str>, outcome: Result<Va
     json_response(status, reply)
 }
 
-/// Answer `read`, which the request's `query` may say more of.
-async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>) -> Response {
+/// Answer `read`, which the request's `query` may say more of. Only the
+/// app (`app`) is shown the screen, or the windows on it, while the person
+/// signs the helper in to an account.
+async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool) -> Response {
     match read {
         Read::Status => json_response(200, viewer.status().await),
         Read::Activity => read_reply(viewer.activity().await),
         Read::Sessions => read_reply(viewer.sessions().await),
-        Read::Apps => read_reply(viewer.apps().await),
+        Read::Apps if app => read_reply(viewer.apps().await),
+        Read::Apps => read_reply(viewer.client().controller.shown(viewer.apps()).await),
         Read::Cleanup => match viewer.cleanup_preview(query).await {
             Err(error) if error.code == Code::Input => json_response(400, json!(error)),
             outcome => read_reply(outcome),
@@ -572,6 +621,12 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>) -> Respon
                 404,
                 json!({"ok": false, "code": "not-offered", "error": "This viewer runs no frame service"}),
             ),
+        },
+        Read::Frame if !app => match viewer.shown_frame().await {
+            Ok((key, frame)) => frame_reply(key, &frame),
+            // Refused for the screen's privacy: the person's control, and
+            // their sign-in, are left alone.
+            Err(error) => json_response(503, json!(error)),
         },
         Read::Frame => match viewer.frame().await {
             Ok((key, frame)) => frame_reply(key, &frame),
@@ -623,6 +678,21 @@ fn frame_reply(key: String, frame: &Frame) -> Response {
 }
 
 /// A refusal in `message`'s words, with status `code`.
+/// What a request for the app's own routes hears from anyone else.
+fn not_the_app() -> Error {
+    Error::new(Code::Permission, "Only the Atlas app can do this")
+}
+
+/// Whether `given` is the app's `secret`, compared in time that doesn't
+/// depend on where they differ.
+fn same_secret(given: &[u8], secret: &[u8]) -> bool {
+    let differs = given
+        .iter()
+        .zip(secret)
+        .fold(0_u8, |differs, (a, b)| differs | (a ^ b));
+    given.len() == secret.len() && std::hint::black_box(differs) == 0
+}
+
 fn refused(code: u16, message: &str) -> Response {
     json_response(code, json!({"ok": false, "error": message}))
 }

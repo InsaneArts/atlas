@@ -254,18 +254,20 @@ impl Viewer {
     }
 
     /// End the sign-in under the lease `released`, which is ending: the
-    /// screen is shown to agents again.
-    pub(super) async fn end_sign_in(&self, client: &Client, released: &str) {
+    /// screen is shown to agents again. Whether one was under way.
+    pub(super) async fn end_sign_in(&self, client: &Client, released: &str) -> bool {
         let mut signing = self.sign_in.lock().await;
         if signing
             .as_ref()
-            .is_some_and(|signing| signing.lease == released)
+            .is_none_or(|signing| signing.lease != released)
         {
-            *signing = None;
-            // A hold that can't be ended is honoured no longer than the
-            // lease it names, which ends now.
-            let _ = client.controller.end_private();
+            return false;
         }
+        *signing = None;
+        // A hold that can't be ended is honoured no longer than the lease
+        // it names, which ends now.
+        let _ = client.controller.end_private();
+        true
     }
 }
 

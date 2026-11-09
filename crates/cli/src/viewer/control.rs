@@ -99,17 +99,19 @@ impl Viewer {
 
         // A sign-in under this lease ends with it: the screen is shown to
         // agents again before control goes back.
-        if let Some(previous) = previous.as_deref() {
-            self.end_sign_in(&client, previous).await;
-        }
+        let guided = match previous.as_deref() {
+            Some(previous) => self.end_sign_in(&client, previous).await,
+            None => false,
+        };
 
         let completion = match previous.as_deref() {
             Some(previous) => release_native(&client, previous, false).await,
             None => Ok(None),
         };
         // A password the person typed while they had control names the
-        // account they signed in to: Atlas lists it.
-        if let Ok(Some(seen)) = &completion {
+        // account they signed in to: Atlas lists it. Never after a guided
+        // sign-in: Done adds its site itself, and Cancel adds nothing.
+        if !guided && let Ok(Some(seen)) = &completion {
             super::accounts::note_sign_in(&self.accounts_home(), seen);
         }
 

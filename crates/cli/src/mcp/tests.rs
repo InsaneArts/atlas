@@ -1682,7 +1682,7 @@ pub(super) const LOOKING: [&str; 8] = [
 ];
 
 #[tokio::test]
-async fn the_views_screen_is_refused_while_the_person_signs_in() {
+async fn the_views_screen_and_window_titles_are_refused_while_the_person_signs_in() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());
     *server.last.lock().await = Some((Instant::now(), json!({"state": "control"})));
@@ -1695,10 +1695,13 @@ async fn the_views_screen_is_refused_while_the_person_signs_in() {
     };
     lease.hide_screen(&controller, &token, &hold).unwrap();
 
-    let refused = server.screen(None).await.unwrap_err();
-
-    assert_eq!(refused.code, "busy");
-    assert_eq!(refused.holder, Some(atlas_core::error::Holder::Person));
+    for refused in [
+        server.screen(None).await.unwrap_err(),
+        server.helper_apps().await.unwrap_err(),
+    ] {
+        assert_eq!(refused.code, "busy");
+        assert_eq!(refused.holder, Some(atlas_core::error::Holder::Person));
+    }
     controller.end_private().unwrap();
     lease.release();
 }

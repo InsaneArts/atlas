@@ -864,7 +864,12 @@ fn development() -> Result<PathBuf> {
 /// app to quit by itself; dropping the returned child kills it outright
 /// (`kill_on_drop`). The login job's name stays here: an `atlas` the app
 /// runs is never the login agent ([`started_at_login`]).
-async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, ChildStdin)> {
+async fn spawn(
+    program: &Program,
+    url: &str,
+    secret: Option<&str>,
+    args: &[&str],
+) -> Result<(Child, ChildStdin)> {
     let cli = std::env::current_exe().and_then(fs::canonicalize)?;
     let mut child = atlas_core::spawn::spawn_async(
         Command::new(&program.executable)
@@ -881,7 +886,13 @@ async fn spawn(program: &Program, url: &str, args: &[&str]) -> Result<(Child, Ch
         .stdin
         .take()
         .ok_or_else(|| Error::new(Code::Menubar, "The menu bar has no input"))?;
-    stdin.write_all(format!("{url}\n").as_bytes()).await?;
+    // The URL, then the secret the app names itself by: given only here,
+    // never on disk or in its arguments or environment.
+    let mut first = format!("{url}\n");
+    if let Some(secret) = secret {
+        first.push_str(&format!("secret {secret}\n"));
+    }
+    stdin.write_all(first.as_bytes()).await?;
     stdin.flush().await?;
 
     Ok((child, stdin))
@@ -909,13 +920,15 @@ pub(crate) struct App {
 }
 
 impl App {
-    /// Start the app; each of `lines` is passed on to it.
+    /// Start the app, giving it `secret` to name itself by; each of
+    /// `lines` is passed on to it.
     pub(crate) async fn launch(
         program: &Program,
         url: &str,
+        secret: &str,
         mut lines: tokio::sync::mpsc::UnboundedReceiver<Line>,
     ) -> Result<Self> {
-        let (child, mut stdin) = spawn(program, url, &[]).await?;
+        let (child, mut stdin) = spawn(program, url, Some(secret), &[]).await?;
         let writer = tokio::spawn(async move {
             while let Some(line) = lines.recv().await {
                 if stdin.write_all(line.text().as_bytes()).await.is_err()
@@ -971,7 +984,7 @@ pub(crate) async fn render(program: &Program, url: &str, path: &Path, dark: bool
     let target = path
         .to_str()
         .ok_or_else(|| Error::new(Code::Usage, "The render path must be UTF-8"))?;
-    let (mut child, _stdin) = spawn(program, url, &render_args(target, dark)).await?;
+    let (mut child, _stdin) = spawn(program, url, None, &render_args(target, dark)).await?;
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait())
         .await
         .map_err(|_| Error::new(Code::Menubar, "The menu bar did not finish rendering"))??;

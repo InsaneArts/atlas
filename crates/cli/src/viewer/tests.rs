@@ -8,7 +8,7 @@ use super::{
         CONCURRENT_REQUESTS, CONNECTIONS, FIRST_REQUEST, accept, bind, header, json_response,
         respond,
     },
-    local::{answering, exchange, reply_status},
+    local::{answering, exchange, post_local_as_app, reply_status},
     reads::{ACTIVITY_ROWS, activity_row, listed_apps},
     *,
 };
@@ -125,15 +125,31 @@ async fn posted(viewer: &Arc<Viewer>, route: &str, body: &Value) -> (u16, Value)
 }
 
 async fn posted_raw(viewer: &Arc<Viewer>, route: &str, body: &str) -> (u16, Value) {
-    let request = Request::builder()
+    posted_with(viewer, route, body, None).await
+}
+
+/// POST `body` to `route` as the app, which names itself by `secret`.
+async fn posted_as(viewer: &Arc<Viewer>, route: &str, body: &Value, secret: &str) -> (u16, Value) {
+    posted_with(viewer, route, &body.to_string(), Some(secret)).await
+}
+
+async fn posted_with(
+    viewer: &Arc<Viewer>,
+    route: &str,
+    body: &str,
+    secret: Option<&str>,
+) -> (u16, Value) {
+    let mut request = Request::builder()
         .method(Method::POST)
         .uri(format!("{}{route}", viewer.prefix))
         .header("host", &viewer.authority)
         .header("origin", format!("http://{}", viewer.authority))
         .header("content-type", "application/json")
-        .header("content-length", body.len())
-        .body(Body::from(body.to_owned()))
-        .unwrap();
+        .header("content-length", body.len());
+    if let Some(secret) = secret {
+        request = request.header(http::APP_SECRET_HEADER, secret);
+    }
+    let request = request.body(Body::from(body.to_owned())).unwrap();
     let reply = respond(viewer.clone(), request).await;
     let status = reply.status().as_u16();
     let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
@@ -627,8 +643,9 @@ async fn finding_the_viewer_and_ending_control_never_wait_for_a_slot() {
 
     assert_eq!(answering_off(&url).await, Some(std::process::id()));
 
+    let secret = viewer.app_secret.clone();
     let ended = tokio::task::spawn_blocking(move || {
-        let revoked = post_local(&url, "control/revoke", &json!({}))?;
+        let revoked = post_local_as_app(&url, &secret, "control/revoke", &json!({}))?;
         let released = post_local(&url, "control/release", &json!({"lease": "gone"}))?;
         Ok::<_, Error>((revoked, released))
     })
@@ -1310,11 +1327,13 @@ async fn shutdown_waits_for_changes_in_progress() {
     assert!(viewer.client().controller.pending().unwrap().is_empty());
 
     let url = viewer.url.clone();
-    let refused =
-        tokio::task::spawn_blocking(move || post_local(&url, "control/revoke", &json!({})))
-            .await
-            .unwrap()
-            .unwrap_err();
+    let secret = viewer.app_secret.clone();
+    let refused = tokio::task::spawn_blocking(move || {
+        post_local_as_app(&url, &secret, "control/revoke", &json!({}))
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
     assert_eq!(refused.error, "The viewer is closing");
 
     server.abort();
@@ -2800,4 +2819,95 @@ fn walk(folder: &Path) -> Vec<PathBuf> {
             }
         })
         .collect()
+}
+
+#[tokio::test]
+async fn only_the_app_may_answer_change_accounts_sign_in_or_revoke() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    *unpoisoned(&viewer.accounts_home) = Some(dir.path().join("home"));
+    let wrong = "0".repeat(viewer.app_secret.len());
+    for route in [
+        "asks/answer",
+        "allowed/end",
+        "accounts/add",
+        "accounts/remove",
+        "accounts/level",
+        "sign-in/start",
+        "forget/start",
+        "reset/start",
+        "sign-in/renew",
+        "sign-in/done",
+        "sign-in/cancel",
+        "control/revoke",
+    ] {
+        for secret in [None, Some(wrong.as_str()), Some("short")] {
+            let (status, reply) = posted_with(&viewer, route, "{}", secret).await;
+            assert_eq!(status, 403, "{route} {secret:?}: {reply}");
+            assert_eq!(reply["code"], "permission", "{route}");
+            assert_eq!(reply["error"], "Only the Atlas app can do this");
+        }
+    }
+    assert!(
+        !dir.path().join("home").exists()
+            || atlas_client::sign_ins::listed_in(&dir.path().join("home"))
+                == atlas_client::sign_ins::Listed::Accounts(Vec::new()),
+        "nothing was added"
+    );
+
+    let secret = viewer.app_secret.clone();
+    let (status, reply) = posted_as(
+        &viewer,
+        "accounts/add",
+        &json!({"id": "com.tinyspeck.slackmacgap", "name": "Slack"}),
+        &secret,
+    )
+    .await;
+    assert_eq!(status, 200, "{reply}");
+}
+
+#[tokio::test]
+async fn taking_and_ending_control_and_stop_stay_open_to_the_terminal_viewer() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
+    assert_eq!(status, 200, "{reply}");
+    let (status, reply) = posted(&viewer, "control/release", &json!({"lease": "gone"})).await;
+    assert_eq!(status, 200, "{reply}");
+}
+
+#[tokio::test]
+async fn while_the_person_signs_in_only_the_app_reads_the_screen_or_its_windows() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    let controller = viewer.client().controller.clone();
+    let mut lease = atlas_control::Lease::default();
+    let token = lease.acquire(&controller).unwrap();
+    let hold = atlas_control::PrivateHold {
+        site: "github.com".to_owned(),
+        kind: atlas_control::HoldKind::SignIn,
+    };
+    lease.hide_screen(&controller, &token, &hold).unwrap();
+
+    for route in ["frame.png", "apps.json"] {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("{}{route}", viewer.prefix))
+            .header("host", &viewer.authority)
+            .body(Body::empty())
+            .unwrap();
+        let reply = respond(viewer.clone(), request).await;
+        assert_eq!(reply.status().as_u16(), 503, "{route}");
+        let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["code"], "busy", "{route}: {body}");
+        assert_eq!(body["holder"], "person", "{route}");
+    }
+    assert!(
+        lease.active(),
+        "a refused look never ends the person's control"
+    );
+    assert_eq!(controller.private_hold(), Some(hold));
+    controller.end_private().unwrap();
+    lease.release();
 }

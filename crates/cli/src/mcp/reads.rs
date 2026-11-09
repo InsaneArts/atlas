@@ -195,11 +195,17 @@ impl Server {
     }
 
     /// The apps open in the helper with their windows, front to back, and
-    /// their icons.
+    /// their icons. Refused with `busy`, held by the person, while they
+    /// sign the helper in to an account: window titles show what is on the
+    /// screen.
     pub(super) async fn helper_apps(&self) -> Result<Value> {
-        let apps = self.client.running_apps().await?;
         let filter = atlas_client::agent::WindowFilter::default();
-        let windows = atlas_client::agent::list(&self.client, &filter).await?;
+        let read = async {
+            let apps = self.client.running_apps().await?;
+            let windows = atlas_client::agent::list(&self.client, &filter).await?;
+            Ok((apps, windows))
+        };
+        let (apps, windows) = self.client.controller.shown(read).await?;
         let mut listed = open_apps(&apps, &windows)?;
 
         listed.iter_mut().for_each(only_title_and_size);

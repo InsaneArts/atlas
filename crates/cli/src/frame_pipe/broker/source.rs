@@ -5,6 +5,7 @@
 //! A screen that stays still is read less often, until it changes or input
 //! is sent; every picture is still read anew and timed when it was read.
 use atlas_client::client::{Client, live::LiveStream};
+use atlas_control::Visible;
 use atlas_core::{
     frame_pipe::{
         budget::Budget,
@@ -44,6 +45,10 @@ pub(crate) struct Picture {
     pub(crate) backend: Source,
     /// The helper session both its proofs named.
     pub(crate) epoch: Epoch,
+    /// The screen's privacy generation through the whole acquisition, or
+    /// None when it was hidden or a sign-in began or ended meanwhile: such
+    /// a picture is shown to the app alone.
+    pub(crate) visible: Option<Visible>,
 }
 
 impl Picture {
@@ -147,10 +152,19 @@ impl Handle {
     }
 }
 
-/// Start the source over `acquire`, charging its pictures to `budget`. A
-/// notice on `input` says input was just sent to the helper, which ends a
-/// still screen's slower cadence at once.
-pub(crate) fn spawn(mut acquire: impl Acquire, budget: Budget, input: Arc<Notify>) -> Handle {
+/// The screen's privacy generation now, or None while it is hidden.
+pub(crate) type Visibility = Arc<dyn Fn() -> Option<Visible> + Send + Sync>;
+
+/// Start the source over `acquire`, charging its pictures to `budget` and
+/// marking each with the privacy generation `visible` held through its
+/// acquisition. A notice on `input` says input was just sent to the helper,
+/// which ends a still screen's slower cadence at once.
+pub(crate) fn spawn(
+    mut acquire: impl Acquire,
+    budget: Budget,
+    input: Arc<Notify>,
+    visible: Visibility,
+) -> Handle {
     let (demand, mut wanted) = watch::channel(0_u64);
     let (answer, answers) = watch::channel(Answer {
         demand: 0,
@@ -164,8 +178,10 @@ pub(crate) fn spawn(mut acquire: impl Acquire, budget: Budget, input: Arc<Notify
             let asked = *wanted.borrow_and_update();
             if asked > answered {
                 let began = tokio::time::Instant::now();
+                let before = visible();
                 let latest = match read(&mut acquire, &budget).await {
-                    Ok(picture) => {
+                    Ok(mut picture) => {
+                        picture.visible = before.filter(|before| visible() == Some(*before));
                         let picture = Arc::new(picture);
                         still.saw(&picture);
                         Latest::Picture(picture)
@@ -285,6 +301,8 @@ impl Acquire for Live {
                         CaptureBackend::ScreenCaptureKit => Source::Sck,
                     },
                     epoch: frame.epoch,
+                    // The source marks it once read.
+                    visible: None,
                 })
             }
             Err(error) => {

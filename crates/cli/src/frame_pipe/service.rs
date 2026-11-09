@@ -5,7 +5,7 @@
 use super::{
     auth::Gate,
     broker::{
-        self, Hidden, Witness,
+        self, Privacy, Witness,
         source::{self, Live},
     },
     endpoint::{self, Endpoint},
@@ -50,7 +50,7 @@ impl Service {
 
 /// Start the frame service for `client`'s helper, reading pictures at most
 /// `longest` pixels on their longest side, telling `witness` of each
-/// committed picture, showing none to an observer `hidden` names, and
+/// committed picture, showing each observer what `privacy` lets it see, and
 /// leaving a still screen's slower pace on each notice on `input`.
 ///
 /// # Errors
@@ -61,7 +61,7 @@ pub(crate) async fn start(
     client: Arc<Client>,
     longest: u32,
     witness: Witness,
-    hidden: Hidden,
+    privacy: Privacy,
     input: Arc<Notify>,
 ) -> Result<Service> {
     let controller = nix::unistd::getuid().as_raw();
@@ -90,6 +90,7 @@ pub(crate) async fn start(
         Live::new(client, longest, CaptureBackend::ScreenCaptureKit),
         Budget::new(BROKER_PIXELS),
         input,
+        privacy.visible.clone(),
     );
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn(broker::run(
@@ -98,7 +99,7 @@ pub(crate) async fn start(
         gate,
         source,
         witness,
-        hidden,
+        privacy,
         async {
             let _ = stopped.await;
         },
