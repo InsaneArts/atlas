@@ -561,7 +561,7 @@ pub(super) struct Mcp {
 #[derive(clap::Args)]
 pub(super) struct Menubar {
     /// Local port for the viewer it opens.
-    #[arg(long, default_value_t = 8765, value_parser = clap::value_parser!(u16).range(1..))]
+    #[arg(long, default_value_t = atlas_cli::menubar::PORT, value_parser = clap::value_parser!(u16).range(1..))]
     pub(super) port: u16,
     /// Serve the menu bar from this process (how it runs on its own).
     #[arg(long, hide = true, conflicts_with_all = ["render", "login"])]

@@ -29,7 +29,8 @@ impl Viewer {
 
 /// Serve the viewer for the menu bar app until the person quits it, or
 /// until interrupted, terminated or hung up: nothing to report then. When
-/// the menu bar already runs on `port`, it says so instead.
+/// the menu bar already runs on `port`, it says so instead; one serving the
+/// same records on another port refuses it.
 /// `ready` receives the redacted startup record after the app launches and its
 /// private record is saved, before accepting requests. Binding, launching or
 /// recording failures are returned without reporting readiness.
@@ -56,6 +57,9 @@ pub async fn serve(
         }
         Err(error) => return Err(error),
     };
+    // One menu bar keeps its record in a folder, on whatever port, until
+    // the record is gone; another is refused before it launches or records.
+    *unpoisoned(&viewer.alone) = Some(crate::menubar::alone(&output)?);
 
     // Stopping it any of these ways releases control and removes its record.
     let mut terminated = signal(SignalKind::terminate())?;
@@ -117,6 +121,7 @@ pub async fn serve(
     if let Some((path, _)) = unpoisoned(&viewer.record).take() {
         remove_record(&path);
     }
+    unpoisoned(&viewer.alone).take();
 
     Ok(Value::Null)
 }

@@ -197,3 +197,28 @@ fn a_suspended_process_reads_as_stopped() {
     child.kill().unwrap();
     child.wait().unwrap();
 }
+
+#[test]
+fn a_process_is_read_with_its_arguments_as_given() {
+    let mut child = crate::spawn::spawn(
+        std::process::Command::new("/bin/sleep")
+            .arg0("a name")
+            .arg("5"),
+    )
+    .unwrap();
+    let pid = child.id() as i32;
+    assert_eq!(arguments(pid).unwrap(), ["a name", "5"]);
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(arguments(pid).is_err(), "a reaped process says nothing");
+    assert!(arguments(1).is_err(), "nor another account's");
+
+    let reply = |count: i32, rest: &[u8]| [&count.to_ne_bytes()[..], rest].concat();
+    assert_eq!(
+        command_line(&reply(2, b"/bin/x\0\0\0x\0a b\0HOME=/\0")).unwrap(),
+        ["x", "a b"]
+    );
+    assert_eq!(command_line(&reply(3, b"/bin/x\0\0x\0a b\0")), None);
+    assert_eq!(command_line(&reply(1, b"/bin/x")), None);
+    assert_eq!(command_line(b"\x01\0"), None);
+}

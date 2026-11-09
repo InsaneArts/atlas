@@ -20,10 +20,49 @@ use tokio::{
     process::{Child, ChildStdin, Command},
 };
 
+/// The port the menu bar serves unless told another.
+pub const PORT: u16 = 8765;
+
 /// Whether this process is the menu bar's login agent, which serves the
 /// menu bar itself rather than starting it.
 pub fn started_at_login() -> bool {
     std::env::var("XPC_SERVICE_NAME").is_ok_and(|job| job == LOGIN_JOB)
+}
+
+/// Hold the place of the menu bar whose records `output` keeps, for as
+/// long as it serves: one menu bar serves them, on whatever port. Its
+/// record is only read, to name the one that holds it.
+///
+/// # Errors
+///
+/// Returns a menu bar error naming the one that serves already, or the
+/// failure to open or lock its lock file.
+pub(crate) fn alone(output: &Path) -> Result<atlas_core::files::LockFile> {
+    let lock = atlas_core::files::open_lock(&output.join("menubar-serve.lock"))?;
+    match fs2::FileExt::try_lock_exclusive(&lock.0) {
+        Ok(()) => return Ok(lock),
+        Err(error) if error.kind() != std::io::ErrorKind::WouldBlock => return Err(error.into()),
+        Err(_) => {}
+    }
+
+    let record = crate::viewer::read_record(&output.join(crate::viewer::MENUBAR_RECORD));
+    let named = record.as_ref().and_then(|record| {
+        Some((
+            crate::viewer::process(record)?,
+            crate::viewer::recorded_port(record)?,
+        ))
+    });
+    Err(Error::new(
+        Code::Menubar,
+        named.map_or_else(
+            || "Another menu bar already runs".to_owned(),
+            |(pid, port)| format!("The menu bar already runs as process {pid} on port {port}"),
+        ),
+    )
+    .with(
+        "next",
+        serde_json::json!(atlas_core::error::advice::MENUBAR_RUNNING),
+    ))
 }
 
 /// Start the menu bar unless it runs already: whether it did, and its
@@ -341,9 +380,9 @@ impl Startup {
             .truncate(false)
             .write(true)
             .mode(0o600)
-            .open(self.output.join("menubar.lock"))?;
+            .open(self.output.join(START_LOCK))?;
 
-        let refused = Error::new(Code::Busy, "Another menu bar start is still running");
+        let refused = start_refused();
         let mut last = None;
         for _ in 0..300 {
             self.check(ready, "waiting for lock")?;
@@ -408,6 +447,15 @@ impl std::error::Error for StartupFailure {
     }
 }
 
+/// The lock one start of the menu bar holds at a time, and how long
+/// another waits for it.
+const START_LOCK: &str = "menubar.lock";
+const START_WAIT: Duration = Duration::from_secs(30);
+
+fn start_refused() -> Error {
+    Error::new(Code::Busy, "Another menu bar start is still running")
+}
+
 fn startup_cancelled() -> Error {
     Error::new(Code::Menubar, "The menu bar start was cancelled")
 }
@@ -423,48 +471,70 @@ fn last_reply(log: &Path) -> Option<serde_json::Value> {
     serde_json::from_str(said[start..].trim()).ok()
 }
 
-/// Stop a running menu bar (as `uninstall` and `update` must): the port it
-/// was serving, so it can be started again there. Only the process its
-/// viewer answers as, which must be the one its record names and Atlas
-/// itself, is signalled; a stale record naming anything else is not. None
-/// only when no menu bar runs: it has no record, or the process its record
-/// names is gone or is another program now.
+/// Stop every running menu bar (as `uninstall` and `update` must): the
+/// port it was serving, so it can be started again there. The one its
+/// record names is signalled only when its viewer answers as it and it is
+/// Atlas; a stale record naming anything else is not. Any other process of
+/// this account that runs `atlas menubar` to serve it is a menu bar too,
+/// one whose record was lost or replaced. None only when no menu bar runs.
 ///
 /// # Errors
 ///
-/// Returns a menu bar error when its record or process can't be read, it
-/// runs but does not answer, it can't be signalled, or it has not been seen
-/// to exit by the deadline. It may still run then, and its record stays.
+/// Returns a menu bar error when its record, this account's processes or a
+/// command line can't be read, the recorded one runs but does not answer,
+/// one can't be signalled, or one has not been seen to exit by the
+/// deadline. It may still run then, and its record stays.
 pub fn stop(output: &Path) -> Result<Option<u16>> {
+    // A start under way finishes first, so the menu bar it starts is found,
+    // and no other starts while they are found and stopped.
+    let starting = atlas_core::files::open_lock(&output.join(START_LOCK))?;
+    atlas_core::files::lock_within(&starting, atlas_core::files::Lock::Exclusive, START_WAIT)
+        .map_err(|held| start_refused().with_source(held.0))?;
+
     let record = output.join(crate::viewer::MENUBAR_RECORD);
-    let Some((port, instance)) = serving(
+    let recorded = serving(
         &record,
         |record| fs::read(record),
         atlas_core::process::info,
         crate::viewer::answering,
         atlas_executable,
-    )?
-    else {
-        return Ok(None);
-    };
+    )?;
+    let exe = std::env::current_exe()?;
+    let me = i32::try_from(std::process::id()).unwrap_or(-1);
+    let unrecorded = menu_bars(
+        listed(),
+        me,
+        exe.file_name().unwrap_or_default(),
+        |process| match atlas_core::process::arguments(process.instance.pid) {
+            Ok(arguments) => Ok(Some(arguments)),
+            Err(_) if process.instance.ended() => Ok(None),
+            Err(error) => Err(error),
+        },
+    )?;
 
-    // It finishes what changes the helper first (a Recover can take most
-    // of a minute), and keeps its port until then.
+    // Each finishes what changes the helper first (a Recover can take most
+    // of a minute), and keeps its port until then. The recorded one, also
+    // listed, is not signalled twice: once gone, it is not signalled again.
     let deadline = std::time::Instant::now() + STOP_WAIT;
-    stopped(
-        port,
-        || instance.state(),
-        || {
-            nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(instance.pid),
-                nix::sys::signal::Signal::SIGINT,
-            )
-        },
-        || {
-            std::thread::sleep(Duration::from_millis(100));
-            std::time::Instant::now() < deadline
-        },
-    )
+    let mut port = None;
+    for (serving, instance) in recorded.into_iter().chain(unrecorded) {
+        let stopped = stopped(
+            serving,
+            || instance.state(),
+            || {
+                nix::sys::signal::kill(
+                    nix::unistd::Pid::from_raw(instance.pid),
+                    nix::sys::signal::Signal::SIGINT,
+                )
+            },
+            || {
+                std::thread::sleep(Duration::from_millis(100));
+                std::time::Instant::now() < deadline
+            },
+        )?;
+        port = port.or(stopped);
+    }
+    Ok(port)
 }
 
 /// [`stop`] the menu bar whose records `output` holds. When where they are
@@ -512,14 +582,7 @@ fn elsewhere(
     me: i32,
     name: &std::ffi::OsStr,
 ) -> Result<Option<u16>> {
-    use std::os::unix::ffi::OsStrExt;
-    let processes = processes.map_err(|error| {
-        Error::new(
-            Code::Menubar,
-            "Atlas could not tell whether the menu bar runs",
-        )
-        .with_source(error)
-    })?;
+    let processes = processes.map_err(|error| undecided().with_source(error))?;
 
     let mut mine = vec![me];
     let mut at = me;
@@ -533,11 +596,8 @@ fn elsewhere(
         at = parent;
     }
 
-    // The kernel keeps at most 16 bytes of a command's name.
-    let name = name.as_bytes();
-    let kept = name.get(..16).unwrap_or(name);
     match processes.iter().find(|process| {
-        !process.zombie && !mine.contains(&process.instance.pid) && process.name.as_bytes() == kept
+        !process.zombie && !mine.contains(&process.instance.pid) && named(process, name)
     }) {
         None => Ok(None),
         Some(process) => Err(Error::new(
@@ -549,6 +609,73 @@ fn elsewhere(
         )
         .with_source(unlocated)),
     }
+}
+
+/// Whether `process` runs a command named `name`, as the kernel keeps it:
+/// at most its first 16 bytes.
+fn named(process: &atlas_core::process::Info, name: &std::ffi::OsStr) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let name = name.as_bytes();
+    process.name.as_bytes() == name.get(..16).unwrap_or(name)
+}
+
+/// The menu bars among `processes`, and the port each serves: live ones
+/// other than `me`, named `name`, whose command line as `arguments` reads
+/// it (None once gone) runs `atlas menubar` to serve it. An ancestor of
+/// `me` counts: the menu bar's app starts updates of its own.
+fn menu_bars(
+    processes: Result<Vec<atlas_core::process::Info>>,
+    me: i32,
+    name: &std::ffi::OsStr,
+    mut arguments: impl FnMut(&atlas_core::process::Info) -> Result<Option<Vec<String>>>,
+) -> Result<Vec<(u16, atlas_core::process::Instance)>> {
+    let processes = processes.map_err(|error| undecided().with_source(error))?;
+    let mut found = Vec::new();
+    for process in processes
+        .iter()
+        .filter(|process| !process.zombie && process.instance.pid != me && named(process, name))
+    {
+        let arguments = arguments(process).map_err(|error| undecided().with_source(error))?;
+        if let Some(port) = arguments.and_then(|arguments| menu_bar_port(&arguments, process.ppid))
+        {
+            found.push((port, process.instance));
+        }
+    }
+    Ok(found)
+}
+
+/// The port served by the `atlas menubar` whose arguments are `arguments`
+/// and whose parent is `parent`: one asked to `--serve`, or started at
+/// login, as launchd's child. None for any other command, and for one that
+/// renders or changes its login item.
+fn menu_bar_port(arguments: &[String], parent: i32) -> Option<u16> {
+    let mut rest = arguments.iter().skip(1).map(String::as_str);
+    let (mut menubar, mut serve, mut port) = (false, false, PORT);
+    while let Some(argument) = rest.next() {
+        let (flag, value) = argument
+            .split_once('=')
+            .map_or((argument, None), |(flag, value)| (flag, Some(value)));
+        match flag {
+            "menubar" if !menubar && value.is_none() => menubar = true,
+            "--serve" => serve = true,
+            "--port" => port = value.or_else(|| rest.next())?.parse().ok()?,
+            "--config" | "--wait" if value.is_none() => {
+                rest.next();
+            }
+            "--config" | "--wait" | "--json" | "--allow-disrupt" => {}
+            // Nothing may follow it: the menu bar takes no arguments.
+            "--" if value.is_none() && rest.next().is_none() => {}
+            _ => return None,
+        }
+    }
+    (menubar && (serve || parent == 1)).then_some(port)
+}
+
+fn undecided() -> Error {
+    Error::new(
+        Code::Menubar,
+        "Atlas could not tell whether the menu bar runs",
+    )
 }
 
 /// The port and process of the menu bar `record` names, when it runs and
@@ -572,12 +699,6 @@ fn serving(
             ),
         )
     };
-    let unknown = || {
-        Error::new(
-            Code::Menubar,
-            "Atlas could not tell whether the menu bar runs",
-        )
-    };
 
     let bytes = match read(record) {
         Ok(bytes) => bytes,
@@ -596,7 +717,7 @@ fn serving(
 
     // The menu bar is this account's own, and never the process asking.
     let me = nix::unistd::getuid().as_raw();
-    let Some(process) = info(pid).map_err(|error| unknown().with_source(error))? else {
+    let Some(process) = info(pid).map_err(|error| undecided().with_source(error))? else {
         return Ok(None);
     };
     if process.zombie || !process.owned_by(me) || process.instance.is_this_one() {
@@ -616,7 +737,7 @@ fn serving(
             Code::Menubar,
             "The menu bar runs but does not answer",
         )),
-        (_, Err(error)) => Err(unknown().with_source(error)),
+        (_, Err(error)) => Err(undecided().with_source(error)),
     }
 }
 

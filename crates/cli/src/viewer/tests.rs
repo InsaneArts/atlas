@@ -2788,3 +2788,28 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
         }
     }
 }
+
+#[tokio::test]
+async fn a_second_menu_bar_on_another_port_refuses_and_leaves_the_running_ones_record_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(dir.path());
+    let output = client.output_dir().unwrap().to_path_buf();
+    let record = output.join(MENUBAR_RECORD);
+    let written = br#"{"url":"http://127.0.0.1:8799/private/","pid":4242}"#;
+    std::fs::write(&record, written).unwrap();
+    let _running = crate::menubar::alone(&output).unwrap();
+
+    let program = crate::menubar::Program {
+        executable: dir.path().join("never started"),
+        config: dir.path().join("u.toml"),
+    };
+    let error = serve(client, 0, program, |_| panic!("a second menu bar started"))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Menubar);
+    assert_eq!(
+        error.error,
+        "The menu bar already runs as process 4242 on port 8799"
+    );
+    assert_eq!(std::fs::read(&record).unwrap(), written);
+}
