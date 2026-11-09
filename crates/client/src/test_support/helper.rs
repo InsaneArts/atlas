@@ -172,7 +172,7 @@ impl Helper {
         if request["op"] == "frame"
             && let Some(pictures) = self.pictures
         {
-            return self.picture(pictures, peer.into_inner(), held).await;
+            return self.picture(pictures, peer, held).await;
         }
 
         let reply = if self.unavailable_after.is_some_and(|limit| requests > limit) {
@@ -205,11 +205,11 @@ impl Helper {
     async fn picture(
         &self,
         pictures: Pictures,
-        mut peer: UnixStream,
+        mut peer: BufReader<UnixStream>,
         held: &mut Vec<(UnixStream, Vec<u8>)>,
     ) {
         let header = match pictures {
-            Pictures::Late => return held.push((peer, Vec::new())),
+            Pictures::Late => return held.push((peer.into_inner(), Vec::new())),
             Pictures::Cancelled => {
                 let log = Arc::clone(&self.log);
                 tokio::spawn(async move {
@@ -221,7 +221,7 @@ impl Helper {
                     let refusal = json!({"ok": false, "code": "cancelled", "uncertain": false,
                         "error": "The picture was no longer wanted"});
                     // The client may have given up on it already.
-                    let _ = peer.write_all(&framed(&refusal, &[])).await;
+                    let _ = peer.get_mut().write_all(&framed(&refusal, &[])).await;
                 });
                 return;
             }
@@ -246,9 +246,9 @@ impl Helper {
             }
         };
         // The client may have given up on it already.
-        let sent = peer.write_all(&framed).await.is_ok();
+        let sent = peer.get_mut().write_all(&framed).await.is_ok();
         if !later.is_empty() {
-            held.push((peer, later));
+            held.push((peer.into_inner(), later));
         } else if sent && pictures == Pictures::Taken {
             self.note("frame sent");
         }
