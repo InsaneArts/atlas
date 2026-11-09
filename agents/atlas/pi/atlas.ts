@@ -13,10 +13,14 @@ export default function (pi: ExtensionAPI) {
   pi.registerMcpServer('atlas', {
     command: join(root, 'scripts/atlas'),
     args: ['mcp'],
-    // Pi does not render MCP Apps. Expose just the two agent tools; the
+    // Pi does not render MCP Apps. Expose only the model-facing tools; the
     // view's own polling and controls stay hidden even on older Atlas builds.
     exposure: 'hidden',
-    toolExposure: { atlas_status: 'direct', show_screen: 'direct' },
+    toolExposure: {
+      atlas_status: 'direct',
+      show_screen: 'direct',
+      take_screenshot: 'direct',
+    },
     description: "See and use Mac apps in Atlas's hidden helper login.",
   });
 
