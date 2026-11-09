@@ -19,7 +19,13 @@ extension ViewerPresenter {
         ? display.map { CGSize(width: $0.width, height: $0.height) } : nil,
       outline: outline(snapshot),
       menu: screenMenu(snapshot),
-      ask: ask(snapshot)
+      ask: snapshot.session.signIn == nil ? ask(snapshot) : nil,
+      signingIn: snapshot.session.signIn.map { signIn in
+        SigningInBarState(
+          text: SignInWords.bar(signIn.kind, site: signIn.site),
+          isWorking: snapshot.session.signInEnding
+        )
+      }
     )
   }
 

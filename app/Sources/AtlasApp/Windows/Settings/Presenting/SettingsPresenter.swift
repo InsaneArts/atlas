@@ -15,7 +15,8 @@ enum SettingsPresenter {
       accounts: accounts(snapshot),
       agents: agents(snapshot),
       about: about(snapshot),
-      alert: alert(snapshot)
+      alert: alert(snapshot),
+      signIn: snapshot.signIn
     )
   }
 

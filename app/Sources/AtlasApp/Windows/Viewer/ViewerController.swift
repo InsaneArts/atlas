@@ -120,7 +120,11 @@ final class ViewerController {
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }
     case .takeControl: Task { await control.takeControlOnScreen() }
-    case .giveBack: control.releaseControl()
+    // Giving control back during a held sign-in is its Cancel.
+    case .giveBack:
+      if session.signIn != nil { Task { await cancelSignIn() } } else { control.releaseControl() }
+    case .signInDone: Task { await finishSignIn() }
+    case .signInCancel: Task { await cancelSignIn() }
     case .stopAgent: Task { await setStopped(true) }
     case .resumeAgent: Task { await setStopped(false) }
     case .chooseSession(let choice):

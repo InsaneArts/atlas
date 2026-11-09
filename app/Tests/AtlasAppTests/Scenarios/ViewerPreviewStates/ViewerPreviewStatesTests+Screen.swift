@@ -30,6 +30,16 @@
       let gone = "Atlas isn't answering in the helper."
       return [
         "Working": shown(try reported("agent", state: "working", activity: Self.working)),
+        "Signing in": shown(try reported("controlling", state: "control")) {
+          $0.lease = "lease"
+          $0.session.signIn = ViewerSignIn(kind: .signIn, site: "github.com")
+        },
+        "Signed in": shown(try reported("agent", state: "working", activity: Self.working)) {
+          $0.session.alert = .signedIn(site: "github.com", added: true)
+        },
+        "Forgot a site": shown(try reported("agent", state: "working", activity: Self.working)) {
+          $0.session.alert = .removeAfter(site: "github.com", browser: nil)
+        },
         "Waiting for you": shown(try reported("agent", state: "working", activity: Self.working)) { snapshot in
           let asked = snapshot.date - 18
           snapshot.asks = AskList(asks: [

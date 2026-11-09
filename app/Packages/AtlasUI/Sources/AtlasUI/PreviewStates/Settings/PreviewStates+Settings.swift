@@ -44,6 +44,8 @@
         PreviewState(name: "Accounts, unread", value: settingsAccountsUnread),
         PreviewState(name: "Remove an account", value: settingsRemoveAccount),
         PreviewState(name: "Accounts, look only", value: settingsAccountsLookOnly),
+        PreviewState(name: "Sign in to a site", value: settingsSignIn),
+        PreviewState(name: "Sign in to a site, refused", value: settingsSignInRefused),
       ]
     }
 

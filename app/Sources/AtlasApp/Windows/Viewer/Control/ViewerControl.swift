@@ -47,9 +47,9 @@ final class ViewerControl {
   private(set) var composing = ""
 
   /// The window this control belongs to: its picture, what it is doing, and its notice. Weak, as the window owns it.
-  @ObservationIgnored private weak var viewer: ViewerController?
+  @ObservationIgnored weak var viewer: ViewerController?
   /// The viewer service it asks.
-  @ObservationIgnored private let service: any ViewerService
+  @ObservationIgnored let service: any ViewerService
   /// The helper's own commands, shared with the panel.
   @ObservationIgnored private let actions: HelperActions
   /// The app's control work not yet answered, shared with the helper's commands and any later window.
@@ -57,9 +57,9 @@ final class ViewerControl {
   /// The time now, in seconds of uptime, which never steps back: what a picture's age is told by.
   @ObservationIgnored private let uptime: @MainActor () -> TimeInterval
   /// The clock every wait runs on; a cancelled wait ends at once.
-  @ObservationIgnored private let clock: any Clock<Duration>
+  @ObservationIgnored let clock: any Clock<Duration>
   /// One heartbeat tick; the lease is renewed every ``renewEvery`` ticks.
-  @ObservationIgnored private let heartbeatInterval: Duration
+  @ObservationIgnored let heartbeatInterval: Duration
   /// The Mac's double-click speed, in seconds.
   @ObservationIgnored private let doubleClickInterval: @MainActor () -> TimeInterval
   /// The window takes the keyboard.
@@ -73,7 +73,11 @@ final class ViewerControl {
   /// The status reading under way when the lease was granted: only a later one can say the lease has ended.
   @ObservationIgnored private(set) var controlSince = 0
   /// Renews the lease and ends control over a stale picture.
-  @ObservationIgnored private(set) var heartbeat: Task<Void, Never>?
+  @ObservationIgnored var heartbeat: Task<Void, Never>?
+  /// The held sign-in's lease, while the person signs in with agents paused: every way control would go back, focus
+  /// lost, the window covered or away from the Screen, only stops sending input, and the lease is renewed with no
+  /// picture until Done or Cancel. Nil otherwise.
+  private(set) var signInLease: String?
   /// The mouse button held and the clicks counted.
   @ObservationIgnored private var gesture = PointerGesture()
   /// Scrolling gathered and not yet sent.
@@ -280,6 +284,12 @@ final class ViewerControl {
   ///
   /// - Parameter message: What the notice says, if anything.
   func releaseControl(_ message: String? = nil) {
+    // A held sign-in keeps its lease and its hold: input only stops going until the window takes it again.
+    if signInLease != nil {
+      clearInput()
+      if let message { viewer?.say(message) }
+      return
+    }
     controlGeneration += 1
     let generation = controlGeneration
     let previous = lease
@@ -302,6 +312,30 @@ final class ViewerControl {
       }
     }
     if let message { viewer?.say(message) }
+  }
+
+  /// Holds a sign-in's lease as control's own: an acquisition under way is called off, and input goes under it while
+  /// the window takes it.
+  ///
+  /// - Parameter granted: The sign-in's lease.
+  func holdSignIn(_ granted: String) {
+    controlGeneration += 1
+    endPictureWait()
+    heartbeat?.cancel()
+    lease = granted
+    signInLease = granted
+    acquiring = false
+    input.activate(granted)
+    viewer?.say(nil)
+    viewer?.readingLoop.refresh()
+  }
+
+  /// Lets go of a sign-in's lease the service ended: input stops and nothing is given back.
+  func letGoSignIn() {
+    controlGeneration += 1
+    signInLease = nil
+    lease = nil
+    clearInput()
   }
 
   /// Drops every input waiting, the gathered scrolling, the gesture under way and the text being composed, whose
@@ -362,6 +396,7 @@ final class ViewerControl {
   /// The window takes the keyboard again; control waits to be taken.
   func gainedFocus() {
     focused = true
+    if let signInLease { input.activate(signInLease) }
   }
 
   /// The last picture is too old to aim input at; with no window, there is none to aim at.

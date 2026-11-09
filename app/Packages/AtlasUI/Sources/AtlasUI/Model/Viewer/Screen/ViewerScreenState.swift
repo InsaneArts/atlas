@@ -19,6 +19,8 @@ public struct ViewerScreenState: Equatable, Sendable {
   public var menu: [ViewerMenuSection]
   /// The question Atlas asks the person, over the Screen; nil for none.
   public var ask: AskCardState?
+  /// The bar while the person signs in, with agents paused; nil for none.
+  public var signingIn: SigningInBarState?
 
   /// Creates the Screen's state.
   ///
@@ -30,6 +32,7 @@ public struct ViewerScreenState: Equatable, Sendable {
   ///   - outline: A window shown from the Apps list; nil shows none.
   ///   - menu: What a right click on the picture offers; nothing by default.
   ///   - ask: The question Atlas asks the person; none by default.
+  ///   - signingIn: The bar while the person signs in; none by default.
   public init(
     picture: DesktopPicture? = nil,
     look: PictureLook = .live,
@@ -37,7 +40,8 @@ public struct ViewerScreenState: Equatable, Sendable {
     actualSize: CGSize? = nil,
     outline: ViewerWindowOutline? = nil,
     menu: [ViewerMenuSection] = [],
-    ask: AskCardState? = nil
+    ask: AskCardState? = nil,
+    signingIn: SigningInBarState? = nil
   ) {
     self.picture = picture
     self.look = look
@@ -46,5 +50,6 @@ public struct ViewerScreenState: Equatable, Sendable {
     self.outline = outline
     self.menu = menu
     self.ask = ask
+    self.signingIn = signingIn
   }
 }

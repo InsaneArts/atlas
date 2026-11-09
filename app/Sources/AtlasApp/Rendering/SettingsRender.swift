@@ -47,6 +47,8 @@
       "37-accounts-unread",
       "38-remove-account",
       "39-accounts-look-only",
+      "40-sign-in",
+      "41-sign-in-refused",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.

@@ -43,9 +43,10 @@ public struct SettingsView: View {
         SettingsHeader(title: state.title, tabs: state.tabs) { send(.selectTab($0)) }
         SettingsPane(state: state, edit: edit, send: send)
       }
-      // Under an alert, nothing is reached by Tab or VoiceOver until it is answered.
-      .disabled(state.alert != nil)
-      .accessibilityHidden(state.alert != nil)
+      // Under an alert or the sheet, nothing is reached by Tab or VoiceOver until it is answered.
+      .disabled(state.alert != nil || state.signIn != nil)
+      .accessibilityHidden(state.alert != nil || state.signIn != nil)
+      SignInSheetLayer(state: state.signIn, send: send)
       AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
     }
     .windowSurface()
@@ -54,6 +55,7 @@ public struct SettingsView: View {
     // Each only when its words change, so a poll that reads the same says nothing.
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
     .onChange(of: state.alert?.refusal) { _, refusal in if let refusal { announce(refusal) } }
+    .onChange(of: state.signIn?.refusal) { _, refusal in if let refusal { announce(refusal) } }
     .onChange(of: state.helper.waiting) { _, waiting in if let waiting { announce(waiting) } }
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.agents.notice) { _, notice in if let notice { announce(notice.text) } }

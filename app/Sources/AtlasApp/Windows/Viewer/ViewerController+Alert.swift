@@ -58,6 +58,8 @@ extension ViewerController {
     case .helper(.logOutAnyway): await run { await self.logOut(force: true) }
     case .restart: await run { await self.restart() }
     case .cleanup(let key, _, _): await run { await self.cleanUp(key) }
+    case .signedIn: session.alert = nil
+    case .removeAfter(let site, let browser): await run { await self.removeAfterSignIn(site: site, browser: browser) }
     case nil: return
     }
   }

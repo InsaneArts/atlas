@@ -1,8 +1,9 @@
 import SwiftUI
 
 /// An account's level as a popup, where the three segments don't fit: the level's word and a chevron on a quiet
-/// capsule, opening Look Only, Ask Before Sending and Trusted with the current one checked, then Remove from List….
-struct AccountLevelMenu: View {
+/// capsule, opening Look Only, Ask Before Sending and Trusted with the current one checked, then what else can be done
+/// with the account.
+struct AccountLevelMenu<Actions: View>: View {
   /// The account's name, which VoiceOver reads with the popup.
   let account: String
   /// The level now.
@@ -11,8 +12,8 @@ struct AccountLevelMenu: View {
   let isEnabled: Bool
   /// Receives the level the person picks.
   let pick: @MainActor (AccountLevelChoice) -> Void
-  /// Asks to take the account off the list.
-  let remove: @MainActor () -> Void
+  /// The items after the levels, such as Remove from List….
+  @ViewBuilder let actions: () -> Actions
 
   /// The popup.
   var body: some View {
@@ -26,7 +27,7 @@ struct AccountLevelMenu: View {
       .pickerStyle(.inline)
       .labelsHidden()
       Divider()
-      Button("Remove from List…", role: .destructive, action: remove)
+      actions()
     } label: {
       HStack(spacing: Spacing.xsPlus) {
         Text(level.title)

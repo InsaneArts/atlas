@@ -95,6 +95,10 @@ public final class ScriptedService: ViewerService {
   public var asksCalls = 0
   /// The answers given, in order, as "ID choice".
   public var answers: [String] = []
+  /// What a sign-in's start answers; its kind and site follow the request.
+  public var signInLease = "sign-in-lease"
+  /// What Done answers of `added`, for a sign-in.
+  public var signInAdded = true
 
   /// A service that answers every request at once, ready and observing.
   public init() {}
@@ -293,6 +297,60 @@ public final class ScriptedService: ViewerService {
     let reply = askList
     try await pause("asks.json")
     return reply
+  }
+
+  /// Records a sign-in's start and answers its lease, unless held or failed: the route is the kind's own.
+  ///
+  /// - Parameters:
+  ///   - kind: What it is for.
+  ///   - site: The site.
+  ///   - browser: The browser.
+  /// - Returns: The sign-in.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func startSignIn(_ kind: SignInKind, site: String, browser: String?) async throws -> SignInStarted {
+    log.append("start \(kind.rawValue) \(site)")
+    let route = ["signIn": "sign-in/start", "forget": "forget/start", "reset": "reset/start"][kind.rawValue] ?? ""
+    try await pause(route)
+    return SignInStarted(lease: signInLease, kind: kind, site: site, browser: browser)
+  }
+
+  /// Records a sign-in's renewal, unless held or failed.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func renewSignIn(lease: String) async throws {
+    log.append("renew sign-in \(lease)")
+    try await pause("sign-in/renew")
+  }
+
+  /// Records Done, unless held or failed.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Returns: The kind and site of the last start, and `signInAdded` for a sign-in.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func finishSignIn(lease: String) async throws -> SignInEnded {
+    log.append("done \(lease)")
+    try await pause("sign-in/done")
+    let started =
+      log.last { $0.hasPrefix("start ") }?
+      .split(separator: " ")
+      .map(String.init) ?? []
+    let kind = started.count > 2 ? SignInKind(rawValue: started[1]) ?? .signIn : .signIn
+    let site = started.count > 2 ? started[2] : ""
+    return SignInEnded(kind: kind, site: site, added: kind == .signIn ? signInAdded : nil)
+  }
+
+  /// Records Cancel, unless held or failed.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func cancelSignIn(lease: String) async throws {
+    log.append("cancel \(lease)")
+    try await pause("sign-in/cancel")
   }
 
   /// Records an answer and takes its question off `askList`, unless held or failed.

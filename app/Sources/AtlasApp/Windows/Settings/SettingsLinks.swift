@@ -31,4 +31,7 @@ struct SettingsLinks {
   var removeAccount: @MainActor (ViewerStatus.Account) async throws -> Void = { _ in }
   /// Sets how freely agents act in an account, through the viewer service.
   var setLevel: @MainActor (AccountLevel, ViewerStatus.Account) async throws -> Void = { _, _ in }
+  /// Starts a held sign-in in the main window, which comes forward on the Screen: what it is for, the site and the
+  /// browser. Returns why it couldn't start, or nil when it did.
+  var startSignIn: @MainActor (SignInKind, String, String?) async -> String? = { _, _, _ in nil }
 }

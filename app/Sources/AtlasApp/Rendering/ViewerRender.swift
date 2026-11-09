@@ -12,6 +12,9 @@
       [
         sample("01-working", PreviewStates.viewerWorking),
         sample("75-waiting-for-you", PreviewStates.viewerAsk),
+        sample("76-signing-in", PreviewStates.viewerSigningIn),
+        sample("77-signed-in", PreviewStates.viewerSignedIn),
+        sample("78-forgot-a-site", PreviewStates.viewerForgotten),
         sample("02-idle", PreviewStates.viewerIdle),
         sample("03-control", PreviewStates.viewerControl),
         sample("04-needs-you", PreviewStates.viewerNeedsYou),

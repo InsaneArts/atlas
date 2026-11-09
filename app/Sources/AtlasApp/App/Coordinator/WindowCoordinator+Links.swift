@@ -80,6 +80,12 @@ extension WindowCoordinator {
       setLevel: { [weak self] level, account in
         guard let service = self?.parts?.panel?.service else { throw ServiceError(SettingsWords.noService) }
         try await service.setLevel(level, of: account)
+      },
+      startSignIn: { [weak self] kind, site, browser in
+        // The main window comes forward on the Screen, where the person signs in with control.
+        self?.openViewer(place: .screen)
+        guard let controller = self?.viewer?.controller else { return SignInWords.noWindow }
+        return await controller.startSignIn(kind, site: site, browser: browser)
       }
     )
   }

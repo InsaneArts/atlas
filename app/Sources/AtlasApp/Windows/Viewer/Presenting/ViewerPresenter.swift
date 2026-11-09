@@ -16,7 +16,7 @@ enum ViewerPresenter {
   static func state(_ snapshot: ViewerSnapshot) -> ViewerState {
     let place = snapshot.session.place
     let state = ViewerState(
-      header: header(snapshot),
+      header: tagged(header(snapshot), snapshot),
       screen: screen(snapshot),
       footer: footer(snapshot),
       sidebar: sidebar(snapshot),

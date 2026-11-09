@@ -14,6 +14,8 @@ public struct SettingsState: Equatable, Sendable {
   public var about: SettingsAboutState
   /// The alert over the whole window, if one is asked.
   public var alert: AlertCardState<AlertChoice>?
+  /// Sign In to a Site…'s sheet over the whole window, while it shows.
+  public var signIn: SignInSheetState?
 
   /// Creates the window's state.
   ///
@@ -25,6 +27,7 @@ public struct SettingsState: Equatable, Sendable {
   ///   - agents: The Agents pane.
   ///   - about: The About pane.
   ///   - alert: The alert over the whole window, if one is asked.
+  ///   - signIn: Sign In to a Site…'s sheet, while it shows; none by default.
   public init(
     tabs: CapsuleTabsState<SettingsTab>,
     general: SettingsGeneralState,
@@ -32,7 +35,8 @@ public struct SettingsState: Equatable, Sendable {
     accounts: SettingsAccountsState,
     agents: SettingsAgentsState,
     about: SettingsAboutState,
-    alert: AlertCardState<AlertChoice>? = nil
+    alert: AlertCardState<AlertChoice>? = nil,
+    signIn: SignInSheetState? = nil
   ) {
     self.tabs = tabs
     self.general = general
@@ -41,6 +45,7 @@ public struct SettingsState: Equatable, Sendable {
     self.agents = agents
     self.about = about
     self.alert = alert
+    self.signIn = signIn
   }
 
   /// The selected pane's name, which the title bar shows.

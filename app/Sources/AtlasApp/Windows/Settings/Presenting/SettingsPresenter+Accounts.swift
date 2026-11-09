@@ -17,7 +17,8 @@ extension SettingsPresenter {
           letter: String(account.name.prefix(1)).uppercased(),
           title: account.name,
           detail: SettingsWords.accountDetail(account, now: snapshot.now, calendar: snapshot.calendar),
-          level: AccountLevelChoice(account.level)
+          level: AccountLevelChoice(account.level),
+          isSite: account.kind == .site
         )
       }
     }

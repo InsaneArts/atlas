@@ -9,8 +9,7 @@ extension SettingsWords {
   /// What the pane says with no accounts listed, with Add an App….
   static let accountsNone = EmptyMessageState(
     headline: "No accounts yet",
-    message: "Agents work freely and nothing asks you. If a task needs an account, sign the helper in here.",
-    action: EmptyMessageAction(title: "Add an App…", isPrimary: false)
+    message: "Agents work freely and nothing asks you. If a task needs an account, sign the helper in here."
   )
 
   /// Why a change to the list can't be asked yet: the menu bar's connection to the service isn't up.
@@ -63,11 +62,7 @@ extension SettingsWords {
   /// - Parameter level: The level.
   /// - Returns: "Agents ask you before sending there.", say.
   static func levelLine(_ level: AccountLevel) -> String {
-    switch level {
-    case .lookOnly: "Agents only look there."
-    case .ask: "Agents ask you before sending there."
-    case .trusted: "Agents act there without asking."
-    }
+    SignInWords.level(level)
   }
 
   /// The question before an account is taken off the list.

@@ -99,7 +99,9 @@
         ForEach(AccountLevelChoice.allCases, id: \.self) { level in
           AccountLevelControl(account: "github.com", level: level) { _ in }
         }
-        AccountLevelMenu(account: "github.com", level: .ask, isEnabled: true, pick: { _ in }, remove: {})
+        AccountLevelMenu(account: "github.com", level: .ask, isEnabled: true, pick: { _ in }) {
+          Button("Remove from List…", role: .destructive) {}
+        }
       }
       .padding(Spacing.xl)
       .sampleSurface()

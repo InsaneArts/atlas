@@ -64,8 +64,12 @@
         ])
       )
       #expect(
-        Set(states.compactMap { $0.alert?.title }).count == 6,
-        "Recover, Switch, Log Out, Log Out Anyway, Restart, Clean Up"
+        Set(states.compactMap { $0.alert?.title }).count == 8,
+        "Recover, Switch, Log Out, Log Out Anyway, Restart, Clean Up, a site added, removing a site too"
+      )
+      #expect(
+        states.contains { $0.screen.signingIn != nil && $0.header.tag != nil },
+        "the bar and the tag while signing in"
       )
       #expect(Set(states.compactMap { $0.screen.picture == nil ? $0.screen.empty?.message.headline : nil }).count == 3)
       let lines = Set(

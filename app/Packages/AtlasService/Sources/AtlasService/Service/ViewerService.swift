@@ -101,6 +101,36 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service refuses.
   func endAllowed(in account: AccountKey) async throws
 
+  /// Starts a held sign-in: the person's lease beside no agent's command or job, the screen hidden from agents, and
+  /// the site's page open in the helper's browser.
+  ///
+  /// - Parameters:
+  ///   - kind: What it is for.
+  ///   - site: The site, as the person typed it or the account names it.
+  ///   - browser: The browser to open, by its bundle identifier; the helper's own when nil.
+  /// - Returns: The sign-in, with its lease.
+  /// - Throws: ``ServiceError`` when the service refuses, as while an agent's command or job runs.
+  func startSignIn(_ kind: SignInKind, site: String, browser: String?) async throws -> SignInStarted
+
+  /// Renews a held sign-in's lease, with no picture: the window may be covered while the person signs in.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Throws: ``ServiceError`` when it has ended.
+  func renewSignIn(lease: String) async throws
+
+  /// Done: the hold and the lease end, and a site signed in to joins the accounts.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Returns: What it was for and what it added.
+  /// - Throws: ``ServiceError`` when it had ended.
+  func finishSignIn(lease: String) async throws -> SignInEnded
+
+  /// Cancel: the hold and the lease end, and nothing is added.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func cancelSignIn(lease: String) async throws
+
   /// Sends input to the helper under a lease.
   ///
   /// - Parameters:

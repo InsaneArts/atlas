@@ -54,6 +54,8 @@ extension ViewerStatus {
     public var asks: [Ask] = []
     /// What the person allowed for a task.
     public var allowed: [AllowedGrant] = []
+    /// The held sign-in under way, while one is; nil for none.
+    public var signingIn: SigningIn?
 
     /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
     /// reads as working, so Stop stays where the person reaches for it.
@@ -114,7 +116,7 @@ extension ViewerStatus {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
         commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs, sound, accounts, accountNote, asks,
-        allowed
+        allowed, signingIn
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -153,6 +155,7 @@ extension ViewerStatus {
       accountNote = try? container.decodeIfPresent(AccountNote.self, forKey: .accountNote)
       asks = container.lenientList(Ask.self, forKey: .asks)
       allowed = container.lenientList(AllowedGrant.self, forKey: .allowed)
+      signingIn = try? container.decodeIfPresent(SigningIn.self, forKey: .signingIn)
     }
   }
 }

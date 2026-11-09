@@ -11,6 +11,8 @@ public struct SettingsAccountRow: Equatable, Sendable, Identifiable {
   public var detail: String
   /// How freely agents act there.
   public var level: AccountLevelChoice
+  /// Whether it is a site, which Sign In…, Forget This Site… and Reset the Helper's Browser… act on.
+  public var isSite: Bool
 
   /// Creates an account's row.
   ///
@@ -20,11 +22,20 @@ public struct SettingsAccountRow: Equatable, Sendable, Identifiable {
   ///   - title: Its name.
   ///   - detail: When it was added.
   ///   - level: How freely agents act there; Ask Before Sending by default.
-  public init(id: String, letter: String, title: String, detail: String, level: AccountLevelChoice = .ask) {
+  ///   - isSite: Whether it is a site; not by default.
+  public init(
+    id: String,
+    letter: String,
+    title: String,
+    detail: String,
+    level: AccountLevelChoice = .ask,
+    isSite: Bool = false
+  ) {
     self.id = id
     self.letter = letter
     self.title = title
     self.detail = detail
     self.level = level
+    self.isSite = isSite
   }
 }

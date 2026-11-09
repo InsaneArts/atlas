@@ -40,6 +40,11 @@
         var next = state
         next.screen.ask = nil
         return next
+      case .signInDone, .signInCancel:
+        var next = state
+        next.screen.signingIn = nil
+        next.header.tag = nil
+        return next
       case .takeControl:
         return viewerControl
       case .giveBack, .alertConfirm, .alertCancel:

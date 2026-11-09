@@ -46,6 +46,10 @@ struct ViewerSession {
   var alert: ViewerAlert?
   /// Whether the asked alert's command runs now, which holds its buttons.
   var alertRunning = false
+  /// The held sign-in this window runs, while the person signs in with agents paused; nil for none.
+  var signIn: ViewerSignIn?
+  /// Whether Done or Cancel on the signing-in bar runs now, which holds both.
+  var signInEnding = false
   /// Where this window's cleanups of sessions' work stand, which hold Clean Up This Session's Work… while one runs.
   var cleanup = ViewerCleanupState()
   /// The screen takes the keyboard (while in control).

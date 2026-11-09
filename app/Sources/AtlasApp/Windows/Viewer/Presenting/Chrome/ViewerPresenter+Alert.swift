@@ -56,6 +56,22 @@ extension ViewerPresenter {
           doneMessage: ViewerWords.restartMessage
         )
       )
+    case .signedIn(let site, let added):
+      AlertCardState(
+        title: SignInWords.signedIn(site, added: added),
+        message: SignInWords.level(
+          overview.accounts?.first { $0.kind == .site && $0.key == site }?.level ?? .ask
+        ),
+        buttons: [AlertCardButton(id: .confirm, title: SignInWords.ok, role: .action)]
+      )
+    case .removeAfter(let site, _):
+      HelperAlert.destructive(
+        SignInWords.removeTitle(site),
+        SignInWords.removeMessage,
+        SignInWords.remove,
+        cancel: SignInWords.keep,
+        phase: progress.phase(running: SignInWords.removing, done: SignInWords.removeTitle(site), doneMessage: "")
+      )
     case .cleanup(_, let steps, let warning):
       HelperAlert.destructive(
         ViewerWords.cleanupTitle,

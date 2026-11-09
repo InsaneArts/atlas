@@ -11,4 +11,17 @@ enum ViewerAlert: Equatable {
   ///   - steps: What it does, a line each, such as "Quits Probe".
   ///   - warning: That the session may still be working; nil when it is not.
   case cleanup(session: String, steps: [String], warning: String?)
+  /// A site joined the accounts, after Done.
+  ///
+  /// - Parameters:
+  ///   - site: The site.
+  ///   - added: Whether it joined now, rather than being listed already.
+  case signedIn(site: String, added: Bool)
+  /// Remove the site from the accounts too? Asked after Forget This Site… or Reset the Helper's Browser…, Keep the
+  /// default.
+  ///
+  /// - Parameters:
+  ///   - site: The site.
+  ///   - browser: The browser it was seen in.
+  case removeAfter(site: String, browser: String?)
 }

@@ -62,6 +62,15 @@
         }
       case .dismissAccountNote:
         next.accounts.note = nil
+      case .askSignIn(let site):
+        next.signIn = SignInSheetState(site: site ?? "")
+      case .editSignInSite(let site):
+        next.signIn?.site = site
+        next.signIn?.refusal = nil
+      case .continueSignIn, .cancelSignIn:
+        next.signIn = nil
+      case .forgetAccount, .resetBrowser:
+        break
       case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile, .addApp:
         break
       }

@@ -37,6 +37,20 @@ public enum SettingsEvent: Equatable, Sendable {
   case setAccountLevel(String, AccountLevelChoice)
   /// The person read the note that Atlas added an account.
   case dismissAccountNote
+  /// Opens Sign In to a Site…, with a site typed in already for an account's row.
+  ///
+  /// - Parameter site: The site to sign in to; nil for none.
+  case askSignIn(String?)
+  /// The site in Sign In to a Site…'s field, as the person typed it.
+  case editSignInSite(String)
+  /// Continue: start signing the helper in to the site.
+  case continueSignIn
+  /// Cancel: close Sign In to a Site….
+  case cancelSignIn
+  /// Forget This Site… on the account with this id: delete its data in the helper's browser, with agents paused.
+  case forgetAccount(String)
+  /// Reset the Helper's Browser… from the account with this id: clear that browser's data, with agents paused.
+  case resetBrowser(String)
   /// Connects the agent with this id.
   case connect(String)
   /// Disconnects every part of the agent with this id.

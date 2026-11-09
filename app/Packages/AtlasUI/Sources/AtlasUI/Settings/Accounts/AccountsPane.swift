@@ -48,27 +48,39 @@ struct AccountsPane: View {
       }
     case .some(let rows) where rows.isEmpty:
       VStack(alignment: .leading, spacing: Spacing.sPlus) {
-        EmptyMessage(state: state.empty, ground: .pane) { send(.addApp) }
-          .disabled(state.isWorking)
+        VStack(spacing: .zero) {
+          EmptyMessage(state: state.empty, ground: .pane)
+          addButtons(signInLeads: true)
+            // 12 under the message's words, inside the room the message keeps round itself.
+            .padding(.top, Spacing.m - Spacing.xl)
+        }
         noteLines
       }
     case .some(let rows):
       VStack(alignment: .trailing, spacing: Spacing.m) {
         // The window's title already says Accounts, so the list needs no heading of its own.
         GroupedSection(rows, notes: notes) { row in
-          AccountRow(
-            row: row,
-            isEnabled: !state.isWorking,
-            pick: { send(.setAccountLevel(row.id, $0)) },
-            remove: { send(.askRemoveAccount(row.id)) }
-          )
+          AccountRow(row: row, isEnabled: !state.isWorking, send: send)
         }
-        Button("Add an App…") { send(.addApp) }
-          .buttonStyle(.capsule(.secondary, size: .mini))
-          .disabled(state.isWorking)
+        addButtons(signInLeads: false)
           .padding(.trailing, Spacing.m)
       }
     }
+  }
+
+  /// Sign In to a Site… and Add an App…, 8 apart: in the empty pane, Sign In to a Site… in the accent; under the list,
+  /// both quiet.
+  ///
+  /// - Parameter signInLeads: Whether Sign In to a Site… is drawn in the accent.
+  /// - Returns: The buttons.
+  private func addButtons(signInLeads: Bool) -> some View {
+    HStack(spacing: Spacing.s) {
+      Button("Sign In to a Site…") { send(.askSignIn(nil)) }
+        .buttonStyle(.capsule(signInLeads ? .accent : .secondary, size: .mini))
+      Button("Add an App…") { send(.addApp) }
+        .buttonStyle(.capsule(.secondary, size: .mini))
+    }
+    .disabled(state.isWorking)
   }
 
   /// The level of the account the note is about, which its Change… opens on; nil when the note names none listed.
