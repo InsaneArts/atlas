@@ -782,3 +782,96 @@ fn a_referenced_objects_page_is_read_from_its_own_ancestors_without_keyboard_foc
         );
     }
 }
+
+/// An account-gate read with enough simulated time to exhaust its ancestor bound.
+fn aimed_at(fake: &mut Fake, pressing: bool) -> Result<Aimed> {
+    let deadline = fake.started + Duration::from_secs(3);
+    Reader {
+        ask: fake,
+        deadline,
+    }
+    .aimed(FIELD, pressing)
+}
+
+#[test]
+fn an_aimed_element_with_missing_ancestry_cannot_prove_it_is_outside_a_page() {
+    for pressing in [false, true] {
+        let mut fake = Fake::app();
+        fake.set(GROUP, "AXParent", Answer::Absent);
+        let error = aimed_at(&mut fake, pressing).unwrap_err();
+        assert_eq!(Unread::of(&error), Some(Unread::Failed));
+    }
+}
+
+#[test]
+fn an_aimed_element_with_cyclic_or_exhausted_ancestry_refuses_as_deep() {
+    for cyclic in [false, true] {
+        let mut fake = Fake::app();
+        fake.set(GROUP, "AXParent", Answer::Element(100));
+        for element in 100..100 + PARENTS {
+            fake.set(element, "AXRole", Answer::Text("AXGroup".into()));
+            let parent = if cyclic { GROUP } else { element + 1 };
+            fake.set(element, "AXParent", Answer::Element(parent));
+        }
+        let error = aimed_at(&mut fake, false).unwrap_err();
+        assert_eq!(Unread::of(&error), Some(Unread::Deep));
+    }
+}
+
+#[test]
+fn an_aimed_elements_explicit_ancestor_terminal_proves_whether_it_is_in_a_page() {
+    for role in ["AXWindow", "AXApplication", "AXWebArea"] {
+        let mut fake = Fake::app();
+        fake.set(GROUP, "AXRole", Answer::Text(role.into()));
+        fake.set(GROUP, "AXParent", Answer::Absent);
+        fake.set(
+            GROUP,
+            "AXURL",
+            Answer::Text("https://github.com/pulls".into()),
+        );
+        let aimed = aimed_at(&mut fake, false).unwrap();
+        assert_eq!(aimed.in_page, role == "AXWebArea");
+        assert_eq!(aimed.url.is_some(), role == "AXWebArea");
+    }
+}
+
+#[test]
+fn an_aimed_elements_failed_title_does_not_authorize_its_harmless_description() {
+    let mut fake = Fake::app();
+    fake.set(FIELD, "AXTitle", Answer::Failed(AXError::Failure));
+    fake.set(FIELD, "AXDescription", Answer::Text("Open".into()));
+    assert_eq!(aimed_at(&mut fake, false).unwrap().name, None);
+}
+
+#[test]
+fn an_aimed_elements_proven_absent_or_empty_title_allows_its_description() {
+    for title in [Answer::Absent, Answer::Text(String::new())] {
+        let mut fake = Fake::app();
+        fake.set(FIELD, "AXTitle", title);
+        fake.set(FIELD, "AXDescription", Answer::Text("Open".into()));
+        assert_eq!(
+            aimed_at(&mut fake, false).unwrap().name.as_deref(),
+            Some("Open")
+        );
+    }
+}
+
+#[test]
+fn an_aimed_elements_readable_title_survives_unrelated_name_getter_failures() {
+    for title in ["Open", "Send"] {
+        let mut fake = Fake::app();
+        fake.set(FIELD, "AXTitle", Answer::Text(title.into()));
+        fake.set(FIELD, "AXDescription", Answer::Failed(AXError::Failure));
+        fake.set(FIELD, "AXIdentifier", Answer::Failed(AXError::Failure));
+        let aimed = aimed_at(&mut fake, false).unwrap();
+        assert_eq!(aimed.name.as_deref(), Some(title));
+        assert_eq!(aimed.identifier, None);
+    }
+}
+
+#[test]
+fn an_aimed_element_whose_description_getter_fails_remains_unnamed() {
+    let mut fake = Fake::app();
+    fake.set(FIELD, "AXDescription", Answer::Failed(AXError::Failure));
+    assert_eq!(aimed_at(&mut fake, false).unwrap().name, None);
+}

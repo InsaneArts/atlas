@@ -692,7 +692,7 @@ impl Ask for &mut ScriptedApp {
 pub(in crate::native) struct Aimed {
     pub(in crate::native) role: Option<String>,
     pub(in crate::native) subrole: Option<String>,
-    /// Its title, else its description; none when it has neither.
+    /// Its title, else its description; none when absent or uncertain.
     pub(in crate::native) name: Option<String>,
     /// Its identifier: in a web page, its DOM id.
     pub(in crate::native) identifier: Option<String>,
@@ -755,7 +755,9 @@ impl<A: Ask> Reader<A> {
         aimed.name = self
             .name(&named, "AXTitle", &mut failed)?
             .filter(|name| !name.is_empty());
-        if aimed.name.is_none() {
+        // A failed title getter does not prove it is absent: a description
+        // cannot stand in for the higher-priority name we could not read.
+        if aimed.name.is_none() && !failed {
             aimed.name = self
                 .name(&named, "AXDescription", &mut failed)?
                 .filter(|name| !name.is_empty());
@@ -764,21 +766,26 @@ impl<A: Ask> Reader<A> {
             aimed.window = Some(self.window(&window)?);
         }
         let mut current = element;
+        let mut in_page = None;
         for _ in 0..PARENTS {
             match self.text(&current, "AXRole")?.as_deref() {
                 Some("AXWebArea") => {
-                    aimed.in_page = true;
+                    in_page = Some(true);
                     aimed.url = self.text(&current, "AXURL").ok().flatten();
                     break;
                 }
-                Some("AXWindow" | "AXApplication") => break,
+                Some("AXWindow" | "AXApplication") => {
+                    in_page = Some(false);
+                    break;
+                }
                 _ => {}
             }
             match self.reference(&current, "AXParent")? {
                 Some(parent) => current = parent,
-                None => break,
+                None => return Err(Unread::Failed.error()),
             }
         }
+        aimed.in_page = in_page.ok_or_else(|| Unread::Deep.error())?;
         let identifier = if aimed.in_page {
             "AXDOMIdentifier"
         } else {
