@@ -159,7 +159,11 @@ impl TerminalFrames {
             self.connected = false;
             self.client = Some(client.clone());
         }
-        let result = self.read(&client).await;
+        // While the person signs this helper in to an account its screen is
+        // hidden here as from agents: the hold checked is the one of the
+        // helper read from, whichever the settings name now.
+        let controller = client.controller.clone();
+        let result = controller.shown(self.read(&client)).await;
         if result.as_ref().is_err_and(|error| {
             !self
                 .stream

@@ -108,7 +108,6 @@ pub async fn monitor(
     // While the person signs the helper in to an account its screen is
     // hidden here as from agents, from the start and at each picture.
     client.controller.screen_visible()?;
-    let controller = client.controller.clone();
     let display = client.identity().await?.epoch.display;
     let points = (display.width, display.height);
     // With the menu bar running for this helper, the terminal shares its
@@ -124,23 +123,15 @@ pub async fn monitor(
             failed: false,
             found: Discovery::of(&client),
             address: address.clone(),
+            controller: Box::new(client.controller.clone()),
         };
-        return connected(
-            address,
-            frames,
-            controller,
-            read_only,
-            max_dimension,
-            points,
-        )
-        .await;
+        return connected(address, frames, read_only, max_dimension, points).await;
     }
     let dimension = quality::current(max_dimension, points);
     let service = viewer::TerminalService::start(client, settings, dimension, backend).await?;
     let result = connected(
         Arc::new(std::sync::Mutex::new(service.url.clone())),
         Frames::Private(service.frames()),
-        controller,
         read_only,
         max_dimension,
         points,
@@ -191,7 +182,9 @@ async fn discover(found: Discovery) -> Option<(String, Value)> {
 }
 
 /// Where the terminal's pictures come from: its own private viewer, or the
-/// menu bar's frame service, shared with every other viewer.
+/// menu bar's frame service, shared with every other viewer. Each picture
+/// is read only while the screen of the helper it comes from is shown to
+/// agents, and kept only when no sign-in began or ended meanwhile.
 enum Frames {
     Private(viewer::TerminalFrames),
     Shared {
@@ -205,6 +198,9 @@ enum Frames {
         /// The menu bar viewer's address control goes to, renewed with the
         /// service when a restarted menu bar is found again.
         address: Address,
+        /// The controller of the helper the menu bar serves for this
+        /// terminal: its sign-in hold hides the screen here too.
+        controller: Box<atlas_control::Controller>,
     },
 }
 
@@ -233,6 +229,7 @@ impl Frames {
                 failed,
                 found,
                 address,
+                controller,
             } => {
                 if *failed && let Some((url, fresh)) = discover(found.clone()).await {
                     *descriptor = fresh;
@@ -240,7 +237,7 @@ impl Frames {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner) = url;
                 }
-                let result = shared_next(descriptor, client).await;
+                let result = controller.shown(shared_next(descriptor, client)).await;
                 *failed = result.is_err();
                 if *failed {
                     *client = None;
@@ -288,7 +285,6 @@ type Address = Arc<std::sync::Mutex<String>>;
 async fn connected(
     url: Address,
     mut source: Frames,
-    controller: atlas_control::Controller,
     read_only: bool,
     max_dimension: Option<u32>,
     mut display: (f64, f64),
@@ -334,7 +330,7 @@ async fn connected(
                     .min(4096.0) as u32;
             }
             source.set_dimension(dimension);
-            let result = controller.shown(source.next()).await;
+            let result = source.next().await;
             next = started
                 + source.interval().max(Duration::from_millis(
                     render_budget.load(Ordering::Relaxed).min(500),
