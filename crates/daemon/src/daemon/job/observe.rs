@@ -128,5 +128,6 @@ pub(super) fn as_left(process: &Info) -> Left {
     Left {
         pid: process.instance.pid,
         name: process.name.clone(),
+        pgid: Some(process.pgid),
     }
 }

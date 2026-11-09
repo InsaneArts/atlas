@@ -214,19 +214,10 @@ impl Store {
     }
 }
 
-/// Whether a process the ended job of `record` left may still run as the
-/// account the job ran as; one macOS won't describe may.
+/// Whether a process the ended job of `record` left, or one in its groups,
+/// may still run as the account the job ran as.
 fn left_may_run(record: &Record) -> bool {
     record.ended.as_ref().is_some_and(|ended| {
-        ended
-            .left
-            .iter()
-            .any(|left| match atlas_core::process::info(left.pid) {
-                Ok(Some(info)) => {
-                    !info.zombie && (info.uid == record.uid || info.ruid == record.uid)
-                }
-                Ok(None) => false,
-                Err(_) => true,
-            })
+        atlas_core::protocol::left_may_run(&ended.left, record.pgid, record.uid)
     })
 }

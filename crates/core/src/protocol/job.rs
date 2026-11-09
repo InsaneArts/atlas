@@ -176,6 +176,44 @@ impl From<StopReason> for How {
 pub struct Left {
     pub pid: i32,
     pub name: String,
+    /// The process group it was in when it was noted: what it starts stays
+    /// in that group unless it moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pgid: Option<i32>,
+}
+
+/// Whether anything an ended job left may still run as account `uid`: a
+/// process it listed in `left`, or any process in the job's own group
+/// `group` or in a group a listed process was in, so work a survivor handed
+/// to a child before it exited is still counted. Descendants are followed
+/// through their groups only: one that moved to a new group, and lost its
+/// parent before Atlas looked, isn't seen. Processes that can't be read or
+/// listed may run.
+pub fn left_may_run(left: &[Left], group: Option<i32>, uid: u32) -> bool {
+    let listed_runs = left
+        .iter()
+        .any(|left| match crate::process::info(left.pid) {
+            Ok(Some(info)) => !info.zombie && (info.uid == uid || info.ruid == uid),
+            Ok(None) => false,
+            Err(_) => true,
+        });
+    if listed_runs {
+        return true;
+    }
+    let groups: Vec<i32> = group
+        .into_iter()
+        .chain(left.iter().filter_map(|left| left.pgid))
+        .filter(|group| *group > 0)
+        .collect();
+    if groups.is_empty() {
+        return false;
+    }
+    match crate::process::of_user(uid) {
+        Ok(processes) => processes
+            .iter()
+            .any(|process| !process.zombie && groups.contains(&process.pgid)),
+        Err(_) => true,
+    }
 }
 
 /// Why a job request was refused, or why nothing could be sent to a job.

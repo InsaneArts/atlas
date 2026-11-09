@@ -1082,6 +1082,8 @@ fn ended(left: Value) -> Value {
     view["how"] = json!("leader-gone");
     view["endedAt"] = json!(30);
     view["left"] = left;
+    // No group of this account's is the job's own here.
+    view["pgid"] = json!(null);
     view
 }
 
@@ -1125,6 +1127,43 @@ async fn a_sign_in_waits_for_what_an_ended_job_left_running() {
 
     survivor.kill().unwrap();
     survivor.wait().unwrap();
+    sign_in_admits(vec![ended(left)]).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_sign_in_waits_for_work_a_survivor_handed_to_a_child_before_it_exited() {
+    use std::os::unix::process::CommandExt;
+    let mut survivor = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "/bin/sleep 30 >/dev/null 2>&1 & echo $!"])
+            .stdout(std::process::Stdio::piped())
+            .process_group(0),
+    )
+    .unwrap();
+    let pid = survivor.id();
+    let mut said = String::new();
+    std::io::Read::read_to_string(survivor.stdout.as_mut().unwrap(), &mut said).unwrap();
+    survivor.wait().unwrap();
+    let child: i32 = said.trim().parse().unwrap();
+    let left = json!([{"pid": pid, "name": "sh", "pgid": pid}]);
+
+    let refused = sign_in_admits(vec![ended(left.clone())]).await.unwrap_err();
+    assert_eq!(refused.details["running"], "job");
+
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    for _ in 0..100 {
+        if atlas_core::process::info(child)
+            .unwrap()
+            .is_none_or(|info| info.zombie)
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     sign_in_admits(vec![ended(left)]).await.unwrap();
 }
 

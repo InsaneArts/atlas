@@ -536,19 +536,9 @@ fn may_run(shown: &Shown, helper: u32) -> bool {
     };
     match (job.state, job.ended()) {
         (JobState::Ended, Some(ended)) => {
-            ended.left.iter().any(|left| still_runs(left.pid, helper))
+            atlas_core::protocol::left_may_run(&ended.left, job.pgid, helper)
         }
         _ => true,
-    }
-}
-
-/// Whether process `pid` still runs as helper account `helper`; one macOS
-/// won't describe may.
-fn still_runs(pid: i32, helper: u32) -> bool {
-    match atlas_core::process::info(pid) {
-        Ok(Some(info)) => !info.zombie && (info.uid == helper || info.ruid == helper),
-        Ok(None) => false,
-        Err(_) => true,
     }
 }
 
