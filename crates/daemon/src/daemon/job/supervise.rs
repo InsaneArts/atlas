@@ -8,7 +8,7 @@ use super::{
     observe::{as_left, left, observe},
     record::{Ended, Record, Stopping},
     signal::Signalled,
-    store::Found,
+    store::{Found, RECORDS_MAX},
     verdict::{Verdict, verdict},
 };
 use crate::daemon::run;
@@ -72,12 +72,14 @@ impl Jobs {
             }
         }
         self.count(&mut state);
-        if state
-            .pruned
-            .is_none_or(|pruned| pruned.elapsed() >= PRUNE_EVERY)
+        if (state.known.len() > RECORDS_MAX
+            || state
+                .pruned
+                .is_none_or(|pruned| pruned.elapsed() >= PRUNE_EVERY))
             && state.store.prune(now)
         {
             state.pruned = Some(Instant::now());
+            self.count(&mut state);
         }
         Ok(())
     }

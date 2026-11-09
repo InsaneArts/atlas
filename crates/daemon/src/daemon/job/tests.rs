@@ -343,6 +343,297 @@ fn a_job_record_reads_back_as_it_was_written() {
 }
 
 #[test]
+fn job_history_with_record_and_log_pairs_is_read_completely_and_pruned() {
+    for count in [127, 128, 129, 512] {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path()).unwrap();
+        write_job_history(&store, count, 5);
+        let scan = store.scan();
+        assert!(scan.complete, "{count} ended record/log pairs");
+        assert_eq!(scan.found.len(), count);
+        assert!(store.prune(5));
+        let remaining = store.scan();
+        assert!(remaining.complete);
+        assert_eq!(
+            remaining.found.len(),
+            64,
+            "{count} pairs must prune in one pass"
+        );
+    }
+}
+
+fn write_job_history(store: &Store, count: usize, at: u64) -> Vec<Record> {
+    (0..count)
+        .map(|number| {
+            let mut ended = record();
+            ended.id = JobId::parse(&format!("{number:012x}")).unwrap();
+            ended.state = JobState::Ended;
+            ended.ended = Some(Ended {
+                how: How::Exited,
+                at,
+                signal: None,
+                exit_code: Some(0),
+                exit_signal: None,
+                left: Vec::new(),
+            });
+            store.write(&ended).unwrap();
+            std::fs::write(store.log_path(&ended.id), b"").unwrap();
+            ended
+        })
+        .collect()
+}
+
+#[test]
+fn job_history_pressure_is_pruned_before_the_hourly_sweep_is_due() {
+    let table = Table::with(Vec::new());
+    let mut ended = record();
+    ended.state = JobState::Ended;
+    ended.adopted = true;
+    ended.ended = Some(Ended {
+        how: How::Exited,
+        at: now_ms(),
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: Vec::new(),
+    });
+    let (_directory, jobs) = jobs_with(&ended, &table);
+    {
+        let mut state = jobs.state().unwrap();
+        state.store.forget(&ended.id);
+        write_job_history(&state.store, 65, now_ms());
+        state.pruned = Some(Instant::now());
+    }
+    jobs.watch_once(None).unwrap();
+    let state = jobs.state().unwrap();
+    assert!(state.complete);
+    assert_eq!(state.store.scan().found.len(), 64);
+    assert!(table.signals().is_empty());
+}
+
+#[test]
+fn job_history_with_an_adopted_unknown_exit_is_complete() {
+    let table = Table::with(Vec::new());
+    let mut ended = record();
+    ended.state = JobState::Ended;
+    ended.adopted = true;
+    ended.ended = Some(Ended {
+        how: How::Exited,
+        at: now_ms(),
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: Vec::new(),
+    });
+    let (_directory, jobs) = jobs_with(&ended, &table);
+    assert_eq!(shown(&jobs)["state"], "ended");
+    assert_eq!(shown(&jobs)["exitCode"], Value::Null);
+    assert_eq!(
+        json!(jobs.census().unwrap()),
+        json!({"running": 0, "launching": 0, "unresolved": 0})
+    );
+}
+
+#[test]
+fn job_history_small_scans_do_not_create_a_lock_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    write_job_history(&store, 127, 5);
+    assert!(store.scan().complete);
+    assert!(!store.directory().join(".lock").exists());
+}
+
+#[test]
+fn job_history_probes_the_complete_entry_bound_and_preserves_an_overflow() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    write_job_history(&store, 129, 5);
+    assert!(store.scan().complete);
+    assert_scan_lock(store.directory());
+    let existing = std::fs::read_dir(store.directory()).unwrap().count();
+    for index in existing..atlas_core::record_folder::CLEANUP_ENTRIES {
+        std::fs::write(store.directory().join(format!("unrelated-{index}")), b"").unwrap();
+    }
+    assert_eq!(
+        std::fs::read_dir(store.directory()).unwrap().count(),
+        atlas_core::record_folder::CLEANUP_ENTRIES
+    );
+    assert!(
+        store.scan().complete,
+        "EOF at exactly the complete-pass budget"
+    );
+    std::fs::write(store.directory().join("one-more-entry"), b"").unwrap();
+    let before = raw_job_files(directory.path());
+    assert!(!store.scan().complete);
+    assert!(!store.prune(u64::MAX));
+    assert_eq!(raw_job_files(directory.path()), before);
+}
+
+#[test]
+fn job_history_retains_unreadable_live_and_unwritten_records_during_recovery() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    write_job_history(&store, 129, 5);
+    let live = record();
+    store.write(&live).unwrap();
+    std::fs::write(store.log_path(&live.id), b"live log").unwrap();
+    let future = Record {
+        id: JobId::parse("abcdef123456").unwrap(),
+        version: VERSION + 1,
+        ..record()
+    };
+    store.write(&future).unwrap();
+    std::fs::write(store.log_path(&future.id), b"future log").unwrap();
+    let unreadable = JobId::parse("fedcba654321").unwrap();
+    std::fs::write(store.directory().join(format!("{unreadable}.json")), b"{").unwrap();
+    std::fs::write(store.log_path(&unreadable), b"unknown log").unwrap();
+    let mut unwritten = Record {
+        id: JobId::parse("ffffff123456").unwrap(),
+        ..record()
+    };
+    store.write(&unwritten).unwrap();
+    std::fs::write(store.log_path(&unwritten.id), b"unwritten log").unwrap();
+    let path = store.directory().join(format!("{}.json", unwritten.id));
+    let saved = path.with_extension("saved");
+    std::fs::rename(&path, &saved).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    unwritten.state = JobState::Ended;
+    unwritten.ended = Some(Ended {
+        how: How::Exited,
+        at: 5,
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: Vec::new(),
+    });
+    assert!(!store.put(&unwritten));
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::rename(saved, &path).unwrap();
+    let ids = [&live.id, &future.id, &unreadable, &unwritten.id];
+    let before = raw_job_files(directory.path());
+    let scan = store.scan();
+    assert!(scan.complete);
+    assert!(
+        scan.found
+            .iter()
+            .any(|found| matches!(found, Found::Record(record) if **record == unwritten))
+    );
+    assert_eq!(
+        scan.found
+            .iter()
+            .filter(|found| matches!(found, Found::Unreadable(_)))
+            .count(),
+        2
+    );
+    assert!(store.prune(u64::MAX));
+    assert_eq!(store.scan().found.len(), ids.len());
+    let after = raw_job_files(directory.path());
+    for id in ids {
+        for extension in ["json", "log"] {
+            let path = store.directory().join(format!("{id}.{extension}"));
+            assert_eq!(after.get(&path), before.get(&path), "{path:?}");
+        }
+    }
+    assert!(store.put(&unwritten));
+    assert!(store.prune(u64::MAX));
+    assert!(!store.holds(&unwritten.id));
+    assert!(!store.log_path(&unwritten.id).exists());
+}
+
+#[test]
+fn job_history_failed_expanded_reads_preserve_records_and_incomplete_coverage() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    write_job_history(&store, 129, 5);
+    // A recognized file larger than this store's bound cannot be silently skipped.
+    let path = store.directory().join("abcdef123456.json");
+    std::fs::write(path, vec![b' '; 128 * 1024 + 1]).unwrap();
+    let before = raw_job_files(directory.path());
+    assert!(!store.scan().complete);
+    assert!(!store.prune(u64::MAX));
+    assert_job_files_unchanged_except_scan_lock(directory.path(), &before);
+}
+
+#[test]
+fn job_history_complete_pass_byte_exhaustion_never_authorizes_retention() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    let mut ended = record();
+    ended.state = JobState::Ended;
+    ended.name = "x".repeat(128 * 1024 - 1024);
+    ended.ended = Some(Ended {
+        how: How::Exited,
+        at: 5,
+        signal: None,
+        exit_code: Some(0),
+        exit_signal: None,
+        left: Vec::new(),
+    });
+    let mut encoded = 0;
+    for number in 0..258 {
+        ended.id = JobId::parse(&format!("{number:012x}")).unwrap();
+        let bytes = serde_json::to_vec(&ended).unwrap();
+        assert!(
+            bytes.len() < 128 * 1024,
+            "each individual record is within its bound"
+        );
+        encoded += bytes.len();
+        store.write(&ended).unwrap();
+        std::fs::write(store.log_path(&ended.id), b"").unwrap();
+    }
+    assert!(encoded > 128 * 1024 * atlas_core::record_folder::LISTED);
+    let before = raw_job_files(directory.path());
+    assert!(!store.scan().complete);
+    assert!(!store.prune(u64::MAX));
+    assert_job_files_unchanged_except_scan_lock(directory.path(), &before);
+}
+
+#[test]
+fn job_history_beyond_the_cheap_scan_is_adopted_and_still_supervised() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let history = write_job_history(&store, 512, now_ms());
+    let cheap_names = || {
+        std::fs::read_dir(store.directory())
+            .unwrap()
+            .take(atlas_core::record_folder::LISTED)
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<std::collections::HashSet<_>>()
+    };
+    let prefix = cheap_names();
+    let omitted = history
+        .iter()
+        .find(|record| !prefix.contains(&std::ffi::OsString::from(format!("{}.json", record.id))))
+        .expect("512 record IDs cannot all fit in a 256-entry prefix");
+    let mut live = record();
+    live.id = omitted.id.clone();
+    live.ends_at = 0;
+    // Update this existing fixture entry in place so its directory name is retained.
+    std::fs::write(
+        store.directory().join(format!("{}.json", live.id)),
+        serde_json::to_vec(&live).unwrap(),
+    )
+    .unwrap();
+    assert!(!cheap_names().contains(&std::ffi::OsString::from(format!("{}.json", live.id))));
+    let table = Table::with(vec![leader()]);
+    let jobs = Jobs::open_in(
+        directory.path(),
+        PathBuf::from("/nonexistent"),
+        UID,
+        LOG_LIMIT,
+        Box::new(Shared(table.clone())),
+        BOOT.into(),
+    )
+    .unwrap();
+    assert_eq!(jobs.show(Some(&live.id))["job"]["adopted"], true);
+    assert_eq!(jobs.census().unwrap().running, 1);
+    jobs.watch_once(None).unwrap();
+    assert_eq!(jobs.show(Some(&live.id))["job"]["state"], "stopping");
+    assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
+    assert!(jobs.state().unwrap().store.holds(&live.id));
+}
+
+#[test]
 fn age_retention_keeps_a_job_completion_until_its_write_is_acknowledged() {
     assert_unwritten_job_survives_retention(u64::MAX, 0);
 }
@@ -650,7 +941,7 @@ fn listing_jobs_refuses_when_the_bounded_scan_cannot_account_for_every_record() 
     let table = Table::with(vec![leader()]);
     let (directory, jobs) = jobs_with(&record(), &table);
     let folder = directory.path().join("jobs");
-    for index in 0..atlas_core::record_folder::LISTED {
+    for index in 0..atlas_core::record_folder::CLEANUP_ENTRIES {
         std::fs::write(folder.join(format!("unrelated-{index}")), "").unwrap();
     }
     let reply = jobs.show(None);
@@ -692,7 +983,7 @@ impl Incomplete {
         use std::os::unix::fs::PermissionsExt;
         match self {
             Self::Bounded => {
-                for index in 0..atlas_core::record_folder::LISTED {
+                for index in 0..atlas_core::record_folder::CLEANUP_ENTRIES {
                     std::fs::write(folder.join(format!("unrelated-{index}")), "").unwrap();
                 }
             }
@@ -706,7 +997,7 @@ impl Incomplete {
         use std::os::unix::fs::PermissionsExt;
         match self {
             Self::Bounded => {
-                for index in 0..atlas_core::record_folder::LISTED {
+                for index in 0..atlas_core::record_folder::CLEANUP_ENTRIES {
                     std::fs::remove_file(folder.join(format!("unrelated-{index}"))).unwrap();
                 }
             }
@@ -756,7 +1047,7 @@ async fn an_incomplete_job_scan_refuses_a_new_launch_before_spawning() {
             !directory.path().join("launcher.ran").exists(),
             "{incomplete:?}: the launcher ran"
         );
-        assert_eq!(raw_job_files(directory.path()), before, "{incomplete:?}");
+        assert_job_files_unchanged_except_scan_lock(directory.path(), &before);
         assert!(jobs.state().unwrap().launching.is_empty());
         assert!(table.signals().is_empty());
     }
@@ -1865,6 +2156,29 @@ fn raw_job_files(folder: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> 
             (path, bytes)
         })
         .collect()
+}
+
+fn assert_scan_lock(folder: &Path) {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let path = folder.join(".lock");
+    let metadata = std::fs::symlink_metadata(&path).unwrap();
+    assert!(metadata.is_file());
+    assert_eq!(metadata.uid(), nix::unistd::getuid().as_raw());
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::read(path).unwrap(), b"");
+}
+
+fn assert_job_files_unchanged_except_scan_lock(
+    folder: &Path,
+    before: &std::collections::BTreeMap<PathBuf, Vec<u8>>,
+) {
+    let mut after = raw_job_files(folder);
+    let lock = folder.join("jobs/.lock");
+    if !before.contains_key(&lock) && after.contains_key(&lock) {
+        assert_scan_lock(&folder.join("jobs"));
+        after.remove(&lock);
+    }
+    assert_eq!(&after, before);
 }
 
 #[tokio::test]

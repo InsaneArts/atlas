@@ -1380,6 +1380,42 @@ async fn unavailable_jobs_refuse_hello_instead_of_reporting_zero() {
 }
 
 #[tokio::test]
+async fn recovered_job_history_reports_a_complete_idle_census() {
+    let (folder, daemon) = with_jobs(false);
+    let now = atlas_core::time::now_ms();
+    for number in 0..129 {
+        let id = format!("{number:012x}");
+        let record = json!({
+            "version": 1, "id": id, "name": "history", "task": null, "session": null,
+            "uid": nix::unistd::getuid().as_raw(), "boot": "fixture-boot", "pid": 4312,
+            "start": [1761650000_u64, 123456], "pgid": 4312, "state": "ended",
+            "startedAt": now, "endsAt": now, "adopted": number == 0, "seen": [],
+            "stopping": null, "ended": {"how": "exited", "at": now,
+                "signal": null, "exitCode": null, "exitSignal": null, "left": []},
+            "logResets": 0
+        });
+        std::fs::write(
+            folder.path().join(format!("jobs/{id}.json")),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(folder.path().join(format!("jobs/{id}.log")), b"").unwrap();
+    }
+    let jobs = daemon.jobs.as_ref().unwrap();
+    let listed = jobs.show(None);
+    assert_eq!(listed["ok"], true);
+    assert_eq!(listed["jobs"].as_array().unwrap().len(), 129);
+    jobs.watch_once(None).unwrap();
+    let hello = daemon.hello();
+    assert_eq!(hello["ok"], true);
+    assert_eq!(
+        hello["daemon"]["jobs"],
+        json!({"running": 0, "launching": 0, "unresolved": 0})
+    );
+    assert_eq!(jobs.show(None)["jobs"].as_array().unwrap().len(), 64);
+}
+
+#[tokio::test]
 async fn an_unlistable_jobs_folder_still_answers_hello_and_says_its_jobs_are_incomplete() {
     use std::os::unix::fs::PermissionsExt;
     let (folder, daemon) = with_jobs(false);

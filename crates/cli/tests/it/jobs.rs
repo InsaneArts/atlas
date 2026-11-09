@@ -13,7 +13,7 @@ use atlas_daemon::{
     test_support::child::{Child, JOBS, Processes},
 };
 use nix::unistd::Pid;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     os::unix::fs::PermissionsExt,
     sync::Arc,
@@ -311,6 +311,68 @@ async fn a_stop_by_the_person_ends_every_job() {
 }
 
 #[tokio::test]
+async fn a_reopened_oversized_history_allows_a_new_job_before_supervision() {
+    let folder = tempfile::tempdir().unwrap();
+    let first = jobs_in(folder.path());
+    let directory = first.folder().unwrap();
+    let now = atlas_core::time::now_ms();
+    let boot = process::boot().unwrap();
+    for number in 0..129 {
+        let id = format!("{number:012x}");
+        let record = json!({
+            "version": 1, "id": id, "name": "history", "task": null, "session": null,
+            "uid": uid(), "boot": boot, "pid": 4312,
+            "start": [1761650000_u64, 123456], "pgid": 4312, "state": "ended",
+            "startedAt": now, "endsAt": now, "adopted": number == 0,
+            "ended": {"how": "exited", "at": now, "signal": null,
+                "exitCode": null, "exitSignal": null, "left": []}
+        });
+        std::fs::write(
+            directory.join(format!("{id}.json")),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(directory.join(format!("{id}.log")), b"").unwrap();
+    }
+    drop(first);
+    let jobs = jobs_in(folder.path());
+    assert_eq!(jobs.show(None)["jobs"].as_array().unwrap().len(), 129);
+    let job = started(&jobs, &["/usr/bin/true"]).await;
+    assert!(jobs.show(None)["jobs"].as_array().unwrap().len() <= 65);
+    let shown = ended(&jobs, &id_of(&job), Duration::from_secs(8));
+    assert_eq!(shown["exitCode"], 0);
+    assert!(jobs.show(None)["jobs"].as_array().unwrap().len() <= 64);
+}
+
+#[tokio::test]
+async fn completed_jobs_stay_within_history_capacity_without_watcher_assistance() {
+    let folder = tempfile::tempdir().unwrap();
+    let jobs = jobs_in(folder.path());
+    jobs.watch_once(None).unwrap();
+    for _ in 0..512 {
+        let job = started(&jobs, &["/usr/bin/true"]).await;
+        let id = id_of(&job);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            // Per-ID observation settles this child without running retention.
+            let shown = show_job(&jobs, &id);
+            if shown["state"] == "ended" {
+                assert_eq!(shown["exitCode"], 0);
+                break;
+            }
+            assert!(Instant::now() < deadline, "job did not end: {shown}");
+            tokio::task::yield_now().await;
+        }
+        let listed = jobs.show(None);
+        assert_eq!(listed["ok"], true, "{listed}");
+        assert!(listed["jobs"].as_array().unwrap().len() <= 65);
+    }
+    jobs.watch_once(None).unwrap();
+    assert!(jobs.show(None)["jobs"].as_array().unwrap().len() <= 64);
+    assert_eq!(jobs.running().unwrap(), 0);
+}
+
+#[tokio::test]
 async fn a_job_outlives_its_supervisor_and_is_adopted_again() {
     let folder = tempfile::tempdir().unwrap();
     let job = {
@@ -335,6 +397,12 @@ async fn a_job_outlives_its_supervisor_and_is_adopted_again() {
     let shown = ended(&jobs, &id, Duration::from_secs(8));
     assert_eq!(shown["state"], "ended", "{shown}");
     assert_eq!(shown["exitCode"], Value::Null);
+    let listed = jobs.show(None);
+    assert_eq!(listed["ok"], true, "{listed}");
+    assert_eq!(listed["jobs"].as_array().unwrap().len(), 1);
+    let next = started(&jobs, &["/usr/bin/true"]).await;
+    let shown = ended(&jobs, &id_of(&next), Duration::from_secs(8));
+    assert_eq!(shown["exitCode"], 0, "{shown}");
 }
 
 #[tokio::test]
