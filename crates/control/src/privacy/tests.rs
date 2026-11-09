@@ -96,13 +96,54 @@ fn a_hold_from_an_earlier_lease_is_ignored_under_a_later_one() {
     hidden(&controller.screen_visible().unwrap_err());
     drop(earlier);
 
+    let before = controller.generation().unwrap();
+
     let _later = controller.acquire_for_person(Beside::Commands).unwrap();
 
     assert!(
-        controller.private.exists(),
-        "the earlier lease's marker is still there"
+        !controller.private.exists(),
+        "the earlier lease's marker is cleared before the later one is noted"
     );
     assert!(controller.screen_visible().is_ok());
+    assert_eq!(controller.generation().unwrap(), before + 1);
+}
+
+#[test]
+fn a_torn_marker_left_by_a_killed_holder_never_hides_a_later_lease() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let earlier = controller.acquire_for_person(Beside::Commands).unwrap();
+    fs::write(&controller.private, b"{\"site\":\"git").unwrap();
+    hidden(&controller.screen_visible().unwrap_err());
+    drop(earlier);
+
+    let later = controller.acquire_for_person(Beside::Commands).unwrap();
+
+    assert!(!controller.private.exists());
+    assert!(controller.screen_visible().is_ok());
+    drop(later);
+}
+
+#[test]
+fn a_marker_is_written_whole_and_never_through_a_link() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = Controller::at(505, directory.path());
+    let mut lease = Lease::new(Duration::from_secs(10));
+    let token = lease.acquire(&controller).unwrap();
+    let elsewhere = directory.path().join("elsewhere");
+    fs::write(&elsewhere, b"kept").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &controller.private).unwrap();
+
+    lease.hide_screen(&controller, &token, &github()).unwrap();
+
+    assert_eq!(fs::read(&elsewhere).unwrap(), b"kept");
+    assert!(
+        !fs::symlink_metadata(&controller.private)
+            .unwrap()
+            .is_symlink()
+    );
+    assert_eq!(controller.private_hold(), Some(github()));
+    lease.release();
 }
 
 #[test]

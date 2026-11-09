@@ -9,7 +9,7 @@
 use super::{Controller, busy::busy_private};
 use atlas_core::{
     error::{Code, Error, Result},
-    files::{Durability, read_own, write_atomic, write_private_with},
+    files::{read_own, write_atomic},
     process::Instance,
     time::now_ms,
 };
@@ -136,11 +136,22 @@ impl Controller {
             lease: lease.to_owned(),
             since: now_ms(),
         };
-        write_private_with(
-            &self.private,
-            &serde_json::to_vec(&marker)?,
-            Durability::Kernel,
-        )
+        // Whole or not at all: a holder killed while writing leaves no torn
+        // marker for a later lease to meet.
+        write_atomic(&self.private, &serde_json::to_vec(&marker)?, 0o600)
+    }
+
+    /// Clear a marker no lease can hold any longer, under the controller's
+    /// exclusion and before the person's next lease is noted: one left by
+    /// a holder that ended or was killed, readable or not. The generation
+    /// goes up when one was there, so a read admitted under it is dropped.
+    pub(crate) fn clear_stale_private(&self) -> Result<()> {
+        match fs::symlink_metadata(&self.private) {
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::writing(&self.private, error)),
+            Ok(_) => {}
+        }
+        self.end_private()
     }
 
     /// End the private hold: the marker goes, then the generation goes up,

@@ -605,6 +605,12 @@ impl Controller {
         &self.private
     }
 
+    /// Where the screen's privacy generation is kept, for tests that break it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn private_generation_path(&self) -> &Path {
+        &self.private_generation
+    }
+
     /// Where the marker of pending changes is kept, for tests that break it.
     #[cfg(any(test, feature = "test-support"))]
     pub fn marker_path(&self) -> &Path {
@@ -660,6 +666,9 @@ impl Controller {
     /// holds a new lease generation, which a private hold names.
     pub(crate) fn acquire_for_person(&self, beside: Beside) -> Result<Ownership> {
         let mut ownership = self.acquire_for(Purpose::Change(beside))?;
+        // No earlier lease holds control now: a hold it left is cleared
+        // before the new lease could be taken for its holder.
+        self.clear_stale_private()?;
         let generation = atlas_core::files::token();
         fs::write(&self.person, generation.as_bytes())
             .map_err(|error| Error::writing(&self.directory, error))?;
