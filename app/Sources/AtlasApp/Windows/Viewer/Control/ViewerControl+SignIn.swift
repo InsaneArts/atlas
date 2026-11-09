@@ -24,7 +24,7 @@ extension ViewerControl {
 
   /// Renews the sign-in's lease with no picture. A lease the service says is lost ends the sign-in here, saying why;
   /// any other failure, such as no reply or a busy service, may have left the hold standing, so the sign-in is
-  /// cancelled as ending control on purpose cancels it, kept until the service answers. Once Done is sent, a failing
+  /// cancelled as ending control on purpose cancels it, kept until the service answers. Once Done is pressed, a failing
   /// renewal changes nothing: Done owns the lease.
   ///
   /// - Parameter lease: The sign-in's lease.

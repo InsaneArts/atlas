@@ -362,6 +362,37 @@ struct ViewerSignInTests {
     #expect(service.log.filter { $0.hasPrefix("renew sign-in") }.count == 1, "no renewal after Done was sent")
   }
 
+  @Test("Done stops input, lets a held button up after what was in flight, and no input failing then undoes its result")
+  func doneSettlesInputFirst() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    let size = CGSize(width: 400, height: 300)
+    _ = await viewer.startSignIn(.forget, site: "github.com", browser: nil)
+    viewer.control.pointerDown(.left, at: CGPoint(x: 200, y: 150), in: size, modifiers: [])
+    try await settle("the press was never sent") { service.actions.count == 1 }
+    service.hold.insert("input")
+    viewer.control.pointerDragged(.left, to: CGPoint(x: 220, y: 160), in: size, modifiers: [])
+    try await settle("the drag never reached the service") { service.held["input"] != nil }
+    let finishing = Task { await viewer.finishSignIn() }
+    try await settle("Done was never pressed") { viewer.session.signInEnding }
+    viewer.control.pointerMoved(to: CGPoint(x: 100, y: 100), in: size)
+    viewer.control.sendKey("a")
+    #expect(!service.log.contains("done sign-in-lease"), "Done waits for the input in flight")
+    // Done ended the lease at the service: input still going now would be told so.
+    service.refusals["input"] = ServiceError("The lease ended.", code: ControlBarrier.leaseLost)
+    service.resume("input")
+    await finishing.value
+    #expect(viewer.state.alert?.title == "Remove github.com from Accounts too?", "Done's result stands")
+    #expect(service.actions.count == 3, "the press, the drag and the release, and nothing given after Done")
+    #expect(
+      service.actions.last?.first.map { if case .pointer(.up, _, _, _, _, _) = $0 { true } else { false } } == true
+    )
+    let lastInput = try #require(service.log.lastIndex { $0.hasPrefix("input") })
+    let done = try #require(service.log.firstIndex(of: "done sign-in-lease"))
+    #expect(lastInput < done, "the button went up before Done")
+    #expect(!service.log.contains { $0.hasPrefix("cancel") || $0.hasPrefix("release") })
+  }
+
   @Test("a start whose reply is lost holds the helper's commands until a hold it may have begun can't be alive")
   func aLostStartIsHeld() async throws {
     let service = ScriptedService()

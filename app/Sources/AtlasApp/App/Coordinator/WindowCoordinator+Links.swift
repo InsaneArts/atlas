@@ -82,10 +82,8 @@ extension WindowCoordinator {
         try await service.setLevel(level, of: account)
       },
       startSignIn: { [weak self] purpose, site, browser in
-        // The main window comes forward on the Screen, where the person signs in with control.
-        self?.openViewer(place: .screen)
-        guard let controller = self?.viewer?.controller else { return SignInWords.noWindow }
-        return await controller.startSignIn(purpose, site: site, browser: browser)
+        guard let self else { return SignInWords.noWindow }
+        return await startSignIn(purpose, site: site, browser: browser)
       }
     )
   }
@@ -110,6 +108,27 @@ extension WindowCoordinator {
   /// - Returns: The switch.
   func viewerSwitch() -> @MainActor () async -> String {
     { [weak self] in await self?.parts?.panel?.logIn() ?? PanelWords.helperNotFound }
+  }
+
+  /// Starts a held sign-in for Settings in the main window, which comes forward on the Screen, where the person signs
+  /// in with control, only once it started. An open main window stays where it is until then; a closed one has to
+  /// open to hold it, and Settings comes back in front should the start be refused, so the sheet's refusal is seen.
+  ///
+  /// - Parameters:
+  ///   - purpose: What it is for.
+  ///   - site: The site.
+  ///   - browser: The browser to open; the helper's own when nil.
+  /// - Returns: Why it couldn't start; nil when it did.
+  private func startSignIn(_ purpose: SignInPurpose, site: String, browser: String?) async -> String? {
+    let opened = openViewerController == nil
+    if opened { openViewer(place: .screen) }
+    guard let controller = openViewerController else { return SignInWords.noWindow }
+    guard let refusal = await controller.startSignIn(purpose, site: site, browser: browser) else {
+      openViewer(place: .screen)
+      return nil
+    }
+    if opened { settings?.window.present() }
+    return refusal
   }
 
   /// The open main window's controller; nil while none is open.

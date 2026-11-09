@@ -81,7 +81,8 @@ final class ViewerControl {
   /// lost, the window covered or away from the Screen, only stops sending input, and the lease is renewed with no
   /// picture until Done or Cancel. Nil otherwise.
   private(set) var signInLease: String?
-  /// The sign-in lease Done was sent for: Done owns it until it answers, so no renewal runs or ends it meanwhile.
+  /// The sign-in lease Done was pressed for: Done owns it until it answers, so no renewal or input runs or ends it
+  /// meanwhile.
   @ObservationIgnored private(set) var finishing: String?
   /// The mouse button held and the clicks counted.
   @ObservationIgnored private var gesture = PointerGesture()
@@ -374,15 +375,19 @@ final class ViewerControl {
     viewer?.readingLoop.refresh()
   }
 
-  /// Done was sent for `lease`: renewals stop, and one already under way can no longer end the sign-in, which Done
-  /// owns until it answers.
+  /// Done was pressed for `lease`, which Done owns from now until it answers: renewals stop, and one already under way
+  /// can no longer end the sign-in; input stops, a button still down going up after what was queued, as suspending
+  /// does; and no input that fails from here on ends the sign-in. Returns once every batch queued or in flight has
+  /// been answered, so Done goes after the person's last input and none races it.
   ///
   /// - Parameter lease: The sign-in's lease.
-  func beginFinishing(_ lease: String) {
+  func beginFinishing(_ lease: String) async {
     guard signInLease == lease else { return }
     finishing = lease
     heartbeat?.cancel()
     heartbeat = nil
+    releaseHeld(under: lease)
+    await input.settled()
   }
 
   /// Lets go of a sign-in's lease the service ended: input stops and nothing is given back.
@@ -495,7 +500,7 @@ final class ViewerControl {
   /// Input goes again under a held sign-in once the Screen can take it: the window shows and takes the keyboard, on
   /// the Screen, with the picture live.
   func resumeIfEligible() {
-    guard let signInLease, let viewer, focused, viewer.shown, !viewer.session.paused,
+    guard let signInLease, finishing == nil, let viewer, focused, viewer.shown, !viewer.session.paused,
       viewer.session.place == .screen, input.owner != signInLease
     else { return }
     // Only a stopped queue starts again: one already sending keeps what it holds.
@@ -514,12 +519,12 @@ final class ViewerControl {
     return uptime() - frameAt >= Freshness.stale
   }
 
-  /// Whether input may go to the helper now. Only the heartbeat ends control over a stale picture; this side just
-  /// stops sending.
+  /// Whether input may go to the helper now: never once Done was pressed. Only the heartbeat ends control over a stale
+  /// picture; this side just stops sending.
   var canInput: Bool {
     guard let viewer else { return false }
-    return lease != nil && viewer.reading.frame != nil && !viewer.session.paused && focused && viewer.shown
-      && viewer.session.place == .screen && viewer.shownAlert == nil && !pictureStale
+    return lease != nil && finishing == nil && viewer.reading.frame != nil && !viewer.session.paused && focused
+      && viewer.shown && viewer.session.place == .screen && viewer.shownAlert == nil && !pictureStale
   }
 
   /// Queues input for the helper, aimed at the picture on screen, while input may go.
@@ -532,11 +537,11 @@ final class ViewerControl {
 
   /// Queues input that undoes what earlier input holds down, a button's release, whenever control is held: over a
   /// stale picture too, which the service may refuse, and then control ends. With no picture to aim at, control
-  /// ends at once, and the service's release lifts what is held.
+  /// ends at once, and the service's release lifts what is held. Once Done was pressed, the button already went up.
   ///
   /// - Parameter actions: The actions, in order.
   private func enqueueCleanup(_ actions: [InputAction]) {
-    guard lease != nil else { return }
+    guard lease != nil, finishing == nil else { return }
     guard let frame = viewer?.reading.frame else { return releaseControl() }
     input.enqueue(actions, frame: frame.id)
   }
@@ -768,8 +773,12 @@ extension ViewerControl: InputSink {
     }
   }
 
-  /// Input failed: control ends, saying why.
+  /// Input failed: control ends, saying why; once Done was pressed, nothing changes, as Done's own answer says how
+  /// the sign-in ended.
   ///
   /// - Parameter error: Why.
-  func inputFailed(_ error: any Error) { releaseControl(error.localizedDescription) }
+  func inputFailed(_ error: any Error) {
+    guard finishing == nil else { return }
+    releaseControl(error.localizedDescription)
+  }
 }

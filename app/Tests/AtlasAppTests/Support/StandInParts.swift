@@ -40,6 +40,8 @@ final class StandInParts: WindowParts {
   private(set) var panelClosures = 0
   /// Every window made, in order.
   private(set) var windows: [WindowStandIn] = []
+  /// The window presented last, opened or brought forward: the one in front.
+  private(set) var front: WindowStandIn?
 
   /// The coordinator's window making: a stand-in for each window, kept in ``windows``.
   var making: WindowMaking {
@@ -135,6 +137,7 @@ final class StandInParts: WindowParts {
   /// - Returns: The stand-in.
   private func standIn(_ closed: @escaping @MainActor (any WindowPresenting) -> Void) -> WindowStandIn {
     let window = WindowStandIn(closed: closed)
+    window.presented = { [unowned self] in front = $0 }
     windows.append(window)
     return window
   }

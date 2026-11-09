@@ -76,6 +76,33 @@ struct InputQueueTests {
     sink.hold?.resume()
   }
 
+  @Test("settling waits for the batch in flight and every one queued behind it, and returns at once with none")
+  func settlingWaitsForEveryBatch() async throws {
+    await InputQueue()
+      .settled()
+    let sink = RecordingSink()
+    sink.holdLease = "lease"
+    let queue = InputQueue()
+    queue.sink = sink
+    queue.activate("lease")
+    queue.enqueue([.key("a")], frame: "f")
+    try await settle("the first batch was never sent") { sink.hold != nil }
+    queue.enqueue([.key("b")], frame: "f")
+    // Whether, as settling ends, both batches went and the second was answered.
+    let settling = Task {
+      await queue.settled()
+      return sink.sent.count == 2 && sink.hold == nil
+    }
+    sink.hold?.resume()
+    sink.hold = nil
+    try await settle("the queued batch was never sent") { sink.hold != nil }
+    let second = sink.hold
+    sink.hold = nil
+    second?.resume()
+    #expect(await settling.value, "settling ended only once the second batch was answered")
+    #expect(queue.pending.isEmpty)
+  }
+
   @Test("nothing is queued without a lease")
   func noLease() {
     let queue = InputQueue()

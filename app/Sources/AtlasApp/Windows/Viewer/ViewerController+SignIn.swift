@@ -76,8 +76,11 @@ extension ViewerController {
     }
     session.signInEnding = true
     defer { if current() { session.signInEnding = false } }
-    // Done owns the lease from here: no renewal runs, and one under way can't end the sign-in.
-    control.beginFinishing(lease)
+    // Done owns the lease from here: no renewal or input runs, and none under way can end the sign-in. Done goes once
+    // the person's last input, a held button's release included, has been answered.
+    await control.beginFinishing(lease)
+    // Ended meanwhile, as closing the window ends it: there is nothing left to finish.
+    guard current() else { return }
     do {
       // Counted as control work, as an acquisition is: nothing that needs the helper free runs until it answers.
       let ended = try await actions.barrier.tracking { try await service.finishSignIn(lease: lease) }
