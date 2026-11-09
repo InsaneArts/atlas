@@ -500,4 +500,5 @@ pub(super) async fn serve(
 }
 
 #[cfg(test)]
+#[path = "stream_tests.rs"]
 mod tests;

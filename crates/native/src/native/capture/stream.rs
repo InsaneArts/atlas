@@ -2067,4 +2067,5 @@ fn pixels(buffer: &CVPixelBuffer, width: usize, height: usize, shape: Shape) -> 
 }
 
 #[cfg(test)]
+#[path = "stream_tests.rs"]
 mod tests;

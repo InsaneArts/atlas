@@ -670,4 +670,5 @@ fn tokens<'a>(listed: &'a Value, field: &'a str) -> impl Iterator<Item = Token> 
 }
 
 #[cfg(test)]
+#[path = "store_tests.rs"]
 mod tests;

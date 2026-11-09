@@ -321,4 +321,5 @@ pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> 
 }
 
 #[cfg(test)]
+#[path = "local_tests.rs"]
 mod tests;

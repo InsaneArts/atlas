@@ -362,4 +362,5 @@ pub fn element_check(
 }
 
 #[cfg(test)]
+#[path = "elements_tests.rs"]
 mod tests;

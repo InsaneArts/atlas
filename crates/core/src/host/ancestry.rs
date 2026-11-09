@@ -40,4 +40,5 @@ pub(crate) fn ancestors_from(
 }
 
 #[cfg(test)]
+#[path = "ancestry_tests.rs"]
 mod tests;

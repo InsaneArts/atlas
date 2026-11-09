@@ -283,4 +283,5 @@ async fn bind_in(base: &Path, controller: u32, helper: u32) -> Result<(Listeners
 }
 
 #[cfg(test)]
+#[path = "endpoint_tests.rs"]
 mod tests;

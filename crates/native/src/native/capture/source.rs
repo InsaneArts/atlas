@@ -419,4 +419,5 @@ impl Source {
 }
 
 #[cfg(test)]
+#[path = "source_tests.rs"]
 mod tests;

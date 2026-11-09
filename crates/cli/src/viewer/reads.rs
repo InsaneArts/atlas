@@ -563,4 +563,5 @@ fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
 }
 
 #[cfg(test)]
+#[path = "reads_tests.rs"]
 mod tests;

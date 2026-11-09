@@ -391,4 +391,5 @@ impl Decoder {
 }
 
 #[cfg(test)]
+#[path = "wire_tests.rs"]
 mod tests;

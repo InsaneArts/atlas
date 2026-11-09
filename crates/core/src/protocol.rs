@@ -780,4 +780,5 @@ fn region_of(value: &Value, key: &str) -> Result<Region, Value> {
 }
 
 #[cfg(test)]
+#[path = "protocol_tests.rs"]
 mod tests;

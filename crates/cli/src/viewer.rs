@@ -145,4 +145,5 @@ fn unanswered() -> Error {
 }
 
 #[cfg(test)]
+#[path = "viewer_tests.rs"]
 mod tests;

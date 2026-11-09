@@ -17,6 +17,7 @@
 mod print;
 mod processes;
 #[cfg(test)]
+#[path = "installs_tests.rs"]
 mod tests;
 
 use super::{

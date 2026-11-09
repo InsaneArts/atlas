@@ -339,4 +339,5 @@ fn file_target(path: &Path) -> std::io::Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "project_tests.rs"]
 mod tests;

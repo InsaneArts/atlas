@@ -595,4 +595,5 @@ pub fn missing(status: &Value) -> Vec<&'static str> {
 }
 
 #[cfg(test)]
+#[path = "setup_tests.rs"]
 mod tests;

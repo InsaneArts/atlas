@@ -444,4 +444,5 @@ fn refusal(reason: ReadRefusal) -> Value {
 }
 
 #[cfg(test)]
+#[path = "read_tests.rs"]
 mod tests;

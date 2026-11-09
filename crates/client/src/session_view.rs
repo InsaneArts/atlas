@@ -489,4 +489,5 @@ fn looks(row: &Row) -> bool {
 }
 
 #[cfg(test)]
+#[path = "session_view_tests.rs"]
 mod tests;

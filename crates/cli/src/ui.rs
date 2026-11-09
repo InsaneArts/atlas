@@ -76,4 +76,5 @@ pub fn suggestions() -> Vec<String> {
 }
 
 #[cfg(test)]
+#[path = "ui_tests.rs"]
 mod tests;

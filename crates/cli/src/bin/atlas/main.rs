@@ -482,4 +482,5 @@ fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
 }
 
 #[cfg(test)]
+#[path = "main_tests.rs"]
 mod tests;

@@ -243,4 +243,5 @@ fn outcome(row: &Row) -> &'static str {
 }
 
 #[cfg(test)]
+#[path = "facts_tests.rs"]
 mod tests;

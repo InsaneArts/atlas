@@ -455,4 +455,5 @@ fn parse(line: &[u8]) -> Option<Row> {
 }
 
 #[cfg(test)]
+#[path = "session_tests.rs"]
 mod tests;

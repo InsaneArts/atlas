@@ -367,4 +367,5 @@ fn has_helper_job(recorded: bool, daemon_answers: bool) -> bool {
 }
 
 #[cfg(test)]
+#[path = "update_tests.rs"]
 mod tests;

@@ -54,4 +54,5 @@ impl ReadRefusal {
 }
 
 #[cfg(test)]
+#[path = "read_tests.rs"]
 mod tests;

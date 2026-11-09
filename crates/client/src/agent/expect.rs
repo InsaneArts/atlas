@@ -240,4 +240,5 @@ pub(super) fn other_app(window: &Window, app: &Target) -> Error {
 }
 
 #[cfg(test)]
+#[path = "expect_tests.rs"]
 mod tests;

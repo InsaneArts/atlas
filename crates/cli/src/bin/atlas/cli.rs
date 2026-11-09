@@ -1442,4 +1442,5 @@ impl AppTarget {
 }
 
 #[cfg(test)]
+#[path = "cli_tests.rs"]
 mod tests;

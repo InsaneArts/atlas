@@ -304,4 +304,5 @@ fn exit<'a>(line: &'a str, domains: &[String]) -> Option<(&'a str, u64)> {
 }
 
 #[cfg(test)]
+#[path = "console_agents_tests.rs"]
 mod tests;

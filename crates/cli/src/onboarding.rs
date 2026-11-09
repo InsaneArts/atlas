@@ -1083,4 +1083,5 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
 }
 
 #[cfg(test)]
+#[path = "onboarding_tests.rs"]
 mod tests;

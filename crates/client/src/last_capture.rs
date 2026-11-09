@@ -314,4 +314,5 @@ fn write(output: &Path, targets: BTreeMap<String, Entry>) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "last_capture_tests.rs"]
 mod tests;

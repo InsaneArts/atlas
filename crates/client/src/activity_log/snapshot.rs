@@ -217,4 +217,5 @@ fn observed(directory: &Path) {
 }
 
 #[cfg(test)]
+#[path = "snapshot_tests.rs"]
 mod tests;

@@ -896,4 +896,5 @@ fn refused(reply: &Value) -> Error {
 }
 
 #[cfg(test)]
+#[path = "jobs_tests.rs"]
 mod tests;

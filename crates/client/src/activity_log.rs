@@ -584,4 +584,5 @@ fn gathered(rows: &mut [Row], row: &Row, oldest_at: Option<u64>) -> bool {
 }
 
 #[cfg(test)]
+#[path = "activity_log_tests.rs"]
 mod tests;

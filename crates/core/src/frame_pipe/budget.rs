@@ -85,4 +85,5 @@ pub fn admits(source: u64, observers: u64, snapshot: bool) -> bool {
 }
 
 #[cfg(test)]
+#[path = "budget_tests.rs"]
 mod tests;

@@ -53,4 +53,5 @@ fn absent(error: AXError) -> bool {
 }
 
 #[cfg(test)]
+#[path = "ax_tests.rs"]
 mod tests;

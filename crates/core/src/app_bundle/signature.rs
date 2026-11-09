@@ -183,4 +183,5 @@ pub fn require_current(pid: u32, expected: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "signature_tests.rs"]
 mod tests;

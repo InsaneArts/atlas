@@ -455,4 +455,5 @@ fn interrupted(signal: Signal, how: &str) -> Error {
 }
 
 #[cfg(test)]
+#[path = "interrupt_tests.rs"]
 mod tests;

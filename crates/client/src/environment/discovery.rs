@@ -495,4 +495,5 @@ pub async fn discover(
 }
 
 #[cfg(test)]
+#[path = "discovery_tests.rs"]
 mod tests;

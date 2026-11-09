@@ -224,4 +224,5 @@ pub async fn sync(client: &Client, path: &Path, apply: bool) -> Result<Value> {
 }
 
 #[cfg(test)]
+#[path = "profile_tests.rs"]
 mod tests;

@@ -275,4 +275,5 @@ impl Lexer<'_> {
 }
 
 #[cfg(test)]
+#[path = "schema_tests.rs"]
 mod tests;

@@ -794,4 +794,5 @@ impl PartialEq for Slot {
 impl Eq for Slot {}
 
 #[cfg(test)]
+#[path = "before_tests.rs"]
 mod tests;

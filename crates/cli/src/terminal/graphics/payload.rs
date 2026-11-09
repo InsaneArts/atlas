@@ -59,4 +59,5 @@ fn choose(pixels: &[u8], width: u32) -> io::Result<Compression> {
 }
 
 #[cfg(test)]
+#[path = "payload_tests.rs"]
 mod tests;

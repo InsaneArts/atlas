@@ -222,4 +222,5 @@ fn pressable_at(frame: Option<Bounds>, supported: bool, x: f64, y: f64) -> bool 
 }
 
 #[cfg(test)]
+#[path = "system_tests.rs"]
 mod tests;

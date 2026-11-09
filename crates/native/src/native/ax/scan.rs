@@ -498,4 +498,5 @@ fn elements(values: &CFArray<CFType>, asked: usize) -> (Vec<CFRetained<AXUIEleme
 }
 
 #[cfg(test)]
+#[path = "scan_tests.rs"]
 mod tests;

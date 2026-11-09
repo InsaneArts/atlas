@@ -207,4 +207,5 @@ fn holds(element: &Element, state: &State, display: &Bounds) -> Result<(), Why> 
 }
 
 #[cfg(test)]
+#[path = "wait_tests.rs"]
 mod tests;

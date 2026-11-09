@@ -192,4 +192,5 @@ fn short(key: &Key) -> &str {
 }
 
 #[cfg(test)]
+#[path = "names_tests.rs"]
 mod tests;

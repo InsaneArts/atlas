@@ -274,4 +274,5 @@ fn asker(actor: Actor, session: Option<&Key>, interactive: bool) -> Asker<'_> {
 }
 
 #[cfg(test)]
+#[path = "doctor_tests.rs"]
 mod tests;

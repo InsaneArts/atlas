@@ -75,4 +75,5 @@ impl Shape {
 }
 
 #[cfg(test)]
+#[path = "shape_tests.rs"]
 mod tests;

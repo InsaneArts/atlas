@@ -68,4 +68,5 @@ pub fn quiet<T>(path: &Path, gap: Duration, work: impl FnOnce() -> T) -> Option<
 }
 
 #[cfg(test)]
+#[path = "activity_tests.rs"]
 mod tests;

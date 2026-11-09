@@ -619,4 +619,5 @@ fn parse(record: &[u8]) -> Option<Info> {
 }
 
 #[cfg(test)]
+#[path = "process_tests.rs"]
 mod tests;

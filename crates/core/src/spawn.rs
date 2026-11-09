@@ -111,4 +111,5 @@ pub fn status_async(
 }
 
 #[cfg(test)]
+#[path = "spawn_tests.rs"]
 mod tests;

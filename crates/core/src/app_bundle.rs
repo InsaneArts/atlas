@@ -204,4 +204,5 @@ pub fn shipped_app() -> Result<Option<PathBuf>> {
 }
 
 #[cfg(test)]
+#[path = "app_bundle_tests.rs"]
 mod tests;

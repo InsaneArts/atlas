@@ -64,4 +64,5 @@ fn answer(reply: &Value) -> Result<Value> {
 }
 
 #[cfg(test)]
+#[path = "sound_tests.rs"]
 mod tests;
