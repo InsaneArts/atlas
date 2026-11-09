@@ -1,6 +1,6 @@
 use super::{
-    LISTING, LOOKUP, OutputFailure, Pipe, drain, faults, observe_exit, observe_exit_using, output,
-    output_with_limit, stop,
+    LISTING, LOOKUP, OutputFailure, Pipe, drain, faults, observe_exit, output, output_with_limit,
+    stop,
 };
 use faults::Operation;
 use std::{
@@ -492,41 +492,6 @@ fn observing_exit_does_not_reap_the_child() {
         assert_eq!(
             observe_exit(&fixture.child).unwrap_err().raw_os_error(),
             Some(libc::ECHILD)
-        );
-    });
-}
-
-#[test]
-fn observing_exit_retries_interruptions_and_checks_errors_and_identity() {
-    watched(|| {
-        let fixture = Fixture::ready("printf r >&2; read gate");
-        let mut calls = 0;
-        assert!(
-            observe_exit_using(&fixture.child, |pid| {
-                calls += 1;
-                if calls == 1 {
-                    Err(io::Error::from_raw_os_error(libc::EINTR))
-                } else {
-                    Ok(pid as i32)
-                }
-            })
-            .unwrap()
-        );
-        assert_eq!(calls, 2);
-        assert!(!observe_exit_using(&fixture.child, |_| Ok(0)).unwrap());
-        assert_eq!(
-            observe_exit_using(&fixture.child, |_| Err(io::Error::from_raw_os_error(
-                libc::ECHILD
-            )))
-            .unwrap_err()
-            .raw_os_error(),
-            Some(libc::ECHILD)
-        );
-        assert_eq!(
-            observe_exit_using(&fixture.child, |_| Ok(-1))
-                .unwrap_err()
-                .kind(),
-            ErrorKind::Other
         );
     });
 }

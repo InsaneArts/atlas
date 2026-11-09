@@ -533,6 +533,42 @@ async fn a_kept_copy_that_changed_is_not_intact() {
 }
 
 #[tokio::test]
+async fn an_unknown_receipt_version_never_proves_that_collected_outputs_are_kept() {
+    let place = Place::new();
+    place.serve();
+    place.file("a.bin", b"kept output");
+    place.settle();
+    let reply = place.collect(&["a.bin"], 1024).await;
+    let id = ReceiptId::parse(reply["receipt"].as_str().unwrap()).unwrap();
+    let output = place.client.output_dir().unwrap();
+    let task = place.client.task.as_ref().unwrap().key();
+    let path = output
+        .join(COLLECTED)
+        .join(task.as_str())
+        .join(id.as_str())
+        .join("receipt.json");
+    let bytes = fs::read(&path).unwrap();
+    let mut receipt: Value = serde_json::from_slice(&bytes).unwrap();
+    receipt["version"] = json!(VERSION + 1);
+    let future = serde_json::to_vec(&receipt).unwrap();
+    fs::write(&path, &future).unwrap();
+
+    let found = intact(output, Some(task), &id);
+    assert!(found.unknown);
+    assert!(!found.whole());
+    assert!(found.kept.is_empty());
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        future,
+        "unknown recovery evidence is retained"
+    );
+    assert_eq!(
+        fs::read(reply["collected"][0]["path"].as_str().unwrap()).unwrap(),
+        b"kept output"
+    );
+}
+
+#[tokio::test]
 async fn collecting_writes_no_file_names_to_the_activity_log() {
     let place = Place::new();
     place.serve();

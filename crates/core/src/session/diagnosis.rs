@@ -128,7 +128,6 @@ impl Observation {
             "warnings": warnings,
         });
 
-        // The status itself, moved in rather than copied.
         report["session"] = value;
 
         Diagnosis {

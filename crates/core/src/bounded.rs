@@ -303,44 +303,8 @@ fn poll_pipes(
     .map_err(Into::into)
 }
 
-#[allow(unsafe_code, reason = "nix does not expose waitid on macOS")]
 fn observe_exit(child: &Child) -> io::Result<bool> {
-    observe_exit_using(child, |pid| {
-        // SAFETY: an all-zero siginfo_t is valid initialized stack storage.
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        // SAFETY: pid is the owned, positive, unreaped child's PID. info is
-        // initialized, correctly aligned and live throughout waitid. WNOWAIT
-        // preserves child/group identity; the return and si_pid are checked.
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                pid,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: waitid succeeded and info is initialized siginfo_t storage.
-        Ok(unsafe { info.si_pid() })
-    })
-}
-
-fn observe_exit_using(
-    child: &Child,
-    mut observe: impl FnMut(u32) -> io::Result<i32>,
-) -> io::Result<bool> {
-    let pid = command_pid(child.id())?.as_raw();
-    loop {
-        match observe(pid as u32) {
-            Ok(0) => return Ok(false),
-            Ok(observed) if observed == pid => return Ok(true),
-            Ok(_) => return Err(io::Error::other("Unexpected command process identity")),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
+    crate::process::child_exited(child.id())
 }
 
 fn reap(child: &mut Child) -> io::Result<std::process::ExitStatus> {

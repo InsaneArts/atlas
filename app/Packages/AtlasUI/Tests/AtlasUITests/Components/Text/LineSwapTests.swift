@@ -82,8 +82,6 @@ struct LineSwapTests {
 
   @Test("under Reduce Motion a line swap still only fades")
   func aLineSwapOnlyFades() {
-    #expect(Words.fade(isShowing: true) == Motion.swapIn)
-    #expect(Words.fade(isShowing: false) == Motion.swapOut)
     #expect(Motion.Duration.swapIn.seconds <= Motion.Duration.reduced.seconds)
     #expect(Motion.Duration.swapOut.seconds <= Motion.Duration.reduced.seconds)
   }

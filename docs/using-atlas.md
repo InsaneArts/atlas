@@ -92,6 +92,8 @@ To watch inside a Rex terminal pane, use `atlas monitor --terminal`. The [termin
 
 Choose **Take Control** in the viewer to use your mouse and keyboard in the helper. Atlas waits for control to become available before accepting your input. While you hold control, agents cannot send competing input. Choose **Give Back**, or press **Control-Shift-Esc**, when you are done.
 
+In the native viewer and a visible embedded view, control ends when no displayed picture has been confirmed for 6.5 seconds. A confirmed unchanged picture counts as fresh; successful control renewals alone do not. This prevents a frozen picture from holding control indefinitely.
+
 **Stop** cancels agent input underway and blocks further agent actions. It is separate from pausing the picture and from taking control. Use **Resume** when you want agents to act again. An agent must not resume itself after you stop it.
 
 If Atlas reports that an action's outcome is unknown, do not send it again. Observe the helper if it is available, follow Atlas's recovery instructions, then inspect the result before continuing. If the helper is unavailable, complete the login or permission step first. Recovery does not prove that the earlier action did nothing. The [error reference](../agents/atlas/skills/atlas/references/troubleshooting.md) gives the next step for each error code.

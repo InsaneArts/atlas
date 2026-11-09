@@ -177,7 +177,7 @@ fn guard(daemon: &Daemon, expected: &InputEpoch) -> Result<Value> {
 }
 
 /// Whether one frame's capture has begun or was cancelled: it begins only
-/// by claiming its start before its client cancels it or leaves, and once
+/// by claiming its start before the handler observes cancellation or departure, and once
 /// either happened it never begins.
 #[derive(Default)]
 struct Start(AtomicBool);
@@ -257,7 +257,7 @@ fn capture(
 /// unconfirmed, and needs no live source of its own.
 ///
 /// The client sends one byte to cancel it when its action will not wait
-/// longer, or leaves. From then on no capture begins; the cancel is
+/// longer, or leaves. Once the handler observes it, no capture begins; the cancel is
 /// answered only once none can, a capture already begun having ended, so
 /// the action goes on only after every capture for it.
 pub(super) async fn one(

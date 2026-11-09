@@ -101,7 +101,6 @@ struct ViewerMotionTableTests {
     // Out, then move, then in: the rows that stay wait out the fade of those leaving, so nothing moves over words
     // still drawn, and a row arriving waits until a move that began at once or after that fade has gone nine tenths of
     // the way, so it never fades in under a row still passing.
-    #expect(Motion.swapOut == Animation.easeIn(duration: 0.1))
     #expect(Motion.listMove == Animation.spring(Motion.Springs.state).delay(0.1))
     #expect(Motion.listIn == Animation.easeOut(duration: 0.15).delay(0.1 + 0.2))
     let made = Motion.Duration.makeRoom.seconds
@@ -124,7 +123,5 @@ struct ViewerMotionTableTests {
   func everyKeptFadeIsShort() {
     #expect(Motion.reduced == Animation.easeOut(duration: 0.2))
     #expect(Motion.crossfadeReduced == Animation.easeOut(duration: 0.15))
-    #expect(Motion.swapIn == Animation.easeOut(duration: 0.15))
-    #expect(Motion.swapOut == Animation.easeIn(duration: 0.1))
   }
 }

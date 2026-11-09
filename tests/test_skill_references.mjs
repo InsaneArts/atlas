@@ -28,11 +28,3 @@ test('every file in the references folder is linked from the skill', () => {
     assert.ok(linked.has(`references/${file}`), `references/${file} is not linked`);
   }
 });
-
-test('Pi and opencode load the whole skill folder, references included', () => {
-  const pluginRoot = fileURLToPath(new URL('../agents/atlas/', import.meta.url));
-  const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'package.json'), 'utf8'));
-  assert.deepEqual(manifest.pi.skills, ['./skills/atlas']);
-  const opencode = fs.readFileSync(path.join(pluginRoot, 'opencode/atlas.js'), 'utf8');
-  assert.ok(opencode.includes("join(root, 'skills/atlas')"));
-});

@@ -1,6 +1,82 @@
 use super::*;
 
 #[test]
+fn group_signals_hold_the_reap_lock_and_never_reuse_a_retired_snapshot() {
+    let registry = Registry::new();
+    locked(&registry).groups.push(12345);
+    let mut posted = Vec::new();
+    let mut post = |group: &i32, _| {
+        assert!(matches!(
+            registry.tools.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        posted.push(*group);
+    };
+    signal_groups_using(
+        &locked(&registry),
+        nix::sys::signal::Signal::SIGTERM,
+        &mut post,
+    );
+    locked(&registry).groups.clear();
+    signal_groups_using(
+        &locked(&registry),
+        nix::sys::signal::Signal::SIGKILL,
+        &mut post,
+    );
+    assert_eq!(
+        posted,
+        vec![12345],
+        "the retired numeric identity is never signalled again"
+    );
+}
+
+#[test]
+fn reaping_a_tool_retires_its_group_before_the_tool_object_is_dropped() {
+    use std::os::unix::process::CommandExt;
+    static TOOLS: Registry = Registry::new();
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "exit 0"]).process_group(0);
+    let mut tool = start(&TOOLS, &mut command).unwrap();
+    let due = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = tool.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < due, "the isolated tool never exited");
+        std::thread::yield_now();
+    }
+    assert!(tool.running.group.is_none());
+    assert!(locked(&TOOLS).groups.is_empty());
+}
+
+#[test]
+fn pis_writer_uses_the_same_absolute_config_home_as_its_reader() {
+    let home = Path::new("/private/tmp/atlas-pi-config");
+    for verb in ["install", "remove"] {
+        let command = command(
+            Agent::Pi,
+            &[verb, "/bundle/atlas", "--no-approve"],
+            Some(home),
+        );
+        assert_eq!(command.get_current_dir(), Some(home));
+        let configured = command
+            .get_envs()
+            .find(|(name, _)| *name == "PI_CODING_AGENT_DIR");
+        assert_eq!(
+            configured.map(|(_, value)| value),
+            Some(Some(home.as_os_str()))
+        );
+    }
+    assert!(
+        command(Agent::Pi, &["--version"], None)
+            .get_envs()
+            .all(|(name, _)| name != "PI_CODING_AGENT_DIR"),
+        "discovery preserves the caller's configuration"
+    );
+}
+
+#[test]
 fn a_generic_agent_is_cursor_only_in_its_resolved_install_tree() {
     use std::os::unix::fs::symlink;
 
@@ -102,6 +178,7 @@ fn no_tool_starts_once_atlas_is_stopping() {
 struct ProcessFixture {
     group: nix::unistd::Pid,
     cancel: std::sync::mpsc::Sender<()>,
+    watchdog_fired: Arc<std::sync::atomic::AtomicBool>,
     watchdog: Option<std::thread::JoinHandle<()>>,
     worker: Option<std::thread::JoinHandle<()>>,
     result: std::sync::mpsc::Receiver<Result<Output>>,
@@ -127,10 +204,17 @@ impl ProcessFixture {
             .process_group(0);
         let mut tool = start(tools, &mut command).unwrap();
         tool.faults = faults;
+        Self::supervising(tool, limit)
+    }
+
+    fn supervising(tool: Tool, limit: Duration) -> Self {
         let group = nix::unistd::Pid::from_raw(i32::try_from(tool.leader.id()).unwrap());
         let (cancel, cancelled) = std::sync::mpsc::channel();
+        let watchdog_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fired = Arc::clone(&watchdog_fired);
         let watchdog = std::thread::spawn(move || {
             if cancelled.recv_timeout(Duration::from_secs(5)).is_err() {
+                fired.store(true, std::sync::atomic::Ordering::SeqCst);
                 let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
             }
         });
@@ -142,6 +226,7 @@ impl ProcessFixture {
         Self {
             group,
             cancel,
+            watchdog_fired,
             watchdog: Some(watchdog),
             worker: Some(worker),
             result,
@@ -207,6 +292,118 @@ fn an_exited_tool_returns_while_its_descendant_holds_both_pipes() {
         "the leader exited and was reaped while its descendant still owns the pipes"
     );
     assert!(locked(&TOOLS).groups.is_empty());
+}
+
+#[test]
+fn stopping_atlas_kills_a_resistant_descendant_after_its_leader_exits_on_term() {
+    use std::{os::unix::net::UnixListener, os::unix::process::CommandExt};
+
+    let tools = fresh_tools();
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("ready");
+    let ready = UnixListener::bind(&socket).unwrap();
+    ready.set_nonblocking(true).unwrap();
+    let mut command = Command::new("/usr/bin/perl");
+    command
+        .args([
+            "-e",
+            r#"
+use IO::Socket::UNIX;
+pipe(my $ready, my $notify) or die;
+my $child = fork;
+defined($child) or die;
+if ($child == 0) {
+    close $ready;
+    $SIG{TERM} = 'IGNORE';
+    print {$notify} "ready\n";
+    close $notify;
+    while (1) { sleep 30 }
+}
+close $notify;
+<$ready> eq "ready\n" or die;
+close $ready;
+$SIG{TERM} = sub { exit 0 };
+my $socket = IO::Socket::UNIX->new(Type => SOCK_STREAM, Peer => $ARGV[0]) or die;
+print {$socket} "$child\n";
+close $socket;
+while (1) { sleep 30 }
+"#,
+        ])
+        .arg(&socket)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let tool = start(tools, &mut command).unwrap();
+    let fixture = ProcessFixture::supervising(tool, Duration::from_secs(30));
+
+    // The child acknowledges its TERM disposition before the leader publishes
+    // readiness. The outer watchdog owns the whole group on every failure path.
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut stream = loop {
+        match ready.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "the tool did not become ready");
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("the readiness connection failed: {error}"),
+        }
+    };
+    // A peer may close before accept; macOS then rejects SO_RCVTIMEO.
+    // Keep every read nonblocking and bound the whole readiness message.
+    stream.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut said = Vec::new();
+    let mut byte = [0];
+    loop {
+        assert!(
+            Instant::now() < deadline,
+            "the readiness message did not arrive"
+        );
+        match stream.read(&mut byte) {
+            Ok(1) if byte[0] == b'\n' => break,
+            Ok(1) => said.push(byte[0]),
+            Ok(_) => panic!("the readiness connection closed before its message ended"),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("the readiness read failed: {error}"),
+        }
+    }
+    let descendant = std::str::from_utf8(&said).unwrap().trim().parse().unwrap();
+    let descendant = atlas_core::process::info(descendant)
+        .unwrap()
+        .expect("the ready descendant is running");
+    assert_eq!(descendant.pgid, fixture.group.as_raw());
+
+    stop_all(tools, Duration::from_millis(300), Duration::from_secs(2));
+    // SIGKILL posting and kernel teardown are asynchronous. A stopping error
+    // can bypass output collection, so also bound the process completion wait.
+    let _answer = fixture.answer();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !descendant.instance.ended() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+
+    assert!(
+        descendant.instance.ended(),
+        "shutdown escalation must end the TERM-resistant descendant"
+    );
+    assert!(
+        !fixture
+            .watchdog_fired
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "the watchdog must not rescue shutdown escalation"
+    );
+    assert!(locked(tools).groups.is_empty());
+    assert!(locked(tools).held.is_empty());
+    assert_eq!(
+        nix::sys::wait::waitpid(fixture.group, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+        Err(nix::errno::Errno::ECHILD),
+        "the leader was reaped after escalation"
+    );
 }
 
 #[test]

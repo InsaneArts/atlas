@@ -105,6 +105,17 @@ Unit tests, DOM fixtures and rendered previews do not prove that macOS displayed
 a native window or accepted input. Distinguish those checks from native desktop
 evidence, including real Save/Open dialogs.
 
+An installed app's signature is a separate artifact check. With Atlas.app
+installed and signed by the team this build trusts, run:
+
+```sh
+cargo test --package atlas-core --locked the_installed_app_meets_this_builds_signing_requirement -- --ignored
+```
+
+Ordinary bundle tests use their own files; a developer's installed build does
+not determine whether those tests pass. Release signing verification remains
+part of `cargo xtask dist`.
+
 Never test on your own desktop: everything Atlas does belongs in the helper.
 Locking the screen, sleeping, logging out and switching accounts affect
 everyone using the Mac, so check with them first.

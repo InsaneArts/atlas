@@ -256,6 +256,7 @@ fn a_picture_written_after_its_sessions_cleanup_is_never_kept() {
 
 #[test]
 fn a_picture_saved_aside_is_in_place_once_the_process_settles() {
+    crate::test_support::prepare_picture_encoder();
     let directory = tempfile::tempdir().unwrap();
     let output = output(directory.path());
     let at = nanos(SystemTime::now());

@@ -551,12 +551,12 @@ async fn a_cancelled_or_abandoned_frame_never_begins_its_capture() {
             held_before_capture,
         );
         daemon.screen.raw_capture = raw;
-        let (mut client, task) = asked(Arc::new(daemon), 7).await;
+        daemon.source = Arc::new(Source::new(|| Ok(())));
+        let daemon = Arc::new(daemon);
+        let (mut client, task) = asked(daemon.clone(), 7).await;
         until(&WAITING).await;
         if leaves {
             drop(client);
-            tokio::time::sleep(Duration::from_millis(15)).await;
-            HELD.store(false, Ordering::SeqCst);
         } else {
             client.write_all(&[0]).await.unwrap();
             let answered = header(&mut client).await;
@@ -564,11 +564,24 @@ async fn a_cancelled_or_abandoned_frame_never_begins_its_capture() {
                 answered["code"], "cancelled",
                 "answered before it could begin"
             );
-            HELD.store(false, Ordering::SeqCst);
         }
-        task.await.unwrap().unwrap();
-        // The worker is joined by the source before the next test runs.
-        tokio::time::sleep(Duration::from_millis(15)).await;
+        // The handler returns only after observing cancellation and winning
+        // the Start decision; the worker stays held until that is known.
+        let cancelled = tokio::time::timeout(Duration::from_secs(2), task).await;
+        HELD.store(false, Ordering::SeqCst);
+        cancelled.unwrap().unwrap().unwrap();
+        // Acquiring the source's write fence proves the preclaim worker has
+        // left its capture closure before another test resets the globals.
+        assert_eq!(
+            tokio::task::spawn_blocking(move || {
+                daemon
+                    .source
+                    .between_captures(Duration::from_secs(2), || ())
+            })
+            .await
+            .unwrap(),
+            Some(())
+        );
         assert_eq!(CAPTURES.load(Ordering::SeqCst), 0, "leaves: {leaves}");
     }
 }

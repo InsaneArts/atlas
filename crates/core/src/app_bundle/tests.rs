@@ -45,9 +45,12 @@ fn the_bundle_ships_the_app_beside_atlas() {
         !app_signed(&loose.join(APP_EXECUTABLE)),
         "an unsigned file is not the app"
     );
+}
 
+/// Artifact qualification, independent of the source checkout's bundle fixtures.
+#[test]
+#[ignore = "requires an installed Atlas.app signed by the team this build trusts"]
+fn the_installed_app_meets_this_builds_signing_requirement() {
     let installed = Path::new("/Applications/Atlas.app/Contents/MacOS").join(APP_EXECUTABLE);
-    if installed.exists() {
-        assert!(app_signed(&installed));
-    }
+    assert!(app_signed(&installed));
 }
