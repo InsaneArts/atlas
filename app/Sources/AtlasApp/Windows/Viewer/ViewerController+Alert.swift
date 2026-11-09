@@ -43,6 +43,7 @@ extension ViewerController {
     if doneHold.isHolding { return doneHold.end() }
     guard !session.alertRunning, !session.recovering, let shown = shownAlert else { return }
     session.alert = nil
+    control.resumeIfEligible()
     session.recoveryRefusal = nil
     if shown == .helper(.recover), let offered = snapshot.offeredRecovery {
       session.recoveryLater = RecoveryKey(offered, status: reading.status)
@@ -51,6 +52,7 @@ extension ViewerController {
 
   /// The alert's button that goes ahead: its command runs once, whatever else is pressed meanwhile.
   func confirmAlert() async {
+    defer { control.resumeIfEligible() }
     switch shownAlert {
     case .helper(.recover): await recover()
     case .helper(.switchToHelper): await run { await self.switchHelper() }

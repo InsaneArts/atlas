@@ -262,6 +262,8 @@ final class ViewerControl {
 
   /// A fresh picture arrived: the acquisition that waited for it goes on, as Take Control pressed now would.
   func pictureArrived() {
+    // A picture back after a failed one lets a held sign-in's input go again.
+    resumeIfEligible()
     guard let waited = pictureWait, waited == controlGeneration else { return }
     endPictureWait()
     acquiring = false
@@ -411,8 +413,9 @@ final class ViewerControl {
   /// the Screen, with the picture live.
   func resumeIfEligible() {
     guard let signInLease, let viewer, focused, viewer.shown, !viewer.session.paused,
-      viewer.session.place == .screen
+      viewer.session.place == .screen, input.owner != signInLease
     else { return }
+    // Only a stopped queue starts again: one already sending keeps what it holds.
     input.activate(signInLease)
   }
 

@@ -181,6 +181,66 @@ struct ViewerSignInTests {
     #expect(viewer.state.alert?.message == words)
   }
 
+  @Test("a held flow started from a paused picture resumes it, and input goes only once a fresh picture arrives")
+  func aPausedPictureResumes() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    viewer.togglePause()
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    #expect(!viewer.session.paused)
+    viewer.control.sendKey("a")
+    #expect(!service.actions.contains([.key("a")]), "nothing goes before a fresh picture")
+    try await settle("no fresh picture came") { viewer.reading.frame != nil && !viewer.control.pictureStale }
+    viewer.control.sendKey("b")
+    try await settle("input never went") { service.actions.contains([.key("b")]) }
+  }
+
+  @Test("input goes again after a lost picture comes back and after an alert is dismissed")
+  func inputComesBackAfterRecoveryAndAlerts() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    viewer.readingLoop.forgetFrame()
+    viewer.readingLoop.refresh()
+    try await settle("the picture never came back") { viewer.reading.frame != nil }
+    viewer.control.sendKey("a")
+    try await settle("input never went after the picture came back") { service.actions.contains([.key("a")]) }
+    viewer.ask(.restart)
+    viewer.cancelAlert()
+    viewer.control.sendKey("b")
+    try await settle("input never went after the alert") { service.actions.contains([.key("b")]) }
+    #expect(viewer.control.signInLease == "sign-in-lease")
+  }
+
+  @Test("the result speaks for the entry of the browser signed in to, never another browser's for the same site")
+  func theResultMatchesItsBrowser() async throws {
+    let service = ScriptedService()
+    service.reply = [
+      "ready": true, "canObserve": true,
+      "overview": [
+        "mode": "observing",
+        "accounts": [
+          [
+            "kind": "site", "id": "github.com", "name": "github.com", "browser": "org.mozilla.firefox", "added": 1,
+            "level": "ask",
+          ],
+          [
+            "kind": "site", "id": "github.com", "name": "github.com", "browser": "com.google.Chrome", "added": 1,
+            "level": "trusted",
+          ],
+        ],
+      ],
+    ]
+    let viewer = try await ViewerController.watching(service)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: "com.google.Chrome")
+    await viewer.finishSignIn()
+    #expect(viewer.state.alert?.message == "Agents act there without asking.")
+    viewer.cancelAlert()
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: "org.mozilla.firefox")
+    await viewer.finishSignIn()
+    #expect(viewer.state.alert?.message == "Agents ask you before sending there.")
+  }
+
   @Test("a start the service refuses says why and holds nothing")
   func aRefusalIsSaid() async throws {
     let service = ScriptedService()

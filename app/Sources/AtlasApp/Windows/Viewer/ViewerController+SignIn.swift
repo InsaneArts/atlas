@@ -17,6 +17,8 @@ extension ViewerController {
   func startSignIn(_ purpose: SignInPurpose, site: String, browser: String?) async -> String? {
     guard session.signIn == nil else { return SignInWords.underWay }
     if session.place != .screen { show(.screen) }
+    // The person signs in on a live picture: a paused one resumes, and input goes once a fresh one arrives.
+    if session.paused { togglePause() }
     if holdingControl || control.acquiring {
       control.releaseControl()
       if let refused = await actions.barrier.settle() { return refused }
@@ -44,7 +46,11 @@ extension ViewerController {
       if signIn.purpose.asksToRemove {
         session.alert = .removeAfter(site: ended.site, browser: ended.browser ?? signIn.browser)
       } else {
-        session.alert = .signedIn(site: ended.site, added: ended.added != false)
+        session.alert = .signedIn(
+          site: ended.site,
+          browser: ended.browser ?? signIn.browser,
+          added: ended.added != false
+        )
       }
     } catch {
       control.endSignIn()

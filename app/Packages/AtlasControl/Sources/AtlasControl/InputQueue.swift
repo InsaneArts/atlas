@@ -23,7 +23,7 @@ public final class InputQueue {
   /// Where the input goes, and who hears how it went.
   public weak var sink: (any InputSink)?
   /// The lease that owns input now; nil while none does.
-  private(set) var owner: String?
+  public private(set) var owner: String?
   private var generation = 0
   /// The batches waiting, oldest first.
   private(set) var pending: [Item] = []

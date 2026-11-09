@@ -15,8 +15,9 @@ enum ViewerAlert: Equatable {
   ///
   /// - Parameters:
   ///   - site: The site.
+  ///   - browser: The browser it was signed in to, whose entry's level the alert words.
   ///   - added: Whether it joined now, rather than being listed already.
-  case signedIn(site: String, added: Bool)
+  case signedIn(site: String, browser: String?, added: Bool)
   /// Remove the site from the accounts too? Asked after Forget This Site… or Reset the Helper's Browser…, Keep the
   /// default.
   ///

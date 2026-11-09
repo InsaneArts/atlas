@@ -35,7 +35,7 @@
           $0.session.signIn = ViewerSignIn(purpose: .signIn, site: "github.com")
         },
         "Signed in": shown(try reported("agent", state: "working", activity: Self.working)) {
-          $0.session.alert = .signedIn(site: "github.com", added: true)
+          $0.session.alert = .signedIn(site: "github.com", browser: nil, added: true)
         },
         "Forgot a site": shown(try reported("agent", state: "working", activity: Self.working)) {
           $0.session.alert = .removeAfter(site: "github.com", browser: nil)
