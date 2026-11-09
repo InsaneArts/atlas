@@ -31,14 +31,14 @@
           from: viewerControl,
           to: viewer(viewerControl, applying: .giveBack),
           size: viewerSize,
-          lead: .list(Motion.Springs.state)
+          lead: .spring(Motion.Springs.state)
         ),
         ViewerMotionPose(
           "take-control",
           from: viewerWorking,
           to: viewer(viewerWorking, applying: .takeControl),
           size: viewerSize,
-          lead: .list(Motion.Springs.state)
+          lead: .spring(Motion.Springs.state)
         ),
         ViewerMotionPose(
           "ended-open",
