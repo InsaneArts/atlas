@@ -393,6 +393,63 @@ struct ViewerSignInTests {
     #expect(!service.log.contains { $0.hasPrefix("cancel") || $0.hasPrefix("release") })
   }
 
+  @Test(
+    "input slower than a lease period before Done is renewed through, and Done goes and succeeds once it is answered"
+  )
+  func slowInputBeforeDoneIsRenewedThrough() async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    service.hold.insert("input")
+    viewer.control.send(text: "a long paste")
+    try await settle("the paste never reached the service") { service.held["input"] != nil }
+    // Covered, so only the sign-in's heartbeat waits on the clock; the paste stays in flight.
+    viewer.setVisible(false)
+    let finishing = Task { await viewer.finishSignIn() }
+    try await settle("Done was never pressed") { viewer.session.signInEnding }
+    // Eleven seconds, past the ten a lease lasts unrenewed.
+    for _ in 0..<22 {
+      try await clock.untilSleeping(for: ViewerControl.heartbeatEvery, "the sign-in's heartbeat never waited")
+      clock.advance(by: ViewerControl.heartbeatEvery)
+    }
+    try await settle("the lease was not renewed while the paste was in flight") {
+      service.log.filter { $0 == "renew sign-in sign-in-lease" }.count >= 4
+    }
+    #expect(!service.log.contains("done sign-in-lease"), "Done waits for the paste")
+    service.resume("input")
+    await finishing.value
+    #expect(viewer.state.alert?.title == "Added github.com to Accounts", "Done succeeded")
+    let lastRenewal = try #require(service.log.lastIndex(of: "renew sign-in sign-in-lease"))
+    let done = try #require(service.log.firstIndex(of: "done sign-in-lease"))
+    #expect(lastRenewal < done, "renewal stopped before Done was sent")
+    #expect(!service.log.contains { $0.hasPrefix("cancel") || $0.hasPrefix("release") })
+  }
+
+  @Test("a lease lost while the input before Done settles ends the sign-in here, and no Done is sent")
+  func aLeaseLostBeforeDoneEndsIt() async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    service.hold.insert("input")
+    viewer.control.send(text: "a long paste")
+    try await settle("the paste never reached the service") { service.held["input"] != nil }
+    viewer.setVisible(false)
+    service.refusals["sign-in/renew"] = ServiceError("The lease ended.", code: ControlBarrier.leaseLost)
+    let finishing = Task { await viewer.finishSignIn() }
+    try await settle("Done was never pressed") { viewer.session.signInEnding }
+    for _ in 0..<ViewerControl.renewEvery {
+      try await clock.untilSleeping(for: ViewerControl.heartbeatEvery, "the sign-in's heartbeat never waited")
+      clock.advance(by: ViewerControl.heartbeatEvery)
+    }
+    try await settle("the lost lease never ended the sign-in") { viewer.control.signInLease == nil }
+    service.resume("input")
+    await finishing.value
+    #expect(!service.log.contains("done sign-in-lease"))
+    #expect(viewer.state.alert == nil && viewer.state.screen.signingIn == nil)
+  }
+
   @Test("a start whose reply is lost holds the helper's commands until a hold it may have begun can't be alive")
   func aLostStartIsHeld() async throws {
     let service = ScriptedService()
