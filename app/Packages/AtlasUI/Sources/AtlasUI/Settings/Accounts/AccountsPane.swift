@@ -60,7 +60,7 @@ struct AccountsPane: View {
       VStack(alignment: .trailing, spacing: Spacing.m) {
         // The window's title already says Accounts, so the list needs no heading of its own.
         GroupedSection(rows, notes: notes) { row in
-          AccountRow(row: row, isEnabled: !state.isWorking, send: send)
+          AccountRow(row: row, isOpen: state.open == row.id, isEnabled: !state.isWorking, send: send)
         }
         addButtons(signInLeads: false)
           .padding(.trailing, Spacing.m)

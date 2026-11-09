@@ -64,6 +64,19 @@ final class ControlBarrier {
     return try await work()
   }
 
+  /// Counts `work` from now until it ends, running it beside the caller: control work a synchronous caller starts, such
+  /// as ending a held sign-in, which a settle asked for right after waits for.
+  ///
+  /// - Parameter work: The work.
+  func run(_ work: @escaping @MainActor () async -> Void) {
+    begin()
+    // Unstructured, as the caller is synchronous; the count ends with the work.
+    Task {
+      await work()
+      end()
+    }
+  }
+
   /// Holds the barrier for an acquisition whose outcome is unknown: its reply was lost, timed out or cancelled, so the
   /// service may have granted control, or still may. It is held until a lease granted then can no longer be alive
   /// (``lateGrant`` and ``leaseLifetime``) and a status reading has answered since, which a service that is not hung

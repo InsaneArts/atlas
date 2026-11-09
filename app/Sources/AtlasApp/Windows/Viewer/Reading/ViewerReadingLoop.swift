@@ -264,10 +264,10 @@ final class ViewerReadingLoop {
     if !reply.ready {
       reading.ready = false
       if viewer.holdingControl || control.acquiring {
-        control.releaseControl(ViewerWords.controlEnded(reply.overview.reason))
+        control.suspend(ViewerWords.controlEnded(reply.overview.reason))
       }
     } else if viewer.holdingControl, statusReading > control.controlSince, reply.noViewerInControl {
-      control.releaseControl(ViewerWords.releasedElsewhere)
+      control.suspend(ViewerWords.releasedElsewhere)
     }
     viewer.forgetRecoveryOnceNoneNeeded()
     viewer.noteActivitySeen()
@@ -288,7 +288,7 @@ final class ViewerReadingLoop {
     if let viewer, viewer.holdingControl || viewer.control.acquiring, let shown = reading.frame,
       shown.revision.hasPrefix("pipe:") == frame.revision.hasPrefix("pipe:"), shown.revision != frame.revision
     {
-      viewer.control.releaseControl(ViewerWords.helperChanged)
+      viewer.control.suspend(ViewerWords.helperChanged)
     }
     stopAwaiting()
     reading.frame = (frame.id, frame.revision, frame.display)
@@ -309,7 +309,7 @@ final class ViewerReadingLoop {
     reading.frame = nil
     reading.picture = nil
     reading.pictureSize = nil
-    viewer?.control.releaseControl()
+    viewer?.control.suspend()
     reading.unavailable = error.localizedDescription
     awaitPicture()
   }

@@ -35,6 +35,7 @@ extension SettingsPresenter {
       empty: SettingsWords.accountsNone,
       note: note,
       noteAccount: notedAccount?.id,
+      open: snapshot.openAccount,
       notice: notice(snapshot, in: .accounts, busy: snapshot.session.accountsWorking),
       isWorking: snapshot.session.accountsWorking
     )

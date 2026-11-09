@@ -34,8 +34,8 @@ struct SettingsSignInTests {
       commands: ScriptedCommands([:]),
       status: try SettingsAccountsTests.reading([])
     ) { dependencies in
-      dependencies.links.startSignIn = { kind, site, browser in
-        asked.append("\(kind.rawValue) \(site) \(browser ?? "-")")
+      dependencies.links.startSignIn = { purpose, site, browser in
+        asked.append("\(purpose.rawValue) \(site) \(browser ?? "-")")
         return refusal
       }
     }
@@ -58,9 +58,10 @@ struct SettingsSignInTests {
     let status = try SettingsAccountsTests.reading([withBrowser])
     var asked: [String] = []
     let controller = SettingsController.scripted(commands: ScriptedCommands([:]), status: status) { dependencies in
-      dependencies.links.startSignIn = { kind, site, browser in
-        asked.append("\(kind.rawValue) \(site) \(browser ?? "-")")
-        return kind == .reset ? "An agent's background job is still running. Stop it, or try again when it ends." : nil
+      dependencies.links.startSignIn = { purpose, site, browser in
+        asked.append("\(purpose.rawValue) \(site) \(browser ?? "-")")
+        return purpose == .reset
+          ? "An agent's background job is still running. Stop it, or try again when it ends." : nil
       }
     }
     let id = try #require(status.overview.accounts?.first?.id)
@@ -68,6 +69,25 @@ struct SettingsSignInTests {
     await controller.holdFor(.reset, account: id)
     #expect(asked == ["forget github.com org.mozilla.firefox", "reset github.com org.mozilla.firefox"])
     #expect(SettingsAccountsTests.pane(controller).notice?.kind == .problem)
+  }
+
+  @Test("clicking an account opens it, one at a time, and clicking it again closes it")
+  @MainActor func anAccountOpensAndCloses() throws {
+    let controller = SettingsController.scripted(
+      commands: ScriptedCommands([:]),
+      status: try SettingsAccountsTests.reading([
+        SettingsAccountsTests.account("site", "github.com", "github.com", added: SettingsAccountsTests.today),
+        SettingsAccountsTests.account("app", "com.tinyspeck.slackmacgap", "Slack", added: SettingsAccountsTests.today),
+      ])
+    )
+    let rows = try #require(SettingsAccountsTests.pane(controller).rows)
+    controller.send(.toggleAccount(rows[0].id))
+    #expect(SettingsAccountsTests.pane(controller).open == rows[0].id)
+    controller.send(.toggleAccount(rows[1].id))
+    #expect(SettingsAccountsTests.pane(controller).open == rows[1].id, "one at a time")
+    controller.send(.toggleAccount(rows[1].id))
+    #expect(SettingsAccountsTests.pane(controller).open == nil)
+    #expect(rows[0].isSite && !rows[1].isSite, "only a site offers Sign Out, Forget and Reset")
   }
 
   @Test("the sheet says what Atlas does while the person signs in")

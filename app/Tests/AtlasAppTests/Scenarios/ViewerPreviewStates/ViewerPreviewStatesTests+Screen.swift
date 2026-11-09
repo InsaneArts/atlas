@@ -32,7 +32,7 @@
         "Working": shown(try reported("agent", state: "working", activity: Self.working)),
         "Signing in": shown(try reported("controlling", state: "control")) {
           $0.lease = "lease"
-          $0.session.signIn = ViewerSignIn(kind: .signIn, site: "github.com")
+          $0.session.signIn = ViewerSignIn(purpose: .signIn, site: "github.com")
         },
         "Signed in": shown(try reported("agent", state: "working", activity: Self.working)) {
           $0.session.alert = .signedIn(site: "github.com", added: true)

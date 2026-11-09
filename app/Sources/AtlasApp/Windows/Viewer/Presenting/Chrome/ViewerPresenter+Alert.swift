@@ -64,10 +64,14 @@ extension ViewerPresenter {
         ),
         buttons: [AlertCardButton(id: .confirm, title: SignInWords.ok, role: .action)]
       )
-    case .removeAfter(let site, _):
+    case .removeAfter(let site, let browser):
       HelperAlert.destructive(
         SignInWords.removeTitle(site),
-        SignInWords.removeMessage,
+        SignInWords.removeMessage(
+          overview.accounts?
+            .first { $0.kind == .site && $0.key == site && (browser == nil || $0.browser == browser) }?
+            .level ?? .ask
+        ),
         SignInWords.remove,
         cancel: SignInWords.keep,
         phase: progress.phase(running: SignInWords.removing, done: SignInWords.removeTitle(site), doneMessage: "")

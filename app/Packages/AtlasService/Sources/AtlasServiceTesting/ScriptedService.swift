@@ -312,6 +312,8 @@ public final class ScriptedService: ViewerService {
     log.append("start \(kind.rawValue) \(site)")
     let route = ["signIn": "sign-in/start", "forget": "forget/start", "reset": "reset/start"][kind.rawValue] ?? ""
     try await pause(route)
+    // The person's lease is held from here, as the service's status then says.
+    leaseHeld = true
     return SignInStarted(lease: signInLease, kind: kind, site: site, browser: browser)
   }
 
@@ -334,6 +336,7 @@ public final class ScriptedService: ViewerService {
   public func finishSignIn(lease: String) async throws -> SignInEnded {
     log.append("done \(lease)")
     try await pause("sign-in/done")
+    leaseHeld = false
     let started =
       log.last { $0.hasPrefix("start ") }?
       .split(separator: " ")
@@ -351,6 +354,7 @@ public final class ScriptedService: ViewerService {
   public func cancelSignIn(lease: String) async throws {
     log.append("cancel \(lease)")
     try await pause("sign-in/cancel")
+    leaseHeld = false
   }
 
   /// Records an answer and takes its question off `askList`, unless held or failed.

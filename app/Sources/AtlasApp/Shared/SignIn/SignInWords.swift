@@ -13,13 +13,14 @@ enum SignInWords {
   /// The bar over the Screen: what to do there, and that agents are paused and can't see.
   ///
   /// - Parameters:
-  ///   - kind: What the hold is for.
+  ///   - purpose: What the hold is for.
   ///   - site: The site.
   /// - Returns: "Signing in to github.com. Agents are paused and can't see the screen.", say.
-  static func bar(_ kind: SignInKind, site: String) -> String {
+  static func bar(_ purpose: SignInPurpose, site: String) -> String {
     let paused = "Agents are paused and can't see the screen."
-    return switch kind {
+    return switch purpose {
     case .signIn: "Signing in to \(site). \(paused)"
+    case .signOut: "Sign out of \(site) on its page, then press Done. \(paused)"
     case .forget: "Delete \(site)'s data in the browser, then press Done. \(paused)"
     case .reset: "Clear the helper's browser data, then press Done. \(paused)"
     }
@@ -55,8 +56,17 @@ enum SignInWords {
     "Remove \(site) from Accounts too?"
   }
 
-  /// What keeping it means.
-  static let removeMessage = "Agents ask you before sending there while it stays listed."
+  /// What keeping it means, at the account's own level.
+  ///
+  /// - Parameter level: The account's level.
+  /// - Returns: "Agents ask you before sending there while it stays listed.", say.
+  static func removeMessage(_ level: AccountLevel) -> String {
+    switch level {
+    case .lookOnly: "Agents can only look there while it stays listed."
+    case .ask: "Agents ask you before sending there while it stays listed."
+    case .trusted: "Agents act there without asking while it stays listed."
+    }
+  }
   /// The question's action.
   static let remove = "Remove"
   /// The question's action while it runs.

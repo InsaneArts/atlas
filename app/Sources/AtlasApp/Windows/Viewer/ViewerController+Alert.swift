@@ -18,7 +18,7 @@ extension ViewerController {
   /// - Parameter alert: The alert.
   func ask(_ alert: ViewerAlert) {
     guard !session.alertRunning, !session.recovering else { return say(HelperWords.waitForAction) }
-    control.releaseControl()
+    control.suspend()
     if alert == .helper(.recover) {
       session.recoveryLater = nil
       session.recoveryRefusal = nil

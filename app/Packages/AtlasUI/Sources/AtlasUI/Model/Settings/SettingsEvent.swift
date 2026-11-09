@@ -47,6 +47,10 @@ public enum SettingsEvent: Equatable, Sendable {
   case continueSignIn
   /// Cancel: close Sign In to a Site….
   case cancelSignIn
+  /// Opens the account with this id to show what else can be done with it, or closes it.
+  case toggleAccount(String)
+  /// Sign Out… on the account with this id: its site's own page, with agents paused, to sign out there.
+  case signOutAccount(String)
   /// Forget This Site… on the account with this id: delete its data in the helper's browser, with agents paused.
   case forgetAccount(String)
   /// Reset the Helper's Browser… from the account with this id: clear that browser's data, with agents paused.

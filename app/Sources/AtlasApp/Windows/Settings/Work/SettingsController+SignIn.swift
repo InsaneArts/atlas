@@ -1,7 +1,7 @@
 import AtlasService
 import AtlasUI
 
-/// Sign In to a Site…, Forget This Site… and Reset the Helper's Browser… from the Accounts pane: each starts a held
+/// Sign In to a Site…, and Sign Out…, Forget… and Reset… on an opened account, from the Accounts pane: each starts a held
 /// sign-in in the main window, which comes forward on the Screen with control, agents paused and the screen hidden
 /// from them. Sign In asks for the site first in its sheet, which shows why Atlas couldn't start, if it couldn't;
 /// Forget and Reset start at once for the account's site, a refusal said under the list.
@@ -20,6 +20,13 @@ extension SettingsController {
     guard signIn?.isWorking == false else { return }
     signIn?.site = site
     signIn?.refusal = nil
+  }
+
+  /// Opens an account's row to show what else can be done with it, or closes it; one opens at a time.
+  ///
+  /// - Parameter id: The account, as the service names it.
+  func toggleAccount(_ id: String) {
+    openAccount = openAccount == id ? nil : id
   }
 
   /// Cancel: the sheet closes, unless Continue runs.
@@ -43,20 +50,20 @@ extension SettingsController {
     }
   }
 
-  /// Forget This Site… or Reset the Helper's Browser…: starts the held flow for the account's site in the browser it
+  /// Sign Out…, Forget… or Reset… on an opened account: starts the held flow for the account's site in the browser it
   /// was seen in; a refusal says why under the list.
   ///
   /// - Parameters:
-  ///   - kind: Forget or Reset.
+  ///   - purpose: Sign out, forget or reset.
   ///   - id: The account, as the service names it.
-  func holdFor(_ kind: SignInKind, account id: String) async {
+  func holdFor(_ purpose: SignInPurpose, account id: String) async {
     guard
       let account = dependencies.links.status().status.overview.accounts?
         .first(where: { $0.id == id }),
       account.kind == .site
     else { return }
     say(nil, in: .accounts)
-    if let refusal = await dependencies.links.startSignIn(kind, account.key, account.browser) {
+    if let refusal = await dependencies.links.startSignIn(purpose, account.key, account.browser) {
       say(refusal, in: .accounts, kind: .problem)
     }
   }

@@ -253,9 +253,10 @@ final class ViewerController {
   /// Pauses the picture, or resumes it. Either way control goes back; resuming reads afresh.
   func togglePause() {
     session.paused.toggle()
-    control.releaseControl()
+    control.suspend()
     if !session.paused { readingLoop.forgetFrame() }
     readingLoop.watch(shown)
+    control.resumeIfEligible()
   }
 
   /// Resume reading after the window was hidden; the first time it shows, it reads the helper's facts that the status
@@ -266,7 +267,7 @@ final class ViewerController {
     // Unstructured, as AppKit's notification is synchronous: the facts are read beside it.
     if shown, !self.shown, helperFacts.agents == nil { Task { await readHelperFacts() } }
     self.shown = shown
-    if !shown { control.releaseControl() }
+    if shown { control.resumeIfEligible() } else { control.suspend() }
     readingLoop.watch(shown)
     panesModel.followPane()
   }

@@ -284,10 +284,12 @@ final class ViewerControl {
   ///
   /// - Parameter message: What the notice says, if anything.
   func releaseControl(_ message: String? = nil) {
-    // A held sign-in keeps its lease and its hold: input only stops going until the window takes it again.
-    if signInLease != nil {
-      clearInput()
-      if let message { viewer?.say(message) }
+    // Ending control on purpose ends a held sign-in first: Cancel at the service, counted as control work, so whatever
+    // waits on it, such as quitting, waits for the answer.
+    if let signing = signInLease {
+      endSignIn()
+      viewer?.signInEnded(message)
+      barrier.run { [service] in try? await service.cancelSignIn(lease: signing) }
       return
     }
     controlGeneration += 1
@@ -325,6 +327,8 @@ final class ViewerControl {
     lease = granted
     signInLease = granted
     acquiring = false
+    // A status read under way now was asked before the hold, so it cannot know of this lease.
+    controlSince = viewer?.readingLoop.statusReading ?? 0
     input.activate(granted)
     viewer?.say(nil)
     viewer?.readingLoop.refresh()
@@ -387,16 +391,35 @@ final class ViewerControl {
     }
   }
 
-  /// The window stopped taking the keyboard: control goes back.
+  /// The window stopped taking the keyboard: control goes back, or, during a held sign-in, input only stops.
   func lostFocus() {
     focused = false
-    releaseControl()
+    suspend()
+  }
+
+  /// The window can't take input for now, as it was covered, paused or left the Screen: control goes back, or, during
+  /// a held sign-in, input only stops until the Screen can take it again (``resumeIfEligible()``).
+  ///
+  /// - Parameter message: What the notice says, if anything.
+  func suspend(_ message: String? = nil) {
+    guard signInLease != nil else { return releaseControl(message) }
+    clearInput()
+    if let message { viewer?.say(message) }
+  }
+
+  /// Input goes again under a held sign-in once the Screen can take it: the window shows and takes the keyboard, on
+  /// the Screen, with the picture live.
+  func resumeIfEligible() {
+    guard let signInLease, let viewer, focused, viewer.shown, !viewer.session.paused,
+      viewer.session.place == .screen
+    else { return }
+    input.activate(signInLease)
   }
 
   /// The window takes the keyboard again; control waits to be taken.
   func gainedFocus() {
     focused = true
-    if let signInLease { input.activate(signInLease) }
+    resumeIfEligible()
   }
 
   /// The last picture is too old to aim input at; with no window, there is none to aim at.

@@ -17,8 +17,10 @@ extension ViewerController {
   /// - Parameter place: The place.
   func show(_ place: ViewerPlace) {
     guard place != session.place else { return }
-    if holdingControl || control.acquiring { control.releaseControl() }
+    // A held sign-in only stops sending input away from the Screen, and sends again back on it.
+    if holdingControl || control.acquiring { control.suspend() }
     session.place = place
+    control.resumeIfEligible()
     noteActivitySeen()
     panesModel.followPane()
   }

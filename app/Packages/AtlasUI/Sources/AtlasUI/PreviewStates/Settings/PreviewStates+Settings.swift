@@ -46,6 +46,7 @@
         PreviewState(name: "Accounts, look only", value: settingsAccountsLookOnly),
         PreviewState(name: "Sign in to a site", value: settingsSignIn),
         PreviewState(name: "Sign in to a site, refused", value: settingsSignInRefused),
+        PreviewState(name: "Accounts, one opened", value: settingsAccountOpened),
       ]
     }
 

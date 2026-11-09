@@ -22,7 +22,7 @@ extension ViewerPresenter {
       ask: snapshot.session.signIn == nil ? ask(snapshot) : nil,
       signingIn: snapshot.session.signIn.map { signIn in
         SigningInBarState(
-          text: SignInWords.bar(signIn.kind, site: signIn.site),
+          text: SignInWords.bar(signIn.purpose, site: signIn.site),
           isWorking: snapshot.session.signInEnding
         )
       }

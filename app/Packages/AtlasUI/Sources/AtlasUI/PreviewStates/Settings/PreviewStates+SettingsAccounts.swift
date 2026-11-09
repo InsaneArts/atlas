@@ -77,6 +77,13 @@
       return state
     }()
 
+    /// The Accounts pane with github.com opened: signing out, forgetting it, resetting the browser and removing it.
+    @MainActor static let settingsAccountOpened: SettingsState = {
+      var state = selecting(.accounts)
+      state.accounts.open = "site\u{1F}github.com"
+      return state
+    }()
+
     /// Sign In to a Site… over the Accounts pane, a site typed.
     @MainActor static let settingsSignIn: SettingsState = {
       var state = selecting(.accounts)

@@ -69,7 +69,9 @@
         next.signIn?.refusal = nil
       case .continueSignIn, .cancelSignIn:
         next.signIn = nil
-      case .forgetAccount, .resetBrowser:
+      case .toggleAccount(let id):
+        next.accounts.open = next.accounts.open == id ? nil : id
+      case .forgetAccount, .resetBrowser, .signOutAccount:
         break
       case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile, .addApp:
         break

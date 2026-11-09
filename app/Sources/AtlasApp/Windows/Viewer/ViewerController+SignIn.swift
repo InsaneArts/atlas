@@ -10,11 +10,11 @@ extension ViewerController {
   /// helper and opens the site, and the window holds the sign-in'"'"'s lease.
   ///
   /// - Parameters:
-  ///   - kind: What it is for.
+  ///   - purpose: What it is for.
   ///   - site: The site.
   ///   - browser: The browser to open; the helper's own when nil.
   /// - Returns: Why it couldn't start, in the service's words; nil when it did.
-  func startSignIn(_ kind: SignInKind, site: String, browser: String?) async -> String? {
+  func startSignIn(_ purpose: SignInPurpose, site: String, browser: String?) async -> String? {
     guard session.signIn == nil else { return SignInWords.underWay }
     if session.place != .screen { show(.screen) }
     if holdingControl || control.acquiring {
@@ -22,8 +22,8 @@ extension ViewerController {
       if let refused = await actions.barrier.settle() { return refused }
     }
     do {
-      let started = try await service.startSignIn(kind, site: site, browser: browser)
-      session.signIn = ViewerSignIn(kind: started.kind, site: started.site, browser: started.browser)
+      let started = try await service.startSignIn(purpose.kind, site: site, browser: browser)
+      session.signIn = ViewerSignIn(purpose: purpose, site: started.site, browser: started.browser)
       control.adoptSignIn(started.lease)
       return nil
     } catch {
@@ -41,9 +41,10 @@ extension ViewerController {
       let ended = try await service.finishSignIn(lease: lease)
       control.endSignIn()
       session.signIn = nil
-      switch ended.kind {
-      case .signIn: session.alert = .signedIn(site: ended.site, added: ended.added != false)
-      case .forget, .reset: session.alert = .removeAfter(site: ended.site, browser: ended.browser ?? signIn.browser)
+      if signIn.purpose.asksToRemove {
+        session.alert = .removeAfter(site: ended.site, browser: ended.browser ?? signIn.browser)
+      } else {
+        session.alert = .signedIn(site: ended.site, added: ended.added != false)
       }
     } catch {
       control.endSignIn()
@@ -66,12 +67,13 @@ extension ViewerController {
     readingLoop.refresh()
   }
 
-  /// The sign-in ended on its own, as its lease was lost: the bar goes and the notice says why.
+  /// The sign-in ended here, as its lease was lost or control was ended on purpose: the bar goes, and the notice says
+  /// why when there is something to say.
   ///
-  /// - Parameter reason: Why, in the service's words.
-  func signInEnded(_ reason: String) {
+  /// - Parameter reason: Why, in the service's words; nil says nothing.
+  func signInEnded(_ reason: String?) {
     session.signIn = nil
-    say(reason)
+    if let reason { say(reason) }
   }
 
   /// Takes the site a Forget or Reset was for off the accounts, as Remove from List… does; one no longer listed is

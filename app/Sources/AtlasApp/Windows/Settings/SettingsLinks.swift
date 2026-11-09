@@ -33,5 +33,5 @@ struct SettingsLinks {
   var setLevel: @MainActor (AccountLevel, ViewerStatus.Account) async throws -> Void = { _, _ in }
   /// Starts a held sign-in in the main window, which comes forward on the Screen: what it is for, the site and the
   /// browser. Returns why it couldn't start, or nil when it did.
-  var startSignIn: @MainActor (SignInKind, String, String?) async -> String? = { _, _, _ in nil }
+  var startSignIn: @MainActor (SignInPurpose, String, String?) async -> String? = { _, _, _ in nil }
 }

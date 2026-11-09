@@ -10,6 +10,8 @@ public struct SettingsAccountsState: Equatable, Sendable {
   public var note: String?
   /// The account the note is about, by its row's id, whose level Change… sets; nil for none.
   public var noteAccount: String?
+  /// The account whose row is open, showing what else can be done with it, by its row's id; nil for none.
+  public var open: String?
   /// What the last change said, under the list; nil for nothing.
   public var notice: SettingsNote?
   /// Whether a change runs now, so the buttons wait.
@@ -22,6 +24,7 @@ public struct SettingsAccountsState: Equatable, Sendable {
   ///   - empty: What the pane says when there are none.
   ///   - note: The note Atlas shows once after it added an account.
   ///   - noteAccount: The account the note is about; none by default.
+  ///   - open: The account whose row is open; none by default.
   ///   - notice: What the last change said.
   ///   - isWorking: Whether a change runs now.
   public init(
@@ -29,6 +32,7 @@ public struct SettingsAccountsState: Equatable, Sendable {
     empty: EmptyMessageState,
     note: String? = nil,
     noteAccount: String? = nil,
+    open: String? = nil,
     notice: SettingsNote? = nil,
     isWorking: Bool = false
   ) {
@@ -36,6 +40,7 @@ public struct SettingsAccountsState: Equatable, Sendable {
     self.empty = empty
     self.note = note
     self.noteAccount = noteAccount
+    self.open = open
     self.notice = notice
     self.isWorking = isWorking
   }
