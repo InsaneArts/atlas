@@ -11,7 +11,11 @@ extension ViewerClient {
   public func asks() async throws(ServiceError) -> AskList {
     let route = base.appendingPathComponent("asks.json")
     let (data, response) = try await fetched(request(to: route), limit: Self.listLimit)
-    return try await Self.decodedReply { () throws(ServiceError) in try Self.asks(data, response: response) }
+    do {
+      return try await Self.decodedReply { () throws(ServiceError) in try Self.asks(data, response: response) }
+    } catch {
+      throw unsecured(error)
+    }
   }
 
   /// An `asks.json` reply read: only a 200 carries questions, so a refusal never reads as none.

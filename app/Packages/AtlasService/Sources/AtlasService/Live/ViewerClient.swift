@@ -18,20 +18,27 @@ public struct ViewerClient: ViewerService {
   let origin: String
   /// An ephemeral session that caches nothing.
   let session: URLSession
+  /// This launch's secret, which the viewer service gave the app on its standard input and asks for on every request
+  /// that only the person's app may make; kept in memory only, never printed. Nil sends none, as for a render.
+  let appSecret: String?
+  /// The header that carries ``appSecret``.
+  static let secretHeader = "X-Atlas-App-Secret"
 
   /// A client for `text`, which must be the service's local capability URL.
   ///
   /// - Parameters:
   ///   - text: The capability URL: `http://127.0.0.1:<port>/<secret>/`, surrounding whitespace allowed.
+  ///   - appSecret: This launch's secret, sent on every request; none by default.
   ///   - session: The session requests go through; by default an ephemeral one that caches nothing and gives up
   ///     after ``timeout``. A test passes one of its own, answered by a scripted protocol.
-  public init?(_ text: String, session: URLSession? = nil) {
+  public init?(_ text: String, appSecret: String? = nil, session: URLSession? = nil) {
     guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
       url.scheme == "http", url.host == "127.0.0.1", let port = url.port,
       url.absoluteString.hasSuffix("/")
     else { return nil }
     base = url
     origin = "http://127.0.0.1:\(port)"
+    self.appSecret = appSecret
     if let session {
       self.session = session
     } else {
@@ -68,6 +75,7 @@ public struct ViewerClient: ViewerService {
     var request = URLRequest(url: url)
     request.timeoutInterval = timeout
     request.setValue(origin, forHTTPHeaderField: "Origin")
+    if let appSecret { request.setValue(appSecret, forHTTPHeaderField: Self.secretHeader) }
     return request
   }
 
@@ -278,10 +286,25 @@ public struct ViewerClient: ViewerService {
     }
     let ok = Self.decoded(Acknowledgement.self, from: data)?.ok == true
     guard (response as? HTTPURLResponse)?.statusCode == 200, ok else {
-      throw Self.failure(data, fallback: "Request was refused")
+      throw unsecured(Self.failure(data, fallback: "Request was refused"))
     }
     return data
   }
+
+  /// A refusal as the person reads it: one for want of this launch's secret says how to get it back, never what the
+  /// service said, which names no secret anyway.
+  ///
+  /// - Parameter refusal: The service's refusal.
+  /// - Returns: The refusal to show.
+  func unsecured(_ refusal: ServiceError) -> ServiceError {
+    guard appSecret == nil, refusal.code == Self.permissionCode else { return refusal }
+    return ServiceError(Self.noSecret, code: Self.permissionCode)
+  }
+
+  /// The code of a refusal for want of this launch's secret, among others.
+  static let permissionCode = "permission"
+  /// What a refusal for want of this launch's secret says.
+  static let noSecret = "Atlas lost its private link to the helper's service. Quit Atlas and open it again."
 
   /// Every POST reply says whether it worked.
   private struct Acknowledgement: Decodable { let ok: Bool? }

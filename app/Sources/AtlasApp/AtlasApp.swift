@@ -57,8 +57,8 @@ enum AtlasApp {
     }
   }
 
-  /// The app itself, once `atlas menubar` has given it the viewer's capability URL on stdin: the menu bar item and the
-  /// windows it opens, built by the container. With `--render PATH`, the panel is drawn instead.
+  /// The app itself, once `atlas menubar` has given it the viewer's capability URL and this launch's secret on stdin:
+  /// the menu bar item and the windows it opens, built by the container. With `--render PATH`, the panel is drawn instead.
   ///
   /// - Parameters:
   ///   - configuration: What the app took from its environment.
@@ -73,7 +73,16 @@ enum AtlasApp {
     render: String?,
     dark: Bool
   ) {
-    guard let line = readLine(), let service = ViewerClient(line) else {
+    guard let line = readLine() else {
+      FileHandle.standardError
+        .write(Data("Expected the viewer URL on stdin\n".utf8))
+      exit(2)
+    }
+    // The launch's secret comes next, kept in memory only; a render is given none. A line that is not one is the
+    // parent's first, passed on once the app listens.
+    let next = render == nil ? readLine() : nil
+    let secret = next.flatMap(ViewerClient.appSecret(fromLine:))
+    guard let service = ViewerClient(line, appSecret: secret) else {
       FileHandle.standardError
         .write(Data("Expected the viewer URL on stdin\n".utf8))
       exit(2)
@@ -92,6 +101,8 @@ enum AtlasApp {
       )
     )
     app.delegate = delegate
+    // Unstructured, so the line is handled once the app runs, as every later one is.
+    if secret == nil, let next { Task { @MainActor in delegate.received(next) } }
     listen(received: { line in delegate.received(line) }, closed: { delegate.parentClosed() })
     withExtendedLifetime(delegate) { app.run() }
   }
