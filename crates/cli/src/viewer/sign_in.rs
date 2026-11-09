@@ -177,12 +177,23 @@ impl Viewer {
             .hide_screen(&client.controller, &signing.lease, &signing.hold)?;
         let _opening = ActionPermit::begin(self.lease.clone(), &signing.lease).await?;
         let ownership = self.lease.lock().await.ownership(&signing.lease)?;
+        // Each launch, and its success, only while the sign-in's lease
+        // holds: one that ran out meanwhile has ended the sign-in.
+        let authorize = || async {
+            self.lease
+                .lock()
+                .await
+                .require(&signing.lease)
+                .map_err(|_| sign_in_ended())?;
+            self.signing(&signing.lease).await.map(drop)
+        };
         agent::open_for_person(
             client,
             &ownership,
             signing.browser.app(),
             page,
             signing.browser.new_window(),
+            authorize,
         )
         .await?;
         Ok(())
@@ -245,12 +256,7 @@ impl Viewer {
             .await
             .clone()
             .filter(|signing| signing.lease == owner)
-            .ok_or_else(|| {
-                Error::new(
-                    Code::LeaseLost,
-                    "The sign-in ended because control ended. Start it again.",
-                )
-            })
+            .ok_or_else(sign_in_ended)
     }
 
     /// End the sign-in under the lease `released`, which is ending: the
@@ -269,6 +275,14 @@ impl Viewer {
         let _ = client.controller.end_private();
         true
     }
+}
+
+/// What the person hears of a sign-in whose control ended.
+fn sign_in_ended() -> Error {
+    Error::new(
+        Code::LeaseLost,
+        "The sign-in ended because control ended. Start it again.",
+    )
 }
 
 /// An agent's command still running refuses a sign-in in the person's

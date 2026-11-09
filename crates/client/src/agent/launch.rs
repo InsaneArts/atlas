@@ -46,26 +46,31 @@ pub async fn open(
 /// task claims it. With `new_window`, the browser is started anew with the
 /// URL as its argument in a window of its own, as Chromium browsers pass it
 /// to the copy already running, so their own settings pages open too.
+/// `authorize` says whether the person's lease still holds: it is asked
+/// before each launch, a retry included, and again before success is said.
 ///
 /// # Errors
 ///
-/// Returns identity, launch and recording failures, and `spawn-failed` when
-/// macOS could not open it. A lost acknowledgement may follow a launch that
-/// went ahead; its outcome stays pending as any run's.
-pub async fn open_for_person(
+/// Returns `authorize`'s refusal, identity, launch and recording failures,
+/// and `spawn-failed` when macOS could not open it. A lost acknowledgement
+/// may follow a launch that went ahead; its outcome stays pending as any
+/// run's.
+pub async fn open_for_person<Authorized>(
     client: &Client,
     ownership: &Ownership,
     app: &str,
     url: &str,
     new_window: bool,
-) -> Result<Value> {
+    authorize: impl Fn() -> Authorized,
+) -> Result<Value>
+where
+    Authorized: std::future::Future<Output = Result<()>>,
+{
     let mut argv = vec!["/usr/bin/open".to_owned()];
     if new_window {
         argv.push("-n".to_owned());
     }
-    argv.push("-a".to_owned());
-    let named_at = argv.len();
-    argv.push(app.to_owned());
+    argv.extend(["-a".to_owned(), app.to_owned()]);
     if new_window {
         argv.extend(["--args".to_owned(), "--new-window".to_owned()]);
     } else {
@@ -73,7 +78,14 @@ pub async fn open_for_person(
     }
     argv.push(url.to_owned());
 
-    let (finished, _) = launch(client, ownership, Some(app), argv, Some(named_at)).await?;
+    authorize().await?;
+    let mut finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
+    if !finished.succeeded && cleared_stale_launch(client, ownership, &finished).await? {
+        authorize().await?;
+        finished = client.run_finished(ownership, argv, OUTPUT).await?;
+    }
+    // A lease that ran out meanwhile ends the sign-in, opened or not.
+    authorize().await?;
     if !finished.succeeded {
         return Err(not_opened(&finished, &[]));
     }

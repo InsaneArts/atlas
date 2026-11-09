@@ -625,3 +625,31 @@ async fn a_frame_read_during_a_sign_in_is_never_shown_from_the_cache_to_anyone_b
         .unwrap();
     assert_eq!(key, "shown");
 }
+
+#[tokio::test]
+async fn a_launch_the_lease_runs_out_during_ends_the_sign_in_and_cleans_up() {
+    let directory = tempfile::tempdir().unwrap();
+    let (viewer, helper) = viewer_of(directory.path());
+    let steps = Mutex::new(Vec::new());
+    let body = json!({"site": "github.com", "browser": "com.google.Chrome"});
+
+    let refused = helper
+        .serve(viewer.sign_in_start(HoldKind::SignIn, &body), |request| {
+            let answer = step(&steps, Fails::Nothing, request);
+            // The browser opens just as the person's lease runs out.
+            if steps.lock().unwrap().last().unwrap().starts_with("open ") {
+                viewer.lease.try_lock().unwrap().expire_for_test();
+            }
+            answer
+        })
+        .await
+        .unwrap_err();
+
+    assert_eq!(refused.code, Code::LeaseLost);
+    assert_eq!(
+        refused.error,
+        "The sign-in ended because control ended. Start it again."
+    );
+    assert_eq!(steps.lock().unwrap().last().unwrap(), "release");
+    nothing_left(&viewer).await;
+}
