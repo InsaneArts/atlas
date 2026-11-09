@@ -4,6 +4,8 @@
 public struct ViewerActivityState: Equatable, Sendable {
   /// What VoiceOver calls the pane: "Activity", or the chosen session's name.
   public var title: String
+  /// Whose work the list shows: every session's, or the chosen one's.
+  public var session: ViewerSessionChoice
   /// What VoiceOver says of it, such as "38 actions today"; empty while the log holds nothing.
   public var meta: String
   /// The filters, and which one is chosen.
@@ -20,11 +22,15 @@ public struct ViewerActivityState: Equatable, Sendable {
   public var sheet: ViewerPictureSheet?
   /// The task replayed over the whole window; nil shows none.
   public var replay: ViewerReplayState?
+  /// Whether the rows are a reading of whose work the pane lists: false while a reading for an earlier choice shows
+  /// what it holds of this one, until this one's own arrives, so its rows replace them as one list, never as new work.
+  public var settled: Bool
 
   /// Creates the Activity pane's state.
   ///
   /// - Parameters:
   ///   - title: What VoiceOver calls the pane; "Activity" by default.
+  ///   - session: Whose work the list shows; every session's by default.
   ///   - meta: What VoiceOver says of it.
   ///   - filters: The filters, and which one is chosen.
   ///   - days: The days and their sessions, runs and steps.
@@ -33,8 +39,10 @@ public struct ViewerActivityState: Equatable, Sendable {
   ///   - showsFilters: Whether the filters show; they do by default.
   ///   - sheet: The picture sheet; none by default.
   ///   - replay: The task replayed; none by default.
+  ///   - settled: Whether the rows are a reading of whose work the pane lists; they are by default.
   public init(
     title: String = "Activity",
+    session: ViewerSessionChoice = .all,
     meta: String,
     filters: CapsuleTabsState<ViewerActivityFilter>,
     days: [ViewerActivityDay],
@@ -42,9 +50,11 @@ public struct ViewerActivityState: Equatable, Sendable {
     query: String = "",
     showsFilters: Bool = true,
     sheet: ViewerPictureSheet? = nil,
-    replay: ViewerReplayState? = nil
+    replay: ViewerReplayState? = nil,
+    settled: Bool = true
   ) {
     self.title = title
+    self.session = session
     self.meta = meta
     self.filters = filters
     self.days = days
@@ -53,6 +63,13 @@ public struct ViewerActivityState: Equatable, Sendable {
     self.showsFilters = showsFilters
     self.sheet = sheet
     self.replay = replay
+    self.settled = settled
+  }
+
+  /// Which list shows: whose work, under which filter, and whether it is that work's own reading yet. A change of it
+  /// is the person's own, or their choice's reading arriving, which swaps the whole list rather than bringing rows in.
+  public var list: ViewerActivityListKey {
+    ViewerActivityListKey(session: session, filter: filters.selected, settled: settled)
   }
 
   /// The newest run's identity, whose change is new work arriving at the top.

@@ -16,6 +16,10 @@ extension Color {
   static let brandOpencodeInner = Color(red: 0x5A / 255, green: 0x58 / 255, blue: 0x58 / 255)
   /// The white silhouette on a dark brand card.
   static let brandWhite = Color.white
+  /// Atlas's orbit on its white tile at the sidebar's foot: graphite #3A3A3C in either appearance.
+  static let brandAtlasInk = Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3C / 255)
+  /// The hairline round Atlas's white tile, which only the light ground needs: black at 0.14, or none.
+  static let brandAtlasEdge = Color(light: .black(0.14), dark: .black(0))
   /// Pi's graphite card, at its top edge.
   static let brandPiTop = Color(red: 0x2B / 255, green: 0x2B / 255, blue: 0x2E / 255)
   /// Pi's graphite card, at its bottom edge.
@@ -151,11 +155,8 @@ extension Color {
   static let groundSelected = Color(light: .white(1), dark: .rgb(0x343436))
   /// A row under the pointer: black at 0.035, or white at 0.035.
   static let fillRowHover = Color(light: .black(0.035), dark: .white(0.035))
-  /// A tile resting on the card, such as an open app's: black at 0.035, or white at 0.045.
+  /// A tile resting on the card, such as the panel's service note: black at 0.035, or white at 0.045.
   static let fillTile = Color(light: .black(0.035), dark: .white(0.045))
-  /// A tile raised off the card in place, such as the app in front: white under ``Elevation/selection``'s shadow, or
-  /// white at 0.10 with none.
-  static let fillTileRaised = Color(light: .white(1), dark: .white(0.1))
   /// A control's fill, such as a secondary capsule, a symbol tile or a hovered menu row: black at 0.05, or white at
   /// 0.08.
   static let fillControl = Color(light: .black(0.05), dark: .white(0.08))

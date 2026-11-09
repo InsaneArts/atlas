@@ -13,8 +13,6 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case speakerMuted = "speaker.slash.fill"
   /// The helper can be heard; pressing mutes it.
   case speakerOn = "speaker.wave.2.fill"
-  /// Stop showing the window outlined on the screen, in its label.
-  case clear = "xmark"
   /// Empty a search field.
   case clearText = "xmark.circle.fill"
   /// Keys, while in control.
@@ -29,8 +27,6 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case expand = "arrow.up.left.and.arrow.down.right"
   /// A search field.
   case search = "magnifyingglass"
-  /// Show on Screen.
-  case show = "eye"
   /// Check again.
   case reload = "arrow.clockwise"
   /// The previous screenshot.
@@ -79,10 +75,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case sparkles
   /// About.
   case info = "info.circle"
-  /// Activity, in the Library.
+  /// Activity, on its empty message.
   case list = "list.bullet"
-  /// Apps, in the Library.
-  case windows = "macwindow.on.rectangle"
   /// A set of pictures, in the component samples.
   case photos = "photo.on.rectangle"
   /// A picture: a step's picture button.

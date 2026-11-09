@@ -2,7 +2,7 @@
   import SwiftUI
 
   /// The main window's motion, to watch and interrupt in a preview: a button for each transition
-  /// (``ViewerMotionMove``), the window's own and Activity's and Apps', a burst of ten footer lines a second, a switch
+  /// (``ViewerMotionMove``), the window's own and Activity's, a burst of ten footer lines a second, a switch
   /// that turns each move back 120 ms after it starts, to show it reverses from where it is, and one that plays the
   /// last move again every 1.5 seconds.
   struct ViewerMotionLab: View {

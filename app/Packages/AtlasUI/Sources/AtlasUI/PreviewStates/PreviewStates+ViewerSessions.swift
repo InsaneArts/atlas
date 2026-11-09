@@ -165,16 +165,14 @@
     /// Claude Code's facts once the sessions' list names it: where and when it started, the apps it opened, the copy
     /// Atlas made, its plan and its screenshots.
     static let claudeRecordFacts = [
-      "Host: Claude Code", "Folder: understudy", "Started: 09:12", "Last seen: just now", "Opie: Open · a copy",
-      "Notes: Closed", "Copy of Opie", "Environment plan: Applied · can roll back · made at 10:02", "Screenshots: 6",
+      "Host: Claude Code", "Folder: understudy", "Started: 09:12", "Last seen: just now", "Opie", "Notes",
+      "Copy of Opie", "Environment plan: Applied · can roll back · made at 10:02", "Screenshots: 6",
     ]
 
-    /// Claude Code chosen on the Screen once the sessions' list names it: its row's tooltip and menu list every fact
-    /// about it, and its menu offers Clean Up This Session's Work….
+    /// Claude Code chosen, back on the Screen, where no row is drawn chosen, once the sessions' list names it: its
+    /// row's tooltip and menu list every fact about it, and its menu offers Clean Up This Session's Work….
     @MainActor public static let viewerSessionChosen: ViewerState = {
       var state = viewerSessions
-      state.sidebar.sessions.chosen = .one(SessionSamples.claudeKey)
-      state.sidebar.library = viewerLibrary(counts: [.apps: 1])
       state.sidebar.sessions.groups[0].rows[0] = viewerSessionRow(
         SessionSamples.claudeKey,
         icon: SessionSamples.claudeIcon,

@@ -35,12 +35,6 @@ extension ViewerWords {
   static let sessionsUnread = "Couldn't read sessions; this may be out of date"
   /// The Terminal session's host, which no host named.
   static let noHost = "None named"
-  /// An app the session opened, open in the helper now.
-  static let appOpen = "Open"
-  /// An app the session opened from a copy Atlas made, open now.
-  static let appOpenCopy = "Open · a copy"
-  /// An app the session opened, closed since.
-  static let appClosed = "Closed"
   /// A plan whose phase is not known.
   static let plan = "A plan"
 

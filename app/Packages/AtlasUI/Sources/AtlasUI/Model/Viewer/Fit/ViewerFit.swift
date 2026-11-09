@@ -2,8 +2,8 @@ import CoreGraphics
 
 /// How the main window's content gives way to the window's size, as its controller decides it from each resize and
 /// the views draw it: the sidebar beside the card or hidden by the width; the footer's capsules turning into circles
-/// and its line giving up its words as the card narrows; the header giving up what its holder does; and the Library
-/// folding into a row of circles in a short window. Each part changes only once its threshold is crossed by its room
+/// and its line giving up its words as the card narrows; the header giving up what its holder does; and the helper's
+/// row folding into its mark in a short window. Each part changes only once its threshold is crossed by its room
 /// (``ViewerThreshold``), so a window held near one never flickers and a resize changes the content only at those
 /// steps.
 public struct ViewerFit: Equatable, Sendable {
@@ -13,7 +13,7 @@ public struct ViewerFit: Equatable, Sendable {
   public var footer: ViewerFooterFit
   /// Whether the header keeps what its holder does after them, such as "has the helper".
   public var showsWhat: Bool
-  /// Whether the window is short enough that the Library folds into a row of circles.
+  /// Whether the window is short enough that the helper's row folds into its mark.
   public var isShort: Bool
 
   /// Creates a fit; by default everything whole, as in a large window.
@@ -22,7 +22,7 @@ public struct ViewerFit: Equatable, Sendable {
   ///   - sidebar: How the width leaves the sidebar; whole by default.
   ///   - footer: How the footer stands; whole by default.
   ///   - showsWhat: Whether the header keeps what its holder does; yes by default.
-  ///   - isShort: Whether the Library folds into a row; no by default.
+  ///   - isShort: Whether the helper's row folds into its mark; no by default.
   public init(
     sidebar: ViewerSidebarMode = .full,
     footer: ViewerFooterFit = .full,
@@ -36,7 +36,8 @@ public struct ViewerFit: Equatable, Sendable {
   }
 
   /// The fit for a window `size`, from this one: the sidebar by the width, then the footer and the header by the
-  /// card's width beside the sidebar as it then stands, hidden if the person hid it, and the Library by the height.
+  /// card's width beside the sidebar as it then stands, hidden if the person hid it, and the helper's health by the
+  /// height.
   ///
   /// - Parameters:
   ///   - size: The window's size.

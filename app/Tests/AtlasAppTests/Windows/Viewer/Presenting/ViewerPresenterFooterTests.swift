@@ -75,8 +75,6 @@ struct ViewerPresenterFooterTests {
   func tooltipsNameTheirShortcuts() throws {
     var snapshot = watching(try status(["overview": ["mode": "agent", "state": "working"]]))
     let state = ViewerPresenter.state(snapshot)
-    #expect(state.sidebar.library.map(\.help) == ["Activity (⌘2)", "Apps (⌘3)"])
-    #expect(state.sidebar.library.map(\.place) == [.activity, .apps])
     #expect(state.footer.controls.pause?.help == "Pause Picture (⇧⌘P)")
     #expect(state.footer.controls.pause?.label == "Pause Picture")
     #expect(state.footer.controls.control?.help == "Take Control (⌃⇧⎋)")

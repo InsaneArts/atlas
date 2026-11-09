@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The row of controls that holds ``ActionSlot``s, animating as one: when the slots' controls come or go, every control
-/// in the row moves together, so the neighbours close or open the gap while the slot grows or shrinks.
+/// in the row moves together, and a slot's control rides the same move, showing only at its end as it comes and gone
+/// by its start as it goes.
 struct ActionSlotRow: ViewModifier {
   /// Whether the slots' controls show, the value the row animates on.
   let isShown: Bool
@@ -13,6 +14,6 @@ struct ActionSlotRow: ViewModifier {
   /// - Returns: The row, animated on `isShown`.
   func body(content: Content) -> some View {
     content
-      .animation(ActionSlot.animation(isShown: isShown, reduceMotion: reduceMotion), value: isShown)
+      .animation(ActionSlot.animation(reduceMotion: reduceMotion), value: isShown)
   }
 }

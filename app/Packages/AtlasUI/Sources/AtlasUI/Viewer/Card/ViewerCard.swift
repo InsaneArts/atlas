@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The content card: one solid card in the card's own colour, its corners nested in the window's, with a hairline edge
 /// and nothing else round it; the header at its top, the stage filling the middle, and the footer at its foot. The
-/// stage is the caller's: the Screen or a list from the Library, with the small screen in its corner.
+/// stage is the caller's: the Screen or Activity, with the small screen in its corner.
 struct ViewerCard<Stage: View>: View {
   /// The header's state.
   let header: ViewerHeaderState

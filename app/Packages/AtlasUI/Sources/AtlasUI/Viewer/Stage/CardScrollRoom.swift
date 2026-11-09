@@ -31,6 +31,17 @@ enum CardScrollRoom {
     style == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : .zero
   }
 
+  /// Whether the list's scroll bar may show: an overlay one only once the pane has faded in, so it never flashes over
+  /// a fade; a classic one always, as it takes room beside the rows and hiding it would lay the list out again.
+  ///
+  /// - Parameters:
+  ///   - settled: Whether the pane has faded in.
+  ///   - gutter: The room kept beside the rows for the scroll bar (``scrollerGutter(_:)``).
+  /// - Returns: Whether it may show.
+  static func showsScroller(settled: Bool, gutter: CGFloat) -> Bool {
+    settled || gutter > .zero
+  }
+
   /// How far a selected row's room reaches past it, which a step scrolls wholly into view
   /// (``View/listSelection(_:isSelected:)``): ``ViewerLayout/listRevealMargin`` all round, for its ring, and the small
   /// screen's band at the end it floats over, so the row lands clear of it.

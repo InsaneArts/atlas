@@ -146,12 +146,13 @@ public protocol ViewerService: Sendable {
   /// - Throws: ``ServiceError`` when the service cannot be read or refuses.
   func activity() async throws(ServiceError) -> ActivityLog
 
-  /// Reads the apps open in the helper with their windows. Reading them records nothing and takes no control.
+  /// Reads what one host session did in the helper: its newest rows from every file the log keeps, and whether they
+  /// were all cleared to save space. Reading it records nothing.
   ///
-  /// - Returns: The apps, front to back, and the sessions that opened them, every missing field at its safe default.
-  /// - Throws: ``ServiceError`` when the service cannot be read or cannot reach the helper; a refusal never reads as
-  ///   no apps.
-  func apps() async throws(ServiceError) -> HelperAppList
+  /// - Parameter session: The session's key; empty for Terminal, the agents' commands no host named.
+  /// - Returns: The session's rows, newest first, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` when the service cannot be read or refuses.
+  func activity(of session: String) async throws(ServiceError) -> ActivityLog
 
   /// Reads the screenshots agents took in the helper, and the folder they are kept in.
   ///

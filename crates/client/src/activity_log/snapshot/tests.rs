@@ -1,6 +1,6 @@
 use super::*;
 use serde_json::{Value, json};
-use std::{fs, io::Write};
+use std::{fs, io::Write, os::unix::fs::MetadataExt};
 
 fn log(times: &[u64]) -> String {
     times

@@ -6,21 +6,17 @@ import Testing
 @Suite("ScreenZoom rules")
 @MainActor
 struct ScreenZoomRulesTests {
-  @Test("every list keeps the screen in its corner, and only a switch between the Screen and a list moves the picture")
+  @Test("Activity keeps the screen in its corner, and a switch between the Screen and Activity moves the picture")
   func onlyTheScreenAndTheCornerZoom() throws {
     let screen = PreviewStates.viewerWorking.screen
     try #require(screen.picture != nil)
-    #expect(ViewerPlace.allCases.filter(\.keepsScreenInCorner) == [.activity, .apps])
-    let moves: [(ViewerPlace, ViewerPlace)] = [
-      (.screen, .activity), (.screen, .apps), (.activity, .screen), (.apps, .screen),
-    ]
+    #expect(ViewerPlace.allCases.filter(\.keepsScreenInCorner) == [.activity])
+    let moves: [(ViewerPlace, ViewerPlace)] = [(.screen, .activity), (.activity, .screen)]
     for (old, new) in moves {
       #expect(ScreenZoom.zooms(from: old, to: new, screen: screen, reduceMotion: false), "\(old) to \(new)")
     }
-    // Between two lists the small screen simply stays in its corner.
-    for (old, new) in [(ViewerPlace.activity, ViewerPlace.apps), (.apps, .activity)] {
-      #expect(!ScreenZoom.zooms(from: old, to: new, screen: screen, reduceMotion: false), "\(old) to \(new)")
-    }
+    // Staying where it is moves nothing.
+    #expect(!ScreenZoom.zooms(from: .activity, to: .activity, screen: screen, reduceMotion: false))
     // At actual size the picture scrolls, so it fades as any pane; with no picture there is none to move.
     var actual = screen
     actual.actualSize = CGSize(width: 1440, height: 900)
@@ -44,7 +40,7 @@ struct ScreenZoomRulesTests {
     #expect(ViewerLayout.miniScale(isComing: true, growsFromStage: false, reduceMotion: false) == 0.96)
     #expect(ViewerLayout.miniScale(isComing: true, growsFromStage: true, reduceMotion: false) == 1)
     // Under Reduce Motion nothing moves: no switch zooms, so the small screen and the stage fade, at their own size.
-    for (old, new) in [(ViewerPlace.screen, ViewerPlace.activity), (.apps, .screen)] {
+    for (old, new) in [(ViewerPlace.screen, ViewerPlace.activity), (.activity, .screen)] {
       #expect(!ScreenZoom.zooms(from: old, to: new, screen: screen, reduceMotion: true), "\(old) to \(new)")
     }
     #expect(ViewerLayout.miniScale(isComing: true, growsFromStage: false, reduceMotion: true) == 1)

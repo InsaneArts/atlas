@@ -7,7 +7,7 @@ use super::{
     unpoisoned,
 };
 use crate::menubar::Line;
-use atlas_client::{client::Client, helper_info};
+use atlas_client::client::Client;
 use atlas_control::{HoldKind, Lease};
 use atlas_core::screen::frame::Frame;
 use atlas_core::{
@@ -111,7 +111,6 @@ pub(super) fn configured(
         app_secret: atlas_core::name::random_hex(64),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
-        icons: helper_info::Icons::default(),
     })
 }
 
@@ -307,7 +306,6 @@ routes! {
         Status => "status.json",
         Activity => "activity.json",
         Sessions => "sessions.json",
-        Apps => "apps.json",
         // What cleaning up a session would do.
         Cleanup => "cleanup.json",
         Screenshots => "screenshots.json",
@@ -611,14 +609,11 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool
     match read {
         // The person's own app alone is shown which account each row acted in.
         Read::Status => json_response(200, viewer.status_for(app).await),
-        Read::Activity => read_reply(viewer.activity_for(app).await),
+        Read::Activity => match viewer.activity_for(query, app).await {
+            Err(error) if error.code == Code::Input => json_response(400, json!(error)),
+            outcome => read_reply(outcome),
+        },
         Read::Sessions => read_reply(viewer.sessions().await),
-        Read::Apps if app => read_reply(viewer.apps().await),
-        // One helper for the whole read: its privacy, and its windows.
-        Read::Apps => {
-            let client = viewer.client();
-            read_reply(client.controller.shown(viewer.apps_of(&client)).await)
-        }
         Read::Cleanup => match viewer.cleanup_preview(query).await {
             Err(error) if error.code == Code::Input => json_response(400, json!(error)),
             outcome => read_reply(outcome),

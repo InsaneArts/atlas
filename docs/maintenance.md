@@ -72,7 +72,7 @@ For an interrupted setup or a managed-layout repair, `atlas setup` inspects the 
 
 ## Records Atlas keeps
 
-Atlas keeps an activity log in its output directory, and records of every action whose outcome is not known yet in your account's cache; the helper keeps its background-job records and output, and its held-input journal, beside its sockets ([Where data lives](configuration.md#where-data-lives)). The activity log names what was done, never typed text, window titles or command output. Pending actions, the held-input journal and unresolved job records are recovery evidence: never delete them to free space or to get past an error.
+Atlas keeps an activity log in its output directory, and records of every action whose outcome is not known yet in your account's cache; the helper keeps its background-job records and output, and its held-input journal, beside its sockets ([Where data lives](configuration.md#where-data-lives)). The activity log names what was done, never typed text, window titles or command output. It keeps the last 30 days of steps, in 64 MB at most; the oldest go first. Pending actions, the held-input journal and unresolved job records are recovery evidence: never delete them to free space or to get past an error.
 
 ## Uninstall
 
@@ -85,6 +85,8 @@ atlas uninstall
 ```
 
 The command shows what it will remove and asks before proceeding. It stops the managed helper job and menu bar, disconnects Atlas-owned integrations, removes its CLI link and moves Atlas.app to the Trash. It removes Atlas's staged app copies and other owned staging data. By default, it also removes the installed settings file and your `~/Library/Application Support/Atlas` directory, including default captures, logs and setup records. Save anything you need from that directory first.
+
+If you installed Atlas with Homebrew, run `brew uninstall --cask --force atlas` afterwards. It removes Homebrew's `atlas` link and its record of the cask; `--force` is needed because Atlas.app is already in the Trash.
 
 To keep those settings and records, use `atlas uninstall --keep-config`. This also preserves Atlas's caches. A checkout's configuration or another custom settings file is not removed by the normal installed-settings cleanup. A custom capture directory outside Application Support is not part of that directory's removal.
 

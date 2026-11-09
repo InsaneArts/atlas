@@ -30,10 +30,11 @@ extension ViewerController {
   /// alert no longer shows.
   func forgetRecoveryOnceNoneNeeded() {
     // Not Now covers one incident: once nothing needs recovery, a later one alerts again.
+    // Each is written only when set, so a status that needs no recovery changes nothing the window shows.
     if snapshot.offeredRecovery == nil {
-      session.recoveryLater = nil
+      if session.recoveryLater != nil { session.recoveryLater = nil }
       // A refusal belongs to the alert it answered: once nothing needs recovery it is gone with it.
-      if session.alert != .helper(.recover) { session.recoveryRefusal = nil }
+      if session.alert != .helper(.recover), session.recoveryRefusal != nil { session.recoveryRefusal = nil }
     }
   }
 

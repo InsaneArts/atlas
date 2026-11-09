@@ -175,22 +175,6 @@ struct ViewerPresenterActivityTests {
     )
   }
 
-  @Test("a run's row never shows a window's title")
-  func aRunsRowNeverShowsAWindowsTitle() throws {
-    var snapshot = try ViewerActivityFixtures.onActivity(ViewerActivityFixtures.textEditLog, sessions: [])
-    snapshot.panes.apps.apps = [
-      HelperApp(
-        pid: 7,
-        name: "TextEdit",
-        front: true,
-        windows: [HelperWindow(id: 1, title: "Secret plan.rtf", width: 800, height: 600)]
-      )
-    ]
-    let activity = ViewerPresenter.activity(snapshot)
-    let shown = String(describing: activity)
-    #expect(!shown.contains("Secret plan"), "no window's title reaches Activity")
-  }
-
   @Test("a folded run says its app, what was done there, its count and its span")
   func aFoldedRunSaysWhatItDid() throws {
     let older = (0..<9)
@@ -466,7 +450,7 @@ struct ViewerPresenterActivityTests {
     )
   }
 
-  @Test("an aggregated personal input row has the same action total in its run, Library and VoiceOver summary")
+  @Test("an aggregated personal input row has the same action total in its run and VoiceOver summary")
   func personalInputCountsAgreeAcrossTheViewer() throws {
     let row = ActivityLog.Entry(id: "personal", says: "sent 2107 actions", actor: .you, ageSeconds: 0, count: 2107)
     var snapshot = try ViewerActivityFixtures.onActivity([row], sessions: [])
@@ -476,7 +460,6 @@ struct ViewerPresenterActivityTests {
     #expect(session.summary == ViewerWords.actions(2107), "a run in no app says what was done, its session how much")
     #expect(session.label.contains(ViewerWords.actions(2107)))
     #expect(activity.meta == "2107 actions today")
-    #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 2107)
     #expect(ViewerActivityFixtures.runs(activity).first?.isOpen == false)
 
     snapshot.panes.activity.filter = .problems
@@ -484,10 +467,9 @@ struct ViewerPresenterActivityTests {
     let filtered = ViewerPresenter.activity(snapshot)
     #expect(filtered.days.isEmpty)
     #expect(filtered.meta == activity.meta)
-    #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 2107)
   }
 
-  @Test("a session's Library and VoiceOver summary count its actions and exclude personal input")
+  @Test("a session's VoiceOver summary counts its actions and exclude personal input")
   func sessionActionCountsAgreeAcrossTheViewer() throws {
     let rows = [
       ActivityLog.Entry(id: "chosen", ageSeconds: 0, count: 7, session: ViewerActivityFixtures.claude),
@@ -499,7 +481,6 @@ struct ViewerPresenterActivityTests {
     let activity = ViewerPresenter.activity(snapshot)
     #expect(activity.meta == "7 actions today")
     #expect(ViewerActivityFixtures.sessions(activity).first?.summary.contains("7 actions") == true)
-    #expect(ViewerPresenter.library(snapshot).first { $0.place == .activity }?.count == 7)
   }
 
   @Test("a refusal before anything was sent is no problem, and says what the agent did next")

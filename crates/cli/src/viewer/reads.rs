@@ -1,6 +1,6 @@
 //! What the viewer reads for the app without changing anything: the
-//! status and overview, recent activity, host sessions, the helper's apps
-//! and the screenshots agents took, and what a cleanup would do.
+//! status and overview, recent activity, host sessions and the screenshots
+//! agents took, and what a cleanup would do.
 use super::{
     Viewer,
     control::cleanup_session,
@@ -8,8 +8,9 @@ use super::{
     unpoisoned,
 };
 use atlas_client::{
+    activity_log::{self, Whose},
     before,
-    client::{AppList, Client},
+    client::Client,
     helper_info::{self, Capture},
     host_session::{
         names::{name_of, names},
@@ -23,12 +24,11 @@ use atlas_core::host::Key;
 use atlas_core::{
     account::{Title, asked_real_name},
     error::{Code, Error, Result},
-    screen::windows::Window,
 };
 use axum::{body::Body, response::Response};
 use serde_json::{Map, Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::Arc,
 };
@@ -135,15 +135,35 @@ impl Viewer {
     }
 
     /// What was done in the helper lately, newest first, as the app lists
-    /// it. Reading it records nothing. For the person's own app (`person`),
-    /// each row is as it shows it: see [`activity_row`].
-    pub(super) async fn activity_for(&self, person: bool) -> Result<Value> {
+    /// it: all recent sessions or the session selected by `query`. For the
+    /// person's app (`person`), each row includes its account attribution.
+    /// Reading it records nothing.
+    pub(super) async fn activity_for(&self, query: Option<&str>, person: bool) -> Result<Value> {
+        let whose = activity_session(query)?;
         let client = self.client();
         // A folder that can't be read is said, never shown as no activity.
         let directory = client.output_dir()?.to_path_buf();
         let unreadable = || Error::new(Code::Io, "The activity log could not be read.");
-        let (rows, pictures, records) = tokio::task::spawn_blocking(move || {
-            let mut rows = atlas_client::activity_log::try_recent(&directory, ACTIVITY_ROWS)?;
+        let (rows, cleared, pictures, records) = tokio::task::spawn_blocking(move || {
+            let records = Store::at(&directory).recent();
+            let (mut rows, cleared) = match &whose {
+                None => (
+                    atlas_client::activity_log::try_recent(&directory, ACTIVITY_ROWS)?,
+                    None,
+                ),
+                Some(whose) => {
+                    let found = activity_log::session_rows(&directory, whose, ACTIVITY_ROWS)?;
+                    let record = match whose {
+                        Whose::Host(key) => records
+                            .iter()
+                            .map(|seen| &seen.record)
+                            .find(|record| record.key == *key),
+                        Whose::Terminal => None,
+                    };
+                    let cleared = record.is_some_and(|record| found.cleared(record));
+                    (found.rows, Some(cleared))
+                }
+            };
             let kept = atlas_client::before::Listing::of(&directory);
             // A picture pruned or cleaned up since is no longer named. Each
             // kept one comes with the picture after it and its facts.
@@ -157,7 +177,7 @@ impl Viewer {
                     })
                 })
                 .collect::<Vec<_>>();
-            Ok::<_, std::io::Error>((rows, pictures, Store::at(&directory).recent()))
+            Ok::<_, std::io::Error>((rows, cleared, pictures, records))
         })
         .await
         .map_err(|error| unreadable().with_source(error))?
@@ -182,7 +202,11 @@ impl Viewer {
             .collect::<Vec<_>>();
         let sessions =
             sessions_named(&client, &records, rows.iter().map(|row| &row["session"])).await;
-        Ok(json!({"ok": true, "activity": rows, "sessions": sessions}))
+        let mut reply = json!({"ok": true, "activity": rows, "sessions": sessions});
+        if let Some(cleared) = cleared {
+            reply["cleared"] = json!(cleared);
+        }
+        Ok(reply)
     }
 
     /// The host sessions of the last days, live and ended, newest first:
@@ -262,59 +286,6 @@ impl Viewer {
         .unwrap_or_default();
 
         Ok(json!({"ok": true, "sessions": history, "live": live}))
-    }
-
-    /// The apps open in the helper with their windows, front to back, the
-    /// icons of those installed where apps go, and which agent's session
-    /// opened each, with those sessions' names. It only reads: nothing is
-    /// recorded and no control is taken.
-    pub(super) async fn apps(&self) -> Result<Value> {
-        self.apps_of(&self.client()).await
-    }
-
-    /// [`Viewer::apps`] of `client`'s helper, whichever the settings name by
-    /// the time it is read: a caller that checked that helper's privacy is
-    /// shown that helper's windows, never another's.
-    pub(super) async fn apps_of(&self, client: &Arc<Client>) -> Result<Value> {
-        let client = client.clone();
-        let read = async {
-            let running = client.running_apps().await?;
-            let filter = atlas_client::agent::WindowFilter::default();
-            let windows = atlas_client::agent::list(&client, &filter).await?;
-            let listed = listed_apps(&running, &windows)?;
-            Ok::<_, Error>((listed, running))
-        };
-        let (mut apps, running) = tokio::time::timeout(READ_DEADLINE, read)
-            .await
-            .map_err(|_| late())??;
-
-        let reading_client = client.clone();
-        let opened = tokio::task::spawn_blocking(move || {
-            let Ok(output) = reading_client.output_dir() else {
-                return (HashMap::new(), Arc::from([]));
-            };
-            let tasks = atlas_client::task::store::Store::at(output).recent();
-            let rows = atlas_client::activity_log::recent(output, ACTIVITY_ROWS);
-            let copies = Path::new(atlas_client::handoff::ROOT);
-            let origins = super::origins::origins(&running, &tasks, &rows, copies);
-            (origins, Store::at(output).recent())
-        });
-        let (origins, records) = opened
-            .await
-            .unwrap_or_else(|_| (HashMap::new(), Arc::from([])));
-        for app in &mut apps {
-            let origin = app["pid"].as_u64().and_then(|pid| origins.get(&pid));
-            app["origin"] = json!(origin);
-        }
-        let opened_by: Vec<Value> = origins
-            .values()
-            .map(|origin| json!(origin.session))
-            .collect();
-        let sessions = sessions_named(&client, &records, opened_by.iter()).await;
-
-        self.icons.add(&mut apps, helper_info::ICON_CACHE).await;
-
-        Ok(json!({"ok": true, "apps": apps, "sessions": sessions}))
     }
 
     /// The screenshots agents took, newest first: each one's name, when it
@@ -495,6 +466,26 @@ impl Viewer {
     }
 }
 
+/// Whose activity `query` asks for: every session's without `session=`,
+/// Terminal's for an empty key, else the session its key names.
+///
+/// # Errors
+///
+/// Returns an input error for a key that is not one.
+fn activity_session(query: Option<&str>) -> Result<Option<Whose>> {
+    let Some(given) = query
+        .unwrap_or_default()
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("session="))
+    else {
+        return Ok(None);
+    };
+    if given.is_empty() {
+        return Ok(Some(Whose::Terminal));
+    }
+    cleanup_session(Some(given)).map(|key| Some(Whose::Host(key)))
+}
+
 /// Account `name`'s full name, as `ask` finds it, kept in `known`. It is
 /// asked once per account (off the runtime, as it asks directory services),
 /// also when it has none, but again after an ask that had no answer.
@@ -617,20 +608,6 @@ fn capture_sessions(seen: &[Seen]) -> BTreeMap<&str, &Key> {
         }
     }
     taken_by
-}
-
-/// The helper's regular apps as the app lists them, front to back, each
-/// with its bundle identifier, whether it is hidden, when it was launched
-/// and its windows front to back. A window's id is its window number, and
-/// its order its place among every app's windows, front to back.
-pub(super) fn listed_apps(apps: &AppList, windows: &[Window]) -> Result<Vec<Value>> {
-    Ok(helper_info::open_apps(apps, windows)?
-        .into_iter()
-        .map(|mut app| {
-            rename(&mut app, "active", "front");
-            app
-        })
-        .collect())
 }
 
 #[cfg(test)]

@@ -24,6 +24,13 @@ Requires macOS 14 or later and an administrator account for setup:
 curl -fsSL https://atlas.insanearts.io/install.sh | sh
 ```
 
+Or with Homebrew:
+
+```sh
+brew trust insanearts/tap
+brew install --cask insanearts/tap/atlas
+```
+
 Atlas guides you through choosing a helper account and granting its macOS permissions. Leave the helper signed in, switch back to your account, and keep working. Watch from the menu bar or open the full viewer to take control.
 
 See [Getting started](docs/getting-started.md) for setup and [Daily use](docs/using-atlas.md) for the workflow and practical limits.

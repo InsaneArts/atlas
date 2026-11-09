@@ -36,10 +36,6 @@
         snapshot.locale = Locale(identifier: "de_DE")
         snapshot.session.chosenSession = .one(Self.claudeKey)
         snapshot.panes.sessions.list = HostSessionList(sessions: [Self.claudeRecord])
-        // Opie, run from the session's copy, so the Library counts it among the session's apps.
-        snapshot.panes.apps.apps = [
-          HelperApp(pid: 501, name: "Opie", front: true, origin: HelperAppOrigin(session: Self.claudeKey, how: .copy))
-        ]
         Self.keepThumbnails(&snapshot)
       }
       return [

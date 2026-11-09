@@ -9,6 +9,8 @@ import Foundation
 struct ViewerActivityFacts {
   /// The log, newest first; nil before the first reading.
   var log: ActivityLog?
+  /// Whose rows the log was read for: every session's, or the one chosen when it was read.
+  var scope = ActivityScope.all
   /// The model's prepared reading, copied as values with this snapshot.
   var preparation: ViewerActivityPreparation?
   /// This reading's runs, whose identities were reconciled at ingestion.

@@ -2,10 +2,6 @@
 public enum ViewerEvent: Equatable, Sendable {
   /// A place picked, from the View menu, or the mini screen pressed for the Screen.
   case show(ViewerPlace)
-  /// A Library row pressed: its list, or the Screen again when its list already shows.
-  ///
-  /// - Parameter place: The row's list.
-  case chooseLibrary(ViewerPlace)
   /// A command chosen from one of the window's context menus.
   ///
   /// - Parameter command: The command.
@@ -22,7 +18,7 @@ public enum ViewerEvent: Equatable, Sendable {
   case stopAgent
   /// Resume: let agents act in the helper again.
   case resumeAgent
-  /// A host session chosen in the sessions column, or All sessions, whose work Activity shows.
+  /// A host session chosen in the sessions column, or All sessions: Activity shows its work.
   ///
   /// - Parameter choice: Whose work.
   case chooseSession(ViewerSessionChoice)
@@ -34,7 +30,7 @@ public enum ViewerEvent: Equatable, Sendable {
   case toggleEnded
   /// The sidebar's search circle: open the search field and give it the focus.
   case openSearch
-  /// The sidebar's search, as the person typed it, which narrows the sessions and the Activity or Apps list shown.
+  /// The sidebar's search, as the person typed it, which narrows the sessions and Activity.
   ///
   /// - Parameter query: The query; empty keeps everything.
   case search(String)
@@ -86,14 +82,6 @@ public enum ViewerEvent: Equatable, Sendable {
   ///
   /// - Parameter id: The day's identity.
   case showDaySessions(String)
-  /// Show on screen: outline a window on the Screen tab.
-  ///
-  /// - Parameters:
-  ///   - app: The app's process id.
-  ///   - window: The window's number.
-  case showWindow(app: Int, window: Int)
-  /// The outlined window's ×, or Escape: stop outlining it.
-  case clearOutline
   /// The small screen let go of in a corner, which the window remembers.
   ///
   /// - Parameter corner: The corner it settled in.

@@ -7,15 +7,20 @@ public struct ActivityLog: Decodable, Equatable, Sendable {
   public var entries: [Entry] = []
   /// The host sessions the rows name, by key.
   public var sessions: [String: HostSessionSummary] = [:]
+  /// Whether one session's log says its rows were all cleared to save space: it did something, and the log no longer
+  /// reaches back to it. False for every session's log, and when the service does not say.
+  public var cleared = false
 
   /// Creates a log of `entries`.
   ///
   /// - Parameters:
   ///   - entries: The rows, newest first.
   ///   - sessions: The host sessions the rows name, by key.
-  public init(entries: [Entry] = [], sessions: [String: HostSessionSummary] = [:]) {
+  ///   - cleared: Whether one session's rows were all cleared to save space.
+  public init(entries: [Entry] = [], sessions: [String: HostSessionSummary] = [:], cleared: Bool = false) {
     self.entries = entries
     self.sessions = sessions
+    self.cleared = cleared
   }
 
   /// The root fields of `activity.json`.
@@ -24,10 +29,12 @@ public struct ActivityLog: Decodable, Equatable, Sendable {
     case entries = "activity"
     /// The host sessions the rows name.
     case sessions
+    /// Whether one session's rows were all cleared.
+    case cleared
   }
 
   /// Decodes a log; rows that are missing or of the wrong type read as none, as do sessions, and each row and session
-  /// decodes on its own, so one odd one is dropped and the rest are kept.
+  /// decodes on its own, so one odd one is dropped and the rest are kept. A `cleared` that is not true reads as false.
   ///
   /// - Parameter decoder: The decoder reading `activity.json`.
   /// - Throws: `DecodingError` only when the reply is not an object.
@@ -37,5 +44,6 @@ public struct ActivityLog: Decodable, Equatable, Sendable {
     sessions = HostSessionSummary.map(
       try? container.decodeIfPresent([String: Lenient<HostSessionSummary>].self, forKey: .sessions)
     )
+    cleared = container.lenientFlag(.cleared)
   }
 }

@@ -85,6 +85,16 @@ public struct ActivityGrouping: Sendable {
     return overflow ? .max : sum
   }
 
+  /// Whether every screenshot row that worked finds its capture among `captures` (``shots(in:)``): while one does
+  /// not, a later listing may still hold it.
+  ///
+  /// - Parameter captures: The screenshots the service lists.
+  /// - Returns: Whether each one does.
+  public func findsEveryShot(in captures: [Screenshot]) -> Bool {
+    let taking = log.entries.filter { $0.operation == Self.screenshotOperation && $0.outcome == .worked }
+    return shots(in: captures).count == taking.count
+  }
+
   /// The capture each screenshot row that worked took: the one the row names, when the screenshots list it; for a row
   /// that names none, as an older service's, the nearest one within ``shotTolerance`` of its start, each capture taken
   /// once, newest rows first. A row whose named capture is gone has none, and no other row ever has one.

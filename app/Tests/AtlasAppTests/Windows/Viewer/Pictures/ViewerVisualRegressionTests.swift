@@ -37,46 +37,4 @@ struct ViewerVisualRegressionTests {
     #expect(filter.minX >= ViewerLayout.swapInset)
     #expect(filter.maxX <= width - ViewerLayout.swapInset)
   }
-
-  @Test("a front-app change draws the singular blue status on exactly one card in every animation frame")
-  func frontAppStatusChangesImmediately() throws {
-    let previous = Motion.Pose.moment
-    Motion.Pose.hold(at: -5)
-    defer { Motion.Pose.hold(at: previous) }
-    let first = PreviewStates.viewerAppsSafariFront
-    let host = ViewerHost(first, animatesArrivals: false)
-    host.render()
-    Motion.Pose.hold(at: .zero)
-    host.show(PreviewStates.viewerApps)
-    for time in [0.0, 0.04, 0.08, 0.12, 0.2, 0.4, 1.0] {
-      Motion.Pose.hold(at: time)
-      host.render()
-      let tags = host.frames.filter { $0.key.hasPrefix("app tags ") && $0.value.width > 0 }
-      try #require(!tags.isEmpty)
-      let blueCards = try tags.values.filter { try Self.ink(host.pixels(in: $0)).blue }
-      #expect(blueCards.count == 1, "two cards must never claim the front app at time \(time)")
-    }
-  }
-
-  /// Counts blue link ink and neutral text ink, excluding the ground in the appearance being drawn.
-  private static func ink(_ pixels: Data, lightText: Bool = false) throws -> (blue: Bool, text: Bool) {
-    let bitmap = try #require(NSBitmapImageRep(data: pixels))
-    var blue = 0
-    var text = 0
-    for y in 0..<bitmap.pixelsHigh {
-      for x in 0..<bitmap.pixelsWide {
-        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
-        if color.blueComponent > color.redComponent + 0.15, color.blueComponent > color.greenComponent + 0.03 {
-          blue += 1
-        }
-        let darkest = min(color.redComponent, color.greenComponent, color.blueComponent)
-        let brightest = max(color.redComponent, color.greenComponent, color.blueComponent)
-        // A dark ground (and a blue glyph's dim edges on it) is not the arriving light text.
-        if lightText ? darkest > 0.5 : brightest < 0.5, brightest - darkest < 0.1 {
-          text += 1
-        }
-      }
-    }
-    return (blue > 5, text > 5)
-  }
 }

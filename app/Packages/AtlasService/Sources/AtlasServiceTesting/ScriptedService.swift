@@ -53,10 +53,11 @@ public final class ScriptedService: ViewerService {
   public var leaseHeld: Bool?
   /// What was done in the helper lately, as the activity reply lists it.
   public var activityLog = ActivityLog()
-  /// The apps open in the helper, front to back.
-  public var openApps: [HelperApp] = []
-  /// The host sessions the apps' origins name, by key.
-  public var appSessions: [String: HostSessionSummary] = [:]
+  /// What one session's activity reply lists, by its key; a session not named here gets ``activityLog``'s rows of
+  /// its own, as the service narrows them.
+  public var sessionLogs: [String: ActivityLog] = [:]
+  /// The sessions whose activity was asked for, in order.
+  public var activitySessions: [String] = []
   /// The screenshots agents took, newest first.
   public var shots: [Screenshot] = []
   /// The folder the screenshots are kept in; nil names none.
@@ -87,8 +88,6 @@ public final class ScriptedService: ViewerService {
   public var cleanupUnanswered = false
   /// The cleanup requests made, in order: "preview KEY" or "apply KEY".
   public var cleanups: [String] = []
-  /// Apps requests made.
-  public var appsCalls = 0
   /// What `asks.json` answers.
   public var askList = AskList()
   /// `asks.json` requests made.
@@ -422,15 +421,21 @@ public final class ScriptedService: ViewerService {
     return activityLog
   }
 
-  /// Answers `openApps`, unless held or failed.
+  /// Answers the session's ``sessionLogs`` entry, else ``activityLog``'s rows of that session, unless held or failed.
+  /// It counts as an activity request, and holds and fails as one.
   ///
-  /// - Returns: The apps open in the helper, and the sessions that opened them.
+  /// - Parameter session: The session's key; empty for Terminal.
+  /// - Returns: The session's activity log.
   /// - Throws: A ``ServiceError`` when the route fails.
   @MainActor
-  public func apps() async throws(ServiceError) -> HelperAppList {
-    appsCalls += 1
-    try await pause("apps")
-    return HelperAppList(apps: openApps, sessions: appSessions)
+  public func activity(of session: String) async throws(ServiceError) -> ActivityLog {
+    activityCalls += 1
+    activitySessions.append(session)
+    try await pause("activity")
+    if let log = sessionLogs[session] { return log }
+    var narrowed = activityLog
+    narrowed.entries = activityLog.entries.filter { $0.groupKey == session }
+    return narrowed
   }
 
   /// Answers `shots` and `shotsFolder`, unless held or failed.

@@ -6,7 +6,7 @@ import SwiftUI
 /// content card beside it, which give way to its size as the controller fits them (``ViewerController/fitWindow(to:)``),
 /// titled with the helper's name for the Window menu. It reads only while on screen, gives control back whenever it closes, hides or
 /// loses focus, takes the keyboard back from the search field on a press anywhere else in it (``FieldFocus``), reads
-/// the picture sheet's and the replay's keys (``ActionKeys``) and Escape for a window outlined on the Screen
+/// the picture sheet's and the replay's keys (``ActionKeys``) and Escape for the sidebar over the card
 /// (``WindowKeys``), hands VoiceOver the states that ask
 /// something of the person (``ViewerController/askingStatus``), and answers the main menu's View, File, Edit and
 /// Helper items (`ViewerWindow+Menus`) as the window itself, which the responder chain reaches. Built on the one
@@ -63,12 +63,13 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     controller.fitWindow(to: frame.size)
     delegate = self
     let fieldReport = fieldFocus.report
+    let feed = controller.readingLoop.feed
     WindowShell.host(in: self) {
       ViewerView(
-        state: controller.state,
+        state: controller.drawnState(),
         send: { controller.send($0) },
         input: { DesktopInput(controller: controller) },
-        livePicture: { LayerPictureView(live: $0) }
+        livePicture: { LayerPictureView(live: $0, feed: feed) }
       )
       .environment(\.focusedFieldReport, fieldReport)
     }
@@ -128,8 +129,8 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     super.sendEvent(event)
   }
 
-  /// A key the window answers itself, over the sidebar shown over the card, on the Screen, or over the picture sheet
-  /// or the replay: its event goes to the controller, and the key goes no further.
+  /// A key the window answers itself, over the sidebar shown over the card, or over the picture sheet or the replay:
+  /// its event goes to the controller, and the key goes no further.
   ///
   /// - Parameter event: The key.
   /// - Returns: The key, to pass on, or nil once handled.
@@ -149,9 +150,6 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       }
       return event
     }
-    if snapshot.session.place == .screen {
-      return outlineKey(event, hasModifiers: !held.isEmpty, snapshot: snapshot)
-    }
     if snapshot.session.place == .activity {
       let shown = ViewerPresenter.shownOverlays(snapshot)
       let key = ActionKeys.event(
@@ -165,26 +163,6 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       return nil
     }
     return event
-  }
-
-  /// Escape on the Screen stops showing the window outlined there, as its label's × does; while this window holds
-  /// control every key is the helper's.
-  ///
-  /// - Parameters:
-  ///   - event: The key.
-  ///   - hasModifiers: Whether ⌘, ⌃ or ⌥ is held with it.
-  ///   - snapshot: What the window held when the key arrived.
-  /// - Returns: The key, to pass on, or nil once handled.
-  private func outlineKey(_ event: NSEvent, hasModifiers: Bool, snapshot: ViewerSnapshot) -> NSEvent? {
-    let key = WindowKeys.screenEvent(
-      keyCode: event.keyCode,
-      hasModifiers: hasModifiers,
-      holdingControl: snapshot.holdingControl,
-      outlineShown: ViewerPresenter.outline(snapshot) != nil
-    )
-    guard let key else { return event }
-    controller.send(key)
-    return nil
   }
 
   /// Reads only while the window is on screen: off screen (minimised, covered, on another Space, or behind a locked

@@ -28,8 +28,6 @@ enum ViewerLayout {
   static let replayScrim = 0.72
   /// The replay's shade's fade, in and out: ``Motion/fade``, which only changes opacity, so Reduce Motion keeps it.
   static var replayFade: Animation { Motion.fade }
-  /// 0.36: how dark the picture goes outside a window shown from the Apps pane.
-  static let spotlightDim = 0.36
   /// 14: how much the last picture blurs behind Connecting's words.
   static let lastFrameBlur: CGFloat = 14
   /// 0.6: how much colour the last picture keeps behind them.
@@ -63,25 +61,5 @@ enum ViewerLayout {
   /// - Returns: The animation, or nil.
   static func miniLanding(velocity: Double, reduceMotion: Bool) -> Animation? {
     Motion.layout(.interpolatingSpring(miniThrown, initialVelocity: velocity), reduceMotion: reduceMotion)
-  }
-
-  /// Where a window outline lies in a view showing the picture letterboxed at its own shape, as a click there maps
-  /// (`DesktopPoint+Mapping`).
-  ///
-  /// - Parameters:
-  ///   - outline: The window's edges as shares of the helper's display.
-  ///   - view: The view's size.
-  ///   - picture: The picture's size, in pixels.
-  /// - Returns: The outline's frame in the view; empty when any size is.
-  static func outlineFrame(_ outline: CGRect, in view: CGSize, picture: CGSize) -> CGRect {
-    guard view.width > 0, view.height > 0, picture.width > 0, picture.height > 0 else { return .zero }
-    let scale = min(view.width / picture.width, view.height / picture.height)
-    let shown = CGSize(width: picture.width * scale, height: picture.height * scale)
-    return CGRect(
-      x: (view.width - shown.width) / 2 + outline.minX * shown.width,
-      y: (view.height - shown.height) / 2 + outline.minY * shown.height,
-      width: outline.width * shown.width,
-      height: outline.height * shown.height
-    )
   }
 }

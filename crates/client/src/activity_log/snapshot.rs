@@ -1,10 +1,8 @@
 //! One bounded, ordered view of the retained log, shared by its readers.
-use super::{FILE, PREVIOUS, READ_LIMIT, Row, read_back, selected};
+use super::{FILE, PREVIOUS, READ_LIMIT, Row, ordered, read_back, retained::Revision, selected};
 use std::{
-    collections::HashSet,
     fs::File,
     io,
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -13,28 +11,6 @@ use std::{
 // than retaining another byte cap's worth of rows for every folder visited.
 // Holding the lock through a rebuild also coalesces concurrent cold reads.
 static CACHE: Mutex<Cache> = Mutex::new(Cache { kept: None });
-
-#[derive(Debug, PartialEq, Eq)]
-struct Revision {
-    device: u64,
-    inode: u64,
-    length: u64,
-    modified: i64,
-    modified_nanos: i64,
-}
-
-impl Revision {
-    fn of(file: &File) -> io::Result<Self> {
-        let metadata = file.metadata()?;
-        Ok(Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-            length: metadata.len(),
-            modified: metadata.mtime(),
-            modified_nanos: metadata.mtime_nsec(),
-        })
-    }
-}
 
 struct Snapshot {
     directory: PathBuf,
@@ -101,7 +77,7 @@ impl Cache {
             }
         }
         if let [Some(current), Some(previous)] = &revision
-            && (current.device, current.inode) == (previous.device, previous.inode)
+            && current.same_file(previous)
         {
             files[1] = None;
             revision[1] = None;
@@ -126,16 +102,8 @@ impl Cache {
                 failure.get_or_insert(error);
             }
         }
-        // Wall-clock time can move backwards during a command. Its last
-        // committed step wins by append order, before timestamps order
-        // the commands for display. Current-file rows precede rotated ones.
-        let mut commands = HashSet::new();
-        rows.retain(|row| {
-            row.command
-                .as_ref()
-                .is_none_or(|command| commands.insert(command.clone()))
-        });
-        rows.sort_by_key(|row| std::cmp::Reverse(row.at_nanos()));
+        // Current-file rows precede rotated ones.
+        ordered(&mut rows);
         if failure.is_some() {
             // Status keeps the rows that read, but Activity reports the
             // failure. Retry even if the revision has not changed.

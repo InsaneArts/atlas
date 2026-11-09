@@ -67,19 +67,20 @@ Cleanup quits only what runs from the task's own copies and installs, never an a
 
 Click the Atlas menu bar item for a small screen and current status. Choose **Open Atlas**, open Atlas from Applications, or run `atlas monitor`, to get the full native viewer. It opens on your desktop while the apps you are testing stay in the helper. If it was open when Atlas last stopped, as during `atlas update`, it opens again when Atlas starts; closing it, or choosing **Quit Atlas** (⌘Q), keeps it closed.
 
-The viewer has three tabs:
+The viewer has two places:
 
-| Tab      | What you can see                                                                            |
+| Place    | What you can see                                                                            |
 | -------- | ------------------------------------------------------------------------------------------- |
 | Screen   | The helper's current picture.                                                               |
 | Activity | Each session's work, run by run in each app, with its problems and the screenshots it took. |
-| Apps     | Apps running in the helper.                                                                 |
+
+The viewer opens on Screen. Click a session in the sidebar to see its Activity, or **All sessions** to see every session's. **View > Screen** (⌘1) and **View > Activity** (⌘2) switch between them too.
 
 Activity lists sessions, then the runs of work each did in one app, then each run's steps. A folded run shows its problems and its newest screenshots; click **N pictures** to see all of them in place, or open the run to read its steps in order. A step with a picture of the helper just before it has a small picture button; it opens the picture in a sheet, marked where the agent clicked, typed or scrolled, with **Before** and **After** when there is a picture after it. Use the arrows to step through the run's pictures, and **Replay** on an open run to play its steps back. Pictures stay on your Mac for 7 days unless **Settings > General** says otherwise, where you can also turn them off, limit the typed text kept beside them, or delete them all. Text typed into a password field is never kept, and no agent is ever given a picture. The [configuration guide](configuration.md#settings-fields) has the details.
 
-In the sidebar, each session is named by what it did and where, such as "Typing in TextEdit". Sessions that never acted in the helper are not listed.
+In the sidebar, each session is named by what it did and where, such as "Typing in TextEdit". Sessions that never acted in the helper are not listed. While Screen shows, no session is highlighted; the session Activity shows is.
 
-When you leave Screen, a small screen remains over the other tabs. Drag or throw it toward another corner to move it out of the way. Click it to return to Screen. It follows the viewer's picture setting, including a paused picture.
+When you leave Screen, a small screen remains over Activity. Drag or throw it toward another corner to move it out of the way. Click it to return to Screen. It follows the viewer's picture setting, including a paused picture.
 
 You can choose **Live**, **Every 5 Seconds** or **Paused** for the picture. Pausing the picture does not stop work in the helper. The menu bar panel's pause control affects its own picture. In the full viewer, **Actual Size** shows one display point per view point and lets you scroll when the screen does not fit.
 

@@ -9,36 +9,109 @@ import Testing
 @Suite("ViewerStage", .serialized, AppKitState())
 @MainActor
 struct ViewerStageTests {
-  @Test("a tab shown again is the pane already built, still scrolled where it was left")
+  @Test("Activity shown again after the Screen is the pane already built, still scrolled where it was left")
   func aTabShownAgainIsThePaneAlreadyBuilt() throws {
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: .zero)
+    defer { Motion.Pose.hold(at: previous) }
     let host = ViewerHost(try Self.activity(lines: 80))
     let list = try #require(host.scrollViews.first, "Activity has its list")
+    let width = list.contentView.frame.width
     list.contentView.scroll(to: NSPoint(x: 0, y: Self.scrolled))
     list.reflectScrolledClipView(list.contentView)
-    host.show(PreviewStates.viewerApps)
+    // SwiftUI hears a scroll on the run loop's later turns, as it would a wheel's: take a few, each waiting for nothing.
+    let loop = RunLoop.main
+    for _ in 0..<Self.settlingTurns {
+      loop.run(mode: .default, before: .distantPast)
+    }
+    var steps = ["scrolled: \(Self.describe(list))"]
+    host.show(PreviewStates.viewerWorking)
+    steps.append("screen: \(Self.describe(list))")
+    Self.settle(host)
+    steps.append("screen settled: \(Self.describe(list))")
     host.show(try Self.activity(lines: 80))
-    // Activity's list and Apps' are all there is: nothing was built again, and nothing old is still leaving.
-    #expect(host.scrollViews.count == 2)
+    steps.append("activity: \(Self.describe(list))")
+    Self.settle(host)
+    steps.append("activity settled: \(Self.describe(list))")
+    // Activity's list is all there is: nothing was built again, and nothing old is still leaving.
+    #expect(host.scrollViews.count == 1)
     #expect(host.scrollViews.contains { $0 === list }, "Activity's list was built again")
-    #expect(list.contentView.bounds.origin.y == Self.scrolled, "the list lost its place")
+    // Hidden, it kept its scroll bar, so it was never tiled again, and it stayed where it was read.
+    #expect(list.contentView.frame.width == width, "the list was tiled again: \(steps)")
+    #expect(list.contentView.bounds.origin.y == Self.scrolled, "the list lost its place: \(steps)")
   }
 
-  @Test("a switch's first frame, and a switch reversed at once, still show the pane left whole: never a blank stage")
-  func aSwitchNeverShowsABlankStage() throws {
-    let activity = try Self.activity(lines: 80)
-    let reference = ViewerHost(activity)
-    let settled = try reference.pixels(in: Self.panes)
+  @Test(
+    "Activity hidden behind the Screen keeps its rows where they stood, with the small screen's room or without it",
+    arguments: [true, false]
+  )
+  func activityHiddenBehindTheScreenKeepsItsRows(hasPicture: Bool) throws {
+    let previous = Motion.Pose.moment
+    Motion.Pose.hold(at: .zero)
+    defer { Motion.Pose.hold(at: previous) }
+    // In a top corner, where the room the list keeps under the small screen stands above its first row.
+    var activity = try Self.activity(lines: 80)
+    activity.miniCorner = .topTrailing
+    var screen = PreviewStates.viewerWorking
+    screen.miniCorner = .topTrailing
+    if !hasPicture {
+      activity.mini = nil
+      screen = PreviewStates.viewerNotReady
+      screen.miniCorner = .topTrailing
+    }
     let host = ViewerHost(activity)
-    host.show(PreviewStates.viewerApps)
-    host.show(activity)
-    host.show(PreviewStates.viewerApps)
-    // As the switch begins the old pane still shows whole, the new one not yet in: the stage is never empty.
-    #expect(try host.pixels(in: Self.panes) == settled, "Activity left the stage at once")
-    host.show(activity)
-    // Turned back at once, Activity never left: it shows whole, and Apps has not come in.
-    #expect(try host.pixels(in: Self.panes) == settled, "turning back left a gap")
-    #expect(host.scrollViews.count == 2, "a pane was built again")
+    let list = try #require(host.scrollViews.first, "Activity has its list")
+    let first = try #require(Self.top(of: Self.firstRow, in: list, host: host), "the first row is drawn")
+    host.show(screen)
+    Self.settle(host)
+    // The small screen leaves with Activity, or never was, and the hidden list keeps the room it had.
+    #expect(Self.top(of: Self.firstRow, in: list, host: host) == first, "the hidden list was laid out again")
   }
+
+  /// The newest session's row, the first in the list.
+  static let firstRow = "session line 79"
+
+  /// How far below `list`'s top the row reporting `id` stands, in the window as it is drawn now.
+  ///
+  /// - Parameters:
+  ///   - id: The row's reported name.
+  ///   - list: The list's scroll view.
+  ///   - host: The window.
+  /// - Returns: The distance, or nil while the row is not drawn.
+  static func top(of id: String, in list: NSScrollView, host: ViewerHost) -> CGFloat? {
+    host.frames[id].map { $0.minY - host.frameFromTop(of: list).minY }
+  }
+
+  /// How `list` stands, for a failure to say: where it is scrolled, its content's frame, its visible width, and its
+  /// scroll bar.
+  ///
+  /// - Parameter list: The list's scroll view.
+  /// - Returns: The description.
+  static func describe(_ list: NSScrollView) -> String {
+    let scroller = list.verticalScroller
+    return [
+      "offset \(list.contentView.bounds.origin.y)",
+      "content \(list.documentView?.frame ?? .zero)",
+      "visible width \(list.contentView.frame.width)",
+      "scroller \(list.hasVerticalScroller) hidden \(scroller?.isHidden ?? true)",
+      "style \(list.scrollerStyle.rawValue) of \(NSScroller.preferredScrollerStyle.rawValue)",
+      "autohides \(list.autohidesScrollers)",
+    ]
+    .joined(separator: ", ")
+  }
+
+  /// Lets every animation of the change just made finish, holding the moment well past the longest, then draws.
+  ///
+  /// - Parameter host: The window.
+  static func settle(_ host: ViewerHost) {
+    host.render()
+    Motion.Pose.hold(at: settled)
+    host.render()
+    Motion.Pose.hold(at: .zero)
+  }
+
+  /// 5 seconds: well past the end of every animation a change runs.
+  static let settled: TimeInterval = 5
 
   @Test("a new session shows at the top, while a list scrolled down holds it under a line and never moves")
   func aNewActionKeepsAScrolledListInPlace() throws {
@@ -86,9 +159,6 @@ struct ViewerStageTests {
     #expect(host.frames["session line 80"] == nil, "the new session waits")
     #expect(host.frames["waiting line"] != nil, "the line says it waits")
   }
-
-  /// In the card, under its header and clear of the small screen: where the panes draw.
-  static let panes = CGRect(x: 260, y: 60, width: 840, height: 600)
 
   /// 10: the most run loop turns a change takes to settle in the list before it is measured.
   static let settlingTurns = 10

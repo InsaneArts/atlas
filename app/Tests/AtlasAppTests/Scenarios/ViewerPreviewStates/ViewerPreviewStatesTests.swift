@@ -101,6 +101,8 @@
         snapshot.reading.frameAt = snapshot.now
       }
       change(&snapshot)
+      // As the window holds it once the log for whose work shows is read.
+      snapshot.panes.activity.scope = ActivityScope(snapshot.shownSessions)
       return ViewerPresenter.state(snapshot)
     }
 
@@ -111,8 +113,16 @@
     func presented() throws -> [String: ViewerState] {
       try screenSamples()
         .merging(try activitySamples()) { _, place in place }
-        .merging(try appsSamples()) { _, place in place }
         .merging(try sessionsSamples()) { _, place in place }
+    }
+
+    /// The icons found for the samples' apps, by their keys.
+    static var icons: ViewerIconsFacts {
+      var icons = ViewerIconsFacts()
+      for (id, icon) in SampleAppIcons.icons {
+        if let key = AppIconKey(bundleId: id) { icons.images[key.text] = icon }
+      }
+      return icons
     }
 
     /// Shows `place` at `date`, on a German clock in UTC.

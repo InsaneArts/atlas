@@ -109,6 +109,44 @@ fn a_first_command_makes_the_record_and_later_ones_update_it() {
 }
 
 #[test]
+fn a_record_keeps_when_its_session_last_wrote_an_activity_row() {
+    let clicked = |client: &Client, session: &HostSession| {
+        note(
+            client,
+            session,
+            Kind::Other,
+            Some(&Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let session = session("logging");
+    clicked(&client(directory.path()), &session);
+    let first = store(&client(directory.path()))
+        .read(session.key())
+        .unwrap();
+    assert!(
+        first.logs_rows,
+        "a new record keeps when its rows were written"
+    );
+    assert_eq!(first.logged, None, "a counted command wrote no row");
+
+    let mut acting = client(directory.path());
+    acting.host_session = Some(session.clone());
+    let before = atlas_core::time::now_ms();
+    acting.record_for_test(&json!({"op": "input"}), &json!({"ok": true}));
+    // The command's outcome is noted through a client of its own.
+    let client = client(directory.path());
+    clicked(&client, &session);
+    let logged = store(&client).read(session.key()).unwrap().logged.unwrap();
+    assert!(logged >= before);
+    let row = crate::activity_log::recent(client.output_dir().unwrap(), 1).remove(0);
+    assert_eq!(row.session.as_deref(), Some(session.key().as_str()));
+    assert!(logged >= row.at_ms().unwrap(), "no earlier than its row");
+}
+
+#[test]
 fn reads_that_do_nothing_in_the_helper_record_nothing() {
     let directory = tempfile::tempdir().unwrap();
     let client = client(directory.path());

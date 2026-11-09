@@ -10,10 +10,10 @@ import Testing
 @MainActor
 struct CardScrollTests {
   /// The lists in the card, each long enough to scroll, with the small screen in the bottom-trailing corner.
-  nonisolated static let lists = ["activity", "apps"]
+  nonisolated static let lists = ["activity"]
 
   @Test(
-    "Activity and Apps each scroll the card's whole height under the floating picture, their end clear of it",
+    "Activity scrolls the card's whole height under the floating picture, its end clear of it",
     arguments: lists
   )
   func eachListScrollsUnderTheFloatingPicture(list name: String) async throws {
@@ -39,45 +39,6 @@ struct CardScrollTests {
     #expect(odd.isEmpty, "\(name) draws in the small screen's band at its end, at \(odd.prefix(4)) in \(frame)")
   }
 
-  @Test(
-    "Apps keeps the card being read in Already open when another agent card arrives above it",
-    .enabled(
-      if: ProcessInfo.processInfo.environment["ATLAS_NATIVE_WINDOW_TESTS"] == "1",
-      "requires the hidden helper graphical test host"
-    )
-  )
-  func appCardsRetainTheirReadingPosition() async throws {
-    let first = PreviewStates.viewerAppsMany
-    var next = first
-    var apps = try #require({ if case .apps(let apps) = first.pane { apps } else { nil } }())
-    let mail = try #require(apps.cards.first { $0.name == "Mail" })
-    // A full extra grid row changes the height above Already open at this window's column count.
-    for index in 0..<4 {
-      var added = try #require(apps.groups.first?.cards.first)
-      added.id = 900 + index
-      added.name = "New app \(index)"
-      apps.groups[0].cards.append(added)
-    }
-    next.pane = .apps(apps)
-    let host = ViewerHost(first, animatesArrivals: false, reduceMotion: true)
-    host.presentNativeWindow()
-    defer { host.closeNativeWindow() }
-    let list = try #require(Self.list(in: host))
-    list.contentView.scroll(to: NSPoint(x: 0, y: 600))
-    list.reflectScrolledClipView(list.contentView)
-    await Self.settle(host)
-    let mailFrame = try #require(host.frames["app \(mail.id)"])
-    let viewport = host.frameFromTop(of: list)
-    list.contentView.scroll(to: NSPoint(x: 0, y: list.contentView.bounds.minY + mailFrame.minY - viewport.minY + 24))
-    list.reflectScrolledClipView(list.contentView)
-    await Self.settle(host)
-    let before = try #require(host.frames["app \(mail.id)"])
-    host.show(next)
-    await Self.settle(host)
-    let after = try #require(host.frames["app \(mail.id)"])
-    #expect(abs(before.minY - after.minY) <= 1, "Mail moved from \(before) to \(after) while the earlier group grew")
-  }
-
   /// 834: the small screen's foot, from the window's top: 12 over the card's footer, 46 high, 8 in from the bottom.
   static let pipBottom: CGFloat = 834
   /// 1220: the small screen's leading edge, 200 wide and 12 in from the card's trailing edge, 8 in from the window's.
@@ -91,10 +52,7 @@ struct CardScrollTests {
   /// - Returns: What the window shows.
   /// - Throws: Never; the samples always have Activity.
   static func state(_ name: String) throws -> ViewerState {
-    switch name {
-    case "activity": try ViewerStageTests.activity(lines: 80)
-    default: PreviewStates.viewerAppsMany
-    }
+    try ViewerStageTests.activity(lines: 80)
   }
 
   /// The card's list: its tallest scroll view.

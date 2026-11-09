@@ -4,9 +4,9 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// The Activity pane: whose work it lists and today's count for VoiceOver, the filters with their problem and
-  /// picture counts, and the outline of sessions, runs and steps, narrowed by the filter and the sidebar's search, or
-  /// why nothing shows. Runs form from every row in scope before the filter, so each keeps its identity whichever
+  /// The Activity pane: whose work it lists, so a new session choice swaps the list rather than bringing rows in, and
+  /// today's count for VoiceOver, the filters with their problem and picture counts, and the outline of sessions, runs
+  /// and steps, narrowed by the filter and the sidebar's search, or why nothing shows. Runs form from every row in scope before the filter, so each keeps its identity whichever
   /// filter shows it. With nothing in the log yet there is nothing to filter. Times are the person's own clock. The
   /// picture sheet, or a run replayed, covers the window.
   ///
@@ -27,6 +27,7 @@ extension ViewerPresenter {
       }
       return ViewerActivityState(
         title: title,
+        session: snapshot.shownSessions,
         meta: "",
         filters: activityFilters(facts.filter, counts: [:]),
         days: [],
@@ -43,16 +44,22 @@ extension ViewerPresenter {
         .reduce(0) { $0 + $1.runs.count }
     }
     let days = returningFocus(activityDays(shown, moments: moments, snapshot), snapshot)
+    // A log read for another choice shows what it holds of this one until this one's own arrives, and never says
+    // that nothing is there.
+    let readForScope = facts.scope == scope
     return ViewerActivityState(
       title: title,
+      session: snapshot.shownSessions,
       meta: log.entries.isEmpty ? "" : ViewerWords.actionsToday(rules.countToday(in: scope)),
       filters: activityFilters(facts.filter, counts: counts),
       days: days,
-      empty: days.isEmpty ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil) : nil,
+      empty: days.isEmpty && readForScope
+        ? activityEmpty(log, moments, facts, query: query, chosen: chosen != nil) : nil,
       query: query,
       showsFilters: !moments.moments.isEmpty,
       sheet: pictureSheet(moments, snapshot),
-      replay: replay(moments, snapshot)
+      replay: replay(moments, snapshot),
+      settled: readForScope
     )
   }
 
@@ -109,8 +116,8 @@ extension ViewerPresenter {
     }
   }
 
-  /// Why nothing shows: nothing done yet, nothing from the chosen session, a search that matches nothing, or a filter
-  /// with nothing in it.
+  /// Why nothing shows: nothing done yet, nothing from the chosen session or its steps cleared to save space, a search
+  /// that matches nothing, or a filter with nothing in it.
   ///
   /// - Parameters:
   ///   - log: The log read.
@@ -127,6 +134,9 @@ extension ViewerPresenter {
     chosen: Bool
   ) -> EmptyMessageState {
     if moments.moments.isEmpty, chosen {
+      if log.cleared {
+        return EmptyMessageState(headline: ViewerWords.stepsCleared, message: ViewerWords.stepsClearedMessage)
+      }
       return EmptyMessageState(headline: ViewerWords.noActivity, message: ViewerWords.noSessionActivityMessage)
     }
     if log.entries.isEmpty {

@@ -9,11 +9,11 @@ use super::{
         respond,
     },
     local::{answering, exchange, post_local_as_app, reply_status},
-    reads::{ACTIVITY_ROWS, activity_row, listed_apps},
+    reads::{ACTIVITY_ROWS, activity_row},
     *,
 };
-use atlas_client::{client::AppList, overview::READ_DEADLINE};
-use atlas_core::{config::Config, files, screen::windows::Window, test_support::SETTINGS};
+use atlas_client::overview::READ_DEADLINE;
+use atlas_core::{config::Config, files, test_support::SETTINGS};
 use axum::{
     body::{Body, to_bytes},
     extract::Request,
@@ -1413,15 +1413,14 @@ async fn connections_that_never_name_the_viewer_close_soon() {
     server.abort();
 }
 
-/// The helper's activity, apps and screenshots answer only at the
+/// The helper's activity, sessions and screenshots answer only at the
 /// viewer's private address, from its own origin, within a free slot.
 #[tokio::test]
-async fn the_helpers_activity_apps_and_screenshots_answer_only_the_viewers_own_origin() {
+async fn the_helpers_activity_and_screenshots_answer_only_the_viewers_own_origin() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = unreachable(dir.path()).await;
     let routes = [
         "activity.json",
-        "apps.json",
         "screenshots.json",
         "sessions.json",
         "screenshot.png?name=1-capture.png",
@@ -1450,12 +1449,6 @@ async fn the_helpers_activity_apps_and_screenshots_answer_only_the_viewers_own_o
     assert_eq!(read_json(&viewer, "activity.json").await.0, 200);
     assert_eq!(read_json(&viewer, "screenshots.json").await.0, 200);
     assert_eq!(read_json(&viewer, "sessions.json").await.0, 200);
-    let (status, apps) = read_json(&viewer, "apps.json").await;
-    assert_eq!(
-        (status, apps["ok"].clone()),
-        (503, json!(false)),
-        "no helper"
-    );
     assert_eq!(read_json(&viewer, "screenshot.jpg").await.0, 404);
 
     let _busy = viewer
@@ -1788,105 +1781,188 @@ async fn activity_json_lists_the_newest_200_rows_by_ids_that_hold_across_reads()
     assert!(!ids.contains(second["activity"][0]["id"].as_str().unwrap()));
 }
 
-#[test]
-fn apps_json_lists_windows_front_to_back() {
-    let apps = json!([
-        {"name": "Finder", "pid": 1, "policy": "regular",
-            "executable": "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"},
-        {"name": "Dock", "pid": 2, "policy": "accessory", "executable": "/x"},
-        {"name": "Opie", "pid": 3, "policy": "regular", "active": true,
-            "executable": "/Applications/Opie.app/Contents/MacOS/Opie"},
-        {"name": "Notes", "pid": 4, "policy": "regular",
-            "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
-    ]);
-    let window = |number: i64, pid: i64, title: &str| {
-        json!({"number": number, "pid": pid, "title": title, "layer": 0, "alpha": 1.0,
-            "bounds": {"x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0}})
-    };
-    let windows = json!([
-        window(31, 4, "QA checklist"),
-        window(12, 3, "Ring"),
-        window(7, 3, "Starter"),
-    ]);
-
-    let listed = listed_apps(
-        &AppList::decode(json!({"ok": true, "apps": apps})).unwrap(),
-        &serde_json::from_value::<Vec<Window>>(windows).unwrap(),
+/// Write `files` as the log in `output`, newest first: the current file,
+/// the previous one, then the history.
+fn kept_log(output: &Path, files: &[String]) {
+    let history = output.join(atlas_client::test_support::HISTORY);
+    std::fs::create_dir(&history).unwrap();
+    std::fs::set_permissions(
+        &history,
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
     )
     .unwrap();
-    let order = listed
-        .iter()
-        .map(|app| app["name"].as_str().unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        ["Notes", "Opie", "Finder"],
-        "by each app's front window"
-    );
-    assert_eq!(
-        listed[1],
-        json!({
-            "pid": 3, "name": "Opie", "bundle": "/Applications/Opie.app", "bundleId": null,
-            "front": true, "hidden": false, "launchedAt": null,
-            "windows": [
-                {"id": 12, "title": "Ring", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0,
-                    "order": 1},
-                {"id": 7, "title": "Starter", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0,
-                    "order": 2},
-            ],
-        })
-    );
-    assert_eq!(listed[2]["windows"], json!([]), "Finder has none");
-    assert_eq!(listed[2]["front"], false);
+    for (index, text) in files.iter().enumerate() {
+        let path = match index {
+            0 => output.join(atlas_client::activity_log::FILE),
+            1 => output.join(atlas_client::test_support::PREVIOUS),
+            _ => history.join(format!("{}.jsonl", files.len() - index)),
+        };
+        std::fs::write(path, text).unwrap();
+    }
 }
 
-#[test]
-fn apps_name_their_bundle_id_whether_hidden_when_launched_and_their_windows_order() {
-    let apps = json!([
-        {"name": "Notes", "pid": 4, "policy": "regular", "hidden": true,
-            "bundleId": "com.apple.Notes", "launchedAt": 1_800_000_000_000_u64,
-            "executable": "/System/Applications/Notes.app/Contents/MacOS/Notes"},
-        {"name": "Probe", "pid": 5, "policy": "regular", "bundleId": "not an id",
-            "executable": "/Users/helper/Applications/Probe.app/Contents/MacOS/Probe"},
-    ]);
-    let window = |number: i64, pid: i64| {
-        json!({"number": number, "pid": pid, "title": "Secret plans", "layer": 0, "alpha": 1.0,
-            "bounds": {"x": 0.0, "y": 0.0, "width": 100.0, "height": 100.0}})
-    };
-    let windows = json!([window(9, 5), window(8, 4), window(7, 5)]);
+/// `count` of an agent's clicks from `first` milliseconds on, in `session`
+/// when it names one.
+fn clicks(first: u128, count: u128, session: Option<&str>) -> String {
+    (first..first + count)
+        .map(|at| {
+            let mut row = json!({"at": (at * 1_000_000).to_string(), "operation": "input",
+                "ok": true, "actor": "agent", "verb": "click",
+                "command": format!("{at:012}-{}", session.unwrap_or("none"))});
+            if let Some(session) = session {
+                row["session"] = json!(session);
+            }
+            format!("{row}\n")
+        })
+        .collect()
+}
 
-    let listed = listed_apps(
-        &AppList::decode(json!({"ok": true, "apps": apps})).unwrap(),
-        &serde_json::from_value::<Vec<Window>>(windows).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(listed[0]["name"], "Probe");
-    assert_eq!(listed[0]["bundleId"], Value::Null, "only an identifier");
-    assert_eq!(listed[0]["hidden"], false);
-    let orders = |app: &Value| {
-        app["windows"]
+#[tokio::test]
+async fn activity_json_for_a_session_finds_its_rows_in_the_oldest_kept_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let client = viewer.client();
+    let output = client.output_dir().unwrap().to_path_buf();
+    let (old, busy) = (
+        atlas_core::host::HostSession::new(atlas_core::host::Host::Codex, "demo").unwrap(),
+        atlas_core::host::HostSession::new(atlas_core::host::Host::Claude, "load").unwrap(),
+    );
+    let (old_key, busy_key) = (old.key().as_str(), busy.key().as_str());
+    kept_log(
+        &output,
+        &[
+            clicks(5_000, 300, Some(busy_key)),
+            clicks(4_000, 300, Some(busy_key)),
+            clicks(3_000, 300, Some(busy_key)),
+            clicks(1_000, 3, Some(old_key)) + &clicks(2_000, 300, Some(busy_key)),
+        ],
+    );
+
+    let (_, every) = read_json(&viewer, "activity.json").await;
+    assert!(
+        every["activity"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|window| window["order"].clone())
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(orders(&listed[0]), [json!(0), json!(2)]);
-    assert_eq!(listed[1]["bundleId"], "com.apple.Notes");
-    assert_eq!(listed[1]["hidden"], true);
-    assert_eq!(listed[1]["launchedAt"], 1_800_000_000_000_u64);
-    assert_eq!(
-        orders(&listed[1]),
-        [json!(1)],
-        "behind Probe's front window"
+            .all(|row| row["session"] == busy_key),
+        "every session's newest rows are the busy one's"
     );
+    assert!(every.get("cleared").is_none());
+
+    let (status, reply) = read_json(&viewer, &format!("activity.json?session={old_key}")).await;
+    assert_eq!(status, 200);
+    let rows = reply["activity"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["startedAt"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [1_002, 1_001, 1_000]
+    );
+    assert!(rows.iter().all(|row| row["session"] == old_key));
+    assert_eq!(reply["cleared"], false);
+    assert_eq!(
+        rows[0]["id"],
+        {
+            let (_, again) = read_json(&viewer, &format!("activity.json?session={old_key}")).await;
+            again["activity"][0]["id"].clone()
+        },
+        "a row keeps its id across reads"
+    );
+    let (_, busy) = read_json(&viewer, &format!("activity.json?session={busy_key}")).await;
+    assert_eq!(busy["activity"].as_array().unwrap().len(), ACTIVITY_ROWS);
+    assert_eq!(busy["activity"][0]["startedAt"], 5_299);
+}
+
+#[tokio::test]
+async fn activity_json_says_a_sessions_steps_were_cleared_only_once_the_log_no_longer_reaches_them()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let client = viewer.client();
+    let output = client.output_dir().unwrap().to_path_buf();
+    let (session, silent) = (
+        atlas_core::host::HostSession::new(atlas_core::host::Host::Codex, "demo").unwrap(),
+        atlas_core::host::HostSession::new(atlas_core::host::Host::Codex, "quiet").unwrap(),
+    );
+    let mut acting = (*client).clone();
+    acting.actor = atlas_client::client::Actor::Agent;
+    acting.host_session = Some(session.clone());
+    acting.record_for_test(&json!({"op": "input"}), &json!({"ok": true}));
+    for session in [&session, &silent] {
+        atlas_client::host_session::store::note(
+            &client,
+            session,
+            atlas_client::host_session::store::Kind::Other,
+            Some(&atlas_client::doing::Doing::new("click")),
+            &Ok(json!({"ok": true})),
+        )
+        .unwrap();
+    }
+    let route = format!("activity.json?session={}", session.key());
+    let now = atlas_core::time::timestamp() / 1_000_000;
+
+    // The log starts after the session's newest row: its rows are gone.
+    kept_log(&output, &[clicks(now + 60_000, 2, None)]);
+    let (status, reply) = read_json(&viewer, &route).await;
+    assert_eq!(status, 200);
+    assert_eq!(reply["activity"], json!([]));
+    assert_eq!(reply["cleared"], true);
+    // One that counted a click but wrote no row had nothing to clear.
+    let (_, reply) = read_json(&viewer, &format!("activity.json?session={}", silent.key())).await;
+    assert_eq!(reply["cleared"], false);
+
+    // A log that reaches back before it holds none of its rows: nothing was
+    // cleared.
+    std::fs::write(
+        output.join(atlas_client::activity_log::FILE),
+        clicks(now - 60_000, 2, None),
+    )
+    .unwrap();
+    let (_, reply) = read_json(&viewer, &route).await;
+    assert_eq!(reply["cleared"], false);
+
+    // A session with no record is never said to be cleared.
+    let unrecorded = atlas_core::host::Key::of(atlas_core::host::Host::Pi, "none");
+    let (_, reply) = read_json(&viewer, &format!("activity.json?session={unrecorded}")).await;
+    assert_eq!(reply["cleared"], false);
+}
+
+#[tokio::test]
+async fn activity_json_reads_terminals_rows_by_the_empty_key_and_refuses_a_key_that_is_not_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let output = viewer.client().output_dir().unwrap().to_path_buf();
+    let person = json!({"at": "9000000", "operation": "input", "ok": true, "actor": "viewer"});
+    kept_log(
+        &output,
+        &[clicks(5_000, 2, Some("0123456789ab"))
+            + &format!("{person}\n")
+            + &clicks(1_000, 1, None)],
+    );
+    let (status, reply) = read_json(&viewer, "activity.json?session=").await;
+    assert_eq!(status, 200);
+    let rows = reply["activity"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "an agent's command no host named, never the person's"
+    );
+    assert_eq!(rows[0]["startedAt"], 1_000);
+    assert_eq!(reply["cleared"], false);
+
+    for bad in ["nope", "0123456789AB", "0123456789ab0", "%2e%2e"] {
+        let (status, reply) = read_json(&viewer, &format!("activity.json?session={bad}")).await;
+        assert_eq!(
+            (status, reply["code"].clone()),
+            (400, json!("input")),
+            "{bad}"
+        );
+    }
 }
 
 #[tokio::test]
 async fn reading_the_helpers_apps_and_windows_records_no_activity() {
     let dir = tempfile::tempdir().unwrap();
-    let viewer = unreachable(dir.path()).await;
-    assert_eq!(read_json(&viewer, "apps.json").await.0, 503, "no helper");
 
     let agent = client(dir.path()).doing(atlas_client::doing::Doing::new("screenshot"));
     let filter = atlas_client::agent::WindowFilter {

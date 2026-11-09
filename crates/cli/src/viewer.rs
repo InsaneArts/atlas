@@ -8,7 +8,6 @@ mod control;
 mod frames;
 mod http;
 mod local;
-mod origins;
 mod reads;
 mod settings;
 mod sign_in;
@@ -24,7 +23,7 @@ pub(crate) use local::{
 pub(crate) use terminal::{TerminalFrames, TerminalService};
 
 use crate::menubar::Line;
-use atlas_client::{client::Client, helper_info};
+use atlas_client::client::Client;
 use atlas_control::SharedLease;
 use atlas_core::{
     error::{Code, Error},
@@ -103,8 +102,6 @@ struct Viewer {
     input_started: std::sync::Mutex<Option<String>>,
     /// Where this viewer's record is kept and what it says, once written.
     record: std::sync::Mutex<Option<(PathBuf, Value)>>,
-    /// The helper's app icons, made once.
-    icons: helper_info::Icons,
     /// The home folder whose record of the helper's accounts this viewer
     /// shows and changes: the person's.
     accounts_home: std::sync::Mutex<Option<PathBuf>>,
