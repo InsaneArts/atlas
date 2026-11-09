@@ -100,7 +100,7 @@ step "Publishing $tag"
 previous=$(git describe --tags --abbrev=0 2>/dev/null || true)
 {
 	printf '## Install\n\n```sh\ncurl -fsSL https://atlas.insanearts.io/install.sh | sh\n```\n\n'
-	printf 'Or with Homebrew:\n\n```sh\nbrew tap insanearts/tap\nbrew trust insanearts/tap\nbrew install --cask insanearts/tap/atlas\n```\n\n'
+	printf 'Or with Homebrew:\n\n```sh\nbrew trust insanearts/tap && brew install --cask insanearts/tap/atlas\n```\n\n'
 	printf 'Requires macOS 14 or later. An installed Atlas updates with `atlas update`.\n\n## Changes\n\n'
 	# The version's section of CHANGELOG.md, when it has one.
 	if grep -q "^## \[$version\]" CHANGELOG.md 2>/dev/null; then
