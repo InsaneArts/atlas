@@ -6,7 +6,7 @@ use super::{
     Jobs, State,
     record::{Record, VERSION},
     reply::unconfirmed,
-    store::Found,
+    store::{Found, RECORDS_MAX, Scan},
     verdict::Verdict,
 };
 use crate::daemon::run;
@@ -116,7 +116,13 @@ impl Jobs {
         };
 
         let mut state = self.state().map_err(|error| json!(error))?;
-        within_limits(&state, start.task.as_ref())?;
+        let scan = state.inventory();
+        within_limits(&state, &scan, start.task.as_ref())?;
+        if scan.found.len() > RECORDS_MAX {
+            // Admission established complete coverage under this same lock.
+            // Protected records may keep the history above its retention target.
+            state.store.prune_scanned(now, scan);
+        }
         while state.store.holds(&record.id) {
             record.id = JobId::new();
         }
@@ -519,8 +525,7 @@ impl Jobs {
 
 /// Refuse a start past the limit on jobs running, in the helper or for `task`,
 /// or when the records cannot all be read, so the jobs running are not known.
-fn within_limits(state: &State, task: Option<&Key>) -> std::result::Result<(), Value> {
-    let scan = state.inventory();
+fn within_limits(state: &State, scan: &Scan, task: Option<&Key>) -> std::result::Result<(), Value> {
     if !scan.complete {
         return Err(JobFailure::new(
             JobRefusal::Unobserved,

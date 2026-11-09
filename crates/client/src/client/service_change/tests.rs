@@ -3,7 +3,7 @@ use crate::{
     client::service_change::service_blocker,
     host_session::{Host, HostSession, store::Store},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 fn session(id: &str) -> HostSession {
     HostSession::new(Host::Named, id).unwrap()
@@ -1216,6 +1216,24 @@ fn background_jobs_block_service_changes_until_they_have_ended() {
     assert!(job_blocker(&[]).is_none());
     assert!(job_blocker(&[job("ended")]).is_none());
     assert!(job_blocker(&[Shown::Later(json!({"state": "unknown"}))]).is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_complete_ended_adopted_job_with_unknown_exit_allows_service_change() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let mut ended = json!(job("ended"));
+    ended["adopted"] = json!(true);
+    ended["how"] = json!("exited");
+    ended["endedAt"] = json!(21);
+    ended["exitCode"] = Value::Null;
+    ended["exitSignal"] = Value::Null;
+    ended["signal"] = Value::Null;
+    let shown: Shown = serde_json::from_value(ended).unwrap();
+    client
+        .require_jobs_idle(async { Ok(vec![shown]) })
+        .await
+        .unwrap();
 }
 
 #[tokio::test(start_paused = true)]
