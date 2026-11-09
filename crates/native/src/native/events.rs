@@ -131,6 +131,9 @@ pub(super) struct Engine {
     /// before it is sent. A drag is judged whole before its press: let go
     /// partway, it would drop where it is.
     pub(super) recheck: Option<super::asking::Recheck>,
+    /// A policy test's synthetic pointed target, independent of the host desktop.
+    #[cfg(test)]
+    pub(super) asking_point: Option<super::asking::Target>,
     /// The looks the service keeps, where a referenced click finds its element.
     pub(super) looks: Arc<Looks>,
     journal: Option<Journal>,
@@ -183,6 +186,8 @@ impl Engine {
             grant: None,
             target: None,
             recheck: None,
+            #[cfg(test)]
+            asking_point: None,
             looks: Arc::default(),
             journal: None,
             journal_dirty: false,

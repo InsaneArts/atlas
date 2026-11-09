@@ -563,3 +563,129 @@ fn a_frame_on_a_display_wider_than_its_picture_is_drawn_in_the_pictures_pixels()
         Value::Null
     );
 }
+
+/// A native-shaped confirmed prefix, with a synthetic picture so asking
+/// needs neither the helper nor a live capture.
+fn confirmed_prefix(client: &Client) -> Result<Value> {
+    client.keep_for_ask(
+        crate::before::Raw {
+            rgb: vec![0, 0, 0],
+            width: 1,
+            height: 1,
+            at: 0,
+            display: (1.0, 1.0),
+        },
+        client.controller.screen_visible().unwrap(),
+    );
+    let mut reply = serde_json::to_value(waiting("same-protected-action")).unwrap();
+    reply["performed"] = json!(1);
+    reply["partial"] = json!(false);
+    Ok(reply)
+}
+
+#[tokio::test]
+async fn an_ask_storage_failure_retains_confirmed_progress() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(dir.path());
+    let folder = client.controller.asks().folder().to_path_buf();
+    std::fs::create_dir_all(folder.parent().unwrap()).unwrap();
+    std::fs::write(&folder, "not a directory").unwrap();
+    let result = after_asking(&client, async || confirmed_prefix(&client)).await;
+    let shown = match result {
+        Ok(reply) => reply,
+        Err(error) => serde_json::to_value(error).unwrap(),
+    };
+    assert_eq!(
+        shown["performed"], 1,
+        "the caller must learn its confirmed prefix"
+    );
+}
+
+#[test]
+fn a_lost_once_claim_never_replays_a_confirmed_prefix() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    tokio::task::LocalSet::new().block_on(&runtime, async {
+        let dir = tempfile::tempdir().unwrap();
+        let mut client = crate::test_support::client(dir.path());
+        client.controller = client
+            .controller
+            .clone()
+            .waiting(std::time::Duration::from_secs(10));
+        let asks = client.controller.asks();
+        let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = attempts.clone();
+        let command = tokio::task::spawn_local(async move {
+            after_asking(&client, async || {
+                if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    confirmed_prefix(&client)
+                } else {
+                    Ok(json!({"ok": true, "performed": 2}))
+                }
+            })
+            .await
+        });
+        let ask = loop {
+            if let Some(ask) = asks.open(now_ms()).into_iter().next() {
+                break ask;
+            }
+            tokio::task::yield_now().await;
+        };
+        // The command has suspended on its blocking wait. With one blocking
+        // worker, this queued signal runs only once that wait returned.
+        let (sent, received) = std::sync::mpsc::channel();
+        let _signal = tokio::task::spawn_blocking(move || sent.send(()).unwrap());
+        std::fs::write(
+            asks.folder().join(format!("{}.answer", ask.id)),
+            b"\"once\"",
+        )
+        .unwrap();
+        received
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap();
+        // A synthetic competing waiter observes and claims the same answer
+        // while the async command cannot resume on this runtime thread.
+        assert!(matches!(
+            asks.wait(&ask.id, Instant::now()).unwrap(),
+            Waited::Answered(Answer::Once)
+        ));
+        assert!(asks.claim_once(&ask.id, now_ms()).unwrap().is_some());
+        let result = command.await.unwrap();
+        let count = attempts.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(count, 1, "the confirmed prefix must not execute again");
+        assert_eq!(result.unwrap()["performed"], 1);
+    });
+}
+
+#[tokio::test]
+async fn stop_preserves_known_delivery_counts_for_reply_and_error_outcomes() {
+    for reply in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::test_support::client(dir.path());
+        client.controller.note_stop(true).unwrap();
+        let mut attempts = 0;
+        let error = after_asking(&client, async || {
+            attempts += 1;
+            let error = waiting("stopped-prefix")
+                .with("performed", json!(1))
+                .with("typed", json!(17))
+                .with("partial", json!(false));
+            if reply {
+                Ok(serde_json::to_value(error).unwrap())
+            } else {
+                Err(error)
+            }
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, Code::Stopped);
+        assert_eq!(error.details["performed"], 1);
+        assert_eq!(error.details["typed"], 17);
+        assert_eq!(error.details["partial"], false);
+        assert!(!error.details.contains_key("ask"));
+        assert_eq!(attempts, 1);
+    }
+}

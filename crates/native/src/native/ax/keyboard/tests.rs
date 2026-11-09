@@ -751,3 +751,34 @@ fn the_focused_element_is_aimed_at_with_its_window_and_page_id_and_never_its_val
             .any(|(_, attribute)| *attribute == "AXValue")
     );
 }
+
+#[test]
+fn a_referenced_objects_page_is_read_from_its_own_ancestors_without_keyboard_focus() {
+    for address in [Some("https://github.com/pulls"), None] {
+        let mut fake = Fake::app();
+        fake.set(APP, "AXFocusedUIElement", Answer::Element(99));
+        fake.set(GROUP, "AXRole", Answer::Text("AXWebArea".into()));
+        if let Some(address) = address {
+            fake.set(GROUP, "AXURL", Answer::Text(address.into()));
+        }
+        let deadline = fake.started + budget();
+        let aimed = Reader {
+            ask: &mut fake,
+            deadline,
+        }
+        .aimed(FIELD, false)
+        .unwrap();
+        assert!(
+            aimed.in_page,
+            "an unread address remains a page, never a browser toolbar"
+        );
+        assert_eq!(aimed.url.as_deref(), address);
+        assert_eq!(aimed.name.as_deref(), Some("Email"));
+        assert!(
+            !fake
+                .asked
+                .iter()
+                .any(|(_, attribute)| matches!(*attribute, "AXFocusedUIElement" | "AXValue"))
+        );
+    }
+}

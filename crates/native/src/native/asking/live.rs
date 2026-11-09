@@ -42,6 +42,9 @@ pub(crate) struct OnScreen<'a> {
     pub(crate) intended: Option<String>,
     /// The element keyboard focus was on when last read.
     pub(crate) held: Option<Held>,
+    /// The pointed target supplied by a service policy test.
+    #[cfg(test)]
+    pub(crate) point: Option<Target>,
 }
 
 impl<'a> OnScreen<'a> {
@@ -59,6 +62,8 @@ impl<'a> OnScreen<'a> {
             deadline,
             intended: None,
             held,
+            #[cfg(test)]
+            point: None,
         }
     }
 
@@ -94,6 +99,10 @@ impl OnScreen<'_> {
 
 impl Look for OnScreen<'_> {
     fn at_point(&mut self, x: f64, y: f64) -> Target {
+        #[cfg(test)]
+        if let Some(point) = &self.point {
+            return point.clone();
+        }
         let display = Bounds::display(self.epoch.width, self.epoch.height);
         let Some((pid, number)) = crate::native::windows::windows().ok().and_then(|windows| {
             let window = receiving(&windows, display, x, y)?;
@@ -148,10 +157,13 @@ impl Look for OnScreen<'_> {
         else {
             return Target::default();
         };
+        if in_page && let Ok(aimed) = self.looks.aimed(*reference, self.epoch, self.deadline) {
+            return target(pid, Some(aimed));
+        }
         Target {
             app: crate::native::apps::bundle_id(pid),
-            // Its page isn't read again: an unread page takes the strictest
-            // level its browser's sites have.
+            // Failed or stale page evidence keeps the strictest listed
+            // browser policy; an old URL never supplies authority.
             site: if in_page { Site::Unread } else { Site::None },
             editable: role
                 .as_deref()

@@ -2,15 +2,17 @@
 //!
 //! An agent's input carries the person's accounts and the grants that may
 //! cover it, only while the person lists any: with none, the request is
-//! byte for byte what it always was. The input service judges the whole
-//! request before its first event; a refusal to ask has sent nothing.
+//! byte for byte what it always was. The input service judges each action
+//! before it is sent. A typing precheck sends nothing; an ordinary batch
+//! may reach a sending action after a confirmed prefix already ran.
 //!
 //! Then the agent's command lets go of control and of the input service's
 //! grant, puts the question up (or joins the one this session already
 //! asks), and waits for the person, Stop or the rest of its wait, sleeping
-//! on the asks folder. Once allowed, the command runs again from the start:
+//! on the asks folder. Once allowed, a command that sent nothing runs again:
 //! control taken again, the accounts and grants read again, the target
-//! looked at afresh, and the reply is the ordinary one.
+//! looked at afresh, and the reply is the ordinary one. A confirmed prefix
+//! is never replayed: its progress is returned so only the rest is sent.
 use crate::client::Client;
 use atlas_control::asks::{Answer, Ask, Permit, Waited};
 use atlas_core::{
@@ -252,7 +254,9 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
             picture: None,
         };
         let frame = ask.question["frame"].clone();
-        let id = asks.ask(ask, now_ms())?;
+        let id = asks
+            .ask(ask, now_ms())
+            .map_err(|error| with_progress(&outcome, error))?;
         // A question goes up without its picture when it can't be kept, or
         // when the person began or ended a sign-in since it was taken.
         if let Some((raw, admitted)) = client.take_for_ask()
@@ -272,14 +276,20 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
         .await
         .map_err(|cause| {
             Error::new(Code::State, "The wait for the person ended").with_source(cause)
-        })??;
+        })
+        .and_then(|waited| waited)
+        .map_err(|error| with_progress(&outcome, error))?;
         // What the person saw is what they answered: the grant comes from
         // the stored question, never from what a rerun read. Just This Once
         // goes to the one command that claims it first; another joined to
         // the same question asks again.
         let stored = match waited {
-            Waited::Answered(Answer::Once) => match asks.claim_once(&id, now_ms())? {
+            Waited::Answered(Answer::Once) => match asks
+                .claim_once(&id, now_ms())
+                .map_err(|error| with_progress(&outcome, error))?
+            {
                 Some(stored) => stored,
+                None if later => return private(went(outcome, &Went::Asked)),
                 None => continue,
             },
             Waited::Answered(Answer::Task | Answer::Deny)
@@ -293,7 +303,7 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
         match waited {
             Waited::Unanswered if later => return private(went(outcome, &Went::Asked)),
             Waited::Unanswered => return private(outcome),
-            Waited::Stopped => return Err(Error::stopped()),
+            Waited::Stopped => return Err(with_progress(&outcome, Error::stopped())),
             Waited::Answered(Answer::Deny) => {
                 asks.close(&id);
                 if later {
@@ -327,7 +337,8 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
                         ends: u64::MAX,
                     },
                     now_ms(),
-                )?;
+                )
+                .map_err(|error| with_progress(&outcome, error))?;
                 return private(went(outcome, &Went::Allowed));
             }
             // A command's check before typing covers that command's own
@@ -352,6 +363,37 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
             }
         }
     }
+}
+
+/// Preserve confirmed delivery facts when the approval infrastructure or
+/// Stop replaces a partial refusal. Only reviewed progress fields cross
+/// this boundary; the private question and message never do.
+fn with_progress(outcome: &Result<Value>, mut error: Error) -> Error {
+    let field = |key: &str| match outcome {
+        Ok(reply) => reply.get(key),
+        Err(previous) => previous.details.get(key),
+    };
+    let performed = field("performed").and_then(Value::as_u64);
+    let typed = field("typed").and_then(Value::as_u64);
+    let partial = field("partial").and_then(Value::as_bool);
+    if performed.unwrap_or(0) == 0 && typed.unwrap_or(0) == 0 && partial != Some(true) {
+        return error;
+    }
+    if let Some(performed) = performed {
+        error = error.with("performed", json!(performed));
+    }
+    if let Some(typed) = typed {
+        error = error.with("typed", json!(typed));
+    }
+    if let Some(partial) = partial {
+        error = error.with("partial", json!(partial));
+    }
+    let uncertain = match outcome {
+        Ok(reply) => reply["uncertain"] == true,
+        Err(previous) => previous.uncertain,
+    };
+    error.uncertain |= uncertain;
+    error.with("next", json!("Some input already ran. Do not repeat it. Resolve this refusal, then look at the result and send only the remaining input."))
 }
 
 /// How the question about the action that stopped a request partway went.

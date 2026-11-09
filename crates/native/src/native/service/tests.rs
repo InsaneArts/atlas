@@ -4595,12 +4595,13 @@ async fn gated_click(asking: Value) -> (Result<Value>, usize) {
     let directory = tempfile::tempdir().unwrap();
     let (tap, posted) = Tap::new();
     let service = tapped_service(directory.path(), tap, Arc::default());
+    service.engine.lock().await.asking_point = Some(super::asking::Target::default());
     service
         .gate
         .acquire_lasting(&owner, super::Who::Agent, LASTING)
         .unwrap();
     let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
-    // Over the menu bar, where no ordinary window is: the app there can't be told.
+    // The observer, rather than a screen coordinate, proves the target is unknown.
     let click = vec![serde_json::from_value(json!({"type": "click", "x": 1, "y": 1})).unwrap()];
     let asking = serde_json::from_value(asking).unwrap();
     let reply = service

@@ -323,6 +323,31 @@ impl Looks {
         })
     }
 
+    /// The reference's current target and page, after proving its process
+    /// and complete retained object path again. Failure conveys no site grant.
+    ///
+    /// # Errors
+    ///
+    /// Refuses stale references, replaced processes, changed paths/pages,
+    /// failed Accessibility reads and exhausted read deadlines.
+    pub(in crate::native) fn aimed(
+        &self,
+        reference: Reference,
+        epoch: &InputEpoch,
+        deadline: Instant,
+    ) -> Result<super::Aimed> {
+        let found = self.find(reference, epoch, Instant::now())?;
+        let target = again(&found, super::remaining(deadline, Instant::now())?)?
+            .pop()
+            .ok_or_else(unavailable)?;
+        let aimed = super::keyboard::element_aim(target.object, deadline)?;
+        check_application(Some(found.instance))?;
+        if found.in_web_page() && !aimed.in_page {
+            return Err(stale("The referenced element's page changed"));
+        }
+        Ok(aimed)
+    }
+
     /// What the look `reference` names holds of its element at `now`,
     /// when that look is still kept and was taken in `epoch`.
     fn find(&self, reference: Reference, epoch: &InputEpoch, now: Instant) -> Result<Found> {

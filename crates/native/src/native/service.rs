@@ -749,6 +749,10 @@ fn recheck(
         std::time::Instant::now() + ASK_BUDGET,
         recheck.held.take(),
     );
+    #[cfg(test)]
+    {
+        look.point = engine.asking_point.clone();
+    }
     let decision = judge(&mut recheck, &mut look);
     recheck.held = look.held;
     engine.recheck = Some(recheck);
@@ -774,6 +778,8 @@ fn gate_request(
         deadline: std::time::Instant::now() + ASK_BUDGET,
         intended,
         held: None,
+        #[cfg(test)]
+        point: engine.asking_point.clone(),
     };
     refusal(asking::decide(actions, asking, &mut look), asking.dry)
 }

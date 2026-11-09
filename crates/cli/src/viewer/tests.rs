@@ -2800,7 +2800,7 @@ async fn a_password_the_person_typed_reaches_no_record_status_or_log() {
             .unwrap();
     assert!(record.contains("github.com"), "{record}");
     assert!(!record.contains(CANARY));
-    let status = viewer.status().await.to_string();
+    let status = viewer.status_for(true).await.to_string();
     assert!(
         status.contains("github.com"),
         "the status lists the account"
@@ -3030,4 +3030,40 @@ async fn only_the_app_is_shown_which_account_a_row_acted_in() {
         assert_eq!(shown["says"], "typed on github.com", "{route}");
     }
     server.abort();
+}
+
+#[tokio::test]
+async fn only_app_status_contains_populated_private_account_inventory_and_note() {
+    use atlas_client::sign_ins::{self, Entry, How, Kind, Level};
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let home = dir.path().join("person");
+    *unpoisoned(&viewer.accounts_home) = Some(home.clone());
+    sign_ins::add_in(
+        &home,
+        Entry {
+            kind: Kind::Site,
+            id: "private-account.invalid".into(),
+            name: "Account inventory canary".into(),
+            browser: Some("com.google.Chrome".into()),
+            added: 1,
+            how: How::TakeControl,
+            level: Level::Ask,
+        },
+        true,
+    )
+    .unwrap();
+    let ordinary = viewer.status_for(false).await;
+    assert!(ordinary["overview"].get("accounts").is_none());
+    assert!(ordinary["overview"].get("accountNote").is_none());
+    assert!(!ordinary.to_string().contains("Account inventory canary"));
+    let app = viewer.status_for(true).await;
+    assert_eq!(
+        app["overview"]["accounts"][0]["name"],
+        "Account inventory canary"
+    );
+    assert_eq!(
+        app["overview"]["accountNote"]["name"],
+        "Account inventory canary"
+    );
 }

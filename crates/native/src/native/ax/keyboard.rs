@@ -837,6 +837,16 @@ pub(in crate::native) fn focused_aim(pid: i64, timeout: Duration) -> Result<Opti
         .map(|aimed| Some((held, aimed)))
 }
 
+/// Read the current page and target attributes of an already revalidated
+/// reference object, within the reference read's original deadline.
+pub(super) fn element_aim(element: CFRetained<AXUIElement>, deadline: Instant) -> Result<Aimed> {
+    Reader {
+        ask: Live,
+        deadline,
+    }
+    .aimed(element, false)
+}
+
 /// [`Aimed`] for what lies at `x`, `y` in app `pid`, a press going to the
 /// nearest pressable element above it; none when nothing is there.
 pub(in crate::native) fn pointed_aim(

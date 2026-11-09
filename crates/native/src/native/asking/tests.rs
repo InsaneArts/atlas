@@ -527,6 +527,7 @@ fn a_request_naming_an_app_not_yet_in_front_is_judged_as_that_app() {
         deadline: std::time::Instant::now(),
         intended: Some(SLACK.to_owned()),
         held: None,
+        point: None,
     };
     let front = Target {
         app: Some("com.apple.TextEdit".to_owned()),
