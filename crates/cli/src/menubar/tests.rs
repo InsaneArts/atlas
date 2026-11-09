@@ -1303,6 +1303,216 @@ fn a_menu_bar_surviving_its_stop_deadline_is_not_reported_stopped() {
 }
 
 #[test]
+fn a_second_menu_bar_refuses_while_one_serves_and_leaves_its_record_alone() {
+    let output = tempfile::tempdir().unwrap();
+    let record = output.path().join(crate::viewer::MENUBAR_RECORD);
+    let written = br#"{"url":"http://127.0.0.1:8799/private/","pid":4242}"#;
+    fs::write(&record, written).unwrap();
+
+    let serving = alone(output.path()).unwrap();
+    let error = alone(output.path()).unwrap_err();
+    assert_eq!(error.code, Code::Menubar);
+    assert_eq!(
+        error.error,
+        "The menu bar already runs as process 4242 on port 8799"
+    );
+    assert_eq!(fs::read(&record).unwrap(), written);
+
+    fs::remove_file(&record).unwrap();
+    assert_eq!(
+        alone(output.path()).unwrap_err().error,
+        "Another menu bar already runs",
+        "one that has not recorded itself yet"
+    );
+
+    drop(serving);
+    assert!(alone(output.path()).is_ok(), "free once it stops");
+}
+
+#[test]
+fn only_atlas_menubar_serving_is_taken_for_a_menu_bar_on_its_port() {
+    let port = |arguments: &[&str], parent: i32| {
+        let arguments: Vec<String> = arguments.iter().map(|&argument| argument.into()).collect();
+        menu_bar_port(&arguments, parent)
+    };
+
+    let launched = [
+        "/Users/a b/atlas",
+        "menubar",
+        "--serve",
+        "--port",
+        "8799",
+        "--config",
+        "/a --render b.toml",
+    ];
+    assert_eq!(port(&launched, 40), Some(8799));
+    assert_eq!(
+        port(
+            &["atlas", "--json", "menubar", "--serve", "--port=8799"],
+            40
+        ),
+        Some(8799)
+    );
+    assert_eq!(
+        port(&["atlas", "--config", "menubar", "menubar", "--serve"], 40),
+        Some(PORT)
+    );
+    assert_eq!(
+        port(&["atlas", "menubar"], 1),
+        Some(PORT),
+        "started at login"
+    );
+    assert_eq!(
+        port(&["atlas", "menubar", "--serve", "--"], 40),
+        Some(PORT),
+        "an empty end of options"
+    );
+
+    for other in [
+        &["atlas", "menubar"][..],
+        &["atlas", "menubar", "--port", "8799"],
+        &["atlas", "menubar", "--serve", "--port", "nine"],
+        &["atlas", "update"],
+        &["atlas", "type", "menubar --serve"],
+        &["atlas", "run", "--", "atlas", "menubar", "--serve"],
+        &["atlas", "--config", "menubar", "--serve"],
+    ] {
+        assert_eq!(port(other, 40), None, "{other:?}");
+    }
+    for other in [
+        &["atlas", "menubar", "--render", "/tmp/panel"][..],
+        &["atlas", "menubar", "--render=/tmp/panel"],
+        &["atlas", "menubar", "--login", "status"],
+        &["atlas", "menubar", "--login=on"],
+        &["atlas", "mcp"],
+    ] {
+        assert_eq!(port(other, 1), None, "{other:?}");
+    }
+}
+
+#[test]
+fn a_menu_bar_is_found_among_this_accounts_processes_by_its_command_line() {
+    use atlas_core::process::{Info, Instance};
+    let process = |pid: i32, ppid: i32, name: &str, zombie: bool| Info {
+        instance: Instance::new(pid, [1, 0]),
+        ppid,
+        pgid: pid,
+        uid: 501,
+        ruid: 501,
+        svuid: 501,
+        zombie,
+        stopped: false,
+        name: name.to_owned(),
+    };
+    let line = |pid: i32| -> Option<&[&str]> {
+        match pid {
+            10 => Some(&["atlas", "menubar", "--serve", "--port", "8799"]),
+            20 | 50 => Some(&["atlas", "menubar", "--serve"]),
+            30 => Some(&["atlas", "update"]),
+            40 => Some(&["atlas", "menubar", "--serve", "--port", "1234"]),
+            _ => None,
+        }
+    };
+    let atlas = std::ffi::OsStr::new("atlas");
+
+    // The menu bar this update runs beneath counts; this process, exited
+    // ones, other programs and ones gone before being read do not.
+    let listed = vec![
+        process(10, 1, "atlas", false),
+        process(20, 10, "atlas", false),
+        process(30, 20, "atlas", false),
+        process(40, 1, "atlas", true),
+        process(50, 1, "AtlasApp", false),
+        process(60, 1, "atlas", false),
+    ];
+    let found = menu_bars(Ok(listed), 30, atlas, |process| {
+        Ok(line(process.instance.pid)
+            .map(|line| line.iter().map(|&argument| argument.into()).collect()))
+    });
+    assert_eq!(
+        found.unwrap(),
+        [
+            (8799, Instance::new(10, [1, 0])),
+            (PORT, Instance::new(20, [1, 0]))
+        ]
+    );
+
+    let unreadable = menu_bars(Ok(vec![process(10, 1, "atlas", false)]), 30, atlas, |_| {
+        Err(Error::new(Code::State, "unreadable"))
+    })
+    .unwrap_err();
+    assert_eq!(unreadable.code, Code::Menubar);
+    assert_eq!(
+        unreadable.error,
+        "Atlas could not tell whether the menu bar runs"
+    );
+    let unlisted = menu_bars(
+        Err(Error::new(Code::State, "no listing")),
+        30,
+        atlas,
+        |_| panic!("nothing listed is read"),
+    )
+    .unwrap_err();
+    assert_eq!(unlisted.error, unreadable.error);
+}
+
+/// Stop the menu bar of `output` while a stand-in for one runs, listed as
+/// this executable and serving port 8123 by its command line: what `stop`
+/// says, and whether the stand-in ended by its interrupt. Other tests see
+/// it as xargs, waiting for input, never as a menu bar.
+fn stopping_a_stand_in(output: &Path) -> (Result<Option<u16>>, bool) {
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    let mut stand_in = atlas_core::spawn::spawn(
+        std::process::Command::new("/usr/bin/xargs")
+            .arg0("atlas")
+            .args(["menubar", "--serve", "--port", "8123"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
+    let pid = i32::try_from(stand_in.id()).unwrap();
+    let mut listed = atlas_core::process::info(pid).unwrap().unwrap();
+    let exe = std::env::current_exe().unwrap();
+    let name = exe.file_name().unwrap().to_str().unwrap();
+    listed.name = name.get(..16).unwrap_or(name).to_owned();
+
+    LISTED.with(|listing| *listing.borrow_mut() = Some(vec![listed]));
+    let outcome = stop(output);
+    LISTED.with(|listing| listing.borrow_mut().take());
+    // Only a stand-in that outlived its stop is still there to kill.
+    let _ = stand_in.kill();
+    let interrupted = stand_in.wait().unwrap().signal() == Some(libc::SIGINT);
+    (outcome, interrupted)
+}
+
+#[test]
+fn an_update_with_no_record_still_stops_and_restarts_the_running_menu_bar() {
+    let output = tempfile::tempdir().unwrap();
+    let (outcome, interrupted) = stopping_a_stand_in(output.path());
+    assert_eq!(outcome.unwrap(), Some(8123), "restarted on its port");
+    assert!(interrupted, "asked to stop as a recorded menu bar is");
+}
+
+#[test]
+fn an_update_with_a_stale_record_finds_the_running_menu_bar() {
+    let output = tempfile::tempdir().unwrap();
+    let mut exited =
+        atlas_core::spawn::spawn(&mut std::process::Command::new("/usr/bin/true")).unwrap();
+    let gone = exited.id();
+    exited.wait().unwrap();
+    fs::write(
+        output.path().join(crate::viewer::MENUBAR_RECORD),
+        serde_json::json!({"url": "http://127.0.0.1:9/private/", "pid": gone}).to_string(),
+    )
+    .unwrap();
+
+    let (outcome, interrupted) = stopping_a_stand_in(output.path());
+    assert_eq!(outcome.unwrap(), Some(8123));
+    assert!(interrupted);
+}
+
+#[test]
 fn rendering_selects_the_appearance() {
     assert_eq!(render_args("/tmp/a.png", false), ["--render", "/tmp/a.png"]);
     assert_eq!(

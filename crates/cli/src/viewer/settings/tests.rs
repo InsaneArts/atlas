@@ -76,6 +76,45 @@ async fn an_unchanged_settings_file_retries_a_failed_viewer_record_move() {
     }
 }
 
+#[tokio::test]
+async fn a_menu_bar_record_never_moves_into_a_folder_another_menu_bar_keeps() {
+    use std::os::unix::fs::DirBuilderExt;
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let settings = base.join("u.toml");
+    let (viewer, record) = followed(&base, &settings).await;
+    *viewer.alone.lock().unwrap() = Some(crate::menubar::alone(record.parent().unwrap()).unwrap());
+    let folder = base.join("moved");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&folder)
+        .unwrap();
+    let theirs = folder.join(MENUBAR_RECORD);
+    let written = br#"{"url":"http://127.0.0.1:8799/private/","pid":4242}"#;
+    std::fs::write(&theirs, written).unwrap();
+    let held = crate::menubar::alone(&folder).unwrap();
+
+    std::fs::write(&settings, SETTINGS.replace("\"out\"", "\"moved\"")).unwrap();
+    viewer.follow_settings().await;
+    assert_eq!(viewer.client().output_dir().unwrap(), folder);
+    assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, record);
+    assert!(record.exists(), "its record stays where it was");
+    assert!(crate::menubar::alone(record.parent().unwrap()).is_err());
+    assert_eq!(std::fs::read(&theirs).unwrap(), written);
+
+    drop(held);
+    viewer.follow_settings().await;
+    assert_eq!(viewer.record.lock().unwrap().as_ref().unwrap().0, theirs);
+    assert!(
+        crate::menubar::alone(&folder).is_err(),
+        "it holds where it moved"
+    );
+    assert!(
+        crate::menubar::alone(record.parent().unwrap()).is_ok(),
+        "and lets go of where it was"
+    );
+}
+
 /// A picture taken eight days ago, kept in `output`'s private pictures folder.
 fn expired_picture(output: &Path) -> std::path::PathBuf {
     use std::os::unix::fs::DirBuilderExt;

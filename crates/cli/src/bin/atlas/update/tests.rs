@@ -178,7 +178,8 @@ async fn finishing_an_update_skips_a_helper_with_no_job() {
         .unwrap();
     assert_eq!(
         finished,
-        json!({"ok": true, "completedSteps": [], "next": "atlas init"})
+        json!({"ok": true, "completedSteps": [], "next": "atlas init", "menubarRestarted": null}),
+        "no menu bar ran to move"
     );
 
     assert!(has_helper_job(true, false), "a recorded setup");
@@ -260,7 +261,7 @@ fn an_update_stops_when_a_child_does_not_acknowledge_success() {
 }
 
 #[test]
-fn an_update_retains_the_previous_app_while_menu_bar_shutdown_is_unconfirmed() {
+fn an_update_that_cant_stop_the_menu_bar_says_so_and_keeps_the_previous_app() {
     let mut report = json!({"ok": true});
     let error = retire_previous(
         &mut report,
@@ -279,6 +280,10 @@ fn an_update_retains_the_previous_app_while_menu_bar_shutdown_is_unconfirmed() {
         "The menu bar did not stop within a minute, so the previous Atlas.app was kept. Quit the \
          menu bar, then run atlas update again."
     );
+    assert_eq!(
+        serde_json::to_value(&error).unwrap()["next"],
+        "Quit the menu bar, then run atlas update again"
+    );
     assert!(report.get("previous").is_none(), "{report}");
 
     for running in [Some(8123), None] {
@@ -288,6 +293,52 @@ fn an_update_retains_the_previous_app_while_menu_bar_shutdown_is_unconfirmed() {
         assert_eq!(port, running, "restarted only where it ran");
         assert_eq!(report["previous"], json!({"removed": true}));
     }
+}
+
+#[test]
+fn finishing_an_update_moves_the_menu_bar_onto_the_new_version_or_keeps_the_previous_app() {
+    let finished = || json!({"ok": true, "completedSteps": ["install"]});
+
+    let mut restarted_on = None;
+    let moved = move_menubar(
+        finished(),
+        || Ok(Some(8123)),
+        |port| {
+            restarted_on = Some(port);
+            true
+        },
+    );
+    assert_eq!(restarted_on, Some(8123), "restarted on its port");
+    assert_eq!(moved["menubarRestarted"], true);
+    assert_eq!(moved["ok"], true);
+
+    let none = move_menubar(finished(), || Ok(None), |_| panic!("none ran"));
+    assert!(none["menubarRestarted"].is_null(), "{none}");
+    assert_eq!(
+        move_menubar(finished(), || Ok(Some(8123)), |_| false)["menubarRestarted"],
+        false
+    );
+
+    let failed = move_menubar(
+        finished(),
+        || {
+            Err(Error::new(
+                Code::Menubar,
+                "The menu bar did not stop within a minute",
+            ))
+        },
+        |_| panic!("one still running was started again"),
+    );
+    assert_eq!(failed["ok"], false);
+    assert_eq!(failed["failedStep"], "menubar");
+    assert_eq!(failed["completedSteps"], json!(["install"]));
+    assert_eq!(failed["failure"]["next"], QUIT_MENU_BAR);
+    assert!(
+        failed["failure"]["error"].as_str().unwrap().ends_with(
+            "so the previous Atlas.app was kept. Quit the menu bar, then run atlas update again."
+        ),
+        "{failed}"
+    );
 }
 
 #[test]

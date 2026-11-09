@@ -100,6 +100,9 @@ struct Viewer {
     input_started: std::sync::Mutex<Option<String>>,
     /// Where this viewer's record is kept and what it says, once written.
     record: std::sync::Mutex<Option<(PathBuf, Value)>>,
+    /// The menu bar's hold on the folder its record is kept in, while it
+    /// serves: taken before the record moves into another, after `record`.
+    alone: std::sync::Mutex<Option<atlas_core::files::LockFile>>,
 }
 
 impl Viewer {

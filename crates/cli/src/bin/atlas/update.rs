@@ -107,37 +107,54 @@ async fn update_using(
     report["helper"] = finished;
 
     if moved {
-        // A running menu bar moves onto the new version too. It stops before
-        // the previous app, the bundle it still runs from, is removed.
+        // The new version moves a running menu bar onto itself as it
+        // finishes; one older than that leaves it to this one. Either way
+        // it stops before the previous app, the bundle it ran from, goes.
+        let handed_over = report["helper"].get("menubarRestarted").cloned();
         let port = retire_previous(
             &mut report,
-            || stop_menubar(config),
+            || match handed_over {
+                Some(_) => Ok(None),
+                None => stop_menubar(config),
+            },
             atlas_client::update::finished,
         )?;
+        if let Some(restarted) = handed_over.filter(Value::is_boolean) {
+            report["menubarRestarted"] = restarted;
+        }
 
         if let Some(port) = port {
             spinner.set("Restarting the menu bar…");
-
-            let restarted = atlas_core::spawn::status(
-                std::process::Command::new(&executable)
-                    .arg("menubar")
-                    .arg("--port")
-                    .arg(port.to_string())
-                    .arg("--config")
-                    .arg(config)
-                    .env("ATLAS_JSON", "1")
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null()),
-            )
-            .is_ok_and(|status| status.success());
-            report["menubarRestarted"] = json!(restarted);
+            report["menubarRestarted"] = json!(restart_menubar(&executable, config, port));
         }
+    } else if report["helper"]["failedStep"] == "menubar" {
+        report["next"] = json!(QUIT_MENU_BAR);
     } else {
         report["next"] = json!("Fix the failed step, then run atlas update again to resume");
     }
 
     Ok(report)
+}
+
+/// What the person does when a menu bar may still run from the previous app.
+const QUIT_MENU_BAR: &str = "Quit the menu bar, then run atlas update again";
+
+/// Start the menu bar with `executable` on `port`, as the settings at
+/// `config` say: whether it started.
+fn restart_menubar(executable: &std::path::Path, config: &std::path::Path, port: u16) -> bool {
+    atlas_core::spawn::status(
+        std::process::Command::new(executable)
+            .arg("menubar")
+            .arg("--port")
+            .arg(port.to_string())
+            .arg("--config")
+            .arg(config)
+            .env("ATLAS_JSON", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null()),
+    )
+    .is_ok_and(|status| status.success())
 }
 
 /// Stop the menu bar of the settings at `config`. Settings that don't say
@@ -159,19 +176,48 @@ fn retire_previous(
     stop: impl FnOnce() -> Result<Option<u16>>,
     finish: impl FnOnce() -> Result<Value>,
 ) -> Result<Option<u16>> {
-    let port = stop().map_err(|error| {
-        Error::new(
-            error.code,
-            format!(
-                "{}, so the previous Atlas.app was kept. Quit the menu bar, then run atlas \
-                 update again.",
-                error.error
-            ),
-        )
-        .with_source(error)
-    })?;
+    let port = stop().map_err(previous_kept)?;
     report["previous"] = finish()?;
     Ok(port)
+}
+
+/// `error`, the menu bar's failure to stop, saying the previous app stays.
+fn previous_kept(error: Error) -> Error {
+    Error::new(
+        error.code,
+        format!(
+            "{}, so the previous Atlas.app was kept. Quit the menu bar, then run atlas update \
+             again.",
+            error.error
+        ),
+    )
+    .with("next", json!(QUIT_MENU_BAR))
+    .with_source(error)
+}
+
+/// Move the running menu bar onto this version, noting it in `finished`,
+/// what finishing the update says: stop it with `stop`, then `restart` it on
+/// the port it served, `menubarRestarted` saying whether it did (null when
+/// none ran). One not seen to stop may still run from the previous app, so
+/// the reply becomes the failure of the `menubar` step, which keeps that
+/// app and the record that resumes the update.
+fn move_menubar(
+    mut finished: Value,
+    stop: impl FnOnce() -> Result<Option<u16>>,
+    restart: impl FnOnce(u16) -> bool,
+) -> Value {
+    match stop() {
+        Ok(port) => {
+            finished["menubarRestarted"] = json!(port.map(restart));
+            finished
+        }
+        Err(error) => json!({
+            "ok": false,
+            "failedStep": "menubar",
+            "failure": previous_kept(error),
+            "completedSteps": finished["completedSteps"],
+        }),
+    }
 }
 
 /// Check the staged app immediately before replacement, while still holding control.
@@ -196,6 +242,7 @@ async fn preflight(
 /// recorded) setup's verification of the new signed build. Stops at the
 /// first failure and names it. With no helper job yet (setup stopped before
 /// installing it), there is nothing to move: atlas init finishes setup.
+/// Then a running menu bar moves onto this executable too.
 pub(super) async fn update_finish(
     config: &std::path::Path,
     host: Option<&HostSession>,
@@ -220,38 +267,46 @@ async fn update_finish_using(
     client.allow_disrupt = allow_disrupt;
     client.require_service_idle().await?;
     let daemon = client.status().await["daemon"]["pid"].is_number();
-    if !has_helper_job(
+    let executable = std::env::current_exe()?;
+    let finished = if has_helper_job(
         atlas_client::setup::migrate::recorded(loaded.helper_uid),
         daemon,
     ) {
-        return Ok(json!({"ok": true, "completedSteps": [], "next": "atlas init"}));
-    }
+        // The daemon restarts first: a daemon whose app was swapped under it
+        // can no longer vouch (to TCC) for a new input service it starts,
+        // while the input service it already runs is cleaned up by the
+        // restart itself.
+        let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
 
-    let executable = std::env::current_exe()?;
-
-    // The daemon restarts first: a daemon whose app was swapped under it can
-    // no longer vouch (to TCC) for a new input service it starts, while the
-    // input service it already runs is cleaned up by the restart itself.
-    let mut steps: Vec<&[&str]> = vec![&["install"], &["restart"], &["start-input"]];
-
-    if atlas_client::setup::migrate::in_effect(loaded.helper_uid) {
-        steps.push(&["setup", "--apply"]);
-    }
-
-    let done = match run_steps(&steps, |step| {
-        let mut command = std::process::Command::new(&executable);
-        command.args(step);
-        if allow_disrupt {
-            command.arg("--allow-disrupt");
+        if atlas_client::setup::migrate::in_effect(loaded.helper_uid) {
+            steps.push(&["setup", "--apply"]);
         }
-        atlas_core::spawn::output(command.arg("--json").arg("--config").arg(config))
-    })? {
-        Ok(done) => done,
-        Err(failed) => return Ok(failed),
+
+        let done = match run_steps(&steps, |step| {
+            let mut command = std::process::Command::new(&executable);
+            command.args(step);
+            if allow_disrupt {
+                command.arg("--allow-disrupt");
+            }
+            atlas_core::spawn::output(command.arg("--json").arg("--config").arg(config))
+        })? {
+            Ok(done) => done,
+            Err(failed) => return Ok(failed),
+        };
+
+        let agents = atlas_agents::refresh();
+        json!({"ok": true, "completedSteps": done, "agents": agents})
+    } else {
+        json!({"ok": true, "completedSteps": [], "next": "atlas init"})
     };
 
-    let agents = atlas_agents::refresh();
-    Ok(json!({"ok": true, "completedSteps": done, "agents": agents}))
+    // The menu bar moves here, by this version's rules, even when an older
+    // version started the update.
+    Ok(move_menubar(
+        finished,
+        || atlas_cli::menubar::stop_located(client.output_dir().map(std::path::Path::to_path_buf)),
+        |port| restart_menubar(&executable, config, port),
+    ))
 }
 
 /// Run `steps` in order through `run`, stopping at the first that fails:

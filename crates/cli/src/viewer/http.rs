@@ -104,6 +104,7 @@ pub(super) fn configured(
         account_name: std::sync::Mutex::new(None),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
+        alone: std::sync::Mutex::new(None),
     })
 }
 
