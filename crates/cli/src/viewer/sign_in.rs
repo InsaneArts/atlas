@@ -166,10 +166,14 @@ impl Viewer {
         }))
     }
 
-    /// The steps of a sign-in under its lease, in order: no agent's job
-    /// left running, the screen hidden, then `page` opened under the
+    /// The steps of a sign-in under its lease, in order: nothing an agent's
+    /// finished command or background job left running, the screen hidden, then `page` opened under the
     /// person's control.
     async fn held(&self, client: &Client, signing: &SignIn, page: &str) -> Result<()> {
+        client
+            .controller
+            .require_no_run_left(client.config.helper_uid)
+            .map_err(command_running)?;
         jobs::require_none(client).await?;
         self.lease
             .lock()

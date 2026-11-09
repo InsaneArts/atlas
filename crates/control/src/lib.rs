@@ -20,6 +20,7 @@ mod lease;
 mod marker;
 mod notes;
 mod privacy;
+mod run_groups;
 #[cfg(test)]
 mod tests;
 mod turns;
@@ -207,6 +208,9 @@ pub struct Controller {
     /// How many times a private hold began or ended, never removed: a read
     /// of the screen is kept only when it did not change meanwhile.
     private_generation: PathBuf,
+    /// The process groups of agents' finished commands that left something
+    /// running, kept until nothing in them runs.
+    run_groups: PathBuf,
     name: String,
     /// How long [`Controller::acquire`] may keep trying, in all, while
     /// another controller has the lock, before answering busy. Zero
@@ -273,6 +277,7 @@ impl Controller {
             stopped: directory.join(format!("{name}.stopped")),
             private: directory.join(format!("{name}.signing-in")),
             private_generation: directory.join(format!("{name}.private-gen")),
+            run_groups: directory.join(format!("{name}.run-groups.json")),
             name: name.to_owned(),
             wait: Duration::ZERO,
             until: None,
@@ -603,6 +608,13 @@ impl Controller {
     #[cfg(any(test, feature = "test-support"))]
     pub fn private_path(&self) -> &Path {
         &self.private
+    }
+
+    /// Where the groups agents' finished commands left running are kept,
+    /// for tests that break it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn run_groups_path(&self) -> &Path {
+        &self.run_groups
     }
 
     /// Where the screen's privacy generation is kept, for tests that break it.

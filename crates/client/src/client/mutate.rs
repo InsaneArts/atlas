@@ -531,6 +531,20 @@ impl Client {
         }
 
         let mut warnings = Vec::new();
+        // A command an agent ran may leave work running in its group: it is
+        // kept before the command stops counting as running, so the person
+        // never signs in beside it.
+        if command
+            && reply["uncertain"] != true
+            && let Some(group) = started_group(&reply)
+            && let Err(error) = self
+                .controller
+                .note_run_group(group, self.config.helper_uid)
+        {
+            warnings.push(format!(
+                "The command finished, but what it left running could not be noted: {error}"
+            ));
+        }
         if let Some(claim) = &claim
             && reply["uncertain"] != true
             && let Err(error) = self.controller.clear_if(claim)
@@ -554,6 +568,22 @@ impl Client {
 
         Ok(reply)
     }
+}
+
+/// The process group of the command a `run` reply is of: the PID its
+/// `started` event names, as the helper starts each command in a group of
+/// its own.
+fn started_group(reply: &Value) -> Option<i32> {
+    reply["pid"]
+        .as_i64()
+        .or_else(|| {
+            reply["events"]
+                .as_array()?
+                .iter()
+                .find(|event| event["event"] == "started")?["pid"]
+                .as_i64()
+        })
+        .and_then(|pid| i32::try_from(pid).ok())
 }
 
 #[cfg(test)]

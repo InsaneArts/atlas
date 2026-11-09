@@ -653,3 +653,53 @@ async fn a_launch_the_lease_runs_out_during_ends_the_sign_in_and_cleans_up() {
     assert_eq!(steps.lock().unwrap().last().unwrap(), "release");
     nothing_left(&viewer).await;
 }
+
+#[tokio::test]
+async fn a_sign_in_beside_work_an_agents_finished_command_left_running_is_undone() {
+    use std::os::unix::process::CommandExt;
+    let directory = tempfile::tempdir().unwrap();
+    let (viewer, helper) = viewer_of(directory.path());
+    let steps = Mutex::new(Vec::new());
+    let controller = viewer.client().controller.clone();
+    // What `atlas run sh -c '(sleep 30; open …) &'` leaves: its shell is
+    // gone, and the work it handed on runs in its group. It runs as this
+    // account, which the stand-in helper's is not, so it is checked as this
+    // account's, in the person's words.
+    let mut shell = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
+            ])
+            .process_group(0),
+    )
+    .unwrap();
+    let group = i32::try_from(shell.id()).unwrap();
+    shell.wait().unwrap();
+    let me = nix::unistd::getuid().as_raw();
+    controller.note_run_group(group, me).unwrap();
+    let refused = command_running(controller.require_no_run_left(me).unwrap_err());
+    assert_eq!(refused.code, Code::Busy);
+    assert_eq!(
+        refused.error,
+        "An agent's command is still running. Try again when it ends."
+    );
+    assert_eq!(refused.holder, Some(Holder::Agent));
+    let _ = nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(group),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+
+    // The sign-in checks that record once it holds control, and undoes
+    // everything when it can't account for it.
+    let record = controller.run_groups_path().to_owned();
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, b"[not groups").unwrap();
+    let refused = started(&viewer, &helper, &steps, HoldKind::SignIn, Fails::Nothing)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code, Code::State);
+    assert_eq!(*steps.lock().unwrap(), ["acquire", "release"]);
+    std::fs::remove_file(&record).unwrap();
+    nothing_left(&viewer).await;
+}

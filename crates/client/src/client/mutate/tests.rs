@@ -273,3 +273,47 @@ fn only_a_refusal_proven_to_have_sent_nothing_drops_its_picture() {
     );
     assert!(!gated(&refusal(json!({"uncertain": true}))));
 }
+
+#[tokio::test]
+async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
+    use std::os::unix::process::CommandExt;
+    // `atlas run sh -c '(sleep 30; open …) &'`: the shell is gone once it
+    // answers, and the work it handed on runs in its group.
+    let mut shell = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
+            ])
+            .process_group(0),
+    )
+    .unwrap();
+    let group = i32::try_from(shell.id()).unwrap();
+    shell.wait().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client_in(dir.path());
+    let me = nix::unistd::getuid().as_raw();
+    client.config.helper_uid = me;
+    let reply = json!({"ok": true, "exitCode": 0, "timedOut": false,
+        "events": [{"event": "started", "pid": group}]});
+    assert_eq!(started_group(&reply), Some(group));
+
+    client
+        .settle(&run().request(), reply, true, None, Instant::now())
+        .await
+        .unwrap();
+
+    let refused = client.controller.require_no_run_left(me).unwrap_err();
+    assert_eq!(refused.details["running"], "command");
+    let _ = nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(group),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+    for _ in 0..200 {
+        if client.controller.require_no_run_left(me).is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the group ended, and still refuses");
+}
