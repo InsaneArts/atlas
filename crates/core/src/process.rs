@@ -6,7 +6,9 @@
 //! account's process and a process that has exited but is not yet reaped,
 //! with its exact start time. `proc_pidinfo` refuses both; [`own`] keeps
 //! its rule, for what describes only this account's live processes.
+mod child;
 mod cwd;
+pub use child::exited as child_exited;
 pub(crate) use cwd::cwd;
 
 use crate::error::{Code, Error, Result};

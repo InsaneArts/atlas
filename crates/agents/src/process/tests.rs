@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn group_signals_hold_the_reap_lock_and_never_reuse_a_retired_snapshot() {
+    let registry = Registry::new();
+    locked(&registry).groups.push(12345);
+    let mut posted = Vec::new();
+    let mut post = |group: &i32, _| {
+        assert!(matches!(
+            registry.tools.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        ));
+        posted.push(*group);
+    };
+    signal_groups_using(&registry, nix::sys::signal::Signal::SIGTERM, &mut post);
+    locked(&registry).groups.clear();
+    signal_groups_using(&registry, nix::sys::signal::Signal::SIGKILL, &mut post);
+    assert_eq!(
+        posted,
+        vec![12345],
+        "the retired numeric identity is never signalled again"
+    );
+}
+
+#[test]
+fn reaping_a_tool_retires_its_group_before_the_tool_object_is_dropped() {
+    use std::os::unix::process::CommandExt;
+    static TOOLS: Registry = Registry::new();
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "exit 0"]).process_group(0);
+    let mut tool = start(&TOOLS, &mut command).unwrap();
+    let due = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = tool.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < due, "the isolated tool never exited");
+        std::thread::yield_now();
+    }
+    assert!(tool.running.group.is_none());
+    assert!(locked(&TOOLS).groups.is_empty());
+}
+
+#[test]
+fn pis_writer_uses_the_same_absolute_config_home_as_its_reader() {
+    let home = Path::new("/private/tmp/atlas-pi-config");
+    for verb in ["install", "remove"] {
+        let command = command(
+            Agent::Pi,
+            &[verb, "/bundle/atlas", "--no-approve"],
+            Some(home),
+        );
+        assert_eq!(command.get_current_dir(), Some(home));
+        let configured = command
+            .get_envs()
+            .find(|(name, _)| *name == "PI_CODING_AGENT_DIR");
+        assert_eq!(
+            configured.map(|(_, value)| value),
+            Some(Some(home.as_os_str()))
+        );
+    }
+    assert!(
+        command(Agent::Pi, &["--version"], None)
+            .get_envs()
+            .all(|(name, _)| name != "PI_CODING_AGENT_DIR"),
+        "discovery preserves the caller's configuration"
+    );
+}
+
+#[test]
 fn a_generic_agent_is_cursor_only_in_its_resolved_install_tree() {
     use std::os::unix::fs::symlink;
 

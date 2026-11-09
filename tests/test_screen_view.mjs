@@ -312,6 +312,7 @@ function screenView() {
     clearTimeout: (id) => timers.delete(id),
     setInterval: (callback, delay) => setTimer(callback, delay, true),
     clearInterval: (id) => timers.delete(id),
+    performance: { now: () => now },
     ResizeObserver: class {
       constructor(callback) {
         observers.push(callback);
@@ -1737,15 +1738,27 @@ test('the view takes the theme the app names, and follows the Mac when it names 
   assert.equal(view.themeOf(undefined), null);
 });
 
-test('every colour of the page follows the theme, and the screen stays dark in either', () => {
+test('the page declares adaptive colour tokens and keeps the screen and chip in a dark scheme', () => {
   const page = readFileSync(new URL('../crates/cli/src/mcp/screen.html', import.meta.url), 'utf8');
-  const style = page.slice(page.indexOf('<style>'), page.indexOf('</style>'));
-  assert.match(style, /html \{ color-scheme: light dark; \}/, 'the page is not forced dark');
-  assert.match(style, /\.screen \.rim, \.chip \{ color-scheme: dark; \}/);
-  const tokens = style.slice(
-    style.indexOf(':root {'),
-    style.indexOf('}', style.indexOf(':root {')),
+  const style = page.slice(page.indexOf('<style>') + '<style>'.length, page.indexOf('</style>'));
+  const rules = [...style.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(
+    ([, selector, declarations]) => ({
+      selectors: selector.split(',').map((value) => value.trim()),
+      declarations: new Map(
+        [...declarations.matchAll(/([\w-]+)\s*:\s*([^;]+);/g)].map(([, name, value]) => [
+          name,
+          value.trim().replace(/\s+/g, ' '),
+        ]),
+      ),
+    }),
   );
+  const declaration = (selector, name) =>
+    rules
+      .find((rule) => rule.selectors.includes(selector) && rule.declarations.has(name))
+      ?.declarations.get(name);
+  assert.equal(declaration('html', 'color-scheme'), 'light dark');
+  assert.equal(declaration('.screen .rim', 'color-scheme'), 'dark');
+  assert.equal(declaration('.chip', 'color-scheme'), 'dark');
   for (const name of [
     '--ground',
     '--ink',
@@ -1756,14 +1769,26 @@ test('every colour of the page follows the theme, and the screen stays dark in e
     '--card',
     '--glass',
   ]) {
-    assert.match(tokens, new RegExp(`${name}: light-dark\\(`), name);
+    assert.match(declaration(':root', name) || '', /^light-dark\s*\(/, name);
   }
-  const rules = style.slice(style.indexOf('}', style.indexOf(':root {')));
-  assert.doesNotMatch(
-    rules,
-    /rgba\((?:255, 255, 255|235, 235, 245)/,
-    'no white ink outside the tokens',
-  );
+  const contrastingInk = new Map([
+    ['.menu button:hover:not([disabled]), .menu button:focus-visible', '#ffffff'],
+    ['.menu button:hover .key', '#ffffff'],
+    ['.alert .badge', '#1d1d1f'],
+    ['.alert .buttons button.default', '#ffffff'],
+  ]);
+  for (const rule of rules.filter((rule) => !rule.selectors.includes(':root'))) {
+    for (const [name, value] of rule.declarations) {
+      if (name === 'color' && contrastingInk.has(rule.selectors.join(', '))) {
+        assert.equal(value, contrastingInk.get(rule.selectors.join(', ')));
+      } else if (name === 'color')
+        assert.match(
+          value,
+          /^(?:var\(--[\w-]+\)|inherit|currentColor|transparent)$/i,
+          `text ink uses a theme token: ${rule.selectors.join(', ')}: ${value}`,
+        );
+    }
+  }
 });
 
 test('a theme in the host context marks the page, and none clears the mark', async () => {
@@ -1795,3 +1820,194 @@ test('the view takes the whole status from _meta, and from beside the facts from
   const older = view.merge({}, { structuredContent: { status: whole } });
   same(older.status, whole);
 });
+
+test('a gathered scroll keeps its original observation across an ordinary picture update', async () => {
+  const page = screenView();
+  await page.receive({
+    method: 'ui/notifications/tool-result',
+    params: page.result('one', 'key-one', 100, 100, true),
+  });
+  page.node('[data-frame]').load();
+  page.node('[data-screen]').fire('wheel', {
+    deltaX: 0,
+    deltaY: 3,
+    deltaMode: 1,
+    clientX: 50,
+    clientY: 50,
+    preventDefault() {},
+  });
+  await page.advance(20);
+  await page.receive({
+    method: 'ui/notifications/tool-result',
+    params: page.result('two', 'key-two', 100, 100, true),
+  });
+  page.node('[data-frame]').load();
+  await page.advance(40);
+  assert.equal(page.calls('send_input').length, 1);
+  same(page.calls('send_input')[0].params.arguments, {
+    frame: 'key-one',
+    actions: [{ type: 'scroll', x: 50, y: 50, dx: 0, dy: 3 }],
+  });
+});
+
+for (const invalidate of ['geometry', 'give-back', 'retire']) {
+  test(`a gathered scroll is discarded after ${invalidate}`, async () => {
+    const page = screenView();
+    const initialized = page.messages.find((message) => message.method === 'ui/initialize');
+    await page.receive({ id: initialized.id, result: {} });
+    await page.receive({
+      method: 'ui/notifications/tool-result',
+      params: page.result('one', 'key-one', 100, 100, true),
+    });
+    page.node('[data-frame]').load();
+    page.node('[data-screen]').fire('wheel', {
+      deltaX: 0,
+      deltaY: 3,
+      deltaMode: 1,
+      clientX: 50,
+      clientY: 50,
+      preventDefault() {},
+    });
+    if (invalidate === 'geometry') {
+      await page.receive({
+        method: 'ui/notifications/tool-result',
+        params: page.result('two', 'key-two', 200, 100, true),
+      });
+      page.node('[data-frame]').load();
+    } else if (invalidate === 'retire')
+      await page.receive({ method: 'ui/resource-teardown', id: 500 });
+    else {
+      const giving = page.node('[data-take]').fire('click');
+      await page.receive({
+        id: page.calls('give_back')[0].id,
+        result: { structuredContent: { control: false } },
+      });
+      await giving;
+      await page.receive({
+        method: 'ui/notifications/tool-result',
+        params: page.result('one', 'key-one', 100, 100, true),
+      });
+      page.node('[data-frame]').load();
+    }
+    await page.advance(60);
+    assert.equal(page.calls('send_input').length, 0);
+  });
+}
+
+test('visible control releases when picture calls fail even while renewals keep succeeding', async () => {
+  const page = screenView();
+  await page.receive({
+    method: 'ui/notifications/tool-result',
+    params: page.result('one', 'key-one', 100, 100, true),
+  });
+  page.node('[data-frame]').load();
+  const initialized = page.messages.find((message) => message.method === 'ui/initialize');
+  await page.receive({ id: initialized.id, result: {} });
+  for (let i = 0; i < 2; i += 1) {
+    await page.advance(3000);
+    for (const request of [...page.calls('screen_frame'), ...page.calls('keep_control')].filter(
+      (request) => !request.done,
+    )) {
+      request.done = true;
+      await page.receive(
+        request.params.name === 'screen_frame'
+          ? { id: request.id, error: { code: -32603, message: 'Picture unavailable' } }
+          : { id: request.id, result: { structuredContent: {} } },
+      );
+    }
+  }
+  await page.advance(500);
+  assert.equal(page.calls('give_back').length, 1);
+  assert.equal(page.node('[data-keys]').disabled, true);
+  const renewals = page.calls('keep_control').length;
+  await page.advance(3000);
+  assert.equal(
+    page.calls('keep_control').length,
+    renewals,
+    'an unanswered release cannot restart renewal',
+  );
+});
+
+test('a confirmed unchanged displayed picture refreshes the control deadline', async () => {
+  const page = screenView();
+  await page.receive({
+    method: 'ui/notifications/tool-result',
+    params: page.result('one', 'key-one', 100, 100, true),
+  });
+  page.node('[data-frame]').load();
+  const initialized = page.messages.find((message) => message.method === 'ui/initialize');
+  await page.receive({ id: initialized.id, result: {} });
+  await page.advance(5000);
+  await page.receive({
+    id: page.calls('screen_frame')[0].id,
+    result: { structuredContent: { unchanged: true, control: true } },
+  });
+  await page.advance(1600);
+  assert.equal(page.calls('give_back').length, 0);
+  assert.equal(page.node('[data-keys]').disabled, false);
+});
+
+test('thumbnail reads are bounded, shared across refreshes and stop starting work after teardown', async () => {
+  const page = screenView();
+  const shots = Array.from({ length: 30 }, (_, i) => ({ name: `shot-${i}`, ageSeconds: i }));
+  page.node('[data-tab="screenshots"]').fire('click');
+  await page.receive({
+    id: page.calls('screenshots')[0].id,
+    result: { structuredContent: { screenshots: shots } },
+  });
+  assert.equal(page.calls('screenshot').length, 2);
+  page.node('[data-tab="screenshots"]').fire('click');
+  await page.receive({
+    id: page.calls('screenshots')[1].id,
+    result: { structuredContent: { screenshots: shots } },
+  });
+  assert.equal(page.calls('screenshot').length, 2, 'pending names share one read');
+  await page.receive({
+    id: page.calls('screenshot')[0].id,
+    result: page.result('thumb', 'thumb-key', 10, 10),
+  });
+  await turns();
+  assert.equal(page.calls('screenshot').length, 3, 'one completion admits one next name');
+  assert.equal(page.calls('screenshot')[2].params.arguments.name, 'shot-2');
+  await page.receive({ method: 'ui/resource-teardown', id: 501 });
+  for (const request of page.calls('screenshot').slice(1)) {
+    await page.receive({ id: request.id, result: page.result('late', 'late-key', 10, 10) });
+  }
+  await turns();
+  assert.equal(page.calls('screenshot').length, 3, 'queued names never start after teardown');
+});
+
+for (const transportFailure of [false, true]) {
+  test(`a ${transportFailure ? 'lost' : 'refused'} stale-picture release keeps its failure visible`, async () => {
+    const page = screenView();
+    await page.receive({
+      method: 'ui/notifications/tool-result',
+      params: page.result('one', 'key-one', 100, 100, true),
+    });
+    page.node('[data-frame]').load();
+    await page.advance(6500);
+    const release = page.calls('give_back')[0];
+    await page.receive(
+      transportFailure
+        ? { id: release.id, error: { code: -32603, message: 'Release is unconfirmed' } }
+        : {
+            id: release.id,
+            result: {
+              isError: true,
+              structuredContent: {
+                error: 'Release is unconfirmed',
+                code: 'menubar',
+                uncertain: true,
+              },
+            },
+          },
+    );
+    await turns();
+    assert.equal(page.node('[data-label]').textContent, 'You have control');
+    assert.equal(page.node('[data-keys]').disabled, true);
+    assert.equal(
+      page.node('[data-note]').textContent,
+      transportFailure ? "Atlas isn't answering" : "Atlas couldn't give control back",
+    );
+  });
+}

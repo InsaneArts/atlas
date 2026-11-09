@@ -169,7 +169,6 @@ extension OnboardingPresenter {
       let ready = idle && !snapshot.agentsInstalling && (snapshot.agentsLoaded || snapshot.agentsFailed)
       return OnboardingFooterState(next: main(.continue, .connectAgents, isEnabled: ready), track: step.track)
     default:
-      // Done.
       return OnboardingFooterState(
         back: back(idle: idle),
         next: main(.done, .complete, isEnabled: idle),
