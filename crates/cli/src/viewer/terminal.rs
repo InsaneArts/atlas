@@ -176,7 +176,7 @@ impl TerminalFrames {
         result
     }
 
-    async fn read(&mut self, client: &Client) -> Result<SharedFrame> {
+    async fn read(&mut self, client: &Arc<Client>) -> Result<SharedFrame> {
         if !self.connected {
             // The next stream opens only once the last one's source is
             // confirmed stopped; until then each read asks again and reports
@@ -206,7 +206,8 @@ impl TerminalFrames {
             let key = self.viewer.remember_live(&frame).await;
             Ok(live_frame(frame, key))
         } else {
-            let (key, frame) = self.viewer.frame().await?;
+            // The helper whose privacy this read is checked against.
+            let (key, frame) = self.viewer.frame_of(client).await?;
             Ok(SharedFrame {
                 png: frame.png.to_vec(),
                 rgb: None,

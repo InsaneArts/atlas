@@ -143,14 +143,13 @@ impl Viewer {
             hold: PrivateHold { site, kind },
             browser,
         };
-        // Noted before the hold begins, so a release from here on ends both.
-        *self.sign_in.lock().await = Some(signing.clone());
-
         let page = browser.page(kind, &address, &signing.hold.site);
-        if let Err(error) = self.held(&client, &signing, &page).await {
-            // The lease, and with it the hold, ends; its own failure to clean
-            // up stays pending for recovery.
-            let _ = self.release(Some(&lease)).await;
+        let started = async {
+            self.publish(&signing).await?;
+            self.held(&client, &signing, &page).await
+        };
+        if let Err(error) = started.await {
+            self.abandon_start(&client, &lease).await;
             return Err(error);
         }
         // Only an app shows the viewer; without one the sign-in still holds.
@@ -164,6 +163,26 @@ impl Viewer {
             "site": signing.hold.site,
             "browser": browser.bundle(),
         }))
+    }
+
+    /// Note `signing` as under way while its lease still holds, checked
+    /// under the lease's lock: a release from here on ends it, and one that
+    /// came first leaves nothing noted.
+    pub(super) async fn publish(&self, signing: &SignIn) -> Result<()> {
+        let mut lease = self.lease.lock().await;
+        lease.require(&signing.lease).map_err(|_| sign_in_ended())?;
+        *self.sign_in.lock().await = Some(signing.clone());
+        drop(lease);
+        Ok(())
+    }
+
+    /// Undo a start under `lease` that failed: the lease, and with it the
+    /// hold, ends, and the sign-in it noted goes even when the lease had
+    /// already ended some other way. A release's own failure to clean up
+    /// stays pending for recovery.
+    pub(super) async fn abandon_start(&self, client: &Client, lease: &str) {
+        let _ = self.release(Some(lease)).await;
+        self.end_sign_in(client, lease).await;
     }
 
     /// The steps of a sign-in under its lease, in order: nothing an agent's

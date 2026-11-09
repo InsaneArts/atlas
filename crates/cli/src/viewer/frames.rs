@@ -81,6 +81,8 @@ impl Frames {
 /// known, which every request waiting on it shares.
 pub(super) struct Capture {
     pub(super) revision: u64,
+    /// The helper it reads: only a request for the same one shares it.
+    pub(super) client: Arc<atlas_client::client::Client>,
     pub(super) outcome: watch::Receiver<Option<Captured>>,
 }
 
@@ -104,6 +106,16 @@ impl Viewer {
     /// included, ends within one deadline, so the app hears why before it
     /// gives up.
     pub(super) async fn frame(&self) -> Result<(String, Arc<Frame>)> {
+        self.frame_of(&self.client()).await
+    }
+
+    /// [`Viewer::frame`] of `client`'s helper, whichever the settings name
+    /// by the time it is read: a caller that checked that helper's privacy
+    /// is shown that helper's screen, never another's.
+    pub(super) async fn frame_of(
+        &self,
+        client: &Arc<atlas_client::client::Client>,
+    ) -> Result<(String, Arc<Frame>)> {
         let until = tokio::time::Instant::now() + READ_DEADLINE;
 
         loop {
@@ -113,10 +125,18 @@ impl Viewer {
             let ours = {
                 let mut slot = unpoisoned(&self.capture);
                 match slot.as_ref() {
-                    Some(running) => Err((running.outcome.clone(), running.revision >= revision)),
+                    // One of another helper is waited out, never shared.
+                    Some(running) => Err((
+                        running.outcome.clone(),
+                        running.revision >= revision && Arc::ptr_eq(&running.client, client),
+                    )),
                     None => {
                         let (sender, outcome) = watch::channel(None);
-                        *slot = Some(Capture { revision, outcome });
+                        *slot = Some(Capture {
+                            revision,
+                            client: client.clone(),
+                            outcome,
+                        });
                         Ok(sender)
                     }
                 }
@@ -140,7 +160,7 @@ impl Viewer {
             };
 
             let _clear = Capturing(&self.capture);
-            let outcome = tokio::time::timeout_at(until, self.take_frame())
+            let outcome = tokio::time::timeout_at(until, self.take_frame(client))
                 .await
                 .unwrap_or_else(|_| Err(late()));
             let shared = match &outcome {
@@ -157,9 +177,11 @@ impl Viewer {
     /// signs the helper in to an account, and for a frame captured during a
     /// sign-in or while one began or ended, however recent.
     pub(super) async fn shown_frame(&self) -> Result<(String, Arc<Frame>)> {
-        let controller = self.client().controller.clone();
+        // One helper for the whole read: its privacy, and its screen.
+        let client = self.client();
+        let controller = client.controller.clone();
         let admitted = controller.screen_visible()?;
-        let (key, frame) = self.frame().await?;
+        let (key, frame) = self.frame_of(&client).await?;
         let under = self
             .frames
             .lock()
@@ -181,8 +203,10 @@ impl Viewer {
 
     /// Take a frame, or reuse the last one when it is recent and no input
     /// came since.
-    async fn take_frame(&self) -> Result<(String, Arc<Frame>)> {
-        let client = self.client();
+    async fn take_frame(
+        &self,
+        client: &Arc<atlas_client::client::Client>,
+    ) -> Result<(String, Arc<Frame>)> {
         let current = client.identity().await?.epoch;
         let revision = {
             let mut frames = self.frames.lock().await;

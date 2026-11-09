@@ -703,3 +703,158 @@ async fn a_sign_in_beside_work_an_agents_finished_command_left_running_is_undone
     std::fs::remove_file(&record).unwrap();
     nothing_left(&viewer).await;
 }
+
+/// What a start notes for github.com under `lease`.
+fn signing_under(lease: &str) -> SignIn {
+    SignIn {
+        lease: lease.to_owned(),
+        hold: PrivateHold {
+            site: "github.com".to_owned(),
+            kind: HoldKind::SignIn,
+        },
+        browser: Browser::Chrome,
+    }
+}
+
+#[tokio::test]
+async fn a_revoke_between_taking_control_and_noting_the_sign_in_leaves_nothing_and_a_new_start_works()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let (viewer, helper) = viewer_of(directory.path());
+    let steps = Mutex::new(Vec::new());
+    let client = viewer.client();
+    let epoch = helper
+        .serve(client.identity(), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .unwrap()
+        .epoch;
+    let lease = helper
+        .serve(
+            viewer.take_control_beside(&client, &epoch, Beside::Nothing),
+            |request| step(&steps, Fails::Nothing, request),
+        )
+        .await
+        .unwrap();
+    // The menu bar's emergency stop lands before the start notes its sign-in.
+    helper
+        .serve(viewer.revoke(), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .unwrap();
+
+    let refused = viewer.publish(&signing_under(&lease)).await.unwrap_err();
+    assert_eq!(refused.code, Code::LeaseLost);
+    helper
+        .serve(viewer.abandon_start(&client, &lease), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await;
+    nothing_left(&viewer).await;
+
+    let reply = started(&viewer, &helper, &steps, HoldKind::SignIn, Fails::Nothing)
+        .await
+        .unwrap();
+    viewer
+        .release(Some(reply["lease"].as_str().unwrap()))
+        .await
+        .ok();
+}
+
+#[tokio::test]
+async fn a_failed_start_forgets_its_sign_in_even_when_its_lease_already_ended() {
+    let directory = tempfile::tempdir().unwrap();
+    let (viewer, helper) = viewer_of(directory.path());
+    let steps = Mutex::new(Vec::new());
+    let client = viewer.client();
+    let epoch = helper
+        .serve(client.identity(), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .unwrap()
+        .epoch;
+    let lease = helper
+        .serve(
+            viewer.take_control_beside(&client, &epoch, Beside::Nothing),
+            |request| step(&steps, Fails::Nothing, request),
+        )
+        .await
+        .unwrap();
+    viewer.publish(&signing_under(&lease)).await.unwrap();
+    // Its lease ends without the sign-in being told.
+    helper
+        .serve(viewer.release(None), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .ok();
+    *viewer.sign_in.lock().await = Some(signing_under(&lease));
+
+    helper
+        .serve(viewer.abandon_start(&client, &lease), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await;
+
+    nothing_left(&viewer).await;
+    let reply = started(&viewer, &helper, &steps, HoldKind::SignIn, Fails::Nothing)
+        .await
+        .unwrap();
+    viewer
+        .release(Some(reply["lease"].as_str().unwrap()))
+        .await
+        .ok();
+}
+
+#[tokio::test]
+async fn a_picture_is_taken_of_the_helper_whose_privacy_was_checked_after_the_settings_moved() {
+    let directory = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let (viewer, helper) = viewer_of(directory.path());
+    let pinned = viewer.client();
+    let steps = Mutex::new(Vec::new());
+    let epoch = helper
+        .serve(pinned.identity(), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .unwrap()
+        .epoch;
+    viewer.frames.lock().await.keep_for_test(
+        "first",
+        atlas_core::screen::frame::Frame {
+            png: Arc::from(&b"the first helper"[..]),
+            width: 1,
+            height: 1,
+            epoch,
+            at: std::time::Instant::now(),
+        },
+        None,
+    );
+    // The settings move to another helper, signing in there, while this
+    // read is under way for the first.
+    let moved = Arc::new(atlas_client::test_support::client_in(other.path()));
+    let mut lease = atlas_control::Lease::default();
+    let token = lease.acquire(&moved.controller).unwrap();
+    let hold = PrivateHold {
+        site: "github.com".to_owned(),
+        kind: HoldKind::SignIn,
+    };
+    lease.hide_screen(&moved.controller, &token, &hold).unwrap();
+    *unpoisoned(&viewer.client) = moved.clone();
+
+    let (key, frame) = helper
+        .serve(viewer.frame_of(&pinned), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(key, "first");
+    assert_eq!(&*frame.png, b"the first helper");
+    moved.controller.end_private().unwrap();
+    lease.release();
+}

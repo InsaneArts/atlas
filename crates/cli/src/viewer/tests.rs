@@ -798,7 +798,11 @@ async fn a_capture_from_before_the_latest_input_is_not_shared() {
     let viewer = unreachable(dir.path()).await;
     let running = |revision| {
         let (sender, outcome) = watch::channel(None);
-        *viewer.capture.lock().unwrap() = Some(Capture { revision, outcome });
+        *viewer.capture.lock().unwrap() = Some(Capture {
+            revision,
+            client: viewer.client(),
+            outcome,
+        });
         sender
     };
 
@@ -1277,6 +1281,7 @@ async fn a_frame_waiting_out_an_older_capture_still_ends_in_time() {
     let (_never, outcome) = watch::channel(None);
     *viewer.capture.lock().unwrap() = Some(Capture {
         revision: 0,
+        client: viewer.client(),
         outcome,
     });
     viewer.frames.lock().await.input_revision = 1;
