@@ -34,6 +34,11 @@ final class ViewerController {
   }
   /// What VoiceOver hears of a state that asks something of the person, once it has held.
   @ObservationIgnored private let announcer = StatusAnnouncer()
+  /// The window's state as its view last drew it (``drawnState()``), which a tick of the clock is compared with.
+  @ObservationIgnored private var drawn: ViewerState?
+  /// Counts the ticks of the clock that changed what the window shows. Observed, and read as the window draws, so
+  /// only such a tick presents it again (``clockMoved()``).
+  private var clockTurns = 0
 
   /// Creates a viewer that has read nothing yet, with the person's saved rate, corner and sidebar.
   ///
@@ -73,6 +78,25 @@ final class ViewerController {
 
   /// The window as it should look now, as of the last tick of the clock.
   var state: ViewerState { ViewerPresenter.state(snapshot) }
+
+  /// The window as its view draws it now, kept to compare the clock's next tick with. Only the window's view asks for
+  /// it.
+  ///
+  /// - Returns: The state.
+  func drawnState() -> ViewerState {
+    _ = clockTurns
+    let state = state
+    drawn = state
+    return state
+  }
+
+  /// The clock moved on, or a fresh picture ended a stale one. What the window shows counts some things in time, such
+  /// as how long ago a session was last seen or whether the picture is too old to take control over, which nothing
+  /// observed tells: the window presents again only when the time has changed what it would show.
+  func clockMoved() {
+    guard let drawn, state != drawn else { return }
+    clockTurns += 1
+  }
 
   /// What acts on the window's picture now, as the stage's menu and the main menu offer it.
   var pictureMenu: ViewerPictureMenu { ViewerPresenter.pictureMenu(snapshot) }

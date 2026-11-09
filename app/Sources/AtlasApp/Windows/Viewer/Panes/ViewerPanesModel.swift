@@ -33,6 +33,10 @@ final class ViewerPanesModel {
   @ObservationIgnored let wallClock: @MainActor () -> Date
   /// The preceding ingested Activity runs; presenting snapshots never writes this history.
   @ObservationIgnored private var activityMoments: [ActivityMoment] = []
+  /// The pane generation whose reading Activity last took in; nil before the first.
+  @ObservationIgnored private var activityRead: Int?
+  /// Whether the screenshots were listed with the reading Activity last took in.
+  @ObservationIgnored private var shotsListed = false
   /// Where a copied picture goes, and how its file is shown.
   @ObservationIgnored private let shotOutlet: ShotOutlet
   /// The picture sheet and the run replayed over Activity: their pictures, Copy, Show in Finder and playing.
@@ -133,7 +137,10 @@ final class ViewerPanesModel {
   }
 
   /// Reads the log, and the screenshots while the log has a screenshot's row. A reply overtaken by a newer start or
-  /// stop has no effect; a failure is kept until a reading succeeds, and a cancelled request says nothing.
+  /// stop has no effect; a failure is kept until a reading succeeds, and a cancelled request says nothing. A later
+  /// reading of the same log, while the pane shows, changes nothing (``unchanged(_:readAt:number:)``). The screenshots
+  /// are listed again only with a changed log, while the picture sheet shows (its Show in Finder acts on their folder),
+  /// or until a listing has worked and found every screenshot row's capture (``shotsFound(readAt:)``).
   ///
   /// - Parameter number: The reading's generation.
   func readActivity(_ number: Int) async {
@@ -144,13 +151,23 @@ final class ViewerPanesModel {
       // The screenshots' list sizes and finds the pictures: wanted while the log names a screenshot or a picture shows.
       let wantsShots =
         panes.activity.sheet != nil || log.entries.contains { $0.operation == ActivityGrouping.screenshotOperation }
-      let list = wantsShots ? try? await service.screenshots() : nil
+      let lists =
+        wantsShots
+        && (panes.activity.sheet != nil || !unchanged(log, readAt: readAt, number: number)
+          || !shotsFound(readAt: readAt))
+      let list = lists ? try? await service.screenshots() : nil
       guard number == work.generation else { return }
+      if lists { shotsListed = list != nil }
+      if let list { keep(list) }
+      if unchanged(log, readAt: readAt, number: number) {
+        return followUnchanged(log)
+      }
+      activityRead = number
       panes.activity.log = log
       panes.activity.readAt = readAt
       let preparation = ViewerActivityPreparation(
         log: log,
-        captures: list?.shots ?? panes.shots.shots ?? [],
+        captures: panes.shots.shots ?? [],
         readAt: readAt,
         calendar: viewer?.snapshot.zonedCalendar ?? .current,
         now: readAt,
@@ -160,7 +177,6 @@ final class ViewerPanesModel {
       panes.activity.preparation = preparation
       panes.activity.failure = nil
       wantIcons(for: log.entries)
-      if let list { keep(list) }
       // A newer reading may name the picture after a step in the sheet, or a replay's next frame.
       if panes.activity.sheet != nil || panes.activity.replay != nil { pictures.refresh() }
     } catch {
@@ -169,12 +185,58 @@ final class ViewerPanesModel {
     }
   }
 
+  /// Whether a reading of `log` would change nothing the pane shows: the pane took in a reading of the very same log
+  /// since it last showed, and the runs prepared from it stand on the same day, with the screenshots listed now. The
+  /// first reading each time the pane shows is always taken in.
+  ///
+  /// - Parameters:
+  ///   - log: The log just read.
+  ///   - readAt: When it was read.
+  ///   - number: The reading's generation.
+  /// - Returns: Whether nothing would change.
+  private func unchanged(_ log: ActivityLog, readAt: Date, number: Int) -> Bool {
+    let facts = panes.activity
+    guard number == work.generation, activityRead == number, let kept = facts.log, let keptAt = facts.readAt,
+      let preparation = facts.preparation, kept.isSameReading(as: log)
+    else { return false }
+    return preparation.matches(
+      log: kept,
+      captures: panes.shots.shots ?? [],
+      readAt: keptAt,
+      calendar: viewer?.snapshot.zonedCalendar ?? .current,
+      now: readAt
+    )
+  }
+
+  /// Whether the last listing of the screenshots worked and found the capture of every screenshot row of the log the
+  /// pane took in; until it does, a later listing may still hold what is missing.
+  ///
+  /// - Parameter readAt: When the log was read again.
+  /// - Returns: Whether it did.
+  private func shotsFound(readAt: Date) -> Bool {
+    guard shotsListed, let kept = panes.activity.log, let keptAt = panes.activity.readAt else { return false }
+    let calendar = viewer?.snapshot.zonedCalendar ?? .current
+    return ActivityGrouping(log: kept, readAt: keptAt, now: readAt, calendar: calendar)
+      .findsEveryShot(in: panes.shots.shots ?? [])
+  }
+
+  /// A reading of the log the pane already shows: nothing is taken in again, but what is still missing is asked for
+  /// again, as after any reading: the icons not found, and the sheet's or the replay's pictures not read. A failure
+  /// kept from before goes.
+  ///
+  /// - Parameter log: The log just read.
+  private func followUnchanged(_ log: ActivityLog) {
+    if panes.activity.failure != nil { panes.activity.failure = nil }
+    wantIcons(for: log.entries)
+    if panes.activity.sheet != nil || panes.activity.replay != nil { pictures.refresh() }
+  }
+
   /// Keeps the screenshots' list: their names, sizes and folder.
   ///
   /// - Parameter list: The list.
   func keep(_ list: ScreenshotList) {
-    panes.shots.shots = list.shots
-    panes.shots.folder = list.folder
+    if panes.shots.shots != list.shots { panes.shots.shots = list.shots }
+    if panes.shots.folder != list.folder { panes.shots.folder = list.folder }
   }
 
   /// Stops reading the sheet's pictures and copying one, before the window is released.

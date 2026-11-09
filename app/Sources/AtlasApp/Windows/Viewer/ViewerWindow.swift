@@ -63,12 +63,13 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     controller.fitWindow(to: frame.size)
     delegate = self
     let fieldReport = fieldFocus.report
+    let feed = controller.readingLoop.feed
     WindowShell.host(in: self) {
       ViewerView(
-        state: controller.state,
+        state: controller.drawnState(),
         send: { controller.send($0) },
         input: { DesktopInput(controller: controller) },
-        livePicture: { LayerPictureView(live: $0) }
+        livePicture: { LayerPictureView(live: $0, feed: feed) }
       )
       .environment(\.focusedFieldReport, fieldReport)
     }

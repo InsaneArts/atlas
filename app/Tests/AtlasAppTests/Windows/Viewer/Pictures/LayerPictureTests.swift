@@ -116,13 +116,16 @@ struct LayerPictureTests {
   func theLiveSlotShowsEachNewFrame() throws {
     let first = try Self.picture("one")
     let live = ViewerLivePicture(picture: first, saturation: 1, corner: 12)
-    let hosting = NSHostingView(rootView: LayerPictureView(live: live))
+    let hosting = NSHostingView(rootView: LayerPictureView(live: live, feed: LivePictureFeed()))
     hosting.frame = NSRect(x: 0, y: 0, width: 160, height: 100)
     hosting.layoutSubtreeIfNeeded()
     let slot = try #require(Self.pictureViews(in: hosting).first, "the slot hosts no layer")
     #expect((slot.layer?.contents as AnyObject?) === first.image)
     let second = try Self.picture("two")
-    hosting.rootView = LayerPictureView(live: ViewerLivePicture(picture: second, saturation: 1, corner: 12))
+    hosting.rootView = LayerPictureView(
+      live: ViewerLivePicture(picture: second, saturation: 1, corner: 12),
+      feed: LivePictureFeed()
+    )
     hosting.layoutSubtreeIfNeeded()
     #expect(Self.pictureViews(in: hosting).count == 1)
     #expect(Self.pictureViews(in: hosting).first === slot, "the slot's view was built again")

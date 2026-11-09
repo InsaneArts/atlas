@@ -4,7 +4,7 @@ import Foundation
 /// What the window last read of the host sessions' list, `sessions.json`: the sessions live or ended within the last
 /// seven days and what each made, which the sidebar's Ended part and the sessions' facts read. The live sessions' state
 /// always comes from the status, which is fresher.
-struct ViewerSessionsFacts {
+struct ViewerSessionsFacts: Equatable {
   /// The list, newest last seen first; nil before the first reading.
   var list: HostSessionList?
   /// Why the last reading failed, while it has, which each session's facts say; nil once one worked.

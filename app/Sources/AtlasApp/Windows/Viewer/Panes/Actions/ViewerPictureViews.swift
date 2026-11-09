@@ -220,13 +220,14 @@ final class ViewerPictureViews {
   }
 
   /// Follows what shows: closes a sheet or a replay whose run is gone, reads the pictures they show and drops the
-  /// rest, and plays or stops the replay.
+  /// rest, and plays or stops the replay. Each is written only when it changes, so following what already shows
+  /// changes nothing the window shows.
   func refresh() {
     guard let model else { return }
     if let snapshot = model.viewer?.snapshot {
       let shown = ViewerPresenter.shownOverlays(snapshot)
-      if !shown.sheet { model.panes.activity.sheet = nil }
-      if !shown.replay { model.panes.activity.replay = nil }
+      if !shown.sheet, model.panes.activity.sheet != nil { model.panes.activity.sheet = nil }
+      if !shown.replay, model.panes.activity.replay != nil { model.panes.activity.replay = nil }
     }
     let shows = model.viewer?.shown == true && model.viewer?.session.place == .activity
     if !shows || model.panes.activity.sheet == nil {
@@ -241,7 +242,8 @@ final class ViewerPictureViews {
       load.cancel()
       loads[name] = nil
     }
-    model.panes.activity.pictures = model.panes.activity.pictures.filter { wanted.contains($0.key) }
+    let kept = model.panes.activity.pictures.filter { wanted.contains($0.key) }
+    if kept.count != model.panes.activity.pictures.count { model.panes.activity.pictures = kept }
     for name in wanted where model.panes.activity.pictures[name] == nil && loads[name] == nil {
       read(name)
     }
