@@ -8,6 +8,8 @@ struct SidebarRowStyle: ButtonStyle {
   let isSelected: Bool
   /// The row's least height.
   let height: CGFloat
+  /// The highlight's corner; nil rounds it into a capsule.
+  var corner: CGFloat?
 
   /// Draws the label on its highlight.
   ///
@@ -17,7 +19,8 @@ struct SidebarRowStyle: ButtonStyle {
     SidebarRowBody(
       configuration: configuration,
       isSelected: isSelected,
-      height: height
+      height: height,
+      corner: corner
     )
   }
 }

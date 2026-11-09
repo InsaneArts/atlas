@@ -1,26 +1,17 @@
 import SwiftUI
 
-/// The helper row's label, laid out as a session's: Atlas's mark with its dot, the title over the line, which takes
-/// the attention colour while it says what the person must do, and a small ellipsis at the trailing edge, saying a
-/// click opens a menu. The ellipsis stands in the row's trailing inset, so the words keep nearly a session's room and
-/// "The helper is logged out" is never cut.
+/// The helper row's label, laid out as a session's: Atlas's mark with its dot and the title over the line, which takes
+/// the attention colour while it says what the person must do. The words take the row's whole room, so "The helper is
+/// logged out" is never cut; the row lights under the pointer and opens its menu on a click.
 struct SidebarHelperLabel: View {
   /// The helper's health.
   let helper: ViewerHelperLine
 
-  /// The mark, the two lines and the ellipsis.
+  /// The mark and the two lines.
   var body: some View {
     HStack(spacing: ViewerLayout.sidebarIconGap) {
       SidebarHelperMark(tone: helper.tone)
       lines
-        .padding(.trailing, ViewerLayout.helperMoreGap)
-    }
-    .overlay(alignment: .trailing) {
-      Image(systemName: SymbolName.more.rawValue)
-        .font(Typography.symbol(.row))
-        .foregroundStyle(Color.textTertiary)
-        .offset(x: ViewerLayout.helperMoreReach)
-        .accessibilityHidden(true)
     }
   }
 
