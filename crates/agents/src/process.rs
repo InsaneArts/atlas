@@ -19,7 +19,8 @@ struct Tools {
     held: Vec<Child>,
     /// Atlas is being stopped: no tool starts from now on.
     stopping: bool,
-    /// The stop's grace is over: each supervisor kills its tool now.
+    /// The stop's final group kill was posted: supervisors may reap now,
+    /// and each kills its tool through its own handle if still running.
     ending: bool,
 }
 
@@ -110,11 +111,14 @@ fn stop_all(registry: &Registry, grace: Duration, bound: Duration) {
     }
     let deadline = Instant::now() + grace + bound;
 
-    signal_groups(registry, nix::sys::signal::Signal::SIGTERM);
+    signal_groups(&locked(registry), nix::sys::signal::Signal::SIGTERM);
     let mut tools = registry.settled(grace);
+    // Posting the last group signal and permitting reaping share the same
+    // lock. No supervisor or concurrent stop can release the leader's PID
+    // between them, and no grace wait or blocking reap holds this lock.
+    signal_groups(&tools, nix::sys::signal::Signal::SIGKILL);
     tools.ending = true;
     drop(tools);
-    signal_groups(registry, nix::sys::signal::Signal::SIGKILL);
 
     let held = std::mem::take(&mut registry.settled(bound).held);
     let unresolved = reap_held(registry, held, deadline);
@@ -123,21 +127,21 @@ fn stop_all(registry: &Registry, grace: Duration, bound: Duration) {
 
 /// Send `signal` to each currently reserved group: a supervisor or
 /// the held-leader reaping confirms each end.
-fn signal_groups(registry: &Registry, signal: nix::sys::signal::Signal) {
-    signal_groups_using(registry, signal, |group, signal| {
+fn signal_groups(tools: &Tools, signal: nix::sys::signal::Signal) {
+    signal_groups_using(tools, signal, |group, signal| {
         let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(*group), signal);
     });
 }
 
-/// Registry lock order: a signal and reaping/retirement share this lock.
+/// The caller holds the registry lock: signals and reaping/retirement
+/// share it.
 /// No numeric snapshot survives it; grace waits and blocking work do not
 /// hold it. Each listed leader therefore stays unreaped through the post.
 fn signal_groups_using(
-    registry: &Registry,
+    tools: &Tools,
     signal: nix::sys::signal::Signal,
     mut post: impl FnMut(&i32, nix::sys::signal::Signal),
 ) {
-    let tools = locked(registry);
     for group in &tools.groups {
         post(group, signal);
     }
@@ -224,16 +228,28 @@ struct Tool {
 }
 
 impl Tool {
-    /// Whether the leader has exited, without waiting.
+    /// Reap an exited leader without waiting, except during stop's grace:
+    /// then only observe its exit, retaining its PID and group reservation
+    /// until the final group signal has been posted under this same lock.
     fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        self.poll(false)
+    }
+
+    /// A cleanup that already posted its own final group kill may reap
+    /// during grace too; ordinary supervision must keep that reservation.
+    fn poll(&mut self, after_kill: bool) -> std::io::Result<Option<ExitStatus>> {
         let mut tools = locked(self.running.tools);
+        let mut wait = || {
+            if tools.stopping && !tools.ending && !after_kill {
+                atlas_core::process::child_exited(self.leader.id()).map(|_| None)
+            } else {
+                self.leader.try_wait()
+            }
+        };
         #[cfg(test)]
-        let waited = self
-            .faults
-            .try_wait()
-            .map_or_else(|| self.leader.try_wait(), Err);
+        let waited = self.faults.try_wait().map_or_else(&mut wait, Err);
         #[cfg(not(test))]
-        let waited = self.leader.try_wait();
+        let waited = wait();
         if matches!(&waited, Ok(Some(_))) || waited.as_ref().is_err_and(lost) {
             if let Some(group) = self.running.group.take() {
                 tools.groups.retain(|running| *running != group);
@@ -243,14 +259,15 @@ impl Tool {
         waited
     }
 
-    /// Wait for the leader to exit, and reap it.
+    /// Wait for the leader to exit and reap it after this owner has posted
+    /// its final group kill. Retirement still takes the registry lock.
     fn wait(&mut self) -> std::io::Result<ExitStatus> {
         #[cfg(test)]
         if let Some(error) = self.faults.wait() {
             return Err(error);
         }
         loop {
-            match self.try_wait()? {
+            match self.poll(true)? {
                 Some(status) => return Ok(status),
                 None => std::thread::sleep(Duration::from_millis(20)),
             }

@@ -12,9 +12,17 @@ fn group_signals_hold_the_reap_lock_and_never_reuse_a_retired_snapshot() {
         ));
         posted.push(*group);
     };
-    signal_groups_using(&registry, nix::sys::signal::Signal::SIGTERM, &mut post);
+    signal_groups_using(
+        &locked(&registry),
+        nix::sys::signal::Signal::SIGTERM,
+        &mut post,
+    );
     locked(&registry).groups.clear();
-    signal_groups_using(&registry, nix::sys::signal::Signal::SIGKILL, &mut post);
+    signal_groups_using(
+        &locked(&registry),
+        nix::sys::signal::Signal::SIGKILL,
+        &mut post,
+    );
     assert_eq!(
         posted,
         vec![12345],
@@ -195,6 +203,10 @@ impl ProcessFixture {
             .process_group(0);
         let mut tool = start(tools, &mut command).unwrap();
         tool.faults = faults;
+        Self::supervising(tool, limit)
+    }
+
+    fn supervising(tool: Tool, limit: Duration) -> Self {
         let group = nix::unistd::Pid::from_raw(i32::try_from(tool.leader.id()).unwrap());
         let (cancel, cancelled) = std::sync::mpsc::channel();
         let watchdog = std::thread::spawn(move || {
@@ -275,6 +287,101 @@ fn an_exited_tool_returns_while_its_descendant_holds_both_pipes() {
         "the leader exited and was reaped while its descendant still owns the pipes"
     );
     assert!(locked(&TOOLS).groups.is_empty());
+}
+
+#[test]
+fn stopping_atlas_kills_a_resistant_descendant_after_its_leader_exits_on_term() {
+    use std::{io::BufRead, os::unix::net::UnixListener, os::unix::process::CommandExt};
+
+    let tools = fresh_tools();
+    let directory = tempfile::tempdir().unwrap();
+    let socket = directory.path().join("ready");
+    let ready = UnixListener::bind(&socket).unwrap();
+    ready.set_nonblocking(true).unwrap();
+    let mut command = Command::new("/usr/bin/perl");
+    command
+        .args([
+            "-e",
+            r#"
+use IO::Socket::UNIX;
+pipe(my $ready, my $notify) or die;
+my $child = fork;
+defined($child) or die;
+if ($child == 0) {
+    close $ready;
+    $SIG{TERM} = 'IGNORE';
+    print {$notify} "ready\n";
+    close $notify;
+    while (1) { sleep 30 }
+}
+close $notify;
+<$ready> eq "ready\n" or die;
+close $ready;
+$SIG{TERM} = sub { exit 0 };
+my $socket = IO::Socket::UNIX->new(Type => SOCK_STREAM, Peer => $ARGV[0]) or die;
+print {$socket} "$child\n";
+close $socket;
+while (1) { sleep 30 }
+"#,
+        ])
+        .arg(&socket)
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    let tool = start(tools, &mut command).unwrap();
+    let fixture = ProcessFixture::supervising(tool, Duration::from_secs(30));
+
+    // The child acknowledges its TERM disposition before the leader publishes
+    // readiness. The outer watchdog owns the whole group on every failure path.
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let stream = loop {
+        match ready.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "the tool did not become ready");
+                std::thread::yield_now();
+            }
+            Err(error) => panic!("the readiness connection failed: {error}"),
+        }
+    };
+    // macOS accepts with the listener's nonblocking mode; the read below
+    // must instead wait for readiness within its timeout.
+    stream.set_nonblocking(false).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .unwrap();
+    let mut said = String::new();
+    std::io::BufReader::new(stream)
+        .read_line(&mut said)
+        .unwrap();
+    let descendant = said.trim().parse().unwrap();
+    let descendant = atlas_core::process::info(descendant)
+        .unwrap()
+        .expect("the ready descendant is running");
+    assert_eq!(descendant.pgid, fixture.group.as_raw());
+
+    stop_all(tools, Duration::from_millis(300), Duration::from_secs(2));
+    // SIGKILL posting and kernel teardown are asynchronous. A stopping error
+    // can bypass output collection, so also bound the process completion wait.
+    let _answer = fixture.answer();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while !descendant.instance.ended() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+
+    assert!(
+        descendant.instance.ended(),
+        "shutdown escalation must end the TERM-resistant descendant"
+    );
+    assert!(locked(tools).groups.is_empty());
+    assert!(locked(tools).held.is_empty());
+    assert_eq!(
+        nix::sys::wait::waitpid(fixture.group, Some(nix::sys::wait::WaitPidFlag::WNOHANG)),
+        Err(nix::errno::Errno::ECHILD),
+        "the leader was reaped after escalation"
+    );
 }
 
 #[test]
