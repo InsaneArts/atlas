@@ -1,6 +1,6 @@
 {
   "name": "atlas",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Test Mac apps in a hidden helper login while the person keeps using their desktop.",
   "author": { "name": "InsaneArts" },
   "homepage": "https://github.com/InsaneArts/atlas",

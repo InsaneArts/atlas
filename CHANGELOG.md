@@ -22,7 +22,9 @@ Thanks to [abenz95](https://x.com/abenz95/status/2118031552768848276) on X for a
 - **No more rare "permission denied" from the helper**: once in a long while macOS briefly refused Atlas's connection to the helper, which could fail a command or leave it uncertain. Atlas now tries the connection again for a moment; nothing is ever sent twice. ([#73](https://github.com/InsaneArts/atlas/pull/73))
 - **Editing your settings no longer blocks updates**: `atlas update` refused if `~/.config/atlas.toml` changed after setup. It now refuses only when the helper's identity or the output folder changed, and Atlas's own settings changes keep the rest of your file exactly as you wrote it. ([#60](https://github.com/InsaneArts/atlas/pull/60))
 - **The installer leaves other apps named Atlas alone**: `install.sh` replaces only Atlas itself and stops with a clear message if another app named Atlas is in `/Applications`. ([#57](https://github.com/InsaneArts/atlas/pull/57))
-- **Pi can take screenshots through MCP**: Pi now exposes Atlas's `take_screenshot` tool, returning the helper's picture inside the tool reply. Pi previously hid the tool.
+- **Pi can take screenshots through MCP**: Pi now exposes Atlas's `take_screenshot` tool, returning the helper's picture inside the tool reply. Pi previously hid the tool. ([#82](https://github.com/InsaneArts/atlas/pull/82))
+- **No partial app copies in the helper**: on macOS 27, `ditto` can skip a folder it cannot read and still report success. Atlas now refuses that copy instead of installing an incomplete app.
+- **Install with Homebrew**: `brew trust insanearts/tap && brew install --cask insanearts/tap/atlas`. Each release now updates the cask. ([#79](https://github.com/InsaneArts/atlas/pull/79))
 
 Resolves [#66](https://github.com/InsaneArts/atlas/issues/66), [#67](https://github.com/InsaneArts/atlas/issues/67), [#68](https://github.com/InsaneArts/atlas/issues/68) and [#69](https://github.com/InsaneArts/atlas/issues/69).
 
