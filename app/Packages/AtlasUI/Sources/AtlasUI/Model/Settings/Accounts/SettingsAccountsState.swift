@@ -1,5 +1,5 @@
-/// The Accounts pane: the accounts Atlas lists for the helper, a note once when Atlas added one, and what the last
-/// change said.
+/// The Accounts pane: the accounts Atlas lists for the helper, a note once when Atlas added one, a line while pictures
+/// of agent actions are off, and what the last change said.
 public struct SettingsAccountsState: Equatable, Sendable {
   /// The accounts, in the order the service lists them; nil when Atlas can't read its list.
   public var rows: [SettingsAccountRow]?
@@ -12,6 +12,9 @@ public struct SettingsAccountsState: Equatable, Sendable {
   public var noteAccount: String?
   /// The account whose row is open, showing what else can be done with it, by its row's id; nil for none.
   public var open: String?
+  /// What the pane says under the list while pictures of agent actions are off in General, such as "Activity won't
+  /// keep pictures of what agents do here."; nil while they are kept.
+  public var picturesOff: String?
   /// What the last change said, under the list; nil for nothing.
   public var notice: SettingsNote?
   /// Whether a change runs now, so the buttons wait.
@@ -25,6 +28,7 @@ public struct SettingsAccountsState: Equatable, Sendable {
   ///   - note: The note Atlas shows once after it added an account.
   ///   - noteAccount: The account the note is about; none by default.
   ///   - open: The account whose row is open; none by default.
+  ///   - picturesOff: What the pane says while pictures are off; none by default.
   ///   - notice: What the last change said.
   ///   - isWorking: Whether a change runs now.
   public init(
@@ -33,6 +37,7 @@ public struct SettingsAccountsState: Equatable, Sendable {
     note: String? = nil,
     noteAccount: String? = nil,
     open: String? = nil,
+    picturesOff: String? = nil,
     notice: SettingsNote? = nil,
     isWorking: Bool = false
   ) {
@@ -41,6 +46,7 @@ public struct SettingsAccountsState: Equatable, Sendable {
     self.note = note
     self.noteAccount = noteAccount
     self.open = open
+    self.picturesOff = picturesOff
     self.notice = notice
     self.isWorking = isWorking
   }

@@ -156,9 +156,9 @@ extension ViewerPresenter {
     }
   }
 
-  /// An app run of the outline: its app, what it did there, its problems and when; open, its steps oldest first with
-  /// the time only where the minute changes; folded, its problem lines and its newest pictures, or its pictures opened
-  /// in place.
+  /// An app run of the outline: its app, what it did there, its problems, the listed account it acted in and what let
+  /// it act there, and when; open, its steps oldest first with the time only where the minute changes; folded, its
+  /// problem lines and its newest pictures, or its pictures opened in place.
   ///
   /// - Parameters:
   ///   - run: The run.
@@ -185,7 +185,9 @@ extension ViewerPresenter {
       isRunning: run.isRunning,
       isOpen: fold.isOpen,
       canFold: fold != .held,
-      canReplay: run.runs.contains { $0.firstBefore != nil }
+      canReplay: run.runs.contains { $0.firstBefore != nil },
+      account: run.account?.name,
+      allowance: Words.allowance(run.allowance)
     )
     if fold.isOpen {
       var minute = ""
@@ -212,8 +214,9 @@ extension ViewerPresenter {
     return outline
   }
 
-  /// What leads a run and what it is titled: its app's icon and name; the person's mark and "You" for their own
-  /// actions in no app; a terminal's tile and Commands for anything else in no app.
+  /// What leads a run and what it is titled: its app's icon and name, a browser's run titled by the one listed site
+  /// it acted in; the person's mark and "You" for their own actions in no app; a terminal's tile and Commands for
+  /// anything else in no app.
   ///
   /// - Parameters:
   ///   - run: The run.
@@ -223,7 +226,7 @@ extension ViewerPresenter {
     switch run.subject {
     case .app(let app):
       let name = app.name ?? ViewerWords.unnamedApp
-      return (.app(appIcon(bundleId: app.bundleId, name: name, snapshot.panes.icons)), name)
+      return (.app(appIcon(bundleId: app.bundleId, name: name, snapshot.panes.icons)), run.site ?? name)
     case .commands where run.stream == .you, .screenshots where run.stream == .you:
       return (.you, ViewerWords.youGroup)
     case .commands, .screenshots:

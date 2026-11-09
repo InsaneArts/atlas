@@ -75,6 +75,54 @@ struct ActivityGroupingTests {
     )
   }
 
+  @Test("repeats allowed differently in a listed account stay apart, so each keeps its own badge")
+  func repeatsAllowedDifferentlyStayApart() {
+    let account = ActivityLog.Account(name: "github.com", key: AccountKey(kind: .site, id: "github.com"))
+    let rules = ActivityFixtures.rules([
+      ActivityLog.Entry(
+        id: "6",
+        says: "clicked Merge on github.com",
+        ageSeconds: 100,
+        account: account,
+        allowed: .task
+      ),
+      ActivityLog.Entry(
+        id: "5",
+        says: "clicked Merge on github.com",
+        ageSeconds: 101,
+        account: account,
+        allowed: .task
+      ),
+      ActivityLog.Entry(
+        id: "4",
+        says: "clicked Merge on github.com",
+        ageSeconds: 102,
+        account: account,
+        allowed: .task
+      ),
+      ActivityLog.Entry(
+        id: "3",
+        says: "clicked Merge on github.com",
+        ageSeconds: 103,
+        account: account,
+        allowed: .once
+      ),
+      ActivityLog.Entry(
+        id: "2",
+        says: "clicked Merge on github.com",
+        ageSeconds: 104,
+        account: account,
+        allowed: .once
+      ),
+      ActivityLog.Entry(id: "1", says: "clicked Merge on github.com", ageSeconds: 105, account: account),
+    ])
+    let runs = ActivityMoments(rules, captures: [], scope: .all)
+      .shown(filter: .all, query: "")
+      .flatMap(\.runs)
+    #expect(runs.map(\.count) == [3, 1, 1, 1])
+    #expect(runs.map(\.entry.allowed) == [.task, .once, .once, nil])
+  }
+
   @Test("three repeats fold into one line that keeps each row, its first picture before and its last after")
   func threeRepeatsFold() throws {
     let rules = ActivityFixtures.rules([

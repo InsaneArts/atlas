@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// The Accounts pane: the note Atlas shows once after it added an account, then the accounts it lists for the helper,
-/// each with its level and Remove…, and Add an App… under them. With none, it says so and offers Add an App…; when
-/// Atlas can't read its list, it says that instead. The note grows in and leaves in place, and the list below moves
-/// with it.
+/// each with its level and Remove…, and Add an App… under them, with a line under the list while pictures of agent
+/// actions are off. With none, it says so and offers Add an App…; when Atlas can't read its list, it says that
+/// instead. The note grows in and leaves in place, and the list below moves with it.
 struct AccountsPane: View {
   /// What the pane shows.
   let state: SettingsAccountsState
@@ -88,7 +88,7 @@ struct AccountsPane: View {
     state.rows?.first { $0.id == state.noteAccount }?.level
   }
 
-  /// What the last change said, under the empty pane's message, inset as a section's notes are.
+  /// What the pane says under the empty pane's message, inset as a section's notes are.
   private var noteLines: some View {
     ForEach(notes.indices, id: \.self) { index in
       GroupedSectionNoteView(note: notes[index])
@@ -96,9 +96,9 @@ struct AccountsPane: View {
     }
   }
 
-  /// What the last change said, under the list or the message.
+  /// What the pane says under the list or the message: that pictures are off, then what the last change said.
   private var notes: [GroupedSectionNote] {
-    [state.notice?.sectionNote]
+    [state.picturesOff.map(GroupedSectionNote.text), state.notice?.sectionNote]
       .compactMap { $0 }
   }
 
@@ -119,6 +119,14 @@ struct AccountsPane: View {
   #Preview("Accounts, look only") {
     FormColumn(insets: SettingsLayout.swapInsets) {
       AccountsPane(state: PreviewStates.settingsAccountsLookOnly.accounts) { _ in }
+    }
+    .frame(width: SettingsLayout.width)
+    .sampleSurface()
+  }
+
+  #Preview("Accounts, pictures off") {
+    FormColumn(insets: SettingsLayout.swapInsets) {
+      AccountsPane(state: PreviewStates.settingsAccountsPicturesOff.accounts) { _ in }
     }
     .frame(width: SettingsLayout.width)
     .sampleSurface()

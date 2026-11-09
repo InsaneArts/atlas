@@ -51,6 +51,49 @@ struct PanelPresenterRecentTests {
     )
   }
 
+  @Test("a Recent row names the listed account it acted in and what let it act there, and one in none has no badge")
+  func aRecentRowSaysItsAllowance() {
+    let github = ActivityLog.Account(name: "github.com", key: AccountKey(kind: .site, id: "github.com"))
+    var status = ViewerStatus()
+    status.overview.activity = [
+      ViewerStatus.Activity(
+        id: "a",
+        operation: "input",
+        ok: true,
+        ageSeconds: 1,
+        says: "clicked Merge on github.com",
+        app: "Google Chrome",
+        account: github,
+        allowed: .task
+      ),
+      ViewerStatus.Activity(
+        id: "b",
+        operation: "input",
+        ok: true,
+        ageSeconds: 2,
+        says: "clicked Close on github.com",
+        app: "Google Chrome",
+        account: github,
+        allowed: .trusted
+      ),
+      ViewerStatus.Activity(id: "c", operation: "input", ok: true, ageSeconds: 3, says: "clicked Save in TextEdit"),
+    ]
+    let rows = PanelPresenter.recent(
+      StatusReading(status),
+      mode: .seen(by: status.overview, holdingControl: false),
+      icons: [:]
+    )
+    #expect(rows.map(\.account) == ["github.com", "github.com", nil])
+    #expect(
+      rows.map(\.allowance) == [
+        AllowanceBadge(words: "You allowed for this task", tone: .accent),
+        AllowanceBadge(words: "Trusted", tone: .quiet),
+        nil,
+      ]
+    )
+    #expect(rows.first?.line.contains("github.com") == true, "its line says the site")
+  }
+
   @Test("a Recent row in no app leads with a quiet tile of what it did")
   func aRecentRowInNoAppLeadsWithAQuietTile() {
     var status = ViewerStatus()

@@ -14,6 +14,10 @@ public struct PanelRecentEntry: Equatable, Sendable, Identifiable {
   public var isFailed: Bool
   /// Whether it is the action running now: the newest row, only while an agent works.
   public var isLive: Bool
+  /// The listed account it acted in, such as "github.com"; nil for none.
+  public var account: String?
+  /// What let it act there, which a badge before its time says; nil when nothing needed allowing.
+  public var allowance: AllowanceBadge?
 
   /// Creates a row.
   ///
@@ -24,13 +28,17 @@ public struct PanelRecentEntry: Equatable, Sendable, Identifiable {
   ///   - when: How long ago, in short words; empty when unknown.
   ///   - isFailed: Whether the action did not work.
   ///   - isLive: Whether it is the action running now.
+  ///   - account: The listed account it acted in; none by default.
+  ///   - allowance: What let it act there; none by default.
   public init(
     id: String,
     icon: ActivityIcon,
     line: String,
     when: String,
     isFailed: Bool = false,
-    isLive: Bool = false
+    isLive: Bool = false,
+    account: String? = nil,
+    allowance: AllowanceBadge? = nil
   ) {
     self.id = id
     self.icon = icon
@@ -38,5 +46,7 @@ public struct PanelRecentEntry: Equatable, Sendable, Identifiable {
     self.when = when
     self.isFailed = isFailed
     self.isLive = isLive
+    self.account = account
+    self.allowance = allowance
   }
 }

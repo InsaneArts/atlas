@@ -25,6 +25,10 @@ extension ViewerStatus {
     public var app: String?
     /// The bundle identifier of the app it acted in, from builds that say so.
     public var bundleId: String?
+    /// The listed account an agent's action acted in, from builds that say so; none for actions in no listed account.
+    public var account: ActivityLog.Account?
+    /// What let it act there: allowed once or for the task, or a Trusted account; only with an account.
+    public var allowed: ActivityLog.Allowance?
 
     /// How it went: worked, failed, or not sent, as an Activity row reads it.
     public var outcome: ActivityLog.Outcome { ActivityLog.Outcome(started: false, ok: ok, nothingSent: nothingSent) }
@@ -46,6 +50,8 @@ extension ViewerStatus {
     ///   - nothingSent: Whether it was refused before anything was sent.
     ///   - app: The name of the app it acted in.
     ///   - bundleId: The bundle identifier of the app it acted in.
+    ///   - account: The listed account it acted in.
+    ///   - allowed: What let it act there; only with an account.
     public init(
       id: String? = nil,
       operation: String,
@@ -57,7 +63,9 @@ extension ViewerStatus {
       session: String? = nil,
       nothingSent: Bool = false,
       app: String? = nil,
-      bundleId: String? = nil
+      bundleId: String? = nil,
+      account: ActivityLog.Account? = nil,
+      allowed: ActivityLog.Allowance? = nil
     ) {
       self.id = id
       self.operation = operation
@@ -70,12 +78,16 @@ extension ViewerStatus {
       self.nothingSent = nothingSent
       self.app = app
       self.bundleId = bundleId
+      self.account = account
+      self.allowed = account == nil ? nil : allowed
     }
 
     /// The fields of one `activity` row this app reads.
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case id, operation, ok, actionCount, actor, ageSeconds, says, session, nothingSent, app, bundleId
+      /// The listed account it acted in, and what let it act there.
+      case account, allowed
     }
 
     /// Decodes an operation; one that names nothing reads as an agent's failed "action".
@@ -103,6 +115,9 @@ extension ViewerStatus {
         .flatMap { $0?.isEmpty == false ? $0 : nil }
       bundleId = (try? container.decodeIfPresent(String.self, forKey: .bundleId))
         .flatMap { $0?.isEmpty == false ? $0 : nil }
+      // An account that does not read whole is none, and what let it act counts only with one.
+      account = container.lenientAccount(.account)
+      allowed = account == nil ? nil : container.lenientAllowance(.allowed)
     }
   }
 }

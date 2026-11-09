@@ -50,6 +50,7 @@
       "40-sign-in",
       "41-sign-in-refused",
       "42-account-opened",
+      "43-accounts-pictures-off",
     ]
 
     /// Every Settings state drawn for visual checks, by file name.

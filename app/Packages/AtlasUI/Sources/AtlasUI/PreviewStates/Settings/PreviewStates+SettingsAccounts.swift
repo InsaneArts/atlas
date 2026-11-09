@@ -47,6 +47,13 @@
       return state
     }()
 
+    /// The Accounts pane while General keeps no pictures of agent actions: the line under the list says so.
+    @MainActor static let settingsAccountsPicturesOff: SettingsState = {
+      var state = selecting(.accounts)
+      state.accounts.picturesOff = "Activity won't keep pictures of what agents do here."
+      return state
+    }()
+
     /// The Accounts pane with a bank agents may only look at.
     @MainActor static let settingsAccountsLookOnly: SettingsState = {
       var state = selecting(.accounts)

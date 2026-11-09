@@ -28,6 +28,10 @@ public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
   public var offersRecovery: Bool
   /// Whether it typed a password, whose text Atlas never keeps, which a lock badge says.
   public var notKept: Bool
+  /// The listed account it acted in, such as "github.com"; nil for none.
+  public var account: String?
+  /// What let it act there, which a badge after its words says; nil when nothing needed allowing.
+  public var allowance: AllowanceBadge?
 
   /// Creates a step.
   ///
@@ -44,6 +48,8 @@ public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
   ///   - problem: Why it did not work; none by default.
   ///   - offersRecovery: Whether it offers recovery; it does not by default.
   ///   - notKept: Whether it typed a password Atlas did not keep; it did not by default.
+  ///   - account: The listed account it acted in; none by default.
+  ///   - allowance: What let it act there; none by default.
   public init(
     id: String,
     kind: ViewerActivityKind,
@@ -56,7 +62,9 @@ public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
     returnsFocus: Bool = false,
     problem: ViewerActivityProblem? = nil,
     offersRecovery: Bool = false,
-    notKept: Bool = false
+    notKept: Bool = false,
+    account: String? = nil,
+    allowance: AllowanceBadge? = nil
   ) {
     self.id = id
     self.kind = kind
@@ -70,12 +78,16 @@ public struct ViewerActivityStep: Equatable, Sendable, Identifiable {
     self.problem = problem
     self.offersRecovery = offersRecovery
     self.notKept = notKept
+    self.account = account
+    self.allowance = allowance
   }
 
   /// What VoiceOver reads for it: "Clicked Save, 10:31", with why it did not work and what came next; a password's
-  /// typing says it was not kept.
+  /// typing says it was not kept, and one in a listed account what let it act there.
   public var label: String {
-    let parts = [words.text, notKept ? "Not kept" : "", time, problem?.why ?? "", problem?.next ?? ""]
+    let parts = [
+      words.text, notKept ? "Not kept" : "", allowance?.words ?? "", time, problem?.why ?? "", problem?.next ?? "",
+    ]
     return parts.filter { !$0.isEmpty }
       .joined(separator: ", ")
   }

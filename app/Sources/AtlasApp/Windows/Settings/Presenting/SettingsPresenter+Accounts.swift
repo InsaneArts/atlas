@@ -4,7 +4,8 @@ import Foundation
 
 extension SettingsPresenter {
   /// The Accounts pane: each account Atlas lists, by name, with when it was added and its level; the note once after
-  /// Atlas added one the person typed a password in, with the account it is about; and what the last change said.
+  /// Atlas added one the person typed a password in, with the account it is about; a line while General keeps no
+  /// pictures of agent actions; and what the last change said.
   ///
   /// - Parameter snapshot: What the controller holds and reads.
   /// - Returns: The pane.
@@ -36,6 +37,7 @@ extension SettingsPresenter {
       note: note,
       noteAccount: notedAccount?.id,
       open: snapshot.openAccount,
+      picturesOff: snapshot.pictures.shown.isOn ? nil : SettingsWords.accountsPicturesOff,
       notice: notice(snapshot, in: .accounts, busy: snapshot.session.accountsWorking),
       isWorking: snapshot.session.accountsWorking
     )

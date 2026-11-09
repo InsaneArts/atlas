@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// An app run's row, 32 high: its disclosure, the app's icon at 16, its name, what was done there, its problems in
-/// orange, Replay while it is open, and its time with a blue dot while it runs. The summary gives way first, then the
-/// name; the problems, Replay and the time never truncate. On a narrow card the summary hides and the problems stay.
+/// orange, what let its steps act in a listed account, Replay while it is open, and its time with a blue dot while it
+/// runs. The summary gives way first, then the name; the problems, the badge, Replay and the time never truncate. On a narrow card the summary hides and the problems stay.
 struct ActivityRunRow: View {
   /// The run.
   let run: ViewerOutlineRun
@@ -69,7 +69,7 @@ struct ActivityRunRow: View {
     .lineLimit(1)
   }
 
-  /// The name, the summary and the problems on one line.
+  /// The name, the summary, the problems and what let its steps act in a listed account, on one line.
   private var words: some View {
     HStack(alignment: .firstTextBaseline, spacing: .zero) {
       Text(verbatim: run.name)
@@ -89,6 +89,11 @@ struct ActivityRunRow: View {
           .font(Typography.digits(.callout))
           .foregroundStyle(Color.textAttention)
           .fixedSize()
+          .padding(.leading, ViewerLayout.runProblemGap)
+          .layoutPriority(2)
+      }
+      if let allowance = run.allowance {
+        AllowanceTag(badge: allowance)
           .padding(.leading, ViewerLayout.runProblemGap)
           .layoutPriority(2)
       }

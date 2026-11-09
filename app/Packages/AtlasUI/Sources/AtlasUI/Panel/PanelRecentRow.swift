@@ -3,9 +3,9 @@ import SwiftUI
 /// One of Recent's rows: its icon, the app's, Atlas's for what Atlas did itself or the person's mark for their own,
 /// so every row's words start at one edge; what was done, and on the right how long ago, whose digits count rather
 /// than jump while the unit stays, and which swaps by opacity when the words change, as from "now" to "1 s" or from
-/// seconds to minutes. Before the time, a warning sign for what did not work, and a blue dot on the live row that
-/// cools away after a second; neither moves the words. Under Reduce Motion the dot only fades as it cools. VoiceOver
-/// reads it as one.
+/// seconds to minutes. Before the time, a badge saying what let it act in a listed account, a warning sign for what
+/// did not work, and a blue dot on the live row that cools away after a second; neither moves the words. Under Reduce
+/// Motion the dot only fades as it cools. VoiceOver reads it as one.
 struct PanelRecentRow: View {
   /// The action.
   let entry: PanelRecentEntry
@@ -26,6 +26,10 @@ struct PanelRecentRow: View {
         .opacity(isGlowing ? 1 : 0)
         .frame(width: holdsDot ? IconSize.xxs : .zero, alignment: .trailing)
         .padding(.leading, holdsDot ? Spacing.s : .zero)
+      if let allowance = entry.allowance {
+        AllowanceTag(badge: allowance)
+          .padding(.leading, Spacing.s)
+      }
       if entry.isFailed {
         ActivityMark(kind: .failed)
           .padding(.leading, Spacing.s)

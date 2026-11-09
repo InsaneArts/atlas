@@ -80,6 +80,10 @@ extension SettingsWords {
   /// While it is taken off.
   static let removingAccount = "Removing…"
 
+  /// Under the list while General keeps no pictures of agent actions: Activity says what agents did in an account, but
+  /// keeps no picture of it.
+  static let accountsPicturesOff = "Activity won't keep pictures of what agents do here."
+
   /// A change to the list that failed.
   ///
   /// - Parameter message: What the service said.

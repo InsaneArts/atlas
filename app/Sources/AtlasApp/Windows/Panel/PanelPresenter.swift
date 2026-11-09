@@ -99,8 +99,8 @@ enum PanelPresenter {
   /// 3: the most rows Recent lists.
   static let recentRows = 3
 
-  /// Recent's rows, newest first, each led by its icon: the newest is live only while an agent works, so only it
-  /// carries the blue dot, and only then.
+  /// Recent's rows, newest first, each led by its icon, with what let it act in a listed account: the newest is live
+  /// only while an agent works, so only it carries the blue dot, and only then.
   ///
   /// - Parameters:
   ///   - reading: The status, read.
@@ -118,7 +118,9 @@ enum PanelPresenter {
           line: entry.line,
           when: entry.when,
           isFailed: entry.mark == .failed,
-          isLive: mode.kind == .working && index == 0
+          isLive: mode.kind == .working && index == 0,
+          account: item.row.account?.name,
+          allowance: Words.allowance(item.row.allowed)
         )
       }
   }

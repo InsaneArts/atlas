@@ -164,7 +164,7 @@ public struct ActivityGrouping: Sendable {
   }
 
   /// Whether a row is the same action as the line just above it, by the same actor in the same host session, with the
-  /// same outcome, at most ``ActivityMoments/momentGap`` apart: running and screenshot rows always stand alone.
+  /// same outcome, in the same listed account allowed the same way, at most ``ActivityMoments/momentGap`` apart: running and screenshot rows always stand alone.
   ///
   /// - Parameters:
   ///   - newer: The line above.
@@ -187,6 +187,7 @@ public struct ActivityGrouping: Sendable {
     else { return false }
     return above.actor == below.actor && above.session == below.session && above.says == below.says
       && above.outcome == below.outcome && above.operation == below.operation && above.reason == below.reason
+      && above.account == below.account && above.allowed == below.allowed
   }
 
   /// Whether a row matches a search: in what was done, never in who did it.

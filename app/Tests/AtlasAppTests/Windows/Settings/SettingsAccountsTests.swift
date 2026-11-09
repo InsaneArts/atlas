@@ -147,6 +147,18 @@ struct SettingsAccountsTests {
     #expect(sent.count == 1, "the level it has already is not sent again")
   }
 
+  @Test("while General keeps no pictures of agent actions, the pane says so under the list, and not while it does")
+  @MainActor func picturesOffIsSaid() throws {
+    let status = try Self.reading([Self.account("site", "github.com", "github.com", added: Self.today)])
+    let controller = SettingsController.scripted(commands: ScriptedCommands([:]), status: status)
+    var snapshot = controller.snapshot
+    #expect(SettingsPresenter.accounts(snapshot).picturesOff == nil, "pictures are kept by default")
+    snapshot.pictures.shown.isOn = false
+    #expect(
+      SettingsPresenter.accounts(snapshot).picturesOff == "Activity won't keep pictures of what agents do here."
+    )
+  }
+
   @Test("a change that failed says why under the list")
   @MainActor func aFailedChangeSaysWhy() async throws {
     let controller = SettingsController.scripted(commands: ScriptedCommands([:]), status: try Self.reading([])) {
