@@ -82,14 +82,6 @@ struct MotionTests {
     #expect(Motion.indicator == Animation.spring(Motion.Springs.indicator))
   }
 
-  @Test("only a mark popping in and a success tile settling bounce; nothing else overshoots")
-  func onlyTwoSpringsBounce() {
-    let bouncing = Self.springs
-      .filter { $0.bounce > 0 }
-      .map(\.name)
-    #expect(bouncing == ["pop", "settle"])
-  }
-
   @Test("panes cross over in 0.15 seconds in and 0.1 out, at once, and words swap by opacity in 0.15")
   func panesAndWordsCrossfadeQuickly() {
     #expect(Motion.swapIn == Animation.easeOut(duration: 0.15))

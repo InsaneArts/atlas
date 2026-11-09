@@ -339,6 +339,8 @@ function screenView() {
     },
     _meta: { 'atlas/frame': { id, key, mimeType: 'image/jpeg', data: id } },
   });
+  const notifyFrame = (...args) =>
+    receive({ method: 'ui/notifications/tool-result', params: result(...args) });
   const newerCard = () => channel.onmessage({ data: { newer: 'another-card' } });
   const calls = (name) => messages.filter((message) => message.params?.name === name);
   return {
@@ -348,6 +350,7 @@ function screenView() {
     messages,
     receive,
     result,
+    notifyFrame,
     advance,
     newerCard,
     calls,
@@ -880,11 +883,9 @@ for (const [tab, tool, panel, rows, fallback] of [
 
 for (const reply of ['poll', 'notification']) {
   test(`a late ${reply} cannot revive a retired card's picture or control`, async () => {
-    const { node, receive, result, newerCard, messages, calls, advance, broadcasts } = screenView();
-    await receive({
-      method: 'ui/notifications/tool-result',
-      params: result('old', 'old-key', 100, 100),
-    });
+    const { node, receive, result, notifyFrame, newerCard, messages, calls, advance, broadcasts } =
+      screenView();
+    await notifyFrame('old', 'old-key', 100, 100);
     const initialize = messages.find((message) => message.method === 'ui/initialize');
     await receive({ id: initialize.id, result: {} });
     const poll = calls('screen_frame')[0];
@@ -906,11 +907,8 @@ for (const reply of ['poll', 'notification']) {
 }
 
 test('teardown during acquisition still releases the control that eventually arrives', async () => {
-  const { node, receive, result, calls, messages, advance } = screenView();
-  await receive({
-    method: 'ui/notifications/tool-result',
-    params: result('old', 'old-key', 100, 100),
-  });
+  const { node, receive, result, notifyFrame, calls, messages, advance } = screenView();
+  await notifyFrame('old', 'old-key', 100, 100);
   const taking = node('[data-take]').fire('click');
   await receive({ id: 'teardown', method: 'ui/resource-teardown' });
   assert.ok(messages.some((message) => message.id === 'teardown' && message.result));
@@ -933,12 +931,9 @@ test('teardown during acquisition still releases the control that eventually arr
 });
 
 test('giving back during acquisition also releases a later successful acquisition', async () => {
-  const { node, receive, result, calls } = screenView();
+  const { node, receive, result, notifyFrame, calls } = screenView();
   const taking = node('[data-take]').fire('click');
-  await receive({
-    method: 'ui/notifications/tool-result',
-    params: result('acquired', 'acquired-key', 100, 100, true),
-  });
+  await notifyFrame('acquired', 'acquired-key', 100, 100, true);
   const givingBack = node('[data-take]').fire('click');
   await receive({
     id: calls('give_back')[0].id,
@@ -959,11 +954,8 @@ test('giving back during acquisition also releases a later successful acquisitio
 });
 
 test('a controlling card ignores a newer card and continues keeping control', async () => {
-  const { node, receive, result, newerCard, calls, advance } = screenView();
-  await receive({
-    method: 'ui/notifications/tool-result',
-    params: result('controlled', 'controlled-key', 100, 100, true),
-  });
+  const { node, notifyFrame, newerCard, calls, advance } = screenView();
+  await notifyFrame('controlled', 'controlled-key', 100, 100, true);
   newerCard();
   await advance(4000);
   assert.equal(node('[data-label]').textContent, 'You have control');
@@ -972,18 +964,12 @@ test('a controlling card ignores a newer card and continues keeping control', as
 });
 
 test('taking control of a changed paused picture refuses clicks until the fresh picture is shown', async () => {
-  const { node, listeners, messages, receive, result } = screenView();
+  const { node, listeners, messages, receive, result, notifyFrame } = screenView();
   const picture = node('[data-frame]');
-  await receive({
-    method: 'ui/notifications/tool-result',
-    params: result('old', 'old-key', 1000, 800),
-  });
+  await notifyFrame('old', 'old-key', 1000, 800);
   picture.load();
   node('[data-pause]').fire('click');
-  await receive({
-    method: 'ui/notifications/tool-result',
-    params: result('moved', 'moved-key', 800, 1000),
-  });
+  await notifyFrame('moved', 'moved-key', 800, 1000);
   assert.equal(picture.getAttribute('src'), 'data:image/jpeg;base64,old');
 
   const taking = node('[data-take]').fire('click');
@@ -1019,10 +1005,7 @@ test('taking control of a changed paused picture refuses clicks until the fresh 
     modifiers: [],
   });
   listeners.get('mouseup')({ clientX: 50, clientY: 50 });
-  await receive({
-    method: 'ui/notifications/tool-result',
-    params: result('later', 'later-key', 1000, 800, true),
-  });
+  await notifyFrame('later', 'later-key', 1000, 800, true);
   picture.load();
   await receive({ id: sent()[0].id, result: { structuredContent: { control: true } } });
   assert.equal(sent().length, 2);
@@ -1046,7 +1029,7 @@ for (const [name, release] of [
 ]) {
   test(name, async () => {
     const page = screenView();
-    const { node, listeners, messages, receive, result } = page;
+    const { node, listeners, messages, receive, notifyFrame } = page;
     const sent = () => messages.filter((message) => message.params?.name === 'send_input');
     const press = () =>
       node('[data-screen]').fire('mousedown', {
@@ -1055,17 +1038,11 @@ for (const [name, release] of [
         clientY: 50,
         preventDefault() {},
       });
-    await receive({
-      method: 'ui/notifications/tool-result',
-      params: result('first', 'first-key', 800, 1000, true),
-    });
+    await notifyFrame('first', 'first-key', 800, 1000, true);
     node('[data-frame]').load();
     press();
     assert.equal(sent().length, 1);
-    await receive({
-      method: 'ui/notifications/tool-result',
-      params: result('next', 'next-key', 1000, 800, true),
-    });
+    await notifyFrame('next', 'next-key', 1000, 800, true);
     listeners.get('mousemove')({ clientX: 90, clientY: 90 });
     release(page);
     await receive({ id: sent()[0].id, result: { structuredContent: { control: true } } });
@@ -1823,10 +1800,7 @@ test('the view takes the whole status from _meta, and from beside the facts from
 
 test('a gathered scroll keeps its original observation across an ordinary picture update', async () => {
   const page = screenView();
-  await page.receive({
-    method: 'ui/notifications/tool-result',
-    params: page.result('one', 'key-one', 100, 100, true),
-  });
+  await page.notifyFrame('one', 'key-one', 100, 100, true);
   page.node('[data-frame]').load();
   page.node('[data-screen]').fire('wheel', {
     deltaX: 0,
@@ -1837,10 +1811,7 @@ test('a gathered scroll keeps its original observation across an ordinary pictur
     preventDefault() {},
   });
   await page.advance(20);
-  await page.receive({
-    method: 'ui/notifications/tool-result',
-    params: page.result('two', 'key-two', 100, 100, true),
-  });
+  await page.notifyFrame('two', 'key-two', 100, 100, true);
   page.node('[data-frame]').load();
   await page.advance(40);
   assert.equal(page.calls('send_input').length, 1);
@@ -1855,10 +1826,7 @@ for (const invalidate of ['geometry', 'give-back', 'retire']) {
     const page = screenView();
     const initialized = page.messages.find((message) => message.method === 'ui/initialize');
     await page.receive({ id: initialized.id, result: {} });
-    await page.receive({
-      method: 'ui/notifications/tool-result',
-      params: page.result('one', 'key-one', 100, 100, true),
-    });
+    await page.notifyFrame('one', 'key-one', 100, 100, true);
     page.node('[data-frame]').load();
     page.node('[data-screen]').fire('wheel', {
       deltaX: 0,
@@ -1869,10 +1837,7 @@ for (const invalidate of ['geometry', 'give-back', 'retire']) {
       preventDefault() {},
     });
     if (invalidate === 'geometry') {
-      await page.receive({
-        method: 'ui/notifications/tool-result',
-        params: page.result('two', 'key-two', 200, 100, true),
-      });
+      await page.notifyFrame('two', 'key-two', 200, 100, true);
       page.node('[data-frame]').load();
     } else if (invalidate === 'retire')
       await page.receive({ method: 'ui/resource-teardown', id: 500 });
@@ -1883,10 +1848,7 @@ for (const invalidate of ['geometry', 'give-back', 'retire']) {
         result: { structuredContent: { control: false } },
       });
       await giving;
-      await page.receive({
-        method: 'ui/notifications/tool-result',
-        params: page.result('one', 'key-one', 100, 100, true),
-      });
+      await page.notifyFrame('one', 'key-one', 100, 100, true);
       page.node('[data-frame]').load();
     }
     await page.advance(60);
@@ -1896,10 +1858,7 @@ for (const invalidate of ['geometry', 'give-back', 'retire']) {
 
 test('visible control releases when picture calls fail even while renewals keep succeeding', async () => {
   const page = screenView();
-  await page.receive({
-    method: 'ui/notifications/tool-result',
-    params: page.result('one', 'key-one', 100, 100, true),
-  });
+  await page.notifyFrame('one', 'key-one', 100, 100, true);
   page.node('[data-frame]').load();
   const initialized = page.messages.find((message) => message.method === 'ui/initialize');
   await page.receive({ id: initialized.id, result: {} });
@@ -1930,10 +1889,7 @@ test('visible control releases when picture calls fail even while renewals keep 
 
 test('a confirmed unchanged displayed picture refreshes the control deadline', async () => {
   const page = screenView();
-  await page.receive({
-    method: 'ui/notifications/tool-result',
-    params: page.result('one', 'key-one', 100, 100, true),
-  });
+  await page.notifyFrame('one', 'key-one', 100, 100, true);
   page.node('[data-frame]').load();
   const initialized = page.messages.find((message) => message.method === 'ui/initialize');
   await page.receive({ id: initialized.id, result: {} });
@@ -1980,10 +1936,7 @@ test('thumbnail reads are bounded, shared across refreshes and stop starting wor
 for (const transportFailure of [false, true]) {
   test(`a ${transportFailure ? 'lost' : 'refused'} stale-picture release keeps its failure visible`, async () => {
     const page = screenView();
-    await page.receive({
-      method: 'ui/notifications/tool-result',
-      params: page.result('one', 'key-one', 100, 100, true),
-    });
+    await page.notifyFrame('one', 'key-one', 100, 100, true);
     page.node('[data-frame]').load();
     await page.advance(6500);
     const release = page.calls('give_back')[0];

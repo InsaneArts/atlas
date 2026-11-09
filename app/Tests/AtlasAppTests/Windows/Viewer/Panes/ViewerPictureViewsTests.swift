@@ -18,13 +18,6 @@ struct ViewerPictureViewsTests {
   )
 
   /// A viewer on Activity over two clicks in TextEdit, each with its picture before, the second with one after.
-  ///
-  /// - Parameters:
-  ///   - service: The scripted service.
-  ///   - clock: The clock a replay plays on.
-  ///   - shotOutlet: Where copied pictures go and how files are shown.
-  /// - Returns: The viewer, its log read.
-  /// - Throws: The failed requirement, when the log is never read.
   static func onActivity(
     _ service: ScriptedService,
     clock: ManualClock = ManualClock(),

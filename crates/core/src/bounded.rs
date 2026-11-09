@@ -304,25 +304,7 @@ fn poll_pipes(
 }
 
 fn observe_exit(child: &Child) -> io::Result<bool> {
-    observe_exit_using(child, |pid| {
-        crate::process::child_exited(pid).map(|exited| if exited { pid as i32 } else { 0 })
-    })
-}
-
-fn observe_exit_using(
-    child: &Child,
-    mut observe: impl FnMut(u32) -> io::Result<i32>,
-) -> io::Result<bool> {
-    let pid = command_pid(child.id())?.as_raw();
-    loop {
-        match observe(pid as u32) {
-            Ok(0) => return Ok(false),
-            Ok(observed) if observed == pid => return Ok(true),
-            Ok(_) => return Err(io::Error::other("Unexpected command process identity")),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(error) => return Err(error),
-        }
-    }
+    crate::process::child_exited(child.id())
 }
 
 fn reap(child: &mut Child) -> io::Result<std::process::ExitStatus> {

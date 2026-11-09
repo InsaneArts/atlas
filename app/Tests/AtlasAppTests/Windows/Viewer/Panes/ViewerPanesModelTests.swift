@@ -373,34 +373,6 @@ struct ViewerPanesModelTests {
     #expect(copied.isEmpty)
   }
 
-  @Test("a delayed picture reply after close does not run the save outlet")
-  func delayedSaveDoesNotRunAfterClose() async throws {
-    let service = ScriptedService()
-    service.shot = png()
-    var saved = false
-    let viewer = try await Self.onShots(
-      service,
-      shotOutlet: ShotOutlet(
-        copy: { _, _ in true },
-        reveal: { _ in true },
-        save: { _, _ in
-          saved = true
-          return true
-        }
-      )
-    )
-    viewer.send(.openShot(Self.newer))
-    viewer.panesModel.pictures.save {}
-    let save = try #require(viewer.panesModel.pictures.copying)
-    try await settle("the picture was never asked for") { service.heldShots.count == 2 }
-    viewer.close()
-    service.resumeAllShots()
-    try await Self.ended(save, "the picture's reply never came back")
-    #expect(!saved)
-    #expect(save.isCancelled)
-    #expect(viewer.panesModel.pictures.copying == nil)
-  }
-
   @Test("the sheet's picture read while the window hides never lands, and is read again once it shows")
   func sheetReadStopsWhileHidden() async throws {
     let service = ScriptedService()

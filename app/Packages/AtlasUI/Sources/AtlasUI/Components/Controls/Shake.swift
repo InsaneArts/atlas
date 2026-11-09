@@ -18,8 +18,6 @@ struct Shake: ViewModifier {
       .keyframeAnimator(initialValue: CGFloat.zero, trigger: trigger) { shaken, offset in
         shaken.offset(x: offset)
       } keyframes: { _ in
-        // The refusal shake: left 5, right 5, left 3, right 3, home, in five even steps; read as the refusal
-        // comes, so under Reduce Motion every step stays home.
         let swings = Self.swings(reduceMotion: reduceMotion)
         KeyframeTrack {
           LinearKeyframe(swings[0], duration: ShakeLayout.step)
