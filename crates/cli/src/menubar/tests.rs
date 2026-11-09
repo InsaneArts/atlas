@@ -1316,6 +1316,11 @@ fn a_second_menu_bar_refuses_while_one_serves_and_leaves_its_record_alone() {
         error.error,
         "The menu bar already runs as process 4242 on port 8799"
     );
+    assert_eq!(
+        error.details["next"],
+        atlas_core::error::advice::MENUBAR_RUNNING,
+        "it says to use the running one or quit it, not that Atlas works without it"
+    );
     assert_eq!(fs::read(&record).unwrap(), written);
 
     fs::remove_file(&record).unwrap();

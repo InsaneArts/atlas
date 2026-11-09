@@ -58,6 +58,10 @@ pub(crate) fn alone(output: &Path) -> Result<atlas_core::files::LockFile> {
             || "Another menu bar already runs".to_owned(),
             |(pid, port)| format!("The menu bar already runs as process {pid} on port {port}"),
         ),
+    )
+    .with(
+        "next",
+        serde_json::json!(atlas_core::error::advice::MENUBAR_RUNNING),
     ))
 }
 
