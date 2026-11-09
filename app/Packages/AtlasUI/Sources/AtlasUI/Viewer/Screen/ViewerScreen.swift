@@ -38,6 +38,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
         .accessibilityLabel(Text(verbatim: "The helper's screen"))
     } else if let empty = state.empty {
       WaitingStage(empty: empty, send: send)
+        .overlay { ScreenBanners(state: state, send: send) }
     }
   }
 
@@ -54,6 +55,7 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
         spotlight(size)
       }
       .overlay { ViewerControlEdge(isInControl: state.look == .inControl) }
+      .overlay { ScreenBanners(state: state, send: send) }
     } else {
       ZStack {
         treated(picture)
@@ -64,6 +66,8 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
       .overlay { ViewerControlEdge(isInControl: state.look == .inControl, corner: corner) }
       .screenZoom(in: zoom)
       .aspectRatio(size, contentMode: .fit)
+      // Inside the picture and its edge, never across them.
+      .overlay { ScreenBanners(state: state, send: send) }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
   }
