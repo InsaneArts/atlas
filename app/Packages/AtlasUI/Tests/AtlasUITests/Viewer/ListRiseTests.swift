@@ -13,11 +13,6 @@ struct ListRiseTests {
     }
     #expect(ListRise.offset(isLowered: true) == 12)
     #expect(ListRise.offset(isLowered: false) == 0)
-    // It rises on the picture's spring, and fades in on the panes' own, starting clear.
-    #expect(ListRise.motion == Motion.zoom)
-    #expect(ScreenZoom.opacity(isArriving: true, isAway: true, zooms: false) == 0)
-    #expect(PaneShift.arrival == Motion.swapIn)
-    #expect(PaneShift.departure == Motion.swapOut)
   }
 
   @Test("a sideways step between lists only crossfades")

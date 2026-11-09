@@ -1255,7 +1255,6 @@ if (typeof document !== 'undefined') {
     if (model.ours) event.preventDefault();
   });
   screen.addEventListener('mousedown', (event) => {
-    // The main and secondary buttons; others have nothing to press there.
     const frame = inputFrame(model);
     if (!frame || (event.button !== 0 && event.button !== 2)) return;
     const point = pointAt(imageRect(), event.clientX, event.clientY, model.points);
@@ -1795,7 +1794,6 @@ if (typeof document !== 'undefined') {
   });
 
   document.addEventListener('visibilitychange', schedule);
-  // A frame that becomes narrow or wide changes layout.
   window.addEventListener('resize', render);
 
   one('[data-action]').addEventListener('click', async () => {
