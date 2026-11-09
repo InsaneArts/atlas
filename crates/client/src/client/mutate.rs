@@ -531,12 +531,12 @@ impl Client {
         }
 
         let mut warnings = Vec::new();
-        // A command an agent ran may leave work running in its group: it is
-        // kept before the command stops counting as running, so the person
-        // never signs in beside it. Work that can't be noted keeps the
-        // command's claim, as an unknown outcome, until a later look notes
-        // it or finds it ended.
-        if command
+        // Any command run in the helper under a claim (an agent's own, an
+        // environment's step, an app opened) may leave work running in its
+        // group: it is kept before its claim is cleared, so the person never
+        // signs in beside it. Work that can't be noted keeps the claim, as
+        // an unknown outcome, until a later look notes it or finds it ended.
+        if request["op"] == "run"
             && reply["uncertain"] != true
             && let Some(group) = started_group(&reply)
             && let Err(error) = self
