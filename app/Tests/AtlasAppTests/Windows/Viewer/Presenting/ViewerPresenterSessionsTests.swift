@@ -19,14 +19,16 @@ struct ViewerPresenterSessionsTests {
     let none = ViewerPresenter.state(try .listing([]))
     #expect(none.sidebar.sessions.groups.isEmpty)
     #expect(none.sidebar.sessions.liveCount == 0, "All sessions says no count")
-    #expect(none.sidebar.sessions.chosen == .all)
+    #expect(none.sidebar.sessions.chosen == nil, "the Screen draws no row chosen")
     var one = try ViewerSnapshot.listing([SessionReplies.claudeActing])
     #expect(ViewerPresenter.sessions(one).rows(.working).map(\.name) == ["understudy"])
     #expect(ViewerPresenter.header(one).what.isEmpty, "one session has the helper, but no one is told apart")
     one.session.chosenSession = .one("3f9a1c07b2e4")
-    let chosen = ViewerPresenter.sessions(one)
-    #expect(chosen.chosen == .one("3f9a1c07b2e4"))
-    let three = try ViewerSnapshot.listing(Self.three)
+    #expect(ViewerPresenter.sessions(one).chosen == nil, "the Screen draws no row chosen")
+    one.session.place = .activity
+    #expect(ViewerPresenter.sessions(one).chosen == .one("3f9a1c07b2e4"), "Activity draws its session chosen")
+    var three = try ViewerSnapshot.listing(Self.three)
+    three.session.place = .activity
     let column = ViewerPresenter.sessions(three)
     #expect(column.chosen == .all)
     #expect(column.icons.count == 3)
@@ -322,6 +324,20 @@ struct ViewerPresenterSessionsTests {
     var unread = ViewerSnapshot.presenterSample
     unread.session.chosenSession = .one("3f9a1c07b2e4")
     #expect(unread.shownSessions == .one("3f9a1c07b2e4"), "before the first reading the choice holds")
+  }
+
+  @Test("Activity names whose work it lists, so a new session choice is another list")
+  func activityNamesTheSessionShown() throws {
+    var snapshot = try ViewerSnapshot.listing(Self.three)
+    #expect(ViewerPresenter.activity(snapshot).list == ViewerActivityListKey(session: .all, filter: .all))
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
+    snapshot.panes.activity.filter = .problems
+    #expect(
+      ViewerPresenter.activity(snapshot).list
+        == ViewerActivityListKey(session: .one("3f9a1c07b2e4"), filter: .problems)
+    )
+    snapshot.session.chosenSession = .one("c0ffee5e5510")
+    #expect(ViewerPresenter.activity(snapshot).session == .all, "a session gone shows every session's work")
   }
 
   @Test("the header names the session that has the helper, and gives way to pause and control")

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A link's look for a button among a row's words, such as Open or Show on screen: link-blue small text, dimmed while
+/// A link's look for a button among a row's words, such as Open or Show in Finder: link-blue small text, dimmed while
 /// pressed, at once under Reduce Motion. A style, not a view, so the control stays a `Button` with its own label, help and disabled state.
 struct TextLinkStyle: ButtonStyle {
   /// A pressed link dims like a link in a Mac app.
@@ -49,7 +49,7 @@ struct TextLinkStyle: ButtonStyle {
         .buttonStyle(.textLink)
       Button {
       } label: {
-        Label(String("Show on screen"), systemImage: "eye")
+        Label(String("Show in Finder"), systemImage: "folder")
       }
       .buttonStyle(.textLink)
     }

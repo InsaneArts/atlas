@@ -107,7 +107,7 @@ struct ViewerPanesModelTests {
     viewer.send(.show(.activity))
     try await settle("Activity was never read") { service.activityCalls == 1 }
     let first = viewer.panesModel.work.reading
-    viewer.send(.show(.apps))
+    viewer.send(.show(.screen))
     try await Self.ended(first, "Activity's reading went on after its tab was left")
     #expect(service.activityCalls == 1)
     viewer.send(.show(.activity))
@@ -186,14 +186,14 @@ struct ViewerPanesModelTests {
     viewer.close()
   }
 
-  @Test("leaving Activity for Apps lets the thumbnail queue go, so a reply starts no queued request")
+  @Test("leaving Activity for the Screen lets the thumbnail queue go, so a reply starts no queued request")
   func appsLetsTheThumbnailsGo() async throws {
     let service = ScriptedService()
     let viewer = try await Self.onShots(service)
     for name in ["1-capture.png", "2-capture.png", "3-capture.png"] { viewer.send(.thumbnailNeeded(name)) }
     try await settle("two thumbnails were never asked for") { service.heldShots.count == 2 }
     let first = viewer.panesModel.thumbnails.work.loading["1-capture.png"]
-    viewer.send(.show(.apps))
+    viewer.send(.show(.screen))
     try await Self.answer(service, "1-capture.png", full: false)
     try await Self.ended(first, "the first thumbnail's reply never came back")
     #expect(service.shotCalls == 2, "the third thumbnail was never asked for")
@@ -473,27 +473,5 @@ struct ViewerPanesModelTests {
     #expect(Self.sheet(viewer)?.canShowInFinder == false)
     viewer.send(.showPictureInFinder)
     #expect(revealed.count == 1, "no file is shown while the folder is unknown")
-  }
-
-  @Test("Clear removes the outline and nothing else")
-  func clearRemovesOnlyTheOutline() async throws {
-    let service = ScriptedService()
-    service.openApps = [
-      HelperApp(
-        pid: 7,
-        name: "Opie",
-        windows: [HelperWindow(id: 3, title: "Ring settings", x: 100, y: 80, width: 520, height: 860)]
-      )
-    ]
-    let viewer = try await ViewerController.watching(service)
-    viewer.send(.show(.apps))
-    try await settle("the apps were never read") { viewer.panes.apps.apps != nil }
-    viewer.send(.show(.screen))
-    let before = viewer.state
-    viewer.send(.showWindow(app: 7, window: 3))
-    try #require(viewer.state.screen.outline != nil, "the window was outlined")
-    viewer.send(.clearOutline)
-    #expect(viewer.state == before)
-    viewer.close()
   }
 }

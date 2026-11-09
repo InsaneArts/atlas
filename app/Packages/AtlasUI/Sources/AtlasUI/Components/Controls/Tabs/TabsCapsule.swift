@@ -174,7 +174,7 @@ struct TabsCapsule<Tab: Hashable & Sendable, Accessory: View>: View {
       if style == .segment, controlSize != .small, let count = tab.count {
         Text(verbatim: "\(count)")
           .font(Typography.digits(.caption, weight: .medium))
-          .foregroundStyle(Color.textTertiary)
+          .foregroundStyle(Color.textSecondary)
       }
     }
     .modifier(TabsAccessory(accessory: accessory(tab.id), gap: accessoryGap))

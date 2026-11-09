@@ -15,6 +15,10 @@
     public static let tenths: [Double] = (0...10)
       .map { Double($0) / 10 }
 
+    /// The moments a change timed on the clock draws (``Lead/clock``): 0, 50, 100, 150, 250 and 500 milliseconds
+    /// after it.
+    public static let clockMoments: [Double] = [0, 0.05, 0.1, 0.15, 0.25, 0.5]
+
     /// 1/120 s: how far a render moves the held moment at a time on its way to a frame, as finely as a fast display
     /// draws, so what one animation's end starts begins where it does on screen.
     public static let tick: TimeInterval = 1.0 / 120
@@ -46,6 +50,9 @@
       /// A list's change in its three beats, rows leaving fading out, the rest moving on the spring, then rows
       /// arriving fading in (``Motion/listMove``, ``Motion/listIn``): the frames stand in each beat's middle.
       case list(Spring)
+      /// The clock itself: each step is the seconds since the change, for a change read in milliseconds, such as a
+      /// list swapped for another.
+      case clock
     }
 
     /// A transition from `from` to `to` in a window of `size`, its frames spaced along `lead`.
@@ -77,19 +84,22 @@
     }
 
     /// A key frame's file name: the transition's, then the step as a share of a hundred, such as
-    /// `motion-sidebar-collapse-050`.
+    /// `motion-sidebar-collapse-050`, or on the clock in milliseconds, such as `motion-session-choose-050ms`.
     ///
     /// - Parameter step: The share of the leading move, from 0 to 1.
     /// - Returns: The name, without its extension.
     public func file(at step: Double) -> String {
-      "motion-\(name)-" + String(format: "%03d", Int((step * 100).rounded()))
+      guard case .clock = lead else {
+        return "motion-\(name)-" + String(format: "%03d", Int((step * 100).rounded()))
+      }
+      return "motion-\(name)-" + String(format: "%03dms", Int((step * 1000).rounded()))
     }
 
     /// The moment, in seconds since the change, a key frame draws: for one spring, the moment it has gone `step` of
     /// the way, the change itself at 0 and the moment it settles at 1; for a list's change, each quarter a beat of
     /// it, the change at 0, the rows leaving half faded at 0.25, the rows moving half way at 0.5, the rows arriving
-    /// half faded in at 0.75 and everything settled at 1, and between, a share of the way from one to the next; at
-    /// the rate motion plays.
+    /// half faded in at 0.75 and everything settled at 1, and between, a share of the way from one to the next; on the
+    /// clock, the step itself; at the rate motion plays.
     ///
     /// - Parameter step: The share of the transition, from 0 to 1.
     /// - Returns: The moment.
@@ -112,6 +122,8 @@
         let below = min(Int(place.rounded(.down)), beats.count - 2)
         let share = place - Double(below)
         return (beats[below] + (beats[below + 1] - beats[below]) * share) / Motion.playbackRate
+      case .clock:
+        return step / Motion.playbackRate
       }
     }
 

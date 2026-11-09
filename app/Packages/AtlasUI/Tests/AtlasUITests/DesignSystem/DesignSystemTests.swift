@@ -168,7 +168,7 @@ struct DesignSystemTests {
     let steps =
       [Radius.extraSmall, Radius.small, Radius.medium, Radius.large, Radius.extraLarge, Radius.window]
       + [IconSize.xxs, IconSize.xs, IconSize.xsPlus, IconSize.s, IconSize.sPlus, IconSize.m]
-      + [IconSize.mPlus, IconSize.l, IconSize.xl, IconSize.xlPlus, IconSize.xxl]
+      + [IconSize.mPlus, IconSize.l, IconSize.xl, IconSize.xxl]
       + shadows
     for step in steps {
       #expect(step.truncatingRemainder(dividingBy: 2) == 0, "\(step)")
@@ -186,7 +186,6 @@ struct DesignSystemTests {
       ("fillGroup", .fillGroup, .white, 0.05),
       ("fillRowHover", .fillRowHover, .white, 0.035),
       ("fillTile", .fillTile, .white, 0.045),
-      ("fillTileRaised", .fillTileRaised, .white, 0.1),
       ("fillControlHover", .fillControlHover, .white, 0.12),
       ("strokeHighlight", .strokeHighlight, .white, 0.12),
       ("dropShadowSoft", .dropShadowSoft, .black, 0.4),

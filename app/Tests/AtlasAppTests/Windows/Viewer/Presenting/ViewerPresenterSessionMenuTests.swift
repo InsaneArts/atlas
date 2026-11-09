@@ -68,7 +68,7 @@ struct ViewerPresenterSessionMenuTests {
       .split(separator: "\n")
       .map(String.init)
     #expect(Array(lines.prefix(2)) == ["understudy", "Clicking Show Center in Opie"])
-    // Before the Apps list has read anything, an app reads by its name alone.
+    // An app the session opened reads by its name alone.
     #expect(
       Array(lines.dropFirst(2)) == [
         "Host: Claude Code", "Folder: understudy", "Started: 09:12", "Last seen: just now", "Opie", "Notes",
@@ -80,9 +80,6 @@ struct ViewerPresenterSessionMenuTests {
     #expect(details.title == "Details")
     #expect(details.items.allSatisfy { $0.isInfo && !$0.isEnabled }, "facts cannot be chosen")
     #expect(details.items.map(\.title) == Array(lines.dropFirst(2)), "the menu lists the tooltip's facts")
-    snapshot.panes.apps.apps = [HelperApp(pid: 1, name: "Opie")]
-    let opened = try Self.row(Self.key, snapshot).help
-    #expect(opened.contains("Opie: Open · a copy") && opened.contains("Notes: Closed"))
     // A live session the list does not name yet has the status's own facts.
     #expect(
       try Self.row("8be20c4d1a77", snapshot).help

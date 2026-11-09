@@ -1,6 +1,6 @@
 import AtlasUI
 
-/// The apps' icons the window has found, which Activity and Apps draw: each by what it is known by, and the bundle
+/// The apps' icons the window has found, which Activity draws: each by what it is known by, and the bundle
 /// identifier each app's name was seen with, so a row that names only an app finds the icon found for its bundle.
 struct ViewerIconsFacts {
   /// The current pane's icons, retained by key independently of the shared repository's cache eviction.

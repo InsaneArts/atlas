@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// The helper line's tooltip: every fact about the helper, one a line, as the window lists them.
+    /// Every fact about the helper, one a line, as the head of the helper row's menu lists them.
     ///
     /// - Parameters:
     ///   - state: Whether input is ready, such as "Ready".
@@ -9,35 +9,37 @@
     ///   - picture: How often the picture updates; Live by default.
     ///   - newest: How old the newest picture is; just now by default.
     ///   - login: When the helper logged in and the agents connected, once read; none by default.
-    /// - Returns: The tooltip.
-    static func viewerHelperHelp(
+    /// - Returns: The facts.
+    static func viewerHelperFacts(
       state: String = "Ready",
       display: String = "1440 × 900",
       ready: [String] = ["Ready to act: All checks pass"],
       picture: String = "Live",
       newest: String = "just now",
       login: [String] = []
-    ) -> String {
-      (["Account: Atlas", "State: \(state)", "Display: \(display)"] + ready
-        + ["Picture: \(picture)", "Newest picture: \(newest)"] + login)
-        .joined(separator: "\n")
+    ) -> [String] {
+      ["Account: Atlas", "State: \(state)", "Display: \(display)"] + ready
+        + ["Picture: \(picture)", "Newest picture: \(newest)"] + login
     }
 
-    /// What a click on the helper line offers, as the Helper menu does.
+    /// What a click on the helper row offers: the facts, then what the Helper menu does.
     ///
     /// - Parameters:
+    ///   - facts: Every fact about the helper; the ready helper's by default.
     ///   - recovers: Whether Recover… would help.
     ///   - logsOut: Whether the helper's state lets it log out; idle, in use elsewhere and stopped do.
     ///   - alertUp: Whether an alert is up, which holds Recover…, Switch… and Log Out….
     ///   - name: The helper's name, once known.
     /// - Returns: The menu's sections.
     static func viewerHelperMenu(
+      facts: [String] = viewerHelperFacts(),
       recovers: Bool = false,
       logsOut: Bool = false,
       alertUp: Bool = false,
       name: String? = "Atlas"
     ) -> [ViewerMenuSection] {
       [
+        ViewerMenuSection(facts.map(ViewerMenuItem.info)),
         ViewerMenuSection([
           ViewerMenuItem("Check Again", command: .checkAgain, shortcut: ViewerMenuShortcut("r")),
           ViewerMenuItem("Open Settings on Helper…", command: .openSettings),
@@ -58,7 +60,7 @@
       ]
     }
 
-    /// The helper line while it can act.
+    /// The helper row while it can act.
     ///
     /// - Parameters:
     ///   - logsOut: Whether the helper's state lets it log out.
@@ -74,9 +76,13 @@
     ) -> ViewerHelperLine {
       ViewerHelperLine(
         tone: .ready,
-        words: "Helper ready · atlas",
-        help: viewerHelperHelp(state: state, picture: picture),
-        menu: viewerHelperMenu(logsOut: logsOut, alertUp: alertUp)
+        title: "Atlas is ready",
+        line: "Helper atlas · 1440 × 900",
+        menu: viewerHelperMenu(
+          facts: viewerHelperFacts(state: state, picture: picture),
+          logsOut: logsOut,
+          alertUp: alertUp
+        )
       )
     }
 

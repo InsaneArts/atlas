@@ -3,45 +3,71 @@ import AtlasStatus
 import AtlasUI
 
 extension ViewerPresenter {
-  /// The helper's health at the sidebar's foot: ready with its short name while it can act, in green; needing setup
-  /// with how many readiness checks do not pass, in orange, while any does not, or the helper is not ready; needing the
-  /// person, or logged out, in orange; connecting, in grey. Save and Open dialogs that do not work are no readiness
-  /// check: the helper stays ready, and its tooltip, which lists every fact about the helper, says they are
-  /// unavailable. A click offers the helper's commands.
+  /// The helper's row at the sidebar's foot: "Atlas is ready" over the helper's short name and display while it can
+  /// act, in green; "Atlas needs setup" over how many readiness checks do not pass, in orange, while any does not, or
+  /// the helper is not ready; "Atlas needs you" while it needs the person to recover it, and "The helper is logged
+  /// out" while it is, each saying what to do in orange; "Connecting to Atlas…" in grey. Save and Open dialogs that do
+  /// not work are no readiness check: the helper stays ready, and its menu, which lists every fact about the helper,
+  /// says they are unavailable. A click offers the facts and the helper's commands.
   ///
   /// - Parameter snapshot: What the controller holds.
-  /// - Returns: The line.
+  /// - Returns: The row.
   static func helperLine(_ snapshot: ViewerSnapshot) -> ViewerHelperLine {
-    let status = snapshot.reading.status
+    let reading = snapshot.reading
     let failing =
-      snapshot.reading.statusReading.readinessItems
+      reading.statusReading.readinessItems
       .filter { $0.state == .notReady }
       .count
-    let (tone, words): (StatusTone, String) =
-      switch snapshot.mode.kind {
-      case .connecting: (.quiet, ViewerWords.helperConnecting)
-      case .loggedOut: (.attention, ViewerWords.helperLoggedOut)
-      case .needsYou: (.attention, ViewerWords.helperNeedsYou)
-      case .notReady: (.attention, ViewerWords.helperNeedsSetup(failing))
-      case .idle, .working, .control, .stopped, .inUseElsewhere:
-        failing > 0
-          ? (.attention, ViewerWords.helperNeedsSetup(failing))
-          : (.ready, ViewerWords.helperReady(status.overview.account ?? account(status)))
-      }
-    return ViewerHelperLine(
-      tone: tone,
-      words: words,
-      help: helperFacts(snapshot)
-        .map(ViewerWords.factLine)
-        .joined(separator: "\n"),
-      menu: helperLineMenu(snapshot)
+    let name = reading.hasStatus ? reading.status.overview.account ?? account(reading.status) : nil
+    let menu = helperLineMenu(snapshot)
+    let needsSetup = ViewerHelperLine(
+      tone: .attention,
+      title: ViewerWords.helperSetupTitle,
+      line: failing > 0 ? ViewerWords.checksFailing(failing) : ViewerWords.helperNamed(name),
+      lineTone: .attention,
+      menu: menu
     )
+    switch snapshot.mode.kind {
+    case .connecting:
+      return ViewerHelperLine(
+        tone: .quiet,
+        title: ViewerWords.helperConnectingTitle,
+        line: ViewerWords.helperNamed(name),
+        menu: menu
+      )
+    case .loggedOut:
+      return ViewerHelperLine(
+        tone: .attention,
+        title: ViewerWords.helperLoggedOutTitle,
+        line: ViewerWords.logInLine(name),
+        lineTone: .attention,
+        menu: menu
+      )
+    case .needsYou:
+      return ViewerHelperLine(
+        tone: .attention,
+        title: ViewerWords.helperNeedsYouTitle,
+        line: ViewerWords.recoverLine,
+        lineTone: .attention,
+        menu: menu
+      )
+    case .notReady:
+      return needsSetup
+    case .idle, .working, .control, .stopped, .inUseElsewhere:
+      guard failing == 0 else { return needsSetup }
+      return ViewerHelperLine(
+        tone: .ready,
+        title: ViewerWords.helperReadyTitle,
+        line: ViewerWords.helperNamed(name, display: Words.size(reading.statusReading.facts.display)),
+        menu: menu
+      )
+    }
   }
 
-  /// What a click on the helper's line offers, as the Helper menu does and with its rules: Check Again (⌘R), which
-  /// waits while a check runs, and Open Settings on Helper…; Recover… while it would help; then Switch to the
-  /// Helper… and Log Out the Helper…, named once the helper is known. Recover…, Switch… and Log Out… wait while an
-  /// alert is up.
+  /// What a click on the helper's row offers: every fact about the helper, read-only, then as the Helper menu does
+  /// and with its rules, Check Again (⌘R), which waits while a check runs, and Open Settings on Helper…; Recover…
+  /// while it would help; then Switch to the Helper… and Log Out the Helper…, named once the helper is known.
+  /// Recover…, Switch… and Log Out… wait while an alert is up.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The menu's sections.
@@ -50,6 +76,7 @@ extension ViewerPresenter {
     let alertUp = alert(snapshot) != nil
     let name = snapshot.reading.hasStatus ? account(snapshot.reading.status) : nil
     return [
+      ViewerMenuSection(helperFacts(snapshot).map { .info(ViewerWords.factLine($0)) }),
       ViewerMenuSection([
         ViewerMenuItem(
           ViewerWords.checkAgainItem,

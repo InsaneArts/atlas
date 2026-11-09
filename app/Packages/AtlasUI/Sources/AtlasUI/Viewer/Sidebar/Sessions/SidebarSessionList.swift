@@ -5,9 +5,10 @@ import SwiftUI
 /// as the rows between open and close the gap, and a heading that comes or goes fades as its room opens or closes. Only
 /// the list's order moves it, never a row's changing line. Ended's rows come in from under its heading and go back up
 /// under it. The selection moves to the row chosen at once; ↑ and ↓ step through the rows in the order they
-/// stand once one has the keyboard focus, moving the focus with the choice. A right click on a session's row opens its
-/// menu: its Activity and screenshots, Send Key, Recover… and Clean Up This Session's Work… as they apply, and its
-/// facts. Under Reduce Motion rows and headings only fade, briefly.
+/// stand once one has the keyboard focus, moving the focus with the choice. While the Screen shows no row is selected,
+/// and choosing any row, the one Activity last showed included, opens its Activity. A right click on a session's row
+/// opens its menu: its Activity and screenshots, Send Key, Recover… and Clean Up This Session's Work… as they apply,
+/// and its facts. Under Reduce Motion rows and headings only fade, briefly.
 struct SidebarSessionList: View {
   /// The sessions.
   let state: ViewerSessionsState
@@ -65,7 +66,7 @@ struct SidebarSessionList: View {
     }
   }
 
-  /// A row that shows `choice`'s work when pressed, selected while it shows.
+  /// A row that shows `choice`'s work in Activity when pressed, selected while Activity shows it.
   ///
   /// - Parameters:
   ///   - choice: Whose work the row shows.

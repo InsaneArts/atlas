@@ -86,7 +86,7 @@
       #expect(rows.contains { $0.isCleaningUp }, "a session's work being cleaned up")
       #expect(rows.contains { $0.help.contains("Last cleanup") }, "a session's last cleanup in its tooltip")
       #expect(
-        states.contains { $0.sidebar.helper.words.hasPrefix("Helper needs setup ·") },
+        states.contains { $0.sidebar.helper.title == "Atlas needs setup" && $0.sidebar.helper.lineTone == .attention },
         "a check that does not pass, counted on the helper's line"
       )
       #expect(states.contains { $0.footer.controls.pause?.isOn == true })
@@ -98,12 +98,10 @@
           case .screen: "screen"
           case .activity(let activity):
             activity.sheet != nil ? "sheet" : activity.empty == nil ? "activity" : "activity, empty"
-          case .apps: "apps"
           }
         }
       )
-      #expect(panes == ["screen", "activity", "activity, empty", "sheet", "apps"])
-      #expect(states.contains { $0.screen.outline != nil })
+      #expect(panes == ["screen", "activity", "activity, empty", "sheet"])
     }
 
     @Test("the settings previews show every pane, alert and update step")

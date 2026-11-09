@@ -9,53 +9,86 @@ import Testing
 
 @Suite("ViewerController+Places")
 struct ViewerControllerPlacesTests {
-  @Test("choosing the shown list again returns to the Screen")
-  func choosingTheShownListAgainReturnsToTheScreen() async throws {
+  /// A session the scripted service lists.
+  static let key = "3f9a1c07b2e4"
+
+  @Test("choosing a session from the Screen opens its Activity")
+  func choosingASessionOpensItsActivity() async throws {
     let viewer = try await ViewerController.watching(ScriptedService())
-    viewer.send(.chooseLibrary(.activity))
+    viewer.send(.chooseSession(.one(Self.key)))
+    #expect(viewer.session.chosenSession == .one(Self.key))
     #expect(viewer.state.pane.place == .activity)
-    viewer.send(.chooseLibrary(.apps))
-    #expect(viewer.state.pane.place == .apps, "another list is a step sideways")
-    viewer.send(.chooseLibrary(.apps))
+    viewer.close()
+  }
+
+  @Test("choosing all sessions from the Screen opens Activity for every session")
+  func choosingAllSessionsOpensActivity() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
+    viewer.send(.chooseSession(.all))
+    #expect(viewer.session.chosenSession == .all)
+    #expect(viewer.state.pane.place == .activity)
+    viewer.close()
+  }
+
+  @Test("choosing the chosen session again from the Screen opens its Activity")
+  func choosingTheChosenSessionAgainOpensItsActivity() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
+    viewer.send(.chooseSession(.one(Self.key)))
+    viewer.send(.show(.screen))
+    try #require(viewer.state.pane.place == .screen)
+    viewer.send(.chooseSession(.one(Self.key)))
+    #expect(viewer.state.pane.place == .activity)
+    viewer.close()
+  }
+
+  @Test("choosing a session while Activity shows narrows it and stays on Activity")
+  func choosingASessionOnActivityNarrowsIt() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
+    viewer.send(.chooseSession(.one(Self.key)))
+    viewer.send(.chooseSession(.all))
+    #expect(viewer.session.chosenSession == .all)
+    #expect(viewer.state.pane.place == .activity)
+    viewer.close()
+  }
+
+  @Test("pressing the corner screen goes back to the Screen")
+  func pressingTheCornerScreenGoesBack() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
+    viewer.send(.chooseSession(.all))
+    try #require(viewer.state.pane.place == .activity)
+    // The corner screen's click sends the Screen, as the view does.
+    viewer.send(.show(.screen))
     #expect(viewer.state.pane.place == .screen)
     viewer.close()
   }
 
-  @Test("choosing a session shows its activity, and choosing all sessions keeps the place shown")
-  func choosingASessionShowsItsActivity() async throws {
+  @Test("no session row is chosen while the Screen shows, and the chosen one is while Activity shows")
+  func theSelectionShowsOnlyOnActivity() async throws {
     let viewer = try await ViewerController.watching(ScriptedService())
-    viewer.send(.chooseSession(.one("3f9a1c07b2e4")))
-    #expect(viewer.session.chosenSession == .one("3f9a1c07b2e4"))
-    #expect(viewer.state.pane.place == .activity)
-    viewer.send(.chooseLibrary(.apps))
-    viewer.send(.chooseSession(.all))
-    #expect(viewer.session.chosenSession == .all)
-    #expect(viewer.state.pane.place == .apps, "every session's work shows where the window is")
+    #expect(viewer.state.sidebar.sessions.chosen == nil)
+    viewer.send(.chooseSession(.one(Self.key)))
+    #expect(viewer.state.sidebar.sessions.chosen != nil)
+    #expect(viewer.state.sidebar.sessions.chosen == viewer.snapshot.shownSessions)
+    viewer.send(.show(.screen))
+    #expect(viewer.state.sidebar.sessions.chosen == nil)
+    #expect(viewer.session.chosenSession == .one(Self.key), "the choice is kept for Activity")
     viewer.close()
   }
 
-  @Test("choosing a session narrows the list that shows, and opens Activity only from the Screen")
-  func choosingASessionNarrowsTheListThatShows() async throws {
+  @Test("a session or all sessions chosen while this window holds control keeps the Screen and control")
+  func aSessionChosenInControlKeepsTheScreen() async throws {
+    #expect(!ViewerController.opensActivity(from: .screen, holdingControl: true))
+    #expect(ViewerController.opensActivity(from: .screen, holdingControl: false))
+    #expect(!ViewerController.opensActivity(from: .activity, holdingControl: false))
     let viewer = try await ViewerController.watching(ScriptedService())
-    viewer.send(.chooseLibrary(.apps))
-    viewer.send(.chooseSession(.one("3f9a1c07b2e4")))
-    #expect(viewer.session.chosenSession == .one("3f9a1c07b2e4"))
-    #expect(viewer.state.pane.place == .apps, "the apps narrow to the session")
-    viewer.send(.chooseLibrary(.activity))
-    viewer.send(.chooseSession(.all))
-    #expect(viewer.state.pane.place == .activity)
-    viewer.close()
-  }
-
-  @Test("a session chosen while this window holds control keeps the Screen and control")
-  func aSessionChosenInControlKeepsTheScreen() {
-    #expect(!ViewerController.opensActivity(for: .one("3f9a1c07b2e4"), from: .screen, holdingControl: true))
-    #expect(ViewerController.opensActivity(for: .one("3f9a1c07b2e4"), from: .screen, holdingControl: false))
-    #expect(!ViewerController.opensActivity(for: .all, from: .screen, holdingControl: false))
-    for place in [ViewerPlace.activity, .apps] {
-      let opens = ViewerController.opensActivity(for: .one("3f9a1c07b2e4"), from: place, holdingControl: false)
-      #expect(!opens, "\(place)")
+    await viewer.control.takeControl()
+    try #require(viewer.control.lease == "lease", "control was taken")
+    for choice in [ViewerSessionChoice.one(Self.key), .all] {
+      viewer.send(.chooseSession(choice))
+      #expect(viewer.state.pane.place == .screen, "\(choice)")
+      #expect(viewer.control.lease == "lease", "\(choice)")
     }
+    viewer.close()
   }
 
   @Test("leaving the Screen gives control back")
@@ -71,13 +104,13 @@ struct ViewerControllerPlacesTests {
     viewer.close()
   }
 
-  @Test("switching tabs while a release is unanswered keeps Take Control waiting until it is answered")
+  @Test("switching places while a release is unanswered keeps Take Control waiting until it is answered")
   func takeControlWaitsForTheRelease() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
     await viewer.control.takeControl()
     service.hold = ["release"]
-    viewer.send(.show(.apps))
+    viewer.send(.show(.activity))
     try await settle("the release was never sent") { service.held["release"] != nil }
     viewer.send(.show(.screen))
     #expect(viewer.state.footer.controls.control?.isEnabled != true)
@@ -86,142 +119,5 @@ struct ViewerControllerPlacesTests {
     service.resume("release")
     try await settle("Take Control never came back") { viewer.state.footer.controls.control?.isEnabled == true }
     viewer.close()
-  }
-
-  @Test("the unseen dot turns orange when an unseen action failed, and clears when Activity is chosen")
-  func theUnseenDotFollowsWhatWasSeen() async throws {
-    let service = ScriptedService()
-    service.reply = Self.reply([["id": "a1", "operation": "input", "ok": true, "ageSeconds": 30]])
-    let viewer = try await ViewerController.watching(service)
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .none, "what happened before the window opened is not new")
-    service.reply = Self.reply([
-      ["id": "a2", "operation": "input", "ok": true, "ageSeconds": 1],
-      ["id": "a1", "operation": "input", "ok": true, "ageSeconds": 31],
-    ])
-    try await Self.read(viewer, until: "a2")
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .new)
-    service.reply = Self.reply([
-      ["id": "a3", "operation": "input", "ok": false, "ageSeconds": 1],
-      ["id": "a2", "operation": "input", "ok": true, "ageSeconds": 2],
-      ["id": "a1", "operation": "input", "ok": true, "ageSeconds": 32],
-    ])
-    try await Self.read(viewer, until: "a3")
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .failed, "one unseen action failed")
-    viewer.send(.show(.activity))
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .none, "Activity shows them")
-    viewer.send(.show(.screen))
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .none, "seen stays seen")
-    viewer.close()
-  }
-
-  @Test("one session's activity keeps every session's actions seen once the Screen shows again")
-  func oneSessionsActivityKeepsEverySessionsActionsSeen() async throws {
-    let key = "3f9a1c07b2e4"
-    let service = ScriptedService()
-    service.reply = Self.reply([Self.row("a2", ok: true), Self.row("a1", ok: true)])
-    service.activityLog = ActivityLog(entries: [
-      ActivityLog.Entry(id: "a2", ageSeconds: 1),
-      ActivityLog.Entry(id: "a1", ageSeconds: 1, session: key),
-    ])
-    service.sessionList = HostSessionList(sessions: [
-      HostSessionRecord(key: key, name: "Codex · demo", host: .codex, state: .ended, actions: 1)
-    ])
-    let viewer = try await ViewerController.watching(service)
-    try await settle("the list was never read") { viewer.panes.sessions.record(key) != nil }
-    viewer.send(.show(.activity))
-    try await settle("every session's activity was never read") { viewer.panes.activity.log != nil }
-    viewer.send(.chooseSession(.one(key)))
-    try await settle("the session's activity was never read") {
-      viewer.panes.activity.scope == .session(key)
-    }
-    viewer.send(.show(.screen))
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .none, "nothing happened since")
-    viewer.close()
-  }
-
-  @Test("an unseen action refused before anything was sent is new, never orange")
-  func aRefusedActionIsNeverOrange() async throws {
-    let service = ScriptedService()
-    service.reply = Self.reply([Self.row("a1", ok: true)])
-    let viewer = try await ViewerController.watching(service)
-    service.reply = Self.reply([
-      ["id": "a2", "operation": "input", "ok": false, "nothingSent": true, "ageSeconds": 1],
-      Self.row("a1", ok: true),
-    ])
-    try await Self.read(viewer, until: "a2")
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .new)
-    viewer.close()
-  }
-
-  @Test("an unseen failure keeps the dot orange after newer actions push it out of the status")
-  func anUnseenFailureOutlastsTheStatusRows() async throws {
-    let service = ScriptedService()
-    service.reply = Self.reply([Self.row("a1", ok: true)])
-    let viewer = try await ViewerController.watching(service)
-    service.reply = Self.reply([Self.row("a2", ok: false), Self.row("a1", ok: true)])
-    try await Self.read(viewer, until: "a2")
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .failed)
-    // Twelve newer actions that worked: the status lists twelve, so the failure has left it unseen.
-    service.reply = Self.reply((1...12).reversed().map { Self.row("b\($0)", ok: true) })
-    try await Self.read(viewer, until: "b12")
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .failed, "the failure was never seen")
-    viewer.send(.show(.activity))
-    viewer.send(.show(.screen))
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .none, "Activity showed it")
-    viewer.close()
-  }
-
-  @Test("what Activity shows while the picture is paused is seen, so the dot stays off once it resumes")
-  func activityReadWhilePausedIsSeen() async throws {
-    let service = ScriptedService()
-    service.reply = Self.reply([Self.row("a1", ok: true)])
-    let viewer = try await ViewerController.watching(service)
-    viewer.send(.togglePause)
-    // The helper acts while the picture, and with it the status, is paused; Activity reads its own log meanwhile.
-    let newer = [Self.row("a3", ok: false), Self.row("a2", ok: true), Self.row("a1", ok: true)]
-    service.reply = Self.reply(newer)
-    service.activityLog = ActivityLog(entries: [
-      ActivityLog.Entry(id: "a3", outcome: .failed),
-      ActivityLog.Entry(id: "a2"),
-      ActivityLog.Entry(id: "a1"),
-    ])
-    viewer.send(.show(.activity))
-    try await settle("Activity never read its log") { viewer.panes.activity.log?.entries.first?.id == "a3" }
-    viewer.send(.show(.screen))
-    viewer.send(.togglePause)
-    try await Self.read(viewer, until: "a3")
-    #expect(ViewerPresenter.unseen(viewer.snapshot) == .none, "Activity showed a2 and a3 before the status caught up")
-    viewer.close()
-  }
-
-  /// One recent action in a status.
-  ///
-  /// - Parameters:
-  ///   - id: Its id.
-  ///   - ok: Whether it worked.
-  /// - Returns: The row.
-  static func row(_ id: String, ok: Bool) -> [String: Any] {
-    ["id": id, "operation": "input", "ok": ok, "ageSeconds": 1]
-  }
-
-  /// A status with `activity`, newest first.
-  ///
-  /// - Parameter activity: The helper's recent actions.
-  /// - Returns: The reply.
-  static func reply(_ activity: [[String: Any]]) -> [String: Any] {
-    ["ready": true, "canObserve": true, "overview": ["mode": "observing", "state": "idle", "activity": activity]]
-  }
-
-  /// Reads the status at once until its newest action is `newest`.
-  ///
-  /// - Parameters:
-  ///   - viewer: The viewer.
-  ///   - newest: The newest action's id.
-  /// - Throws: The failed requirement, when it never shows.
-  static func read(_ viewer: ViewerController, until newest: String) async throws {
-    viewer.readingLoop.refresh()
-    try await settle("\(newest) never showed") {
-      viewer.reading.statusReading.activity(limit: 1).first?.id == newest
-    }
   }
 }

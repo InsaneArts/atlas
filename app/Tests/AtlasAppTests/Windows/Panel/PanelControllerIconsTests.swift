@@ -94,19 +94,6 @@ struct PanelControllerIconsTests {
     #expect(gate.count == 1)
   }
 
-  @Test("a panel refresh receives live evidence that replaced a shared miss")
-  func refreshesAMiss() async throws {
-    let icons = AppIcons.none
-    let panel = try panel(icons)
-    panel.wantRecentIcons()
-    try await settle("the panel miss was never cached") { icons.repository.cachedCount == 1 }
-    let app = HelperApp(pid: 1, name: "Shared", bundleId: Self.bundleId, icon: png())
-    let want = try #require(AppIconWant.open(app, home: "", live: true))
-    #expect(await icons.find(want) != nil)
-    panel.wantRecentIcons()
-    try await settle("the panel never refreshed its missed icon") { !panel.icons.isEmpty }
-  }
-
   @Test("closing a window cancels its own icon waits and leaves another window's", arguments: [true, false])
   func closesOnlyItsOwnRequests(closeViewer: Bool) async throws {
     let gate = IconLookupGate()
@@ -161,7 +148,7 @@ struct PanelControllerIconsTests {
     #expect(gate.count == 1)
   }
 
-  @Test("leaving a viewer pane cancels its icon waits while the panel keeps waiting")
+  @Test("the viewer changing its place cancels its icon waits while the panel keeps waiting")
   func cancelsWhenLeavingAPane() async throws {
     let gate = IconLookupGate()
     defer { gate.release() }
@@ -174,8 +161,8 @@ struct PanelControllerIconsTests {
     ])
     panel.wantRecentIcons()
     try await settle("the windows never joined the lookup") { icons.repository.waiterCount == 2 }
-    viewer.show(.apps)
-    try await settle("the old pane kept its icon waiter") { icons.repository.waiterCount == 1 }
+    viewer.show(.activity)
+    try await settle("the old place kept its icon waiter") { icons.repository.waiterCount == 1 }
     gate.release()
     try await settle("the panel never received the icon") { !panel.icons.isEmpty }
     #expect(viewer.panes.icons.images.isEmpty)
@@ -189,46 +176,15 @@ struct PanelControllerIconsTests {
     let panel = try panel(icons)
     let viewer = try await ViewerController.watching(ScriptedService(), icons: icons)
     defer { viewer.close() }
-    let app = HelperApp(pid: 1, name: "Shared", bundleId: Self.bundleId)
-    viewer.panesModel.wantIcons(for: [app])
+    let entry = ActivityLog.Entry(id: "shared", says: "Shared", app: "Shared", bundleId: Self.bundleId)
+    viewer.panesModel.wantIcons(for: [entry])
     panel.wantRecentIcons()
     try await settle("the windows never joined the lookup") { icons.repository.waiterCount == 2 }
-    viewer.panesModel.wantIcons(for: [HelperApp]())
+    viewer.panesModel.wantIcons(for: [ActivityLog.Entry]())
     try await settle("the viewer kept an unwanted waiter") { icons.repository.waiterCount == 1 }
     gate.release()
     try await settle("the panel never received the icon") { !panel.icons.isEmpty }
     #expect(viewer.panes.icons.images.isEmpty)
-  }
-
-  @Test("new live evidence upgrades an owned request without another waiter", arguments: [true, false])
-  func upgradesAnOwnedRequest(beforeStarting: Bool) async throws {
-    let gate = IconLookupGate()
-    defer { gate.release() }
-    var lookup = AppIconLookup.none
-    lookup.bundleOfId = { _ in
-      await gate.read()
-      return nil
-    }
-    let icons = AppIcons(store: AppIconStore(caches: nil), lookup: lookup, home: "")
-    let viewer = try await ViewerController.watching(ScriptedService(), icons: icons)
-    defer { viewer.close() }
-    let entry = ActivityLog.Entry(id: "shared", says: "Shared", app: "Shared", bundleId: Self.bundleId)
-    viewer.panesModel.wantIcons(for: [entry])
-    if !beforeStarting {
-      try await settle("the weaker lookup never started") { gate.count == 1 && icons.repository.waiterCount == 1 }
-    }
-    let image = png()
-    viewer.panesModel.wantIcons(for: [HelperApp(pid: 1, name: "Shared", bundleId: Self.bundleId, icon: image)])
-    #expect(viewer.panesModel.iconRequests.count == 1)
-    #expect(icons.repository.waiterCount <= 1)
-    gate.release()
-    let key = try #require(AppIconKey(bundleId: Self.bundleId))
-    try await settle("the retained request lost the newer evidence") { viewer.panes.icons.images[key.text] != nil }
-    let digest = AppIconStore.digest(image)
-      .prefix(AppIconFound.digits)
-    #expect(viewer.panes.icons.images[key.text]?.id == "\(key.text) \(digest)")
-    #expect(viewer.panesModel.iconRequests.isEmpty)
-    #expect(gate.count == (beforeStarting ? 0 : 1))
   }
 
   private func icons(_ gate: IconLookupGate) -> AppIcons {
@@ -240,7 +196,7 @@ struct PanelControllerIconsTests {
       return bundle
     }
     lookup.icon = { _ in image }
-    return AppIcons(store: AppIconStore(caches: nil), lookup: lookup, home: "")
+    return AppIcons(store: AppIconStore(caches: nil), lookup: lookup)
   }
 
   private func panel(_ icons: AppIcons) throws -> PanelController {

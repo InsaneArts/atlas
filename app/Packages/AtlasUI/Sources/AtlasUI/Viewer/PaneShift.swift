@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The Screen's opacity transition and the fade tokens shared with retained lists. Activity and Apps use
+/// The Screen's opacity transition and the fade tokens shared with retained lists. Activity uses
 /// ``KeptPaneShift`` and ``PaneHandoff``: the outgoing list disappears before the latest destination arrives, so their
 /// words never overlap. List switches change opacity in place, also under Reduce Motion.
 ///

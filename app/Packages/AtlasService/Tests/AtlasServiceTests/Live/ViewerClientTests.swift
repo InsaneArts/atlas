@@ -82,13 +82,6 @@ struct ViewerClientTests {
     }
   }
 
-  @Test("an apps reply that is not a 200 is the service's error with its code, never an empty list")
-  func appsRefused() throws {
-    #expect(throws: ServiceError("The helper is not running.", code: "unavailable")) {
-      try ViewerClient.apps(appsUnreachable, response: reply(503))
-    }
-  }
-
   @Test("an older service's 404 for the sessions list reads as not offered, and a 200 reads the list")
   func sessionsNotOffered() throws {
     let missing = Data(#"{"ok": false, "error": "Not found"}"#.utf8)

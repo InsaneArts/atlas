@@ -4,6 +4,8 @@
 public struct ViewerActivityState: Equatable, Sendable {
   /// What VoiceOver calls the pane: "Activity", or the chosen session's name.
   public var title: String
+  /// Whose work the list shows: every session's, or the chosen one's.
+  public var session: ViewerSessionChoice
   /// What VoiceOver says of it, such as "38 actions today"; empty while the log holds nothing.
   public var meta: String
   /// The filters, and which one is chosen.
@@ -28,6 +30,7 @@ public struct ViewerActivityState: Equatable, Sendable {
   ///
   /// - Parameters:
   ///   - title: What VoiceOver calls the pane; "Activity" by default.
+  ///   - session: Whose work the list shows; every session's by default.
   ///   - meta: What VoiceOver says of it.
   ///   - filters: The filters, and which one is chosen.
   ///   - days: The days and their sessions, runs and steps.
@@ -39,6 +42,7 @@ public struct ViewerActivityState: Equatable, Sendable {
   ///   - settled: Whether the rows are a reading of whose work the pane lists; they are by default.
   public init(
     title: String = "Activity",
+    session: ViewerSessionChoice = .all,
     meta: String,
     filters: CapsuleTabsState<ViewerActivityFilter>,
     days: [ViewerActivityDay],
@@ -50,6 +54,7 @@ public struct ViewerActivityState: Equatable, Sendable {
     settled: Bool = true
   ) {
     self.title = title
+    self.session = session
     self.meta = meta
     self.filters = filters
     self.days = days
@@ -59,6 +64,12 @@ public struct ViewerActivityState: Equatable, Sendable {
     self.sheet = sheet
     self.replay = replay
     self.settled = settled
+  }
+
+  /// Which list shows: whose work, under which filter, and whether it is that work's own reading yet. A change of it
+  /// is the person's own, or their choice's reading arriving, which swaps the whole list rather than bringing rows in.
+  public var list: ViewerActivityListKey {
+    ViewerActivityListKey(session: session, filter: filters.selected, settled: settled)
   }
 
   /// The newest run's identity, whose change is new work arriving at the top.

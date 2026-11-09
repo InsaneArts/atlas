@@ -7,6 +7,6 @@ import Testing
 /// - Returns: The response.
 /// - Throws: When the response cannot be made.
 func reply(_ code: Int) throws -> HTTPURLResponse {
-  let url = try #require(URL(string: "http://127.0.0.1:8765/abc/apps.json"))
+  let url = try #require(URL(string: "http://127.0.0.1:8765/abc/status.json"))
   return try #require(HTTPURLResponse(url: url, statusCode: code, httpVersion: nil, headerFields: nil))
 }

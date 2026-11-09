@@ -10,8 +10,6 @@
       case windowSurface
       /// The panel's card.
       case panelCard
-      /// A window outlined near the picture's right edge, its label moved inside the outline.
-      case outlineLabel
     }
 
     private let kind: Kind
@@ -36,17 +34,6 @@
             .padding(Spacing.xl)
             .frame(width: SampleWidth.narrow)
             .panelCard()
-        case .outlineLabel:
-          ZStack {
-            OutlineHighlight(frame: CGRect(x: 150, y: 20, width: 90, height: 100), dim: 0.36)
-            OutlineLabelPlacement(outline: CGRect(x: 150, y: 20, width: 90, height: 100)) {
-              PictureChip {
-                Text(verbatim: "Opie Settings, a window near the edge")
-              }
-            }
-          }
-          .frame(width: SampleWidth.narrow, height: 140)
-          .background(Color.fillPlaceholder)
         }
       }
       .sampleSurface()

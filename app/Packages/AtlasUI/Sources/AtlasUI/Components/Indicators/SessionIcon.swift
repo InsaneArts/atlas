@@ -10,9 +10,17 @@ public struct SessionIcon: View {
   /// 0.25: a tile's corner against its side, 7 on a 28-point row icon, so a tile rounds the same at any side.
   private static let cornerShare: CGFloat = 0.25
   /// 824/1024: a macOS app icon's plate against its canvas, so a mark is drawn the size of an app icon beside it.
-  private static let plateShare: CGFloat = 824 / 1024
+  private nonisolated static let plateShare: CGFloat = 824 / 1024
   /// 28: the icon leading a session's two-line row, in the main window's sessions column and the panel alike.
   nonisolated static let rowSide: CGFloat = 28
+
+  /// The plate an app's icon draws inside `side`, which a mark beside it is drawn to.
+  ///
+  /// - Parameter side: The icon's side.
+  /// - Returns: Its plate's side.
+  nonisolated static func plate(_ side: CGFloat) -> CGFloat {
+    side * plateShare
+  }
 
   /// What it draws.
   private let icon: RowIcon
@@ -47,7 +55,7 @@ public struct SessionIcon: View {
       // The mark draws at its row size; scaled to an app icon's plate, its card, glyph and rim keep their
       // proportions.
       AgentMark(kind: kind)
-        .scaleEffect(side * Self.plateShare / IconSize.mPlus)
+        .scaleEffect(Self.plate(side) / IconSize.mPlus)
     case .tile(let tile):
       tileGlyph(tile)
         .foregroundStyle(Color.textSecondary)

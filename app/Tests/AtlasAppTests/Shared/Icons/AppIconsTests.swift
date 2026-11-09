@@ -10,83 +10,58 @@ struct AppIconsTests {
   static let home = "/Users/person"
   /// Notes, where it is installed.
   static let notes = "/System/Applications/Notes.app"
-  /// A copy only the helper can read.
-  static let copy = "/Users/atlas-helper/Library/Application Support/Atlas/Copies/Probe.app"
 
-  @Test("live window titles and bounds never enter an app's icon request or disk index")
-  func windowDetailsStayOutOfTheIconCache() async throws {
+  @Test("a found icon is kept by its bundle id with its name, file and digest, and nothing else")
+  func theDiskIndexKeepsOnlyTheIconsFacts() async throws {
     let folder = try TemporaryFolder()
     defer { folder.remove() }
-    let icon = png(width: 128, height: 128)
-    var app = HelperApp(
-      pid: 3,
-      name: "Notes",
-      bundle: Self.notes,
-      bundleId: "com.apple.Notes",
-      windows: [HelperWindow(id: 7, title: "Private window sentinel", x: 123, y: 456, width: 789, height: 321)]
-    )
-    let want = try #require(AppIconWant.open(app, home: Self.home, live: true))
-    app.windows = [HelperWindow(id: 8, title: "Another private title", width: 900, height: 500)]
-    #expect(AppIconWant.open(app, home: Self.home, live: true) == want)
     let icons = AppIcons(
       store: AppIconStore(caches: folder.url),
-      lookup: IconLookups().lookup(icons: [Self.notes: icon]),
-      home: Self.home
+      lookup: IconLookups().lookup(
+        icons: [Self.notes: png(width: 128, height: 128)],
+        ids: ["com.apple.Notes": Self.notes]
+      )
     )
+    let want = try #require(AppIconWant.named(bundleId: "com.apple.Notes", name: "Notes"))
     _ = try #require(await icons.find(want))
     let index = folder.url.appendingPathComponent("AppIcons/v1/\(AppIconStore.indexName)")
     let json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: index)) as? [String: Any])
     let entry = try #require((json["icons"] as? [String: [String: Any]])?["com.apple.Notes"])
     #expect(Set(entry.keys) == ["file", "name", "used", "read", "bytes", "sha"])
     #expect(entry["name"] as? String == "Notes")
-    #expect(!String(decoding: try Data(contentsOf: index), as: UTF8.self).contains("Private window sentinel"))
   }
 
-  @Test("an app's icon comes from the open app, then the cache, then its bundle id, else none")
+  @Test("an app's icon comes from its bundle id where it is installed, then the kept icon, else none")
   func order() async throws {
     let folder = try TemporaryFolder()
     defer { folder.remove() }
-    let live = png(width: 128, height: 128)
-    let installed = png(width: 96, height: 96)
     let lookups = IconLookups()
     let icons = AppIcons(
       store: AppIconStore(caches: folder.url),
       lookup: lookups.lookup(
-        icons: [Self.notes: live, "/Applications/Opie.app": installed],
+        icons: ["/Applications/Opie.app": png(width: 96, height: 96)],
         ids: ["test.opie": "/Applications/Opie.app"]
-      ),
-      home: Self.home
+      )
     )
-    let open = HelperApp(pid: 3, name: "Notes", bundle: Self.notes, bundleId: "com.apple.Notes")
-
-    let openWant = try #require(AppIconWant.open(open, home: Self.home, live: true))
-    let fromApp = try #require(await icons.find(openWant))
-    #expect(fromApp.image.width == 128)
-    #expect(await lookups.asked == ["icon \(Self.notes)"])
-
-    let notesWant = try #require(AppIconWant.named(bundleId: "com.apple.Notes", name: "Notes"))
-    let cached = try #require(await icons.find(notesWant))
-    #expect(cached.sha == fromApp.sha)
-    #expect(await lookups.asked == ["icon \(Self.notes)"], "a kept icon asks the workspace nothing")
-
     let opieWant = try #require(AppIconWant.named(bundleId: "test.opie", name: "Opie"))
     let byId = try #require(await icons.find(opieWant))
     #expect(byId.image.width == 96)
-    #expect(await lookups.asked.suffix(2) == ["id test.opie", "icon /Applications/Opie.app"])
+    #expect(await lookups.asked == ["id test.opie", "icon /Applications/Opie.app"])
+    let kept = try #require(await icons.find(opieWant))
+    #expect(kept.sha == byId.sha)
+    #expect(await lookups.asked.count == 2, "a kept icon asks the workspace nothing")
 
     let missing = try #require(AppIconWant.named(bundleId: "test.none", name: "Nothing"))
     #expect(await icons.find(missing) == nil)
   }
 
-  @Test("a copy only the helper can read is found only by its bundle id where the person has the app")
-  func copies() async throws {
+  @Test("an app known by its bundle id is never looked up by its name")
+  func byIdOnly() async throws {
     let lookups = IconLookups()
-    let icons = AppIcons(store: AppIconStore(caches: nil), lookup: lookups.lookup(), home: Self.home)
-    let copy = HelperApp(pid: 9, name: "Probe", bundle: Self.copy, bundleId: "test.atlas.probe")
-    let want = try #require(AppIconWant.open(copy, home: Self.home, live: true))
-    #expect(want.bundle == nil, "a copy's path is never read")
+    let icons = AppIcons(store: AppIconStore(caches: nil), lookup: lookups.lookup())
+    let want = try #require(AppIconWant.named(bundleId: "test.atlas.probe", name: "Probe"))
     #expect(await icons.find(want) == nil)
-    #expect(await lookups.asked == ["id test.atlas.probe"], "an app with a bundle id is never looked up by its name")
+    #expect(await lookups.asked == ["id test.atlas.probe"])
   }
 
   @Test("an app known only by its name is found as its bundle where apps are installed, and its name kept")
@@ -101,8 +76,7 @@ struct AppIconsTests {
         icons: [Self.notes: png(width: 128, height: 128)],
         names: ["Notes": Self.notes],
         declared: [Self.notes: "com.apple.Notes"]
-      ),
-      home: Self.home
+      )
     )
     let want = try #require(AppIconWant.named(bundleId: nil, name: "Notes"))
     let found = try #require(await icons.find(want))

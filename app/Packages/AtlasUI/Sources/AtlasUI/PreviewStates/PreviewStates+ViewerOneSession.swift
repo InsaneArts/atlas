@@ -7,7 +7,6 @@
       state.header = viewerSessions.header
       state.sidebar.sessions = allSessions
       state.sidebar.sessions.chosen = .one(SessionSamples.claudeKey)
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 0])
       state.pane = .activity(oneSessionEmptyActivity)
       return state
     }()

@@ -51,7 +51,7 @@
     }()
 
     /// More sessions than the sidebar has room for: Claude Code under Needs you, three under Working, six under Idle
-    /// and Ended open on four, so the sessions scroll in their own room above the Library.
+    /// and Ended open on four, so the sessions scroll in their own room above the helper's health.
     @MainActor public static let viewerSidebarMany: ViewerState = {
       var state = viewerSidebarByState
       let codex = SessionSamples.codexIcon

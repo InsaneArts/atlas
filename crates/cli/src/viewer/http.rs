@@ -7,7 +7,7 @@ use super::{
     unpoisoned,
 };
 use crate::menubar::Line;
-use atlas_client::{client::Client, helper_info};
+use atlas_client::client::Client;
 use atlas_control::Lease;
 use atlas_core::screen::frame::Frame;
 use atlas_core::{
@@ -104,7 +104,6 @@ pub(super) fn configured(
         account_name: std::sync::Mutex::new(None),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
-        icons: helper_info::Icons::default(),
     })
 }
 
@@ -300,7 +299,6 @@ routes! {
         Status => "status.json",
         Activity => "activity.json",
         Sessions => "sessions.json",
-        Apps => "apps.json",
         // What cleaning up a session would do.
         Cleanup => "cleanup.json",
         Screenshots => "screenshots.json",
@@ -507,7 +505,6 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>) -> Respon
             outcome => read_reply(outcome),
         },
         Read::Sessions => read_reply(viewer.sessions().await),
-        Read::Apps => read_reply(viewer.apps().await),
         Read::Cleanup => match viewer.cleanup_preview(query).await {
             Err(error) if error.code == Code::Input => json_response(400, json!(error)),
             outcome => read_reply(outcome),
