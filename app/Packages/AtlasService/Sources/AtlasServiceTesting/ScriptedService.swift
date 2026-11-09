@@ -95,6 +95,8 @@ public final class ScriptedService: ViewerService {
   public var asksCalls = 0
   /// The answers given, in order, as "ID choice".
   public var answers: [String] = []
+  /// The service's own refusal each route answers with, its code included, in place of `fail`'s codeless one.
+  public var refusals: [String: ServiceError] = [:]
   /// What a sign-in's start answers; its kind and site follow the request.
   public var signInLease = "sign-in-lease"
   /// What Done answers of `added`, for a sign-in.
@@ -149,6 +151,7 @@ public final class ScriptedService: ViewerService {
       // The live client suspends on every request, so an unheld one never answers in line either.
       await Task.yield()
     }
+    if let refusal = refusals[route] { throw refusal }
     if fail.contains(route) { throw ServiceError("\(route) failed") }
   }
 

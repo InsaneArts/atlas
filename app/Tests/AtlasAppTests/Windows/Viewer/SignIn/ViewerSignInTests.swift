@@ -121,6 +121,7 @@ struct ViewerSignInTests {
     _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
     viewer.send(.giveBack)
     try await settle("Give Back never cancelled") { viewer.control.signInLease == nil }
+    #expect(await viewer.actions.barrier.settle() == nil, "the Cancel was answered")
     #expect(service.log.contains("cancel sign-in-lease"))
     #expect(viewer.state.screen.signingIn == nil && viewer.state.alert == nil)
   }
@@ -322,25 +323,111 @@ struct ViewerSignInTests {
     service.hold.insert("sign-in/done")
     let finishing = Task { await viewer.finishSignIn() }
     try await settle("Done never reached the service") { service.held["sign-in/done"] != nil }
-    // The release shortcut ends it on purpose, and the person starts again.
+    // The release shortcut ends it on purpose, and the person starts again: the start waits for Done's answer.
     viewer.control.releaseControl()
     service.signInLease = "second-lease"
-    #expect(await viewer.startSignIn(.signIn, site: "gitlab.com", browser: nil) == nil)
+    let starting = Task { await viewer.startSignIn(.signIn, site: "gitlab.com", browser: nil) }
     service.resume("sign-in/done")
     await finishing.value
+    #expect(await starting.value == nil)
     #expect(viewer.control.signInLease == "second-lease", "the newer lease is kept")
     #expect(viewer.session.signIn?.site == "gitlab.com")
     #expect(viewer.state.alert == nil, "the late Done says nothing")
     #expect(viewer.state.screen.signingIn?.isWorking == false, "the newer bar's buttons take presses")
   }
 
-  @Test("a start the service refuses says why and holds nothing")
-  func aRefusalIsSaid() async throws {
+  @Test("once Done is sent no renewal runs, and one failing under it leaves Done's result whole")
+  func doneOwnsTheLease() async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    _ = await viewer.startSignIn(.forget, site: "github.com", browser: nil)
+    // Covered, so only the sign-in's heartbeat waits on the clock.
+    viewer.setVisible(false)
+    service.hold.insert("sign-in/renew")
+    service.refusals["sign-in/renew"] = ServiceError("The lease ended.", code: ControlBarrier.leaseLost)
+    for _ in 0..<ViewerControl.renewEvery {
+      try await clock.untilSleeping(for: ViewerControl.heartbeatEvery, "the heartbeat never waited")
+      clock.advance(by: ViewerControl.heartbeatEvery)
+    }
+    try await settle("no renewal was under way") { service.held["sign-in/renew"] != nil }
+    service.hold.insert("sign-in/done")
+    let finishing = Task { await viewer.finishSignIn() }
+    try await settle("Done never reached the service") { service.held["sign-in/done"] != nil }
+    service.resume("sign-in/renew")
+    clock.advance(by: ViewerControl.heartbeatEvery * ViewerControl.renewEvery)
+    service.resume("sign-in/done")
+    await finishing.value
+    #expect(viewer.state.alert?.title == "Remove github.com from Accounts too?", "Done's result stands")
+    #expect(service.log.filter { $0.hasPrefix("renew sign-in") }.count == 1, "no renewal after Done was sent")
+  }
+
+  @Test("a start whose reply is lost holds the helper's commands until a hold it may have begun can't be alive")
+  func aLostStartIsHeld() async throws {
     let service = ScriptedService()
     service.fail.insert("sign-in/start")
     let viewer = try await ViewerController.watching(service)
+    #expect(await viewer.startSignIn(.signIn, site: "github.com", browser: nil) == "sign-in/start failed")
+    #expect(viewer.actions.barrier.isBusy, "the unknown outcome holds what needs the helper free")
+    #expect(viewer.control.signInLease == nil)
+  }
+
+  @Test("every start first sends again a Cancel still unanswered")
+  func aStartSendsAPendingCancelFirst() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    service.fail.insert("sign-in/cancel")
+    await viewer.cancelSignIn()
+    #expect(viewer.actions.barrier.uncancelled == ["sign-in-lease"])
+    service.fail.remove("sign-in/cancel")
+    #expect(await viewer.startSignIn(.signIn, site: "gitlab.com", browser: nil) == nil)
+    let lastCancel = try #require(service.log.lastIndex(of: "cancel sign-in-lease"))
+    let secondStart = try #require(service.log.lastIndex(of: "start signIn gitlab.com"))
+    #expect(lastCancel < secondStart, "the Cancel went first")
+    #expect(viewer.actions.barrier.uncancelled.isEmpty)
+  }
+
+  @Test(
+    "a renewal that fails without saying the lease is lost cancels the sign-in, a button let up first; a lost lease only ends it here",
+    arguments: [false, true]
+  )
+  func aFailedRenewalCancelsUnlessTheLeaseIsLost(leaseLost: Bool) async throws {
+    let service = ScriptedService()
+    let clock = ManualClock()
+    let viewer = try await ViewerController.watching(service, clock: clock)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    viewer.control.pointerDown(.left, at: CGPoint(x: 200, y: 150), in: CGSize(width: 400, height: 300), modifiers: [])
+    try await settle("the press was never sent") { service.actions.count == 1 }
+    // Reading stops, so only the sign-in's heartbeat waits on the clock.
+    viewer.readingLoop.watch(false)
+    if leaseLost {
+      service.refusals["sign-in/renew"] = ServiceError("The lease ended.", code: ControlBarrier.leaseLost)
+    } else {
+      service.fail.insert("sign-in/renew")
+    }
+    for _ in 0..<ViewerControl.renewEvery {
+      try await clock.untilSleeping(for: ViewerControl.heartbeatEvery, "the heartbeat never waited")
+      clock.advance(by: ViewerControl.heartbeatEvery)
+    }
+    try await settle("the sign-in never ended") { viewer.control.signInLease == nil }
+    _ = await viewer.actions.barrier.settle()
+    #expect(service.log.contains("cancel sign-in-lease") == !leaseLost)
+    if !leaseLost {
+      let upIndex = try #require(service.log.lastIndex { $0.hasPrefix("input") })
+      let cancelIndex = try #require(service.log.lastIndex(of: "cancel sign-in-lease"))
+      #expect(service.actions.count == 2 && upIndex < cancelIndex, "the button went up before the Cancel")
+    }
+  }
+
+  @Test("a start the service refuses says why and holds nothing")
+  func aRefusalIsSaid() async throws {
+    let service = ScriptedService()
+    service.refusals["sign-in/start"] = ServiceError("An agent's command is still running.", code: "busy")
+    let viewer = try await ViewerController.watching(service)
     let refusal = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
-    #expect(refusal == "sign-in/start failed")
+    #expect(refusal == "An agent's command is still running.")
+    #expect(!viewer.actions.barrier.isBusy, "the service's own refusal says no hold began")
     #expect(viewer.control.signInLease == nil && viewer.state.screen.signingIn == nil)
   }
 }

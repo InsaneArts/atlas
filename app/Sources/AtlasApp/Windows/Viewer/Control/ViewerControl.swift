@@ -81,6 +81,8 @@ final class ViewerControl {
   /// lost, the window covered or away from the Screen, only stops sending input, and the lease is renewed with no
   /// picture until Done or Cancel. Nil otherwise.
   private(set) var signInLease: String?
+  /// The sign-in lease Done was sent for: Done owns it until it answers, so no renewal runs or ends it meanwhile.
+  @ObservationIgnored private(set) var finishing: String?
   /// The mouse button held and the clicks counted.
   @ObservationIgnored private var gesture = PointerGesture()
   /// Scrolling gathered and not yet sent.
@@ -293,9 +295,15 @@ final class ViewerControl {
     // Ending control on purpose ends a held sign-in first: Cancel at the service, counted as control work, so whatever
     // waits on it, such as quitting, waits for the answer.
     if let signing = signInLease {
+      // A button still down goes up first, then the Cancel: both counted as control work, the Cancel kept until the
+      // service answers.
+      let held = heldRelease()
       endSignIn()
       viewer?.signInEnded(message)
-      barrier.cancelSignIn(signing)
+      barrier.run { [service, barrier] in
+        if let held { try? await service.input(lease: signing, frame: held.frame, actions: [held.up]) }
+        _ = await barrier.cancelSignInNow(signing)
+      }
       return
     }
     controlGeneration += 1
@@ -366,9 +374,21 @@ final class ViewerControl {
     viewer?.readingLoop.refresh()
   }
 
+  /// Done was sent for `lease`: renewals stop, and one already under way can no longer end the sign-in, which Done
+  /// owns until it answers.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  func beginFinishing(_ lease: String) {
+    guard signInLease == lease else { return }
+    finishing = lease
+    heartbeat?.cancel()
+    heartbeat = nil
+  }
+
   /// Lets go of a sign-in's lease the service ended: input stops and nothing is given back.
   func letGoSignIn() {
     controlGeneration += 1
+    finishing = nil
     signInLease = nil
     lease = nil
     clearInput()
@@ -439,6 +459,17 @@ final class ViewerControl {
     if let message { viewer?.say(message) }
   }
 
+  /// The release of a button still down, on the newest picture the window had, taken out of the gesture; nil when
+  /// none is down.
+  ///
+  /// - Returns: The release and the picture it names.
+  private func heldRelease() -> (up: InputAction, frame: String)? {
+    guard let button = gesture.heldButton, let point = gesture.last, let frame = lastFrame,
+      let up = gesture.finish(button, at: point, modifiers: [], now: uptime())
+    else { return nil }
+    return (up, frame)
+  }
+
   /// Stops what input holds under a held sign-in, keeping the queue, the lease and the hold: a button still down goes
   /// up first, sent in turn after what was queued before it and answered as any input is, so the helper's button never
   /// stays held while the person is away; then the gesture, the scrolling and the text being composed are dropped.
@@ -446,11 +477,9 @@ final class ViewerControl {
   ///
   /// - Parameter lease: The sign-in's lease.
   private func releaseHeld(under lease: String) {
-    if let button = gesture.heldButton, let point = gesture.last, let frame = lastFrame,
-      let up = gesture.finish(button, at: point, modifiers: [], now: uptime())
-    {
+    if let held = heldRelease() {
       if input.owner != lease { input.activate(lease) }
-      input.enqueue([up], frame: frame)
+      input.enqueue([held.up], frame: held.frame)
     }
     gesture.cancel()
     composing = ""

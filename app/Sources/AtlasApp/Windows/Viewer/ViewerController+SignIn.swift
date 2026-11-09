@@ -19,13 +19,14 @@ extension ViewerController {
     if session.place != .screen { show(.screen) }
     // The person signs in on a live picture: a paused one resumes, and input goes once a fresh one arrives.
     if session.paused { togglePause() }
-    let releasing = holdingControl || control.acquiring
-    if releasing { control.releaseControl() }
+    if holdingControl || control.acquiring { control.releaseControl() }
     // Reserved before the first wait, as an acquisition is: closing the window from here on calls the start off, and
     // a grant that comes after is cancelled before the control work ends, so nothing waiting on it sees a hold nobody
     // shows.
     let generation = control.beginSignInStart()
-    if releasing, let refused = await actions.barrier.settle() {
+    // Every start waits for the app's control work first: a release or a Cancel still unanswered is sent again, so no
+    // earlier hold is left standing at the service.
+    if let refused = await actions.barrier.settle() {
       control.signInStartEnded(generation)
       return refused
     }
@@ -35,7 +36,15 @@ extension ViewerController {
     }
     do {
       let started = try await actions.barrier.tracking { () async throws -> SignInStarted? in
-        let started = try await service.startSignIn(purpose.kind, site: site, browser: browser)
+        let started: SignInStarted
+        do {
+          started = try await service.startSignIn(purpose.kind, site: site, browser: browser)
+        } catch {
+          // Only the service's own refusal, which carries its code, says no hold began; a lost reply may have started
+          // one, held until its lease can no longer be alive, as a lost acquisition is.
+          if (error as? ServiceError)?.code == nil { actions.barrier.holdLostAcquisition() }
+          throw error
+        }
         guard control.wantsSignIn(generation) else {
           _ = await actions.barrier.cancelSignInNow(started.lease)
           return nil
@@ -67,6 +76,8 @@ extension ViewerController {
     }
     session.signInEnding = true
     defer { if current() { session.signInEnding = false } }
+    // Done owns the lease from here: no renewal runs, and one under way can't end the sign-in.
+    control.beginFinishing(lease)
     do {
       // Counted as control work, as an acquisition is: nothing that needs the helper free runs until it answers.
       let ended = try await actions.barrier.tracking { try await service.finishSignIn(lease: lease) }
