@@ -140,7 +140,7 @@ final class ViewerControl {
     acquiring = true
     controlGeneration += 1
     let generation = controlGeneration
-    if !barrier.unreleased.isEmpty {
+    if barrier.hasUnanswered {
       let refused = await barrier.settle()
       // Cancelled while it waited: releaseControl moved the generation on and cleared the attempt.
       guard generation == controlGeneration else { return }
@@ -295,7 +295,7 @@ final class ViewerControl {
     if let signing = signInLease {
       endSignIn()
       viewer?.signInEnded(message)
-      barrier.run { [service] in try? await service.cancelSignIn(lease: signing) }
+      barrier.cancelSignIn(signing)
       return
     }
     controlGeneration += 1

@@ -37,7 +37,7 @@ extension ViewerController {
       let started = try await actions.barrier.tracking { () async throws -> SignInStarted? in
         let started = try await service.startSignIn(purpose.kind, site: site, browser: browser)
         guard control.wantsSignIn(generation) else {
-          try? await service.cancelSignIn(lease: started.lease)
+          _ = await actions.barrier.cancelSignInNow(started.lease)
           return nil
         }
         return started
@@ -47,6 +47,7 @@ extension ViewerController {
         return SignInWords.calledOff
       }
       session.signIn = ViewerSignIn(purpose: purpose, site: started.site, browser: started.browser)
+      session.signInEnding = false
       control.adoptSignIn(started.lease)
       return nil
     } catch {
@@ -59,11 +60,19 @@ extension ViewerController {
   /// Forget or Reset, whether to take the site off the list too.
   func finishSignIn() async {
     guard let signIn = session.signIn, let lease = control.signInLease, !session.signInEnding else { return }
+    let generation = control.controlGeneration
+    // Whether this Done still speaks for the window: nothing ended its sign-in or started another meanwhile.
+    let current = { [weak self] in
+      self?.control.controlGeneration == generation && self?.control.signInLease == lease
+    }
     session.signInEnding = true
-    defer { session.signInEnding = false }
+    defer { if current() { session.signInEnding = false } }
     do {
-      let ended = try await service.finishSignIn(lease: lease)
+      // Counted as control work, as an acquisition is: nothing that needs the helper free runs until it answers.
+      let ended = try await actions.barrier.tracking { try await service.finishSignIn(lease: lease) }
+      guard current() else { return }
       control.endSignIn()
+      session.signInEnding = false
       session.signIn = nil
       if signIn.purpose.asksToRemove {
         session.alert = .removeAfter(site: ended.site, browser: ended.browser ?? signIn.browser)
@@ -75,22 +84,21 @@ extension ViewerController {
         )
       }
     } catch {
-      control.endSignIn()
-      session.signIn = nil
-      say(error.localizedDescription)
+      guard current() else { return }
+      session.signInEnding = false
+      // The hold may still stand: it is cancelled as control ending on purpose cancels it, kept until answered.
+      control.releaseControl(error.localizedDescription)
     }
     await readingLoop.readStatus()
     readingLoop.refresh()
   }
 
-  /// Cancel: the hold ends and nothing is added.
+  /// Cancel: the hold ends here at once and nothing is added; the Cancel is counted as control work and sent again
+  /// before anything that needs the helper free, should it fail.
   func cancelSignIn() async {
-    guard session.signIn != nil, let lease = control.signInLease, !session.signInEnding else { return }
-    session.signInEnding = true
-    defer { session.signInEnding = false }
-    try? await service.cancelSignIn(lease: lease)
-    control.endSignIn()
-    session.signIn = nil
+    guard session.signIn != nil, control.signInLease != nil, !session.signInEnding else { return }
+    control.releaseControl()
+    _ = await actions.barrier.settle()
     await readingLoop.readStatus()
     readingLoop.refresh()
   }

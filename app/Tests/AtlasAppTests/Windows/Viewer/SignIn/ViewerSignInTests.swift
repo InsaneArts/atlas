@@ -296,6 +296,44 @@ struct ViewerSignInTests {
     #expect(!service.log.contains { $0.hasPrefix("cancel") || $0.hasPrefix("release") })
   }
 
+  @Test("a Cancel that fails stays to be sent again, and is sent before control is taken again")
+  func aFailedCancelIsSentAgain() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    service.fail.insert("sign-in/cancel")
+    viewer.control.releaseControl()
+    #expect(await viewer.actions.barrier.settle() == "sign-in/cancel failed", "the helper isn't free yet")
+    #expect(viewer.actions.barrier.uncancelled == ["sign-in-lease"])
+    service.fail.remove("sign-in/cancel")
+    await viewer.control.takeControl()
+    #expect(viewer.actions.barrier.uncancelled.isEmpty)
+    let cancels = service.log.indices.filter { service.log[$0] == "cancel sign-in-lease" }
+    let acquire = try #require(service.log.lastIndex { $0.hasPrefix("acquire") })
+    #expect(cancels.count >= 2, "the failed Cancel is sent again")
+    #expect(cancels.last.map { $0 < acquire } == true, "before control is taken")
+  }
+
+  @Test("a Done that answers after its sign-in ended and another began leaves the newer one alone")
+  func aLateDoneLeavesTheNewerSignIn() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    service.hold.insert("sign-in/done")
+    let finishing = Task { await viewer.finishSignIn() }
+    try await settle("Done never reached the service") { service.held["sign-in/done"] != nil }
+    // The release shortcut ends it on purpose, and the person starts again.
+    viewer.control.releaseControl()
+    service.signInLease = "second-lease"
+    #expect(await viewer.startSignIn(.signIn, site: "gitlab.com", browser: nil) == nil)
+    service.resume("sign-in/done")
+    await finishing.value
+    #expect(viewer.control.signInLease == "second-lease", "the newer lease is kept")
+    #expect(viewer.session.signIn?.site == "gitlab.com")
+    #expect(viewer.state.alert == nil, "the late Done says nothing")
+    #expect(viewer.state.screen.signingIn?.isWorking == false, "the newer bar's buttons take presses")
+  }
+
   @Test("a start the service refuses says why and holds nothing")
   func aRefusalIsSaid() async throws {
     let service = ScriptedService()
