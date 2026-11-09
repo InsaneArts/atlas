@@ -81,6 +81,8 @@ struct CardScroll<Content: View>: View {
             )
           }
         }
+        // Like the rows, the line takes no press or keyboard focus while its pane is hidden.
+        .disabled(!paneShows)
         // Only the line fades in and out: the rows keep the animation their own change brings.
         .animation(
           Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced),
