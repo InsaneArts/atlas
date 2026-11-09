@@ -4225,26 +4225,28 @@ fn answering_input(
 async fn a_refusal_to_ask_through_the_real_input_path_waits_and_tells_the_agent_nothing_private() {
     const CANARY: &str = "the release notes canary 9f2e";
     let (_dir, client, listener, session) = native_client();
+    let asks = client.controller.asks();
+    let (person, seen) = std::sync::mpsc::channel();
     let client = Client {
         controller: client
             .controller
             .clone()
             .waiting(Duration::from_millis(150)),
+        // Read the person's stored card after publication, before the wait
+        // can end and take its preview down, even if the deadline passed.
+        ask_shown: Some(Arc::new(move |id| {
+            let ask = asks
+                .open(atlas_core::time::now_ms())
+                .into_iter()
+                .find(|ask| ask.id == id)
+                .expect("the published question is shown");
+            person
+                .send(ask.question["message"]["preview"].clone())
+                .unwrap();
+        })),
         ..client
     };
     let service = answering_input(listener, vec![refusal_to_ask(CANARY)]);
-    let asks = client.controller.asks();
-    // What the person's card reads while the command waits.
-    let person = std::thread::spawn(move || {
-        let until = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < until {
-            if let Some(ask) = asks.open(atlas_core::time::now_ms()).into_iter().next() {
-                return ask.question["message"]["preview"].clone();
-            }
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        Value::Null
-    });
     let outcome = crate::asking::after_asking(&client, async || {
         let _ownership = client.controller.acquire(false)?;
         let actions = json!([{"type": "key", "key": "return"}]);
@@ -4275,7 +4277,7 @@ async fn a_refusal_to_ask_through_the_real_input_path_waits_and_tells_the_agent_
         "nor where it lands: {shown}"
     );
     assert_eq!(
-        person.join().unwrap(),
+        seen.try_recv().unwrap(),
         CANARY,
         "the person sees the message while the command waits"
     );

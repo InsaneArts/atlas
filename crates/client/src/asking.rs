@@ -268,6 +268,10 @@ async fn asking(client: &Client, mut attempt: impl AsyncFnMut() -> Result<Value>
             asks: asks.clone(),
             id: id.clone(),
         };
+        #[cfg(test)]
+        if let Some(observe) = &client.ask_shown {
+            observe(&id);
+        }
         let waited = tokio::task::spawn_blocking({
             let asks = asks.clone();
             let id = id.clone();

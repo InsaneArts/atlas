@@ -48,6 +48,9 @@ use std::{path::Path, sync::Arc, time::Duration};
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
 type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
 
+#[cfg(test)]
+type AskShown = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// A helper session a command has just verified, and whether its daemon
 /// refuses a read meant for another session. Only [`Client::verify`] makes
 /// one, so a read given it was checked in that session.
@@ -144,6 +147,9 @@ pub struct Client {
     /// the person's question alone, and the screen's privacy when it was
     /// taken: it goes up only while that is unchanged.
     for_ask: std::sync::Arc<std::sync::Mutex<Option<(crate::before::Raw, atlas_control::Visible)>>>,
+    /// Observe a published question while its preview is still shown, before waiting.
+    #[cfg(test)]
+    pub(crate) ask_shown: Option<AskShown>,
 }
 
 impl Client {
@@ -179,6 +185,8 @@ impl Client {
             checking: std::sync::Arc::default(),
             typing: std::sync::Arc::default(),
             for_ask: std::sync::Arc::default(),
+            #[cfg(test)]
+            ask_shown: None,
             config,
         })
     }
