@@ -19,13 +19,20 @@ extension ViewerController {
     if session.place != .screen { show(.screen) }
     // The person signs in on a live picture: a paused one resumes, and input goes once a fresh one arrives.
     if session.paused { togglePause() }
-    if holdingControl || control.acquiring {
-      control.releaseControl()
-      if let refused = await actions.barrier.settle() { return refused }
-    }
-    // Counted as control work, as an acquisition is: closing the window meanwhile calls it off, and a grant that
-    // comes after is cancelled before the work ends, so nothing waiting on it sees a hold nobody shows.
+    let releasing = holdingControl || control.acquiring
+    if releasing { control.releaseControl() }
+    // Reserved before the first wait, as an acquisition is: closing the window from here on calls the start off, and
+    // a grant that comes after is cancelled before the control work ends, so nothing waiting on it sees a hold nobody
+    // shows.
     let generation = control.beginSignInStart()
+    if releasing, let refused = await actions.barrier.settle() {
+      control.signInStartEnded(generation)
+      return refused
+    }
+    guard control.wantsSignIn(generation) else {
+      control.signInStartEnded(generation)
+      return SignInWords.calledOff
+    }
     do {
       let started = try await actions.barrier.tracking { () async throws -> SignInStarted? in
         let started = try await service.startSignIn(purpose.kind, site: site, browser: browser)

@@ -490,7 +490,7 @@ final class ViewerControl {
   var canInput: Bool {
     guard let viewer else { return false }
     return lease != nil && viewer.reading.frame != nil && !viewer.session.paused && focused && viewer.shown
-      && viewer.session.place == .screen && !pictureStale
+      && viewer.session.place == .screen && viewer.shownAlert == nil && !pictureStale
   }
 
   /// Queues input for the helper, aimed at the picture on screen, while input may go.

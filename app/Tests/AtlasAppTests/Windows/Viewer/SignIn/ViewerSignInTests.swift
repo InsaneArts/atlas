@@ -258,6 +258,22 @@ struct ViewerSignInTests {
     #expect(viewer.control.signInLease == nil && viewer.session.signIn == nil)
   }
 
+  @Test("closing the window while control held before is given back calls the start off before it is sent")
+  func closingDuringThePreliminaryReleaseSendsNoStart() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    await viewer.control.takeControl()
+    try #require(viewer.holdingControl)
+    service.hold.insert("release")
+    let starting = Task { await viewer.startSignIn(.signIn, site: "github.com", browser: nil) }
+    try await settle("the release never reached the service") { service.held["release"] != nil }
+    viewer.close()
+    service.resume("release")
+    #expect(await starting.value == SignInWords.calledOff)
+    #expect(!service.log.contains { $0.hasPrefix("start") }, "no start was sent")
+    #expect(viewer.control.signInLease == nil && !viewer.control.acquiring)
+  }
+
   @Test("suspending with a button down sends its release first, keeps the lease, and the next click works")
   func aHeldButtonComesUpOnSuspend() async throws {
     let service = ScriptedService()

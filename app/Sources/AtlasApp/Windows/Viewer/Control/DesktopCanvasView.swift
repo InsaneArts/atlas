@@ -124,6 +124,9 @@ final class DesktopCanvasView: NSView {
     // take each repeat as Take Control: the repeats go nowhere, in control or not.
     if KeyRoute.swallows(keyCode: event.keyCode, modifiers: modifiers, repeating: event.isARepeat) { return nil }
     guard let controller, controller.holdingControl, window.firstResponder === self else { return event }
+    // An alert over the window takes its own keys, Return, Escape and ⌘. among them: nothing reaches the helper while
+    // it shows, as during a held sign-in, whose lease still renews.
+    guard controller.shownAlert == nil else { return event }
     let route = KeyRoute(
       keyCode: event.keyCode,
       modifiers: modifiers,
