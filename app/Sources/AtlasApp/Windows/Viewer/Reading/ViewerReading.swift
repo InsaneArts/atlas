@@ -12,7 +12,9 @@ struct ViewerReading {
   var hasStatus = false
   /// The latest picture's frame: its id, revision and display.
   var frame: (id: String, revision: String, display: ViewerStatus.Size)?
-  /// The latest picture, ready to draw; the panel's, until the first reading of the window's own.
+  /// The picture the window is laid out with, ready to draw: the first since a picture came, or came at another size;
+  /// the panel's, until the first reading of the window's own. The live slots draw the newest in its place
+  /// (``LivePictureFeed``).
   var picture: DesktopPicture?
   /// The last picture drawn, kept when the picture is lost, so the stage keeps it behind its words, blurred,
   /// while the window connects again. Only drawn: input is never mapped through it.
@@ -34,4 +36,13 @@ struct ViewerReading {
 
   /// Whether the helper is logged out.
   var loggedOut: Bool { status.overview.mode == .loggedOut }
+
+  /// Whether the picture is too old to aim input at, at `now`: control ends over one, and none is taken.
+  ///
+  /// - Parameter now: The time, in seconds of uptime.
+  /// - Returns: Whether it is; true before the first picture.
+  func pictureStale(at now: TimeInterval) -> Bool {
+    guard let frameAt else { return true }
+    return now - frameAt >= Freshness.stale
+  }
 }

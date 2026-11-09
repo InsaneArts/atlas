@@ -66,10 +66,13 @@ extension ViewerPanesModel {
     do {
       let list = try await service.sessions()
       guard number == work.sessionsGeneration else { return }
-      panes.sessions.list = list
-      panes.sessions.failure = nil
-      panes.sessions.notOfferedAt = nil
-      panes.sessions.notOfferedUptime = nil
+      // Written only when it changed, so the same list again changes nothing the window shows.
+      var sessions = panes.sessions
+      sessions.list = list
+      sessions.failure = nil
+      sessions.notOfferedAt = nil
+      sessions.notOfferedUptime = nil
+      if sessions != panes.sessions { panes.sessions = sessions }
       await onSessionsRead(list)
     } catch {
       guard number == work.sessionsGeneration, !error.isCancelled else { return }

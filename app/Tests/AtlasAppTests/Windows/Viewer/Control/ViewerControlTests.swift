@@ -203,7 +203,10 @@ struct ViewerControlTests {
     viewer.say(Words.recovered)
     service.revision = "r2"
     viewer.readingLoop.refresh()
-    try await settle("the changed picture never showed") { viewer.reading.frame?.revision == "r2" }
+    // The feed follows each picture, which the frame it came with is read beside.
+    try await settle("the changed picture never showed") {
+      viewer.readingLoop.feed.picture != nil && viewer.reading.frame?.revision == "r2"
+    }
     #expect(viewer.session.notice == Words.recovered, "no control was held, so none ended")
     viewer.close()
   }
