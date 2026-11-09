@@ -35,6 +35,7 @@ struct CardScroll<Content: View>: View {
   @State private var gutter = CardScrollRoom.scrollerGutter(NSScroller.preferredScrollerStyle)
   @Environment(\.miniClearance) private var clearance
   @Environment(\.paneSettled) private var paneSettled
+  @Environment(\.paneShows) private var paneShows
   @Environment(\.cardScrollPlacement) private var placement
   @Environment(\.motionReduced) private var reduceMotion
 
@@ -43,6 +44,8 @@ struct CardScroll<Content: View>: View {
     ScrollViewReader { scroll in
       ScrollView {
         content
+          // The rows, not the scroll view: a disabled scroll view drops its scroll bar.
+          .disabled(!paneShows)
           .environment(\.listIsAtTop, isAtTop)
           .padding(CardScrollRoom.contentInsets(clearance))
           .background {

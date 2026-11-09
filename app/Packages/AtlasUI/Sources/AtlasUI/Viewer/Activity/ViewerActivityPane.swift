@@ -11,6 +11,7 @@ struct ViewerActivityPane: View {
   let state: ViewerActivityState
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
+  @Environment(\.paneShows) private var paneShows
   @Environment(\.motionReduced) private var reduceMotion
 
   /// The list, or why there is nothing to list; one gives way to the other as a list gives way to another
@@ -19,6 +20,7 @@ struct ViewerActivityPane: View {
     ZStack(alignment: .top) {
       if let empty = state.empty, !state.showsFilters {
         EmptyMessage(state: empty, size: .stage, ground: .pane, symbol: .list)
+          .disabled(!paneShows)
           .transition(ActivityMotion.swap(isAtTop: true, reduceMotion: reduceMotion))
       } else {
         CardScroll(list: state.list) {
