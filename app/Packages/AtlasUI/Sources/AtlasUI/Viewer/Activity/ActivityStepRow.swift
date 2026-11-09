@@ -2,9 +2,9 @@ import SwiftUI
 
 /// One step of an opened run, or a folded run's problem line, on one 28-point line: its glyph in the lead column, what
 /// was done, a picture button when it kept a picture of the screen just before it, and its time when the minute
-/// changed, with a badge after its words saying what let it act in a listed account. A screenshot's step shows its
-/// picture framed in place under its line; the action of unknown outcome offers Show Screen and Recover… under it.
-/// Steps are not pressable, so they have no highlight.
+/// changed, with the listed account it acted in after its words where its run does not name it, and a badge saying
+/// what let it act there. A screenshot's step shows its picture framed in place under its line; the action of
+/// unknown outcome offers Show Screen and Recover… under it. Steps are not pressable, so they have no highlight.
 struct ActivityStepRow: View {
   /// The step.
   let step: ViewerActivityStep
@@ -40,6 +40,13 @@ struct ActivityStepRow: View {
     HStack(alignment: .firstTextBaseline, spacing: ViewerLayout.outlineTimeGap) {
       HStack(alignment: .center, spacing: ViewerLayout.pictureButtonGap) {
         words
+        if let account = step.account {
+          Text(verbatim: account)
+            .font(Typography.font(.body))
+            .foregroundStyle(Color.textSecondary)
+            .lineLimit(1)
+            .fixedSize()
+        }
         if step.notKept {
           notKept
         }

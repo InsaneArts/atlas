@@ -23,15 +23,13 @@
           kind: .pointer,
           words: ViewerStepWords("Clicked", target: "Files changed"),
           time: "02:10",
-          hasPicture: true,
-          account: "github.com"
+          hasPicture: true
         ),
         ViewerActivityStep(
           id: "step.github.type",
           kind: .typing,
           words: ViewerStepWords("Typed", quote: "Looks good to me", joiner: "into", target: "Comment"),
           hasPicture: true,
-          account: "github.com",
           allowance: allowedForTask
         ),
         ViewerActivityStep(
@@ -40,7 +38,6 @@
           words: ViewerStepWords("Clicked", target: "Comment"),
           time: "02:11",
           hasPicture: true,
-          account: "github.com",
           allowance: allowedOnce
         ),
         ViewerActivityStep(
@@ -49,7 +46,6 @@
           words: ViewerStepWords("Clicked", target: "Merge pull request"),
           time: "02:12",
           hasPicture: true,
-          account: "github.com",
           allowance: allowedForTask
         ),
       ],

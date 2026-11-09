@@ -7,7 +7,9 @@ struct ViewerAllowanceLabelTests {
   /// The person allowed the rest of the task.
   static let badge = AllowanceBadge(words: "You allowed for this task", tone: .accent)
 
-  @Test("a step reads what let it act after its words, and one with no badge reads as before")
+  @Test(
+    "a step reads the account its run doesn't name and what let it act after its words, and one with neither reads as before"
+  )
   func aStepReadsItsAllowance() {
     var step = ViewerActivityStep(
       id: "c1",
@@ -17,7 +19,8 @@ struct ViewerAllowanceLabelTests {
       account: "github.com",
       allowance: Self.badge
     )
-    #expect(step.label == "Clicked Merge, You allowed for this task, 02:12")
+    #expect(step.label == "Clicked Merge, github.com, You allowed for this task, 02:12")
+    step.account = nil
     step.allowance = nil
     #expect(step.label == "Clicked Merge, 02:12")
   }

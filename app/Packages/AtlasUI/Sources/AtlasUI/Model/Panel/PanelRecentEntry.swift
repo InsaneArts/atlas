@@ -14,7 +14,7 @@ public struct PanelRecentEntry: Equatable, Sendable, Identifiable {
   public var isFailed: Bool
   /// Whether it is the action running now: the newest row, only while an agent works.
   public var isLive: Bool
-  /// The listed account it acted in, such as "github.com"; nil for none.
+  /// The listed account it acted in, such as "github.com", shown after its words; nil for none.
   public var account: String?
   /// What let it act there, which a badge before its time says; nil when nothing needed allowing.
   public var allowance: AllowanceBadge?

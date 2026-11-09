@@ -8,7 +8,8 @@ extension ViewerPresenter {
   /// took framed in place, whether it kept a picture right before its first action, and for a step that did not work
   /// why and what the same stream did next. The action whose outcome is
   /// unknown is marked as a problem, says that every session waits, and offers Show Screen and Recover…. Typing into a
-  /// password field says its text was not kept, and a step in a listed account what let it act there.
+  /// password field says its text was not kept, and a step in a listed account what let it act there and, where its
+  /// run does not name it, which account it was.
   ///
   /// - Parameters:
   ///   - run: The step's rows.
@@ -47,7 +48,8 @@ extension ViewerPresenter {
       problem: problem,
       offersRecovery: offersRecovery,
       notKept: entry.facts?.action == .type && entry.facts?.secure == true,
-      account: entry.account?.name,
+      // Named on the step only where its run does not already name it.
+      account: entry.account.flatMap { $0 == moment.account ? nil : $0.name },
       allowance: Words.allowance(entry.allowed)
     )
   }
@@ -88,7 +90,7 @@ extension ViewerPresenter {
     }
   }
 
-  /// What a step did, in the service's own words less the run's app or the site that titles it and, in the person's
+  /// What a step did, in the service's own words less the run's app or its listed site and, in the person's
   /// own run, less "You", which its row already names: the control or field it named set apart in semibold, the keys
   /// it pressed as caps in place of their label, followed by the element with focus where Atlas named it, and the
   /// repeats counted. A command says it ran or failed and never what it ran. Typing shows what was typed, shortened to
@@ -129,8 +131,10 @@ extension ViewerPresenter {
       said.removeLast(" in \(app)".count)
       break
     }
-    // A run titled by its site already says where it was.
-    if let site = moment.site, said.hasSuffix(" on \(site)") { said.removeLast(" on \(site)".count) }
+    // The site a step acted in is named by its run or beside its words, never in them.
+    if let site = entry.account.flatMap({ $0.key.kind == .site ? $0.name : nil }), said.hasSuffix(" on \(site)") {
+      said.removeLast(" on \(site)".count)
+    }
     guard let label = entry.label, !label.isEmpty, said.hasSuffix(" \(label)") else {
       return ViewerStepWords(said, count: counted)
     }

@@ -51,7 +51,9 @@ struct PanelPresenterRecentTests {
     )
   }
 
-  @Test("a Recent row names the listed account it acted in and what let it act there, and one in none has no badge")
+  @Test(
+    "a Recent row names the listed account it acted in beside its words, even ones naming only the browser, and what let it act there"
+  )
   func aRecentRowSaysItsAllowance() {
     let github = ActivityLog.Account(name: "github.com", key: AccountKey(kind: .site, id: "github.com"))
     var status = ViewerStatus()
@@ -61,7 +63,7 @@ struct PanelPresenterRecentTests {
         operation: "input",
         ok: true,
         ageSeconds: 1,
-        says: "clicked Merge on github.com",
+        says: "clicked Merge in Google Chrome",
         app: "Google Chrome",
         account: github,
         allowed: .task
@@ -91,7 +93,10 @@ struct PanelPresenterRecentTests {
         nil,
       ]
     )
-    #expect(rows.first?.line.contains("github.com") == true, "its line says the site")
+    #expect(
+      rows.map(\.line) == ["Clicked Merge in Google Chrome", "Clicked Close", "Clicked Save in TextEdit"],
+      "the account shows beside the words whatever they say, never twice"
+    )
   }
 
   @Test("a Recent row in no app leads with a quiet tile of what it did")

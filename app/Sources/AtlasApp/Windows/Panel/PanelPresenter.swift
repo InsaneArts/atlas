@@ -115,7 +115,7 @@ enum PanelPresenter {
         return PanelRecentEntry(
           id: entry.id,
           icon: recentIcon(item, icons: icons),
-          line: entry.line,
+          line: recentLine(entry.line, account: item.row.account),
           when: entry.when,
           isFailed: entry.mark == .failed,
           isLive: mode.kind == .working && index == 0,
@@ -123,6 +123,21 @@ enum PanelPresenter {
           allowance: Words.allowance(item.row.allowed)
         )
       }
+  }
+
+  /// A Recent row's words, less the account they end in, which the row names beside them whatever the words say:
+  /// "Clicked Merge" for "Clicked Merge on github.com", "Typed into Message" for "Typed into Message in Slack".
+  ///
+  /// - Parameters:
+  ///   - line: The row's words.
+  ///   - account: The listed account it acted in, or nil.
+  /// - Returns: The words.
+  static func recentLine(_ line: String, account: ActivityLog.Account?) -> String {
+    guard let name = account?.name else { return line }
+    for ending in [" on \(name)", " in \(name)"] where line.hasSuffix(ending) {
+      return String(line.dropLast(ending.count))
+    }
+    return line
   }
 
   /// What leads one of Recent's rows: Atlas's own mark for what Atlas did itself, recovering or logging out the
