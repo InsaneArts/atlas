@@ -124,6 +124,9 @@ impl Helper {
 
     /// This helper, answering a picture's frame request as `pictures` says.
     pub fn taking_pictures(mut self, pictures: Pictures) -> Self {
+        if pictures == Pictures::Taken {
+            super::prepare_picture_encoder();
+        }
         self.pictures = Some(pictures);
         self
     }

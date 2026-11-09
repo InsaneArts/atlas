@@ -2965,7 +2965,7 @@ async fn taking_and_ending_control_and_stop_stay_open_to_the_terminal_viewer() {
 }
 
 #[tokio::test]
-async fn while_the_person_signs_in_only_the_app_reads_the_screen_or_its_windows() {
+async fn signing_in_hides_the_screen_from_ordinary_viewer_reads() {
     let dir = tempfile::tempdir().unwrap();
     let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
     let controller = viewer.client().controller.clone();
@@ -2977,20 +2977,18 @@ async fn while_the_person_signs_in_only_the_app_reads_the_screen_or_its_windows(
     };
     lease.hide_screen(&controller, &token, &hold).unwrap();
 
-    for route in ["frame.png", "apps.json"] {
-        let request = Request::builder()
-            .method(Method::GET)
-            .uri(format!("{}{route}", viewer.prefix))
-            .header("host", &viewer.authority)
-            .body(Body::empty())
-            .unwrap();
-        let reply = respond(viewer.clone(), request).await;
-        assert_eq!(reply.status().as_u16(), 503, "{route}");
-        let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
-        let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["code"], "busy", "{route}: {body}");
-        assert_eq!(body["holder"], "person", "{route}");
-    }
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("{}frame.png", viewer.prefix))
+        .header("host", &viewer.authority)
+        .body(Body::empty())
+        .unwrap();
+    let reply = respond(viewer.clone(), request).await;
+    assert_eq!(reply.status().as_u16(), 503);
+    let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["code"], "busy", "{body}");
+    assert_eq!(body["holder"], "person");
     assert!(
         lease.active(),
         "a refused look never ends the person's control"

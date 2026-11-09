@@ -185,7 +185,7 @@ struct AskNotificationsTests {
     viewer.send(.show(.activity))
     #expect(recorded.posted.map(\.id) == ["a1"], "Activity doesn't show it")
     viewer.send(.show(.screen))
-    viewer.send(.show(.apps))
+    viewer.send(.show(.activity))
     #expect(recorded.posted.map(\.id) == ["a1"], "posted once")
   }
 

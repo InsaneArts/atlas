@@ -38,6 +38,16 @@ pub const WEB_CONTENT: &str = crate::capability::WEB_CONTENT;
 /// The warning a doctor gives of a failed Save/Open check.
 pub const NATIVE_DIALOGS_FAILED: &str = crate::capability::NATIVE_DIALOGS_FAILED;
 
+/// Initialize macOS's encoder before a fixture starts its input/save deadline.
+/// Its first CGImage call can scan the test executable's bundle resources.
+pub(crate) fn prepare_picture_encoder() {
+    static READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    READY.get_or_init(|| {
+        crate::helper_info::jpeg_rgb(&[200; 24], (4, 2, 12), (4, 0.6))
+            .expect("the fixture's native picture encoder");
+    });
+}
+
 /// Claim `owned` for `task`, kept in `store`.
 pub fn claim_in(store: Store, task: Task, owned: &Owned, state: State) -> Result<()> {
     Claims::in_store(store, task).claim(owned, state)
