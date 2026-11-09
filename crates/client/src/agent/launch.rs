@@ -6,7 +6,7 @@ use crate::{
     client::{AppList, AppRow, Client, Finished},
     handoff, task,
 };
-use atlas_control::Ownership;
+use atlas_control::{Ownership, SharedLease};
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc, time::Instant};
@@ -46,26 +46,24 @@ pub async fn open(
 /// task claims it. With `new_window`, the browser is started anew with the
 /// URL as its argument in a window of its own, as Chromium browsers pass it
 /// to the copy already running, so their own settings pages open too.
-/// `authorize` says whether the person's lease still holds: it is asked
-/// before each launch, a retry included, and again before success is said.
+/// Each launch, a retry included, is sent only while the person's `lease`
+/// still holds its token, checked once connected and held until it is
+/// sent; success is said only while it still holds.
 ///
 /// # Errors
 ///
-/// Returns `authorize`'s refusal, identity, launch and recording failures,
-/// and `spawn-failed` when macOS could not open it. A lost acknowledgement
-/// may follow a launch that went ahead; its outcome stays pending as any
-/// run's.
-pub async fn open_for_person<Authorized>(
+/// Returns `lease-lost` once the lease ran out or was released, identity,
+/// launch and recording failures, and `spawn-failed` when macOS could not
+/// open it. A lost acknowledgement may follow a launch that went ahead; its
+/// outcome stays pending as any run's.
+pub async fn open_for_person(
     client: &Client,
     ownership: &Ownership,
+    lease: (&SharedLease, &str),
     app: &str,
     url: &str,
     new_window: bool,
-    authorize: impl Fn() -> Authorized,
-) -> Result<Value>
-where
-    Authorized: std::future::Future<Output = Result<()>>,
-{
+) -> Result<Value> {
     let mut argv = vec!["/usr/bin/open".to_owned()];
     if new_window {
         argv.push("-n".to_owned());
@@ -78,14 +76,17 @@ where
     }
     argv.push(url.to_owned());
 
-    authorize().await?;
-    let mut finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
-    if !finished.succeeded && cleared_stale_launch(client, ownership, &finished).await? {
-        authorize().await?;
-        finished = client.run_finished(ownership, argv, OUTPUT).await?;
+    let leased = Some(lease);
+    let mut finished = client
+        .run_finished_under(ownership, leased, argv.clone(), OUTPUT)
+        .await?;
+    if !finished.succeeded && cleared_stale_launch(client, ownership, leased, &finished).await? {
+        finished = client
+            .run_finished_under(ownership, leased, argv, OUTPUT)
+            .await?;
     }
-    // A lease that ran out meanwhile ends the sign-in, opened or not.
-    authorize().await?;
+    // A lease that ran out meanwhile ends the person's flow, opened or not.
+    lease.0.lock().await.require(lease.1)?;
     if !finished.succeeded {
         return Err(not_opened(&finished, &[]));
     }
@@ -304,7 +305,7 @@ async fn launch(
 ) -> Result<(Finished, bool)> {
     let mut finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
 
-    if !finished.succeeded && cleared_stale_launch(client, ownership, &finished).await? {
+    if !finished.succeeded && cleared_stale_launch(client, ownership, None, &finished).await? {
         finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
     }
 
@@ -388,6 +389,7 @@ fn not_opened(finished: &Finished, copied: &[crate::handoff::Copied]) -> Error {
 async fn cleared_stale_launch(
     client: &Client,
     ownership: &Ownership,
+    lease: Option<(&SharedLease, &str)>,
     failed: &Finished,
 ) -> Result<bool> {
     let said = failed.said();
@@ -402,7 +404,9 @@ async fn cleared_stale_launch(
         "sh".to_owned(),
         bundle.to_owned(),
     ];
-    let cleared = client.run_finished(ownership, argv, OUTPUT).await?;
+    let cleared = client
+        .run_finished_under(ownership, lease, argv, OUTPUT)
+        .await?;
 
     Ok(!cleared.output().is_empty())
 }

@@ -4500,3 +4500,57 @@ async fn typing_stopped_at_a_later_batch_reports_how_far_it_got_and_is_never_typ
         1
     );
 }
+
+#[tokio::test]
+async fn a_persons_launch_is_never_sent_when_their_lease_runs_out_while_the_helper_is_verified() {
+    use crate::test_support::{Helper, completed};
+    use atlas_control::{Lease, SharedLease};
+    use atlas_core::test_support::UID;
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let lease: SharedLease =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Lease::new(Duration::from_secs(10))));
+    let token = lease.lock().await.acquire(&client.controller).unwrap();
+    let ownership = lease.lock().await.ownership(&token).unwrap();
+
+    // The lease is held still until the helper has been verified for the
+    // launch, and runs out then: before the launch is sent.
+    let verified = helper.proofs();
+    let mut held = lease.clone().lock_owned().await;
+    let expiring = async {
+        while helper.proofs() == verified {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        held.expire_for_test();
+        drop(held);
+    };
+    let mut sent = Vec::new();
+    let launching = helper.serve(
+        async {
+            let (refused, ()) = tokio::join!(
+                open_for_person(
+                    &client,
+                    &ownership,
+                    (&lease, &token),
+                    "Google Chrome",
+                    "https://github.com",
+                    true,
+                ),
+                expiring,
+            );
+            refused
+        },
+        |request| {
+            sent.push(request.clone());
+            Some(completed(""))
+        },
+    );
+    let refused = launching.await.unwrap_err();
+
+    assert_eq!(refused.code, Code::LeaseLost);
+    assert!(helper.proofs() > verified, "the helper was verified first");
+    assert!(sent.is_empty(), "nothing was sent: {sent:?}");
+    assert!(client.controller.pending().unwrap().is_empty());
+    drop(ownership);
+    lease.lock().await.release();
+}

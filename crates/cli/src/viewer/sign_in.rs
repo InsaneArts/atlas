@@ -183,23 +183,19 @@ impl Viewer {
         let ownership = self.lease.lock().await.ownership(&signing.lease)?;
         // Each launch, and its success, only while the sign-in's lease
         // holds: one that ran out meanwhile has ended the sign-in.
-        let authorize = || async {
-            self.lease
-                .lock()
-                .await
-                .require(&signing.lease)
-                .map_err(|_| sign_in_ended())?;
-            self.signing(&signing.lease).await.map(drop)
-        };
         agent::open_for_person(
             client,
             &ownership,
+            (&self.lease, &signing.lease),
             signing.browser.app(),
             page,
             signing.browser.new_window(),
-            authorize,
         )
-        .await?;
+        .await
+        .map_err(|error| match error.code {
+            Code::LeaseLost => sign_in_ended(),
+            _ => error,
+        })?;
         Ok(())
     }
 
