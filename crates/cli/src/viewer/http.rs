@@ -613,7 +613,11 @@ async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool
         Read::Activity => read_reply(viewer.activity().await),
         Read::Sessions => read_reply(viewer.sessions().await),
         Read::Apps if app => read_reply(viewer.apps().await),
-        Read::Apps => read_reply(viewer.client().controller.shown(viewer.apps()).await),
+        // One helper for the whole read: its privacy, and its windows.
+        Read::Apps => {
+            let client = viewer.client();
+            read_reply(client.controller.shown(viewer.apps_of(&client)).await)
+        }
         Read::Cleanup => match viewer.cleanup_preview(query).await {
             Err(error) if error.code == Code::Input => json_response(400, json!(error)),
             outcome => read_reply(outcome),

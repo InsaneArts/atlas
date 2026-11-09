@@ -246,7 +246,14 @@ impl Viewer {
     /// opened each, with those sessions' names. It only reads: nothing is
     /// recorded and no control is taken.
     pub(super) async fn apps(&self) -> Result<Value> {
-        let client = self.client();
+        self.apps_of(&self.client()).await
+    }
+
+    /// [`Viewer::apps`] of `client`'s helper, whichever the settings name by
+    /// the time it is read: a caller that checked that helper's privacy is
+    /// shown that helper's windows, never another's.
+    pub(super) async fn apps_of(&self, client: &Arc<Client>) -> Result<Value> {
+        let client = client.clone();
         let read = async {
             let running = client.running_apps().await?;
             let filter = atlas_client::agent::WindowFilter::default();

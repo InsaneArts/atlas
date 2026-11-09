@@ -858,3 +858,27 @@ async fn a_picture_is_taken_of_the_helper_whose_privacy_was_checked_after_the_se
     moved.controller.end_private().unwrap();
     lease.release();
 }
+
+#[tokio::test]
+async fn the_windows_listed_are_of_the_helper_whose_privacy_was_checked_after_the_settings_moved() {
+    let directory = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let (viewer, helper) = viewer_of(directory.path());
+    let pinned = viewer.client();
+    // The settings move to another helper, which no helper answers for,
+    // while this read is under way for the first.
+    *unpoisoned(&viewer.client) = Arc::new(atlas_client::test_support::client_in(other.path()));
+    let steps = Mutex::new(Vec::new());
+
+    let _ = helper
+        .serve(viewer.apps_of(&pinned), |request| {
+            step(&steps, Fails::Nothing, request)
+        })
+        .await;
+
+    assert!(
+        steps.lock().unwrap().iter().any(|step| step == "apps"),
+        "the first helper was asked: {:?}",
+        steps.lock().unwrap()
+    );
+}
