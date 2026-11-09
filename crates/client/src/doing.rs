@@ -476,7 +476,11 @@ fn says_on(row: &Row, site: Option<&str>) -> String {
                 &within(&format!("type into {field}")),
             ),
             None => worded(
-                &app.map_or("typed text".into(), |app| format!("typed in {app}")),
+                &match (site, app) {
+                    (Some(site), _) => format!("typed on {site}"),
+                    (None, Some(app)) => format!("typed in {app}"),
+                    (None, None) => "typed text".into(),
+                },
                 &within("type"),
             ),
         },
@@ -532,7 +536,7 @@ fn says_on(row: &Row, site: Option<&str>) -> String {
     if row.worked() {
         done
     } else if row.coded(Code::FocusChanged) {
-        not_sent(row, &failed)
+        not_sent(row, site, &failed)
     } else {
         failed
     }
@@ -540,12 +544,15 @@ fn says_on(row: &Row, site: Option<&str>) -> String {
 
 /// What a command refused because another app came to the front did not
 /// do, as a skip rather than a failure: "didn't type in Notes", or
-/// "stopped typing in Notes" when part of its text was sent first.
-fn not_sent(row: &Row, failed: &str) -> String {
+/// "stopped typing in Notes" when part of its text was sent first. In the
+/// person's own app, `site`, the site they listed it was in, stands for
+/// the browser.
+fn not_sent(row: &Row, site: Option<&str>, failed: &str) -> String {
     if row.partial == Some(true) && row.verb.as_deref() == Some("type") {
-        return match row.app.as_deref() {
-            Some(app) => format!("stopped typing in {app}"),
-            None => "stopped typing".into(),
+        return match (site, row.app.as_deref()) {
+            (Some(site), _) => format!("stopped typing on {site}"),
+            (None, Some(app)) => format!("stopped typing in {app}"),
+            (None, None) => "stopped typing".into(),
         };
     }
 

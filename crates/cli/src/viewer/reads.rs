@@ -45,9 +45,19 @@ enum Named {
 }
 
 impl Viewer {
-    /// The helper's status and overview as the app shows them, with
-    /// whether control is held.
+    /// [`Viewer::status_for`] any caller but the person's own app.
+    #[cfg(test)]
     pub(super) async fn status(self: &Arc<Self>) -> Value {
+        self.status_for(false).await
+    }
+
+    /// The helper's status and overview as the app shows them, with
+    /// whether control is held: its recent rows as the person's own app
+    /// shows them when the caller is that app (`person`), with the account
+    /// each acted in and a browser's action said on its site. Any other
+    /// caller, as `atlas watch`, a chat app's view or a script, is shown
+    /// them as an agent is.
+    pub(super) async fn status_for(self: &Arc<Self>, person: bool) -> Value {
         // Reading waits on the helper, for a few seconds at most, following
         // the settings included.
         let until = tokio::time::Instant::now() + READ_DEADLINE;
@@ -88,13 +98,15 @@ impl Viewer {
         let overview = atlas_client::overview::overview(&doctor, active, pending, &activity, now);
         let mut status = atlas_client::overview::Reading::new(doctor, overview, active, now);
         // The recent rows as the person's app shows them, with the account
-        // each acted in: an agent's status never carries it.
-        status.value["overview"]["activity"] = json!(
-            activity
-                .iter()
-                .map(|row| atlas_client::overview::shown_to_person(row, now))
-                .collect::<Vec<_>>()
-        );
+        // each acted in: no other caller's status carries it.
+        if person {
+            status.value["overview"]["activity"] = json!(
+                activity
+                    .iter()
+                    .map(|row| atlas_client::overview::shown_to_person(row, now))
+                    .collect::<Vec<_>>()
+            );
+        }
         atlas_client::overview::add_host_sessions(&mut status, &client, now).await;
 
         if let Some(name) = status.value["overview"]["account"].as_str() {
@@ -121,8 +133,9 @@ impl Viewer {
     }
 
     /// What was done in the helper lately, newest first, as the app lists
-    /// it. Reading it records nothing.
-    pub(super) async fn activity(&self) -> Result<Value> {
+    /// it. Reading it records nothing. For the person's own app (`person`),
+    /// each row is as it shows it: see [`activity_row`].
+    pub(super) async fn activity_for(&self, person: bool) -> Result<Value> {
         let client = self.client();
         // A folder that can't be read is said, never shown as no activity.
         let directory = client.output_dir()?.to_path_buf();
@@ -153,7 +166,7 @@ impl Viewer {
             .iter()
             .zip(pictures)
             .map(|(row, picture)| {
-                let mut shown = activity_row(row, now);
+                let mut shown = activity_row(row, now, person);
                 let (after, facts) = picture.unwrap_or_default();
                 let (after, after_at) = after.unzip();
                 shown["after"] = json!(after);
@@ -513,8 +526,20 @@ async fn account_title(
 /// it. Only these fields go, through [`atlas_client::overview::shown`]:
 /// never typed text, argv, coordinates or titles, which the log never keeps
 /// either.
-pub(super) fn activity_row(row: &atlas_client::activity_log::Row, now: u128) -> Value {
-    let shown = atlas_client::overview::shown_to_person(row, now);
+///
+/// For the person's own app (`person`), it names the listed account it
+/// acted in and what let it, and a browser's action is said on its site;
+/// for anyone else, as for agents, neither.
+pub(super) fn activity_row(
+    row: &atlas_client::activity_log::Row,
+    now: u128,
+    person: bool,
+) -> Value {
+    let shown = if person {
+        atlas_client::overview::shown_to_person(row, now)
+    } else {
+        atlas_client::overview::shown(row, now)
+    };
     let keys = shown.keys();
     let mut fields = json!(shown);
     rename(&mut fields, "actionCount", "count");

@@ -609,8 +609,9 @@ async fn mutation_reply(viewer: &Viewer, owner: Option<&str>, outcome: Result<Va
 /// signs the helper in to an account.
 async fn answer(viewer: &Arc<Viewer>, read: Read, query: Option<&str>, app: bool) -> Response {
     match read {
-        Read::Status => json_response(200, viewer.status().await),
-        Read::Activity => read_reply(viewer.activity().await),
+        // The person's own app alone is shown which account each row acted in.
+        Read::Status => json_response(200, viewer.status_for(app).await),
+        Read::Activity => read_reply(viewer.activity_for(app).await),
         Read::Sessions => read_reply(viewer.sessions().await),
         Read::Apps if app => read_reply(viewer.apps().await),
         // One helper for the whole read: its privacy, and its windows.

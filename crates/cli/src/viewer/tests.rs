@@ -1927,7 +1927,7 @@ fn the_apps_activity_row_keeps_its_fields_and_values() {
     let rows = atlas_client::activity_log::recent(dir.path(), 5);
     let shown: Vec<Value> = rows
         .iter()
-        .map(|row| activity_row(row, 100_000_000_000))
+        .map(|row| activity_row(row, 100_000_000_000, true))
         .collect();
     // AtlasService decodes this same fixture, so producer and consumer cannot
     // silently drift while asserting separate copies of the wire contract.
@@ -1960,7 +1960,7 @@ fn a_commands_logical_id_holds_from_start_to_end_and_an_input_runs_holds_as_it_g
         )
         .unwrap();
     };
-    let shown = || activity_row(&recent(dir.path(), 1)[0], 5_000_000_000);
+    let shown = || activity_row(&recent(dir.path(), 1)[0], 5_000_000_000, true);
 
     write(std::slice::from_ref(&start));
     let before = shown();
@@ -1992,7 +1992,10 @@ fn a_commands_logical_id_holds_from_start_to_end_and_an_input_runs_holds_as_it_g
     spoofed["firstInputId"] = json!("untrusted");
     assert_eq!(Row::parse(&spoofed).unwrap().logical_id(), "2000000000");
     let standalone = Row::parse(&json!({"operation": "read"})).unwrap();
-    assert_eq!(activity_row(&standalone, 0)["logicalId"], standalone.id);
+    assert_eq!(
+        activity_row(&standalone, 0, true)["logicalId"],
+        standalone.id
+    );
 }
 
 #[tokio::test]
@@ -2963,4 +2966,68 @@ async fn the_persons_questions_and_resume_are_the_apps_and_stop_is_anyones() {
     let (status, reply) = posted_as(&viewer, "control/hold", &json!({"on": false}), &secret).await;
     assert_eq!(status, 200, "{reply}");
     assert!(!viewer.client().controller.stop_noted());
+}
+
+#[tokio::test]
+async fn only_the_app_is_shown_which_account_a_row_acted_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+    let output = viewer.client().output_dir().unwrap().to_path_buf();
+    let row = json!({"at": "1", "operation": "input",
+        "ok": true, "actor": "agent", "verb": "type", "app": "Google Chrome",
+        "command": "000000000001",
+        "account": {"name": "github.com",
+            "key": {"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}},
+        "allowed": "task"});
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(
+        output.join(atlas_client::activity_log::FILE),
+        format!("{row}\n"),
+    )
+    .unwrap();
+
+    // What `atlas watch --once` and a chat app's status read: no secret.
+    let url = viewer.url.clone();
+    let (status, activity) = tokio::task::spawn_blocking(move || {
+        let read = |route| {
+            serde_json::from_slice::<Value>(
+                &fetch(&url, route, Duration::from_secs(5), 1 << 22).unwrap(),
+            )
+            .unwrap()
+        };
+        (read("status.json"), read("activity.json"))
+    })
+    .await
+    .unwrap();
+    for shown in [&status["overview"]["activity"][0], &activity["activity"][0]] {
+        assert!(shown.get("account").is_none(), "{shown}");
+        assert!(shown.get("allowed").is_none(), "{shown}");
+        assert_eq!(shown["says"], "typed in Google Chrome");
+    }
+    assert!(!status.to_string().contains("github.com"));
+    assert!(!activity.to_string().contains("github.com"));
+
+    // The app, naming itself, is shown both.
+    let secret = viewer.app_secret.clone();
+    for route in ["status.json", "activity.json"] {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("{}{route}", viewer.prefix))
+            .header("host", &viewer.authority)
+            .header(http::APP_SECRET_HEADER, &secret)
+            .body(Body::empty())
+            .unwrap();
+        let reply = respond(viewer.clone(), request).await;
+        let body: Value =
+            serde_json::from_slice(&to_bytes(reply.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let shown = match route {
+            "status.json" => &body["overview"]["activity"][0],
+            _ => &body["activity"][0],
+        };
+        assert_eq!(shown["account"]["name"], "github.com", "{route}");
+        assert_eq!(shown["allowed"], "task", "{route}");
+        assert_eq!(shown["says"], "typed on github.com", "{route}");
+    }
+    server.abort();
 }
