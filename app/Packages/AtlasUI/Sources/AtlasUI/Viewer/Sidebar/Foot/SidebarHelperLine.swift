@@ -24,6 +24,7 @@ struct SidebarHelperLine: View {
       }
       .buttonStyle(.row(corner: ViewerLayout.helperCircle / 2))
       .fixedSize()
+      .padding(.leading, ViewerLayout.helperCircleInset)
     } else {
       menu {
         SidebarHelperLabel(helper: helper)

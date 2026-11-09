@@ -101,6 +101,9 @@ extension ViewerLayout {
   static let tallSidebar = ViewerThreshold(fallsUnder: 420, room: fitRoom)
   /// 44: the circle the helper's mark stands alone in, in a short window, a row's height across.
   static let helperCircle = sidebarRowHeight
+  /// 2: the circle's inset from the row's leading edge, so the mark in it stands where it does in the whole row, on the
+  /// session icons' axis.
+  static let helperCircleInset = sidebarRowInset + sidebarIcon / 2 - helperCircle / 2
 
   /// The room the sidebar takes at the window's leading edge: its width, or none while hidden. Its content keeps its
   /// width as it hides, so its rows are cut off by its narrowing edge rather than laid out again.
