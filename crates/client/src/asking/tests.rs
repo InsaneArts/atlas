@@ -638,11 +638,7 @@ fn a_lost_once_claim_never_replays_a_confirmed_prefix() {
         // worker, this queued signal runs only once that wait returned.
         let (sent, received) = std::sync::mpsc::channel();
         let _signal = tokio::task::spawn_blocking(move || sent.send(()).unwrap());
-        std::fs::write(
-            asks.folder().join(format!("{}.answer", ask.id)),
-            b"\"once\"",
-        )
-        .unwrap();
+        asks.answer(&ask.id, Answer::Once, true, now_ms()).unwrap();
         received
             .recv_timeout(std::time::Duration::from_secs(3))
             .unwrap();
