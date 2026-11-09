@@ -2071,3 +2071,34 @@ async fn raw_job_expectation_mismatches_never_signal_or_rewrite_the_record() {
     assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
     assert_ne!(raw_job_files(folder.path()), before);
 }
+
+#[test]
+fn an_ended_jobs_record_is_kept_while_a_process_it_left_still_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    let mut child =
+        atlas_core::spawn::spawn(std::process::Command::new("/bin/sleep").arg("30")).unwrap();
+    let mut job = record();
+    job.uid = nix::unistd::getuid().as_raw();
+    job.state = JobState::Ended;
+    job.ended = Some(Ended {
+        how: How::LeaderGone,
+        at: 5,
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: vec![Left {
+            pid: i32::try_from(child.id()).unwrap(),
+            name: "sleep".into(),
+        }],
+    });
+    assert!(store.put(&job));
+
+    store.prune(u64::MAX);
+    assert!(store.holds(&job.id), "a survivor keeps its record");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    store.prune(u64::MAX);
+    assert!(!store.holds(&job.id), "it goes once nothing it left runs");
+}

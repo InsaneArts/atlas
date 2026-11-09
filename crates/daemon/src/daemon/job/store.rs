@@ -170,8 +170,9 @@ impl Store {
 
     /// Remove ended records older than a week, with their logs, and the
     /// oldest ended ones past [`RECORDS_MAX`]. A record of a job that may
-    /// still run, cannot be read, or has an unacknowledged write is never
-    /// removed. The in-memory result must reach disk before retention can
+    /// still run, cannot be read, has an unacknowledged write, or left
+    /// processes that may still run as its account is never removed: it is
+    /// what keeps the person from signing in beside them. The in-memory result must reach disk before retention can
     /// discard it and the previous durable record. Nothing is removed while
     /// a scan cannot account for every record. Whether it pruned.
     pub(super) fn prune(&mut self, now: u64) -> bool {
@@ -186,7 +187,8 @@ impl Store {
             .filter_map(|read| match read {
                 Found::Record(record)
                     if record.state == JobState::Ended
-                        && !self.unwritten.contains_key(&record.id) =>
+                        && !self.unwritten.contains_key(&record.id)
+                        && !left_may_run(&record) =>
                 {
                     Some((
                         record
@@ -210,4 +212,21 @@ impl Store {
         }
         true
     }
+}
+
+/// Whether a process the ended job of `record` left may still run as the
+/// account the job ran as; one macOS won't describe may.
+fn left_may_run(record: &Record) -> bool {
+    record.ended.as_ref().is_some_and(|ended| {
+        ended
+            .left
+            .iter()
+            .any(|left| match atlas_core::process::info(left.pid) {
+                Ok(Some(info)) => {
+                    !info.zombie && (info.uid == record.uid || info.ruid == record.uid)
+                }
+                Ok(None) => false,
+                Err(_) => true,
+            })
+    })
 }
