@@ -477,17 +477,82 @@ async fn a_refused_or_late_picture_never_holds_the_input_back() {
         assert!(!log.contains(&"frame sent".to_owned()));
         assert!(pictures(&client).is_empty(), "{pictures_answer:?}");
         assert!(rows(&client)[0].get("before").is_none());
-        if pictures_answer == Pictures::Cancelled {
-            let cancelled = log.iter().position(|op| op == "frame cancelled");
-            let input = log.iter().position(|op| op == "input");
-            assert!(
-                cancelled
-                    .zip(input)
-                    .is_some_and(|(cancelled, input)| cancelled < input),
-                "the input waits for the cancel's answer: {log:?}"
-            );
-        }
     }
+}
+
+/// A picture whose cancel is observed, with its answer held by the test.
+fn cancellable_picture() -> (Taking, oneshot::Receiver<()>, oneshot::Sender<()>) {
+    let directory = tempfile::tempdir().unwrap();
+    let admitted = crate::test_support::client(directory.path())
+        .controller
+        .screen_visible()
+        .unwrap();
+    let (cancel, cancelled) = oneshot::channel();
+    let (noticed, notice) = oneshot::channel();
+    let (answer, answered) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        cancelled.await.unwrap();
+        noticed.send(()).unwrap();
+        answered.await.unwrap();
+        Err(Error::new(Code::Capture, "The picture was cancelled"))
+    });
+    (
+        Taking {
+            task,
+            deadline: (tokio::time::Instant::now() + WAIT).into_std(),
+            cancel: Some(cancel),
+            admitted,
+        },
+        notice,
+        answer,
+    )
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_picture_waits_for_the_cancel_answer_before_its_deadline() {
+    let (taking, cancelled, answer) = cancellable_picture();
+    let started = tokio::time::Instant::now();
+    let waiting = tokio::spawn(taking.taken());
+    cancelled.await.unwrap();
+    assert_eq!(started.elapsed(), WAIT - CANCEL);
+    assert!(!waiting.is_finished());
+    answer.send(()).unwrap();
+    assert!(waiting.await.unwrap().is_none());
+    assert_eq!(started.elapsed(), WAIT - CANCEL);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_missing_picture_cancel_answer_stops_delaying_input_at_the_deadline() {
+    let (taking, cancelled, _answer) = cancellable_picture();
+    let started = tokio::time::Instant::now();
+    let waiting = tokio::spawn(taking.taken());
+    cancelled.await.unwrap();
+    tokio::time::advance(CANCEL - Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+    assert!(waiting.await.unwrap().is_none());
+    assert_eq!(started.elapsed(), WAIT);
+}
+
+#[tokio::test]
+async fn a_frame_sends_its_cancel_and_reads_the_daemons_answer() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Cancelled, "key");
+    let (cancel, cancelled) = oneshot::channel();
+    cancel.send(()).unwrap();
+    let picture = helper
+        .serve(
+            frame(
+                client.transport.clone(),
+                epoch(),
+                std::process::id(),
+                cancelled,
+            ),
+            |request| panic!("nothing else is asked: {request}"),
+        )
+        .await;
+    assert!(matches!(picture, Err(error) if error.code == Code::Cancelled));
+    assert!(helper.log().contains(&"frame cancelled".to_owned()));
 }
 
 #[tokio::test]
@@ -550,10 +615,9 @@ async fn a_picture_comes_only_from_the_verified_daemon() {
 }
 
 #[tokio::test]
-async fn a_late_picture_is_given_up_at_its_deadline() {
+async fn a_late_picture_is_discarded_and_asked_for_once_per_command() {
     let directory = tempfile::tempdir().unwrap();
     let (client, helper) = agent(directory.path(), Pictures::Late, "key");
-    let started = Instant::now();
     let taking = client.picture_before(&epoch(), std::process::id()).unwrap();
     assert!(
         client
@@ -567,12 +631,6 @@ async fn a_late_picture_is_given_up_at_its_deadline() {
         })
         .await;
     assert!(picture.is_none());
-    let waited = started.elapsed();
-    assert!(waited >= WAIT, "{waited:?}");
-    assert!(
-        waited < WAIT + Duration::from_millis(80),
-        "the cancel's answer is waited for within the deadline: {waited:?}"
-    );
 }
 
 /// The session a picture is asked of.
