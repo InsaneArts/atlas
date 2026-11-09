@@ -24,8 +24,12 @@ struct FooterSlotMotionTests {
     #expect(crossing.isEmpty, "the sound button was drawn over Stop: \(crossing)")
   }
 
-  /// The centre of Stop's square in a standard window, in points from its top left.
-  static let stopMark = CGPoint(x: 1215.5, y: 870)
+  /// Points on the strokes of Stop's word in a standard window, in points from its top left: spread across it, wider
+  /// than the sound button's mark, so the mark passing over them never lights most of them.
+  static let stopWord: [CGPoint] = [1234, 1238.5, 1242, 1247.5, 1250, 1255]
+    .map { CGPoint(x: $0, y: 870) }
+  /// 4: how many of ``stopWord``'s points must be lit for Stop to count as drawn.
+  static let stopLit = 4
   /// Points in Stop's capsule, before its square and after its word, where only another button's mark draws: across
   /// the band the sound button's mark takes.
   static let stopRoom: [CGPoint] = [1189, 1193, 1197, 1201, 1205, 1260, 1264, 1268, 1272, 1276, 1280]
@@ -56,9 +60,15 @@ struct FooterSlotMotionTests {
       .map { moment in
         Motion.Pose.hold(at: moment)
         host.render()
-        let lit = try host.brightness(at: [stopMark] + stopRoom)
+        let lit = try host.brightness(at: stopWord + stopRoom)
           .map { $0 > drawn }
-        return FooterSlotFrame(moment: moment, stopDrawn: lit[0], soundInStop: lit.dropFirst().contains(true))
+        let word = lit.prefix(stopWord.count)
+          .filter { $0 }
+        return FooterSlotFrame(
+          moment: moment,
+          stopDrawn: word.count >= stopLit,
+          soundInStop: lit.dropFirst(stopWord.count).contains(true)
+        )
       }
   }
 }

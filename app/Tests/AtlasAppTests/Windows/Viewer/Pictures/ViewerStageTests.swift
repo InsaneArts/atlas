@@ -16,8 +16,14 @@ struct ViewerStageTests {
     defer { Motion.Pose.hold(at: previous) }
     let host = ViewerHost(try Self.activity(lines: 80))
     let list = try #require(host.scrollViews.first, "Activity has its list")
+    let width = list.contentView.frame.width
     list.contentView.scroll(to: NSPoint(x: 0, y: Self.scrolled))
     list.reflectScrolledClipView(list.contentView)
+    // SwiftUI hears a scroll on the run loop's later turns, as it would a wheel's: take a few, each waiting for nothing.
+    let loop = RunLoop.main
+    for _ in 0..<Self.settlingTurns {
+      loop.run(mode: .default, before: .distantPast)
+    }
     var steps = ["scrolled: \(Self.describe(list))"]
     host.show(PreviewStates.viewerWorking)
     steps.append("screen: \(Self.describe(list))")
@@ -30,48 +36,50 @@ struct ViewerStageTests {
     // Activity's list is all there is: nothing was built again, and nothing old is still leaving.
     #expect(host.scrollViews.count == 1)
     #expect(host.scrollViews.contains { $0 === list }, "Activity's list was built again")
+    // Hidden, it kept its scroll bar, so it was never tiled again, and it stayed where it was read.
+    #expect(list.contentView.frame.width == width, "the list was tiled again: \(steps)")
     #expect(list.contentView.bounds.origin.y == Self.scrolled, "the list lost its place: \(steps)")
   }
 
-  @Test("Activity hidden behind the Screen keeps its list as it was laid out")
-  func activityHiddenBehindTheScreenKeepsItsLayout() throws {
+  @Test(
+    "Activity hidden behind the Screen keeps its rows where they stood, with the small screen's room or without it",
+    arguments: [true, false]
+  )
+  func activityHiddenBehindTheScreenKeepsItsRows(hasPicture: Bool) throws {
     let previous = Motion.Pose.moment
     Motion.Pose.hold(at: .zero)
     defer { Motion.Pose.hold(at: previous) }
-    let host = ViewerHost(try Self.activity(lines: 80))
-    let list = try #require(host.scrollViews.first, "Activity has its list")
-    let laidOut = try #require(list.documentView?.frame)
-    let before = Self.describe(list)
-    host.show(PreviewStates.viewerWorking)
-    Self.settle(host)
-    // The small screen leaves with Activity, but the hidden list keeps the room it kept under it.
-    #expect(
-      list.documentView?.frame == laidOut,
-      "the hidden list was laid out again: \(before) became \(Self.describe(list))"
-    )
-  }
-
-  @Test("Activity with no small screen keeps its list as it was laid out behind a Screen with no picture")
-  func activityWithNoPictureKeepsItsLayoutBehindTheScreen() throws {
-    let previous = Motion.Pose.moment
-    Motion.Pose.hold(at: .zero)
-    defer { Motion.Pose.hold(at: previous) }
+    // In a top corner, where the room the list keeps under the small screen stands above its first row.
     var activity = try Self.activity(lines: 80)
-    activity.mini = nil
     activity.miniCorner = .topTrailing
-    var screen = PreviewStates.viewerNotReady
+    var screen = PreviewStates.viewerWorking
     screen.miniCorner = .topTrailing
+    if !hasPicture {
+      activity.mini = nil
+      screen = PreviewStates.viewerNotReady
+      screen.miniCorner = .topTrailing
+    }
     let host = ViewerHost(activity)
     let list = try #require(host.scrollViews.first, "Activity has its list")
-    let laidOut = try #require(list.documentView?.frame)
-    let before = Self.describe(list)
+    let first = try #require(Self.top(of: Self.firstRow, in: list, host: host), "the first row is drawn")
     host.show(screen)
     Self.settle(host)
-    // No picture, so no small screen comes back over the list: it keeps no room for one.
-    #expect(
-      list.documentView?.frame == laidOut,
-      "the hidden list was laid out again: \(before) became \(Self.describe(list))"
-    )
+    // The small screen leaves with Activity, or never was, and the hidden list keeps the room it had.
+    #expect(Self.top(of: Self.firstRow, in: list, host: host) == first, "the hidden list was laid out again")
+  }
+
+  /// The newest session's row, the first in the list.
+  static let firstRow = "session line 79"
+
+  /// How far below `list`'s top the row reporting `id` stands, in the window as it is drawn now.
+  ///
+  /// - Parameters:
+  ///   - id: The row's reported name.
+  ///   - list: The list's scroll view.
+  ///   - host: The window.
+  /// - Returns: The distance, or nil while the row is not drawn.
+  static func top(of id: String, in list: NSScrollView, host: ViewerHost) -> CGFloat? {
+    host.frames[id].map { $0.minY - host.frameFromTop(of: list).minY }
   }
 
   /// How `list` stands, for a failure to say: where it is scrolled, its content's frame, its visible width, and its
