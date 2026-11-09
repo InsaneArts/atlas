@@ -230,14 +230,11 @@ struct ViewerPresenterTests {
     #expect(ViewerPresenter.state(snapshot).footer.latest.id == typing.id, "a longer composition updates in place")
   }
 
-  @Test(
-    "the screen in the corner of every list reads paused while the picture is",
-    arguments: [ViewerPlace.activity, .apps]
-  )
-  func theMiniScreenFollowsThePause(place: ViewerPlace) throws {
+  @Test("the screen in Activity's corner reads paused while the picture is")
+  func theMiniScreenFollowsThePause() throws {
     var snapshot = watching(try status(["overview": ["mode": "observing", "state": "idle"]]))
     snapshot.reading.picture = SampleDesktop.picture
-    snapshot.session.place = place
+    snapshot.session.place = .activity
     snapshot.session.paused = true
     #expect(ViewerPresenter.state(snapshot).mini?.isPaused == true)
     snapshot.session.paused = false
@@ -289,8 +286,8 @@ struct ViewerPresenterTests {
     )
     let line = ViewerPresenter.helperLine(ready)
     #expect(line.tone == .ready)
-    #expect(line.words == "Helper ready · atlas")
-    let facts = line.help.components(separatedBy: "\n")
+    #expect(line.title == "Atlas is ready")
+    let facts = line.menu.first?.items.map(\.title) ?? []
     #expect(facts.contains("Ready to act: All checks pass"), "\(facts)")
     #expect(facts.contains("Save and Open dialogs unavailable: Didn't work 5 min ago."), "\(facts)")
 
@@ -303,6 +300,6 @@ struct ViewerPresenterTests {
     )
     let setup = ViewerPresenter.helperLine(notReady)
     #expect(setup.tone == .attention)
-    #expect(setup.words == "Helper needs setup · 1 check", "a readiness check still asks for setup, alone")
+    #expect(setup.line == "1 check doesn't pass", "a readiness check still asks for setup, alone")
   }
 }

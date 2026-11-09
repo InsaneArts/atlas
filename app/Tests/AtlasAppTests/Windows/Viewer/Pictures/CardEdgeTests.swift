@@ -12,7 +12,7 @@ import Testing
 struct CardEdgeTests {
   @Test(
     "the list keeps the card's edges through the sidebar hiding and showing, full screen and a narrow and wide window",
-    arguments: [Pane.activity, .apps, .screen],
+    arguments: [Pane.activity, .screen],
     [ViewerSidebarMode.full, .hidden]
   )
   func theListKeepsTheCardsEdges(pane: Pane, mode: ViewerSidebarMode) async throws {
@@ -71,7 +71,6 @@ struct CardEdgeTests {
   /// A pane the window shows.
   enum Pane: CustomTestStringConvertible {
     case activity
-    case apps
     case screen
 
     /// The window showing the pane, with the sidebar standing as `mode`.
@@ -82,7 +81,6 @@ struct CardEdgeTests {
       var state =
         switch self {
         case .activity: PreviewStates.viewerActivity
-        case .apps: PreviewStates.viewerApps
         case .screen: PreviewStates.viewerWorking
         }
       state.sidebar.mode = mode
@@ -92,7 +90,6 @@ struct CardEdgeTests {
     var testDescription: String {
       switch self {
       case .activity: "Activity"
-      case .apps: "Apps"
       case .screen: "the Screen"
       }
     }

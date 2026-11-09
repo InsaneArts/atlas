@@ -33,7 +33,7 @@
       return next
     }
 
-    /// The Activity or Apps sample narrowed by the sidebar's search, as the list shown follows it.
+    /// The Activity sample narrowed by the sidebar's search, as the list shown follows it.
     ///
     /// - Parameters:
     ///   - state: The sample shown.
@@ -44,15 +44,6 @@
       switch state.pane {
       case .activity(let activity):
         next.pane = .activity(activitySample(activity, query: query, filter: activity.filters.selected))
-      case .apps(var apps):
-        apps.groups = sampleAppsPane.groups
-          .map { group in
-            var kept = group
-            kept.cards = group.cards.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
-            return kept
-          }
-          .filter { !$0.cards.isEmpty }
-        next.pane = .apps(apps)
       case .screen:
         break
       }

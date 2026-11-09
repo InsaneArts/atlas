@@ -25,7 +25,7 @@ struct HelperCommandsGrantTests {
     service.hold = ["acquire"]
     let taking = Task { await viewer.control.takeControl() }
     try await settle("control was never asked for") { service.held["acquire"] != nil }
-    viewer.send(.show(.apps))
+    viewer.send(.show(.activity))
     let switching = Task { await viewer.actions.switchTo("atlas") }
     try await settle("the switch never reached its wait") { viewer.barrier.waiters == 1 }
     #expect(commands.ran.isEmpty, "nothing runs while the acquisition is unanswered")

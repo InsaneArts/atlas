@@ -1,5 +1,5 @@
 extension ViewerPlace {
-  /// The places whose panes the window keeps built once shown, in the Library's order: every list, not the Screen,
+  /// The places whose panes the window keeps built once shown, in the View menu's order: every list, not the Screen,
   /// whose picture and input surface exist only while it shows.
   public static let keptPlaces = allCases.filter(\.isKept)
 

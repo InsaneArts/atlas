@@ -6,23 +6,22 @@ struct ActivityArrivals: Equatable {
   private var met: Set<String> = []
   /// The sessions waiting, as last met.
   private var held: Set<String> = []
-  /// The filter chosen as the list was last met.
-  private var filter: ViewerActivityFilter?
-  /// What the pane was called as the list was last met: "Activity", or the chosen session's name.
-  private var title: String?
+  /// Which list showed as it was last met: whose work and under which filter.
+  private var list: ViewerActivityListKey?
   /// The sidebar's search as the list was last met.
   private var query: String?
 
   /// The sessions that wait in `state`: those waiting already that it still lists, and, while the person is scrolled
-  /// down, each session never met that stands above every session shown. A new filter, session choice or search is
-  /// the person's own change, so none waits then; nor on the list's first reading.
+  /// down, each session never met that stands above every session shown. Another list (``ViewerActivityState/list``),
+  /// its session or filter chosen by the person, or a new search is the person's own change, so none waits then; nor
+  /// on the list's first reading.
   ///
   /// - Parameters:
   ///   - state: What the list shows.
   ///   - isAtTop: Whether the list sits at its very top.
   /// - Returns: The sessions' identities.
   func waiting(in state: ViewerActivityState, isAtTop: Bool) -> Set<String> {
-    guard !met.isEmpty, state.filters.selected == filter, state.title == title, state.query == query else {
+    guard !met.isEmpty, state.list == list, state.query == query else {
       return []
     }
     var waiting = held
@@ -45,8 +44,7 @@ struct ActivityArrivals: Equatable {
   mutating func meet(_ state: ViewerActivityState, isAtTop: Bool) {
     held = waiting(in: state, isAtTop: isAtTop)
     met.formUnion(state.days.flatMap(\.sessions).map(\.id))
-    filter = state.filters.selected
-    title = state.title
+    list = state.list
     query = state.query
   }
 

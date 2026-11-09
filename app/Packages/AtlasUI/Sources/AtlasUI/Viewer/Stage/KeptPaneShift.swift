@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// How Activity and Apps show and hide as the pane changes once each has been shown: the pane is kept, so
+/// How Activity shows and hides as the pane changes once it has been shown: the pane is kept, so
 /// a switch back fades the one already built instead of building it again, which took the main thread 15 to 45
 /// milliseconds a switch. The shared ``PaneHandoff`` waits for the outgoing pane to disappear before admitting
 /// the latest destination. Each pane fades on ``PaneShift/arrival`` and ``PaneShift/departure``.
 /// Its scroll indicators wait until it has faded in (``EnvironmentValues/paneSettled``). Hidden, it takes
-/// no clicks, keyboard focus or VoiceOver, and tells its views it is not showing (``EnvironmentValues/paneShows``).
+/// no clicks or VoiceOver, and tells its views it is not showing (``EnvironmentValues/paneShows``), so they take no
+/// keyboard focus; its list's scroll view stays enabled, as a disabled one drops its scroll bar, and a classic scroll
+/// bar going would lay the hidden list out again and lose its place.
 struct KeptPaneShift: ViewModifier {
   /// Whether the pane shows.
   let isShown: Bool
@@ -34,7 +36,6 @@ struct KeptPaneShift: ViewModifier {
       .opacity(drawn || (isShown && !animatesArrivals) ? 1 : 0)
       .offset(y: ListRise.offset(isLowered: lowered && animatesArrivals))
       .allowsHitTesting(isShown)
-      .disabled(!isShown)
       .accessibilityHidden(!isShown)
       .zIndex(isShown ? 1 : 0)
       .onChange(of: isShown, initial: true) { _, shown in fade(shown) }

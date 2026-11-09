@@ -2,8 +2,7 @@ import AtlasUI
 import CoreGraphics
 
 extension ViewerPresenter {
-  /// The Screen: the picture and how it is drawn, or why there is none; a window shown from the Apps list, and what a
-  /// right click on the picture offers.
+  /// The Screen: the picture and how it is drawn, or why there is none, and what a right click on the picture offers.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The screen.
@@ -17,7 +16,6 @@ extension ViewerPresenter {
       empty: reading.picture == nil ? empty(snapshot) : nil,
       actualSize: session.actualSize && reading.picture != nil
         ? display.map { CGSize(width: $0.width, height: $0.height) } : nil,
-      outline: outline(snapshot),
       menu: screenMenu(snapshot)
     )
   }

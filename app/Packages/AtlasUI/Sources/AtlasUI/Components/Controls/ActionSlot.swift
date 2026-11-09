@@ -1,12 +1,11 @@
 import SwiftUI
 
 /// A place for a control that shows only while its action applies, such as Keys while the person has control.
-/// The control grows in from its leading edge and shrinks away there; the row it sits in carries the
-/// animation (``ActionSlotRow``), so the controls beside it slide to close the gap as the slot goes from
-/// nothing to its width and back. Under Reduce Motion it only fades.
+/// The row it sits in moves its controls on ``Motion/state`` as the slot comes or goes (``ActionSlotRow``), and the
+/// control rides that move (``ActionSlotBeat``): coming, it shows only once its neighbours have nearly made room for
+/// it; going, it has faded before they reach its place, so a sliding neighbour never passes over it. Under Reduce Motion
+/// it only fades.
 struct ActionSlot: ViewModifier {
-  /// Close to full size so the control reads as arriving rather than popping.
-  private static let arrivingScale: CGFloat = 0.94
   /// Whether the action applies, so the control shows.
   let isShown: Bool
   @Environment(\.motionReduced) private var reduceMotion
@@ -18,25 +17,21 @@ struct ActionSlot: ViewModifier {
   func body(content: Content) -> some View {
     if isShown {
       content
-        .transition(Motion.transition(growing, reduceMotion: reduceMotion))
+        .transition(Motion.transition(Self.beats, reduceMotion: reduceMotion))
     }
   }
 
-  /// The control growing from its leading edge as it fades in, and shrinking back as it fades out.
-  private var growing: AnyTransition {
-    AnyTransition.scale(scale: Self.arrivingScale, anchor: .leading)
-      .combined(with: .opacity)
+  /// The control coming in on the last of the row's move and going on the first of it.
+  private static var beats: AnyTransition {
+    .modifier(active: ActionSlotBeat(progress: .zero), identity: ActionSlotBeat(progress: 1))
   }
 
-  /// How a row moves as its slots' controls come or go.
+  /// How a row moves its controls as its slots' controls come or go.
   ///
-  /// - Parameters:
-  ///   - isShown: Whether the controls are showing now.
-  ///   - reduceMotion: Whether the Reduce Motion setting is on.
-  /// - Returns: ``Motion/arrive`` as they come, ``Motion/leave`` as they go, and the short fade ``Motion/reduced``
-  ///   under Reduce Motion.
-  nonisolated static func animation(isShown: Bool, reduceMotion: Bool) -> Animation {
-    Motion.animation(isShown ? Motion.arrive : Motion.leave, reduceMotion: reduceMotion, reduced: Motion.reduced)
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: ``Motion/state``, or the short fade ``Motion/reduced`` under Reduce Motion.
+  nonisolated static func animation(reduceMotion: Bool) -> Animation {
+    Motion.animation(Motion.state, reduceMotion: reduceMotion, reduced: Motion.reduced)
   }
 }
 

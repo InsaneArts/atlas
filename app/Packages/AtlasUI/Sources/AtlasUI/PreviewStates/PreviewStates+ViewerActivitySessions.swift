@@ -4,7 +4,7 @@
     /// clicks.
     @MainActor public static let viewerActivityBySession: ViewerState = {
       var state = viewerSessions
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 14])
+      state.sidebar.sessions.chosen = .all
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(bySessionActivity)
@@ -18,6 +18,7 @@
       state.alert = nil
       state.sidebar.helper = viewerHelperNeedsYou(alertUp: false)
       state.sidebar.sessions = ViewerSessionsState(
+        chosen: .all,
         icons: [SessionSamples.claudeIcon, SessionSamples.codexIcon, SessionSamples.cursorIcon],
         liveCount: 3,
         groups: [
@@ -26,7 +27,6 @@
           ViewerSessionGroup(.idle, rows: [sessionRows[2]]),
         ]
       )
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 14])
       state.footer.latest = ViewerLatestLine(
         id: "c1",
         icon: SessionSamples.claudeIcon,
@@ -44,8 +44,15 @@
     @MainActor public static let viewerActivityOneSession: ViewerState = {
       var state = viewerActivityBySession
       state.sidebar.sessions.chosen = .one(SessionSamples.claudeKey)
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 6])
       state.pane = .activity(oneSessionActivity)
+      return state
+    }()
+
+    /// Activity for Codex alone, chosen in the sidebar after Claude Code: other runs from the first row down.
+    @MainActor public static let viewerActivityOtherSession: ViewerState = {
+      var state = viewerActivityBySession
+      state.sidebar.sessions.chosen = .one(SessionSamples.codexKey)
+      state.pane = .activity(otherSessionActivity)
       return state
     }()
 
@@ -53,7 +60,7 @@
     /// the retry that worked.
     @MainActor public static let viewerFocusChanged: ViewerState = {
       var state = viewerIdle
-      state.sidebar.library = viewerLibrary(.activity, counts: [.activity: 3])
+      state.sidebar.sessions.chosen = .all
       state.mini = SampleDesktop.picture
         .map { MiniScreenState(picture: $0) }
       state.pane = .activity(focusActivity)

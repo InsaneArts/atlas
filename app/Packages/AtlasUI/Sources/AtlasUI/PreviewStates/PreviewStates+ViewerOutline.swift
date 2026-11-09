@@ -207,8 +207,55 @@
       session.runs[2] = chromeRunOpen
       return ViewerActivityState(
         title: "Typing in TextEdit",
+        session: .one(SessionSamples.claudeKey),
         meta: "5,044 actions today",
         filters: activityFilters(problems: 1, pictures: 339),
+        days: [ViewerActivityDay(id: "today", title: "", sessions: [session])]
+      )
+    }
+
+    /// Codex alone, chosen in the sidebar: its runs in Safari, Notes and between them at the first level.
+    @MainActor static var otherSessionActivity: ViewerActivityState {
+      let runs = [
+        ViewerOutlineRun(
+          id: "run.codex.safari",
+          icon: sampleApp(SampleAppIcons.safari, "Safari"),
+          name: "Safari",
+          summary: "Opened the landing page and scrolled · 14 actions",
+          time: "10:12–10:14",
+          strip: ViewerPictureStrip(run: "run.codex.safari", tiles: outlineTiles("codex-safari", count: 3), total: 9)
+        ),
+        ViewerOutlineRun(
+          id: "run.codex.commands",
+          icon: .symbol(.terminal),
+          name: "Commands",
+          summary: "Ran 2 commands",
+          time: "10:11"
+        ),
+        ViewerOutlineRun(
+          id: "run.codex.notes",
+          icon: sampleApp(SampleAppIcons.notes, "Notes"),
+          name: "Notes",
+          summary: "Typed the release notes · 6 actions",
+          time: "10:08–10:10",
+          strip: ViewerPictureStrip(run: "run.codex.notes", tiles: outlineTiles("codex-notes", count: 2), total: 2)
+        ),
+      ]
+      let session = ViewerOutlineSession(
+        id: "session.codex.landing",
+        icon: SessionSamples.codexIcon,
+        agent: "Codex",
+        project: "atlas-landing",
+        summary: "Safari and Notes · 22 actions",
+        time: "10:08–10:14",
+        showsHead: false,
+        runs: runs
+      )
+      return ViewerActivityState(
+        title: "atlas-landing",
+        session: .one(SessionSamples.codexKey),
+        meta: "22 actions today",
+        filters: activityFilters(pictures: 11),
         days: [ViewerActivityDay(id: "today", title: "", sessions: [session])]
       )
     }
@@ -386,6 +433,7 @@
     /// Claude Code chosen before it did anything in the helper.
     @MainActor static let oneSessionEmptyActivity = ViewerActivityState(
       title: SessionSamples.claudeTitle,
+      session: .one(SessionSamples.claudeKey),
       meta: "",
       filters: activityFilters(),
       days: [],
