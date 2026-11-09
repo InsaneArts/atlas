@@ -1,6 +1,11 @@
 use super::*;
 use crate::test_support::Helper;
 use atlas_core::test_support::UID;
+use atlas_core::{
+    protocol::SESSION_PIN,
+    screen::windows::HitWindow,
+    session::{Display, Epoch, Observation, Session},
+};
 use tokio::{io::AsyncReadExt, net::UnixListener};
 
 #[test]
@@ -74,4 +79,60 @@ async fn a_window_read_keeps_its_deadline_and_never_leaves_an_uncertain_mutation
     assert_eq!(error.code, Code::Transport);
     assert!(!error.uncertain);
     assert!(client.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_missing_window_endpoint_preserves_memory_without_starting_the_look() {
+    use crate::host_session::{Host, HostSession};
+    use atlas_core::screen::windows::Bounds;
+    use std::cell::Cell;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
+    let verified = Verified {
+        session: Session {
+            epoch: Epoch {
+                uid: client.config.helper_uid,
+                capture_pid: 123,
+                input_pid: 456,
+                security_session_id: 42,
+                display_id: 7,
+                display: Display {
+                    width: 100.0,
+                    height: 100.0,
+                    scale: 1.0,
+                },
+            },
+            capture: true,
+            input: true,
+        },
+        observation: Observation::decode(&json!({"daemon": {"capabilities": [SESSION_PIN]}})),
+    };
+    client.remember_windows(
+        &[HitWindow {
+            number: 42,
+            pid: 812,
+            start: Some([123, 456]),
+            layer: 0,
+            bounds: Bounds::display(100.0, 100.0),
+        }],
+        &verified.session().epoch,
+    );
+    let looked = Cell::new(false);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        client.look(&verified, async {
+            looked.set(true);
+            Ok(())
+        }),
+    )
+    .await
+    .expect("the missing endpoint is refused promptly");
+    assert!(result.is_err());
+    assert!(!looked.get());
+    assert_eq!(
+        client.remembered_windows().unwrap().windows.unwrap()[0].number,
+        42
+    );
 }

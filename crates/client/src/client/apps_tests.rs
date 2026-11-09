@@ -172,3 +172,61 @@ fn only_an_ok_reply_with_an_app_array_is_a_list() {
         );
     }
 }
+
+#[tokio::test]
+async fn process_identities_stay_internal_to_app_resolution() {
+    use crate::test_support::Helper;
+    use atlas_core::test_support::UID;
+    let dir = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(dir.path(), UID);
+    let reply = json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}],"starts":{"812":[123,456]}});
+    let internal = helper
+        .serve(
+            async {
+                let verified = client.verify().await?;
+                client.apps_in(&verified).await
+            },
+            |_| Some(reply.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(internal.starts().unwrap().get(&812), Some(&[123, 456]));
+    let public = helper
+        .serve(client.apps(), |_| Some(reply.clone()))
+        .await
+        .unwrap();
+    assert!(public.get("starts").is_none());
+    assert_eq!(public["apps"], reply["apps"]);
+}
+
+#[tokio::test]
+async fn an_app_list_read_is_never_uncertain() {
+    use crate::test_support::Helper;
+    use atlas_core::test_support::UID;
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+
+    // The stand-in takes the request and hangs up without a reply.
+    let error = helper.serve(client.apps(), |_| None).await.unwrap_err();
+
+    assert_eq!((error.code, error.uncertain), (Code::Protocol, false));
+}
+
+#[tokio::test]
+async fn public_apps_discard_malformed_starts_without_rejecting_valid_rows() {
+    use crate::test_support::Helper;
+    use atlas_core::test_support::UID;
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    for starts in [Value::Null, json!([1]), json!({"812": [123]}), json!(false)] {
+        let reply = json!({"ok": true, "apps": [{"pid": 812}], "starts": starts});
+        let mut public = helper
+            .serve(client.apps(), |_| Some(reply.clone()))
+            .await
+            .unwrap();
+        assert!(public["elapsedMs"].is_number());
+        public.as_object_mut().unwrap().remove("elapsedMs");
+        assert_eq!(public, json!({"ok": true, "apps": [{"pid": 812}]}));
+    }
+}

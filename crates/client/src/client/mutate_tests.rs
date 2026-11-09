@@ -1,5 +1,18 @@
 use super::*;
+use crate::{
+    activity_log,
+    client::tests::{
+        GRACE, SOON, another, answer, command, dispatched, native_client,
+        recovery_settles_the_abandoned_claim, run_of, running, waits,
+    },
+    doing::Doing,
+    test_support::client_in,
+};
 use atlas_core::host::Key;
+use atlas_core::{actions, error::Holder};
+use nix::sys::signal::Signal;
+use std::fs;
+use tokio::io::AsyncBufReadExt;
 
 fn run() -> Mutation<'static> {
     Mutation::Run {
@@ -210,4 +223,370 @@ fn each_mutation_sends_its_exact_request() {
     for (mutation, wire) in cases {
         assert_eq!(mutation.request().to_string(), wire);
     }
+}
+
+#[test]
+fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
+    let app = Expect::new(812).unwrap();
+    let checked = Some(&app);
+    let actions = json!([{"type": "key", "key": "a"}, {"type": "key", "key": "b"}]);
+    let epoch = InputEpoch {
+        uid: 502,
+        security_session_id: 42,
+        display_id: 7,
+        width: 100.0,
+        height: 100.0,
+        process_id: 456,
+    };
+
+    for (expect, reply, confirmed) in [
+        (None, json!({"ok": true, "performed": 2}), true),
+        (None, json!({"ok": true, "performed": 1}), false),
+        (
+            checked,
+            json!({"ok": true, "performed": 2, "expect": {"pid": 812}}),
+            true,
+        ),
+        (checked, json!({"ok": true, "performed": 2}), false),
+        (
+            checked,
+            json!({"ok": true, "performed": 2, "expect": {"pid": 9}}),
+            false,
+        ),
+        (checked, json!({"ok": false, "code": "focus-changed"}), true),
+    ] {
+        let outcome = Mutation::Input {
+            actions: actions::Batch::decode(&actions).unwrap(),
+            owner: "owner",
+            epoch: epoch.clone(),
+            picture: None,
+            app: false,
+            expect,
+        }
+        .validate(&reply);
+        assert_eq!(outcome.is_ok(), confirmed, "{expect:?} {reply}");
+        if let Err(error) = outcome {
+            assert_eq!(error.code, "protocol");
+            assert!(error.uncertain);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_run_that_ends_within_the_grace_is_settled() {
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, interrupt) = running(dir.path(), client);
+    let _ownership = acting.controller.acquire(false).unwrap();
+    let run = || run_of(&["true"], 1000);
+    let mut caller = Box::pin(acting.mutate(run(), None, None, None));
+    let mut peer = dispatched(&mut caller, &helper, "run").await;
+    tokio::time::pause();
+    interrupt.ask_for_test(Signal::SIGTERM);
+    tokio::time::advance(SOON).await;
+
+    answer(
+        &mut peer,
+        json!({"ok": true, "exitCode": 0, "timedOut": false}),
+    )
+    .await;
+    assert_eq!(caller.await.unwrap()["exitCode"], 0);
+    assert!(acting.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_run_still_going_after_the_grace_is_cut_and_stays_pending() {
+    if !atlas_core::test_support::isolated(
+        "client::mutate::tests::a_run_still_going_after_the_grace_is_cut_and_stays_pending",
+    ) {
+        return;
+    }
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, interrupt) = running(dir.path(), client);
+    let ownership = acting.controller.acquire(false).unwrap();
+    let run = || run_of(&["sleep", "30"], 60_000);
+    let mut caller = Box::pin(acting.mutate(run(), None, None, None));
+    let mut peer = dispatched(&mut caller, &helper, "run").await;
+    interrupt.ask_for_test(Signal::SIGTERM);
+
+    let error = tokio::time::timeout(GRACE * 5, caller)
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, "interrupted");
+    assert!(error.uncertain);
+    let mut line = String::new();
+    assert_eq!(
+        peer.read_line(&mut line).await.unwrap(),
+        0,
+        "the helper sees the connection close, which ends the command"
+    );
+    let log = fs::read_to_string(acting.output_dir().unwrap().join(activity_log::FILE)).unwrap();
+    let ended: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+    assert_eq!(ended["ok"], false);
+    assert_eq!(ended["code"], "uncertain", "never recorded as not done");
+    drop(ownership);
+    recovery_settles_the_abandoned_claim(&another(&acting, dir.path()));
+}
+
+#[tokio::test]
+async fn malformed_uncertainty_after_a_sent_mutation_keeps_its_original_claim() {
+    let id = JobId::new();
+    let expected = Expected {
+        boot: "boot".to_owned(),
+        pid: 2,
+        start: [1, 0],
+        pgid: 2,
+    };
+    let pin = SessionPin {
+        security_session_id: 1,
+        display_id: 1,
+    };
+    for flag in atlas_core::test_support::invalid_uncertainty_flags() {
+        for (mutation, op) in [
+            (run_of(&["true"], 1000), "run"),
+            (
+                Mutation::JobStart {
+                    start: JobStart {
+                        argv: vec!["true".to_owned()],
+                        lifetime: Duration::from_secs(1),
+                        name: None,
+                        task: None,
+                        session: None,
+                    },
+                    uid: 0,
+                    pin,
+                },
+                "job",
+            ),
+            (
+                Mutation::JobStop {
+                    id: &id,
+                    expected: &expected,
+                    grace: Duration::from_secs(1),
+                },
+                "job",
+            ),
+        ] {
+            let is_run = matches!(mutation, Mutation::Run { .. });
+            let (dir, client, input, _session) = native_client();
+            drop(input);
+            let (acting, helper, _interrupt) = running(dir.path(), client);
+            let ownership = acting.controller.acquire_beside_commands().unwrap();
+            let (held, release) = if is_run {
+                (None, Some(ownership))
+            } else {
+                (Some(ownership), None)
+            };
+            let mut caller = Box::pin(acting.mutate(mutation, None, None, release));
+            let mut peer = dispatched(&mut caller, &helper, op).await;
+            let original = acting.controller.pending().unwrap();
+            assert_eq!(original.len(), 1);
+            answer(
+                &mut peer,
+                json!({"ok": false, "code": "job", "error": "unknown", "uncertain": flag}),
+            )
+            .await;
+            let result = caller.await;
+            assert_eq!(acting.controller.pending().unwrap(), original);
+            let error = result.unwrap_err();
+            assert_eq!(error.code, Code::Protocol);
+            assert!(error.uncertain);
+            if is_run {
+                let log = fs::read_to_string(acting.output_dir().unwrap().join(activity_log::FILE))
+                    .unwrap();
+                let ended: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+                assert_eq!(ended["code"], "uncertain");
+            }
+            drop(held);
+            recovery_settles_the_abandoned_claim(&acting);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_run_lets_go_of_control_once_its_request_is_sent() {
+    if !atlas_core::test_support::isolated(
+        "client::mutate::tests::a_run_lets_go_of_control_once_its_request_is_sent",
+    ) {
+        return;
+    }
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, _interrupt) = running(dir.path(), client);
+    let other = another(&acting, dir.path());
+    let ownership = acting.controller.acquire_beside_commands().unwrap();
+    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
+    let mut peer = dispatched(&mut caller, &helper, "run").await;
+    waits(&mut caller).await;
+
+    drop(other.controller.acquire_beside_commands().unwrap());
+    drop(other.controller.acquire_for_person_for_test().unwrap());
+    let refused = other.controller.acquire(true).unwrap_err();
+    assert_eq!(refused.code, "busy");
+    assert_eq!(refused.holder, Some(Holder::Agent));
+    assert_eq!(other.controller.acquire(false).unwrap_err().code, "busy");
+    assert!(other.controller.pending_causes().unwrap()[0].command);
+
+    answer(
+        &mut peer,
+        json!({"ok": true, "exitCode": 0, "timedOut": false}),
+    )
+    .await;
+    assert_eq!(caller.await.unwrap()["exitCode"], 0);
+    assert!(other.controller.pending().unwrap().is_empty());
+    assert!(other.controller.acquire(false).is_ok());
+}
+
+#[tokio::test]
+async fn a_lost_run_reply_blocks_every_agent() {
+    if !atlas_core::test_support::isolated(
+        "client::mutate::tests::a_lost_run_reply_blocks_every_agent",
+    ) {
+        return;
+    }
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, _interrupt) = running(dir.path(), client);
+    let other = another(&acting, dir.path());
+    let ownership = acting.controller.acquire_beside_commands().unwrap();
+    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
+    let peer = dispatched(&mut caller, &helper, "run").await;
+    waits(&mut caller).await;
+
+    drop(peer);
+    let error = caller.await.unwrap_err();
+    assert!(error.uncertain, "{error:?}");
+    for refused in [
+        other.controller.acquire_beside_commands(),
+        other.controller.acquire_for_person_for_test(),
+        other.controller.acquire(false),
+    ] {
+        assert_eq!(refused.unwrap_err().code, "uncertain");
+    }
+    recovery_settles_the_abandoned_claim(&other);
+}
+
+#[tokio::test]
+async fn a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone() {
+    if !atlas_core::test_support::isolated(
+        "client::mutate::tests::a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone",
+    ) {
+        return;
+    }
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, interrupt) = running(dir.path(), client);
+    let other = another(&acting, dir.path());
+    let ownership = acting.controller.acquire_beside_commands().unwrap();
+    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
+    let mut peer = dispatched(&mut caller, &helper, "run").await;
+    waits(&mut caller).await;
+    interrupt.ask_for_test(Signal::SIGTERM);
+
+    let error = tokio::time::timeout(GRACE * 5, caller)
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(error.code, "interrupted");
+    assert!(error.uncertain);
+    let mut line = String::new();
+    assert_eq!(
+        peer.read_line(&mut line).await.unwrap(),
+        0,
+        "the helper sees the connection close, which ends the command"
+    );
+    for refused in [
+        other.controller.acquire_beside_commands(),
+        other.controller.acquire_for_person_for_test(),
+    ] {
+        assert_eq!(refused.unwrap_err().code, "uncertain");
+    }
+    recovery_settles_the_abandoned_claim(&other);
+}
+
+#[tokio::test]
+async fn two_runs_go_on_beside_each_other() {
+    if !atlas_core::test_support::isolated(
+        "client::mutate::tests::two_runs_go_on_beside_each_other",
+    ) {
+        return;
+    }
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, _interrupt) = running(dir.path(), client);
+    let second = another(&acting, dir.path());
+    let other = another(&acting, dir.path());
+
+    let first_control = acting.controller.acquire_beside_commands().unwrap();
+    let mut first = Box::pin(acting.mutate(command(), None, None, Some(first_control)));
+    let mut first_peer = dispatched(&mut first, &helper, "run").await;
+    waits(&mut first).await;
+    let second_control = second.controller.acquire_beside_commands().unwrap();
+    let mut beside = Box::pin(second.mutate(command(), None, None, Some(second_control)));
+    let mut second_peer = dispatched(&mut beside, &helper, "run").await;
+    waits(&mut beside).await;
+
+    let causes = other.controller.pending_causes().unwrap();
+    assert_eq!(causes.len(), 2);
+    assert!(causes.iter().all(|cause| cause.command));
+    drop(other.controller.acquire_beside_commands().unwrap());
+    assert_eq!(other.controller.acquire(true).unwrap_err().code, "busy");
+
+    let ended = json!({"ok": true, "exitCode": 0, "timedOut": false});
+    answer(&mut second_peer, ended.clone()).await;
+    beside.await.unwrap();
+    assert_eq!(other.controller.pending().unwrap().len(), 1);
+    answer(&mut first_peer, ended).await;
+    first.await.unwrap();
+    assert!(other.controller.pending().unwrap().is_empty());
+    assert!(other.controller.acquire(false).is_ok());
+}
+
+#[tokio::test]
+async fn other_commands_keep_control_for_their_whole_run() {
+    let (dir, client, input, _session) = native_client();
+    drop(input);
+    let (acting, helper, _interrupt) = running(dir.path(), client);
+    let other = another(&acting, dir.path());
+    let ownership = acting.controller.acquire_beside_commands().unwrap();
+    let mut caller = Box::pin(acting.mutate(command(), None, None, None));
+    let mut peer = dispatched(&mut caller, &helper, "run").await;
+    waits(&mut caller).await;
+
+    assert_eq!(
+        other.controller.acquire_beside_commands().unwrap_err().code,
+        "busy",
+        "the caller keeps control"
+    );
+    assert!(!other.controller.pending_causes().unwrap()[0].command);
+
+    answer(
+        &mut peer,
+        json!({"ok": true, "exitCode": 0, "timedOut": false}),
+    )
+    .await;
+    caller.await.unwrap();
+    drop(ownership);
+    assert!(other.controller.pending().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_stopped_agents_command_is_refused_before_it_starts_and_a_read_is_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client_in(dir.path());
+    std::fs::write(client.config.input_socket.with_extension("stopped"), b"").unwrap();
+    let run = || run_of(&["true"], 1000);
+
+    let acting = client.clone().doing(Doing::new("run"));
+    let refused = acting.mutate(run(), None, None, None).await.unwrap_err();
+    assert_eq!(refused.code, "stopped");
+    assert!(!refused.uncertain, "nothing started");
+
+    let reading = client.mutate(run(), None, None, None).await.unwrap_err();
+    assert_ne!(
+        reading.code, "stopped",
+        "a read goes on (and finds no helper here)"
+    );
 }

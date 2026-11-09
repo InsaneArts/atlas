@@ -347,3 +347,7 @@ async fn no_window(client: &Client, filter: &WindowFilter) -> String {
         Some(_) => format!("{app} is running but shows no window"),
     }
 }
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;

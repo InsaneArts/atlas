@@ -1,14 +1,8 @@
-//! The client's tests: captures and their crops, input and its checks,
-//! stops, commands run beside each other, restarts and log-outs, and the
-//! activity rows they write.
+//! The client's tests that cross its parts: commands run beside each other,
+//! restarts and log-outs, and the rows they write. Each part's own tests sit
+//! beside it and share the stand-ins here.
 use super::*;
-use super::{
-    capture::{Cropped, capture_name, cropped, meets, placement, screenshot_request},
-    input::expectation,
-    record::{PERSON_INPUT_SPAN, PersonInput, worked},
-    service::process_exists,
-    session::gone_within,
-};
+use super::{capture::capture_name, record::PersonInput};
 use crate::{
     activity_log::{self, Failure, Op},
     test_support::client_in,
@@ -16,20 +10,15 @@ use crate::{
 use atlas_control::{Ownership, SharedLease, interrupt::Interrupt};
 use atlas_core::{
     actions::{self, Expect},
-    digest::file_sha256,
     error::Holder,
-    protocol::{Crop, Expected, JobId, JobStart, Region, SessionPin},
+    protocol::{Crop, Region, SessionPin},
     screen::windows::HitWindow,
-    session::{
-        Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, HOLD, InputEpoch,
-        NativeObservation, SHUTDOWN,
-    },
+    session::{Display, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_WINDOW, HOLD, SHUTDOWN},
 };
 use fs2::FileExt;
 use nix::sys::signal::Signal;
 use std::{
-    fs::{self, OpenOptions},
-    os::unix::fs::OpenOptionsExt,
+    fs::{self},
     time::Instant,
 };
 use tokio::{
@@ -37,45 +26,8 @@ use tokio::{
     net::{UnixListener, UnixStream},
 };
 
-#[test]
-fn pruning_removes_only_old_capture_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let old = std::time::SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60);
-    let kept = [
-        "notes-capture.png",
-        "-capture.png",
-        "340282366920938463463374607431768211456-capture.png",
-        ".1-capture.png.partial",
-    ];
-    for name in kept.into_iter().chain(["1-capture.png"]) {
-        let file = fs::File::create(dir.path().join(name)).unwrap();
-        file.set_times(fs::FileTimes::new().set_modified(old))
-            .unwrap();
-    }
-    fs::write(dir.path().join("2-capture.png"), b"recent").unwrap();
-    std::os::unix::fs::symlink("notes-capture.png", dir.path().join("3-capture.png")).unwrap();
-    fs::create_dir(dir.path().join("4-capture.png")).unwrap();
-    fs::File::open(dir.path().join("4-capture.png"))
-        .unwrap()
-        .set_times(fs::FileTimes::new().set_modified(old))
-        .unwrap();
-
-    prune_captures(dir.path());
-
-    assert!(!dir.path().join("1-capture.png").exists());
-    for name in kept
-        .into_iter()
-        .chain(["2-capture.png", "3-capture.png", "4-capture.png"])
-    {
-        assert!(
-            fs::symlink_metadata(dir.path().join(name)).is_ok(),
-            "{name}"
-        );
-    }
-}
-
 /// A native socket and controller confined to a short temporary path.
-fn native_client() -> (tempfile::TempDir, Client, UnixListener, Session) {
+pub(super) fn native_client() -> (tempfile::TempDir, Client, UnixListener, Session) {
     let dir = tempfile::Builder::new().tempdir_in("/tmp").unwrap();
     let mut client = client_in(dir.path());
     client.controller = Controller::at(atlas_core::test_support::UID, &dir.path().join("state"));
@@ -103,7 +55,7 @@ fn native_client() -> (tempfile::TempDir, Client, UnixListener, Session) {
 
 /// Drive the caller until the stand-in has received a complete request,
 /// leaving its reply under the test's control.
-async fn dispatched<T: std::fmt::Debug>(
+pub(super) async fn dispatched<T: std::fmt::Debug>(
     caller: &mut (impl Future<Output = Result<T>> + Unpin),
     listener: &UnixListener,
     operation: &str,
@@ -112,7 +64,7 @@ async fn dispatched<T: std::fmt::Debug>(
 }
 
 /// [`dispatched`], with the request the stand-in received.
-async fn received<T: std::fmt::Debug>(
+pub(super) async fn received<T: std::fmt::Debug>(
     caller: &mut (impl Future<Output = Result<T>> + Unpin),
     listener: &UnixListener,
     operation: &str,
@@ -131,7 +83,7 @@ async fn received<T: std::fmt::Debug>(
     }
 }
 
-async fn answer(peer: &mut BufReader<UnixStream>, reply: Value) {
+pub(super) async fn answer(peer: &mut BufReader<UnixStream>, reply: Value) {
     peer.get_mut()
         .write_all(format!("{reply}\n").as_bytes())
         .await
@@ -173,7 +125,7 @@ async fn checked_input(
         .await
 }
 
-fn textedit() -> Option<Expect> {
+pub(super) fn textedit() -> Option<Expect> {
     Some(Expect::new(812).unwrap())
 }
 
@@ -536,106 +488,6 @@ async fn an_input_service_without_the_dock_check_receives_no_checked_input() {
     assert!(sent);
 }
 
-#[test]
-fn a_required_check_is_refused_by_an_older_service() {
-    let older = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD]});
-    let current = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK]});
-    let undocked = json!({"ok": true, "capabilities": [SHUTDOWN, HOLD, FOCUS_APP]});
-    assert_eq!(
-        expectation(
-            &NativeObservation::decode(&undocked),
-            Some(textedit().unwrap())
-        )
-        .unwrap_err()
-        .code,
-        "startup"
-    );
-    let unanswered = json!({"ok": false, "code": "transport"});
-    let pid = textedit().unwrap();
-
-    assert_eq!(
-        expectation(&NativeObservation::decode(&older), Some(pid.clone()))
-            .unwrap_err()
-            .code,
-        "startup"
-    );
-    assert_eq!(
-        expectation(&NativeObservation::decode(&current), Some(pid.clone())).unwrap(),
-        Some(pid.clone())
-    );
-    // A service that did not answer is refused as unavailable later.
-    assert_eq!(
-        expectation(&NativeObservation::decode(&unanswered), Some(pid.clone())).unwrap(),
-        Some(pid.clone())
-    );
-    assert_eq!(
-        expectation(&NativeObservation::decode(&older), None).unwrap(),
-        None
-    );
-}
-
-#[tokio::test]
-async fn a_focus_refusal_keeps_its_code_on_every_native_path() {
-    let (_dir, client, listener, _) = native_client();
-    let mut caller = Box::pin(client.native_control("input", "owner"));
-    let mut request = dispatched(&mut caller, &listener, "input").await;
-    answer(
-        &mut request,
-        json!({"ok": false, "code": "focus-changed", "error": "Calculator has keyboard focus"}),
-    )
-    .await;
-    let error = caller.await.unwrap_err();
-    assert_eq!(error.code, "focus-changed");
-    assert!(!error.uncertain);
-}
-
-#[test]
-fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
-    let app = Expect::new(812).unwrap();
-    let checked = Some(&app);
-    let actions = json!([{"type": "key", "key": "a"}, {"type": "key", "key": "b"}]);
-    let epoch = InputEpoch {
-        uid: 502,
-        security_session_id: 42,
-        display_id: 7,
-        width: 100.0,
-        height: 100.0,
-        process_id: 456,
-    };
-
-    for (expect, reply, confirmed) in [
-        (None, json!({"ok": true, "performed": 2}), true),
-        (None, json!({"ok": true, "performed": 1}), false),
-        (
-            checked,
-            json!({"ok": true, "performed": 2, "expect": {"pid": 812}}),
-            true,
-        ),
-        (checked, json!({"ok": true, "performed": 2}), false),
-        (
-            checked,
-            json!({"ok": true, "performed": 2, "expect": {"pid": 9}}),
-            false,
-        ),
-        (checked, json!({"ok": false, "code": "focus-changed"}), true),
-    ] {
-        let outcome = Mutation::Input {
-            actions: actions::Batch::decode(&actions).unwrap(),
-            owner: "owner",
-            epoch: epoch.clone(),
-            picture: None,
-            app: false,
-            expect,
-        }
-        .validate(&reply);
-        assert_eq!(outcome.is_ok(), confirmed, "{expect:?} {reply}");
-        if let Err(error) = outcome {
-            assert_eq!(error.code, "protocol");
-            assert!(error.uncertain);
-        }
-    }
-}
-
 /// `acquire` once the lock is free: a child another test is starting
 /// may hold the lock's file a moment past its release, until it runs
 /// its own program. Any other refusal is the answer.
@@ -654,7 +506,7 @@ fn once_free(acquire: impl Fn() -> Result<Ownership>) -> Result<Ownership> {
     acquire()
 }
 
-fn recovery_settles_the_abandoned_claim(client: &Client) {
+pub(super) fn recovery_settles_the_abandoned_claim(client: &Client) {
     assert_eq!(client.controller.pending().unwrap().len(), 1);
     assert_eq!(client.controller.unresolved().unwrap().len(), 1);
     assert_eq!(
@@ -749,14 +601,14 @@ async fn standalone_input_with_an_uncertain_outcome_stays_pending_until_recovery
 }
 
 /// A grace the tests wait out.
-const GRACE: Duration = Duration::from_millis(500);
+pub(super) const GRACE: Duration = Duration::from_millis(500);
 
 /// Well within [`GRACE`].
-const SOON: Duration = Duration::from_millis(50);
+pub(super) const SOON: Duration = Duration::from_millis(50);
 
 /// `client`'s controller stopped by a stop of its own, which the test
 /// asks.
-fn stoppable(client: &mut Client) -> Interrupt {
+pub(super) fn stoppable(client: &mut Client) -> Interrupt {
     let interrupt = Interrupt::new_for_test(GRACE);
     client.controller = client.controller.clone().interrupted_by(interrupt.clone());
     interrupt
@@ -764,39 +616,10 @@ fn stoppable(client: &mut Client) -> Interrupt {
 
 /// `client` with a controller of its own on the same state, as another
 /// agent's command has.
-fn another(client: &Client, dir: &Path) -> Client {
+pub(super) fn another(client: &Client, dir: &Path) -> Client {
     let mut other = client.clone();
     other.controller = Controller::at(atlas_core::test_support::UID, &dir.join("state"));
     other
-}
-
-#[tokio::test]
-async fn a_stop_before_native_acquisition_starts_nothing() {
-    let (_dir, mut client, listener, session) = native_client();
-    let interrupt = stoppable(&mut client);
-    let _ownership = client.controller.acquire(false).unwrap();
-    interrupt.ask_for_test(Signal::SIGTERM);
-
-    let actions = json!([{"type": "key", "key": "a"}]);
-    let error = client
-        .input_in_session(
-            actions::Batch::decode(&actions).unwrap(),
-            None,
-            None,
-            None,
-            &session,
-        )
-        .await
-        .unwrap_err();
-    assert_eq!(error.code, "interrupted");
-    assert!(!error.uncertain);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), listener.accept())
-            .await
-            .is_err(),
-        "the input service heard nothing"
-    );
-    assert!(client.controller.pending().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -1015,69 +838,11 @@ async fn a_stop_while_a_request_waits_to_be_sent_sends_nothing_and_leaves_nothin
 
 /// An agent's `run` against a helper stand-in kept in `dir`, its
 /// listener, and the stop its controller heeds.
-fn running(dir: &Path, mut client: Client) -> (Client, UnixListener, Interrupt) {
+pub(super) fn running(dir: &Path, mut client: Client) -> (Client, UnixListener, Interrupt) {
     client.transport.path = dir.join("helper.sock");
     let helper = UnixListener::bind(&client.transport.path).unwrap();
     let interrupt = stoppable(&mut client);
     (client.doing(Doing::new("run")), helper, interrupt)
-}
-
-#[tokio::test]
-async fn a_run_that_ends_within_the_grace_is_settled() {
-    let (dir, client, input, _session) = native_client();
-    drop(input);
-    let (acting, helper, interrupt) = running(dir.path(), client);
-    let _ownership = acting.controller.acquire(false).unwrap();
-    let run = || run_of(&["true"], 1000);
-    let mut caller = Box::pin(acting.mutate(run(), None, None, None));
-    let mut peer = dispatched(&mut caller, &helper, "run").await;
-    tokio::time::pause();
-    interrupt.ask_for_test(Signal::SIGTERM);
-    tokio::time::advance(SOON).await;
-
-    answer(
-        &mut peer,
-        json!({"ok": true, "exitCode": 0, "timedOut": false}),
-    )
-    .await;
-    assert_eq!(caller.await.unwrap()["exitCode"], 0);
-    assert!(acting.controller.pending().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn a_run_still_going_after_the_grace_is_cut_and_stays_pending() {
-    if !atlas_core::test_support::isolated(
-        "client::tests::a_run_still_going_after_the_grace_is_cut_and_stays_pending",
-    ) {
-        return;
-    }
-    let (dir, client, input, _session) = native_client();
-    drop(input);
-    let (acting, helper, interrupt) = running(dir.path(), client);
-    let ownership = acting.controller.acquire(false).unwrap();
-    let run = || run_of(&["sleep", "30"], 60_000);
-    let mut caller = Box::pin(acting.mutate(run(), None, None, None));
-    let mut peer = dispatched(&mut caller, &helper, "run").await;
-    interrupt.ask_for_test(Signal::SIGTERM);
-
-    let error = tokio::time::timeout(GRACE * 5, caller)
-        .await
-        .unwrap()
-        .unwrap_err();
-    assert_eq!(error.code, "interrupted");
-    assert!(error.uncertain);
-    let mut line = String::new();
-    assert_eq!(
-        peer.read_line(&mut line).await.unwrap(),
-        0,
-        "the helper sees the connection close, which ends the command"
-    );
-    let log = fs::read_to_string(acting.output_dir().unwrap().join(activity_log::FILE)).unwrap();
-    let ended: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
-    assert_eq!(ended["ok"], false);
-    assert_eq!(ended["code"], "uncertain", "never recorded as not done");
-    drop(ownership);
-    recovery_settles_the_abandoned_claim(&another(&acting, dir.path()));
 }
 
 #[tokio::test]
@@ -1258,79 +1023,6 @@ async fn releasing_after_a_lost_acquisition_reply_keeps_the_acquisition_pending(
 }
 
 #[tokio::test]
-async fn an_acquisition_interrupted_after_dispatch_stays_pending_until_recovery() {
-    let (_dir, client, listener, session) = native_client();
-    let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
-    let _acquire = dispatched(&mut caller, &listener, "acquire").await;
-    assert_eq!(client.controller.pending().unwrap().len(), 1);
-    drop(caller);
-    recovery_settles_the_abandoned_claim(&client);
-}
-
-#[tokio::test]
-async fn an_acquisition_settles_only_an_acknowledged_outcome() {
-    for reply in [
-        json!({"ok": true}),
-        json!({"ok": false, "code": "busy", "error": "refused"}),
-        json!({"ok": false, "uncertain": true, "error": "unknown"}),
-    ] {
-        let (_dir, client, listener, session) = native_client();
-        let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
-        let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-        assert_eq!(client.controller.pending().unwrap().len(), 1);
-        answer(&mut acquire, reply.clone()).await;
-        assert_eq!(caller.await.is_ok(), reply["ok"] == true);
-        if reply["uncertain"] == true {
-            recovery_settles_the_abandoned_claim(&client);
-        } else {
-            assert!(client.controller.pending().unwrap().is_empty());
-            assert!(client.controller.acquire(false).is_ok());
-        }
-    }
-}
-
-#[tokio::test]
-async fn malformed_uncertainty_in_an_acquisition_keeps_its_original_claim() {
-    for ok in [false, true] {
-        for flag in atlas_core::test_support::invalid_uncertainty_flags() {
-            let (_dir, client, listener, session) = native_client();
-            let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
-            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-            let original = client.controller.pending().unwrap();
-            assert_eq!(original.len(), 1);
-            answer(
-                &mut acquire,
-                json!({"ok": ok, "code": "busy", "error": "refused", "uncertain": flag}),
-            )
-            .await;
-            let result = caller.await;
-            assert_eq!(client.controller.pending().unwrap(), original);
-            let error = result.unwrap_err();
-            assert_eq!(error.code, Code::Protocol);
-            assert!(error.uncertain);
-            recovery_settles_the_abandoned_claim(&client);
-        }
-    }
-}
-
-#[tokio::test]
-async fn a_successful_but_uncertain_acquisition_keeps_its_original_claim() {
-    let (_dir, client, listener, session) = native_client();
-    let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
-    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-    let original = client.controller.pending().unwrap();
-    assert_eq!(original.len(), 1);
-    answer(&mut acquire, json!({"ok": true, "uncertain": true})).await;
-    let result = caller.await;
-    assert_eq!(client.controller.pending().unwrap(), original);
-    let error = result.unwrap_err();
-    assert_eq!(error.code, Code::Uncertain);
-    assert_eq!(error.error, "Input service reported an uncertain outcome");
-    assert!(error.uncertain);
-    recovery_settles_the_abandoned_claim(&client);
-}
-
-#[tokio::test]
 async fn a_successful_but_uncertain_release_keeps_its_original_claim() {
     let (_dir, client, listener, session) = native_client();
     let mut caller = Box::pin(standalone_input(&client, &session));
@@ -1348,133 +1040,6 @@ async fn a_successful_but_uncertain_release_keeps_its_original_claim() {
     assert_eq!(error.code, Code::Uncertain);
     assert!(error.uncertain);
     recovery_settles_the_abandoned_claim(&client);
-}
-
-#[tokio::test]
-async fn a_successful_but_uncertain_resume_keeps_the_local_stop() {
-    let (_dir, mut client, listener, _session) = native_client();
-    client.actor = Actor::Viewer;
-    client.controller.note_stop(true).unwrap();
-    let mut caller = Box::pin(client.hold(false));
-    let mut hello = dispatched(&mut caller, &listener, "hello").await;
-    answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
-    let mut hold = dispatched(&mut caller, &listener, "hold").await;
-    answer(
-        &mut hold,
-        json!({"ok": true, "held": false, "kept": true, "uncertain": true}),
-    )
-    .await;
-    let result = caller.await;
-    assert!(client.controller.stop_noted());
-    let error = result.unwrap_err();
-    assert_eq!(error.code, Code::Uncertain);
-    assert!(error.uncertain);
-}
-
-#[tokio::test]
-async fn malformed_uncertainty_after_a_sent_mutation_keeps_its_original_claim() {
-    let id = JobId::new();
-    let expected = Expected {
-        boot: "boot".to_owned(),
-        pid: 2,
-        start: [1, 0],
-        pgid: 2,
-    };
-    let pin = SessionPin {
-        security_session_id: 1,
-        display_id: 1,
-    };
-    for flag in atlas_core::test_support::invalid_uncertainty_flags() {
-        for (mutation, op) in [
-            (run_of(&["true"], 1000), "run"),
-            (
-                Mutation::JobStart {
-                    start: JobStart {
-                        argv: vec!["true".to_owned()],
-                        lifetime: Duration::from_secs(1),
-                        name: None,
-                        task: None,
-                        session: None,
-                    },
-                    uid: 0,
-                    pin,
-                },
-                "job",
-            ),
-            (
-                Mutation::JobStop {
-                    id: &id,
-                    expected: &expected,
-                    grace: Duration::from_secs(1),
-                },
-                "job",
-            ),
-        ] {
-            let is_run = matches!(mutation, Mutation::Run { .. });
-            let (dir, client, input, _session) = native_client();
-            drop(input);
-            let (acting, helper, _interrupt) = running(dir.path(), client);
-            let ownership = acting.controller.acquire_beside_commands().unwrap();
-            let (held, release) = if is_run {
-                (None, Some(ownership))
-            } else {
-                (Some(ownership), None)
-            };
-            let mut caller = Box::pin(acting.mutate(mutation, None, None, release));
-            let mut peer = dispatched(&mut caller, &helper, op).await;
-            let original = acting.controller.pending().unwrap();
-            assert_eq!(original.len(), 1);
-            answer(
-                &mut peer,
-                json!({"ok": false, "code": "job", "error": "unknown", "uncertain": flag}),
-            )
-            .await;
-            let result = caller.await;
-            assert_eq!(acting.controller.pending().unwrap(), original);
-            let error = result.unwrap_err();
-            assert_eq!(error.code, Code::Protocol);
-            assert!(error.uncertain);
-            if is_run {
-                let log = fs::read_to_string(acting.output_dir().unwrap().join(activity_log::FILE))
-                    .unwrap();
-                let ended: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
-                assert_eq!(ended["code"], "uncertain");
-            }
-            drop(held);
-            recovery_settles_the_abandoned_claim(&acting);
-        }
-    }
-}
-
-#[tokio::test]
-async fn a_busy_input_service_says_who_holds_control() {
-    for (holder, expected) in [
-        (json!("person"), Some(Holder::Person)),
-        (json!("agent"), Some(Holder::Agent)),
-        (json!("someone"), None),
-        (Value::Null, None),
-    ] {
-        for uncertain in [false, true] {
-            let (_dir, client, listener, session) = native_client();
-            let mut caller = Box::pin(client.acquire_input("owner", &session.epoch));
-            let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-            let reply = json!({"ok": false, "code": "busy", "error": "refused", "holder": holder,
-                "uncertain": uncertain, "reason": "app", "unread": "slow", "found": {"pid": 812},
-                "performed": 2, "partial": true, "id": "job", "task": "task", "state": "running",
-                "secret": "unrelated-refusal-secret-4b72"});
-            answer(&mut acquire, reply).await;
-            let error = caller.await.unwrap_err();
-            assert_eq!(error.code, "busy");
-            assert_eq!(error.holder, expected, "{holder}");
-            let mut kept =
-                json!({"ok": false, "code": "busy", "error": "refused", "uncertain": uncertain});
-            if let Some(expected) = expected {
-                kept["holder"] = json!(expected);
-            }
-            assert_eq!(serde_json::to_value(error).unwrap(), kept);
-            assert_eq!(client.controller.pending().unwrap().is_empty(), !uncertain);
-        }
-    }
 }
 
 /// A positive native Stop acknowledgement followed by a controlled job reply.
@@ -1598,152 +1163,8 @@ async fn confirmed_stop_all_replies_keep_legacy_defaults_and_partial_job_warning
     }
 }
 
-/// A status reply sufficient for repinning preflight. It deliberately
-/// lacks the independent proof required by later session verification.
-fn repinnable_status(session: &Session) -> Value {
-    json!({"ok": true, "inputService": {
-        "ok": true, "protocolVersion": 1, "accessibility": true,
-        "enforcedEpoch": session.epoch.input_epoch(),
-    }})
-}
-
-#[tokio::test]
-async fn missing_input_with_permissions_granted_reports_a_startup_failure() {
-    let (_dir, client, listener, session) = native_client();
-    let status = json!({
-        "ok": true,
-        "permissions": {"screenCapture": true, "accessibility": true},
-        "inputService": {"ok": false, "accessibility": true},
-    });
-    let mut caller = Box::pin(client.repin(session));
-    let mut hello = dispatched(&mut caller, &listener, "hello").await;
-    answer(&mut hello, status).await;
-    let error = caller.await.unwrap_err();
-    assert_eq!(error.code, "startup");
-    assert!(!error.uncertain);
-    assert!(client.controller.pending().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn repinning_with_accessibility_revoked_reports_a_permission_failure() {
-    for source in ["permissions", "inputService"] {
-        let (_dir, client, listener, session) = native_client();
-        let mut status = repinnable_status(&session);
-        status[source]["accessibility"] = json!(false);
-        let mut caller = Box::pin(client.repin(session));
-        let mut hello = dispatched(&mut caller, &listener, "hello").await;
-        answer(&mut hello, status).await;
-        assert_eq!(caller.await.unwrap_err().code, "permission", "{source}");
-        assert!(client.controller.pending().unwrap().is_empty());
-    }
-}
-
-#[tokio::test]
-async fn a_display_reset_interrupted_after_dispatch_stays_pending_until_recovery() {
-    let (_dir, client, listener, session) = native_client();
-    let status = repinnable_status(&session);
-    let mut caller = Box::pin(client.repin(session));
-    let mut hello = dispatched(&mut caller, &listener, "hello").await;
-    answer(&mut hello, status).await;
-    let _reset = dispatched(&mut caller, &listener, "reset").await;
-    assert_eq!(client.controller.pending().unwrap().len(), 1);
-    drop(caller);
-    recovery_settles_the_abandoned_claim(&client);
-}
-
-#[tokio::test]
-async fn an_acknowledged_display_reset_is_settled_before_session_verification() {
-    let (_dir, client, listener, session) = native_client();
-    let status = repinnable_status(&session);
-    let mut caller = Box::pin(client.repin(session));
-    let mut hello = dispatched(&mut caller, &listener, "hello").await;
-    answer(&mut hello, status.clone()).await;
-    let mut reset = dispatched(&mut caller, &listener, "reset").await;
-    assert_eq!(client.controller.pending().unwrap().len(), 1);
-    answer(&mut reset, json!({"ok": true, "released": true})).await;
-    let mut verifying = dispatched(&mut caller, &listener, "hello").await;
-    assert!(client.controller.pending().unwrap().is_empty());
-    answer(&mut verifying, status).await;
-    assert_eq!(caller.await.unwrap_err().code, "identity");
-    assert!(client.controller.pending().unwrap().is_empty());
-    assert!(client.controller.acquire(false).is_ok());
-}
-
-#[test]
-fn an_interrupted_setup_can_repair_its_probe_without_settling_pending_work() {
-    if !atlas_core::test_support::isolated(
-        "client::tests::an_interrupted_setup_can_repair_its_probe_without_settling_pending_work",
-    ) {
-        return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let mut client = client_in(dir.path());
-    client.controller = Controller::at(60001, &dir.path().join("state"));
-    let previous = client.controller.quarantine().unwrap();
-    let generation = previous.generation().to_owned();
-    drop(previous);
-    assert!(!client.config.identity_probe.exists());
-    assert!(client.install().is_err());
-    let competing = client.controller.acquire(true).unwrap();
-    assert!(client.bootstrap_probe().is_err());
-    assert!(!client.config.identity_probe.exists());
-    drop(competing);
-    client.bootstrap_probe().unwrap();
-    assert!(client.config.identity_probe.is_file());
-    assert_eq!(
-        file_sha256(&client.config.identity_probe).unwrap(),
-        file_sha256(&std::env::current_exe().unwrap()).unwrap()
-    );
-    assert_eq!(
-        client.controller.pending().unwrap(),
-        std::slice::from_ref(&generation)
-    );
-    assert!(client.controller.acquire(false).is_err());
-    fs::write(&client.config.identity_probe, b"interrupted copy").unwrap();
-    client.bootstrap_probe().unwrap();
-    assert_eq!(
-        file_sha256(&client.config.identity_probe).unwrap(),
-        file_sha256(&std::env::current_exe().unwrap()).unwrap()
-    );
-    assert_eq!(client.controller.pending().unwrap(), [generation]);
-    let owned = client.controller.acquire(true).unwrap();
-    client.controller.clear().unwrap();
-    drop(owned);
-    assert!(client.controller.acquire(false).is_ok());
-}
-
-#[test]
-fn a_successful_recovery_allows_the_next_normal_acquisition() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut client = client_in(dir.path());
-    client.controller = Controller::at(60001, &dir.path().join("state"));
-    let ownership = client.controller.acquire(true).unwrap();
-    drop(client.controller.quarantine().unwrap());
-    let claim = client.controller.quarantine().unwrap();
-    // The verified recovery clears abandoned work while retaining its
-    // own live claim, which the restart success path must then settle.
-    client.controller.clear().unwrap();
-    client
-        .settle_restart(&claim, Ok(json!({"ok": true, "restarted": true})))
-        .unwrap();
-    drop(claim);
-    drop(ownership);
-    assert!(client.controller.pending().unwrap().is_empty());
-    assert!(client.controller.acquire(false).is_ok());
-
-    let other = client.controller.quarantine().unwrap();
-    let claim = client.controller.quarantine().unwrap();
-    client.controller.clear().unwrap();
-    client
-        .settle_restart(&claim, Ok(json!({"ok": true, "restarted": true})))
-        .unwrap();
-    drop(claim);
-    assert_eq!(client.controller.pending().unwrap(), [other.generation()]);
-    assert!(client.controller.acquire(false).is_err());
-}
-
 /// The rows `client` wrote to its activity log, oldest first.
-fn rows(client: &Client) -> Vec<Value> {
+pub(super) fn rows(client: &Client) -> Vec<Value> {
     fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE))
         .unwrap()
         .lines()
@@ -1751,34 +1172,11 @@ fn rows(client: &Client) -> Vec<Value> {
         .collect()
 }
 
-fn labelled(client: &Client) -> Client {
+pub(super) fn labelled(client: &Client) -> Client {
     let mut labelled = client.clone().doing(Doing::new("click"));
     labelled.host_session =
         crate::host_session::HostSession::new(crate::host_session::Host::Claude, "d9031471-5e2a");
     labelled
-}
-
-#[test]
-fn an_agent_row_carries_its_host_session_key() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = labelled(&client_in(dir.path()));
-    let key = client.host_session.as_ref().unwrap().key().clone();
-    client.record_for_test(
-        &json!({"op": "input", "actions": [{}]}),
-        &json!({"ok": true}),
-    );
-    assert_eq!(rows(&client)[0]["session"], key.as_str());
-
-    let mut viewer = client.clone();
-    viewer.actor = Actor::Viewer;
-    viewer.record_for_test(
-        &json!({"op": "input", "actions": [{}]}),
-        &json!({"ok": true}),
-    );
-    assert!(
-        rows(&client)[1].get("session").is_none(),
-        "the person's never does"
-    );
 }
 
 #[test]
@@ -1835,92 +1233,6 @@ fn a_row_with_no_host_session_is_as_before() {
 }
 
 #[test]
-fn every_kind_of_row_is_written_byte_for_byte_as_the_log_keeps_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let agent = labelled(&client_in(dir.path()));
-    let key = agent.host_session.as_ref().unwrap().key().clone();
-    let mut tasked = agent
-        .clone()
-        .doing(Doing::new("type").app(Some("TextEdit")));
-    tasked.task = Some(Task::of(&key, Some("settings-sheet")).unwrap());
-    let typed = json!({"op": "input", "actions": [{}, {}]});
-    tasked.record_start_blocking(&typed).unwrap();
-    tasked
-        .record_blocking(&typed, &json!({"ok": true}), Duration::from_millis(5))
-        .unwrap();
-    let ran = agent
-        .clone()
-        .doing(Doing::new("open").app(Some("Calculator")));
-    let run = json!({"op": "run", "argv": ["open"]});
-    ran.record_blocking(&run, &json!({"ok": true, "exitCode": 2}), Duration::ZERO)
-        .unwrap();
-    ran.record_blocking(&run, &json!({"ok": true, "timedOut": true}), Duration::ZERO)
-        .unwrap();
-    let refused = agent.clone().doing(Doing::new("click"));
-    refused
-        .record_blocking(
-            &typed,
-            &json!({"ok": false, "code": "focus-changed", "performed": 1, "reason": "window"}),
-            Duration::ZERO,
-        )
-        .unwrap();
-    agent
-        .clone()
-        .doing(Doing::new("collect"))
-        .record_blocking(
-            &json!({"op": "collect"}),
-            &json!({"ok": true, "count": 2, "bytes": 30}),
-            Duration::ZERO,
-        )
-        .unwrap();
-    agent
-        .clone()
-        .doing(Doing::new("screenshot"))
-        .record_blocking(
-            &json!({"op": "screenshot"}),
-            &json!({"ok": true, "capture": "1761660429000123456-capture.png"}),
-            Duration::ZERO,
-        )
-        .unwrap();
-    let mut viewer = client_in(dir.path());
-    viewer.actor = Actor::Viewer;
-    viewer
-        .record_blocking(
-            &json!({"op": "restart"}),
-            &json!({"ok": true}),
-            Duration::ZERO,
-        )
-        .unwrap();
-
-    let log = fs::read_to_string(agent.output_dir().unwrap().join(activity_log::FILE)).unwrap();
-    let lines: Vec<String> = log
-        .lines()
-        .map(|line| {
-            let row: Value = serde_json::from_str(line).unwrap();
-            let mut line = line.replace(row["at"].as_str().unwrap(), "AT");
-            if let Some(command) = row["command"].as_str() {
-                line = line.replace(command, "COMMAND");
-            }
-            line.replace(key.as_str(), "SESSION")
-                .replace(tasked.task.as_ref().unwrap().key().as_str(), "TASK")
-        })
-        .collect();
-    assert_eq!(
-        lines,
-        [
-            r#"{"actionCount":2,"actor":"agent","app":"TextEdit","at":"AT","command":"COMMAND","elapsedMs":0.0,"ok":null,"operation":"input","session":"SESSION","started":true,"task":"TASK","verb":"type"}"#,
-            r#"{"actionCount":2,"actor":"agent","app":"TextEdit","at":"AT","command":"COMMAND","elapsedMs":5.0,"ok":true,"operation":"input","session":"SESSION","task":"TASK","verb":"type"}"#,
-            r#"{"actionCount":null,"actor":"agent","app":"Calculator","at":"AT","code":"exit","command":"COMMAND","elapsedMs":0.0,"ok":false,"operation":"run","session":"SESSION","verb":"open"}"#,
-            r#"{"actionCount":null,"actor":"agent","app":"Calculator","at":"AT","code":"timeout","command":"COMMAND","elapsedMs":0.0,"ok":false,"operation":"run","session":"SESSION","verb":"open"}"#,
-            r#"{"actionCount":2,"actor":"agent","at":"AT","code":"focus-changed","command":"COMMAND","elapsedMs":0.0,"ok":false,"operation":"input","partial":true,"reason":"window","session":"SESSION","verb":"click"}"#,
-            r#"{"actionCount":null,"actor":"agent","at":"AT","bytes":30,"command":"COMMAND","count":2,"elapsedMs":0.0,"ok":true,"operation":"collect","session":"SESSION","verb":"collect"}"#,
-            r#"{"actionCount":null,"actor":"agent","at":"AT","capture":"1761660429000123456-capture.png","command":"COMMAND","elapsedMs":0.0,"ok":true,"operation":"screenshot","session":"SESSION","verb":"screenshot"}"#,
-            r#"{"actionCount":null,"actor":"viewer","at":"AT","elapsedMs":0.0,"ok":true,"operation":"restart"}"#,
-        ]
-    );
-}
-
-#[test]
 fn a_screenshot_row_names_its_capture_file_and_nothing_else() {
     let dir = tempfile::tempdir().unwrap();
     let client = labelled(&client_in(dir.path()));
@@ -1944,265 +1256,6 @@ fn a_screenshot_row_names_its_capture_file_and_nothing_else() {
     assert_eq!(rows[0]["capture"], name);
     assert!(rows[1].get("capture").is_none() && rows[2].get("capture").is_none());
     assert!(!rows.iter().any(|row| row.to_string().contains("/Users")));
-}
-
-#[test]
-fn a_refusal_for_another_app_in_front_says_whether_some_was_sent() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = labelled(&client_in(dir.path()));
-    let request = json!({"op": "input", "actions": [{}, {}]});
-    for reply in [
-        json!({"ok": false, "code": "focus-changed", "performed": 0, "partial": false}),
-        json!({"ok": false, "code": "focus-changed", "performed": 1, "partial": false}),
-        json!({"ok": false, "code": "focus-changed", "performed": 0, "partial": true}),
-        json!({"ok": false, "code": "busy"}),
-    ] {
-        client.record_for_test(&request, &reply);
-    }
-    let partial: Vec<Value> = rows(&client)
-        .iter()
-        .map(|row| row["partial"].clone())
-        .collect();
-    assert_eq!(
-        partial,
-        [json!(false), json!(true), json!(true), Value::Null]
-    );
-}
-
-#[test]
-fn a_focus_refusals_row_keeps_why_it_was_refused_in_the_services_own_words_only() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = labelled(&client_in(dir.path()));
-    let request = json!({"op": "input", "actions": [{}]});
-    for reason in [
-        json!("app"),
-        json!("point"),
-        json!("unreadable"),
-        json!("window"),
-        json!("sheet"),
-        json!("field"),
-        json!("disabled"),
-        json!("Calculator has keyboard focus"),
-        Value::Null,
-    ] {
-        client.record_for_test(
-            &request,
-            &json!({"ok": false, "code": "focus-changed", "reason": reason, "performed": 0}),
-        );
-    }
-    client.record_for_test(
-        &request,
-        &json!({"ok": false, "code": "busy", "reason": "app"}),
-    );
-    let reasons: Vec<Value> = rows(&client)
-        .iter()
-        .map(|row| row["reason"].clone())
-        .collect();
-    assert_eq!(
-        reasons,
-        [
-            json!("app"),
-            json!("point"),
-            json!("unreadable"),
-            json!("window"),
-            json!("sheet"),
-            json!("field"),
-            json!("disabled"),
-            Value::Null,
-            Value::Null,
-            Value::Null,
-        ]
-    );
-}
-
-#[test]
-fn an_expectation_is_sent_only_to_a_service_that_names_the_capability() {
-    let app = Expect::new(812).unwrap();
-    let window = app.clone().in_window(4120).unwrap();
-    let field = app.clone().in_field("Email").unwrap();
-    let both = window.clone().in_field("Email").unwrap();
-    let service = |extra: &[&str]| {
-        let mut capabilities = vec![SHUTDOWN, HOLD, FOCUS_APP, FOCUS_DOCK];
-        capabilities.extend_from_slice(extra);
-        json!({"ok": true, "capabilities": capabilities})
-    };
-    let sent = |native: &Value, expect: &Expect| {
-        expectation(&NativeObservation::decode(native), Some(expect.clone()))
-            .map(|sent| sent == Some(expect.clone()))
-    };
-
-    let app_only = service(&[]);
-    assert!(sent(&app_only, &app).unwrap());
-    for refused in [&window, &field, &both] {
-        assert_eq!(
-            sent(&app_only, refused).unwrap_err().code,
-            "startup",
-            "{refused:?}"
-        );
-    }
-
-    let windows = service(&[FOCUS_WINDOW]);
-    assert!(sent(&windows, &window).unwrap());
-    assert_eq!(sent(&windows, &field).unwrap_err().code, "startup");
-    assert_eq!(sent(&windows, &both).unwrap_err().code, "startup");
-
-    let all = service(&[FOCUS_WINDOW, FOCUS_FIELD]);
-    for expect in [&app, &window, &field, &both] {
-        assert!(sent(&all, expect).unwrap(), "{expect:?}");
-    }
-}
-
-/// A login is gone only once it is seen gone twice in a row and its
-/// daemon stopped answering; a look in between that sees it again
-/// starts the count over.
-#[tokio::test(start_paused = true)]
-async fn a_login_is_gone_only_when_seen_gone_twice_and_silent() {
-    use std::{cell::RefCell, collections::VecDeque};
-
-    let pause = Duration::from_millis(1);
-    let limit = Duration::from_secs(5);
-    let run = |looks: &[bool], hellos: &[bool]| {
-        let looks = RefCell::new(looks.iter().copied().collect::<VecDeque<_>>());
-        let hellos = RefCell::new(hellos.iter().copied().collect::<VecDeque<_>>());
-        let seen = RefCell::new(0);
-        async move {
-            let gone = gone_within(
-                || {
-                    *seen.borrow_mut() += 1;
-                    let look = looks.borrow_mut().pop_front().unwrap_or(false);
-                    async move { look }
-                },
-                || {
-                    let hello = hellos.borrow_mut().pop_front().unwrap_or(false);
-                    async move { hello }
-                },
-                limit,
-                pause,
-            )
-            .await;
-            (gone, seen.into_inner())
-        }
-    };
-
-    assert_eq!(run(&[true, true, true], &[]).await, (true, 3));
-    assert_eq!(
-        run(&[true, false, true, true, true], &[]).await,
-        (true, 5),
-        "a login seen again starts the count over"
-    );
-    assert_eq!(
-        run(&[true, true, true, true, true], &[true, true]).await,
-        (true, 5),
-        "waits for the daemon to go quiet, looking all the while"
-    );
-    assert_eq!(
-        run(&[true, true, false, true, true, true], &[true, false]).await,
-        (true, 6),
-        "a login back after the second look starts the count over"
-    );
-    assert_eq!(
-        run(&[true, true, false, true, true, true], &[false, false]).await,
-        (true, 6),
-        "a login back while the daemon was asked starts the count over"
-    );
-
-    // Back after the second look, then its daemon goes quiet: still
-    // logged in, never gone.
-    let back = Duration::from_millis(50);
-    let looks = std::cell::Cell::new(0);
-    let hellos = std::cell::Cell::new(0);
-    let returned = gone_within(
-        || {
-            looks.set(looks.get() + 1);
-            let look = looks.get() <= 2;
-            async move { look }
-        },
-        || {
-            hellos.set(hellos.get() + 1);
-            let hello = hellos.get() == 1;
-            async move { hello }
-        },
-        back,
-        pause,
-    )
-    .await;
-    assert!(!returned, "a login that came back is not gone");
-
-    // It logs in again while the daemon is still being asked, and the
-    // daemon then says nothing: still logged in.
-    let again = std::cell::Cell::new(false);
-    let returned = gone_within(
-        || {
-            let look = !again.get();
-            async move { look }
-        },
-        || {
-            again.set(true);
-            async move {
-                tokio::time::sleep(pause).await;
-                false
-            }
-        },
-        back,
-        pause,
-    )
-    .await;
-    assert!(!returned, "back while its daemon was asked");
-
-    let short = Duration::from_millis(50);
-    let stays = gone_within(|| async { false }, || async { false }, short, pause).await;
-    assert!(!stays, "a login that stays is not gone");
-    let answering = gone_within(|| async { true }, || async { true }, short, pause).await;
-    assert!(!answering, "a daemon that keeps answering is not gone");
-}
-
-#[tokio::test]
-async fn an_input_change_stays_pending_only_while_its_outcome_is_unknown() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut client = client_in(dir.path());
-    client.controller = atlas_control::Controller::at(60001, &dir.path().join("state"));
-
-    assert_eq!(
-        client.pending_until_known(async { Ok(1) }).await.unwrap(),
-        1
-    );
-
-    let refused = Error::new(Code::Native, "refused");
-    assert!(
-        client
-            .pending_until_known(async { Err::<(), _>(refused) })
-            .await
-            .is_err()
-    );
-    assert!(
-        client.controller.pending().unwrap().is_empty(),
-        "known outcomes clear"
-    );
-
-    for (index, code) in [Code::Transport, Code::Uncertain].into_iter().enumerate() {
-        let unknown = Error::new(code, "The mutation was not acknowledged").uncertain();
-        assert!(
-            client
-                .pending_until_known(async { Err::<(), _>(unknown) })
-                .await
-                .is_err()
-        );
-        assert_eq!(client.controller.unresolved().unwrap().len(), index + 1);
-    }
-}
-
-#[test]
-fn process_existence_ignores_ownership() {
-    assert!(process_exists(std::process::id()));
-    assert!(process_exists(1), "launchd exists though owned by root");
-    assert!(!process_exists(u32::MAX));
-}
-
-#[tokio::test]
-async fn only_the_person_resumes_agents() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = client_in(dir.path());
-    assert_eq!(client.hold(false).await.unwrap_err().code, "stopped");
 }
 
 #[tokio::test]
@@ -2246,20 +1299,6 @@ async fn a_stop_holds_on_the_persons_side_while_the_helpers_input_is_down() {
     fs::remove_file(marker).unwrap();
     person.hold(false).await.unwrap();
     assert!(agent.require_going().await.is_ok(), "resumed");
-}
-
-#[tokio::test]
-async fn a_running_command_hears_of_a_stop_from_its_saved_marker() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = client_in(dir.path());
-    let marker = client.config.input_socket.with_extension("stopped");
-
-    let waiting = tokio::time::timeout(Duration::from_millis(500), client.stopped_while_running());
-    assert!(waiting.await.is_err(), "no stop, no end");
-
-    std::fs::write(&marker, b"").unwrap();
-    let heard = tokio::time::timeout(Duration::from_secs(2), client.stopped_while_running());
-    assert!(heard.await.is_ok(), "the stop is heard within a moment");
 }
 
 #[tokio::test]
@@ -2320,7 +1359,9 @@ async fn a_local_stop_cancels_a_running_command_and_refuses_its_next_dispatch() 
 
 /// Drive `caller` for a moment past sending its request, as it waits
 /// for the reply.
-async fn waits<T: std::fmt::Debug>(caller: &mut (impl Future<Output = Result<T>> + Unpin)) {
+pub(super) async fn waits<T: std::fmt::Debug>(
+    caller: &mut (impl Future<Output = Result<T>> + Unpin),
+) {
     assert!(
         tokio::time::timeout(SOON, caller).await.is_err(),
         "it still waits for its reply"
@@ -2329,51 +1370,17 @@ async fn waits<T: std::fmt::Debug>(caller: &mut (impl Future<Output = Result<T>>
 
 /// A command an agent started with `run`, which the stand-in leaves
 /// unanswered until the test answers it.
-fn command() -> Mutation<'static> {
+pub(super) fn command() -> Mutation<'static> {
     run_of(&["sleep", "30"], 60_000)
 }
 
 /// A run of `argv` the helper stops after `millis` milliseconds.
-fn run_of(argv: &[&str], millis: u64) -> Mutation<'static> {
+pub(super) fn run_of(argv: &[&str], millis: u64) -> Mutation<'static> {
     Mutation::Run {
         argv: argv.iter().map(|&argument| argument.to_owned()).collect(),
         timeout: Duration::from_millis(millis),
         pin: None,
     }
-}
-
-#[tokio::test]
-async fn a_run_lets_go_of_control_once_its_request_is_sent() {
-    if !atlas_core::test_support::isolated(
-        "client::tests::a_run_lets_go_of_control_once_its_request_is_sent",
-    ) {
-        return;
-    }
-    let (dir, client, input, _session) = native_client();
-    drop(input);
-    let (acting, helper, _interrupt) = running(dir.path(), client);
-    let other = another(&acting, dir.path());
-    let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
-    let mut peer = dispatched(&mut caller, &helper, "run").await;
-    waits(&mut caller).await;
-
-    drop(other.controller.acquire_beside_commands().unwrap());
-    drop(other.controller.acquire_for_person_for_test().unwrap());
-    let refused = other.controller.acquire(true).unwrap_err();
-    assert_eq!(refused.code, "busy");
-    assert_eq!(refused.holder, Some(Holder::Agent));
-    assert_eq!(other.controller.acquire(false).unwrap_err().code, "busy");
-    assert!(other.controller.pending_causes().unwrap()[0].command);
-
-    answer(
-        &mut peer,
-        json!({"ok": true, "exitCode": 0, "timedOut": false}),
-    )
-    .await;
-    assert_eq!(caller.await.unwrap()["exitCode"], 0);
-    assert!(other.controller.pending().unwrap().is_empty());
-    assert!(other.controller.acquire(false).is_ok());
 }
 
 #[tokio::test]
@@ -2463,33 +1470,6 @@ async fn a_stopped_run_stays_pending_beside_other_agents() {
 }
 
 #[tokio::test]
-async fn a_lost_run_reply_blocks_every_agent() {
-    if !atlas_core::test_support::isolated("client::tests::a_lost_run_reply_blocks_every_agent") {
-        return;
-    }
-    let (dir, client, input, _session) = native_client();
-    drop(input);
-    let (acting, helper, _interrupt) = running(dir.path(), client);
-    let other = another(&acting, dir.path());
-    let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
-    let peer = dispatched(&mut caller, &helper, "run").await;
-    waits(&mut caller).await;
-
-    drop(peer);
-    let error = caller.await.unwrap_err();
-    assert!(error.uncertain, "{error:?}");
-    for refused in [
-        other.controller.acquire_beside_commands(),
-        other.controller.acquire_for_person_for_test(),
-        other.controller.acquire(false),
-    ] {
-        assert_eq!(refused.unwrap_err().code, "uncertain");
-    }
-    recovery_settles_the_abandoned_claim(&other);
-}
-
-#[tokio::test]
 async fn a_lost_or_uncertain_run_reply_is_unknown_before_its_row_is_written() {
     if !atlas_core::test_support::isolated(
         "client::tests::a_lost_or_uncertain_run_reply_is_unknown_before_its_row_is_written",
@@ -2565,134 +1545,6 @@ async fn lost_before_its_row(lost: bool) {
 }
 
 #[tokio::test]
-async fn a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone() {
-    if !atlas_core::test_support::isolated(
-        "client::tests::a_run_that_let_go_and_is_cut_after_the_grace_stays_pending_for_everyone",
-    ) {
-        return;
-    }
-    let (dir, client, input, _session) = native_client();
-    drop(input);
-    let (acting, helper, interrupt) = running(dir.path(), client);
-    let other = another(&acting, dir.path());
-    let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(command(), None, None, Some(ownership)));
-    let mut peer = dispatched(&mut caller, &helper, "run").await;
-    waits(&mut caller).await;
-    interrupt.ask_for_test(Signal::SIGTERM);
-
-    let error = tokio::time::timeout(GRACE * 5, caller)
-        .await
-        .unwrap()
-        .unwrap_err();
-    assert_eq!(error.code, "interrupted");
-    assert!(error.uncertain);
-    let mut line = String::new();
-    assert_eq!(
-        peer.read_line(&mut line).await.unwrap(),
-        0,
-        "the helper sees the connection close, which ends the command"
-    );
-    for refused in [
-        other.controller.acquire_beside_commands(),
-        other.controller.acquire_for_person_for_test(),
-    ] {
-        assert_eq!(refused.unwrap_err().code, "uncertain");
-    }
-    recovery_settles_the_abandoned_claim(&other);
-}
-
-#[tokio::test]
-async fn two_runs_go_on_beside_each_other() {
-    if !atlas_core::test_support::isolated("client::tests::two_runs_go_on_beside_each_other") {
-        return;
-    }
-    let (dir, client, input, _session) = native_client();
-    drop(input);
-    let (acting, helper, _interrupt) = running(dir.path(), client);
-    let second = another(&acting, dir.path());
-    let other = another(&acting, dir.path());
-
-    let first_control = acting.controller.acquire_beside_commands().unwrap();
-    let mut first = Box::pin(acting.mutate(command(), None, None, Some(first_control)));
-    let mut first_peer = dispatched(&mut first, &helper, "run").await;
-    waits(&mut first).await;
-    let second_control = second.controller.acquire_beside_commands().unwrap();
-    let mut beside = Box::pin(second.mutate(command(), None, None, Some(second_control)));
-    let mut second_peer = dispatched(&mut beside, &helper, "run").await;
-    waits(&mut beside).await;
-
-    let causes = other.controller.pending_causes().unwrap();
-    assert_eq!(causes.len(), 2);
-    assert!(causes.iter().all(|cause| cause.command));
-    drop(other.controller.acquire_beside_commands().unwrap());
-    assert_eq!(other.controller.acquire(true).unwrap_err().code, "busy");
-
-    let ended = json!({"ok": true, "exitCode": 0, "timedOut": false});
-    answer(&mut second_peer, ended.clone()).await;
-    beside.await.unwrap();
-    assert_eq!(other.controller.pending().unwrap().len(), 1);
-    answer(&mut first_peer, ended).await;
-    first.await.unwrap();
-    assert!(other.controller.pending().unwrap().is_empty());
-    assert!(other.controller.acquire(false).is_ok());
-}
-
-#[tokio::test]
-async fn input_goes_on_beside_a_running_command() {
-    if !atlas_core::test_support::isolated("client::tests::input_goes_on_beside_a_running_command")
-    {
-        return;
-    }
-    let (dir, client, input, _session) = native_client();
-    drop(input);
-    let running = another(&client, dir.path());
-
-    let command = running.controller.quarantine_command().unwrap();
-    let actions = json!([{"type": "key", "key": "a"}]);
-    let beside = client.input(&actions, None, None).await.unwrap_err();
-    assert!(
-        ![Code::Busy, Code::Uncertain].contains(&beside.code),
-        "only the helper refuses it: {beside:?}"
-    );
-    running.controller.clear_if(&command).unwrap();
-    drop(command);
-
-    let change = running.controller.quarantine().unwrap();
-    let refused = client.input(&actions, None, None).await.unwrap_err();
-    assert_eq!(refused.code, "uncertain", "an unmarked change still blocks");
-    running.controller.clear_if(&change).unwrap();
-}
-
-#[tokio::test]
-async fn other_commands_keep_control_for_their_whole_run() {
-    let (dir, client, input, _session) = native_client();
-    drop(input);
-    let (acting, helper, _interrupt) = running(dir.path(), client);
-    let other = another(&acting, dir.path());
-    let ownership = acting.controller.acquire_beside_commands().unwrap();
-    let mut caller = Box::pin(acting.mutate(command(), None, None, None));
-    let mut peer = dispatched(&mut caller, &helper, "run").await;
-    waits(&mut caller).await;
-
-    assert_eq!(
-        other.controller.acquire_beside_commands().unwrap_err().code,
-        "busy",
-        "the caller keeps control"
-    );
-    assert!(!other.controller.pending_causes().unwrap()[0].command);
-
-    answer(
-        &mut peer,
-        json!({"ok": true, "exitCode": 0, "timedOut": false}),
-    )
-    .await;
-    caller.await.unwrap();
-    drop(ownership);
-    assert!(other.controller.pending().unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fails() {
     let (dir, mut client, input, _session) = native_client();
     client.transport.path = dir.path().join("helper.sock");
@@ -2747,407 +1599,14 @@ async fn a_local_stop_succeeds_and_cancels_a_running_command_when_native_hold_fa
     recovery_settles_the_abandoned_claim(&acting);
 }
 
-#[tokio::test]
-async fn a_stop_returns_ok_with_the_native_problem_when_native_hold_fails() {
-    let (_dir, mut person, input, _session) = native_client();
-    person.actor = Actor::Viewer;
-    let mut stopping = Box::pin(person.hold(true));
-    let mut hello = dispatched(&mut stopping, &input, "hello").await;
-    answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
-    let mut hold = dispatched(&mut stopping, &input, "hold").await;
-    answer(
-        &mut hold,
-        json!({"ok": false, "error": "Cleanup failed", "uncertain": false}),
-    )
-    .await;
-
-    assert_eq!(
-        stopping.await.unwrap(),
-        json!({
-            "ok": true,
-            "held": true,
-            "kept": true,
-            "warnings": ["The helper's input service reported a problem while stopping: Cleanup failed. Agents are stopped here all the same."],
-        })
-    );
-    assert!(person.controller.stop_noted());
-}
-
-#[tokio::test]
-async fn a_stop_returns_ok_with_uncertainty_and_a_warning_when_native_hold_is_uncertain() {
-    let (_dir, mut person, input, _session) = native_client();
-    person.actor = Actor::Viewer;
-    let mut stopping = Box::pin(person.hold(true));
-    let mut hello = dispatched(&mut stopping, &input, "hello").await;
-    answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
-    let mut hold = dispatched(&mut stopping, &input, "hold").await;
-    answer(
-        &mut hold,
-        json!({"ok": false, "error": "Cleanup failed", "uncertain": true}),
-    )
-    .await;
-
-    assert_eq!(
-        stopping.await.unwrap(),
-        json!({
-            "ok": true,
-            "held": true,
-            "kept": true,
-            "uncertain": true,
-            "warnings": ["The helper's input service may or may not have been told. Agents are stopped here all the same."],
-        })
-    );
-    assert!(person.controller.stop_noted());
-}
-
-#[tokio::test]
-async fn resume_keeps_the_local_stop_until_the_helpers_stop_can_be_cleared() {
-    let (_dir, client, listener, _session) = native_client();
-    let mut person = client;
-    person.actor = Actor::Viewer;
-    let marker = person.config.input_socket.with_extension("stopped");
-    let mut stopping = Box::pin(person.hold(true));
-    let mut hello = dispatched(&mut stopping, &listener, "hello").await;
-    answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
-    let mut hold = dispatched(&mut stopping, &listener, "hold").await;
-    fs::write(&marker, b"").unwrap();
-    answer(&mut hold, json!({"ok": true, "held": true, "kept": true})).await;
-    assert_eq!(stopping.await.unwrap()["held"], true);
-    drop(listener);
-
-    let error = person.hold(false).await.unwrap_err();
-    assert_eq!(error.code, "stopped");
-    assert!(
-        error
-            .error
-            .contains("Recover input before agents can resume")
-    );
-    assert!(person.controller.stop_noted());
-    assert!(marker.exists());
-    let mut agent = person.clone();
-    agent.actor = Actor::Agent;
-    assert_eq!(agent.require_going().await.unwrap_err().code, "stopped");
-
-    fs::remove_file(marker).unwrap();
-    assert_eq!(person.hold(false).await.unwrap()["held"], false);
-    assert!(!person.controller.stop_noted());
-}
-
-#[tokio::test]
-async fn resume_clears_the_local_stop_only_after_native_acknowledgment() {
-    for acknowledged in [false, true] {
-        let (_dir, client, listener, _session) = native_client();
-        let mut person = client;
-        person.actor = Actor::Viewer;
-        person.controller.note_stop(true).unwrap();
-        let mut resuming = Box::pin(person.hold(false));
-        let mut hello = dispatched(&mut resuming, &listener, "hello").await;
-        assert!(person.controller.stop_noted());
-        answer(&mut hello, json!({"ok": true, "capabilities": ["hold"]})).await;
-        let mut hold = dispatched(&mut resuming, &listener, "hold").await;
-        assert!(person.controller.stop_noted());
-        answer(
-            &mut hold,
-            json!({"ok": acknowledged, "code": "native", "error": "refused", "held": false}),
-        )
-        .await;
-        assert_eq!(resuming.await.is_ok(), acknowledged);
-        assert_eq!(person.controller.stop_noted(), !acknowledged);
-    }
-}
-
-#[tokio::test]
-async fn a_stopped_agents_command_is_refused_before_it_starts_and_a_read_is_not() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = client_in(dir.path());
-    std::fs::write(client.config.input_socket.with_extension("stopped"), b"").unwrap();
-    let run = || run_of(&["true"], 1000);
-
-    let acting = client.clone().doing(Doing::new("run"));
-    let refused = acting.mutate(run(), None, None, None).await.unwrap_err();
-    assert_eq!(refused.code, "stopped");
-    assert!(!refused.uncertain, "nothing started");
-
-    let reading = client.mutate(run(), None, None, None).await.unwrap_err();
-    assert_ne!(
-        reading.code, "stopped",
-        "a read goes on (and finds no helper here)"
-    );
-}
-
-#[test]
-fn input_names_the_app_it_landed_in_and_a_command_its_start() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = client_in(dir.path()).doing(Doing::new("type"));
-    let typed = json!({"op": "input", "actions": [{"type": "type", "text": "x"}]});
-    client
-        .record_blocking(
-            &typed,
-            &json!({"ok": true, "app": "TextEdit"}),
-            Duration::ZERO,
-        )
-        .unwrap();
-    let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
-    assert_eq!(crate::doing::says(&rows[0]), "typed in TextEdit");
-
-    let client = client.doing(Doing::new("open").app(Some("Calculator")));
-    let run = json!({"op": "run", "argv": ["open", "-a", "Calculator"]});
-    client.record_start_blocking(&run).unwrap();
-    let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
-    assert_eq!(crate::doing::says(&rows[0]), "opening Calculator…");
-    client
-        .record_blocking(&run, &json!({"ok": true, "exitCode": 0}), Duration::ZERO)
-        .unwrap();
-    let rows = crate::activity_log::recent(client.output_dir().unwrap(), 5);
-    assert_eq!(
-        crate::doing::says(&rows[0]),
-        "opened Calculator",
-        "the end stands for the start"
-    );
-    assert_eq!(rows.len(), 2, "one row per command");
-}
-
-#[test]
-fn input_names_the_bundle_of_the_app_it_landed_in_as_the_helper_saw_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = client_in(dir.path()).doing(Doing::new("click"));
-    let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 1, "y": 2}]});
-    let landed = |reply: Value| {
-        client
-            .record_blocking(&clicked, &reply, Duration::ZERO)
-            .unwrap();
-        activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
-    };
-
-    let row = landed(json!({"ok": true, "app": "TextEdit", "bundleId": "com.apple.TextEdit"}));
-    assert_eq!(row.app.as_deref(), Some("TextEdit"));
-    assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
-
-    for odd in [
-        json!("/Applications/TextEdit.app"),
-        json!("com.apple TextEdit"),
-        json!(7),
-    ] {
-        let row = landed(json!({"ok": true, "app": "TextEdit", "bundleId": odd}));
-        assert_eq!(row.bundle_id, None, "{odd}");
-    }
-    let row = landed(json!({"ok": true, "bundleId": "com.apple.TextEdit"}));
-    assert_eq!(
-        (row.app, row.bundle_id),
-        (None, None),
-        "an identifier for no app named"
-    );
-}
-
-#[test]
-fn typed_text_names_its_field_only_by_the_role_the_helper_found_it_of() {
-    let dir = tempfile::tempdir().unwrap();
-    let client =
-        client_in(dir.path()).doing(Doing::new("type").app(Some("Notes")).field(Some("Email")));
-    let typed = json!({"op": "input", "actions": [{"type": "type", "text": "sam@example.com"}]});
-    let landed = |reply: Value| {
-        client
-            .record_blocking(&typed, &reply, Duration::ZERO)
-            .unwrap();
-        activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
-    };
-
-    let row = landed(json!({"ok": true, "app": "Notes",
-        "field": {"role": "AXTextField", "value": "sam@example.com", "name": "private-page-text"}}));
-    assert_eq!(row.label.as_deref(), Some("Email"));
-    assert_eq!(crate::doing::says(&row), "typed into Email in Notes");
-
-    for unchecked in [
-        json!({"ok": true, "app": "Notes"}),
-        json!({"ok": true, "app": "Notes", "field": {"role": "AXTextArea"}}),
-        json!({"ok": true, "app": "Notes", "field": {"role": 7}}),
-        json!({"ok": true, "app": "Notes", "field": "AXTextField"}),
-        json!({"ok": false, "code": "focus-changed", "reason": "field",
-            "field": {"role": "AXTextField"}}),
-    ] {
-        let row = landed(unchecked.clone());
-        assert_eq!(row.label, None, "{unchecked}");
-    }
-    let written =
-        fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
-    assert!(
-        !written.contains("sam@example.com"),
-        "typed text is never kept"
-    );
-    assert!(
-        !written.contains("private-page-text"),
-        "reply text is never kept"
-    );
-}
-
-#[test]
-fn a_bundle_id_seen_for_another_app_than_the_one_named_is_not_kept() {
-    let dir = tempfile::tempdir().unwrap();
-    let typed = json!({"op": "input", "actions": [{"type": "type", "text": "x"}]});
-    let landed = |named: &str, seen: &str| {
-        let client = client_in(dir.path()).doing(Doing::new("type").app(Some(named)));
-        let reply = json!({"ok": true, "app": seen, "bundleId": "com.apple.calculator"});
-        client
-            .record_blocking(&typed, &reply, Duration::ZERO)
-            .unwrap();
-        activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
-    };
-
-    let other = landed("TextEdit", "Calculator");
-    assert_eq!(other.app.as_deref(), Some("TextEdit"));
-    assert_eq!(other.bundle_id, None);
-    let same = landed("calculator", "Calculator");
-    assert_eq!(same.bundle_id.as_deref(), Some("com.apple.calculator"));
-}
-
-#[test]
-fn an_install_row_keeps_the_installed_apps_bundle_id() {
-    use base64::{Engine, engine::general_purpose::STANDARD};
-
-    let dir = tempfile::tempdir().unwrap();
-    let client =
-        client_in(dir.path()).doing(Doing::new("install").app(Some("/tmp/Secret/Probe.app")));
-    let run = json!({"op": "run", "argv": ["atlas", "environment-worker"]});
-    let answered = |answer: Value| {
-        let output = STANDARD.encode(answer.to_string());
-        let reply = json!({"ok": true, "exitCode": 0, "timedOut": false, "signal": null,
-            "events": [{"event": "output", "data": output}]});
-        client
-            .record_blocking(&run, &reply, Duration::ZERO)
-            .unwrap();
-        activity_log::recent(client.output_dir().unwrap(), 1).remove(0)
-    };
-    let installed = |app: &str, id: Value| {
-        json!({"ok": true, "installed": true, "installId": "ID", "app": app,
-            "path": "/Users/helper/Applications/Probe.app", "bundleId": id,
-            "version": "1.0 (1)", "registered": true})
-    };
-
-    let row = answered(installed("Probe", json!("test.atlas.install-probe")));
-    assert_eq!(crate::doing::says(&row), "installed Probe");
-    assert_eq!(row.bundle_id.as_deref(), Some("test.atlas.install-probe"));
-    let text =
-        std::fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
-    assert!(
-        !text.contains("/Users/helper") && !text.contains("Secret"),
-        "{text}"
-    );
-
-    assert_eq!(
-        answered(installed("Other", json!("test.other"))).bundle_id,
-        None
-    );
-    assert_eq!(answered(installed("Probe", json!(null))).bundle_id, None);
-    assert_eq!(answered(installed("Probe", json!("a b"))).bundle_id, None);
-    let refused = json!({"ok": false, "installId": "ID", "phase": "held", "error": "x"});
-    assert_eq!(answered(refused).bundle_id, None);
-}
-
 /// A viewer's client for `dir`, gathering the person's input as a viewer
 /// does.
 /// A viewer's client in `dir` whose person's input gathers a `span`.
-fn persons_client(dir: &Path, span: Duration) -> Client {
+pub(super) fn persons_client(dir: &Path, span: Duration) -> Client {
     let mut client = client_in(dir);
     client.actor = Actor::Viewer;
     client.person_input = Some(PersonInput::with_span(span));
     client
-}
-
-/// A span no test outlasts, so gathering never ends while a test runs.
-const LONG_SPAN: Duration = Duration::from_secs(3600);
-/// A span advanced explicitly by timer tests.
-const SHORT_SPAN: Duration = Duration::from_millis(200);
-
-#[test]
-fn the_persons_input_through_a_viewer_is_one_row_a_span_counting_every_action() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = persons_client(dir.path(), LONG_SPAN);
-    let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 412, "y": 96}, {"type": "type", "text": "hunter2"}]});
-    for _ in 0..30 {
-        client
-            .record_blocking(
-                &clicked,
-                &json!({"ok": true, "performed": 2}),
-                Duration::ZERO,
-            )
-            .unwrap();
-    }
-    let output = client.output_dir().unwrap().to_path_buf();
-    assert!(
-        activity_log::recent(&output, 5).is_empty(),
-        "gathered until its span ends"
-    );
-
-    let refused = json!({"ok": false, "code": "busy"});
-    client
-        .record_blocking(&clicked, &refused, Duration::ZERO)
-        .unwrap();
-    let rows = activity_log::recent(&output, 5);
-    assert_eq!(
-        rows.iter()
-            .map(|row| (row.failed(), row.action_count))
-            .collect::<Vec<_>>(),
-        [(true, Some(2)), (false, Some(60))],
-        "a failure is written at once, after the input before it"
-    );
-
-    client
-        .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
-        .unwrap();
-    client.person_input.as_ref().unwrap().flush().unwrap();
-    let text = std::fs::read_to_string(output.join(activity_log::FILE)).unwrap();
-    assert_eq!(text.lines().count(), 3);
-    // Digits can turn up in a row's times by chance, so coordinates are
-    // looked for as fields, and the typed text as words.
-    assert!(!text.contains("hunter2"), "no typed text");
-    for line in text.lines() {
-        let row: Value = serde_json::from_str(line).unwrap();
-        for field in ["x", "y", "text", "actions"] {
-            assert!(row.get(field).is_none(), "{field} in {line}");
-        }
-    }
-
-    // An agent's input, and the person's elsewhere, are written at once.
-    let agent = client_in(dir.path()).doing(Doing::new("click"));
-    agent
-        .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
-        .unwrap();
-    let mut unshared = persons_client(dir.path(), LONG_SPAN);
-    unshared.person_input = None;
-    unshared
-        .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
-        .unwrap();
-    let text = std::fs::read_to_string(output.join(activity_log::FILE)).unwrap();
-    assert_eq!(text.lines().count(), 5);
-}
-
-#[test]
-fn a_failed_flush_keeps_every_buffered_action_until_the_log_can_be_written() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = persons_client(dir.path(), LONG_SPAN);
-    let output = client.output_dir().unwrap();
-    fs::create_dir_all(output).unwrap();
-    let blocked = output.join(activity_log::FILE);
-    fs::create_dir(&blocked).unwrap();
-    let input = json!({"op": "input", "actions": [{"type": "click"}]});
-    client.record_for_test(&input, &json!({"ok": true}));
-    let gathering = client.person_input.as_ref().unwrap();
-    assert!(gathering.flush().is_err());
-    assert!(
-        client
-            .record_blocking(&input, &json!({"ok": true}), Duration::ZERO)
-            .is_err()
-    );
-    assert!(gathering.flush().is_err());
-
-    fs::remove_dir(blocked).unwrap();
-    // An interrupted writer can leave a prefix even after the disk is usable.
-    fs::write(output.join(activity_log::FILE), b"{\"operation\":").unwrap();
-    gathering.flush().unwrap();
-    gathering.flush().unwrap();
-    let text = fs::read_to_string(output.join(activity_log::FILE)).unwrap();
-    assert_eq!(text.lines().count(), 2);
-    assert_eq!(activity_log::recent(output, 1)[0].action_count, Some(2));
 }
 
 #[test]
@@ -3181,105 +1640,6 @@ fn a_failed_rollover_keeps_both_spans_in_their_original_order() {
 }
 
 #[test]
-fn the_persons_input_gathers_five_seconds_a_row_unless_made_with_another_span() {
-    assert_eq!(PersonInput::default().span(), PERSON_INPUT_SPAN);
-    assert_eq!(PERSON_INPUT_SPAN, Duration::from_secs(5));
-    assert_eq!(PersonInput::with_span(SHORT_SPAN).span(), SHORT_SPAN);
-}
-
-#[tokio::test(start_paused = true)]
-async fn the_persons_gathered_input_is_written_once_its_span_ends_with_nothing_after_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = persons_client(dir.path(), SHORT_SPAN);
-    let output = client.output_dir().unwrap().to_path_buf();
-    let clicked = json!({"op": "input", "actions": [{"type": "click", "x": 1, "y": 2}]});
-    for _ in 0..3 {
-        client
-            .record_blocking(&clicked, &json!({"ok": true}), Duration::ZERO)
-            .unwrap();
-    }
-    let gathering = client.person_input.clone().unwrap();
-    let timer = gathering.untimed().unwrap();
-    let mut writing = Box::pin(gathering.write_at(timer));
-    assert!(activity_log::recent(&output, 5).is_empty());
-
-    for _ in 0..2 {
-        std::future::poll_fn(|cx| {
-            assert!(std::future::Future::poll(writing.as_mut(), cx).is_pending());
-            std::task::Poll::Ready(())
-        })
-        .await;
-        tokio::time::advance(SHORT_SPAN / 2).await;
-    }
-    writing.await.unwrap();
-    let rows = activity_log::recent(&output, 5);
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].action_count, Some(3));
-    assert_eq!(rows[0].actor(), "viewer");
-}
-
-#[tokio::test(start_paused = true)]
-async fn an_input_timer_keeps_the_deadline_set_when_gathering_began() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = persons_client(dir.path(), SHORT_SPAN);
-    client.record_for_test(
-        &json!({"op": "input", "actions": [{"type": "click"}]}),
-        &json!({"ok": true}),
-    );
-    let deadline = tokio::time::Instant::now() + SHORT_SPAN;
-    tokio::time::advance(SHORT_SPAN / 2).await;
-    let gathering = client.person_input.clone().unwrap();
-    let timer = gathering.untimed().unwrap();
-    let writing = tokio::spawn(gathering.write_at(timer));
-    tokio::time::advance(SHORT_SPAN / 2).await;
-    writing.await.unwrap().unwrap();
-    assert_eq!(tokio::time::Instant::now(), deadline);
-    assert_eq!(
-        activity_log::recent(client.output_dir().unwrap(), 1)[0].action_count,
-        Some(1)
-    );
-}
-
-#[tokio::test(start_paused = true)]
-async fn an_old_input_timer_cannot_flush_input_gathered_after_an_explicit_flush() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = persons_client(dir.path(), SHORT_SPAN);
-    let input = json!({"op": "input", "actions": [{"type": "click"}]});
-    client.record_for_test(&input, &json!({"ok": true}));
-    let gathering = client.person_input.clone().unwrap();
-    let earlier = gathering.untimed().unwrap();
-    tokio::time::advance(SHORT_SPAN / 2).await;
-    gathering.flush().unwrap();
-    client.record_for_test(&input, &json!({"ok": true}));
-    let later = gathering.untimed().unwrap();
-    assert!(gathering.untimed().is_none(), "each span gets one timer");
-
-    let old_writing = tokio::spawn(gathering.clone().write_at(earlier));
-    tokio::time::advance(SHORT_SPAN / 2).await;
-    old_writing.await.unwrap().unwrap();
-    let path = client.output_dir().unwrap().join(activity_log::FILE);
-    assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 1);
-
-    let new_writing = tokio::spawn(gathering.write_at(later));
-    tokio::time::advance(SHORT_SPAN / 2).await;
-    new_writing.await.unwrap().unwrap();
-    assert_eq!(fs::read_to_string(path).unwrap().lines().count(), 2);
-}
-
-#[test]
-fn a_command_that_failed_or_timed_out_is_recorded_as_failed() {
-    assert!(worked(&json!({"ok": true})));
-    assert!(worked(
-        &json!({"ok": true, "exitCode": 0, "timedOut": false})
-    ));
-    assert!(!worked(&json!({"ok": true, "exitCode": 1})));
-    assert!(!worked(
-        &json!({"ok": true, "exitCode": 0, "timedOut": true})
-    ));
-    assert!(!worked(&json!({"ok": false})));
-}
-
-#[test]
 fn a_command_terminated_by_a_signal_is_recorded_as_an_exit_failure() {
     let dir = tempfile::tempdir().unwrap();
     let client = client_in(dir.path()).doing(Doing::new("run"));
@@ -3297,7 +1657,7 @@ fn a_command_terminated_by_a_signal_is_recorded_as_an_exit_failure() {
     assert_eq!(rows[0].code, Some(Failure::Exit));
 }
 
-fn display() -> Display {
+pub(super) fn display() -> Display {
     Display {
         width: 1280.0,
         height: 720.0,
@@ -3305,147 +1665,13 @@ fn display() -> Display {
     }
 }
 
-fn region(x: i32, y: i32, width: i32, height: i32) -> Region {
+pub(super) fn region(x: i32, y: i32, width: i32, height: i32) -> Region {
     Region {
         x,
         y,
         width,
         height,
     }
-}
-
-#[test]
-fn a_crop_maps_pixels_to_points_from_its_origin() {
-    let shown = region(300, 200, 800, 600);
-    let ((x, y), scale) = placement(&display(), 400, Some(&shown));
-
-    assert_eq!(((x, y), scale), ((300.0, 200.0), 2.0));
-    assert_eq!((x + 10.0 * scale, y + 20.0 * scale), (320.0, 240.0));
-    assert_eq!(
-        placement(&display(), 1600, Some(&shown)),
-        ((300.0, 200.0), 0.5)
-    );
-}
-
-#[test]
-fn a_full_screenshot_starts_at_the_corner_with_todays_scale() {
-    assert_eq!(placement(&display(), 2560, None), ((0.0, 0.0), 0.5));
-    assert_eq!(placement(&display(), 640, None), ((0.0, 0.0), 2.0));
-    assert_eq!(
-        cropped(&json!({"ok": true}), None, &display()).unwrap(),
-        None
-    );
-}
-
-#[test]
-fn an_older_helper_that_ignores_the_crop_is_refused() {
-    let whole = json!({"ok": true, "png": "", "width": 2560, "height": 1440, "scale": 2.0, "offDisplayWindows": []});
-
-    for crop in [Crop::App { pid: 42 }, Crop::Region(region(0, 0, 400, 300))] {
-        let refused = cropped(&whole, Some(&crop), &display()).unwrap_err();
-        assert_eq!(refused.code, "daemon", "{crop:?}");
-        assert!(refused.error.contains("atlas restart"), "{crop:?}");
-    }
-
-    let mut null = whole.clone();
-    null["region"] = Value::Null;
-    assert_eq!(
-        cropped(&null, Some(&Crop::App { pid: 42 }), &display())
-            .unwrap_err()
-            .code,
-        "daemon"
-    );
-}
-
-#[test]
-fn a_crop_other_than_the_one_asked_for_is_refused() {
-    let reply = |region: Value| json!({"ok": true, "region": region});
-    let asked = Crop::Region(region(100, 100, 400, 300));
-
-    let fits = reply(json!({"x": 100, "y": 100, "width": 400, "height": 300}));
-    assert_eq!(
-        cropped(&fits, Some(&asked), &display()).unwrap(),
-        Some(Cropped {
-            region: region(100, 100, 400, 300),
-            app: Value::Null,
-            overlapping: Value::Null,
-        })
-    );
-    let clamped = reply(json!({"x": 100, "y": 100, "width": 100, "height": 50}));
-    assert!(cropped(&clamped, Some(&asked), &display()).is_ok());
-
-    for sent in [
-        json!({"x": 90, "y": 100, "width": 400, "height": 300}),
-        json!({"x": 100, "y": 100, "width": 401, "height": 300}),
-        json!({"x": -1, "y": 0, "width": 10, "height": 10}),
-        json!({"x": 1200, "y": 0, "width": 100, "height": 10}),
-        json!({"x": 0, "y": 0, "width": 0, "height": 10}),
-        json!({"x": 100.5, "y": 100, "width": 10, "height": 10}),
-        json!({"x": 100, "y": 100}),
-        json!("100,100,400,300"),
-    ] {
-        let refused = cropped(&reply(sent.clone()), Some(&asked), &display()).unwrap_err();
-        assert_eq!(refused.code, "protocol", "{sent}");
-    }
-
-    let app = Crop::App { pid: 42 };
-    let shown = |pid: i64, overlapping: Value| {
-        json!({
-            "ok": true,
-            "region": {"x": 0, "y": 0, "width": 10, "height": 10},
-            "app": {"pid": pid, "name": "TextEdit"},
-            "overlapping": overlapping,
-        })
-    };
-    let found = cropped(&shown(42, json!([])), Some(&app), &display())
-        .unwrap()
-        .unwrap();
-    assert_eq!(found.app, json!({"pid": 42, "name": "TextEdit"}));
-    assert_eq!(found.overlapping, json!([]));
-    for (pid, overlapping) in [(43, json!([])), (42, Value::Null), (42, json!({}))] {
-        let refused = cropped(&shown(pid, overlapping), Some(&app), &display()).unwrap_err();
-        assert_eq!(refused.code, "protocol", "{pid}");
-    }
-}
-
-#[test]
-fn only_the_standard_size_asks_for_one_pixel_per_point() {
-    assert_eq!(
-        screenshot_request(Size::Standard),
-        json!({"op": "screenshot", "maxDimension": atlas_core::screen::frame::SCREENSHOT_SIDE, "perPoint": true})
-    );
-    assert_eq!(
-        screenshot_request(Size::Longest(atlas_core::screen::frame::SCREENSHOT_SIDE)),
-        json!({"op": "screenshot", "maxDimension": atlas_core::screen::frame::SCREENSHOT_SIDE})
-    );
-    assert_eq!(
-        screenshot_request(Size::Longest(800)),
-        json!({"op": "screenshot", "maxDimension": 800})
-    );
-    assert_eq!(screenshot_request(Size::Full), json!({"op": "screenshot"}));
-}
-
-#[test]
-fn a_crop_nobody_asked_for_is_refused() {
-    let reply = json!({"ok": true, "region": {"x": 0, "y": 0, "width": 10, "height": 10}});
-    let refused = cropped(&reply, None, &display()).unwrap_err();
-
-    assert_eq!(
-        (refused.code, refused.error.as_str()),
-        (
-            Code::Protocol,
-            "The helper sent a crop that was not asked for"
-        )
-    );
-}
-
-#[test]
-fn a_region_must_meet_the_display() {
-    assert!(meets(&region(-50, -50, 200, 200), &display()));
-    assert!(meets(&region(1279, 719, 10, 10), &display()));
-    assert!(!meets(&region(5000, 5000, 10, 10), &display()));
-    assert!(!meets(&region(1280, 0, 10, 10), &display()));
-    assert!(!meets(&region(-10, 0, 10, 10), &display()));
 }
 
 #[tokio::test]
@@ -3507,251 +1733,6 @@ async fn a_status_read_without_a_viewer_says_no_viewer_has_control() {
             .unwrap()
             .ends_with('.')
     );
-}
-
-#[test]
-fn a_failure_keeps_its_fixed_code_and_reads_as_plain_words_but_never_its_message() {
-    let dir = tempfile::tempdir().unwrap();
-    let click = json!({"op": "input", "actions": [{"type": "click"}]});
-    let refused = json!({"ok": false, "code": "elements", "error": "No element is named secret"});
-    let odd = json!({"ok": false, "code": "Not A Code: secret"});
-    let failed = json!({"ok": true, "exitCode": 2});
-
-    // One client per action: rows of one command read as its newest step.
-    for reply in [&refused, &odd, &failed] {
-        client_in(dir.path())
-            .doing(Doing::new("click").app(Some("Opie")))
-            .record_blocking(&click, reply, Duration::ZERO)
-            .unwrap();
-    }
-
-    let client = client_in(dir.path());
-    let directory = client.output_dir().unwrap();
-    let log = std::fs::read_to_string(directory.join(activity_log::FILE)).unwrap();
-    assert!(!log.contains("secret"), "{log}");
-    let rows = crate::activity_log::recent(directory, 5);
-    let reasons = rows
-        .iter()
-        .map(|row| json!(crate::overview::shown(row, 0).reason))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        reasons,
-        [
-            json!("The command failed"),
-            Value::Null,
-            json!("Nothing on screen matched")
-        ]
-    );
-}
-
-#[test]
-fn recorded_rows_name_the_actor_and_what_was_done_but_never_typed_text() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut client = client_in(dir.path()).doing(Doing::new("type").app(Some("TextEdit")));
-    let typed = json!({"op": "input", "actions": [{"type": "type", "text": "secret"}]});
-    let ok = json!({"ok": true});
-
-    client
-        .record_blocking(&typed, &ok, Duration::from_millis(5))
-        .unwrap();
-    client.doing = None;
-    client.actor = Actor::Viewer;
-    client
-        .record_blocking(&json!({"op": "restart"}), &ok, Duration::ZERO)
-        .unwrap();
-
-    let directory = client.output_dir().unwrap();
-    let rows = crate::activity_log::recent(directory, 5);
-    assert_eq!(
-        (rows[0].actor(), &rows[0].operation),
-        ("viewer", &Some(Op::Restart))
-    );
-    assert_eq!((rows[1].actor(), rows[1].action_count), ("agent", Some(1)));
-    assert_eq!(
-        (rows[1].verb.as_deref(), rows[1].app.as_deref()),
-        (Some("type"), Some("TextEdit"))
-    );
-    assert!(rows[0].verb.is_none(), "a row says only what it knows");
-
-    let log = fs::read_to_string(directory.join(activity_log::FILE)).unwrap();
-    assert!(!log.contains("secret"), "no typed text is recorded");
-}
-
-#[test]
-fn recording_refuses_non_files_without_waiting_for_a_reader() {
-    const WORKER: &str = "ATLAS_TEST_METADATA_DIRECTORY";
-    if let Some(directory) = std::env::var_os(WORKER) {
-        let client = client_in(Path::new(&directory));
-        assert!(client.record_start_blocking(&json!({"op": "run"})).is_err());
-        return;
-    }
-
-    let mut refused = Vec::new();
-    for name in [activity_log::LOCK, activity_log::FILE] {
-        for kind in [
-            "fifo",
-            "fifo with reader",
-            "directory",
-            "link",
-            "large link",
-        ] {
-            let dir = tempfile::tempdir().unwrap();
-            let client = client_in(dir.path());
-            let output = client.output_dir().unwrap();
-            let path = output.join(name);
-            let target = output.join("personal-file");
-            let contents = if kind == "large link" {
-                vec![b'x'; 1024 * 1024 + 1]
-            } else {
-                b"kept".to_vec()
-            };
-            fs::write(&target, &contents).unwrap();
-            match kind {
-                "fifo" | "fifo with reader" => nix::unistd::mkfifo(
-                    &path,
-                    nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
-                )
-                .unwrap(),
-                "directory" => fs::create_dir(&path).unwrap(),
-                "link" | "large link" => std::os::unix::fs::symlink(&target, &path).unwrap(),
-                _ => unreachable!(),
-            }
-            let _reader = (kind == "fifo with reader").then(|| {
-                OpenOptions::new()
-                    .read(true)
-                    .custom_flags(libc::O_NONBLOCK)
-                    .open(&path)
-                    .unwrap()
-            });
-
-            // The synchronous open cannot be interrupted by a Tokio timeout.
-            // Confine it to a child we always reap, even on the old blocking path.
-            let mut child = atlas_core::spawn::spawn(
-                atlas_core::test_support::rerun(
-                    "client::tests::recording_refuses_non_files_without_waiting_for_a_reader",
-                )
-                .env(WORKER, dir.path())
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null()),
-            )
-            .unwrap();
-            let deadline = Instant::now() + Duration::from_secs(2);
-            let success = loop {
-                if let Some(status) = child.try_wait().unwrap() {
-                    break status.success();
-                }
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    child.wait().unwrap();
-                    break false;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            };
-            assert_eq!(fs::read(&target).unwrap(), contents);
-            refused.push((name, kind, success));
-        }
-    }
-    assert!(
-        refused.iter().all(|(_, _, success)| *success),
-        "{refused:?}"
-    );
-}
-
-#[test]
-fn recording_appends_privately_and_rotates_a_full_log() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = client_in(dir.path()).doing(Doing::new("run"));
-    let request = json!({"op": "run"});
-    client.record_start_blocking(&request).unwrap();
-    client
-        .record_blocking(&request, &json!({"ok": true}), Duration::ZERO)
-        .unwrap();
-    let output = client.output_dir().unwrap();
-    let path = output.join(activity_log::FILE);
-    assert_eq!(fs::read_to_string(&path).unwrap().lines().count(), 2);
-    for name in [activity_log::LOCK, activity_log::FILE] {
-        assert_eq!(
-            std::os::unix::fs::MetadataExt::mode(&fs::metadata(output.join(name)).unwrap()) & 0o777,
-            0o600
-        );
-    }
-
-    let rows = fs::read(&path).unwrap();
-    let full = rows.repeat(1024 * 1024 / rows.len() + 1);
-    fs::write(&path, &full).unwrap();
-    client.record_start_blocking(&request).unwrap();
-    assert_eq!(fs::read(output.join(activity_log::PREVIOUS)).unwrap(), full);
-    let row: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    assert_eq!(row["operation"], "run");
-    assert_eq!(row["started"], true);
-}
-
-#[tokio::test]
-async fn process_identities_stay_internal_to_app_resolution() {
-    use crate::test_support::Helper;
-    use atlas_core::test_support::UID;
-    let dir = tempfile::tempdir().unwrap();
-    let (client, helper) = Helper::client(dir.path(), UID);
-    let reply = json!({"ok":true,"apps":[{"pid":812,"name":"Editor"}],"starts":{"812":[123,456]}});
-    let internal = helper
-        .serve(
-            async {
-                let verified = client.verify().await?;
-                client.apps_in(&verified).await
-            },
-            |_| Some(reply.clone()),
-        )
-        .await
-        .unwrap();
-    assert_eq!(internal.starts().unwrap().get(&812), Some(&[123, 456]));
-    let public = helper
-        .serve(client.apps(), |_| Some(reply.clone()))
-        .await
-        .unwrap();
-    assert!(public.get("starts").is_none());
-    assert_eq!(public["apps"], reply["apps"]);
-}
-
-#[tokio::test]
-async fn an_app_list_read_is_never_uncertain() {
-    use crate::test_support::Helper;
-    use atlas_core::test_support::UID;
-
-    let directory = tempfile::tempdir().unwrap();
-    let (client, helper) = Helper::client(directory.path(), UID);
-
-    // The stand-in takes the request and hangs up without a reply.
-    let error = helper.serve(client.apps(), |_| None).await.unwrap_err();
-
-    assert_eq!((error.code, error.uncertain), (Code::Protocol, false));
-}
-
-#[test]
-fn app_screenshot_rows_keep_only_safe_identity_from_the_nested_reply() {
-    let directory = tempfile::tempdir().unwrap();
-    let client = client_in(directory.path()).doing(Doing::new("screenshot"));
-    client.record_for_test(
-        &json!({"op": "screenshot", "pid": 812}),
-        &json!({
-            "ok": true, "capture": "1761660429000123456-capture.png",
-            "app": {"pid": 812, "name": "TextEdit", "bundleId": "com.apple.TextEdit",
-                "title": "PRIVATE DOCUMENT TITLE", "bounds": {"x": 12}},
-            "overlapping": [{"title": "ANOTHER PRIVATE TITLE"}], "png": "IMAGE PAYLOAD"
-        }),
-    );
-    let row = activity_log::recent(client.output_dir().unwrap(), 1).remove(0);
-    assert_eq!(row.app.as_deref(), Some("TextEdit"));
-    assert_eq!(row.bundle_id.as_deref(), Some("com.apple.TextEdit"));
-    assert_eq!(row.label, None);
-    assert_eq!(
-        row.capture.as_deref(),
-        Some("1761660429000123456-capture.png")
-    );
-    let log = fs::read_to_string(client.output_dir().unwrap().join(activity_log::FILE)).unwrap();
-    for private in ["PRIVATE", "bounds", "overlapping", "IMAGE PAYLOAD"] {
-        assert!(!log.contains(private), "{private}: {log}");
-    }
 }
 
 #[tokio::test]
@@ -3870,102 +1851,6 @@ async fn a_focus_write_with_an_unknown_outcome_keeps_its_claim_after_cleanup() {
     );
 }
 
-#[tokio::test]
-async fn a_named_click_sends_its_window_and_keeps_a_native_dock_refusal() {
-    let (_dir, client, listener, session) = native_client();
-    let mut caller = Box::pin(async {
-        let _ownership = client.controller.acquire(false)?;
-        let actions = json!([{"type":"click","x":20,"y":80}]);
-        let expect = Expect::new(812)?.in_window(42)?;
-        client
-            .input_in_session(
-                actions::Batch::decode(&actions)?,
-                None,
-                None,
-                Some(expect),
-                &session,
-            )
-            .await
-    });
-    let mut acquire = dispatched(&mut caller, &listener, "acquire").await;
-    answer(&mut acquire, json!({"ok":true})).await;
-    let (mut input, request) = received(&mut caller, &listener, "input").await;
-    assert_eq!(request["expect"], json!({"pid":812,"window":42}));
-    assert_eq!(request["actions"][0]["type"], "click");
-    let refused = json!({"ok":false,"code":"focus-changed","reason":"point","found":{"app":"Dock","pid":2},"error":"The Dock is at that point","performed":0,"partial":false,"uncertain":false});
-    answer(&mut input, refused.clone()).await;
-    let mut release = dispatched(&mut caller, &listener, "release").await;
-    answer(&mut release, json!({"ok":true})).await;
-    let reply = caller.await.unwrap();
-    for field in [
-        "code",
-        "reason",
-        "found",
-        "performed",
-        "partial",
-        "uncertain",
-    ] {
-        assert_eq!(reply[field], refused[field]);
-    }
-    assert!(client.controller.pending().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn a_missing_window_endpoint_preserves_memory_without_starting_the_look() {
-    use crate::host_session::{Host, HostSession};
-    use atlas_core::screen::windows::Bounds;
-    use std::cell::Cell;
-
-    let directory = tempfile::tempdir().unwrap();
-    let mut client = crate::test_support::client(directory.path());
-    client.host_session = Some(HostSession::new(Host::Named, "one").unwrap());
-    let verified = Verified {
-        session: Session {
-            epoch: Epoch {
-                uid: client.config.helper_uid,
-                capture_pid: 123,
-                input_pid: 456,
-                security_session_id: 42,
-                display_id: 7,
-                display: Display {
-                    width: 100.0,
-                    height: 100.0,
-                    scale: 1.0,
-                },
-            },
-            capture: true,
-            input: true,
-        },
-        observation: Observation::decode(&json!({"daemon": {"capabilities": [SESSION_PIN]}})),
-    };
-    client.remember_windows(
-        &[HitWindow {
-            number: 42,
-            pid: 812,
-            start: Some([123, 456]),
-            layer: 0,
-            bounds: Bounds::display(100.0, 100.0),
-        }],
-        &verified.session().epoch,
-    );
-    let looked = Cell::new(false);
-    let result = tokio::time::timeout(
-        Duration::from_secs(1),
-        client.look(&verified, async {
-            looked.set(true);
-            Ok(())
-        }),
-    )
-    .await
-    .expect("the missing endpoint is refused promptly");
-    assert!(result.is_err());
-    assert!(!looked.get());
-    assert_eq!(
-        client.remembered_windows().unwrap().windows.unwrap()[0].number,
-        42
-    );
-}
-
 impl Client {
     pub(crate) fn remember_windows(&self, windows: &[HitWindow], epoch: &Epoch) {
         if let Some(session) = &self.host_session
@@ -3983,37 +1868,6 @@ impl Client {
         )
         .unwrap()
     }
-}
-
-#[tokio::test]
-async fn public_apps_discard_malformed_starts_without_rejecting_valid_rows() {
-    use crate::test_support::Helper;
-    use atlas_core::test_support::UID;
-    let directory = tempfile::tempdir().unwrap();
-    let (client, helper) = Helper::client(directory.path(), UID);
-    for starts in [Value::Null, json!([1]), json!({"812": [123]}), json!(false)] {
-        let reply = json!({"ok": true, "apps": [{"pid": 812}], "starts": starts});
-        let mut public = helper
-            .serve(client.apps(), |_| Some(reply.clone()))
-            .await
-            .unwrap();
-        assert!(public["elapsedMs"].is_number());
-        public.as_object_mut().unwrap().remove("elapsedMs");
-        assert_eq!(public, json!({"ok": true, "apps": [{"pid": 812}]}));
-    }
-}
-
-#[test]
-fn preparation_fits_before_the_client_reply_timeout() {
-    let dir = tempfile::tempdir().unwrap();
-    let client = crate::test_support::client_in(dir.path());
-    let budget = atlas_native::native::focus::prepare_budget();
-    assert_eq!(budget, std::time::Duration::from_millis(1250));
-    assert!(budget < client.input_transport().timeout);
-    assert_eq!(
-        client.input_transport().timeout,
-        std::time::Duration::from_secs(5)
-    );
 }
 
 #[test]

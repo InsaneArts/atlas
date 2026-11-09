@@ -491,3 +491,7 @@ impl Client {
         outcome
     }
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

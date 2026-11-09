@@ -690,3 +690,7 @@ fn report(transaction: &Transaction, result: Result<()>, rollback: bool) -> Valu
 
     value
 }
+
+#[cfg(test)]
+#[path = "worker_tests.rs"]
+mod tests;

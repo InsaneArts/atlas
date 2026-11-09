@@ -760,3 +760,99 @@ fn remembering_windows_saves_no_names_and_leaves_session_records_untouched() {
         .is_err()
     );
 }
+
+/// A helper showing a TextEdit document and Calculator, counting the
+/// window lists it gives.
+fn two_apps(lists: &std::cell::Cell<usize>) -> impl FnMut(&Value) -> Option<Value> + '_ {
+    move |request| {
+        if request["op"] == "apps" {
+            return Some(
+                json!({"ok": true, "starts": {"812":[123,456],"900":[124,0]}, "apps": [
+                {"pid": 812, "name": "TextEdit"}, {"pid": 900, "name": "Calculator"}]}),
+            );
+        }
+        assert_eq!(request["op"], "windows", "nothing else is read");
+        lists.set(lists.get() + 1);
+        let window = |number, pid, owner| {
+            json!({"number": number, "pid": pid,
+            "owner": owner, "title": null, "layer": 0, "alpha": 1.0,
+            "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
+        };
+        let listed = json!({"ok": true, "starts": {"812":[123,456],"900":[124,0]}, "windows": [
+            window(4120, 812, "TextEdit"), window(339, 900, "Calculator")]});
+        Some(listed)
+    }
+}
+
+/// What `expected` asks the helper to check, found in a helper showing
+/// [`two_apps`], with how many window lists it read.
+async fn resolved(expected: Option<Expected>) -> (Result<Expect>, usize) {
+    use crate::test_support::Helper;
+    use atlas_core::test_support::UID;
+
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let lists = std::cell::Cell::new(0);
+    let expected = expected.unwrap();
+    let outcome = helper
+        .serve(
+            async {
+                let verified = client.verify().await?;
+                expected.resolve(&client, &verified).await
+            },
+            two_apps(&lists),
+        )
+        .await;
+    (outcome, lists.get())
+}
+
+#[tokio::test]
+async fn an_expectation_is_resolved_in_the_helper_with_one_window_list() {
+    let textedit = || Some(Target::Name("TextEdit".into()));
+    let field = || Some("Email".to_owned());
+
+    let (alone, lists) = resolved(Expected::new(None, Some(4120), field()).unwrap()).await;
+    assert_eq!(
+        serde_json::to_value(alone.unwrap()).unwrap(),
+        json!({"pid": 812, "start": [123, 456], "window": 4120, "field": "Email"}),
+        "the window names its app"
+    );
+    assert_eq!(lists, 1);
+
+    let (both, lists) = resolved(Expected::new(textedit(), Some(4120), None).unwrap()).await;
+    assert_eq!(both.unwrap().pid(), 812);
+    assert_eq!(lists, 1, "the app is found in the same list");
+
+    let calculator = Some(Target::Name("Calculator".into()));
+    let (other, _) = resolved(Expected::new(calculator, Some(4120), None).unwrap()).await;
+    assert_eq!(other.unwrap_err().code, "usage");
+
+    let (by_pid, _) =
+        resolved(Expected::new(Some(Target::Pid(900)), Some(4120), None).unwrap()).await;
+    assert_eq!(by_pid.unwrap_err().code, "usage");
+
+    let (missing, _) = resolved(Expected::new(textedit(), Some(77), None).unwrap()).await;
+    assert_eq!(missing.unwrap_err().code, "windows");
+
+    let (app, _) = resolved(Expected::new(textedit(), None, field()).unwrap()).await;
+    assert_eq!(
+        serde_json::to_value(app.unwrap()).unwrap(),
+        json!({"pid": 812, "start": [123, 456], "field": "Email"})
+    );
+}
+
+#[test]
+fn a_field_needs_the_app_or_window_it_is_in() {
+    let field = || Some("Email".to_owned());
+    assert_eq!(
+        Expected::new(None, None, field()).unwrap_err().code,
+        "usage"
+    );
+    assert!(Expected::new(None, None, None).unwrap().is_none());
+    assert!(Expected::new(None, Some(4120), field()).unwrap().is_some());
+    assert!(
+        Expected::new(Some(Target::Name("TextEdit".into())), None, field())
+            .unwrap()
+            .is_some()
+    );
+}

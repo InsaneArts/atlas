@@ -392,3 +392,7 @@ impl Client {
         Ok(saved)
     }
 }
+
+#[cfg(test)]
+#[path = "capture_tests.rs"]
+mod tests;
