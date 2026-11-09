@@ -533,7 +533,9 @@ impl Client {
         let mut warnings = Vec::new();
         // A command an agent ran may leave work running in its group: it is
         // kept before the command stops counting as running, so the person
-        // never signs in beside it.
+        // never signs in beside it. Work that can't be noted keeps the
+        // command's claim, as an unknown outcome, until a later look notes
+        // it or finds it ended.
         if command
             && reply["uncertain"] != true
             && let Some(group) = started_group(&reply)
@@ -541,8 +543,12 @@ impl Client {
                 .controller
                 .note_run_group(group, self.config.helper_uid)
         {
+            if let Some(claim) = claim.take() {
+                self.controller.keep_unrecorded_run(claim, group);
+            }
             warnings.push(format!(
-                "The command finished, but what it left running could not be noted: {error}"
+                "The command finished, but what it left running could not be noted, so Atlas \
+                 treats its outcome as unknown until it can: {error}"
             ));
         }
         if let Some(claim) = &claim

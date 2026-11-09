@@ -317,3 +317,65 @@ async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
     }
     panic!("the group ended, and still refuses");
 }
+
+#[tokio::test]
+async fn a_run_whose_leftover_work_cant_be_noted_keeps_the_person_out_until_it_is() {
+    use std::os::unix::process::CommandExt;
+    let mut shell = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
+            ])
+            .process_group(0),
+    )
+    .unwrap();
+    let group = i32::try_from(shell.id()).unwrap();
+    shell.wait().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client_in(dir.path());
+    let me = nix::unistd::getuid().as_raw();
+    client.config.helper_uid = me;
+    client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
+    let claim = client.controller.quarantine_command().unwrap();
+    // The record of leftover work can't be written: a folder stands there.
+    std::fs::create_dir_all(client.controller.run_groups_path()).unwrap();
+    let reply = json!({"ok": true, "exitCode": 0, "timedOut": false,
+        "events": [{"event": "started", "pid": group}]});
+
+    let settled = client
+        .settle(&run().request(), reply, true, Some(claim), Instant::now())
+        .await
+        .unwrap();
+
+    assert!(
+        settled["warnings"]
+            .to_string()
+            .contains("could not be noted")
+    );
+    let mut lease = atlas_control::Lease::default();
+    let refused = lease.acquire(&client.controller).unwrap_err();
+    assert_eq!(
+        refused.code,
+        Code::Uncertain,
+        "the person can't sign in beside it"
+    );
+
+    std::fs::remove_dir(client.controller.run_groups_path()).unwrap();
+    let token = lease.acquire(&client.controller).unwrap();
+    assert_eq!(
+        client
+            .controller
+            .require_no_run_left(me)
+            .unwrap_err()
+            .details["running"],
+        "command",
+        "noted at last, the work still keeps a sign-in out"
+    );
+    drop(token);
+    lease.release();
+    let _ = nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(group),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+}

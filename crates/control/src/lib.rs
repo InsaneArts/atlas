@@ -211,6 +211,11 @@ pub struct Controller {
     /// The process groups of agents' finished commands that left something
     /// running, kept until nothing in them runs.
     run_groups: PathBuf,
+    /// The groups of agents' finished commands that could not be recorded
+    /// there, by the generation of the claim kept for each.
+    unrecorded_runs: PathBuf,
+    /// The helper account this controller is for.
+    helper: u32,
     name: String,
     /// How long [`Controller::acquire`] may keep trying, in all, while
     /// another controller has the lock, before answering busy. Zero
@@ -278,6 +283,8 @@ impl Controller {
             private: directory.join(format!("{name}.signing-in")),
             private_generation: directory.join(format!("{name}.private-gen")),
             run_groups: directory.join(format!("{name}.run-groups.json")),
+            unrecorded_runs: directory.join(format!("{name}.run-unrecorded.json")),
+            helper: uid,
             name: name.to_owned(),
             wait: Duration::ZERO,
             until: None,
@@ -456,6 +463,9 @@ impl Controller {
     /// [`Controller::acquire`] for `purpose`.
     fn acquire_for(&self, purpose: Purpose) -> Result<Ownership> {
         let lock = self.take_lock()?;
+        // A command whose leftover work could not be recorded is settled
+        // once it is, or once that work ended.
+        self.settle_unrecorded_runs();
         match purpose {
             Purpose::Recovery => self.require_nothing_running()?,
             Purpose::Change(beside) => self.require_known_beside(beside)?,
@@ -477,6 +487,7 @@ impl Controller {
     /// refusal here; it is the returned `bool`.
     pub fn acquire_for_cleanup(&self) -> Result<(Ownership, bool)> {
         let lock = self.take_lock()?;
+        self.settle_unrecorded_runs();
         let unknown = match self.require_known_beside(Beside::Nothing) {
             Ok(()) => false,
             Err(error) if error.code == Code::Uncertain => true,
@@ -615,6 +626,12 @@ impl Controller {
     #[cfg(any(test, feature = "test-support"))]
     pub fn run_groups_path(&self) -> &Path {
         &self.run_groups
+    }
+
+    /// Where the groups that could not be recorded are kept, for tests.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn unrecorded_runs_path(&self) -> &Path {
+        &self.unrecorded_runs
     }
 
     /// Where the screen's privacy generation is kept, for tests that break it.
