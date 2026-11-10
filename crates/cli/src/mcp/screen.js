@@ -1,14 +1,16 @@
 // Atlas's screen view: an MCP Apps view (JSON-RPC 2.0 over postMessage with
 // the agent app that shows it). It shows the helper's screen and status
-// through Atlas's own tools, and offers what Atlas's viewer offers: Stop and
-// Resume, taking control, the activity, the helper's apps, the agent's
-// screenshots, Recover, Open in Atlas, Switch and Log Out. The decisions are
-// plain functions at the top, tested by tests/test_screen_view.mjs; the page
-// wiring below runs only in a page.
+// through Atlas's own tools, and offers what Atlas.app's viewer offers: the
+// screen first, Stop and Resume, taking control, the sessions and their
+// activity with its pictures, Recover, Open in Atlas, Switch and Log Out.
+// The decisions are plain functions at the top, tested by
+// tests/test_screen_view.mjs; the page wiring below runs only in a page.
 'use strict';
 
-/** Where a tool result carries a picture: the screen, or a screenshot. */
+/** Where a tool result carries a picture: a screenshot; and where
+ * `screen_frame` carries the tiles of the screen. */
 const FRAME_META = 'atlas/frame';
+const TILES_META = 'atlas/tiles';
 const STATUS_META = 'atlas/status';
 /** How often the person's control is kept, in milliseconds: well inside
  * the ten seconds it lasts, so a closed view lets go soon. */
@@ -18,8 +20,27 @@ const KEEP_EVERY = 3000;
 const PICTURE_FRESH = 6500;
 /** How long recent actions stay as captions over the screen, in seconds. */
 const CAPTION_SECONDS = 60;
-/** Rows newer than this many seconds are under "Now" in the activity. */
-const NOW_SECONDS = 120;
+/** The longest pause inside a run of the activity, in milliseconds, as
+ * Atlas.app forms them, and the most runs it draws. */
+const MOMENT_GAP = 120000;
+const MOST_RUNS = 60;
+/** What the view says where the app showing it refuses its calls. */
+const UNAVAILABLE = "This app can't show the live screen here. Use Atlas to watch it.";
+/** The fewest repeats that read as one line. */
+const FOLDS_FROM = 3;
+/** The most reads one picture opened large takes, tiles that did not fit
+ * one answer coming in the next. */
+const MOST_PICTURE_READS = 20;
+/** The session states the sidebar lists as at work. */
+const WORKING_STATES = ['acting', 'waiting', 'needsYou'];
+/** The name each host's app goes by. */
+const HOST_LABELS = {
+  claude: 'Claude Code',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  pi: 'Pi',
+  opencode: 'opencode',
+};
 /** Most actions sent at once, as the helper takes them. */
 const MOST_ACTIONS = 32;
 /** The most characters one typing action carries. */
@@ -89,9 +110,11 @@ const STREAM_GAP = 100;
  * for far more often. */
 function interval(
   state,
-  { hidden = false, picture = 'live', ours = false, streaming = false } = {},
+  { hidden = false, picture = 'live', ours = false, streaming = false, more = false } = {},
 ) {
   if (hidden) return null;
+  // Tiles that did not fit the last answer come next, at once.
+  if (more && (ours || picture !== 'paused')) return 0;
   if (ours) return streaming ? STREAM_GAP : 400;
   if (picture === 'paused') return 4000;
   if (picture === 'slow') return 5000;
@@ -302,11 +325,18 @@ function newest(status) {
 /** The view's next model from a tool result: its status and which session
  * this chat is (when Atlas knows), whether this app may resume and take
  * control, whether the control shown is the view's own, where clicks land,
- * and the screen from `_meta` (kept while the picture is paused). */
+ * and the screen's tiles from `_meta` (kept while the picture is paused).
+ * A frame names the picture it was drawn on (`after`): its tiles are only
+ * what changed since. */
 function merge(current, result) {
   const next = { ...current };
   const structured = (result && result.structuredContent) || {};
-  const frame = result && result._meta && result._meta[FRAME_META];
+  const tiles = result && result._meta && result._meta[TILES_META];
+  const frame = tiles && {
+    ...tiles,
+    tiles: Array.isArray(tiles.tiles) ? tiles.tiles : [],
+    after: current.frame ? current.frame.id : null,
+  };
   // The whole status is in `_meta`; an older server put it beside the facts.
   const status = (result && result._meta && result._meta[STATUS_META]) || structured.status;
   if (status) {
@@ -325,14 +355,37 @@ function merge(current, result) {
   const paused = current.picture === 'paused' && current.frame && !next.ours;
   if (frame && !paused) {
     next.frame = frame;
+    next.more = frame.more === true;
     next.points = structured.points || null;
     next.stale = false;
   } else if (structured.unchanged) {
     next.stale = false;
   } else if (structured.screen === false) {
+    // A screen that could not be read is not asked for again at once.
     next.stale = true;
+    next.more = false;
   }
   return next;
+}
+
+/** The longest side, in device pixels, of a screen drawn `rect` in the page
+ * at `ratio` device pixels per CSS pixel; none before it is laid out. */
+function drawnLongest(rect, ratio = 1) {
+  const longest = Math.round(Math.max(rect.width, rect.height) * (ratio > 0 ? ratio : 1));
+  return longest > 0 ? longest : null;
+}
+
+/** What drawing `frame` on a picture showing `shown` (the id of the frame
+ * last drawn, or null) takes: its base and tiles in order, or null when
+ * the frame builds on a picture that isn't there. */
+function paintSteps(frame, shown) {
+  if (!frame || !(frame.width > 0) || !(frame.height > 0)) return null;
+  if (!frame.base && (shown === null || frame.after !== shown)) return null;
+  const steps = frame.base
+    ? [{ data: frame.base, x: 0, y: 0, width: frame.width, height: frame.height }]
+    : [];
+  for (const tile of frame.tiles || []) steps.push({ data: tile.data, x: tile.x, y: tile.y });
+  return steps;
 }
 
 /** The observation input may name, once its picture is on screen. */
@@ -406,43 +459,344 @@ function captions(status, count, self = null) {
   });
 }
 
-/** The activity a filter shows, in groups: what happened in the last two
- * minutes under "Now", the rest under "Earlier". While sessions show, a line
- * from another session names it; a line that sent nothing says why, and is
- * never a problem. */
-function activityGroups(rows, filter = 'all', status = null, self = null) {
-  const kept = (rows || []).filter((row) => {
-    if (filter === 'agent') return row.actor !== 'viewer';
-    if (filter === 'you') return row.actor === 'viewer';
-    if (filter === 'problems') return failed(row);
-    return true;
-  });
-  const lines = grouped(kept, sessionsShown(status));
-  for (const line of lines) {
-    const session = whose(line.row, status, self);
-    if (session) line.who = nameOf(session);
-    if (line.row.nothingSent === true) {
-      line.nothingSent = true;
-      line.reason = line.row.reason || 'Another app was in front';
-    }
-  }
-  const groups = [];
-  for (const line of lines) {
-    const title =
-      typeof line.ageSeconds === 'number' && line.ageSeconds < NOW_SECONDS ? 'Now' : 'Earlier';
-    const last = groups[groups.length - 1];
-    if (last && last.title === title) last.lines.push(line);
-    else groups.push({ title, lines: [line] });
-  }
-  return groups;
+/** Whose work a row follows: the person's own, or a session's by its key
+ * (Terminal's when no host named it). */
+function streamOf(row) {
+  return row.actor === 'viewer' ? 'you' : typeof row.session === 'string' ? row.session : '';
 }
 
-/** The clock time `ageSeconds` before `now` (milliseconds), as 10:31:42. */
-function clock(ageSeconds, now) {
-  if (typeof ageSeconds !== 'number') return '';
-  const at = new Date(now - ageSeconds * 1000);
+/** The app a row acted in, by its name and bundle as far as the row
+ * says; none for a command or a screenshot of the whole screen. */
+function appOf(row) {
+  const name = typeof row.app === 'string' && row.app ? row.app : null;
+  const bundleId = typeof row.bundleId === 'string' && row.bundleId ? row.bundleId : null;
+  return name || bundleId ? { name, bundleId } : null;
+}
+
+/** Whether two apps are one, as Atlas.app tells: by bundle when both say
+ * it, else by name. */
+function sameApp(one, other) {
+  if (one.bundleId && other.bundleId) return one.bundleId === other.bundleId;
+  return Boolean(one.name && other.name && one.name.toLowerCase() === other.name.toLowerCase());
+}
+
+/** An app with what `other` says of it filled in where it said nothing. */
+function filledApp(app, other) {
+  return { name: app.name || other.name, bundleId: app.bundleId || other.bundleId };
+}
+
+/** The picture a row kept: the screenshot it took, or the screen just
+ * before its step with what marks it. */
+function pictureOf(row) {
+  if (typeof row.capture === 'string' && row.capture)
+    return { name: row.capture, kind: 'shot', at: row.startedAt };
+  if (typeof row.before === 'string' && row.before)
+    return { name: row.before, kind: 'before', at: row.startedAt, facts: row.facts || null };
+  return null;
+}
+
+/** How a row went: under way, of unknown outcome, refused before
+ * anything was sent, failed, or done. */
+function outcomeOf(row) {
+  if (row.started === true) return 'running';
+  if (row.uncertain === true) return 'uncertain';
+  if (row.nothingSent === true) return 'notSent';
+  return row.ok === false ? 'failed' : 'done';
+}
+
+/** Whether an older row is the same action as the line just above it, as
+ * Atlas.app reads repeats: by the same actor in the same session, saying
+ * the same, with the same outcome, operation, reason and app, on the same
+ * day and at most two minutes apart. A line under way and screenshots
+ * always stand alone. */
+function repeats(line, row) {
+  const above = line.rows[line.rows.length - 1];
+  const at = typeof row.startedAt === 'number' ? row.startedAt : null;
+  if (line.startedAt !== null && at !== null) {
+    if (line.startedAt - at > MOMENT_GAP || dayOf(line.startedAt) !== dayOf(at)) return false;
+  }
+  const app = appOf(row);
+  if (Boolean(line.app) !== Boolean(app) || (app && !sameApp(app, line.app))) return false;
+  if (outcomeOf(above) === 'running') return false;
+  if (above.operation === 'screenshot' || row.operation === 'screenshot') return false;
+  return (
+    above.actor === row.actor &&
+    streamOf(above) === streamOf(row) &&
+    above.says === row.says &&
+    outcomeOf(above) === outcomeOf(row) &&
+    above.operation === row.operation &&
+    (above.reason || null) === (row.reason || null)
+  );
+}
+
+/** A line of the activity from its rows, newest first: named by its
+ * oldest, so it keeps its identity as repeats arrive. */
+function lineOf(rows) {
+  const newest = rows[0];
+  const oldest = rows[rows.length - 1];
+  const times = rows.map((row) => row.startedAt).filter((at) => typeof at === 'number');
+  const stream = streamOf(newest);
+  return {
+    id: oldest.logicalId || oldest.id || `${stream}|${oldest.startedAt}`,
+    text: rowText(newest),
+    stream,
+    actor: newest.actor,
+    app: appOf(newest),
+    rows,
+    times: rows.length,
+    actions: rows.reduce((sum, row) => sum + (row.count || 1), 0),
+    failed: failed(newest),
+    nothingSent: newest.nothingSent === true,
+    reason: newest.reason || null,
+    uncertain: newest.uncertain === true,
+    running: newest.started === true,
+    startedAt: times.length ? Math.min(...times) : null,
+    endedAt: times.length ? Math.max(...times) : null,
+    shot: newest.operation === 'screenshot' && newest.capture ? { name: newest.capture } : null,
+    picture: rows.map(pictureOf).find(Boolean) || null,
+  };
+}
+
+/** Rows, newest first, as the activity's lines: three or more rows that
+ * repeat one another read as one line that counts them; two read better
+ * as two. */
+function linesOf(rows) {
+  const groups = [];
+  for (const row of rows || []) {
+    if (!row || typeof row !== 'object') continue;
+    const last = groups[groups.length - 1];
+    if (last && repeats(last, row)) {
+      last.rows.push(row);
+      const app = appOf(row);
+      if (app) last.app = filledApp(last.app, app);
+      if (typeof row.startedAt === 'number')
+        last.startedAt = Math.min(last.startedAt ?? row.startedAt, row.startedAt);
+      continue;
+    }
+    groups.push({
+      rows: [row],
+      app: appOf(row),
+      startedAt: typeof row.startedAt === 'number' ? row.startedAt : null,
+    });
+  }
+  return groups.flatMap((group) =>
+    group.rows.length >= FOLDS_FROM ? [lineOf(group.rows)] : group.rows.map((row) => lineOf([row])),
+  );
+}
+
+/** The day a time falls on, in the person's time zone; none for no time. */
+function dayOf(at) {
+  return typeof at === 'number' ? new Date(at).toDateString() : null;
+}
+
+/** Whether an older line joins a run, as Atlas.app forms them: on the same
+ * day, at most two minutes before the run's oldest line, and in the same
+ * app, in none, or the run is in none yet. Lines in no app join a run in
+ * none however far apart, so neighbouring commands read as one run. */
+function joins(run, line) {
+  const day = dayOf(line.endedAt);
+  if (run.day && day && run.day !== day) return false;
+  if (!line.app && !run.app) return true;
+  if (run.startedAt !== null && line.endedAt !== null && run.startedAt - line.endedAt > MOMENT_GAP)
+    return false;
+  if (!line.app || !run.app) return true;
+  return sameApp(run.app, line.app);
+}
+
+/** Lines, newest first, as runs: one stream's work in one app, each line
+ * joining its stream's open run when it may, else opening another. A run
+ * is titled by its app; one in none is the person's own, Screenshots or
+ * Commands. */
+function runsOf(lines) {
+  const runs = [];
+  const open = new Map();
+  for (const line of lines) {
+    const index = open.get(line.stream);
+    const run = index === undefined ? null : runs[index];
+    if (run && joins(run, line)) {
+      run.lines.push(line);
+      if (line.app) run.app = run.app ? filledApp(run.app, line.app) : line.app;
+      if (line.startedAt !== null)
+        run.startedAt = Math.min(run.startedAt ?? line.startedAt, line.startedAt);
+      if (line.endedAt !== null) run.endedAt = Math.max(run.endedAt ?? line.endedAt, line.endedAt);
+    } else {
+      open.set(line.stream, runs.length);
+      runs.push({
+        stream: line.stream,
+        app: line.app,
+        lines: [line],
+        startedAt: line.startedAt,
+        endedAt: line.endedAt,
+        day: dayOf(line.endedAt),
+      });
+    }
+  }
+  return runs.map((run) => {
+    const oldest = run.lines[run.lines.length - 1];
+    const title = run.app
+      ? run.app.name || run.app.bundleId
+      : run.stream === 'you'
+        ? 'You'
+        : run.lines.every((line) => line.shot)
+          ? 'Screenshots'
+          : 'Commands';
+    return {
+      ...run,
+      id: `${run.stream}|${oldest.id}`,
+      title,
+      actions: run.lines.reduce((sum, line) => sum + line.actions, 0),
+      problems: run.lines.filter((line) => line.failed),
+      pictures: run.lines.filter((line) => line.picture),
+      uncertain: run.lines.some((line) => line.uncertain),
+    };
+  });
+}
+
+/** The runs a filter shows, each with only the lines it keeps, at most
+ * MOST_RUNS: all of them, the problems, or the lines with a picture. */
+function shownRuns(runs, filter = 'all') {
+  const keeps =
+    {
+      all: () => true,
+      problems: (line) => line.failed,
+      pictures: (line) => Boolean(line.picture),
+    }[filter] || (() => true);
+  return runs
+    .map((run) => ({ ...run, lines: run.lines.filter(keeps) }))
+    .filter((run) => run.lines.length)
+    .slice(0, MOST_RUNS);
+}
+
+/** Whether a run shows its steps: always while it holds the action of
+ * unknown outcome; else as the person chose; else folded under All and
+ * open under any other filter, whose lines are what was asked to see. */
+function runOpen(run, filter = 'all', choices = {}) {
+  if (run.uncertain) return true;
+  if (typeof choices[run.id] === 'boolean') return choices[run.id];
+  return filter !== 'all';
+}
+
+/** A run's words after its title: what it did last, how many actions,
+ * and how many did not work. */
+function runWords(run) {
+  const newest = run.lines[0];
+  const words = [newest ? newest.text : ''];
+  words.push(`${run.actions} ${run.actions === 1 ? 'action' : 'actions'}`);
+  const problems = run.problems.length;
+  return {
+    words: words.filter(Boolean).join(' · '),
+    problems: problems ? `${problems} ${problems === 1 ? 'problem' : 'problems'}` : '',
+  };
+}
+
+/** Where a step acted, as fractions across and down the picture before
+ * it: its point, or the middle of the element it went to; none for a
+ * picture with neither, or no display to place it by. */
+function spotOf(picture) {
+  const facts = picture && picture.facts;
+  const element = facts && facts.element && facts.element.frame;
+  const point =
+    (facts && facts.point) ||
+    (element && { x: element.x + element.width / 2, y: element.y + element.height / 2 });
+  const display = facts && facts.display;
+  if (!point || !display || !(display.width > 0) || !(display.height > 0)) return null;
+  const x = point.x / display.width;
+  const y = point.y / display.height;
+  if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return null;
+  return { x, y };
+}
+
+/** A time as a clock reads it, 13:02; none for no time. */
+function hourMinute(at) {
+  if (typeof at !== 'number') return '';
+  const time = new Date(at);
   const two = (n) => String(n).padStart(2, '0');
-  return `${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}`;
+  return `${two(time.getHours())}:${two(time.getMinutes())}`;
+}
+
+/** When a run went on: 12:58–13:01, or one time when it fit in a minute. */
+function runTime(run) {
+  const from = hourMinute(run.startedAt);
+  const to = hourMinute(run.endedAt);
+  return from && to && from !== to ? `${from}–${to}` : to || from;
+}
+
+/** How many lines each filter would show, for its tab. */
+function filterCounts(runs) {
+  const lines = runs.flatMap((run) => run.lines);
+  return {
+    problems: lines.filter((line) => line.failed).length,
+    pictures: lines.filter((line) => line.picture).length,
+  };
+}
+
+/** Whose a run of the activity is, said beside it: none for the person's
+ * own and this chat's; Terminal's for commands no host named; else the
+ * session's name, from the live sessions or those the activity named. */
+function ownerOf(stream, status, named = {}, self = null) {
+  if (stream === 'you' || (known(self) && stream === self)) return null;
+  if (stream === '') return 'Terminal';
+  const session = sessionsOf(status).find((one) => one.key === stream) || (named && named[stream]);
+  return session ? nameOf(session) : 'Another session';
+}
+
+/** The name a host's app goes by. */
+function hostLabel(host) {
+  return HOST_LABELS[host] || 'Terminal';
+}
+
+/** The sessions beside the screen, as Atlas.app's sidebar groups them:
+ * those at work (acting, waiting or needing the person), those idle, and
+ * those ended that the activity still names. `known` holds every session
+ * the activity named, by its key. */
+function sidebarGroups(status, known = {}) {
+  const live = sessionsOf(status);
+  const working = [];
+  const idle = [];
+  const seen = new Set();
+  for (const session of live) {
+    seen.add(session.key);
+    const row = {
+      key: session.key,
+      name: nameOf(session),
+      host: session.host,
+      state: session.state,
+      sub: hostLabel(session.host),
+      icon: iconOf(session),
+    };
+    if (WORKING_STATES.includes(session.state) || session.holdsHelper === true) working.push(row);
+    else idle.push(row);
+  }
+  const ended = Object.entries(known || {})
+    .filter(([key]) => !seen.has(key))
+    .map(([key, session]) => ({
+      key,
+      name: (session && session.name) || 'Session',
+      host: session && session.host,
+      state: 'ended',
+      sub: (session && session.hostLabel) || hostLabel(session && session.host),
+      icon: iconOf({ name: session && session.name, host: session && session.host }),
+    }));
+  return [
+    { title: 'Working', rows: working },
+    { title: 'Idle', rows: idle },
+    { title: 'Ended', rows: ended },
+  ].filter((group) => group.rows.length);
+}
+
+/** The header's words: the state over the screen, or whose activity shows
+ * under it. */
+function headWords(model, known = {}) {
+  if (model.place !== 'activity')
+    return { title: label(model.status, model.ours, model.self), sub: '' };
+  if (model.session === null || model.session === undefined)
+    return { title: 'All sessions', sub: '' };
+  const live = sessionsOf(model.status).find((session) => session.key === model.session);
+  const named = live || known[model.session];
+  if (!named) return { title: model.session === '' ? 'Terminal' : 'Session', sub: '' };
+  const sub = [named.hostLabel || hostLabel(named.host)];
+  if (live && live.holdsHelper === true) sub.push('has the helper');
+  return { title: nameOf(named), sub: sub.join(' · ') };
 }
 
 /** The size the screen takes in a stage of `width`×`height`: as large as
@@ -576,16 +930,6 @@ function themeOf(context) {
   return theme === 'light' || theme === 'dark' ? theme : null;
 }
 
-/** The words for an app's window: its title and size. */
-function windowWords(window) {
-  const title = window.title && String(window.title).trim() ? String(window.title) : 'Untitled';
-  const size =
-    typeof window.width === 'number' && typeof window.height === 'number'
-      ? `${Math.round(window.width)} × ${Math.round(window.height)}`
-      : '';
-  return { title, size };
-}
-
 if (typeof document !== 'undefined') {
   const all = (selector) => Array.from(document.querySelectorAll(selector));
   const one = (selector) => document.querySelector(selector);
@@ -608,14 +952,17 @@ if (typeof document !== 'undefined') {
     ours: false,
     points: null,
     picture: 'live',
-    tab: 'screen',
+    place: 'screen',
+    // Whose activity shows: every session's (null), Terminal's ('') or one
+    // session's by its key.
+    session: null,
     filter: 'all',
     activity: null,
     activityError: null,
-    apps: null,
-    appsError: null,
-    shots: null,
-    shotsError: null,
+    // Every session the activity has named, by its key, and the runs the
+    // person opened or folded, by their id.
+    known: {},
+    choices: {},
   };
   let context = {};
   let timer = null;
@@ -672,11 +1019,14 @@ if (typeof document !== 'undefined') {
       throw error;
     });
   };
+  // The app showing the view refuses its calls: it shows what a tool's
+  // own result brings, never the live screen.
+  const refusedHere = (error) => error.message === 'IPC not available for MCP tool call';
   const callError = (error, otherwise = "Atlas isn't answering") =>
     error.code === -32602 && viewCredential
       ? error.message
-      : error.message === 'IPC not available for MCP tool call'
-        ? 'View unavailable here · Use Atlas'
+      : refusedHere(error)
+        ? UNAVAILABLE
         : otherwise;
   const said = (result, otherwise) =>
     (result && result.content && result.content[0] && result.content[0].text) || otherwise;
@@ -777,32 +1127,103 @@ if (typeof document !== 'undefined') {
     return mark;
   };
 
+  const loadPicture = (source) =>
+    new Promise((resolve, reject) => {
+      const image = el('img');
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("The helper's screen couldn't be drawn"));
+      image.src = source;
+    });
+  // Draws frames of tiles on `canvas` in the order they came, each on the
+  // picture the one before left, all of a frame at once once its pictures
+  // load, while `live` says the canvas is still this painter's. `done`
+  // hears each frame drawn (true) or not (false); after one that could
+  // not be drawn, only a frame with a base draws again.
+  const painter = (canvas, live, done) => {
+    let painting = Promise.resolve();
+    let shown = null;
+    const paint = async (frame) => {
+      const steps = paintSteps(frame, shown);
+      if (!steps) throw new Error("The helper's screen couldn't be drawn");
+      const images = await Promise.all(
+        steps.map((step) => loadPicture(`data:${frame.mimeType};base64,${step.data}`)),
+      );
+      if (!live()) return false;
+      if (canvas.width !== frame.width || canvas.height !== frame.height) {
+        canvas.width = frame.width;
+        canvas.height = frame.height;
+      }
+      const pen = canvas.getContext('2d');
+      images.forEach((image, index) => {
+        const step = steps[index];
+        if (step.width) pen.drawImage(image, step.x, step.y, step.width, step.height);
+        else pen.drawImage(image, step.x, step.y);
+      });
+      shown = frame.id;
+      return true;
+    };
+    return {
+      queue(frame) {
+        painting = painting.then(() =>
+          paint(frame).then(
+            (drawn) => drawn && done(frame, true),
+            () => {
+              shown = null;
+              done(frame, false);
+            },
+          ),
+        );
+      },
+      shown: () => shown,
+    };
+  };
+
+  // The screen: a frame that can't be drawn starts it again, as the next
+  // ask then names no frame and the whole screen comes.
+  let queued = null;
+  const screenPainter = painter(
+    one('[data-frame]'),
+    () => !superseded,
+    (frame, drawn) => {
+      if (!drawn) {
+        if (model.frame === frame) model.frame = null;
+        return;
+      }
+      if (model.frame === frame) {
+        const newlyDisplayed = model.displayed !== frame;
+        model.displayed = frame;
+        if (newlyDisplayed) sawPicture();
+        showButtons();
+      }
+      copyBack();
+    },
+  );
+  const queuePaint = (frame) => {
+    queued = frame;
+    screenPainter.queue(frame);
+  };
+  // The screen in the corner: the picture, drawn down to its own size in
+  // device pixels.
+  const copyBack = () => {
+    const back = one('[data-back-frame]');
+    if (one('[data-back]').hidden || !screenPainter.shown()) return;
+    const canvas = one('[data-frame]');
+    const across = drawnLongest(back.getBoundingClientRect(), window.devicePixelRatio);
+    back.width = across || canvas.width;
+    back.height = Math.max(1, Math.round((back.width * canvas.height) / canvas.width));
+    back.getContext('2d').drawImage(canvas, 0, 0, back.width, back.height);
+  };
+
   const showScreen = () => {
-    const image = one('[data-frame]');
+    const canvas = one('[data-frame]');
     const empty = one('[data-empty]');
     if (model.frame) {
-      const frame = model.frame;
-      const source = `data:${frame.mimeType};base64,${frame.data}`;
-      const loaded = () => {
-        if (
-          model.frame === frame &&
-          image.currentSrc === source &&
-          image.complete &&
-          image.naturalWidth > 0
-        ) {
-          const newlyDisplayed = model.displayed !== frame;
-          model.displayed = frame;
-          if (newlyDisplayed) sawPicture();
-          showButtons();
-        }
-      };
-      image.onload = loaded;
-      if (image.getAttribute('src') !== source) image.src = source;
-      else loaded();
-      image.hidden = false;
-      image.classList.toggle('dim', model.stale || model.picture === 'paused');
+      if (model.frame !== queued) queuePaint(model.frame);
+      canvas.hidden = false;
+      canvas.classList.toggle('dim', model.stale || model.picture === 'paused');
       empty.hidden = true;
-      one('[data-back-frame]').src = source;
+    } else if (model.refused) {
+      one('[data-empty-words]').textContent = UNAVAILABLE;
     } else if (model.status && model.status.state === 'notReady') {
       one('[data-empty-words]').textContent = 'Open Atlas to see why';
     }
@@ -892,14 +1313,66 @@ if (typeof document !== 'undefined') {
     controls.hidden = fills(context) || modes.includes('fullscreen');
     controls.textContent = inlineExpanded ? 'Collapse' : 'Controls';
     controls.setAttribute('aria-expanded', String(inlineExpanded));
-    one('[data-back]').hidden = model.tab === 'screen';
-    one('[data-orbit]').style.display = full() && model.tab !== 'screen' ? 'none' : '';
-
-    for (const tab of all('[data-tab]'))
-      tab.setAttribute('aria-selected', String(tab.dataset.tab === model.tab));
-    for (const panel of all('[data-tab-panel]'))
-      panel.hidden = panel.dataset.tabPanel !== model.tab;
+    one('[data-back]').hidden = model.place === 'screen';
+    copyBack();
+    for (const panel of all('[data-place]')) panel.hidden = panel.dataset.place !== model.place;
+    showHead();
+    showSidebar();
   };
+
+  // The header: the state over the screen, or whose activity shows; in a
+  // narrow frame, where the sessions fold away, a way to the activity.
+  const showHead = () => {
+    const words = headWords(model, model.known);
+    one('[data-head-title]').textContent = words.title;
+    one('[data-head-sub]').textContent = words.sub;
+    one('[data-open-activity]').hidden = model.place !== 'screen' || !narrow();
+  };
+
+  // The sessions: All, then each by what it does, the one whose activity
+  // shows chosen; none while the screen shows. The helper at the foot.
+  let sidebarKey = '';
+  const showSidebar = () => {
+    if (!full()) return;
+    const groups = sidebarGroups(model.status, model.known);
+    const chosen = model.place === 'activity' ? model.session : undefined;
+    one('[data-session-all]').setAttribute('aria-pressed', String(chosen === null));
+    const live = sessionsOf(model.status).length;
+    one('[data-all-count]').textContent = live ? String(live) : '';
+    const status = model.status || {};
+    one('[data-helper-dot]').className = `dot ${(status && status.state) || ''}`;
+    one('[data-helper-label]').textContent = status.label || 'Atlas';
+    const display = status.display;
+    one('[data-helper-facts]').textContent = [
+      status.helper ? `Helper ${status.helper}` : '',
+      display ? `${display.width} × ${display.height}` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const key = JSON.stringify([groups, chosen]);
+    if (key === sidebarKey) return;
+    sidebarKey = key;
+    const nodes = [];
+    for (const group of groups) {
+      nodes.push(el('div', 'side-title', group.title));
+      for (const session of group.rows) {
+        const row = el('button', 'side-row');
+        row.type = 'button';
+        row.setAttribute('aria-pressed', String(chosen === session.key));
+        const badge = el('span', 'side-icon');
+        badge.append(icon(session.icon));
+        if (session.state !== 'ended') badge.append(el('span', `dot ${dotOf(session.state)}`));
+        const words = el('span', 'side-words');
+        words.append(el('span', 'side-name', session.name), el('span', 'side-sub', session.sub));
+        row.append(badge, words);
+        row.addEventListener('click', () => showActivityOf(session.key));
+        nodes.push(row);
+      }
+    }
+    one('[data-session-groups]').replaceChildren(...nodes);
+  };
+  const dotOf = (state) =>
+    ({ acting: 'working', waiting: 'waiting', needsYou: 'needsYou' })[state] || '';
 
   // The screen keeps its own proportions: across the card inline, as large
   // as the frame allows when it fills one.
@@ -956,6 +1429,7 @@ if (typeof document !== 'undefined') {
       picture: model.picture,
       ours: model.ours,
       streaming: model.streaming,
+      more: model.more === true,
     });
     if (wait !== null) timer = setTimeout(poll, wait);
   };
@@ -967,17 +1441,27 @@ if (typeof document !== 'undefined') {
     const asked = epoch;
     try {
       // Hosts check arguments as JSON, where a key can't be undefined: the
-      // first ask leaves it out.
-      const result = await call('screen_frame', model.frame ? { since: model.frame.id } : {});
+      // first ask leaves it out, as does a view not laid out yet.
+      const asking = {};
+      if (model.frame) asking.since = model.frame.id;
+      const longest = drawnLongest(
+        one('[data-screen]').getBoundingClientRect(),
+        window.devicePixelRatio,
+      );
+      if (longest) asking.longest = longest;
+      const result = await call('screen_frame', asking);
       if (guardRequired || result?.structuredContent?.guardAppControls === true)
         await observeGuard(result);
       if (superseded || asked !== epoch) {
         // The card retired or an action came since: this answer is obsolete.
       } else if (result && result.isError) {
+        // A read that failed is not asked again at once.
+        model.more = false;
         note(said(result, "Atlas couldn't read the helper"));
       } else {
         const wasOurs = model.ours;
         model = merge(model, result);
+        model.refused = false;
         if (result?.structuredContent?.unchanged && model.displayed === model.frame && !model.stale)
           sawPicture();
         if (wasOurs && !model.ours) controlEnded('Control ended');
@@ -986,8 +1470,11 @@ if (typeof document !== 'undefined') {
         render();
       }
     } catch (error) {
+      model.more = false;
       if (!superseded) {
-        note(callError(error));
+        // Refused by the app, the screen itself says so.
+        model.refused = refusedHere(error);
+        note(model.refused ? '' : callError(error));
         render();
       }
     }
@@ -1154,7 +1641,7 @@ if (typeof document !== 'undefined') {
       note('');
       keepControl();
       one('[data-screen]').focus({ preventScroll: true });
-      if (model.tab !== 'screen') show('screen');
+      if (model.place !== 'screen') show('screen');
     }
     render();
   };
@@ -1370,209 +1857,198 @@ if (typeof document !== 'undefined') {
     enqueue(sent);
   });
 
-  const show = (tab) => {
+  // The screen is the main view; the activity shows a session's work, or
+  // every session's, and the screen in the corner goes back.
+  const show = (place) => {
     if (superseded) return;
-    model.tab = tab;
+    model.place = place;
     clearInterval(panelTimer);
     render();
-    if (tab === 'screen') return;
-    const load = { activity: loadActivity, apps: loadApps, screenshots: loadShots }[tab];
-    load();
+    if (place === 'screen') return;
+    loadActivity();
     // A hidden view does not ask the helper for anything.
-    panelTimer = setInterval(() => document.hidden || load(), tab === 'activity' ? 4000 : 8000);
+    panelTimer = setInterval(() => document.hidden || loadActivity(), 4000);
+  };
+  const showActivityOf = (session) => {
+    if (model.session !== session) {
+      model.session = session;
+      model.activity = null;
+      model.activityError = null;
+    }
+    show('activity');
+    showActivity();
   };
 
+  // A reply for a session no longer shown is dropped.
   const loadActivity = async () => {
     if (superseded) return;
+    const session = model.session;
     try {
-      const result = await call('activity', {});
-      if (superseded) return;
+      const result = await call('activity', session === null ? {} : { session });
+      if (superseded || session !== model.session) return;
       if (result && result.isError)
         model.activityError = said(result, "Atlas couldn't load activity");
       else {
-        model.activity = result.structuredContent.activity || [];
-        model.activityError = null;
+        const read = (result && result.structuredContent) || {};
+        if (!Array.isArray(read.activity)) {
+          // A reply that holds no activity keeps what was read, and says so.
+          model.activityError = "Atlas couldn't load activity";
+        } else {
+          model.activity = read.activity;
+          model.known = { ...model.known, ...(read.sessions || {}) };
+          model.activityError = null;
+        }
       }
     } catch (error) {
-      if (superseded) return;
+      if (superseded || session !== model.session) return;
       model.activityError = callError(error, "Atlas couldn't load activity");
     }
-    if (!superseded) showActivity();
+    if (!superseded) {
+      showActivity();
+      showHead();
+      showSidebar();
+    }
   };
 
   const showActivity = () => {
-    const rows = model.activity || [];
-    one('[data-activity-meta]').textContent = model.activity
-      ? model.activityError || (rows.length ? 'Newest first' : '')
-      : '';
-    for (const button of all('[data-filter]'))
-      button.setAttribute('aria-selected', String(button.dataset.filter === model.filter));
-    const groups = activityGroups(rows, model.filter, model.status, model.self);
+    const runs = runsOf(linesOf(model.activity || []));
+    const counts = filterCounts(runs);
+    for (const button of all('[data-filter]')) {
+      const kind = button.dataset.filter;
+      button.setAttribute('aria-selected', String(kind === model.filter));
+      const count = counts[kind];
+      button.textContent = `${{ all: 'All', problems: 'Problems', pictures: 'Pictures' }[kind]}${
+        count ? ` ${count}` : ''
+      }`;
+    }
+    // A refresh that failed keeps what was read, and says why.
+    one('[data-activity-meta]').textContent = model.activity ? model.activityError || '' : '';
+    const shown = shownRuns(runs, model.filter);
     const body = one('[data-activity]');
-    if (!groups.length) {
-      body.replaceChildren(
-        el(
-          'div',
-          'panel-empty',
-          model.activity ? 'Nothing here yet.' : model.activityError || 'Loading…',
-        ),
-      );
+    if (!shown.length) {
+      const empty = model.activity
+        ? runs.length
+          ? 'Nothing here.'
+          : 'Nothing here yet.'
+        : model.activityError || 'Loading…';
+      body.replaceChildren(el('div', 'panel-empty', empty));
       return;
     }
-    const now = Date.now();
-    const nodes = [];
-    let first = true;
-    for (const group of groups) {
-      nodes.push(el('div', 'group', group.title));
-      for (const line of group.lines) {
-        const live = first && line.started && line.actor !== 'viewer';
-        first = false;
-        const row = el('div', live ? 'row live' : 'row');
-        const mark = el('span', 'mark');
-        if (line.failed) {
-          mark.append(warning());
-        } else {
-          mark.append(el('i', live ? 'live' : line.actor === 'viewer' ? 'you' : ''));
-        }
-        const text = el('span', 'text');
-        text.append(el('span', '', line.text));
-        if (line.who) text.append(el('span', 'who', line.who));
-        if (line.failed) text.append(el('span', 'why', "This didn't work"));
-        else if (line.nothingSent) text.append(el('span', 'why quiet', line.reason));
-        row.append(
-          el('span', 'time', clock(line.ageSeconds, now)),
-          mark,
-          text,
-          el('span', 'times', line.times > 1 ? `×${line.times}` : ''),
-        );
-        nodes.push(row);
-      }
+    // Every session's activity says whose each run is, once two did work.
+    const naming = model.session === null && new Set(runs.map((run) => run.stream)).size > 1;
+    body.replaceChildren(...shown.map((run) => runNode(run, naming)));
+  };
+
+  const glyph = (name) => one(`[data-${name}-glyph]`).content.firstElementChild.cloneNode(true);
+
+  // A run: its line with its title, words and time; folded, its problems
+  // and pictures; opened, its steps oldest first.
+  const runNode = (run, naming) => {
+    const open = runOpen(run, model.filter, model.choices);
+    const box = el('div', 'run');
+    const line = el('div', 'run-line');
+    const fold = el('button', 'fold');
+    fold.type = 'button';
+    fold.setAttribute('aria-expanded', String(open));
+    fold.setAttribute('aria-label', open ? `Fold ${run.title}` : `Open ${run.title}`);
+    fold.append(glyph('fold'));
+    fold.addEventListener('click', () => {
+      model.choices = { ...model.choices, [run.id]: !open };
+      showActivity();
+    });
+    const words = runWords(run);
+    const said = el('span', 'run-words');
+    said.append(el('b', '', run.title), document.createTextNode(words.words));
+    if (words.problems)
+      said.append(document.createTextNode(' · '), el('span', 'problems', words.problems));
+    const owner = naming ? ownerOf(run.stream, model.status, model.known, model.self) : null;
+    if (owner) said.append(el('span', 'who', ` · ${owner}`));
+    line.append(fold, said, el('span', 'time', runTime(run)));
+    box.append(line);
+    if (open) {
+      const steps = el('div', 'steps');
+      for (const step of [...run.lines].reverse()) steps.append(...stepNodes(step));
+      box.append(steps);
+      return box;
     }
-    body.replaceChildren(...nodes);
+    if (run.problems.length) {
+      const steps = el('div', 'steps');
+      for (const step of run.problems) steps.append(...stepNodes(step));
+      box.append(steps);
+    }
+    if (run.pictures.length) {
+      const strip = el('div', 'strip');
+      for (const step of run.pictures.slice(0, 3)) strip.append(tile(step));
+      const count = run.pictures.length;
+      const more = el('button', 'link more', `${count} ${count === 1 ? 'picture' : 'pictures'} ›`);
+      more.type = 'button';
+      more.addEventListener('click', () => {
+        model.choices = { ...model.choices, [run.id]: true };
+        showActivity();
+      });
+      strip.append(more);
+      box.append(strip);
+    }
+    return box;
+  };
+
+  // A step: its glyph, words, why it did not work or was not sent, a
+  // button to the screen just before it, its time; a screenshot's picture
+  // under it.
+  const stepNodes = (step) => {
+    const row = el('div', step.failed ? 'step problem' : 'step');
+    const mark = el('span', 'glyph');
+    const live = step.running && step.actor !== 'viewer';
+    if (step.failed) mark.append(warning());
+    else mark.append(el('i', live ? 'live' : step.actor === 'viewer' ? 'you' : ''));
+    const words = el('span', 'words');
+    words.append(el('span', '', step.times > 1 ? `${step.text} ×${step.times}` : step.text));
+    if (step.failed && step.reason) words.append(el('span', 'why', step.reason));
+    else if (step.nothingSent)
+      words.append(el('span', 'why', step.reason || 'Another app was in front'));
+    if (step.picture && step.picture.kind === 'before') {
+      const button = el('button', 'step-picture');
+      button.type = 'button';
+      button.setAttribute('aria-label', 'Show the screen before this step');
+      button.title = 'The screen before this step';
+      button.append(glyph('picture'));
+      button.addEventListener('click', () => openPicture(step.picture, step.text));
+      words.append(button);
+    }
+    row.append(mark, words, el('span', 'time', hourMinute(step.endedAt)));
+    if (!step.shot) return [row];
+    const shot = el('button', 'in-place');
+    shot.type = 'button';
+    shot.setAttribute('aria-label', 'Open the screenshot');
+    const image = el('img');
+    image.alt = '';
+    shot.append(image);
+    thumbnail(step.shot.name).then((source) => {
+      if (source) image.src = source;
+    });
+    shot.addEventListener('click', () => openPicture(step.picture, step.text));
+    return [row, shot];
+  };
+
+  // One picture of a run's strip.
+  const tile = (step) => {
+    const button = el('button', 'tile');
+    button.type = 'button';
+    button.setAttribute(
+      'aria-label',
+      step.picture.kind === 'shot' ? 'Open the screenshot' : `The screen before: ${step.text}`,
+    );
+    const image = el('img');
+    image.alt = '';
+    button.append(image);
+    thumbnail(step.picture.name).then((source) => {
+      if (source) image.src = source;
+    });
+    button.addEventListener('click', () => openPicture(step.picture, step.text));
+    return button;
   };
 
   const warning = () => one('[data-warning]').content.firstElementChild.cloneNode(true);
-
-  const loadApps = async () => {
-    if (superseded) return;
-    try {
-      const result = await call('helper_apps', {});
-      if (superseded) return;
-      if (result && result.isError) model.appsError = said(result, "Atlas couldn't list the apps");
-      else {
-        model.apps = result.structuredContent.apps || [];
-        model.appsError = null;
-      }
-    } catch (error) {
-      if (superseded) return;
-      model.appsError = callError(error, "Atlas couldn't list the apps");
-    }
-    if (!superseded) showApps();
-  };
-
-  const showApps = () => {
-    const apps = model.apps;
-    const body = one('[data-apps]');
-    if (!apps) {
-      one('[data-apps-meta]').textContent = '';
-      body.replaceChildren(el('div', 'panel-empty', model.appsError || 'Loading…'));
-      return;
-    }
-    const windows = apps.reduce((count, app) => count + app.windows.length, 0);
-    one('[data-apps-meta]').textContent =
-      model.appsError ||
-      `${apps.length} ${apps.length === 1 ? 'app' : 'apps'} · ${windows} ${windows === 1 ? 'window' : 'windows'}, front to back`;
-    if (!apps.length) {
-      body.replaceChildren(el('div', 'panel-empty', 'No apps are open in the helper.'));
-      return;
-    }
-    body.replaceChildren(
-      ...apps.map((app) => {
-        const box = el('div', 'app');
-        const head = el('div', 'app-head');
-        if (app.icon) {
-          const icon = el('img');
-          icon.alt = '';
-          icon.src = `data:image/png;base64,${app.icon}`;
-          head.append(icon);
-        } else {
-          head.append(el('span', 'tile', String(app.name || '?').charAt(0)));
-        }
-        head.append(el('span', 'name', app.name || 'App'));
-        if (app.active) head.append(el('span', 'tag', 'In front'));
-        if (app.hidden) head.append(el('span', 'tag', 'Hidden'));
-        box.append(head);
-        if (!app.windows.length) box.append(el('div', 'window none', 'No windows'));
-        for (const window of app.windows) {
-          const words = windowWords(window);
-          const row = el('div', 'window');
-          row.append(el('span', '', words.title), el('span', 'size', words.size));
-          box.append(row);
-        }
-        return box;
-      }),
-    );
-  };
-
-  const loadShots = async () => {
-    if (superseded) return;
-    try {
-      const result = await call('screenshots', {});
-      if (superseded) return;
-      if (result && result.isError)
-        model.shotsError = said(result, "Atlas couldn't list screenshots");
-      else {
-        model.shots = result.structuredContent.screenshots || [];
-        model.shotsError = null;
-      }
-    } catch (error) {
-      if (superseded) return;
-      model.shotsError = callError(error, "Atlas couldn't list screenshots");
-    }
-    if (!superseded) showShots();
-  };
-
-  const showShots = () => {
-    const shots = model.shots;
-    const body = one('[data-shots]');
-    if (!shots) {
-      one('[data-shots-meta]').textContent = '';
-      body.replaceChildren(el('div', 'panel-empty', model.shotsError || 'Loading…'));
-      return;
-    }
-    one('[data-shots-meta]').textContent =
-      model.shotsError || (shots.length ? `${shots.length} · open one to see it full size` : '');
-    if (!shots.length) {
-      body.replaceChildren(el('div', 'panel-empty', "The agent hasn't taken any screenshots yet."));
-      return;
-    }
-    const now = Date.now();
-    body.replaceChildren(
-      ...shots.map((shot) => {
-        const button = el('button', 'shot');
-        button.type = 'button';
-        button.setAttribute(
-          'aria-label',
-          `Open the screenshot from ${clock(shot.ageSeconds, now)}`,
-        );
-        const picture = el('span', 'picture');
-        const image = el('img');
-        image.alt = '';
-        picture.append(image);
-        const words = el('span', 'words');
-        words.append(
-          el('span', '', clock(shot.ageSeconds, now)),
-          el('span', '', ago(shot.ageSeconds)),
-        );
-        button.append(picture, words);
-        button.addEventListener('click', () => openShot(shot.name));
-        thumbnail(shot.name).then((source) => {
-          if (source) image.src = source;
-        });
-        return button;
-      }),
-    );
-  };
 
   const thumbnail = (name) => {
     if (superseded) return Promise.resolve(null);
@@ -1595,7 +2071,7 @@ if (typeof document !== 'undefined') {
       (async () => {
         let source = null;
         try {
-          const result = await call('screenshot', { name });
+          const result = await call('picture', { name });
           const image = !superseded && result?._meta?.[FRAME_META];
           source = image ? `data:${image.mimeType};base64,${image.data}` : null;
           if (source) thumbs.set(name, source);
@@ -1611,22 +2087,61 @@ if (typeof document !== 'undefined') {
     }
   };
 
-  const openShot = async (name) => {
-    if (superseded) return;
+  // A picture large: its thumbnail at once, then the whole of it in
+  // tiles, as sharp as the screen; the screen before a step marked where
+  // the step acted. A newer opening or closing it ends this one.
+  const openPicture = async (picture, words) => {
+    if (superseded || !picture) return;
     const mine = ++opening;
     const box = one('[data-lightbox]');
     const image = one('[data-lightbox-image]');
-    image.src = thumbs.get(name) || '';
+    const canvas = one('[data-lightbox-canvas]');
+    image.src = thumbs.get(picture.name) || '';
+    image.hidden = false;
+    canvas.hidden = true;
+    image.alt =
+      picture.kind === 'shot' ? 'A screenshot the agent took' : 'The screen before the step';
+    one('[data-lightbox-words]').textContent = words || '';
+    const at = spotOf(picture);
+    const spot = one('[data-spot]');
+    spot.hidden = !at;
+    if (at) {
+      spot.style.left = `${at.x * 100}%`;
+      spot.style.top = `${at.y * 100}%`;
+    }
+    fitPicture(16 / 10);
     box.hidden = false;
     one('[data-lightbox-close]').focus();
+    const live = () => !superseded && mine === opening;
+    const drawing = painter(canvas, live, (frame, drawn) => {
+      if (!drawn || !live()) return;
+      canvas.hidden = false;
+      image.hidden = true;
+    });
+    let since = null;
     try {
-      const result = await call('screenshot', { name, full: true });
-      const picture = result && result._meta && result._meta[FRAME_META];
-      if (picture && mine === opening)
-        image.src = `data:${picture.mimeType};base64,${picture.data}`;
+      for (let round = 0; round < MOST_PICTURE_READS; round += 1) {
+        const result = await call(
+          'picture',
+          since ? { name: picture.name, full: true, since } : { name: picture.name, full: true },
+        );
+        const tiles = result && result._meta && result._meta[TILES_META];
+        if (!live() || !tiles) return;
+        fitPicture(tiles.width / tiles.height);
+        drawing.queue({ ...tiles, tiles: tiles.tiles || [], after: since });
+        since = tiles.id;
+        if (!tiles.more) return;
+      }
     } catch (error) {
-      // The thumbnail stays.
+      // What was drawn, or the thumbnail, stays.
     }
+  };
+  // The large picture as big as the window lets it be, in its proportions.
+  const fitPicture = (ratio) => {
+    const room = fit(window.innerWidth * 0.92, window.innerHeight - 140, ratio);
+    const frame = one('[data-lightbox-picture]');
+    frame.style.width = `${room.width}px`;
+    frame.style.height = `${room.height}px`;
   };
 
   const closeMenus = () => {
@@ -1854,9 +2369,10 @@ if (typeof document !== 'undefined') {
   });
   one('[data-lightbox-close]').addEventListener('click', dismiss);
 
-  for (const tab of all('[data-tab]')) tab.addEventListener('click', () => show(tab.dataset.tab));
   one('[data-back]').addEventListener('click', () => show('screen'));
-  one('[data-all-activity]').addEventListener('click', () => show('activity'));
+  one('[data-session-all]').addEventListener('click', () => showActivityOf(null));
+  one('[data-all-activity]').addEventListener('click', () => showActivityOf(null));
+  one('[data-open-activity]').addEventListener('click', () => showActivityOf(null));
   for (const button of all('[data-filter]')) {
     button.addEventListener('click', () => {
       model.filter = button.dataset.filter;
@@ -1952,11 +2468,22 @@ if (typeof module !== 'undefined') {
     holderChip,
     newest,
     merge,
+    drawnLongest,
+    paintSteps,
     rowText,
     grouped,
     captions,
-    activityGroups,
-    clock,
+    linesOf,
+    runsOf,
+    shownRuns,
+    runOpen,
+    runWords,
+    runTime,
+    filterCounts,
+    ownerOf,
+    spotOf,
+    sidebarGroups,
+    headWords,
     fit,
     pointAt,
     modifiers,
@@ -1966,6 +2493,5 @@ if (typeof module !== 'undefined') {
     portion,
     fills,
     themeOf,
-    windowWords,
   };
 }

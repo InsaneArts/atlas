@@ -551,3 +551,54 @@ fn pipelined_cursor_initialization_guards_an_imported_plain_mcp_connection() {
         );
     }
 }
+
+#[test]
+fn mcp_ends_on_a_signal_while_its_host_still_holds_the_pipe_open() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::time::{Duration, Instant};
+
+    let fixture = Fixture::new();
+    let config = fixture.config("mcp.toml");
+    std::fs::write(
+        &config,
+        "helper_uid = 60001\nsocket_path = \"absent.sock\"\nidentity_probe = \"absent\"\ninput_socket = \"input.sock\"\noutput_dir = \"out\"\n",
+    )
+    .unwrap();
+    let mut child = atlas_core::spawn::spawn(
+        Command::new(env!("CARGO_BIN_EXE_atlas"))
+            .args(["--config", config.to_str().unwrap(), "mcp"])
+            .env("HOME", fixture.directory.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
+    // The host keeps standard input open, as Claude Code does when it ends
+    // a server with SIGINT, then SIGTERM, then SIGKILL half a second later.
+    let mut input = child.stdin.take().unwrap();
+    let initialize = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"claude-code"}}});
+    input
+        .write_all(format!("{initialize}\n").as_bytes())
+        .unwrap();
+    let mut reply = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut reply)
+        .unwrap();
+    assert!(reply.contains("\"id\":1"), "{reply}");
+
+    let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGINT).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("atlas mcp was still running two seconds after SIGINT");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert!(status.success());
+    drop(input);
+}

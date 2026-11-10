@@ -85,12 +85,16 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "The helper's newest screen and status, unless the screen is still the one named by since.",
+    "description": "The helper's newest screen and status: the tiles that changed since the picture named by since, at most longest pixels on its longest side.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
         "since": {
           "type": "string"
+        },
+        "longest": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "type": "object"
@@ -320,10 +324,14 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "Everything done in the helper lately, newest first.",
+    "description": "Everything done in the helper lately, newest first, with the pictures taken around it: every session's, or one session's by its key (empty for Terminal's).",
     "inputSchema": {
       "additionalProperties": false,
-      "properties": {},
+      "properties": {
+        "session": {
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "name": "activity",
@@ -344,55 +352,7 @@
       "openWorldHint": false,
       "readOnlyHint": true
     },
-    "description": "The apps open in the helper and their windows.",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {},
-      "type": "object"
-    },
-    "name": "helper_apps",
-    "title": "Apps"
-  },
-  {
-    "_meta": {
-      "openai/visibility": "private",
-      "openai/widgetAccessible": true,
-      "ui": {
-        "resourceUri": "ui://atlas/screen.html",
-        "visibility": [
-          "app"
-        ]
-      }
-    },
-    "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
-    },
-    "description": "The screenshots agents took in the helper.",
-    "inputSchema": {
-      "additionalProperties": false,
-      "properties": {},
-      "type": "object"
-    },
-    "name": "screenshots",
-    "title": "Screenshots"
-  },
-  {
-    "_meta": {
-      "openai/visibility": "private",
-      "openai/widgetAccessible": true,
-      "ui": {
-        "resourceUri": "ui://atlas/screen.html",
-        "visibility": [
-          "app"
-        ]
-      }
-    },
-    "annotations": {
-      "openWorldHint": false,
-      "readOnlyHint": true
-    },
-    "description": "One screenshot an agent took, as a thumbnail or full size.",
+    "description": "One picture from the activity: a screenshot an agent took, or the screen just before an agent's step; as a thumbnail, or full size as the tiles that changed since the picture named by since.",
     "inputSchema": {
       "additionalProperties": false,
       "properties": {
@@ -401,6 +361,9 @@
         },
         "name": {
           "type": "string"
+        },
+        "since": {
+          "type": "string"
         }
       },
       "required": [
@@ -408,8 +371,8 @@
       ],
       "type": "object"
     },
-    "name": "screenshot",
-    "title": "Screenshot"
+    "name": "picture",
+    "title": "Picture"
   },
   {
     "_meta": {

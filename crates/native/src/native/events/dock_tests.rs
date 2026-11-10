@@ -137,7 +137,8 @@ fn a_ready_tap_resolves_the_dock_again() {
             find_count.set(find_count.get() + 1);
             Ok(on_dock.get().then_some(()))
         };
-        let act = |_: &()| {
+        let act = |_: &(), action: &str| {
+            assert_eq!(action, "AXPress");
             posted.set(posted.get() + 1);
             AXError::Success
         };
@@ -186,7 +187,7 @@ fn a_dock_that_appears_after_target_verification_is_refused() {
                 press,
                 || Ok(()),
                 || Ok(dock_visible.get().then_some(())),
-                |_| panic!("an ordinary point must not press the Dock"),
+                |_, _| panic!("an ordinary point must not press the Dock"),
             )
             .unwrap()
         );
@@ -198,7 +199,7 @@ fn a_dock_that_appears_after_target_verification_is_refused() {
             press,
             || Ok(()),
             || Ok(dock_visible.get().then_some(())),
-            |_| panic!("a targeted request must not press the Dock"),
+            |_, _| panic!("a targeted request must not press the Dock"),
         )
         .unwrap_err();
         assert_eq!(error.code, Code::FocusChanged);
@@ -208,16 +209,42 @@ fn a_dock_that_appears_after_target_verification_is_refused() {
 }
 
 #[test]
+fn a_right_or_control_click_shows_a_dock_items_menu() {
+    for (button, modifiers) in [
+        (Button::Right, vec![]),
+        (Button::Left, vec!["ctrl".to_owned()]),
+    ] {
+        let acted = Cell::new(None);
+        assert!(
+            resolve(
+                false,
+                button,
+                &modifiers,
+                true,
+                || Ok(()),
+                || Ok(Some(())),
+                |_, action| {
+                    acted.set(Some(action));
+                    AXError::Success
+                },
+            )
+            .unwrap()
+        );
+        assert_eq!(acted.get(), Some("AXShowMenu"));
+    }
+}
+
+#[test]
 fn dock_presses_refuse_other_buttons_and_modifiers() {
     for press in [false, true] {
         for (button, modifiers) in [
-            (Button::Right, vec![]),
             (Button::Middle, vec![]),
-            (Button::Left, vec!["ctrl".to_owned()]),
+            (Button::Right, vec!["ctrl".to_owned()]),
             (Button::Left, vec!["cmd".to_owned()]),
             (Button::Left, vec!["shift".to_owned()]),
             (Button::Left, vec!["alt".to_owned()]),
             (Button::Left, vec!["fn".to_owned()]),
+            (Button::Left, vec!["ctrl".to_owned(), "shift".to_owned()]),
         ] {
             let error = resolve(
                 false,
@@ -226,7 +253,7 @@ fn dock_presses_refuse_other_buttons_and_modifiers() {
                 press,
                 || Ok(()),
                 || Ok(Some(())),
-                |_| panic!("an unsupported gesture must not press the Dock"),
+                |_, _| panic!("an unsupported gesture must not press the Dock"),
             )
             .unwrap_err();
             assert_eq!(error.code, Code::Input);
@@ -254,7 +281,7 @@ fn a_dock_press_checks_the_guard_after_resolving_the_item() {
             current.set(false);
             Ok(Some(()))
         },
-        |_| panic!("a revoked controller must not press the Dock"),
+        |_, _| panic!("a revoked controller must not press the Dock"),
     )
     .unwrap_err();
     assert_eq!(error.code, Code::LeaseLost);

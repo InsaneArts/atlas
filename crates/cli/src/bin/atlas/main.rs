@@ -159,6 +159,9 @@ fn run(
         ),
         _ => None,
     };
+    // `atlas mcp` reads its host's requests until the host closes the pipe,
+    // and a host that ends it with a signal may never close it.
+    let reads_stdin = matches!(command, Command::Mcp(_));
 
     // Commands that ask questions or wait for the person stop cleanly on
     // Ctrl-C, saying what that means for each. Those that run agent tools
@@ -241,6 +244,12 @@ fn run(
         picture_after(&config, &before);
     }
     atlas_client::before::settle(std::time::Duration::from_millis(500));
+    // Its own cleanup done, nothing it started still matters: the read of
+    // standard input left waiting would otherwise keep the process from
+    // ending until the host kills it.
+    if reads_stdin {
+        runtime.shutdown_background();
+    }
     status
 }
 

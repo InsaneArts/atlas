@@ -34,6 +34,7 @@ pub mod jobs;
 mod last_capture;
 pub mod overview;
 pub mod readiness;
+pub mod screen_tiles;
 pub mod session_view;
 pub mod setup;
 pub mod sign_in_copies;

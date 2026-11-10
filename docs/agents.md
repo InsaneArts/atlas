@@ -39,7 +39,7 @@ Connect Cursor with `atlas agents install --cursor`. The Cursor IDE and its sepa
 
 Cursor's embedded view sets up its own controls before enabling them.
 
-Cursor currently offers inline presentation rather than fullscreen. Use **Controls** to expand the embedded view and reach Screen, Activity, Apps, Screenshots and person controls, then **Collapse** to return to the compact card. If a view expires after 15 minutes without requests or cannot establish private controls, reload that view. Atlas does not silently replace expired authority. The native viewer remains available independently.
+Cursor currently offers inline presentation rather than fullscreen. Use **Controls** to expand the embedded view and reach the screen, the activity with its pictures and person controls, then **Collapse** to return to the compact card. If a view expires after 15 minutes without requests or cannot establish private controls, reload that view. Atlas does not silently replace expired authority. The native viewer remains available independently.
 
 The agent uses the Atlas CLI for GUI tasks, subject to Atlas's existing helper and input checks. After an Atlas update, reload Cursor fully or end the old Agent session before using the refreshed connection; an existing MCP process can retain its previous tool set.
 
@@ -63,7 +63,7 @@ Each host also stops a shell command that runs too long, and a stop in the middl
 ## Verify the connection
 
 First run `atlas doctor --json` and check for `ready: true`. Then run `atlas agents status` and check the host you connected. These are separate checks: a connected plugin does not make a logged-out helper ready.
-After refreshing the host, ask the agent to check Atlas's status. For a host with embedded viewing, ask it to use Atlas's `show_screen` tool. Confirm that you see a changing helper picture and that the Apps panel loads. A saved screenshot or a newly opened native window does not verify the embedded view.
+After refreshing the host, ask the agent to check Atlas's status. For a host with embedded viewing, ask it to use Atlas's `show_screen` tool. Confirm that you see a changing helper picture and that the activity loads. A saved screenshot or a newly opened native window does not verify the embedded view.
 
 In Claude Desktop, use the desktop Atlas connector for the embedded view. Claude's different task types can use different tool connections. A tool name appearing in a conversation does not prove that connection supports the view. If the card reports that the view is unavailable, check the selected connection and start a fresh conversation after refreshing it.
 

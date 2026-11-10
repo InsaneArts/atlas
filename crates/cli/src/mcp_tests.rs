@@ -1,10 +1,10 @@
 use super::control::{ACTIONS, LEASE, LeaseRequest, checked};
-use super::presentation::{only_title_and_size, own_session, said, summary};
-use super::resources::{APP_MIME, FRAME_META, SCREEN, SCREEN_SCRIPT, STATUS_META, VERSIONS};
+use super::presentation::{own_session, said, summary};
+use super::resources::{
+    APP_MIME, FRAME_META, SCREEN, SCREEN_SCRIPT, STATUS_META, TILES_META, VERSIONS,
+};
 use super::*;
-use atlas_client::{client::AppList, helper_info::open_apps};
 use atlas_core::host::Key;
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 pub(super) fn server(dir: &std::path::Path) -> Server {
@@ -262,9 +262,7 @@ async fn a_read_only_server_offers_only_what_looks() {
             "take_screenshot",
             "screen_frame",
             "activity",
-            "helper_apps",
-            "screenshots",
-            "screenshot"
+            "picture"
         ]
     );
     for name in ["stop_agent", "take_control", "send_input", "log_out_helper"] {
@@ -377,9 +375,7 @@ async fn the_model_sees_the_status_and_the_view_and_only_the_view_calls_the_rest
         "give_back",
         "send_input",
         "activity",
-        "helper_apps",
-        "screenshots",
-        "screenshot",
+        "picture",
         "switch_helper",
         "log_out_helper",
     ] {
@@ -455,35 +451,6 @@ async fn a_tool_that_fails_says_why_as_an_error_result() {
 }
 
 #[tokio::test]
-async fn a_refused_app_list_is_an_error_in_the_view_not_zero_apps() {
-    use atlas_client::test_support::Helper;
-    use atlas_core::test_support::UID;
-
-    let dir = tempfile::tempdir().unwrap();
-    let mut server = server(dir.path());
-    server.views.store(true, Ordering::Relaxed);
-    let (client, helper) = Helper::client(dir.path(), UID);
-    server.client = client;
-
-    let listed = helper
-        .serve(
-            ask(&server, "tools/call", json!({"name": "helper_apps"})),
-            |_| {
-                Some(json!({"ok": false, "code": "busy", "uncertain": false,
-                    "error": "The helper is serving too many connections"}))
-            },
-        )
-        .await;
-
-    assert_eq!(listed["result"]["isError"], true, "{listed}");
-    assert_eq!(
-        listed["result"]["structuredContent"]["error"]["code"],
-        "busy"
-    );
-    assert!(listed["result"]["structuredContent"]["apps"].is_null());
-}
-
-#[tokio::test]
 async fn a_status_read_that_began_earlier_never_replaces_a_later_one() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());
@@ -498,20 +465,59 @@ async fn a_status_read_that_began_earlier_never_replaces_a_later_one() {
 }
 
 #[tokio::test]
-async fn a_screen_that_has_not_changed_reuses_its_frame() {
-    let dir = tempfile::tempdir().unwrap();
-    let server = server(dir.path());
-    let png = atlas_native::native::capture::sample_png(640, 360);
+async fn a_screen_sends_its_tiles_once_then_only_what_changed() {
+    use atlas_client::test_support::Helper;
+    use atlas_core::test_support::UID;
+    use base64::{Engine, engine::general_purpose::STANDARD};
 
-    let first = server.frame_of(png.clone()).await.unwrap();
-    let marker = json!({"id": "kept"});
-    server.framed.lock().await.as_mut().unwrap().1 = marker.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let mut server = server(dir.path());
+    let (client, helper) = Helper::client(dir.path(), UID);
+    server.client = client;
+    *server.last.lock().await = Some((Instant::now() + Duration::from_secs(60), json!({})));
+    let png = atlas_native::native::capture::sample_png(640, 360);
+    let answer = |png: &[u8]| {
+        Some(json!({"ok": true, "width": 640, "height": 360, "png": STANDARD.encode(png)}))
+    };
+
+    let first = helper
+        .serve(server.screen(None, Some(640)), |_| answer(&png))
+        .await
+        .unwrap();
+    let tiles = &first["_meta"][TILES_META];
     assert_eq!(
-        server.frame_of(png).await.unwrap(),
-        marker,
-        "not made again"
+        (tiles["width"].as_u64(), tiles["height"].as_u64()),
+        (Some(640), Some(360))
     );
-    assert_eq!(first["mimeType"], "image/jpeg");
+    assert!(tiles["base"].is_string(), "something to show at once");
+    assert_eq!(tiles["tiles"].as_array().unwrap().len(), 6);
+    assert_eq!(tiles["more"], false);
+    assert_eq!(first["structuredContent"]["unchanged"], false);
+
+    let id = tiles["id"].as_str().unwrap().to_owned();
+    let again = helper
+        .serve(server.screen(Some(&id), Some(640)), |_| answer(&png))
+        .await
+        .unwrap();
+    assert_eq!(again["structuredContent"]["unchanged"], true);
+    assert!(
+        server.decoded.lock().unwrap().is_some(),
+        "the unchanged PNG is drawn once"
+    );
+    assert_eq!(again["_meta"][TILES_META]["tiles"], json!([]));
+    assert_eq!(again["_meta"][TILES_META]["id"], id.as_str());
+    assert!(again["_meta"][TILES_META].get("base").is_none());
+}
+
+#[test]
+fn a_view_is_sent_its_own_size_in_steps_within_what_the_service_gives() {
+    use super::reads::longest;
+    assert_eq!(longest(None), 1600);
+    assert_eq!(longest(Some(100)), 640);
+    assert_eq!(longest(Some(641)), 960);
+    assert_eq!(longest(Some(1280)), 1280);
+    assert_eq!(longest(Some(1281)), 1600);
+    assert_eq!(longest(Some(5120)), 1600);
 }
 
 #[test]
@@ -937,7 +943,7 @@ fn personal_permission_is_decided_before_action_field_validation() {
 }
 
 #[tokio::test]
-async fn a_screenshot_is_read_only_by_a_name_a_capture_wrote() {
+async fn a_picture_is_read_only_by_a_name_a_capture_or_a_step_wrote_and_opens_as_tiles() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());
     let output = server.client.output_dir().unwrap().to_path_buf();
@@ -946,14 +952,47 @@ async fn a_screenshot_is_read_only_by_a_name_a_capture_wrote() {
     std::fs::write(output.join("5-capture.png"), &png).unwrap();
     std::os::unix::fs::symlink(output.join("5-capture.png"), output.join("6-capture.png")).unwrap();
 
-    let thumb = server.screenshot("5-capture.png", false).await.unwrap();
+    let thumb = server
+        .activity_picture("5-capture.png", false, None)
+        .await
+        .unwrap();
     assert_eq!(thumb["_meta"][FRAME_META]["width"], 480);
-    let full = server.screenshot("5-capture.png", true).await.unwrap();
-    assert_eq!(full["_meta"][FRAME_META]["width"], 1024);
+    let full = server
+        .activity_picture("5-capture.png", true, None)
+        .await
+        .unwrap();
+    let tiles = &full["_meta"][TILES_META];
+    assert_eq!(
+        (tiles["width"].as_u64(), tiles["height"].as_u64()),
+        (Some(1280), Some(800))
+    );
+    assert!(tiles["base"].is_string());
+    let again = server
+        .activity_picture("5-capture.png", true, tiles["id"].as_str())
+        .await
+        .unwrap();
+    assert_eq!(
+        again["_meta"][TILES_META]["tiles"],
+        json!([]),
+        "only what it lacks"
+    );
+    assert!(
+        server.picture_decoded.lock().unwrap().is_some(),
+        "drawn once for its answers"
+    );
 
-    for name in ["../u.toml", "6-capture.png", "7-capture.png"] {
+    for name in [
+        "../u.toml",
+        "6-capture.png",
+        "7-capture.png",
+        "1-before.jpg",
+    ] {
         assert_eq!(
-            server.screenshot(name, false).await.unwrap_err().code,
+            server
+                .activity_picture(name, false, None)
+                .await
+                .unwrap_err()
+                .code,
             "bad-request",
             "{name}"
         );
@@ -970,13 +1009,12 @@ fn held(lease: &str, kept: Instant) -> Held {
 }
 
 #[tokio::test]
-async fn taking_control_returns_its_picture_and_input_keeps_the_displayed_frames_key() {
+async fn taking_control_says_the_display_size_and_input_names_the_frame_taken_with() {
     use axum::{Json, Router, routing::get, routing::post};
 
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());
     let png = atlas_native::native::capture::sample_png(640, 360);
-    let expected = server.frame_of(png.clone()).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/viewer/", listener.local_addr().unwrap());
     let received = Arc::new(Mutex::new(Value::Null));
@@ -1019,10 +1057,10 @@ async fn taking_control_returns_its_picture_and_input_keeps_the_displayed_frames
     });
 
     let taken = server.take_control().await.unwrap();
-    let picture = &taken["_meta"][FRAME_META];
-    assert_eq!(picture["id"], expected["id"]);
-    assert_eq!(picture["data"], expected["data"]);
-    assert_eq!(picture["key"], "shown");
+    assert!(
+        taken["_meta"].get(FRAME_META).is_none(),
+        "the view draws its own tiles"
+    );
     assert_eq!(
         taken["structuredContent"]["points"],
         json!({"width": 1280.0, "height": 720.0})
@@ -1033,10 +1071,7 @@ async fn taking_control_returns_its_picture_and_input_keeps_the_displayed_frames
         at: Instant::now(),
     });
     let click = json!([{"type": "pointer", "phase": "down", "x": 1, "y": 1}]);
-    server
-        .send_input(picture["key"].as_str(), &click)
-        .await
-        .unwrap();
+    server.send_input(Some("shown"), &click).await.unwrap();
     assert_eq!(received.lock().await["frame"], "shown");
     assert_eq!(
         server.send_input(None, &click).await.unwrap_err().code,
@@ -1262,20 +1297,6 @@ async fn request_lines_keep_blank_lines_distinct_from_eof() {
     }
 }
 
-#[test]
-fn the_view_gets_each_windows_title_and_size_but_never_its_place_or_number() {
-    let mut app = json!({"name": "Opie", "windows": [
-        {"id": 12, "title": "Ring", "x": 10.0, "y": 40.0, "width": 520.0, "height": 860.0},
-    ]});
-
-    only_title_and_size(&mut app);
-
-    assert_eq!(
-        app["windows"],
-        json!([{"title": "Ring", "width": 520.0, "height": 860.0}])
-    );
-}
-
 fn cost_fixtures(source: &str) -> Vec<Value> {
     serde_json::from_str(source).unwrap()
 }
@@ -1331,37 +1352,6 @@ fn activity_rows(rows: usize) -> Value {
             row
         })
         .collect()
-}
-
-/// `rows` running apps, each with one window, as the app reply-cost
-/// fixtures read them.
-fn app_rows(rows: usize) -> Value {
-    let text = atlas_core::test_support::reply_cost_text;
-    let apps: Vec<Value> = (0..rows)
-        .map(|index| {
-            json!({
-                "pid": 812 + index,
-                "name": text(index),
-                "policy": "regular",
-                "active": index == 0,
-                "hidden": false,
-            })
-        })
-        .collect();
-    let windows: Vec<Value> = (0..rows)
-        .map(|index| {
-            json!({
-                "number": index + 1,
-                "pid": 812 + index,
-                "owner": text(index),
-                "title": text(index),
-                "layer": 0,
-                "alpha": 1,
-                "bounds": {"x": index, "y": index, "width": 640, "height": 480},
-            })
-        })
-        .collect();
-    json!({"apps": apps, "windows": windows})
 }
 
 fn cost_activity(server: &Server, fixture: &Value) {
@@ -1458,7 +1448,7 @@ async fn activity_reply_cost_keeps_empty_and_populated_rows() {
         let dir = tempfile::tempdir().unwrap();
         let server = server(dir.path());
         cost_activity(&server, &fixture);
-        atlas_core::test_support::reply_cost(&server.activity().await.unwrap(), &fixture);
+        atlas_core::test_support::reply_cost(&server.activity(None).await.unwrap(), &fixture);
     }
 }
 
@@ -1506,56 +1496,7 @@ async fn reply_cost_preserves_uncertain_input_and_its_retained_control() {
 }
 
 #[tokio::test]
-async fn representative_reads_keep_their_helper_request_counts() {
-    use atlas_client::test_support::Helper;
-    use atlas_core::test_support::UID;
-
-    for fixture in atlas_core::test_support::reply_cost_fixtures(
-        include_str!("../../../tests/fixtures/reply-cost/apps.json"),
-        app_rows,
-    ) {
-        for envelope in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
-            let mut server = server(dir.path());
-            server.views.store(true, Ordering::Relaxed);
-            let (client, helper) = Helper::client(dir.path(), UID);
-            server.client = client;
-            let mut operations = Vec::new();
-            let listed = helper
-                .serve(
-                    async {
-                        if envelope {
-                            let mut reply = server.answer(&fixture["request"]).await.unwrap();
-                            reply.delivered();
-                            reply.value
-                        } else {
-                            server.helper_apps().await.unwrap()
-                        }
-                    },
-                    |request| {
-                        let op = request["op"].as_str().unwrap();
-                        operations.push(op.to_owned());
-                        Some(json!({"ok":true, op:fixture["input"][op], "starts":{}}))
-                    },
-                )
-                .await;
-            atlas_core::test_support::reply_cost(
-                &listed,
-                if envelope {
-                    &fixture["answerCost"]
-                } else {
-                    &fixture
-                },
-            );
-            assert_eq!(json!(operations), fixture["helperOperations"]);
-            assert_eq!(json!(helper.proofs()), fixture["helperProofs"]);
-            assert_eq!(json!(helper.requests()), fixture["helperRequests"]);
-        }
-    }
-}
-
-#[tokio::test]
-async fn reply_cost_includes_the_private_frame_in_the_outgoing_envelope() {
+async fn reply_cost_includes_the_private_tiles_in_the_outgoing_envelope() {
     use atlas_client::test_support::Helper;
     use atlas_core::test_support::UID;
     use base64::{Engine, engine::general_purpose::STANDARD};
@@ -1570,21 +1511,37 @@ async fn reply_cost_includes_the_private_frame_in_the_outgoing_envelope() {
     let (client, helper) = Helper::client(dir.path(), UID);
     server.client = client;
     let png = atlas_native::native::capture::sample_png(640, 360);
-    *server.framed.lock().await = Some((Sha256::digest(&png).into(), fixture["frame"].clone()));
     *server.last.lock().await = Some((
         Instant::now() + Duration::from_secs(60),
         fixture["status"].clone(),
     ));
     let mut operations = Vec::new();
+    let mut screenshot = |request: &Value| {
+        operations.push(request["op"].as_str().unwrap().to_owned());
+        Some(json!({"ok":true,"width":640,"height":360,"png":STANDARD.encode(&png)}))
+    };
+    let call = |arguments: Value| {
+        json!({
+            "jsonrpc":"2.0","id":7,"method":"tools/call",
+            "params":{"name":"screen_frame","arguments":arguments}
+        })
+    };
+    let mut first = helper
+        .serve(
+            server.answer(&call(json!({"longest": 640}))),
+            &mut screenshot,
+        )
+        .await
+        .unwrap();
+    let since = first.value["result"]["_meta"][TILES_META]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    first.delivered();
     let mut reply = helper
         .serve(
-            server.answer(&json!({
-                "jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"screen_frame"}
-            })),
-            |request| {
-                operations.push(request["op"].as_str().unwrap().to_owned());
-                Some(json!({"ok":true,"width":640,"height":360,"png":STANDARD.encode(&png)}))
-            },
+            server.answer(&call(json!({"since": since, "longest": 640}))),
+            &mut screenshot,
         )
         .await
         .unwrap();
@@ -1592,38 +1549,7 @@ async fn reply_cost_includes_the_private_frame_in_the_outgoing_envelope() {
     assert_eq!(json!(operations), fixture["helperOperations"]);
     assert_eq!(json!(helper.proofs()), fixture["helperProofs"]);
     assert_eq!(json!(helper.requests()), fixture["helperRequests"]);
-    assert_eq!(
-        json!(
-            STANDARD
-                .decode(fixture["frame"]["data"].as_str().unwrap())
-                .unwrap()
-                .len()
-        ),
-        fixture["decodedImageBytes"]
-    );
     reply.delivered();
-}
-
-#[test]
-fn app_reply_cost_preserves_the_window_projection() {
-    for fixture in atlas_core::test_support::reply_cost_fixtures(
-        include_str!("../../../tests/fixtures/reply-cost/apps.json"),
-        app_rows,
-    ) {
-        let windows: Vec<atlas_core::screen::windows::Window> =
-            serde_json::from_value(fixture["input"]["windows"].clone()).unwrap();
-        let running =
-            AppList::decode(json!({"ok": true, "apps": fixture["input"]["apps"]})).unwrap();
-        let mut apps = open_apps(&running, &windows).unwrap();
-        for app in &mut apps {
-            only_title_and_size(app);
-        }
-        let reply = json!({
-            "content":[{"type":"text","text":format!("{} apps open in the helper.", apps.len())}],
-            "structuredContent":{"apps":apps},
-        });
-        atlas_core::test_support::reply_cost(&reply, &fixture);
-    }
 }
 
 /// The lists below stay whole, so no tool escapes the checks that loop over
@@ -1656,33 +1582,29 @@ fn the_tool_lists_name_every_tool_of_their_policy() {
 
 /// The tools only a client that draws views is offered: they are the
 /// person's, and only such a client keeps a view's tools from the model.
-pub(super) const VIEW_ONLY: [&str; 11] = [
+pub(super) const VIEW_ONLY: [&str; 9] = [
     "resume_agent",
     "take_control",
     "keep_control",
     "give_back",
     "send_input",
     "activity",
-    "helper_apps",
-    "screenshots",
-    "screenshot",
+    "picture",
     "switch_helper",
     "log_out_helper",
 ];
 /// The tools that only look, all a read-only server offers.
-pub(super) const LOOKING: [&str; 8] = [
+pub(super) const LOOKING: [&str; 6] = [
     "atlas_status",
     "show_screen",
     "take_screenshot",
     "screen_frame",
     "activity",
-    "helper_apps",
-    "screenshots",
-    "screenshot",
+    "picture",
 ];
 
 #[tokio::test]
-async fn the_views_screen_and_window_titles_are_refused_while_the_person_signs_in() {
+async fn the_views_screen_is_refused_while_the_person_signs_in() {
     let dir = tempfile::tempdir().unwrap();
     let server = server(dir.path());
     *server.last.lock().await = Some((Instant::now(), json!({"state": "control"})));
@@ -1695,13 +1617,27 @@ async fn the_views_screen_and_window_titles_are_refused_while_the_person_signs_i
     };
     lease.hide_screen(&controller, &token, &hold).unwrap();
 
-    for refused in [
-        server.screen(None).await.unwrap_err(),
-        server.helper_apps().await.unwrap_err(),
-    ] {
-        assert_eq!(refused.code, "busy");
-        assert_eq!(refused.holder, Some(atlas_core::error::Holder::Person));
-    }
+    let refused = server.screen(None, None).await.unwrap_err();
+    assert_eq!(refused.code, "busy");
+    assert_eq!(refused.holder, Some(atlas_core::error::Holder::Person));
     controller.end_private().unwrap();
     lease.release();
+}
+
+#[tokio::test]
+async fn the_activity_keeps_only_the_marks_of_a_steps_facts_and_where_its_element_stands() {
+    let mut facts = json!({
+        "action": "type", "display": {"width": 1440, "height": 900},
+        "point": {"x": 1, "y": 2}, "text": "secret", "length": 6, "label": "Password",
+        "element": {"role": "field", "name": "Password", "frame": {"x": 1, "y": 2, "width": 3, "height": 4}}, "task": "sign in", "keys": [["⌘", "S"]],
+    });
+    super::reads::only_marks(&mut facts);
+    assert_eq!(
+        facts,
+        json!({
+            "action": "type", "display": {"width": 1440, "height": 900},
+            "point": {"x": 1, "y": 2}, "keys": [["⌘", "S"]],
+            "element": {"frame": {"x": 1, "y": 2, "width": 3, "height": 4}},
+        })
+    );
 }

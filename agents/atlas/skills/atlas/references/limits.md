@@ -1,7 +1,8 @@
 ## Limits
 
 - A point click on a Dock item uses Accessibility's press action, including
-  a tap in the viewer. A point on the shelf or a separator is refused without
+  a tap in the viewer; a right or Control click shows the item's menu. A point
+  on the shelf or a separator is refused without
   posting a click. `--app` or `--pid` refuses any click, scroll or drag on the
   Dock; start apps with `atlas open`. The helper disables click-wallpaper-to-show-desktop
   in its own preferences.
