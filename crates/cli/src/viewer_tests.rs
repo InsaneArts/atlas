@@ -3124,7 +3124,6 @@ async fn only_app_status_contains_populated_private_account_inventory_and_note()
             how: How::TakeControl,
             level: Level::Ask,
         },
-        true,
     )
     .unwrap();
     let ordinary = viewer.status_for(false).await;

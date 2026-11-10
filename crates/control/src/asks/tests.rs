@@ -71,19 +71,13 @@ fn an_ask_is_private_lives_two_minutes_and_a_rerun_joins_it() {
 }
 
 #[test]
-fn only_the_person_answers_and_allow_for_this_task_covers_that_session_in_that_account() {
+fn allow_for_this_task_covers_that_session_in_that_account_until_it_is_ended() {
     let folder = tempfile::tempdir().unwrap();
     let asks = asks(folder.path());
     let id = asks.ask(question("s1", "b1"), 1_000).unwrap();
-    assert_eq!(
-        asks.answer(&id, Answer::Task, false, 1_000)
-            .unwrap_err()
-            .code,
-        Code::Stopped
-    );
     assert_eq!(asks.answered(&id), None);
 
-    asks.answer(&id, Answer::Task, true, 1_000).unwrap();
+    asks.answer(&id, Answer::Task, 1_000).unwrap();
     assert_eq!(asks.answered(&id), Some(Answer::Task));
     let allowed = asks.allowed(1_000);
     assert_eq!(allowed.len(), 1);
@@ -95,18 +89,10 @@ fn only_the_person_answers_and_allow_for_this_task_covers_that_session_in_that_a
         "an hour at most"
     );
 
-    assert_eq!(
-        asks.end(Some(&slack()), None, false, 1_000)
-            .unwrap_err()
-            .code,
-        Code::Stopped
-    );
-    asks.end(Some(&slack()), None, true, 1_000).unwrap();
+    asks.end(&slack(), 1_000).unwrap();
     assert!(asks.allowed(1_000).is_empty(), "End stops it");
     assert_eq!(
-        asks.answer("gone", Answer::Once, true, 1_000)
-            .unwrap_err()
-            .code,
+        asks.answer("gone", Answer::Once, 1_000).unwrap_err().code,
         Code::Input
     );
 }
@@ -132,7 +118,7 @@ fn a_wait_ends_at_the_answer_at_stop_or_at_its_deadline_and_never_polls() {
         let id = id.clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(100));
-            asks.answer(&id, Answer::Once, true, atlas_core::time::now_ms())
+            asks.answer(&id, Answer::Once, atlas_core::time::now_ms())
                 .unwrap();
         })
     };
@@ -192,7 +178,7 @@ fn grants_and_ends_at_once_never_undo_one_another() {
         .into_iter()
         .map(|id| {
             let asks = asks.clone();
-            std::thread::spawn(move || asks.answer(&id, Answer::Task, true, 1_000).unwrap())
+            std::thread::spawn(move || asks.answer(&id, Answer::Task, 1_000).unwrap())
         })
         .collect();
     for thread in answering {
@@ -204,7 +190,7 @@ fn grants_and_ends_at_once_never_undo_one_another() {
             let asks = asks.clone();
             std::thread::spawn(move || {
                 let account = json!({"kind": "site", "id": format!("site{index}.example")});
-                asks.end(Some(&account), None, true, 1_000).unwrap();
+                asks.end(&account, 1_000).unwrap();
             })
         })
         .collect();
@@ -224,7 +210,7 @@ fn just_this_once_goes_to_the_first_waiter_that_claims_it_and_to_no_other() {
         None,
         "not answered yet"
     );
-    asks.answer(&id, Answer::Once, true, 2_000).unwrap();
+    asks.answer(&id, Answer::Once, 2_000).unwrap();
     let claims: Vec<bool> = std::thread::scope(|scope| {
         let waiters: Vec<_> = (0..2)
             .map(|_| scope.spawn(|| asks.claim_once(&id, 3_000).unwrap().is_some()))
@@ -256,7 +242,7 @@ fn allow_for_this_task_is_kept_for_the_host_process_that_asked_and_ends_when_it_
             1_000,
         )
         .unwrap();
-    asks.answer(&id, Answer::Task, true, 2_000).unwrap();
+    asks.answer(&id, Answer::Task, 2_000).unwrap();
     assert_eq!(asks.allowed(3_000)[0].process, Some(process));
     asks.end_unless(3_000, |grant| grant.process != Some(process))
         .unwrap();
@@ -273,13 +259,13 @@ fn a_choice_a_question_doesnt_offer_cant_be_given() {
     let id = asks.ask(ask, 1_000).unwrap();
     for answer in [Answer::Task, Answer::Once] {
         assert_eq!(
-            asks.answer(&id, answer, true, 2_000).unwrap_err().code,
+            asks.answer(&id, answer, 2_000).unwrap_err().code,
             Code::Input,
             "{answer:?}"
         );
     }
     assert!(asks.allowed(2_000).is_empty());
-    asks.answer(&id, Answer::Deny, true, 2_000).unwrap();
+    asks.answer(&id, Answer::Deny, 2_000).unwrap();
 }
 
 #[test]
@@ -299,7 +285,7 @@ fn an_ask_that_ran_out_is_gone_from_disk_at_the_next_read_whoever_reads() {
 
     let answered = asks.ask(question("s1", "b2"), 1_000).unwrap();
     assert_eq!(
-        asks.answer(&answered, Answer::Deny, true, ended)
+        asks.answer(&answered, Answer::Deny, ended)
             .unwrap_err()
             .code,
         Code::Input
@@ -443,7 +429,7 @@ fn an_asks_picture_is_private_and_goes_with_it_however_it_goes() {
         assert_eq!(mode & 0o777, 0o600);
         // Answered through the person's own route, with no command left to
         // take the question down.
-        asks.answer(&id, answer, true, now).unwrap();
+        asks.answer(&id, answer, now).unwrap();
         assert!(pictures_of(folder.path(), &id).is_empty(), "{answer:?}");
         answered.push(id);
     }
@@ -594,7 +580,7 @@ fn a_picture_write_cut_short_is_gone_with_its_ask() {
     // A writer killed between writing and placing its picture.
     let cut = asks.folder().join(format!(".{id}-0123abcd.jpg.4567ef"));
     fs::write(&cut, b"private").unwrap();
-    asks.answer(&id, Answer::Deny, true, now).unwrap();
+    asks.answer(&id, Answer::Deny, now).unwrap();
     assert!(!cut.exists(), "taken with the question's own");
     assert!(pictures_of(folder.path(), &id).is_empty());
 }

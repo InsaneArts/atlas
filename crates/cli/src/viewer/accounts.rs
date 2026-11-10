@@ -51,7 +51,7 @@ pub(super) fn add(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
         how: How::ByHand,
         level: Level::default(),
     };
-    let added = sign_ins::add_in(known(home)?, entry, true)?;
+    let added = sign_ins::add_in(known(home)?, entry)?;
     Ok(json!({"ok": true, "added": added}))
 }
 
@@ -67,7 +67,7 @@ pub(super) fn add_signed_in(home: &Option<PathBuf>, site: &str, browser: &str) -
         how: How::ByHand,
         level: Level::default(),
     };
-    sign_ins::add_in(known(home)?, entry, true)
+    sign_ins::add_in(known(home)?, entry)
 }
 
 /// Remove the account `body` names: its kind, id, and for a site the
@@ -75,7 +75,7 @@ pub(super) fn add_signed_in(home: &Option<PathBuf>, site: &str, browser: &str) -
 pub(super) fn remove(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
     let (kind, id) = named(body)?;
     let browser = body["browser"].as_str();
-    let removed = sign_ins::remove_in(known(home)?, kind, id, browser, true)?;
+    let removed = sign_ins::remove_in(known(home)?, kind, id, browser)?;
     Ok(json!({"ok": true, "removed": removed}))
 }
 
@@ -86,7 +86,7 @@ pub(super) fn set_level(home: &Option<PathBuf>, body: &Value) -> Result<Value> {
     let level = serde_json::from_value::<Level>(body["level"].clone())
         .map_err(|_| Error::new(Code::Input, "Name the level: lookOnly, ask or trusted"))?;
     let browser = body["browser"].as_str();
-    let changed = sign_ins::set_level_in(known(home)?, kind, id, browser, level, true)?;
+    let changed = sign_ins::set_level_in(known(home)?, kind, id, browser, level)?;
     Ok(json!({"ok": true, "changed": changed}))
 }
 
@@ -150,7 +150,7 @@ pub(super) fn answer(client: &atlas_client::client::Client, body: &Value) -> Res
     client
         .controller
         .asks()
-        .answer(id, answer, true, atlas_core::time::now_ms())?;
+        .answer(id, answer, atlas_core::time::now_ms())?;
     Ok(json!({"ok": true}))
 }
 
@@ -166,7 +166,7 @@ pub(super) fn end_allowed(client: &atlas_client::client::Client, body: &Value) -
     client
         .controller
         .asks()
-        .end(Some(account), None, true, atlas_core::time::now_ms())?;
+        .end(account, atlas_core::time::now_ms())?;
     Ok(json!({"ok": true}))
 }
 
@@ -182,7 +182,7 @@ pub(super) fn note_sign_in(home: &Option<PathBuf>, seen: &Value) {
     };
     let entry = sign_ins::account_of(&seen, atlas_core::time::now_ms());
     // The person's lease proved it: only their typing is looked at.
-    let _ = sign_ins::add_in(home, entry, true);
+    let _ = sign_ins::add_in(home, entry);
 }
 
 /// The home folder, when the person's was found.

@@ -8,10 +8,10 @@
 //! One file on the person's side, written whole and private. A missing file
 //! is the empty list; one that can't be read, or that a newer Atlas wrote,
 //! is unknown and is never taken as empty or written over. Only the person
-//! changes it.
+//! changes it: the viewer serves its changes to the Atlas app alone.
 use atlas_core::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize};
-use std::{io::ErrorKind, net::IpAddr, os::unix::fs::DirBuilderExt, path::Path};
+use std::{io::ErrorKind, net::IpAddr, path::Path};
 
 /// Where the record is kept, under the person's home folder.
 const RECORD: &str = "Library/Application Support/Atlas/sign-ins.json";
@@ -137,24 +137,15 @@ pub fn listed_in(home: &Path) -> Listed {
     }
 }
 
-/// Add `entry`, unless the same account is listed already; the person only.
-/// Says whether it was added.
+/// Add `entry` to the record under the home folder `home`, unless the same
+/// account is listed already. Says whether it was added.
 ///
 /// # Errors
 ///
-/// Returns `stopped` when an agent asks, `state` when the record is
-/// unknown or full, and file errors when it can't be written.
-pub fn add(entry: Entry, by_person: bool) -> Result<bool> {
-    add_in(&atlas_core::config::home()?, entry, by_person)
-}
-
-/// [`add`] for the home folder `home`.
-///
-/// # Errors
-///
-/// As [`add`].
-pub fn add_in(home: &Path, entry: Entry, by_person: bool) -> Result<bool> {
-    let _locked = locked(home, by_person)?;
+/// Returns `state` when the record is unknown or full, and file errors when
+/// it can't be written.
+pub fn add_in(home: &Path, entry: Entry) -> Result<bool> {
+    let _locked = locked(home)?;
     let mut accounts = writable(home)?;
     if accounts.iter().any(|listed| listed.same(&entry)) {
         return Ok(false);
@@ -170,30 +161,15 @@ pub fn add_in(home: &Path, entry: Entry, by_person: bool) -> Result<bool> {
     Ok(true)
 }
 
-/// Remove the account `kind` `id` (seen in `browser`, for a site); the
-/// person only. Says whether it was listed.
+/// Remove the account `kind` `id` (seen in `browser`, for a site) from the
+/// record under the home folder `home`. Says whether it was listed.
 ///
 /// # Errors
 ///
-/// Returns `stopped` when an agent asks, `state` when the record is
-/// unknown, and file errors when it can't be written.
-pub fn remove(kind: Kind, id: &str, browser: Option<&str>, by_person: bool) -> Result<bool> {
-    remove_in(&atlas_core::config::home()?, kind, id, browser, by_person)
-}
-
-/// [`remove`] for the home folder `home`.
-///
-/// # Errors
-///
-/// As [`remove`].
-pub fn remove_in(
-    home: &Path,
-    kind: Kind,
-    id: &str,
-    browser: Option<&str>,
-    by_person: bool,
-) -> Result<bool> {
-    let _locked = locked(home, by_person)?;
+/// Returns `state` when the record is unknown, and file errors when it
+/// can't be written.
+pub fn remove_in(home: &Path, kind: Kind, id: &str, browser: Option<&str>) -> Result<bool> {
+    let _locked = locked(home)?;
     let mut accounts = writable(home)?;
     let before = accounts.len();
     accounts.retain(|entry| {
@@ -207,21 +183,20 @@ pub fn remove_in(
 }
 
 /// Set how agents may act in the account `kind` `id` (seen in `browser`,
-/// for a site): the person only. Says whether it was listed.
+/// for a site). Says whether it was listed.
 ///
 /// # Errors
 ///
-/// Returns `stopped` when an agent asks, `state` when the record is
-/// unknown, and file errors when it can't be written.
+/// Returns `state` when the record is unknown, and file errors when it
+/// can't be written.
 pub fn set_level_in(
     home: &Path,
     kind: Kind,
     id: &str,
     browser: Option<&str>,
     level: Level,
-    by_person: bool,
 ) -> Result<bool> {
-    let _locked = locked(home, by_person)?;
+    let _locked = locked(home)?;
     let mut accounts = writable(home)?;
     let Some(entry) = accounts
         .iter_mut()
@@ -274,26 +249,9 @@ pub fn site_key(host: &str) -> String {
     psl::domain_str(&host).map_or_else(|| host.clone(), str::to_owned)
 }
 
-/// The record's lock, held by this caller alone until it is dropped: the
-/// person only.
-fn locked(home: &Path, by_person: bool) -> Result<atlas_core::files::LockFile> {
-    if !by_person {
-        return Err(Error::new(
-            Code::Stopped,
-            "Only the person changes the helper's accounts, from Atlas › Settings › Accounts",
-        ));
-    }
-    let path = home.join(LOCK);
-    if let Some(parent) = path.parent() {
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)
-            .map_err(|error| Error::writing(parent, error))?;
-    }
-    let lock = atlas_core::files::open_lock(&path)?;
-    fs2::FileExt::lock_exclusive(&lock.0).map_err(|error| Error::writing(&path, error))?;
-    Ok(lock)
+/// The record's lock, held by this caller alone until it is dropped.
+fn locked(home: &Path) -> Result<atlas_core::files::LockFile> {
+    atlas_core::files::locked(&home.join(LOCK))
 }
 
 /// The accounts, when the record may be written over: only one that was

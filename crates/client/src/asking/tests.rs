@@ -59,7 +59,7 @@ fn answer_soon(client: &Client, answer: Answer) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         for _ in 0..200 {
             if let Some(ask) = asks.open(now_ms()).into_iter().next() {
-                asks.answer(&ask.id, answer, true, now_ms()).unwrap();
+                asks.answer(&ask.id, answer, now_ms()).unwrap();
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -187,7 +187,7 @@ async fn the_person_can_take_control_while_an_agent_waits_and_an_allow_later_run
         let taken = controller.acquire(false).map(drop).is_ok();
         std::thread::sleep(std::time::Duration::from_millis(300));
         let answered = Instant::now();
-        asks.answer(&ask.id, Answer::Task, true, now_ms()).unwrap();
+        asks.answer(&ask.id, Answer::Task, now_ms()).unwrap();
         (taken, answered)
     });
     let mut looked = Vec::new();
@@ -274,7 +274,7 @@ async fn one_just_this_once_runs_one_of_two_commands_waiting_on_the_same_questio
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
             let ask = asks.open(now_ms()).into_iter().next().unwrap();
-            asks.answer(&ask.id, Answer::Once, true, now_ms()).unwrap();
+            asks.answer(&ask.id, Answer::Once, now_ms()).unwrap();
         })
     };
     let ran = std::sync::atomic::AtomicUsize::new(0);
@@ -327,7 +327,7 @@ fn allow_for_this_task_holds_only_in_the_host_process_it_was_given_in_while_its_
         picture: None,
     };
     let id = asks.ask(ask, now_ms()).unwrap();
-    asks.answer(&id, Answer::Task, true, now_ms()).unwrap();
+    asks.answer(&id, Answer::Task, now_ms()).unwrap();
     let tasks = |client: &Client| {
         policy_by(client, Listed::Accounts(vec![github()]), &[])
             .0
@@ -379,7 +379,7 @@ async fn just_this_once_answers_gathered_in_one_command_all_hold_until_it_ends()
                 .into_iter()
                 .find(|ask| !answered.contains(&ask.id))
             {
-                asks.answer(&ask.id, Answer::Once, true, now_ms()).unwrap();
+                asks.answer(&ask.id, Answer::Once, now_ms()).unwrap();
                 answered.push(ask.id);
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -638,7 +638,7 @@ fn a_lost_once_claim_never_replays_a_confirmed_prefix() {
         // worker, this queued signal runs only once that wait returned.
         let (sent, received) = std::sync::mpsc::channel();
         let _signal = tokio::task::spawn_blocking(move || sent.send(()).unwrap());
-        asks.answer(&ask.id, Answer::Once, true, now_ms()).unwrap();
+        asks.answer(&ask.id, Answer::Once, now_ms()).unwrap();
         received
             .recv_timeout(std::time::Duration::from_secs(3))
             .unwrap();

@@ -125,7 +125,7 @@ fn what_the_person_allowed_a_task_ends_with_its_host_process() {
             picture: None,
         };
         let id = asks.ask(ask, now).unwrap();
-        asks.answer(&id, atlas_control::asks::Answer::Task, true, now)
+        asks.answer(&id, atlas_control::asks::Answer::Task, now)
             .unwrap();
     }
     let (_, allowed) = asks_for_status(&client);

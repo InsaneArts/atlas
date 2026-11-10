@@ -204,21 +204,15 @@ impl Asks {
         asks
     }
 
-    /// The person's answer to ask `id`; the person only, through their
-    /// viewer. An ask that is gone can't be answered.
+    /// The person's answer to ask `id`, given through their viewer, which
+    /// serves it to the Atlas app alone. An ask that is gone can't be
+    /// answered.
     ///
     /// # Errors
     ///
-    /// Returns `stopped` for an agent, `input` for an ask that is gone or a
-    /// choice it doesn't offer, and file errors when the answer can't be
-    /// written.
-    pub fn answer(&self, id: &str, answer: Answer, by_person: bool, now: u64) -> Result<()> {
-        if !by_person {
-            return Err(Error::new(
-                Code::Stopped,
-                "Only the person answers Atlas's questions, in the Atlas menu bar or the viewer",
-            ));
-        }
+    /// Returns `input` for an ask that is gone or a choice it doesn't offer,
+    /// and file errors when the answer can't be written.
+    pub fn answer(&self, id: &str, answer: Answer, now: u64) -> Result<()> {
         let Some(ask) = self.open(now).into_iter().find(|ask| ask.id == id) else {
             return Err(Error::new(Code::Input, "That question is no longer open"));
         };
@@ -315,7 +309,7 @@ impl Asks {
     /// The asks' lock, held across a change that reads an ask and writes or
     /// removes it, so none undoes another.
     fn lock(&self) -> Result<atlas_core::files::LockFile> {
-        locked(&self.folder.join("asks.lock"))
+        atlas_core::files::locked(&self.folder.join("asks.lock"))
     }
 
     /// Keep `permit` for the one request that sends its action, for two
@@ -492,8 +486,7 @@ impl Asks {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            let its = (name.ends_with(".jpg")
-                && (name.starts_with(&prefix) || name == format!("{id}.jpg")))
+            let its = (name.ends_with(".jpg") && name.starts_with(&prefix))
                 || (name.starts_with(&cut) && name.contains(".jpg."));
             if its && Some(name) != keep {
                 // One that can't be removed now goes at its ask's next cleanup.
@@ -601,34 +594,19 @@ impl Asks {
     /// The grants' lock, held across each read, change and write of them,
     /// so an End is never undone by another change at once.
     fn lock_allowed(&self) -> Result<atlas_core::files::LockFile> {
-        locked(&self.allowed.with_extension("lock"))
+        atlas_core::files::locked(&self.allowed.with_extension("lock"))
     }
 
-    /// End every task grant in `account` (End in the panel), or every one of
-    /// `session` (its agent session ended); the person only.
+    /// End every task grant in `account`: End in the person's panel, which
+    /// their viewer serves to the Atlas app alone.
     ///
     /// # Errors
     ///
-    /// Returns `stopped` for an agent, and file errors.
-    pub fn end(
-        &self,
-        account: Option<&Value>,
-        session: Option<&str>,
-        by_person: bool,
-        now: u64,
-    ) -> Result<()> {
-        if !by_person {
-            return Err(Error::new(
-                Code::Stopped,
-                "Only the person ends what they allowed, in the Atlas menu bar",
-            ));
-        }
+    /// Returns file errors.
+    pub fn end(&self, account: &Value, now: u64) -> Result<()> {
         let _locked = self.lock_allowed()?;
         let mut allowed = self.allowed(now);
-        allowed.retain(|grant| {
-            account.is_none_or(|account| &grant.account != account)
-                && session.is_none_or(|session| grant.session != session)
-        });
+        allowed.retain(|grant| &grant.account != account);
         self.save_allowed(&allowed)
     }
 
@@ -715,7 +693,7 @@ impl Asks {
 }
 
 /// The ask whose picture, or picture write cut short, the file `name` is:
-/// `<id>-<token>.jpg`, `<id>.jpg`, or `.<id>-<token>.jpg.<token>`.
+/// `<id>-<token>.jpg` or `.<id>-<token>.jpg.<token>`.
 fn picture_of(name: &str) -> Option<&str> {
     if !name.contains(".jpg") {
         return None;
@@ -723,21 +701,7 @@ fn picture_of(name: &str) -> Option<&str> {
     let name = name.strip_prefix('.').unwrap_or(name);
     let end = name.find(|letter: char| !letter.is_ascii_hexdigit())?;
     let (id, rest) = name.split_at(end);
-    (!id.is_empty() && (rest.starts_with('-') || rest.starts_with(".jpg"))).then_some(id)
-}
-
-/// The lock at `path`, held exclusively until it is dropped.
-fn locked(path: &Path) -> Result<atlas_core::files::LockFile> {
-    if let Some(parent) = path.parent() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)
-            .map_err(|error| Error::writing(parent, error))?;
-    }
-    let lock = atlas_core::files::open_lock(path)?;
-    fs2::FileExt::lock_exclusive(&lock.0).map_err(|error| Error::writing(path, error))?;
-    Ok(lock)
+    (!id.is_empty() && rest.starts_with('-')).then_some(id)
 }
 
 /// `duration` in whole milliseconds.

@@ -2162,7 +2162,7 @@ async fn stopped_partway(
         };
         for _ in 0..500 {
             if let Some(ask) = asks.open(atlas_core::time::now_ms()).into_iter().next() {
-                asks.answer(&ask.id, answer, true, atlas_core::time::now_ms())
+                asks.answer(&ask.id, answer, atlas_core::time::now_ms())
                     .unwrap();
                 return;
             }
@@ -2269,7 +2269,6 @@ async fn an_allow_after_the_observation_freshness_limit_still_runs_through_a_fre
         asks.answer(
             &ask.id,
             atlas_control::asks::Answer::Task,
-            true,
             atlas_core::time::now_ms(),
         )
         .unwrap();
