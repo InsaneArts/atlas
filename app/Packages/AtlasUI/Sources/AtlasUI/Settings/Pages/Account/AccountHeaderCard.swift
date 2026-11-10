@@ -1,9 +1,12 @@
 import SwiftUI
 
-/// The card at the top of an account's page: its first letter on its name's tinted tile, its name over what it is.
+/// The card at the top of an account's page: its app's or site's icon, else its first letter on its name's tinted
+/// tile, its name over what it is.
 struct AccountHeaderCard: View {
-  /// Its first letter on its tint.
-  let monogram: AppMonogram
+  /// Its app's or site's icon; nil for its first letter.
+  let icon: SettingsAccountIcon?
+  /// Its first letter.
+  let letter: String
   /// Its name.
   let title: String
   /// What it is and when it was added.
@@ -12,9 +15,7 @@ struct AccountHeaderCard: View {
   /// The disc and the words on the card.
   var body: some View {
     HStack(spacing: Spacing.m) {
-      // The tile's body stands 34 across; its icon-grid margin overhangs, clear.
-      MonogramTile(monogram: monogram, side: IconSize.xl / IconGrid.bodyShare)
-        .frame(width: IconSize.xl, height: IconSize.xl)
+      AccountTile(icon: icon, letter: letter, title: title)
       VStack(alignment: .leading, spacing: Spacing.hairline) {
         // A long name wraps whole, the card growing to hold it.
         Text(title)

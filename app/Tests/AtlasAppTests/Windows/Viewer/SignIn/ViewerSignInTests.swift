@@ -156,6 +156,32 @@ struct ViewerSignInTests {
     #expect(service.log.contains("remove account github.com"))
   }
 
+  @Test("Done and its alert's Remove have the accounts read again at once, so Settings shows them")
+  func doneAndRemovalTellTheAccounts() async throws {
+    let service = ScriptedService()
+    service.reply = [
+      "ready": true, "canObserve": true,
+      "overview": [
+        "mode": "observing",
+        "accounts": [
+          ["kind": "site", "id": "github.com", "name": "github.com", "browser": "com.google.Chrome", "added": 1]
+        ],
+      ],
+    ]
+    let told = CallCount()
+    let viewer = try await ViewerController.watching(service, accountsChanged: { told.count += 1 })
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    #expect(told.count == 0, "starting changes no account")
+    await viewer.finishSignIn()
+    #expect(told.count == 1)
+    viewer.cancelAlert()
+    _ = await viewer.startSignIn(.forget, site: "github.com", browser: "com.google.Chrome")
+    await viewer.finishSignIn()
+    #expect(told.count == 2)
+    await viewer.confirmAlert()
+    #expect(told.count == 3)
+  }
+
   @Test(
     "Sign Out holds the helper on the site's own page, and Keep's words follow the account's level",
     arguments: [
@@ -257,6 +283,24 @@ struct ViewerSignInTests {
     _ = await viewer.actions.barrier.settle()
     #expect(service.log.contains("cancel sign-in-lease"), "the late grant is cancelled")
     #expect(viewer.control.signInLease == nil && viewer.session.signIn == nil)
+  }
+
+  @Test(
+    "losing the keyboard or being covered while a start waits keeps it going, as during the sign-in",
+    arguments: [true, false]
+  )
+  func aStartGoesOnThroughASuspend(focusLost: Bool) async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    service.hold.insert("sign-in/start")
+    let starting = Task { await viewer.startSignIn(.signIn, site: "github.com", browser: nil) }
+    try await settle("the start never reached the service") { service.held["sign-in/start"] != nil }
+    if focusLost { viewer.control.lostFocus() } else { viewer.setVisible(false) }
+    #expect(viewer.control.acquiring, "the start still waits")
+    service.resume("sign-in/start")
+    #expect(await starting.value == nil)
+    #expect(viewer.control.signInLease == "sign-in-lease" && viewer.session.signIn != nil)
+    #expect(!service.log.contains("cancel sign-in-lease"), "nothing was called off")
   }
 
   @Test("closing the window while control held before is given back calls the start off before it is sent")

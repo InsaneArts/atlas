@@ -2,11 +2,12 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// The Settings window: 740 by 572, as Rex's Settings stands, with the sidebar of pages under its window buttons and the
-/// content card beside it, titled with the route shown for the Window menu and VoiceOver. One at a time; it has a Dock
-/// icon while open, like any app window (``DockIcon``). It opens where it was left, kept whole on its screen
-/// (``SettingsWindowFrame``), centred only the first time; it cannot be resized or minimised, as a settings window is
-/// closed instead, and it comes to the Space the person is on, full-screen apps included.
+/// The Settings window: 740 by 572 at first and at its smallest, as Rex's Settings stands, with the sidebar of pages
+/// under its window buttons and the content card beside it, titled with the route shown for the Window menu and
+/// VoiceOver. One at a time; it has a Dock icon while open, like any app window (``DockIcon``). It opens where and at
+/// the size it was left, kept whole on its screen (``SettingsWindowFrame``), centred only the first time; it can be
+/// resized, not minimised, as a settings window is closed instead, and it comes to the Space the person is on,
+/// full-screen apps included.
 final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// The name its place is kept under in the app's defaults. Shipped, so it never changes.
   static let autosaveName = "AtlasSettings"
@@ -28,7 +29,7 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     self.closed = closed
     super.init(
       contentRect: NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.height),
-      styleMask: [.titled, .closable, .fullSizeContentView],
+      styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
@@ -43,6 +44,7 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     toolbarStyle = .unified
     isReleasedWhenClosed = false
     isMovableByWindowBackground = true
+    contentMinSize = SettingsWindowFrame.smallest
     collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
     delegate = self
     WindowShell.host(in: self) {
@@ -76,7 +78,7 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// Closes the window.
   func dismiss() { close() }
 
-  /// Sets the window at its fixed size, moved just enough to stand whole on its screen.
+  /// Keeps the window at least its smallest and at most its screen, moved just enough to stand whole on it.
   func keepOnScreen() {
     let target = SettingsWindowFrame.frame(current: frame, within: screen?.visibleFrame)
     if target != frame { setFrame(target, display: true) }

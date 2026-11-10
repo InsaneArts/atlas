@@ -14,7 +14,7 @@ struct SettingsCard: View {
   /// The bar over the page, on the card.
   var body: some View {
     VStack(spacing: .zero) {
-      SettingsTopBar(title: state.title)
+      SettingsTopBar(title: state.title, back: back, send: send)
       SettingsPageStage(state: state, edit: edit, send: send)
     }
     .clipShape(shape)
@@ -27,6 +27,12 @@ struct SettingsCard: View {
         .strokeBorder(Color.strokeContent, lineWidth: Stroke.hairline)
         .allowsHitTesting(false)
     }
+  }
+
+  /// Where Back goes from the route shown: Accounts from an account's page; nowhere from a page of its own.
+  private var back: (page: SettingsPage, title: String)? {
+    guard state.route.account != nil else { return nil }
+    return (.accounts, state.sidebar.title(of: .accounts))
   }
 
   /// The card's outline.

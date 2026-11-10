@@ -877,7 +877,7 @@ async fn every_look_at_the_screen_is_refused_while_the_person_signs_in() {
         );
         assert_eq!(
             refused.error,
-            "The person is signing in to an account in the helper; the screen is hidden until they finish."
+            "The person is managing an account in the helper; the screen is hidden until they finish."
         );
     }
 

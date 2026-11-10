@@ -39,6 +39,7 @@ extension SettingsController {
   /// unreadable. While the list can't be read, nothing changes.
   func keepListedAccounts() {
     guard let listed = listedAccounts else { return }
+    wantAccountIcons(listed)
     let route = session.route.kept(accounts: Set(listed.map(\.id)))
     if route != session.route { session.route = route }
     let known = Dictionary(listed.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })

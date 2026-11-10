@@ -19,7 +19,8 @@ extension SettingsPresenter {
           title: account.name,
           detail: SettingsWords.accountRowDetail(account, now: snapshot.now, calendar: snapshot.calendar),
           level: AccountLevelChoice(account.level),
-          isSite: account.kind == .site
+          isSite: account.kind == .site,
+          icon: snapshot.accountIcons[account.id]
         )
       }
     }
@@ -63,7 +64,8 @@ extension SettingsPresenter {
       level: level,
       levelLine: level == nil ? "" : SettingsWords.levelLine(account.level),
       isEnabled: level != nil && !snapshot.session.accountsWorking,
-      notice: notice(snapshot, on: .account(id), busy: snapshot.session.accountsWorking)
+      notice: notice(snapshot, on: .account(id), busy: snapshot.session.accountsWorking),
+      icon: snapshot.accountIcons[id]
     )
   }
 

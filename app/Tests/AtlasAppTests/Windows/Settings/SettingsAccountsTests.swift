@@ -57,8 +57,8 @@ struct SettingsAccountsTests {
     #expect(rows.map(\.title) == ["github.com", "Slack", "acme.dev"])
     #expect(
       rows.map(\.detail) == [
-        "Ask before sending · Added today", "Ask before sending · App · added yesterday",
-        "Ask before sending · Added Nov 3",
+        "Ask before sending · added today", "Ask before sending · App · added yesterday",
+        "Ask before sending · added Nov 3",
       ]
     )
     #expect(rows.map(\.letter) == ["G", "S", "A"])

@@ -3,13 +3,17 @@
 //! launchd still holds a finished job for the app or the app is known only
 //! by the task's own install.
 use crate::{
-    client::{AppList, AppRow, Client, Finished},
+    client::{AppList, AppRow, Client, Finished, Verified, WINDOW_LOOKUP},
     handoff, task,
 };
 use atlas_control::{Ownership, SharedLease};
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc, time::Instant};
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 /// Browsers that open the URLs given after `--new-window` in a window of
 /// their own when they are already running, by bundle ID: two agents' pages
@@ -43,9 +47,11 @@ pub async fn open(
 
 /// Open `url` in the browser `app` (by its name) for the person, under the
 /// control their lease holds (`ownership`): nothing is handed over and no
-/// task claims it. With `new_window`, the browser is started anew with the
-/// URL as its argument in a window of its own, as Chromium browsers pass it
-/// to the copy already running, so their own settings pages open too.
+/// task claims it. With `new_window`, the page gets a window of its own: a
+/// web page is the argument of the browser started anew, as Chromium
+/// browsers pass it to the copy already running; one of the browser's own
+/// pages, which Chromium ignores as an argument, opens as a URL once the
+/// new window shows, filling its empty tab.
 /// Each launch, a retry included, is sent only while the person's `lease`
 /// still holds its token, checked once connected and held until it is
 /// sent; success is said only while it still holds.
@@ -64,18 +70,62 @@ pub async fn open_for_person(
     url: &str,
     new_window: bool,
 ) -> Result<Value> {
-    let mut argv = vec!["/usr/bin/open".to_owned()];
-    if new_window {
-        argv.push("-n".to_owned());
+    let open_url = [
+        "-a".to_owned(),
+        app.to_owned(),
+        "--".to_owned(),
+        url.to_owned(),
+    ];
+    if !new_window {
+        return launch_for_person(client, ownership, lease, &open_url).await;
     }
-    argv.extend(["-a".to_owned(), app.to_owned()]);
-    if new_window {
-        argv.extend(["--args".to_owned(), "--new-window".to_owned()]);
-    } else {
-        argv.push("--".to_owned());
+    let mut new = vec!["-n".to_owned(), "-a".to_owned(), app.to_owned()];
+    new.extend(["--args".to_owned(), "--new-window".to_owned()]);
+    if web_page(url) {
+        new.push(url.to_owned());
+        return launch_for_person(client, ownership, lease, &new).await;
     }
-    argv.push(url.to_owned());
+    let verified = client.verify().await?;
+    let before = windows_of(client, &verified, app).await;
+    launch_for_person(client, ownership, lease, &new).await?;
+    let waited = Instant::now();
+    while windows_of(client, &verified, app).await <= before && waited.elapsed() < NEW_WINDOW_WAIT {
+        tokio::time::sleep(NEW_WINDOW_POLL).await;
+    }
+    launch_for_person(client, ownership, lease, &open_url).await
+}
 
+/// How long a browser's own page waits for the window opened for it, before
+/// it opens wherever the browser puts it.
+const NEW_WINDOW_WAIT: Duration = Duration::from_secs(5);
+
+/// How often the helper's windows are read while it waits.
+const NEW_WINDOW_POLL: Duration = Duration::from_millis(100);
+
+/// How many windows `app`, by its name, shows in the helper `verified`;
+/// none when they can't be read.
+async fn windows_of(client: &Client, verified: &Verified, app: &str) -> usize {
+    client
+        .windows_in(Some(verified), false, WINDOW_LOOKUP)
+        .await
+        .map_or(0, |shown| {
+            shown
+                .windows
+                .iter()
+                .filter(|window| window.owner.as_deref() == Some(app))
+                .count()
+        })
+}
+
+/// One `open` with `arguments` for the person, under their lease.
+async fn launch_for_person(
+    client: &Client,
+    ownership: &Ownership,
+    lease: (&SharedLease, &str),
+    arguments: &[String],
+) -> Result<Value> {
+    let mut argv = vec!["/usr/bin/open".to_owned()];
+    argv.extend_from_slice(arguments);
     let leased = Some(lease);
     let mut finished = client
         .run_finished_under(ownership, leased, argv.clone(), OUTPUT)

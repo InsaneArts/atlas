@@ -42,4 +42,7 @@ struct ViewerDependencies {
   /// Told when the window leaves one place for another, such as the Screen for Activity, so a question its banner
   /// showed is notified once it no longer shows; nothing by default.
   var placeChanged: @MainActor () -> Void = {}
+  /// Told once the accounts may have changed here, after a sign-in's Done or a removal from its alert, so the panel
+  /// reads them at once and Settings and the menu bar show them; nothing by default.
+  var accountsChanged: @MainActor () async -> Void = {}
 }

@@ -66,6 +66,9 @@ final class ViewerControl {
   private(set) var focused = true
   /// Numbers each acquisition and release, so a late reply knows it was overtaken.
   @ObservationIgnored private(set) var controlGeneration = 0
+  /// The number of the sign-in start waiting for its reply: while it is the acquisition under way, suspending leaves it
+  /// going, as it leaves a held sign-in.
+  @ObservationIgnored private var signInStart: Int?
   /// The acquisition that waits for a fresh picture, Take Control having resumed a paused one; nil while none waits.
   @ObservationIgnored private(set) var pictureWait: Int?
   /// Ends that wait once it has gone on too long.
@@ -340,6 +343,7 @@ final class ViewerControl {
   func beginSignInStart() -> Int {
     controlGeneration += 1
     acquiring = true
+    signInStart = controlGeneration
     return controlGeneration
   }
 
@@ -463,10 +467,17 @@ final class ViewerControl {
   }
 
   /// The window can't take input for now, as it was covered, paused or left the Screen: control goes back, or, during
-  /// a held sign-in, input only stops until the Screen can take it again (``resumeIfEligible()``).
+  /// a held sign-in, input only stops until the Screen can take it again (``resumeIfEligible()``), and a sign-in still
+  /// starting goes on.
   ///
   /// - Parameter message: What the notice says, if anything.
   func suspend(_ message: String? = nil) {
+    // A sign-in starting holds no input yet: it goes on as a held one does, and only ending control on purpose, as
+    // closing the window does, calls it off.
+    if acquiring, signInStart == controlGeneration {
+      if let message { viewer?.say(message) }
+      return
+    }
     guard let signInLease else { return releaseControl(message) }
     releaseHeld(under: signInLease)
     if let message { viewer?.say(message) }

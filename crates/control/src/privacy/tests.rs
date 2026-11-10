@@ -27,7 +27,7 @@ fn hidden(error: &Error) {
     assert_eq!(error.holder, Some(Holder::Person));
     assert_eq!(
         error.error,
-        "The person is signing in to an account in the helper; the screen is hidden until they finish."
+        "The person is managing an account in the helper; the screen is hidden until they finish."
     );
 }
 

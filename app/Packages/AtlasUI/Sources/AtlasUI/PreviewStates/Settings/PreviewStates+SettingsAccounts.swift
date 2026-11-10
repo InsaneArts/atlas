@@ -13,7 +13,7 @@
           id: "site\u{1F}github.com",
           letter: "G",
           title: "github.com",
-          detail: "Ask before sending · Added today",
+          detail: "Ask before sending · added today",
           isSite: true
         ),
         SettingsAccountRow(
@@ -26,7 +26,7 @@
           id: "site\u{1F}staging.acme.dev",
           letter: "S",
           title: "staging.acme.dev",
-          detail: "Trusted · Added Nov 3",
+          detail: "Trusted · added Nov 3",
           level: .trusted,
           isSite: true
         ),
@@ -67,14 +67,14 @@
           id: "site\u{1F}github.com",
           letter: "G",
           title: "github.com",
-          detail: "Ask before sending · Added today",
+          detail: "Ask before sending · added today",
           isSite: true
         ),
         SettingsAccountRow(
           id: "site\u{1F}mybank.com",
           letter: "M",
           title: "mybank.com",
-          detail: "Look only · Added Nov 2",
+          detail: "Look only · added Nov 2",
           level: .lookOnly,
           isSite: true
         ),

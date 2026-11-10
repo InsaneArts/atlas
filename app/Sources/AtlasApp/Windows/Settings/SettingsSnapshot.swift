@@ -23,6 +23,8 @@ struct SettingsSnapshot {
   var accountNoteRead: Double = 0
   /// Sign In to a Site…'s sheet, while it shows.
   var signIn: SignInSheetState?
+  /// The icons of the accounts listed, by account.
+  var accountIcons: [String: SettingsAccountIcon] = [:]
   /// Now, which tells the day an account was added.
   var now = Date()
   /// The calendar days are told in.

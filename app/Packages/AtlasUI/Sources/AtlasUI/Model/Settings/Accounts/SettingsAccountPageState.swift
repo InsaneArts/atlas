@@ -20,6 +20,8 @@ public struct SettingsAccountPageState: Equatable, Sendable {
   public var isEnabled: Bool
   /// What the last change on the page said; nil for nothing.
   public var notice: SettingsNote?
+  /// Its app's or site's icon; nil draws its first letter.
+  public var icon: SettingsAccountIcon?
 
   /// Creates the page's state.
   ///
@@ -33,6 +35,7 @@ public struct SettingsAccountPageState: Equatable, Sendable {
   ///   - levelLine: What the level lets agents do there.
   ///   - isEnabled: Whether its choices take presses now.
   ///   - notice: What the last change on the page said; none by default.
+  ///   - icon: Its app's or site's icon; none by default.
   public init(
     id: String,
     letter: String,
@@ -42,7 +45,8 @@ public struct SettingsAccountPageState: Equatable, Sendable {
     level: AccountLevelChoice?,
     levelLine: String,
     isEnabled: Bool,
-    notice: SettingsNote? = nil
+    notice: SettingsNote? = nil,
+    icon: SettingsAccountIcon? = nil
   ) {
     self.id = id
     self.letter = letter
@@ -53,6 +57,7 @@ public struct SettingsAccountPageState: Equatable, Sendable {
     self.levelLine = levelLine
     self.isEnabled = isEnabled
     self.notice = notice
+    self.icon = icon
   }
 
   /// Whether Atlas can't read its list now, so the page says so and its choices wait.

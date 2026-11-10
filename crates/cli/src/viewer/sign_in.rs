@@ -60,9 +60,8 @@ impl Browser {
             .find(|browser| applications.join(format!("{}.app", browser.app())).is_dir())
     }
 
-    /// Whether a page opens in a window of its own, the browser started anew
-    /// with it as its argument: Chrome passes it to the copy already running,
-    /// and opens its own settings pages that way.
+    /// Whether a page opens in a window of its own: Chrome opens one for it,
+    /// its own settings pages included.
     fn new_window(self) -> bool {
         match self {
             Self::Chrome => true,

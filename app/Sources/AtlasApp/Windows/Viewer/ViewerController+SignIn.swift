@@ -104,6 +104,7 @@ extension ViewerController {
     }
     await readingLoop.readStatus()
     readingLoop.refresh()
+    await dependencies.accountsChanged()
   }
 
   /// Cancel: the hold ends here at once and nothing is added; the Cancel is counted as control work and sent again
@@ -142,5 +143,6 @@ extension ViewerController {
       say(error.localizedDescription)
     }
     await readingLoop.readStatus()
+    await dependencies.accountsChanged()
   }
 }

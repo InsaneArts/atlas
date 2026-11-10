@@ -88,6 +88,9 @@ struct TabsCapsule<Tab: Hashable & Sendable, Accessory: View>: View {
         }
       }
       .pickerStyle(.segmented)
+      // Only the name is read; a label drawn beside the segments would push them off the capsule's own.
+      .labelsHidden()
+      .accessibilityLabel(Text(state.label))
       .accessibilityValue(state.tabs.first { $0.id == state.selected }.map(accessibilityLabel) ?? "")
       .accessibilityAdjustableAction { direction in
         switch direction {

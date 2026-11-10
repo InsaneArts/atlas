@@ -64,6 +64,11 @@ extension Color {
     .opacity(0.14)
   /// A drawn app tile's letter: white, the same in either appearance.
   static let monogramLetter = Color.white
+  /// The tile under a site's icon: white, the same in either appearance, as a web app's icon stands.
+  static let siteTile = Color.white
+  /// The hairline edge of a site's tile, so its white holds on a light ground: black at 0.1.
+  static let siteTileEdge = Color.black
+    .opacity(0.1)
   /// The ground every window draws on: #F5F5F7, or #161618.
   public static let ground = Color(light: .rgb(0xF5F5F7), dark: .rgb(0x161618))
   /// A ground a step below ``ground``, for a window whose content sits on one card laid over it, such as the

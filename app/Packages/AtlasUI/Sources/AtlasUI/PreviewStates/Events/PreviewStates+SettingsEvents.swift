@@ -106,13 +106,11 @@
         .split(separator: " · ", maxSplits: 1)
         .last
         .map(String.init) ?? row.detail
-      let first = added.prefix(1)
-        .lowercased()
       return SettingsAccountPageState(
         id: row.id,
         letter: row.letter,
         title: row.title,
-        kindLine: row.isSite ? "Website · \(first)\(added.dropFirst())" : added,
+        kindLine: row.isSite ? "Website · \(added)" : added,
         isSite: row.isSite,
         level: row.level,
         levelLine: settingsLevelLines[row.level] ?? "",

@@ -31,6 +31,7 @@ extension ViewerController {
   ///   - preferences: The window's saved choices; by default in memory, with `rate` saved.
   ///   - icons: Where apps' icons are found; by default nowhere, so every app draws its tile.
   ///   - placeChanged: Told when the window leaves one place for another; nothing by default.
+  ///   - accountsChanged: Told once the accounts may have changed here; nothing by default.
   /// - Returns: The viewer, closed until it is shown.
   static func scripted(
     _ service: ScriptedService,
@@ -47,7 +48,8 @@ extension ViewerController {
     shotOutlet: ShotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true }),
     preferences: ViewerPreferences? = nil,
     icons: AppIcons = .none,
-    placeChanged: @escaping @MainActor () -> Void = {}
+    placeChanged: @escaping @MainActor () -> Void = {},
+    accountsChanged: @escaping @MainActor () async -> Void = {}
   ) -> ViewerController {
     let viewer = WeakViewer()
     let actions =
@@ -70,7 +72,8 @@ extension ViewerController {
         wallClock: wallClock,
         shotOutlet: shotOutlet,
         icons: icons,
-        placeChanged: placeChanged
+        placeChanged: placeChanged,
+        accountsChanged: accountsChanged
       )
     )
     viewer.controller = controller
@@ -91,6 +94,7 @@ extension ViewerController {
   ///   - wallClock: The date and time now; by default a fixed one.
   ///   - shotOutlet: Where copied screenshots go and how files are shown; by default nowhere.
   ///   - icons: Where apps' icons are found; by default nowhere.
+  ///   - accountsChanged: Told once the accounts may have changed here; nothing by default.
   /// - Returns: The viewer, open and watching.
   /// - Throws: The failed requirement, when the first picture never arrives.
   static func watching(
@@ -104,7 +108,8 @@ extension ViewerController {
     actions: HelperActions? = nil,
     wallClock: @escaping @MainActor () -> Date = { Date(timeIntervalSince1970: 0) },
     shotOutlet: ShotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true }),
-    icons: AppIcons = .none
+    icons: AppIcons = .none,
+    accountsChanged: @escaping @MainActor () async -> Void = {}
   ) async throws -> ViewerController {
     service.picture = png()
     let viewer = scripted(
@@ -118,7 +123,8 @@ extension ViewerController {
       actions: actions,
       wallClock: wallClock,
       shotOutlet: shotOutlet,
-      icons: icons
+      icons: icons,
+      accountsChanged: accountsChanged
     )
     viewer.setVisible(true)
     try await settle("the first picture never arrived") { viewer.reading.frame != nil }

@@ -28,6 +28,11 @@ final class SettingsController {
   var accountNoteRead: Double = 0
   /// Sign In to a Site…'s sheet, while it shows. Written only by the controller's own files.
   var signIn: SignInSheetState?
+  /// The icons of the accounts listed, by account: an app's own, or a site's. Written only by the controller's own
+  /// files.
+  var accountIcons: [String: SettingsAccountIcon] = [:]
+  /// The accounts whose icon was asked for, so each is asked once while it stays listed.
+  @ObservationIgnored var askedIcons: Set<String> = []
   /// Counts the times the window came forward and a choice was kept where no other window shows it, so what the
   /// links read is read again then.
   private(set) var revision = 0
@@ -86,7 +91,8 @@ final class SettingsController {
         version: dependencies.version
       ),
       accountNoteRead: accountNoteRead,
-      signIn: signIn
+      signIn: signIn,
+      accountIcons: accountIcons
     )
   }
 

@@ -1,12 +1,12 @@
 import SwiftUI
 
 /// The Settings window's own measures, which no other window shares, set as Rex's Settings stands: a 740 by 572
-/// window, a 214 sidebar of 32-point page rows under a 40-point status row, and the page on the content card under a
-/// bar with its title.
+/// window at first and at its smallest, a 214 sidebar of 32-point page rows under a 40-point status row, and the page
+/// on the content card under a bar with its title.
 public enum SettingsLayout {
-  /// 740: the window's width.
+  /// 740: the window's width at first, and its narrowest.
   public static let width: CGFloat = 740
-  /// 572: the window's height.
+  /// 572: the window's height at first, and its shortest.
   public static let height: CGFloat = 572
   /// 214: the sidebar's width.
   static let sidebarWidth: CGFloat = 214
@@ -35,6 +35,10 @@ public enum SettingsLayout {
   static let barHeight = WindowChrome.cardBarHeight
   /// 20: the bar's inset at each side of its title, on the page's own edges.
   static let barInset = pageInsets.leading
+  /// 10: the bar's inset before Back, on an account's page.
+  static let backInset = Spacing.sPlus
+  /// 8: between Back and the title.
+  static let backGap = Spacing.s
   /// The page's insets on the card: 12 under the bar, 20 at the sides and 28 at the foot, so its last control ends
   /// clear of the fade.
   static let pageInsets = EdgeInsets(top: Spacing.m, leading: Spacing.xl, bottom: pageFoot, trailing: Spacing.xl)

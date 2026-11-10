@@ -20,7 +20,7 @@ extension SettingsWords {
   /// The app panel's line.
   static let addAccountMessage = "Choose an app the helper is signed in to."
 
-  /// When an account was added: "Added today", "Added yesterday" or "Added Nov 5", after "App · " for an app.
+  /// When an account was added: "added today", "added yesterday" or "added Nov 5".
   ///
   /// - Parameters:
   ///   - account: The account.
@@ -44,7 +44,7 @@ extension SettingsWords {
       style.timeZone = calendar.timeZone
       day = added.formatted(style)
     }
-    return account.kind == .app ? "App · added \(day)" : "Added \(day)"
+    return "added \(day)"
   }
 
   /// An account's line in the list: its level, then when it was added.
@@ -53,9 +53,11 @@ extension SettingsWords {
   ///   - account: The account.
   ///   - now: Now.
   ///   - calendar: The calendar days are told in.
-  /// - Returns: "Ask before sending · Added today", or "Trusted · App · added Nov 5".
+  /// - Returns: "Ask before sending · added today", or "Trusted · App · added Nov 5".
   static func accountRowDetail(_ account: ViewerStatus.Account, now: Date, calendar: Calendar) -> String {
-    "\(levelShort(account.level)) · \(accountDetail(account, now: now, calendar: calendar))"
+    let level = levelShort(account.level)
+    let added = accountDetail(account, now: now, calendar: calendar)
+    return account.kind == .app ? "\(level) · App · \(added)" : "\(level) · \(added)"
   }
 
   /// What an account is and when it was added, under its name on its page.
@@ -66,11 +68,8 @@ extension SettingsWords {
   ///   - calendar: The calendar days are told in.
   /// - Returns: "Website · added today", or "App · added Nov 5".
   static func accountKindLine(_ account: ViewerStatus.Account, now: Date, calendar: Calendar) -> String {
-    let detail = accountDetail(account, now: now, calendar: calendar)
-    guard account.kind == .site else { return detail }
-    let first = detail.prefix(1)
-      .lowercased()
-    return "Website · \(first)\(detail.dropFirst())"
+    let kind = account.kind == .site ? "Website" : "App"
+    return "\(kind) · \(accountDetail(account, now: now, calendar: calendar))"
   }
 
   /// A level in a sentence's case, as an account's line names it.

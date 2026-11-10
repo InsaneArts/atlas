@@ -166,6 +166,22 @@ fn step(steps: &Mutex<Vec<String>>, fails: Fails, request: &Value) -> Option<Val
             exited(1, "Unable to find application named 'Google Chrome'")
         }
         open if open.starts_with("open ") => completed(""),
+        // A window of Chrome's own for each one a launch opened.
+        "windows" => {
+            let opened = steps
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|step| step.starts_with("open -n"))
+                .count();
+            let windows: Vec<Value> = (0..opened)
+                .map(|number| {
+                    json!({"number": number, "pid": 812, "owner": "Google Chrome", "title": null,
+                        "layer": 0, "alpha": 1.0, "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
+                })
+                .collect();
+            json!({"ok": true, "starts": {}, "windows": windows})
+        }
         "release" if fails == Fails::Typed => json!({"ok": true, "signedIn":
             {"app": "com.google.Chrome", "name": "Google Chrome", "host": "gitlab.com"}}),
         _ => json!({"ok": true}),
@@ -311,7 +327,7 @@ async fn agents_reads_are_refused_during_a_sign_in_and_allowed_after_it() {
     assert_eq!(read.holder, Some(Holder::Person));
     assert_eq!(
         read.error,
-        "The person is signing in to an account in the helper; the screen is hidden until they finish."
+        "The person is managing an account in the helper; the screen is hidden until they finish."
     );
     served(&helper, &steps, viewer.sign_in_cancel(&lease))
         .await
@@ -364,10 +380,21 @@ async fn forgetting_opens_the_sites_data_in_settings_and_removes_nothing_on_done
     let reply = started(&viewer, &helper, &steps, HoldKind::Forget, Fails::Nothing)
         .await
         .unwrap();
+    // Chrome ignores its own pages as an argument: a window of its own opens,
+    // then the page goes to it as a URL.
+    let opens: Vec<String> = steps
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|step| step.starts_with("open "))
+        .cloned()
+        .collect();
     assert_eq!(
-        steps.lock().unwrap().last().unwrap(),
-        "open -n -a Google Chrome --args --new-window \
-         chrome://settings/content/all?searchSubpage=github.com"
+        opens,
+        [
+            "open -n -a Google Chrome --args --new-window",
+            "open -a Google Chrome -- chrome://settings/content/all?searchSubpage=github.com",
+        ]
     );
     let lease = reply["lease"].as_str().unwrap().to_owned();
     let done = served(&helper, &steps, viewer.sign_in_done(&lease))

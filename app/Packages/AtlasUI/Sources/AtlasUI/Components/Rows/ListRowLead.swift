@@ -43,6 +43,20 @@ struct ListRowLead: View {
       // The tile's body fills the lead; its icon-grid margin overhangs, clear.
       MonogramTile(monogram: monogram, side: ListRow.leadWidth(lead, size: size) / IconGrid.bodyShare)
         .frame(width: ListRow.leadWidth(lead, size: size), height: ListRow.leadWidth(lead, size: size))
+    case .appIcon(let icon):
+      // As a monogram's, the icon's body fills the lead; its grid margin overhangs, clear.
+      Image(decorative: icon.image, scale: 1)
+        .resizable()
+        .interpolation(.high)
+        .frame(
+          width: ListRow.leadWidth(lead, size: size) / IconGrid.bodyShare,
+          height: ListRow.leadWidth(lead, size: size) / IconGrid.bodyShare
+        )
+        .frame(width: ListRow.leadWidth(lead, size: size), height: ListRow.leadWidth(lead, size: size))
+    case .siteIcon(let icon):
+      // As a monogram's, the tile's body fills the lead.
+      SiteIconTile(icon: icon, side: ListRow.leadWidth(lead, size: size) / IconGrid.bodyShare)
+        .frame(width: ListRow.leadWidth(lead, size: size), height: ListRow.leadWidth(lead, size: size))
     case .check(let state):
       OutcomeMark(kind: StatusLine.Kind(state), side: ListRow.leadWidth(lead, size: size))
         .id(state)

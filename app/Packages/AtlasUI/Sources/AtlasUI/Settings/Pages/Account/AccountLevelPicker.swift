@@ -35,6 +35,8 @@ struct AccountLevelPicker: View {
       }
     }
     .focusable(isEnabled)
+    // The chosen tile's ring says where the arrows act; the system's ring round all three would frame the card.
+    .focusEffectDisabled()
     .focused($focused)
     .onKeyPress(.leftArrow) { step(-1) }
     .onKeyPress(.rightArrow) { step(1) }
@@ -46,6 +48,9 @@ struct AccountLevelPicker: View {
         }
       }
       .pickerStyle(.segmented)
+      // Only the name is read; a label drawn beside the choices would push them off the tiles.
+      .labelsHidden()
+      .accessibilityLabel(Text(Self.label))
       .accessibilityValue(Text(Self.spokenValue(level)))
       .accessibilityHint(Text(verbatim: "In \(account)"))
       .accessibilityAdjustableAction { direction in

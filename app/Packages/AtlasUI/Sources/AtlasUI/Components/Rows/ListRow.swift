@@ -21,6 +21,11 @@ struct ListRow: View {
     case letter(String)
     /// A name's first letter on its own tint's tile, as an app without its own icon shows, such as an account's.
     case monogram(AppMonogram)
+    /// An app's own icon whose body fills the lead, its icon-grid margin overhanging, so it stands as large as a
+    /// monogram or a site's tile beside it, such as an account's.
+    case appIcon(IconImage)
+    /// A site's icon on a white tile, as a web app's icon stands, such as an account's.
+    case siteIcon(IconImage)
     /// A check's mark: a spinner, a green check or an orange round "!".
     case check(CheckState)
     /// A check not run yet: an empty ring in a check mark's place.
@@ -267,7 +272,8 @@ struct ListRow: View {
     switch lead {
     case .none: 0
     case .check, .pending: IconSize.s
-    case .tile, .image, .mark, .picture, .letter, .monogram: size == .compact ? IconSize.mPlus : IconSize.l
+    case .tile, .image, .mark, .picture, .letter, .monogram, .appIcon, .siteIcon:
+      size == .compact ? IconSize.mPlus : IconSize.l
     }
   }
 
@@ -282,7 +288,7 @@ struct ListRow: View {
     if size == .compact || size == .checklist { return .regular }
     switch lead {
     case .check, .pending: return .regular
-    case .none, .tile, .image, .mark, .picture, .letter, .monogram: return .medium
+    case .none, .tile, .image, .mark, .picture, .letter, .monogram, .appIcon, .siteIcon: return .medium
     }
   }
 }

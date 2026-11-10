@@ -34,7 +34,8 @@ extension AppContainer: WindowParts {
         openSettings: coordinator.panelLinks().openSettings,
         icons: appIcons,
         framePipe: NativeFramePipeConnector(),
-        placeChanged: { [weak self] in self?.askSignals?.lookedAway() }
+        placeChanged: { [weak self] in self?.askSignals?.lookedAway() },
+        accountsChanged: { [weak self] in await self?.panel?.readStatus() }
       )
     )
   }
@@ -52,6 +53,11 @@ extension AppContainer: WindowParts {
         installs: installs,
         preferences: watchedPreferences(),
         fileIcon: FileIcons.icon(forFile:),
+        appIcon: FileIcons.icon(forApp:),
+        siteIcon: { site in
+          await SiteIcons.live
+            .icon(for: site)
+        },
         version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
         links: links,
         clock: clock,

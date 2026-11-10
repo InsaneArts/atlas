@@ -654,3 +654,132 @@ async fn a_persons_launch_is_never_sent_when_their_lease_runs_out_while_the_help
     drop(ownership);
     lease.lock().await.release();
 }
+
+#[tokio::test]
+async fn a_browsers_own_page_opens_for_the_person_once_its_new_window_shows() {
+    use crate::test_support::{Helper, completed};
+    use atlas_control::{Lease, SharedLease};
+    use atlas_core::test_support::UID;
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let lease: SharedLease =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Lease::new(Duration::from_secs(10))));
+    let token = lease.lock().await.acquire(&client.controller).unwrap();
+    let ownership = lease.lock().await.ownership(&token).unwrap();
+    let page = "chrome://settings/clearBrowserData";
+
+    // Chrome ignores its own pages as an argument: an empty window opens
+    // first, then the page goes to it as a URL once the window shows.
+    let mut sent = Vec::new();
+    let mut opened = 0;
+    let mut reads_after = 0;
+    let launched = helper
+        .serve(
+            open_for_person(
+                &client,
+                &ownership,
+                (&lease, &token),
+                "Google Chrome",
+                page,
+                true,
+            ),
+            |request| {
+                if request["op"] == "windows" {
+                    if opened > 0 {
+                        reads_after += 1;
+                    }
+                    let shown = usize::from(opened > 0 && reads_after > 1);
+                    let windows: Vec<Value> = (0..1 + shown)
+                        .map(|number| {
+                            json!({"number": number, "pid": 812, "owner": "Google Chrome",
+                            "title": null, "layer": 0, "alpha": 1.0,
+                            "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
+                        })
+                        .collect();
+                    return Some(json!({"ok": true, "starts": {}, "windows": windows}));
+                }
+                if request["argv"][0] == "/usr/bin/open" {
+                    sent.push((request["argv"].clone(), reads_after));
+                    opened += 1;
+                }
+                Some(completed(""))
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(launched["opened"], true);
+    assert_eq!(
+        sent,
+        [
+            (
+                json!([
+                    "/usr/bin/open",
+                    "-n",
+                    "-a",
+                    "Google Chrome",
+                    "--args",
+                    "--new-window"
+                ]),
+                0
+            ),
+            (
+                json!(["/usr/bin/open", "-a", "Google Chrome", "--", page]),
+                2
+            ),
+        ],
+        "the page went once the second read showed the new window"
+    );
+    drop(ownership);
+    lease.lock().await.release();
+}
+
+#[tokio::test]
+async fn a_web_page_opens_for_the_person_in_a_new_window_at_once() {
+    use crate::test_support::{Helper, completed};
+    use atlas_control::{Lease, SharedLease};
+    use atlas_core::test_support::UID;
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let lease: SharedLease =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Lease::new(Duration::from_secs(10))));
+    let token = lease.lock().await.acquire(&client.controller).unwrap();
+    let ownership = lease.lock().await.ownership(&token).unwrap();
+
+    let mut sent = Vec::new();
+    helper
+        .serve(
+            open_for_person(
+                &client,
+                &ownership,
+                (&lease, &token),
+                "Google Chrome",
+                "https://example.com",
+                true,
+            ),
+            |request| {
+                assert_ne!(request["op"], "windows", "no window is waited for");
+                if request["argv"][0] == "/usr/bin/open" {
+                    sent.push(request["argv"].clone());
+                }
+                Some(completed(""))
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sent,
+        [json!([
+            "/usr/bin/open",
+            "-n",
+            "-a",
+            "Google Chrome",
+            "--args",
+            "--new-window",
+            "https://example.com"
+        ])]
+    );
+    drop(ownership);
+    lease.lock().await.release();
+}
