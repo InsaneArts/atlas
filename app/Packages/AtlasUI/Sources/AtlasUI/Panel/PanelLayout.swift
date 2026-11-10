@@ -34,8 +34,6 @@ enum PanelLayout {
   /// panel's edge as the text above it does, 8 after the state, clear of the fill's curve, and 4 above and below, so
   /// the name over its line, 33 high, keeps the row at 44 with the icon centred 8 from its edges.
   static let sessionInset = EdgeInsets(top: Spacing.xs, leading: Spacing.xs, bottom: Spacing.xs, trailing: Spacing.s)
-  /// 14: a session row's hover corner, the card's less the panel's inset, so the two curves run side by side.
-  static let sessionCorner = Radius.nested(in: corner, inset: inset)
   /// 4: the header's, a heading's and a Recent row's inset inside the panel's, so their words start 16 from its edge,
   /// in line with the session rows' icons.
   static let textInset = Spacing.xs

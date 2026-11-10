@@ -70,8 +70,6 @@ extension ViewerLayout {
   static let chevronTurn: Double = 90
   /// 24: Ended's heading as a button, its fill a capsule round the line.
   static let endedHeadingHeight = ControlHeight.xs
-  /// 12: the corner of Ended's fill, half its height.
-  static let endedHeadingCorner = endedHeadingHeight / 2
   /// Ended's inset round its button: 6 above and 2 under, so its line stands where another heading's does.
   static let endedHeadingInset = EdgeInsets(top: Spacing.xsPlus, leading: .zero, bottom: Spacing.half, trailing: .zero)
   /// About 22.5: the helper row's tile, the plate an app's icon draws in a session's icon's 28, so the tile stands the

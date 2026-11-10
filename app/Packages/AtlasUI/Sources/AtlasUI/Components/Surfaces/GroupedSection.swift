@@ -38,7 +38,7 @@ struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Item
         GroupLabel(text: title)
           .padding(.horizontal, Spacing.m)
       }
-      GroupedList(items, style: .compact, row: row)
+      GroupedList(items, row: row)
       ForEach(notes.indices, id: \.self) { index in
         GroupedSectionNoteView(note: notes[index])
           .padding(.horizontal, Spacing.m)

@@ -33,7 +33,7 @@ struct PanelAccountsLine: View {
       .padding(.horizontal, PanelLayout.textInset)
       .contentShape(Rectangle())
     }
-    .buttonStyle(.row(corner: PanelLayout.sessionCorner))
+    .buttonStyle(.pill)
     .accessibilityLabel(line)
     .accessibilityHint("Opens Settings › Accounts")
   }

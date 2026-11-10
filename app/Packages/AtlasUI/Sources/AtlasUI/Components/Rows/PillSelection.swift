@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The sidebar's selection: a raised white capsule with a fine rim, as a source list's chosen row stands on.
-struct SidebarSelectionPill: View {
-  /// The capsule, raised off the sidebar.
+/// The selection a pill row stands on: a raised white capsule with a fine rim, as a source list's chosen row stands
+/// on.
+struct PillSelection: View {
+  /// The capsule, raised off the ground.
   var body: some View {
     Capsule()
       .fill(Color.fillSelection)

@@ -22,14 +22,17 @@ struct SidebarHelperLine: View {
           .frame(width: ViewerLayout.helperCircle, height: ViewerLayout.helperCircle)
           .contentShape(Circle())
       }
-      .buttonStyle(.row(corner: ViewerLayout.helperCircle / 2))
+      .buttonStyle(.pill)
       .fixedSize()
       .padding(.leading, ViewerLayout.helperCircleInset)
     } else {
       menu {
         SidebarHelperLabel(helper: helper)
+          .frame(width: ViewerLayout.rowContentWidth, alignment: .leading)
+          .padding(.horizontal, ViewerLayout.sidebarRowInset)
+          .frame(minHeight: ViewerLayout.sidebarRowHeight)
       }
-      .buttonStyle(SidebarRowStyle(isSelected: false, height: ViewerLayout.sidebarRowHeight))
+      .buttonStyle(.pill)
     }
   }
 

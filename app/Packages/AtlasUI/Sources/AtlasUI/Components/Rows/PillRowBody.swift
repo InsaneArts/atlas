@@ -1,15 +1,14 @@
 import SwiftUI
 
-/// A sidebar row's label on its capsule: raised and white with a fine rim under the row chosen
-/// (``SidebarSelectionPill``), which moves to another row at once as the choice changes, nothing travelling between
-/// them; a faint fill under the pointer and a firmer one while pressed, which gives way to the selection at once.
-struct SidebarRowBody: View {
+/// A pill row's label on its capsule: the selection under the row chosen (``PillSelection``), which moves to another
+/// row at once as the choice changes, nothing travelling between them; a faint fill under the pointer on
+/// ``Motion/hover(_:)`` and a firmer one while pressed, which gives way to the selection at once. The pointer's fill
+/// waits while the window is being resized (``EnvironmentValues/hoverPaused``).
+struct PillRowBody: View {
   /// The button's label and pressed state.
   let configuration: ButtonStyleConfiguration
   /// Whether the row is the one chosen.
   let isSelected: Bool
-  /// The row's least height.
-  let height: CGFloat
   /// Whether the pointer is over the row.
   @State private var isHovered = false
   @Environment(\.hoverPaused) private var hoverPaused
@@ -17,9 +16,6 @@ struct SidebarRowBody: View {
   /// The label over its capsule.
   var body: some View {
     configuration.label
-      .frame(width: ViewerLayout.rowContentWidth, alignment: .leading)
-      .padding(.horizontal, ViewerLayout.sidebarRowInset)
-      .frame(minHeight: height)
       .contentShape(Capsule())
       .background { highlight }
       .onHover { isHovered = $0 }
@@ -32,7 +28,7 @@ struct SidebarRowBody: View {
   private var highlight: some View {
     ZStack {
       if isSelected {
-        SidebarSelectionPill()
+        PillSelection()
       } else {
         Capsule()
           .fill(fill)

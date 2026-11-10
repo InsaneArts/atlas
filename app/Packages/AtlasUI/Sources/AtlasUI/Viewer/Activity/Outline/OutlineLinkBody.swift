@@ -31,7 +31,11 @@ struct OutlineLinkBody: View {
       Capsule()
         .fill(configuration.isPressed ? Color.fillControlHover : Color.fillControl)
         .opacity(lit ? 1 : 0)
-        .animation(Motion.hover(isHovered), value: lit)
+        .animation(Motion.hover(isHovered), value: isHovered && !hoverPaused)
+        .animation(
+          CapsuleButtonStyle.pressAnimation(isPressed: configuration.isPressed),
+          value: configuration.isPressed
+        )
     )
     .overlay {
       if isFocused {
