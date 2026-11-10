@@ -1,8 +1,8 @@
-/// The Settings window: where it stands and where it has been, its sidebar of pages, each page's state, and the alert
+/// The Settings window: the route it shows, its sidebar of pages, each page's state, and the alert
 /// or sheet over it.
 public struct SettingsState: Equatable, Sendable {
-  /// The route shown, with Back's and Forward's routes.
-  public var navigation: SettingsNavigation
+  /// The route shown.
+  public var route: SettingsRoute
   /// The sidebar: its rows and the search over them.
   public var sidebar: SettingsSidebarState
   /// The values of the General and Activity pages, which one binding edits.
@@ -30,7 +30,7 @@ public struct SettingsState: Equatable, Sendable {
   /// Creates the window's state.
   ///
   /// - Parameters:
-  ///   - navigation: The route shown, with Back's and Forward's.
+  ///   - route: The route shown.
   ///   - sidebar: The sidebar.
   ///   - general: The values of the General and Activity pages.
   ///   - helper: The Helper page.
@@ -43,7 +43,7 @@ public struct SettingsState: Equatable, Sendable {
   ///   - alert: The alert over the whole window, if one is asked.
   ///   - signIn: Sign In to a Site…'s sheet, while it shows; none by default.
   public init(
-    navigation: SettingsNavigation,
+    route: SettingsRoute,
     sidebar: SettingsSidebarState,
     general: SettingsGeneralState,
     helper: SettingsHelperState,
@@ -56,7 +56,7 @@ public struct SettingsState: Equatable, Sendable {
     alert: AlertCardState<AlertChoice>? = nil,
     signIn: SignInSheetState? = nil
   ) {
-    self.navigation = navigation
+    self.route = route
     self.sidebar = sidebar
     self.general = general
     self.helper = helper
@@ -69,9 +69,6 @@ public struct SettingsState: Equatable, Sendable {
     self.alert = alert
     self.signIn = signIn
   }
-
-  /// The route shown.
-  public var route: SettingsRoute { navigation.current }
 
   /// The title of the route shown, which the bar and the window's title show: its page's, or its account's name.
   public var title: String {

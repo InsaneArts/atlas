@@ -114,7 +114,7 @@ final class WindowCoordinator {
     openSettings()
     guard let controller = settings?.controller else { return }
     controller.select(.about)
-    guard controller.session.navigation.current == .page(.about) else { return }
+    guard controller.session.route == .page(.about) else { return }
     controller.send(.checkForUpdates)
   }
 

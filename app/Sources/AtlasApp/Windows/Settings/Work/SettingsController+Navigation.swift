@@ -1,11 +1,10 @@
 import AtlasService
 import AtlasUI
 
-/// Where the window stands: a page chosen in the sidebar, an account's page, Back and Forward, each going through
-/// ``SettingsNavigation``, and none while an alert or Sign In to a Site…'s sheet waits for an answer. A page is
-/// remembered for the next time the window opens, and the page come to reads what it shows afresh, however the window
-/// came to it: Integrations its agents, Privacy the person's files. Each time Atlas reads its accounts list, routes to
-/// accounts it no longer lists leave the history for good.
+/// Where the window stands: a page chosen in the sidebar or an account's page, and no move while an alert or Sign In to
+/// a Site…'s sheet waits for an answer. A page is remembered for the next time the window opens, and the page come to
+/// reads what it shows afresh, however the window came to it: Integrations its agents, Privacy the person's files. Each
+/// time Atlas reads its accounts list, the page of an account it no longer lists goes back to Accounts.
 extension SettingsController {
   /// Whether the window asks something now, in an alert or Sign In to a Site…'s sheet, which holds it where it stands.
   var isAsking: Bool {
@@ -16,19 +15,17 @@ extension SettingsController {
   ///
   /// - Parameter page: The page.
   func select(_ page: SettingsPage) {
-    navigate { $0.go(to: .page(page)) }
+    go(to: .page(page))
   }
 
-  /// Moves the window's history, then saves the page come to and reads what it shows.
+  /// Goes to a route, then saves the page come to and reads what it shows; going to the route shown does nothing.
   ///
-  /// - Parameter move: The move.
-  func navigate(_ move: (inout SettingsNavigation) -> Void) {
+  /// - Parameter route: Where to go.
+  func go(to route: SettingsRoute) {
     guard !isAsking else { return }
     keepListedAccounts()
-    let before = session.navigation.current
-    move(&session.navigation)
-    let route = session.navigation.current
-    guard route != before else { return }
+    guard route != session.route else { return }
+    session.route = route
     arrived(at: route)
   }
 
@@ -37,15 +34,13 @@ extension SettingsController {
     dependencies.links.status().status.overview.accounts
   }
 
-  /// Takes in an authoritative reading of the accounts list: every route to an account it no longer lists leaves the
-  /// history for good, so a list read later that can't be read never brings them back, and an account's page shown
-  /// for one goes back to Accounts; and each listed account is kept as listed, so its page keeps its newest name
-  /// should the list turn unreadable. While the list can't be read, nothing changes.
+  /// Takes in an authoritative reading of the accounts list: the page of an account it no longer lists goes back to
+  /// Accounts, and each listed account is kept as listed, so its page keeps its newest name should the list turn
+  /// unreadable. While the list can't be read, nothing changes.
   func keepListedAccounts() {
     guard let listed = listedAccounts else { return }
-    var navigation = session.navigation
-    navigation.keep(accounts: Set(listed.map(\.id)))
-    if navigation != session.navigation { session.navigation = navigation }
+    let route = session.route.kept(accounts: Set(listed.map(\.id)))
+    if route != session.route { session.route = route }
     let known = Dictionary(listed.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
     if known != session.knownAccounts { session.knownAccounts = known }
   }

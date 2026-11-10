@@ -47,7 +47,7 @@ final class SettingsController {
   init(dependencies: SettingsDependencies) {
     self.dependencies = dependencies
     let preferences = dependencies.preferences
-    session.navigation = SettingsNavigation(.page(SettingsPage.saved(preferences.loadTab())))
+    session.route = .page(SettingsPage.saved(preferences.loadTab()))
     notify = preferences.loadNotify()
     accountNoteRead = preferences.loadAccountNoteRead()
     icons = AgentRowIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
@@ -100,9 +100,7 @@ final class SettingsController {
     // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
     case .select(let page): select(page)
-    case .openAccount(let id): navigate { $0.go(to: .account(id)) }
-    case .goBack: navigate { $0.goBack() }
-    case .goForward: navigate { $0.goForward() }
+    case .openAccount(let id): go(to: .account(id))
     case .checkAgain: Task { await checkAgain() }
     case .askSwitch: ask(.helper(.switchToHelper))
     case .askRecover: ask(.helper(.recover))
@@ -172,7 +170,7 @@ final class SettingsController {
     // Unstructured, as coming forward is synchronous: the readings run beside it.
     Task { await readHelperSound() }
     Task { await readPictures() }
-    if session.navigation.current == .page(.privacy) { Task { await readFiles() } }
+    if session.route == .page(.privacy) { Task { await readFiles() } }
   }
 
   /// The window closed: the agents reading under way stops. A command it started, such as a check for updates or a

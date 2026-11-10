@@ -1,11 +1,11 @@
 import AtlasService
 import AtlasUI
 
-/// What the Settings window is doing: where it stands and has been, the alert asked, what runs, and what the last
+/// What the Settings window is doing: where it stands, the alert asked, what runs, and what the last
 /// command said.
 struct SettingsSession: Equatable {
-  /// The route shown, with Back's and Forward's.
-  var navigation = SettingsNavigation()
+  /// The route shown.
+  var route = SettingsRoute.page(.helper)
   /// Each account as Atlas last listed it, by id, so an account's page keeps its newest name while Atlas can't read
   /// its list.
   var knownAccounts: [String: ViewerStatus.Account] = [:]

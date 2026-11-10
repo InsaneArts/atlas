@@ -88,11 +88,11 @@ struct SettingsSignInTests {
     #expect(controller.state.route == .account(rows[0].id))
     #expect(controller.state.title == "github.com")
     #expect(controller.state.account?.isSite == true)
-    controller.send(.goBack)
+    controller.send(.select(.accounts))
     controller.send(.openAccount(rows[1].id))
     #expect(controller.state.account?.title == "Slack")
     #expect(controller.state.account?.isSite == false, "only a site offers Sign Out, Forget and Reset")
-    controller.send(.goBack)
+    controller.send(.select(.accounts))
     #expect(controller.state.route == .page(.accounts))
     #expect(controller.state.account == nil)
   }

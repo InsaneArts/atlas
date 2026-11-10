@@ -1,19 +1,14 @@
 import SwiftUI
 
-/// The bar over a Settings page on the content card: back and forward, then the page's title, level with the window
-/// buttons. The title swaps in place by opacity, with the page.
+/// The bar over a Settings page on the content card: the page's title within the page's own edges, level with the
+/// window buttons. The title swaps in place by opacity, with the page.
 struct SettingsTopBar: View {
   /// The route's title.
   let title: String
-  /// Where the window stands, for Back and Forward.
-  let navigation: SettingsNavigation
-  /// Receives Back or Forward.
-  let send: @MainActor (SettingsEvent) -> Void
 
-  /// The capsule and the title.
+  /// The title.
   var body: some View {
-    HStack(spacing: SettingsLayout.barGap) {
-      NavButtons(canGoBack: navigation.canGoBack, canGoForward: navigation.canGoForward, send: send)
+    HStack(spacing: .zero) {
       Text(verbatim: title)
         .textStyle(.heading)
         .foregroundStyle(Color.textPrimary)
@@ -24,7 +19,7 @@ struct SettingsTopBar: View {
         .accessibilityAddTraits(.isHeader)
       Spacer(minLength: .zero)
     }
-    .padding(.leading, SettingsLayout.barLeading)
+    .padding(.horizontal, SettingsLayout.barInset)
     .frame(height: SettingsLayout.barHeight)
   }
 }

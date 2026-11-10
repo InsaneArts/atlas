@@ -14,7 +14,7 @@ struct SettingsCard: View {
   /// The bar over the page, on the card.
   var body: some View {
     VStack(spacing: .zero) {
-      SettingsTopBar(title: state.title, navigation: state.navigation, send: send)
+      SettingsTopBar(title: state.title)
       SettingsPageStage(state: state, edit: edit, send: send)
     }
     .clipShape(shape)

@@ -5,7 +5,7 @@ import Testing
 @Suite("Settings preview events")
 @MainActor
 struct SettingsPreviewEventsTests {
-  @Test("the interactive preview opens the account clicked, not another, and drops its page on the way back")
+  @Test("the interactive preview opens the account clicked, not another, and drops its page on leaving")
   func theInteractivePreviewOpensTheAccountClicked() throws {
     let accounts = PreviewStates.settingsAccounts
     let staging = try #require(accounts.accounts.rows?.last)
@@ -14,10 +14,7 @@ struct SettingsPreviewEventsTests {
     #expect(opened.account?.title == "staging.acme.dev")
     #expect(opened.account?.level == .trusted)
     #expect(opened.account?.kindLine == "Website · added Nov 3")
-    let back = PreviewStates.settings(opened, applying: .goBack)
-    #expect(back.account == nil)
-    let forward = PreviewStates.settings(back, applying: .goForward)
-    #expect(forward.account?.id == staging.id, "Forward rebuilds the same account's page")
+    #expect(PreviewStates.settings(opened, applying: .select(.accounts)).account == nil)
     #expect(PreviewStates.settings(accounts, applying: .openAccount("missing")).account == nil, "no stand-in page")
   }
 }

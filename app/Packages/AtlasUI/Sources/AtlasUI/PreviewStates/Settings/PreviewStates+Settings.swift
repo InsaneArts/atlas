@@ -75,7 +75,7 @@
     /// The General page: opening at login, muting the helper and notifying on, the screen live; the other pages at
     /// rest.
     @MainActor static let settingsGeneral = SettingsState(
-      navigation: SettingsNavigation(.page(.general)),
+      route: .page(.general),
       sidebar: settingsSidebar,
       general: SettingsGeneralState(
         opensAtLogin: true,
@@ -129,7 +129,7 @@
     /// - Returns: The sample.
     @MainActor static func selecting(_ page: SettingsPage) -> SettingsState {
       var state = settingsGeneral
-      state.navigation.go(to: .page(page))
+      state.route = .page(page)
       return state
     }
   }

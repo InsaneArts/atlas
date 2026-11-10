@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The Settings window: the sidebar of pages on the window's recessed ground, and beside it the content card with back
-/// and forward, the route's title and its page; an alert or Sign In to a Site…'s sheet over the whole window when one
-/// is asked. It draws its state and sends what the person does; the General and Activity pages' values change through
-/// `edit`. What a command says, and what an alert asks, VoiceOver hears once, as it changes.
+/// The Settings window: the sidebar of pages on the window's recessed ground, and beside it the content card with the
+/// route's title and its page; an alert or Sign In to a Site…'s sheet over the whole window when one is asked. It draws
+/// its state and sends what the person does; the General and Activity pages' values change through `edit`. What a
+/// command says, and what an alert asks, VoiceOver hears once, as it changes.
 public struct SettingsView: View {
   /// What the window shows.
   private let state: SettingsState

@@ -5,10 +5,6 @@ public enum SettingsEvent: Equatable, Sendable {
   case select(SettingsPage)
   /// Shows the page of the account with this id.
   case openAccount(String)
-  /// Returns to the route left last.
-  case goBack
-  /// Goes again to the route Back left.
-  case goForward
   /// Reads the helper's readiness again now.
   case checkAgain
   /// Asks to switch this Mac's screen to the helper.

@@ -23,7 +23,7 @@ struct ViewerControllerTests {
     dependencies.openSettings = coordinator.panelLinks().openSettings
     let viewer = ViewerController(dependencies: dependencies)
     viewer.send(.openSettings)
-    #expect(coordinator.settings?.controller.session.navigation.current == .page(.helper))
+    #expect(coordinator.settings?.controller.session.route == .page(.helper))
     #expect(parts.settingsMade == 1)
   }
 

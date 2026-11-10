@@ -49,7 +49,7 @@ extension SettingsPresenter {
   /// - Parameter snapshot: What the controller holds and reads.
   /// - Returns: The page, or nil.
   static func accountPage(_ snapshot: SettingsSnapshot) -> SettingsAccountPageState? {
-    guard let id = navigation(snapshot).current.account else { return nil }
+    guard let id = route(snapshot).account else { return nil }
     let listed = snapshot.facts.status.overview.accounts
     let account = listed.map { $0.first { $0.id == id } } ?? snapshot.session.knownAccounts[id]
     guard let account else { return nil }
@@ -77,17 +77,14 @@ extension SettingsPresenter {
     return notice(snapshot, on: route, busy: snapshot.session.accountsWorking)
   }
 
-  /// Where the window stands, with every route to an account Atlas no longer lists dropped from its history and an
-  /// account's page shown for one gone back to Accounts. While Atlas can't read its list, the history stays as it is.
+  /// Where the window stands, an account's page Atlas no longer lists gone back to Accounts. While Atlas can't read its
+  /// list, the route stays as it is.
   ///
   /// - Parameter snapshot: What the controller holds and reads.
-  /// - Returns: The history.
-  static func navigation(_ snapshot: SettingsSnapshot) -> SettingsNavigation {
-    var navigation = snapshot.session.navigation
-    if let listed = snapshot.facts.status.overview.accounts {
-      navigation.keep(accounts: Set(listed.map(\.id)))
-    }
-    return navigation
+  /// - Returns: The route.
+  static func route(_ snapshot: SettingsSnapshot) -> SettingsRoute {
+    guard let listed = snapshot.facts.status.overview.accounts else { return snapshot.session.route }
+    return snapshot.session.route.kept(accounts: Set(listed.map(\.id)))
   }
 
   /// An account's first letter, as its disc shows it.

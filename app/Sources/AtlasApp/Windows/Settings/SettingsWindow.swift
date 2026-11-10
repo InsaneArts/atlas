@@ -6,15 +6,10 @@ import SwiftUI
 /// content card beside it, titled with the route shown for the Window menu and VoiceOver. One at a time; it has a Dock
 /// icon while open, like any app window (``DockIcon``). It opens where it was left, kept whole on its screen
 /// (``SettingsWindowFrame``), centred only the first time; it cannot be resized or minimised, as a settings window is
-/// closed instead, and it comes to the Space the person is on, full-screen apps included. The mouse's back and
-/// forward buttons move through the window's history as ⌘[ and ⌘] do.
+/// closed instead, and it comes to the Space the person is on, full-screen apps included.
 final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// The name its place is kept under in the app's defaults. Shipped, so it never changes.
   static let autosaveName = "AtlasSettings"
-  /// 3: the mouse's back button, as AppKit numbers it.
-  static let backButton = 3
-  /// 4: the mouse's forward button.
-  static let forwardButton = 4
 
   /// The window's controller.
   let controller: SettingsController
@@ -43,7 +38,7 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     titlebarAppearsTransparent = true
     titlebarSeparatorStyle = .none
     // An empty unified toolbar gives the title bar its 52, so the window buttons centre with the sidebar's band and
-    // the back and forward capsule, as the main window's do.
+    // the page's title, as the main window's do.
     toolbar = NSToolbar(identifier: "settings")
     toolbarStyle = .unified
     isReleasedWhenClosed = false
@@ -85,17 +80,6 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   func keepOnScreen() {
     let target = SettingsWindowFrame.frame(current: frame, within: screen?.visibleFrame)
     if target != frame { setFrame(target, display: true) }
-  }
-
-  /// The mouse's back and forward buttons move through the window's history; any other button goes on as usual.
-  ///
-  /// - Parameter event: The press.
-  override func otherMouseDown(with event: NSEvent) {
-    switch event.buttonNumber {
-    case Self.backButton: controller.send(.goBack)
-    case Self.forwardButton: controller.send(.goForward)
-    default: super.otherMouseDown(with: event)
-    }
   }
 
   /// The window came forward: what it shows from the other windows is read again.

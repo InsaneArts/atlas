@@ -11,7 +11,7 @@ public enum WindowChrome {
   /// 52: the title bar's band an empty unified toolbar makes, the window buttons centred in it.
   public static let titleBand: CGFloat = 52
   /// 38: the bar across the content card's top, its centre about level with the window buttons': the main window's
-  /// header, Settings' back and forward with its title.
+  /// header, Settings' page title.
   public static let cardBarHeight: CGFloat = 38
   /// 8: the content card's inset from the window's top, trailing and bottom edges.
   public static let cardInset = Spacing.s

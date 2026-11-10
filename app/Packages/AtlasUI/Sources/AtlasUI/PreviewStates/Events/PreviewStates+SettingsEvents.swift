@@ -10,17 +10,11 @@
       var next = state
       switch event {
       case .select(let page):
-        next.navigation.go(to: .page(page))
-        next.account = settingsAccount(for: next.navigation.current, in: next.accounts.rows)
+        next.route = .page(page)
+        next.account = settingsAccount(for: next.route, in: next.accounts.rows)
       case .openAccount(let id):
-        next.navigation.go(to: .account(id))
-        next.account = settingsAccount(for: next.navigation.current, in: next.accounts.rows)
-      case .goBack:
-        next.navigation.goBack()
-        next.account = settingsAccount(for: next.navigation.current, in: next.accounts.rows)
-      case .goForward:
-        next.navigation.goForward()
-        next.account = settingsAccount(for: next.navigation.current, in: next.accounts.rows)
+        next.route = .account(id)
+        next.account = settingsAccount(for: next.route, in: next.accounts.rows)
       case .askRecover:
         next.alert = settingsRecover.alert
       case .askLogOut:
@@ -50,7 +44,7 @@
         if next.alert == settingsInstall.alert { next.about = settingsAbout.about }
         if next.alert == settingsRemoveAccount.alert, let id = next.accounts.rows?.first?.id {
           next.accounts.rows?.removeFirst()
-          next.navigation.keep(accounts: Set(next.accounts.rows?.map(\.id) ?? []))
+          next.route = next.route.kept(accounts: Set(next.accounts.rows?.map(\.id) ?? []))
           if next.account?.id == id { next.account = nil }
         }
         if next.alert == settingsDeletePictures.alert {

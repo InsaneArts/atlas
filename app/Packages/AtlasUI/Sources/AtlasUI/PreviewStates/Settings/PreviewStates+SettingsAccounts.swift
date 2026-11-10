@@ -167,7 +167,7 @@
     /// - Returns: The sample.
     @MainActor static func opening(_ page: SettingsAccountPageState) -> SettingsState {
       var state = selecting(.accounts)
-      state.navigation.go(to: .account(page.id))
+      state.route = .account(page.id)
       state.account = page
       return state
     }

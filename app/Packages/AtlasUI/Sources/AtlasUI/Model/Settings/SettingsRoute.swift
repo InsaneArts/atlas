@@ -20,4 +20,14 @@ public enum SettingsRoute: Hashable, Sendable {
     case .account(let id): id
     }
   }
+
+  /// The route once Atlas lists only these accounts: the page of an account no longer listed goes back to Accounts, any
+  /// other route stays.
+  ///
+  /// - Parameter listed: The ids of the accounts listed now.
+  /// - Returns: The route.
+  public func kept(accounts listed: Set<String>) -> SettingsRoute {
+    guard let id = account, !listed.contains(id) else { return self }
+    return .page(.accounts)
+  }
 }

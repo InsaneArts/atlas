@@ -90,7 +90,7 @@ struct SettingsAccountPageTests {
     #expect(!app.isSite)
   }
 
-  @Test("while Atlas can't read its list the page keeps its name, its choices wait, Back still works, and it recovers")
+  @Test("while Atlas can't read its list the page keeps its name, its choices wait, and it recovers")
   func anUnreadableListKeepsThePage() throws {
     let listed = try Self.listed()
     let reading = Reading(listed)
@@ -106,12 +106,12 @@ struct SettingsAccountPageTests {
     reading.status = listed
     #expect(Self.page(controller)?.isEnabled == true, "the page comes back once the list reads again")
     reading.status = try status(["overview": ["mode": "observing"]])
-    controller.send(.goBack)
+    controller.send(.select(.accounts))
     #expect(controller.state.route == .page(.accounts))
   }
 
-  @Test("an account removed while its page shows goes back to Accounts, and leaves Back's and Forward's history")
-  func aRemovedAccountLeavesTheHistory() throws {
+  @Test("an account removed while its page shows goes back to Accounts")
+  func aRemovedAccountGoesBackToAccounts() throws {
     let listed = try Self.listed()
     let reading = Reading(listed)
     let controller = Self.controller(reading)
@@ -128,12 +128,9 @@ struct SettingsAccountPageTests {
     ])
     #expect(controller.state.route == .page(.accounts))
     #expect(controller.state.account == nil)
-    #expect(!controller.state.navigation.canGoForward)
-    controller.send(.goBack)
-    #expect(controller.state.route == .page(.helper), "Back skips the removed account's page")
   }
 
-  @Test("an account removed while Settings is closed stays out of the history it reopens on, the list unreadable")
+  @Test("an account removed while Settings is closed reopens on Accounts, the list unreadable")
   func aRemovalWhileClosedOutlivesAnUnreadableList() async throws {
     let listed = try Self.listed()
     let reading = Reading(listed)
@@ -142,20 +139,18 @@ struct SettingsAccountPageTests {
     let window = SettingsWindow(controller: controller) { _ in }
     controller.send(.select(.accounts))
     controller.send(.openAccount(ids[0]))
-    controller.send(.goBack)
-    #expect(controller.session.navigation.forward == [.account(ids[0])])
     window.close()
     reading.status = try SettingsAccountsTests.reading([
       SettingsAccountsTests.account("app", "com.tinyspeck.slackmacgap", "Slack", added: SettingsAccountsTests.today)
     ])
-    for _ in 0..<20 where controller.session.navigation.canGoForward {
+    for _ in 0..<20 where controller.session.route != .page(.accounts) {
       await afterQueuedWork()
     }
-    #expect(!controller.session.navigation.canGoForward, "the controller kept the removal with its window closed")
+    #expect(controller.session.route == .page(.accounts), "the controller kept the removal with its window closed")
     reading.status = try status(["overview": ["mode": "observing"]])
     let reopened = SettingsWindow(controller: controller) { _ in }
     defer { reopened.close() }
-    #expect(!controller.state.navigation.canGoForward, "reopened on an unreadable list, the route stays gone")
+    #expect(controller.state.route == .page(.accounts), "reopened on an unreadable list, the page stays gone")
   }
 
   @Test("an account renamed by a reading keeps its new name on its page when the list then can't be read")
@@ -176,24 +171,23 @@ struct SettingsAccountPageTests {
     #expect(Self.page(controller)?.isUnreadable == true)
   }
 
-  @Test("while an alert or the sign-in sheet is up, the sidebar, Back and Forward wait")
+  @Test("while an alert or the sign-in sheet is up, the sidebar and an account's page wait")
   func navigationWaitsUnderAModal() throws {
     let reading = Reading(try Self.listed())
     let controller = Self.controller(reading)
     controller.send(.select(.about))
     controller.send(.askRecover)
     try #require(controller.state.alert != nil)
-    controller.send(.goBack)
     controller.send(.select(.privacy))
     #expect(controller.state.route == .page(.about), "under an alert")
     controller.send(.alertCancel)
     controller.send(.askSignIn(nil))
     try #require(controller.state.signIn != nil)
-    controller.send(.goBack)
+    controller.send(.openAccount("github"))
     #expect(controller.state.route == .page(.about), "under the sheet")
     controller.send(.cancelSignIn)
-    controller.send(.goBack)
-    #expect(controller.state.route == .page(.helper))
+    controller.send(.select(.privacy))
+    #expect(controller.state.route == .page(.privacy))
   }
 
   @Test("a level change that fails after the person left its page is still heard, and shows again on return")
@@ -206,11 +200,11 @@ struct SettingsAccountPageTests {
     let id = try #require(listed.overview.accounts?.first?.id)
     controller.send(.select(.accounts))
     controller.send(.openAccount(id))
-    controller.send(.goBack)
+    controller.send(.select(.accounts))
     await controller.setLevel(.trusted, of: id)
     #expect(controller.state.account == nil)
     #expect(controller.state.accountNotice?.kind == .problem, "the result is kept for VoiceOver whatever shows")
-    controller.send(.goForward)
+    controller.send(.openAccount(id))
     #expect(controller.state.account?.notice == controller.state.accountNotice, "its page says it again")
   }
 

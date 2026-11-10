@@ -22,18 +22,14 @@ struct SettingsNavigationTests {
     return commands.ran.contains(action.arguments)
   }
 
-  @Test("a page chosen in the sidebar shows, Back returns and Forward goes again, and the bar's title follows")
-  func theSidebarAndBackAndForward() {
+  @Test("a page chosen in the sidebar shows, and the bar's title follows")
+  func theSidebarChoosesThePage() {
     let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
     #expect(controller.state.route == .page(.helper), "Helper first, with nothing saved")
     controller.send(.select(.general))
     controller.send(.select(.about))
-    #expect(controller.state.title == "About")
-    controller.send(.goBack)
-    #expect(controller.state.route == .page(.general))
-    #expect(controller.state.navigation.canGoForward)
-    controller.send(.goForward)
     #expect(controller.state.route == .page(.about))
+    #expect(controller.state.title == "About")
   }
 
   @Test("each page shown is saved for the next time the window opens, an account's page as Accounts")
@@ -47,7 +43,7 @@ struct SettingsNavigationTests {
     )
     controller.send(.select(.privacy))
     controller.send(.openAccount("github"))
-    controller.send(.goBack)
+    controller.send(.select(.privacy))
     #expect(saved == ["privacy", "accounts", "privacy"])
   }
 
@@ -73,18 +69,6 @@ struct SettingsNavigationTests {
     SettingsController.scripted(commands: sidebar)
       .send(.select(.privacy))
     #expect(await Self.ran(sidebar, .homeFiles), "from the sidebar")
-
-    let back = ScriptedCommands([:])
-    let walking = SettingsController.scripted(commands: back)
-    walking.send(.select(.privacy))
-    walking.send(.select(.about))
-    await afterQueuedWork()
-    let before = back.ran.count { $0 == Action.homeFiles.arguments }
-    walking.send(.goBack)
-    for _ in 0..<20 where back.ran.count(where: { $0 == Action.homeFiles.arguments }) == before {
-      await afterQueuedWork()
-    }
-    #expect(back.ran.count { $0 == Action.homeFiles.arguments } > before, "by Back")
 
     let restored = ScriptedCommands([:])
     let opened = SettingsController.scripted(

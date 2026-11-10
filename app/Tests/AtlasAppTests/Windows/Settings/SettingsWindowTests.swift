@@ -44,32 +44,4 @@ struct SettingsWindowTests {
     await afterQueuedWork()
     #expect(window.title == "Privacy")
   }
-
-  @Test("the mouse's back and forward buttons move through the window's history")
-  @MainActor
-  func theMouseButtonsGoBackAndForward() throws {
-    let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
-    let window = SettingsWindow(controller: controller) { _ in }
-    controller.send(.select(.about))
-    window.otherMouseDown(with: try Self.press(button: SettingsWindow.backButton, in: window))
-    #expect(controller.state.route == .page(.helper))
-    window.otherMouseDown(with: try Self.press(button: SettingsWindow.forwardButton, in: window))
-    #expect(controller.state.route == .page(.about))
-  }
-
-  /// A press of a mouse's other button in `window`.
-  ///
-  /// - Parameters:
-  ///   - button: The button's number.
-  ///   - window: The window.
-  /// - Returns: The press.
-  /// - Throws: When AppKit makes no event.
-  @MainActor
-  private static func press(button: Int, in window: NSWindow) throws -> NSEvent {
-    let event = try #require(
-      CGEvent(mouseEventSource: nil, mouseType: .otherMouseDown, mouseCursorPosition: .zero, mouseButton: .center)
-    )
-    event.setIntegerValueField(.mouseEventButtonNumber, value: Int64(button))
-    return try #require(NSEvent(cgEvent: event))
-  }
 }
