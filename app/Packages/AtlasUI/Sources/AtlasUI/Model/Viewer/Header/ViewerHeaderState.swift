@@ -9,6 +9,8 @@ public struct ViewerHeaderState: Equatable, Sendable {
   public var tone: StatusTone
   /// Whether ``what`` shows: not in a narrow card, where ``who`` takes the line.
   public var showsWhat: Bool
+  /// A tag at the line's trailing end, such as "Screen · Hidden from agents" while the person signs in; nil for none.
+  public var tag: String?
 
   /// The words the header draws, who and what as they show, which tell one line from the next: new words swap the
   /// line, a new tone for the same words lands in place.
@@ -23,10 +25,12 @@ public struct ViewerHeaderState: Equatable, Sendable {
   ///   - what: What they do with it; none by default.
   ///   - tone: How `who` reads; quiet by default.
   ///   - showsWhat: Whether `what` shows; yes by default.
-  public init(who: String, what: String = "", tone: StatusTone = .quiet, showsWhat: Bool = true) {
+  ///   - tag: A tag at the line's trailing end; none by default.
+  public init(who: String, what: String = "", tone: StatusTone = .quiet, showsWhat: Bool = true, tag: String? = nil) {
     self.who = who
     self.what = what
     self.tone = tone
     self.showsWhat = showsWhat
+    self.tag = tag
   }
 }

@@ -89,6 +89,70 @@ fn a_ready_doctor_is_one_line() {
 }
 
 #[test]
+fn a_doctor_in_the_terminal_says_what_the_helper_can_open_in_the_home_folder() {
+    let report = |files: Value| {
+        json!({
+            "ok": true, "ready": true, "checks": [], "nextSteps": [], "warnings": [],
+            "helper": {"name": "atlas", "uid": 502},
+            "files": files,
+        })
+    };
+    let open = show(
+        View::Doctor { verbose: false },
+        report(json!({"private": false, "readable": 6, "examples": ["dev", ".config"]})),
+    )
+    .out;
+    assert!(
+        open.ends_with(
+            "Your files: the helper can open 6 folders in your home (dev, .config and 4 more).\n  \
+             Make them private in Atlas › Settings › Privacy."
+        ),
+        "{open}"
+    );
+    let two = show(
+        View::Doctor { verbose: false },
+        report(json!({"private": false, "readable": 2, "examples": ["dev", ".config"]})),
+    )
+    .out;
+    assert!(
+        two.contains("open 2 folders in your home (dev and .config)."),
+        "{two}"
+    );
+    for quiet in [
+        json!({"private": true, "readable": 0, "examples": []}),
+        json!({"private": false, "readable": 0, "examples": []}),
+        Value::Null,
+    ] {
+        let out = show(View::Doctor { verbose: false }, report(quiet)).out;
+        assert_eq!(out, "✓ Atlas is ready  helper atlas");
+    }
+}
+
+#[test]
+fn a_doctor_in_the_terminal_lists_the_helpers_accounts() {
+    let report = |accounts: Value| {
+        json!({
+            "ok": true, "ready": true, "checks": [], "nextSteps": [], "warnings": [],
+            "helper": {"name": "atlas", "uid": 502},
+            "accounts": accounts,
+        })
+    };
+    let listed = show(
+        View::Doctor { verbose: false },
+        report(json!(["github.com", "Slack"])),
+    )
+    .out;
+    assert_eq!(
+        listed,
+        "✓ Atlas is ready  helper atlas\n✓ Accounts: github.com, Slack"
+    );
+    for none in [json!([]), Value::Null] {
+        let out = show(View::Doctor { verbose: false }, report(none)).out;
+        assert_eq!(out, "✓ Atlas is ready  helper atlas");
+    }
+}
+
+#[test]
 fn a_doctor_that_is_not_ready_lists_checks_and_fixes() {
     let report = json!({
         "ok": true, "ready": false,

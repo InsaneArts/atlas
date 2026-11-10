@@ -492,6 +492,56 @@ pub async fn list(client: &Client, all: bool) -> Result<Value> {
     Ok(json!({"ok": true, "jobs": listed}))
 }
 
+/// What the person hears when an agent's background job keeps them from
+/// signing the helper in to an account.
+pub const JOB_RUNNING: &str =
+    "An agent's background job is still running. Stop it, or try again when it ends.";
+
+/// Refuse while any background job in the helper may still have processes:
+/// one that is starting, running or stopping, one whose record can't be
+/// read or that a later Atlas shows in another shape, and one that ended but
+/// left processes that still run as the helper. The helper's own list is
+/// read, once and bounded; unlike [`list`], a list that can't be read,
+/// decoded or completed refuses, and the task's records never stand in.
+///
+/// # Errors
+///
+/// Returns `busy`, held by an agent with `running` `job`, while a job may
+/// still run, and `job` when the helper's list can't be read.
+pub async fn require_none(client: &Client) -> Result<()> {
+    let jobs = shown_all(client).await.map_err(|cause| {
+        Error::new(
+            Code::Job,
+            "Atlas couldn't read the helper's background jobs. Try again.",
+        )
+        .with_source(cause)
+    })?;
+    if jobs
+        .iter()
+        .any(|job| may_run(job, client.config.helper_uid))
+    {
+        return Err(Error::new(Code::Busy, JOB_RUNNING)
+            .held_by(atlas_core::error::Holder::Agent)
+            .with("running", json!("job")));
+    }
+    Ok(())
+}
+
+/// Whether the job `shown` may still have processes in helper account
+/// `helper`. Only a job that ended, with every process it left gone or now
+/// another account's, has none.
+fn may_run(shown: &Shown, helper: u32) -> bool {
+    let Some(job) = shown.job() else {
+        return true;
+    };
+    match (job.state, job.ended()) {
+        (JobState::Ended, Some(ended)) => {
+            atlas_core::protocol::left_may_run(&ended.left, job.pgid, helper)
+        }
+        _ => true,
+    }
+}
+
 /// A job as `job list` shows it: always its identity and times; whether
 /// it was adopted, how its stop goes and the last signal sent, when known;
 /// how it ended once its state is ended; and the processes that left its

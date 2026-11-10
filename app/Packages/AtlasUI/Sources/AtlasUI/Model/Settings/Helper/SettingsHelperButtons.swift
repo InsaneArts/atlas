@@ -1,4 +1,4 @@
-/// Which of the Helper pane's buttons can run now, each waiting while its command runs from any window, and Switch's
+/// Which of the Helper page's buttons can run now, each waiting while its command runs from any window, and Switch's
 /// tooltip.
 public struct SettingsHelperButtons: Equatable, Sendable {
   /// Whether Switch to the Helper… can run.

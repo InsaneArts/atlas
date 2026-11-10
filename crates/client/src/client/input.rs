@@ -9,7 +9,7 @@ use atlas_core::{
     actions::{self, Expect},
     error::{Code, Error, Holder, Result},
     session::{
-        ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
+        ASKS, ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
         NativeObservation, Observation, Session, TYPED_FIELDS,
     },
     transport::Transport,
@@ -364,6 +364,18 @@ impl Client {
         }
 
         let actions = actions?;
+        // An older input service would ignore the accounts and send without
+        // asking: while the person lists any, it must ask.
+        if lease.is_none()
+            && !observation.native.has_capability(ASKS)
+            && crate::asking::policy(self).is_some()
+        {
+            return Err(Error::new(
+                Code::Startup,
+                "The helper's input service can't ask the person before sending: run atlas \
+                 start-input, then try again",
+            ));
+        }
         if actions
             .actions()
             .iter()
@@ -420,6 +432,13 @@ impl Client {
             .is_none()
             .then(|| self.controller.quarantine())
             .transpose()?;
+        // An agent's input is judged by the person's accounts while they
+        // list any; the person's own never is.
+        let (asking, permits) = if lease.is_none() {
+            crate::asking::policy_for(self, actions.actions())
+        } else {
+            (None, Vec::new())
+        };
         let mutation = Mutation::Input {
             actions,
             owner,
@@ -427,10 +446,14 @@ impl Client {
             picture,
             app: self.doing.is_some(),
             expect: expect.as_ref(),
+            asking,
         };
         let result = self
             .mutate(mutation, lease, expected.map(|(_, at)| at), None)
             .await;
+        // A permit is spent by the request that took it, unless that request
+        // is proven to have sent nothing.
+        crate::asking::return_permits(self, permits, &result);
 
         match &generation {
             Some(generation) => self.release_input(owner, generation, result).await,

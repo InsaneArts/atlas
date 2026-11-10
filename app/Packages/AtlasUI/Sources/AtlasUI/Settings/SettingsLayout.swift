@@ -1,38 +1,67 @@
 import SwiftUI
 
-/// The Settings window's own measures, which no other window shares.
+/// The Settings window's own measures, which no other window shares, set as Rex's Settings stands: a 740 by 572
+/// window at first and at its smallest, a 214 sidebar of 32-point page rows under a 40-point status row, and the page
+/// on the content card under a bar with its title.
 public enum SettingsLayout {
-  /// 680: the window's width. Its height is its pane's, under the tab row.
-  public static let width: CGFloat = 680
-  /// 102: the title and the tab row over every pane.
-  public static let header: CGFloat = 102
-  /// 540: the window's height before its first pane has said how tall it is.
-  public static let firstHeight: CGFloat = 540
-  /// 14: the title's top, in the title bar beside the window buttons.
-  static let titleTop: CGFloat = 14
-  /// 40: the tab row's top.
-  static let tabsTop: CGFloat = 40
-  /// 28: a pane's side inset.
-  static let sideInset: CGFloat = 28
-  /// 624: a pane's width inside its side insets.
-  static let formWidth: CGFloat = width - 2 * sideInset
-  /// 6 above, 28 at the sides and below: a form pane's insets.
-  static let swapInsets = EdgeInsets(top: Spacing.xsPlus, leading: sideInset, bottom: sideInset, trailing: sideInset)
-  /// 20: between a form's sections, the gap and the next section name's own space above it.
-  static let sectionGap = Spacing.xl
-  /// About uses the same column insets as every other Settings pane.
-  static let aboutInsets = swapInsets
-  /// 68: the app's visible icon tile in About's compact header.
-  static let aboutTile: CGFloat = 68
-  /// 360: the widest About's tagline runs, also constrained by the available column.
-  static let aboutTextWidth: CGFloat = 360
+  /// 740: the window's width at first, and its narrowest.
+  public static let width: CGFloat = 740
+  /// 572: the window's height at first, and its shortest.
+  public static let height: CGFloat = 572
+  /// 214: the sidebar's width.
+  static let sidebarWidth: CGFloat = 214
+  /// 518: the content card's width, beside the sidebar and inside the window's trailing inset.
+  static let cardWidth = width - sidebarWidth - WindowChrome.cardInset
+  /// 478: a page's sections across, inside the page's side insets.
+  static let pageWidth = cardWidth - pageInsets.leading - pageInsets.trailing
+  /// 10: the sidebar's inset at its sides, which its rows' capsules keep to.
+  static let sidebarInset = Spacing.sPlus
+  /// 40: the Helper row, its 28-point mark and the line under its title.
+  static let helperRowHeight = ControlHeight.l
+  /// 32: a page's row.
+  static let pageRowHeight = ControlHeight.m
+  /// 6: a row's content inset inside its capsule.
+  static let pageRowInset = Spacing.xsPlus
+  /// 8: between a row's tile and its title.
+  static let pageRowGap = Spacing.s
+  /// 13: between two groups of rows, as Rex's sidebar leaves.
+  static let groupGap: CGFloat = 13
+  /// 28: the slot a row's symbol or the helper's mark stands centred in, so every title starts on one line.
+  static let leadSlot = SessionIcon.rowSide
+  /// 16: a page's symbol.
+  static let pageSymbol = IconSize.s
+  /// 38: the bar over the page inside the card, as the main window's header stands, so its title centres about level
+  /// with the window buttons.
+  static let barHeight = WindowChrome.cardBarHeight
+  /// 20: the bar's inset at each side of its title, on the page's own edges.
+  static let barInset = pageInsets.leading
+  /// 10: the bar's inset before Back, on an account's page.
+  static let backInset = Spacing.sPlus
+  /// 8: between Back and the title.
+  static let backGap = Spacing.s
+  /// The page's insets on the card: 12 under the bar, 20 at the sides and 28 at the foot, so its last control ends
+  /// clear of the fade.
+  static let pageInsets = EdgeInsets(top: Spacing.m, leading: Spacing.xl, bottom: pageFoot, trailing: Spacing.xl)
+  /// 28: under the page's last section.
+  static let pageFoot: CGFloat = 28
+  /// 12: how far the page fades out under the bar and at the card's foot.
+  static let pageFade = Spacing.m
+  /// 10: between a section's name and its group, for a section that draws its own name.
+  static let titleGap = Spacing.sPlus
+  /// 30: between a page's sections.
+  static let sectionGap: CGFloat = 30
+  /// 56: the Helper page's status card.
+  static let headerRowHeight: CGFloat = 56
+  /// 38: the symbol over an empty card's headline.
+  static let emptySymbol: CGFloat = 38
+  /// 330: the widest an empty card's sentence runs.
+  static let emptyTextWidth: CGFloat = 330
+  /// 64: the app's icon on About.
+  static let aboutTile = IconSize.xxl
+  /// 300: the widest About's tagline runs.
+  static let aboutTextWidth: CGFloat = 300
   /// 72: a number the person types, such as how many days pictures are kept.
   static let numberWidth: CGFloat = 72
-  /// 40: the helper's picture at the top of the Helper pane.
-  static let accountPicture: CGFloat = 40
-  /// 10: between a section's name and its group, as ``GroupedSection`` sets them, for a section that draws its own
-  /// name.
-  static let titleGap = Spacing.sPlus
   /// 0.05: how long after the row above it each readiness check's result lands as Check Again's reading ends.
   static let checkStaggerStep: TimeInterval = 0.05
 

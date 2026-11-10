@@ -97,6 +97,8 @@ pub mod activity;
 #[cfg(target_os = "macos")]
 pub mod apps;
 #[cfg(target_os = "macos")]
+mod asking;
+#[cfg(target_os = "macos")]
 pub mod audio;
 #[cfg(target_os = "macos")]
 pub mod ax;

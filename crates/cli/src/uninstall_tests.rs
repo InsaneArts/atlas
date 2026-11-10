@@ -1104,3 +1104,16 @@ fn only_a_choice_to_keep_it_off_survives_uninstall() {
         "unknown: setup decides again"
     );
 }
+
+#[test]
+fn uninstall_says_the_home_folder_stays_private_and_how_to_open_it() {
+    assert!(super::home_note("atlas", Ok(None), false).is_empty());
+    let kept = super::home_note("atlas", Ok(Some(0)), false);
+    assert_eq!(kept.len(), 2);
+    assert!(kept[1].ends_with("chmod -a \"user:atlas deny list,search\" ~"));
+    let deleted = super::home_note("atlas", Ok(Some(1)), true);
+    assert!(deleted[2].contains("chmod -a# 1 ~"));
+    let unread = super::home_note("atlas", Err(Error::new(Code::Io, "timed out")), true);
+    assert_eq!(unread.len(), 1);
+    assert!(unread[0].ends_with("chmod -a \"user:atlas deny list,search\" ~"));
+}

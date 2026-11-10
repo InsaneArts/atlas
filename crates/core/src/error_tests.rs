@@ -139,12 +139,14 @@ fn an_input_service_refusal_keeps_only_the_codes_callers_act_on() {
         [
             "busy",
             "cancelled",
+            "denied",
             "focus-changed",
             "identity",
             "lease-lost",
             "permission",
             "session-changed",
             "stopped",
+            "waiting-for-person",
         ]
     );
 }
@@ -182,7 +184,9 @@ fn every_code_keeps_its_word() {
         (Code::Collect, "collect"),
         (Code::Config, "config"),
         (Code::ConfigInvalid, "config-invalid"),
+        (Code::Credentials, "credentials"),
         (Code::Daemon, "daemon"),
+        (Code::Denied, "denied"),
         (Code::Elements, "elements"),
         (Code::Environment, "environment"),
         (Code::FocusChanged, "focus-changed"),
@@ -224,6 +228,7 @@ fn every_code_keeps_its_word() {
         (Code::Uninstall, "uninstall"),
         (Code::Update, "update"),
         (Code::Usage, "usage"),
+        (Code::WaitingForPerson, "waiting-for-person"),
         (Code::WaitFailed, "wait-failed"),
         (Code::Windows, "windows"),
     ];

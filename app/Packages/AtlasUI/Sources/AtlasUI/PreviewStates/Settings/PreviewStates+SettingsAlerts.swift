@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// Recover asked for from the Helper pane, with the main window's words.
+    /// Recover asked for from the Helper page, with the main window's words.
     @MainActor static let settingsRecover: SettingsState = {
       var state = selecting(.helper)
       state.alert = AlertCardState(
@@ -14,7 +14,7 @@
       return state
     }()
 
-    /// Log Out asked for from the Helper pane, with the main window's words.
+    /// Log Out asked for from the Helper page, with the main window's words.
     @MainActor static let settingsLogOut: SettingsState = {
       var state = selecting(.helper)
       state.alert = AlertCardState(
@@ -30,7 +30,7 @@
 
     /// Forget asked for a project: it stays listed until the person confirms.
     @MainActor static let settingsForget: SettingsState = {
-      var state = selecting(.agents)
+      var state = selecting(.integrations)
       state.alert = AlertCardState(
         title: "Forget “opie”?",
         message:
@@ -71,7 +71,7 @@
       return state
     }()
 
-    /// Switch asked for from the Helper pane, with the main window's words.
+    /// Switch asked for from the Helper page, with the main window's words.
     @MainActor static let settingsSwitch: SettingsState = {
       var state = selecting(.helper)
       state.alert = AlertCardState(

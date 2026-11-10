@@ -2,6 +2,7 @@
 //! interface that answers status, pictures of the helper, control and input
 //! for one menu bar, and keeps a private record of itself in the output
 //! directory so `atlas monitor` and the login item can find it.
+mod accounts;
 mod app;
 mod control;
 mod frames;
@@ -9,6 +10,7 @@ mod http;
 mod local;
 mod reads;
 mod settings;
+mod sign_in;
 mod terminal;
 
 pub(crate) use app::{launched_url, open_viewer};
@@ -101,6 +103,17 @@ struct Viewer {
     input_started: std::sync::Mutex<Option<String>>,
     /// Where this viewer's record is kept and what it says, once written.
     record: std::sync::Mutex<Option<(PathBuf, Value)>>,
+    /// The home folder whose record of the helper's accounts this viewer
+    /// shows and changes: the person's.
+    accounts_home: std::sync::Mutex<Option<PathBuf>>,
+    /// The sign-in under way, while its lease holds; it ends with the lease.
+    sign_in: Mutex<Option<sign_in::SignIn>>,
+    /// The app this viewer serves, as macOS names its process once started:
+    /// the frame service shows it the screen while agents may not see it.
+    app_process: std::sync::Mutex<Option<atlas_core::process::Instance>>,
+    /// The secret the app names itself by, given only to the app this
+    /// viewer starts, on its standard input; never written anywhere.
+    app_secret: String,
     /// The menu bar's hold on the folder its record is kept in, while it
     /// serves: taken before the record moves into another, after `record`.
     alone: std::sync::Mutex<Option<atlas_core::files::LockFile>>,

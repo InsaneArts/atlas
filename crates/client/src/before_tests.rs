@@ -50,6 +50,7 @@ fn raw(at: u128) -> Raw {
         width: 4,
         height: 2,
         at,
+        display: (4.0, 2.0),
     }
 }
 

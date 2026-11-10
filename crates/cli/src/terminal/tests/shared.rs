@@ -16,6 +16,7 @@ async fn the_terminal_shares_the_running_menu_bar_frame_service() {
         failed: false,
         found: Discovery::of(&client),
         address: Arc::new(std::sync::Mutex::new(url.clone())),
+        controller: Box::new(client.controller.clone()),
     };
     let began = std::time::Instant::now();
     let mut last = None;
@@ -55,6 +56,7 @@ async fn a_shared_terminal_follows_a_restarted_menu_bar() {
         failed: false,
         found: Discovery::of(&client),
         address: address.clone(),
+        controller: Box::new(client.controller.clone()),
     };
     frames.next().await.unwrap();
     atlas_core::spawn::status(std::process::Command::new("pkill").args([

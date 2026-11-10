@@ -276,6 +276,18 @@ impl Grant {
         state.require_at(&self.owner, true, now)?;
         Ok(state)
     }
+
+    /// This grant's owner, when it was granted to the person: never another
+    /// holder that came in since. It only looks, so a Stop or a release
+    /// that landed meanwhile keeps its own refusal for the batch to meet.
+    pub(super) fn person(&self) -> Option<&str> {
+        let state = self.gate.lock().ok()?;
+        let theirs = state
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.token == self.owner && owner.who == Who::Person);
+        theirs.then_some(self.owner.as_str())
+    }
 }
 
 #[cfg(test)]

@@ -34,6 +34,15 @@
         var next = state
         next.footer.controls.sound = HelperSoundButton(isMuted: !state.footer.controls.sound.isMuted)
         return next
+      case .answerAsk:
+        var next = state
+        next.screen.ask = nil
+        return next
+      case .signInDone, .signInCancel:
+        var next = state
+        next.screen.signingIn = nil
+        next.header.tag = nil
+        return next
       case .takeControl:
         return viewerControl
       case .giveBack, .alertConfirm, .alertCancel:

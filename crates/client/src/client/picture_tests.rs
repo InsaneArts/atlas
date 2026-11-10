@@ -58,6 +58,8 @@ fn rows(client: &Client) -> Vec<Value> {
 }
 
 fn pictures(client: &Client) -> Vec<String> {
+    // Pictures are saved on a thread of their own, off the action's path: wait for any still being saved.
+    before::settle(Duration::from_secs(10));
     let folder = client.output_dir().unwrap().join(before::FOLDER);
     let Ok(entries) = fs::read_dir(folder) else {
         return Vec::new();
@@ -482,6 +484,11 @@ async fn a_refused_or_late_picture_never_holds_the_input_back() {
 
 /// A picture whose cancel is observed, with its answer held by the test.
 fn cancellable_picture() -> (Taking, oneshot::Receiver<()>, oneshot::Sender<()>) {
+    let directory = tempfile::tempdir().unwrap();
+    let admitted = crate::test_support::client(directory.path())
+        .controller
+        .screen_visible()
+        .unwrap();
     let (cancel, cancelled) = oneshot::channel();
     let (noticed, notice) = oneshot::channel();
     let (answer, answered) = oneshot::channel();
@@ -496,6 +503,7 @@ fn cancellable_picture() -> (Taking, oneshot::Receiver<()>, oneshot::Sender<()>)
             task,
             deadline: (tokio::time::Instant::now() + WAIT).into_std(),
             cancel: Some(cancel),
+            admitted,
         },
         notice,
         answer,
@@ -637,4 +645,232 @@ fn epoch() -> InputEpoch {
         height: 100.0,
         process_id: 456,
     }
+}
+
+/// The pictures `client` saved, once it saved `count`, or as they are in
+/// five seconds.
+fn saved(client: &Client, count: usize) -> Vec<String> {
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let pictures = pictures(client);
+        if pictures.len() >= count || Instant::now() >= until {
+            return pictures;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[tokio::test]
+async fn a_lost_reply_keeps_its_picture_and_only_a_refusal_proven_to_send_nothing_drops_it() {
+    // The reply never comes: the input may have been sent.
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let lost = helper
+        .serve(client.input(&key(), None, None), |request| {
+            if request["op"] == "input" {
+                return None;
+            }
+            input_service(&client, false, request)
+        })
+        .await;
+    assert!(lost.is_err());
+    assert_eq!(saved(&client, 1).len(), 1, "its picture is kept");
+
+    // Refused to ask the person before its first event: nothing was sent.
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let _ = helper
+        .serve(client.input(&key(), None, None), |request| {
+            if request["op"] == "input" {
+                return Some(json!({"ok": false, "code": "waiting-for-person",
+                    "error": "Atlas asked the person", "performed": 0}));
+            }
+            input_service(&client, false, request)
+        })
+        .await;
+    // Nothing was kept to be saved, so none can come later either.
+    assert!(
+        pictures(&client).is_empty(),
+        "no picture for what sent nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_question_to_the_person_has_its_own_picture_and_activity_keeps_none_whatever_the_setting()
+{
+    // A referenced click is brought forward first: its picture is taken
+    // afresh, the one before it never reused.
+    let referenced = json!([{"type": "reference", "ref": "8123abc.12"}]);
+    for (keeping, actions) in [(true, key()), (false, key()), (true, referenced)] {
+        let fresh = !keeping || actions != key();
+        let directory = tempfile::tempdir().unwrap();
+        let (mut client, helper) = agent(directory.path(), Pictures::Taken, "key");
+        client.config.activity.pictures_before_actions = keeping;
+        client.controller = client
+            .controller
+            .clone()
+            .waiting(Duration::from_millis(100));
+        let frame = json!({"x": 10.0, "y": 20.0, "width": 80.0, "height": 24.0});
+        let refused = json!({"ok": false, "code": "waiting-for-person",
+            "error": "github.com is signed in", "performed": 0, "partial": false,
+            "uncertain": false, "ask": {"account": "github.com", "what": "click",
+                "accountKey": {"kind": "site", "id": "github.com"}, "action": "a1",
+                "bind": {"action": "a1"}, "once": true, "task": true, "frame": frame}});
+        let outcome = helper
+            .serve(
+                crate::asking::after_asking(&client, async || {
+                    client.input(&actions, None, None).await
+                }),
+                |request| match request["op"].as_str() {
+                    Some("input") => Some(refused.clone()),
+                    _ => input_service(&client, false, request),
+                },
+            )
+            .await;
+
+        if fresh {
+            // Taken only once the input was let go of and control with it,
+            // so the person taking over never waits for it.
+            let log = helper.log();
+            let released = log.iter().rposition(|op| op == "release");
+            let taken = log.iter().rposition(|op| op == "frame sent");
+            assert!(
+                released
+                    .zip(taken)
+                    .is_some_and(|(released, taken)| released < taken),
+                "{log:?}"
+            );
+        }
+        let asks = client.controller.asks();
+        let open = asks.open(atlas_core::time::now_ms());
+        let picture = open[0].picture.clone().expect("the question has a picture");
+        assert!(asks.folder().join(&picture).exists(), "keeping {keeping}");
+        // Where the element is, in the picture's own pixels: the display
+        // here is 100 points across.
+        let size = &open[0].question["pictureSize"];
+        let across = size["width"].as_f64().unwrap() / 100.0;
+        assert!(across > 0.0, "{size}");
+        assert_eq!(
+            open[0].question["frame"]["x"].as_f64(),
+            Some(10.0 * across),
+            "where the element is"
+        );
+        assert!(
+            pictures(&client).is_empty(),
+            "activity keeps none: {keeping}"
+        );
+        let told = match &outcome {
+            Ok(reply) => reply.to_string(),
+            Err(error) => serde_json::to_string(error).unwrap(),
+        };
+        for private in ["frame", &picture, ".jpg", "\"x\":10"] {
+            assert!(!told.contains(private), "{private} in {told}");
+        }
+    }
+}
+
+/// The person's lease on `client`'s helper, hiding its screen for a
+/// sign-in to github.com.
+fn signing_in(client: &Client) -> atlas_control::Lease {
+    let mut lease = atlas_control::Lease::default();
+    let token = lease.acquire(&client.controller).unwrap();
+    let hold = atlas_control::PrivateHold {
+        site: "github.com".to_owned(),
+        kind: atlas_control::HoldKind::SignIn,
+    };
+    lease
+        .hide_screen(&client.controller, &token, &hold)
+        .unwrap();
+    lease
+}
+
+#[tokio::test]
+async fn no_picture_after_an_action_is_taken_while_the_person_signs_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let at = atlas_core::time::timestamp() - 5_000_000_000;
+    let first = before::name(at, None, None);
+    let ended = u64::try_from(at / 1_000_000).unwrap() + 100;
+    let mut lease = signing_in(&client);
+
+    helper
+        .serve(client.picture_after(&first, ended), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await
+        .unwrap();
+
+    assert!(!helper.log().iter().any(|op| op.starts_with("frame")));
+    let after = before::after_name(&first).unwrap();
+    assert!(!before::Listing::of(&client.config.output_dir).has(&after));
+    client.controller.end_private().unwrap();
+    lease.release();
+}
+
+#[tokio::test]
+async fn no_picture_for_a_question_is_taken_while_the_person_signs_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let mut lease = signing_in(&client);
+
+    let taken = helper
+        .serve(client.picture_for_ask(), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await;
+
+    assert!(taken.is_none());
+    assert!(!helper.log().iter().any(|op| op.starts_with("frame")));
+    client.controller.end_private().unwrap();
+    lease.release();
+    let (_, admitted) = helper
+        .serve(client.picture_for_ask(), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await
+        .expect("taken once the sign-in ended");
+    assert!(client.controller.still_visible(admitted).is_ok());
+}
+
+#[tokio::test]
+async fn a_question_never_shows_a_picture_taken_before_a_sign_in_began() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "key");
+    let (_, admitted) = helper
+        .serve(client.picture_for_ask(), |request| {
+            panic!("nothing else is asked: {request}")
+        })
+        .await
+        .unwrap();
+
+    let mut lease = signing_in(&client);
+    client.controller.end_private().unwrap();
+    lease.release();
+
+    assert_eq!(
+        client.controller.still_visible(admitted).unwrap_err().code,
+        Code::Busy,
+        "a hold began and ended since it was taken"
+    );
+}
+
+#[tokio::test]
+async fn an_agents_screenshot_is_refused_while_the_person_signs_in() {
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = agent(directory.path(), Pictures::Taken, "screenshot");
+    let mut lease = signing_in(&client);
+
+    let refused = helper
+        .serve(
+            client.capture(crate::client::Size::Full, None, false),
+            |request| panic!("nothing else is asked: {request}"),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(refused.code, Code::Busy);
+    assert_eq!(refused.holder, Some(atlas_core::error::Holder::Person));
+    assert!(helper.log().is_empty(), "{:?}", helper.log());
+    client.controller.end_private().unwrap();
+    lease.release();
 }

@@ -20,6 +20,7 @@ extension SettingsController {
   ///   - fileIcon: The icon a file shows, by its path; none by default.
   ///   - status: The shared status it reads; an empty one by default.
   ///   - menuBarIcon: The menu bar's glyph, which its links read and set; the Orbit by default.
+  ///   - edit: Changes the dependencies before the controller is made, such as its links; none by default.
   /// - Returns: The controller.
   static func scripted(
     commands: ScriptedCommands,
@@ -29,38 +30,39 @@ extension SettingsController {
     actions: HelperActions? = nil,
     fileIcon: @escaping @MainActor (String) -> CGImage? = { _ in nil },
     status: ViewerStatus = ViewerStatus(),
-    menuBarIcon: MenuBarIconChoice = MenuBarIconChoice()
+    menuBarIcon: MenuBarIconChoice = MenuBarIconChoice(),
+    edit: (inout SettingsDependencies) -> Void = { _ in }
   ) -> SettingsController {
     let service = ScriptedService()
-    return SettingsController(
-      dependencies: SettingsDependencies(
-        commands: commands,
-        actions: actions
-          ?? HelperActions.scripted(service, commands: commands),
-        installs: installs ?? AgentInstalls(commands: commands),
-        preferences: SettingsPreferences(
-          loadTab: { nil },
-          saveTab: { _ in },
-          loadNotify: { false },
-          saveNotify: { _ in }
-        ),
-        fileIcon: fileIcon,
-        version: "0.1.0",
-        links: SettingsLinks(
-          status: { (status, false) },
-          readStatus: { statusReads.count += 1 },
-          opensAtLogin: { OpenAtLogin.State(isAvailable: true, isEnabled: false) },
-          setOpenAtLogin: { _ in },
-          menuBarIcon: { menuBarIcon.icon },
-          chooseMenuBarIcon: { menuBarIcon.pick($0) },
-          picture: { .live },
-          canPause: { false },
-          choosePicture: { _ in },
-          switchToHelper: { "" },
-          gettingStarted: {}
-        ),
-        clock: clock
-      )
+    var dependencies = SettingsDependencies(
+      commands: commands,
+      actions: actions
+        ?? HelperActions.scripted(service, commands: commands),
+      installs: installs ?? AgentInstalls(commands: commands),
+      preferences: SettingsPreferences(
+        loadTab: { nil },
+        saveTab: { _ in },
+        loadNotify: { false },
+        saveNotify: { _ in }
+      ),
+      fileIcon: fileIcon,
+      version: "0.1.0",
+      links: SettingsLinks(
+        status: { (status, false) },
+        readStatus: { statusReads.count += 1 },
+        opensAtLogin: { OpenAtLogin.State(isAvailable: true, isEnabled: false) },
+        setOpenAtLogin: { _ in },
+        menuBarIcon: { menuBarIcon.icon },
+        chooseMenuBarIcon: { menuBarIcon.pick($0) },
+        picture: { .live },
+        canPause: { false },
+        choosePicture: { _ in },
+        switchToHelper: { "" },
+        gettingStarted: {}
+      ),
+      clock: clock
     )
+    edit(&dependencies)
+    return SettingsController(dependencies: dependencies)
   }
 }

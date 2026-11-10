@@ -58,6 +58,16 @@ public enum Action: Sendable, Equatable {
   case helperSound
   /// Keep apps in the helper silent, or let them play.
   case setHelperSound(muted: Bool)
+  /// Read whether the person's home folder is private from the helper, and what it can open there.
+  case homeFiles
+  /// Make the person's home folder private from the helper.
+  case makeHomePrivate
+  /// Let the helper open the person's home folder again; the person confirmed.
+  case openHome
+  /// Remember that keeping the home folder private was offered, changing nothing.
+  case homeOffered
+  /// Let agents copy sign-ins and secrets into the helper, or stop them; the person confirmed turning it on.
+  case copySignIns(Bool)
   /// Read Atlas's settings with how many pictures of agent actions this Mac keeps, and their size.
   case picturesSummary
   /// Keep pictures of the helper's screen around each agent action, or stop keeping them.
@@ -119,6 +129,12 @@ public enum Action: Sendable, Equatable {
     case .update: ["update"]
     case .helperSound: ["sound"]
     case .setHelperSound(let muted): ["sound", muted ? "off" : "on"]
+    case .homeFiles: ["onboarding", "files"]
+    case .makeHomePrivate: ["onboarding", "files", "private"]
+    // The person confirmed in Settings.
+    case .openHome: ["onboarding", "files", "open"]
+    case .homeOffered: ["onboarding", "files", "offered"]
+    case .copySignIns(let allow): ["onboarding", "sign-ins", allow ? "allow" : "refuse"]
     case .picturesSummary: ["config", "--pictures-summary"]
     // The person turned the switch in Settings.
     case .keepPictures(let on): ["config", "--pictures-before-actions", on ? "on" : "off"]

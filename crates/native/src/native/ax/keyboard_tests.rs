@@ -677,3 +677,201 @@ fn only_a_request_the_app_could_not_complete_is_asked_again() {
         assert!(fake.pauses.is_empty());
     }
 }
+
+/// [`secure_page`] of `fake`, with the usual budget.
+fn page_of(fake: &mut Fake) -> Result<Option<Option<String>>> {
+    let deadline = fake.started + budget();
+    secure_page(&mut *fake, &APP, deadline)
+}
+
+#[test]
+fn a_field_that_is_not_a_password_says_nothing() {
+    let mut fake = Fake::app();
+    assert_eq!(page_of(&mut fake).unwrap(), None);
+}
+
+#[test]
+fn a_password_field_in_a_web_page_gives_the_pages_address_and_never_its_value() {
+    let mut fake = Fake::app();
+    let text = |text: &str| Answer::Text(text.to_owned());
+    fake.set(FIELD, "AXSubrole", text("AXSecureTextField"));
+    fake.set(GROUP, "AXRole", text("AXWebArea"));
+    fake.set(GROUP, "AXURL", text("https://github.com/login?return_to=x"));
+    assert_eq!(
+        page_of(&mut fake).unwrap(),
+        Some(Some("https://github.com/login?return_to=x".to_owned()))
+    );
+    assert!(
+        !fake
+            .asked
+            .iter()
+            .any(|(_, attribute)| *attribute == "AXValue")
+    );
+}
+
+#[test]
+fn a_password_field_in_an_app_window_gives_no_page() {
+    let mut fake = Fake::app();
+    fake.set(
+        FIELD,
+        "AXSubrole",
+        Answer::Text("AXSecureTextField".to_owned()),
+    );
+    assert_eq!(page_of(&mut fake).unwrap(), Some(None));
+}
+
+#[test]
+fn the_focused_element_is_aimed_at_with_its_window_and_page_id_and_never_its_value() {
+    let mut fake = Fake::app();
+    let text = |text: &str| Answer::Text(text.to_owned());
+    fake.set(FIELD, "AXWindow", Answer::Element(WINDOW));
+    fake.set(FIELD, "AXDOMIdentifier", text("composer"));
+    fake.set(GROUP, "AXRole", text("AXWebArea"));
+    fake.set(GROUP, "AXURL", text("https://app.slack.com/client"));
+    let deadline = fake.started + budget();
+    let mut reader = Reader {
+        ask: &mut fake,
+        deadline,
+    };
+    let element = reader.focused_element(&APP).unwrap().unwrap();
+    let aimed = reader.aimed(element, false).unwrap();
+    let window = aimed.window.unwrap();
+    assert_eq!(window.title.as_deref(), Some("Letter.txt"));
+    assert!(
+        window.frame.is_some(),
+        "its frame tells which listed window"
+    );
+    assert_eq!(aimed.identifier.as_deref(), Some("composer"));
+    assert_eq!(aimed.name.as_deref(), Some("Email"));
+    assert!(aimed.in_page);
+    assert!(
+        !fake
+            .asked
+            .iter()
+            .any(|(_, attribute)| *attribute == "AXValue")
+    );
+}
+
+#[test]
+fn a_referenced_objects_page_is_read_from_its_own_ancestors_without_keyboard_focus() {
+    for address in [Some("https://github.com/pulls"), None] {
+        let mut fake = Fake::app();
+        fake.set(APP, "AXFocusedUIElement", Answer::Element(99));
+        fake.set(GROUP, "AXRole", Answer::Text("AXWebArea".into()));
+        if let Some(address) = address {
+            fake.set(GROUP, "AXURL", Answer::Text(address.into()));
+        }
+        let deadline = fake.started + budget();
+        let aimed = Reader {
+            ask: &mut fake,
+            deadline,
+        }
+        .aimed(FIELD, false)
+        .unwrap();
+        assert!(
+            aimed.in_page,
+            "an unread address remains a page, never a browser toolbar"
+        );
+        assert_eq!(aimed.url.as_deref(), address);
+        assert_eq!(aimed.name.as_deref(), Some("Email"));
+        assert!(
+            !fake
+                .asked
+                .iter()
+                .any(|(_, attribute)| matches!(*attribute, "AXFocusedUIElement" | "AXValue"))
+        );
+    }
+}
+
+/// An account-gate read with enough simulated time to exhaust its ancestor bound.
+fn aimed_at(fake: &mut Fake, pressing: bool) -> Result<Aimed> {
+    let deadline = fake.started + Duration::from_secs(3);
+    Reader {
+        ask: fake,
+        deadline,
+    }
+    .aimed(FIELD, pressing)
+}
+
+#[test]
+fn an_aimed_element_with_missing_ancestry_cannot_prove_it_is_outside_a_page() {
+    for pressing in [false, true] {
+        let mut fake = Fake::app();
+        fake.set(GROUP, "AXParent", Answer::Absent);
+        let error = aimed_at(&mut fake, pressing).unwrap_err();
+        assert_eq!(Unread::of(&error), Some(Unread::Failed));
+    }
+}
+
+#[test]
+fn an_aimed_element_with_cyclic_or_exhausted_ancestry_refuses_as_deep() {
+    for cyclic in [false, true] {
+        let mut fake = Fake::app();
+        fake.set(GROUP, "AXParent", Answer::Element(100));
+        for element in 100..100 + PARENTS {
+            fake.set(element, "AXRole", Answer::Text("AXGroup".into()));
+            let parent = if cyclic { GROUP } else { element + 1 };
+            fake.set(element, "AXParent", Answer::Element(parent));
+        }
+        let error = aimed_at(&mut fake, false).unwrap_err();
+        assert_eq!(Unread::of(&error), Some(Unread::Deep));
+    }
+}
+
+#[test]
+fn an_aimed_elements_explicit_ancestor_terminal_proves_whether_it_is_in_a_page() {
+    for role in ["AXWindow", "AXApplication", "AXWebArea"] {
+        let mut fake = Fake::app();
+        fake.set(GROUP, "AXRole", Answer::Text(role.into()));
+        fake.set(GROUP, "AXParent", Answer::Absent);
+        fake.set(
+            GROUP,
+            "AXURL",
+            Answer::Text("https://github.com/pulls".into()),
+        );
+        let aimed = aimed_at(&mut fake, false).unwrap();
+        assert_eq!(aimed.in_page, role == "AXWebArea");
+        assert_eq!(aimed.url.is_some(), role == "AXWebArea");
+    }
+}
+
+#[test]
+fn an_aimed_elements_failed_title_does_not_authorize_its_harmless_description() {
+    let mut fake = Fake::app();
+    fake.set(FIELD, "AXTitle", Answer::Failed(AXError::Failure));
+    fake.set(FIELD, "AXDescription", Answer::Text("Open".into()));
+    assert_eq!(aimed_at(&mut fake, false).unwrap().name, None);
+}
+
+#[test]
+fn an_aimed_elements_proven_absent_or_empty_title_allows_its_description() {
+    for title in [Answer::Absent, Answer::Text(String::new())] {
+        let mut fake = Fake::app();
+        fake.set(FIELD, "AXTitle", title);
+        fake.set(FIELD, "AXDescription", Answer::Text("Open".into()));
+        assert_eq!(
+            aimed_at(&mut fake, false).unwrap().name.as_deref(),
+            Some("Open")
+        );
+    }
+}
+
+#[test]
+fn an_aimed_elements_readable_title_survives_unrelated_name_getter_failures() {
+    for title in ["Open", "Send"] {
+        let mut fake = Fake::app();
+        fake.set(FIELD, "AXTitle", Answer::Text(title.into()));
+        fake.set(FIELD, "AXDescription", Answer::Failed(AXError::Failure));
+        fake.set(FIELD, "AXIdentifier", Answer::Failed(AXError::Failure));
+        let aimed = aimed_at(&mut fake, false).unwrap();
+        assert_eq!(aimed.name.as_deref(), Some(title));
+        assert_eq!(aimed.identifier, None);
+    }
+}
+
+#[test]
+fn an_aimed_element_whose_description_getter_fails_remains_unnamed() {
+    let mut fake = Fake::app();
+    fake.set(FIELD, "AXDescription", Answer::Failed(AXError::Failure));
+    assert_eq!(aimed_at(&mut fake, false).unwrap().name, None);
+}

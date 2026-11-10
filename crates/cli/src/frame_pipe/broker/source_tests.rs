@@ -55,6 +55,7 @@ impl Acquire for Scripted {
                 display_id: 1,
                 input_pid: 1,
             },
+            visible: None,
         })
     }
 
@@ -79,6 +80,11 @@ fn scripted() -> (Scripted, Arc<Log>, Arc<Mutex<Option<Reason>>>) {
 /// A notice no input ever gives.
 fn quiet() -> Arc<Notify> {
     Arc::new(Notify::new())
+}
+
+/// The privacy of a screen these tests never look at.
+fn unseen() -> Visibility {
+    Arc::new(|| None)
 }
 
 /// The next picture, asked for now, and when it was answered.
@@ -116,7 +122,7 @@ async fn answer(handle: &mut Handle, demand: u64) -> Answer {
 async fn each_demand_gets_an_acquisition_begun_after_it() {
     let (source, log, _) = scripted();
     let budget = Budget::new(1024);
-    let mut handle = spawn(source, budget.clone(), quiet());
+    let mut handle = spawn(source, budget.clone(), quiet(), unseen());
     let first = handle.want();
     let Latest::Picture(picture) = answer(&mut handle, first).await.latest else {
         panic!("no picture");
@@ -137,7 +143,7 @@ async fn each_demand_gets_an_acquisition_begun_after_it() {
 #[tokio::test(start_paused = true)]
 async fn acquisitions_keep_their_cadence() {
     let (source, _, _) = scripted();
-    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let mut handle = spawn(source, Budget::new(1024), quiet(), unseen());
     let began = tokio::time::Instant::now();
     for _ in 0..4 {
         let demand = handle.want();
@@ -149,7 +155,7 @@ async fn acquisitions_keep_their_cadence() {
 #[tokio::test(start_paused = true)]
 async fn a_failure_is_the_answer_and_the_next_demand_tries_again() {
     let (source, _, fail) = scripted();
-    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let mut handle = spawn(source, Budget::new(1024), quiet(), unseen());
     *fail.lock().unwrap() = Some(Reason::SourceStale);
     let demand = handle.want();
     assert!(matches!(
@@ -167,7 +173,7 @@ async fn a_failure_is_the_answer_and_the_next_demand_tries_again() {
 #[tokio::test(start_paused = true)]
 async fn a_budget_that_cannot_hold_a_picture_fails_it() {
     let (source, _, _) = scripted();
-    let mut handle = spawn(source, Budget::new(5), quiet());
+    let mut handle = spawn(source, Budget::new(5), quiet(), unseen());
     let demand = handle.want();
     assert!(matches!(
         answer(&mut handle, demand).await.latest,
@@ -178,7 +184,7 @@ async fn a_budget_that_cannot_hold_a_picture_fails_it() {
 #[tokio::test(start_paused = true)]
 async fn without_demand_the_stream_is_given_back_and_closing_gives_it_back_too() {
     let (source, log, _) = scripted();
-    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let mut handle = spawn(source, Budget::new(1024), quiet(), unseen());
     let demand = handle.want();
     answer(&mut handle, demand).await;
     tokio::time::sleep(IDLE + 2 * CADENCE).await;
@@ -193,7 +199,7 @@ async fn without_demand_the_stream_is_given_back_and_closing_gives_it_back_too()
 #[tokio::test(start_paused = true)]
 async fn a_still_screen_is_read_less_often_but_never_less_than_four_times_a_second() {
     let (source, log, _) = scripted();
-    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let mut handle = spawn(source, Budget::new(1024), quiet(), unseen());
     let still_after = STILL_AFTER as usize;
     let gaps = gaps(&mut handle, 4 * still_after).await;
     let (moving, still) = gaps.split_at(still_after);
@@ -207,7 +213,7 @@ async fn a_still_screen_is_read_less_often_but_never_less_than_four_times_a_seco
 async fn a_changed_picture_brings_the_normal_cadence_back() {
     let (source, _, _) = scripted();
     let shade = source.shade.clone();
-    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let mut handle = spawn(source, Budget::new(1024), quiet(), unseen());
     let slow = gaps(&mut handle, STILL_AFTER as usize + 1).await;
     assert_eq!(slow.last(), Some(&STILL_CADENCE));
     shade.store(1, Ordering::SeqCst);
@@ -218,7 +224,7 @@ async fn a_changed_picture_brings_the_normal_cadence_back() {
 async fn input_brings_the_normal_cadence_back_at_once() {
     let (source, _, _) = scripted();
     let input = Arc::new(Notify::new());
-    let mut handle = spawn(source, Budget::new(1024), input.clone());
+    let mut handle = spawn(source, Budget::new(1024), input.clone(), unseen());
     let slow = gaps(&mut handle, STILL_AFTER as usize + 1).await;
     assert_eq!(slow.last(), Some(&STILL_CADENCE));
     let wanted_at = tokio::time::Instant::now();
@@ -235,7 +241,7 @@ async fn input_brings_the_normal_cadence_back_at_once() {
 async fn pictures_of_a_still_screen_are_each_new_and_a_failure_lets_the_last_go() {
     let (source, _, fail) = scripted();
     let budget = Budget::new(1024);
-    let mut handle = spawn(source, budget.clone(), quiet());
+    let mut handle = spawn(source, budget.clone(), quiet(), unseen());
     let mut sequence = 0;
     for _ in 0..2 * STILL_AFTER {
         let (picture, _) = next(&mut handle).await;
@@ -274,7 +280,7 @@ impl Acquire for LateOnce {
 async fn a_picture_that_came_too_late_is_read_again_at_once_and_the_new_one_answers() {
     let (source, log, _) = scripted();
     let late = LateOnce { source, late: true };
-    let mut handle = spawn(late, Budget::new(1024), quiet());
+    let mut handle = spawn(late, Budget::new(1024), quiet(), unseen());
     let demand = handle.want();
     assert!(matches!(
         answer(&mut handle, demand).await.latest,
@@ -287,7 +293,7 @@ async fn a_picture_that_came_too_late_is_read_again_at_once_and_the_new_one_answ
 async fn a_picture_too_late_twice_in_a_row_is_the_answer() {
     let (source, log, fail) = scripted();
     *fail.lock().unwrap() = Some(Reason::SourceStale);
-    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let mut handle = spawn(source, Budget::new(1024), quiet(), unseen());
     let demand = handle.want();
     assert!(matches!(
         answer(&mut handle, demand).await.latest,
@@ -300,11 +306,45 @@ async fn a_picture_too_late_twice_in_a_row_is_the_answer() {
 async fn any_other_failure_is_the_answer_without_reading_again() {
     let (source, log, fail) = scripted();
     *fail.lock().unwrap() = Some(Reason::SourceStartFailed);
-    let mut handle = spawn(source, Budget::new(1024), quiet());
+    let mut handle = spawn(source, Budget::new(1024), quiet(), unseen());
     let demand = handle.want();
     assert!(matches!(
         answer(&mut handle, demand).await.latest,
         Latest::Failed(Reason::SourceStartFailed)
     ));
     assert_eq!(log.take(), ["acquire"]);
+}
+
+#[tokio::test]
+async fn a_picture_is_marked_with_the_privacy_it_was_read_under() {
+    let directory = tempfile::tempdir().unwrap();
+    let controller = atlas_control::Controller::at(505, directory.path());
+    let seen = controller.clone();
+    let (source, _, _) = scripted();
+    let mut handle = spawn(
+        source,
+        Budget::new(1024),
+        quiet(),
+        Arc::new(move || seen.screen_visible().ok()),
+    );
+    let before = controller.screen_visible().unwrap();
+    let (shown, _) = next(&mut handle).await;
+    assert_eq!(shown.visible, Some(before));
+
+    let mut lease = atlas_control::Lease::new(Duration::from_secs(10));
+    let token = lease.acquire(&controller).unwrap();
+    let hold = atlas_control::PrivateHold {
+        site: "github.com".to_owned(),
+        kind: atlas_control::HoldKind::SignIn,
+    };
+    lease.hide_screen(&controller, &token, &hold).unwrap();
+    let (hidden, _) = next(&mut handle).await;
+    assert_eq!(hidden.visible, None, "read while the screen was hidden");
+
+    controller.end_private().unwrap();
+    lease.release();
+    let (after, _) = next(&mut handle).await;
+    assert_eq!(after.visible, Some(controller.screen_visible().unwrap()));
+    assert_ne!(after.visible, Some(before));
+    handle.close().await;
 }

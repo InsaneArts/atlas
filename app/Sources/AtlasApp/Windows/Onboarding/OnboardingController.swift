@@ -138,6 +138,9 @@ final class OnboardingController {
     case .setOpenAtLogin(let on):
       guard snapshot.working == nil else { return }
       snapshot.opensAtLogin = on
+    case .setKeepHomePrivate(let on):
+      guard snapshot.working == nil else { return }
+      snapshot.keepsHomePrivate = on
     case .complete: enqueue(.complete)
     case .allow:
       let asker = snapshot.facts.asker

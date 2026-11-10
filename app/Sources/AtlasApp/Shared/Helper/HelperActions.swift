@@ -33,6 +33,8 @@ final class HelperActions {
   let console: SessionConsole
   /// The helper's sound, as every window shows and changes it.
   let sound: HelperSoundSwitch
+  /// The questions Atlas asks the person before an agent sends, and what they allowed, as every window shows them.
+  let asks: AskStore
   /// The `atlas` command line each command runs.
   @ObservationIgnored private let commands: any CommandRunning
   /// The viewer service, which ends every viewer's control before a log-out from a controlled helper.
@@ -53,12 +55,14 @@ final class HelperActions {
   ///   - service: The viewer service.
   ///   - barrier: The app's control work not yet answered.
   ///   - endControl: Ends this app's own control, if a window holds it, its release joining `barrier`.
+  ///   - asks: The questions every window shows; by default a store over `service` on the system's clock.
   init(
     console: SessionConsole = .shared,
     commands: any CommandRunning,
     service: any ViewerService,
     barrier: ControlBarrier,
-    endControl: @escaping @MainActor () -> Void = {}
+    endControl: @escaping @MainActor () -> Void = {},
+    asks: AskStore? = nil
   ) {
     self.commands = commands
     self.service = service
@@ -66,6 +70,7 @@ final class HelperActions {
     self.console = console
     self.endControl = endControl
     sound = HelperSoundSwitch(commands: commands)
+    self.asks = asks ?? AskStore(service: service)
   }
 
   /// Whether a command runs now, from any window: control is not taken meanwhile.

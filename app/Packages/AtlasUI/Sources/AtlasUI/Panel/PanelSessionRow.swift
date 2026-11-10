@@ -24,7 +24,7 @@ struct PanelSessionRow: View {
       .padding(PanelLayout.sessionInset)
       .frame(minHeight: PanelLayout.sessionRow)
     }
-    .buttonStyle(.row(corner: PanelLayout.sessionCorner))
+    .buttonStyle(.pill)
     .help("Show its activity in Atlas")
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(entry.label)

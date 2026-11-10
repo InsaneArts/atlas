@@ -148,3 +148,42 @@ async fn terminal_viewing_never_replaces_the_menu_bars_private_record() {
     service.shutdown().await.unwrap();
     assert_eq!(std::fs::read(record).unwrap(), b"existing menu bar");
 }
+
+#[tokio::test]
+async fn a_terminal_that_followed_the_settings_to_another_helper_heeds_that_helpers_sign_in() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let client = atlas_client::test_support::client_in(first.path());
+    let first_controller = client.controller.clone();
+    let viewer = http::configured(client, "127.0.0.1:0".to_owned(), None);
+    let mut frames = TerminalFrames {
+        viewer: viewer.clone(),
+        stream: None,
+        retired: None,
+        connected: false,
+        client: None,
+        dimension: 800,
+        backend: CaptureBackend::ScreenCaptureKit,
+        reconfiguring: false,
+        ring: Ring::default(),
+    };
+    // The settings now name another helper, whose person signs in to it.
+    let other = Arc::new(atlas_client::test_support::client_in(second.path()));
+    let other_controller = other.controller.clone();
+    *crate::viewer::unpoisoned(&viewer.client) = other;
+    let mut lease = atlas_control::Lease::default();
+    let token = lease.acquire(&other_controller).unwrap();
+    let hold = atlas_control::PrivateHold {
+        site: "github.com".to_owned(),
+        kind: atlas_control::HoldKind::SignIn,
+    };
+    lease.hide_screen(&other_controller, &token, &hold).unwrap();
+    assert!(first_controller.screen_visible().is_ok());
+
+    let refused = frames.next().await.err().expect("refused");
+
+    assert_eq!(refused.code, Code::Busy);
+    assert_eq!(refused.holder, Some(atlas_core::error::Holder::Person));
+    other_controller.end_private().unwrap();
+    lease.release();
+}

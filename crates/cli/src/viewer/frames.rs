@@ -4,6 +4,7 @@
 use super::{Viewer, unpoisoned};
 use atlas_client::client::live::LiveFrame;
 use atlas_client::overview::{READ_DEADLINE, late};
+use atlas_control::Visible;
 use atlas_core::screen::frame::Frame;
 use atlas_core::{
     error::{Code, Error, Result},
@@ -42,6 +43,10 @@ pub(super) struct Frames {
     pub(super) input_revision: u64,
     /// The input revision the newest frame was captured at.
     capture_revision: Option<u64>,
+    /// The frames captured wholly while the screen was visible to agents,
+    /// with its privacy generation then: only these are shown to anyone
+    /// but the app, and only while that generation holds.
+    visible: VecDeque<(String, Visible)>,
 }
 
 /// What input authority needs of a frame: its verified epoch and capture
@@ -52,11 +57,23 @@ pub(super) struct Observation {
 }
 
 impl Frames {
+    /// Keep `frame` as the newest capture, under `key`, read wholly under
+    /// `visible` when that is Some.
+    #[cfg(test)]
+    pub(super) fn keep_for_test(&mut self, key: &str, frame: Frame, visible: Option<Visible>) {
+        self.items.push_back((key.to_owned(), Arc::new(frame)));
+        self.capture_revision = Some(self.input_revision);
+        if let Some(visible) = visible {
+            self.visible.push_back((key.to_owned(), visible));
+        }
+    }
+
     /// Forget every frame, kept or live, and what input they showed.
     pub(super) fn clear(&mut self) {
         self.items.clear();
         self.live.clear();
         self.capture_revision = None;
+        self.visible.clear();
     }
 }
 
@@ -64,6 +81,8 @@ impl Frames {
 /// known, which every request waiting on it shares.
 pub(super) struct Capture {
     pub(super) revision: u64,
+    /// The helper it reads: only a request for the same one shares it.
+    pub(super) client: Arc<atlas_client::client::Client>,
     pub(super) outcome: watch::Receiver<Option<Captured>>,
 }
 
@@ -87,6 +106,16 @@ impl Viewer {
     /// included, ends within one deadline, so the app hears why before it
     /// gives up.
     pub(super) async fn frame(&self) -> Result<(String, Arc<Frame>)> {
+        self.frame_of(&self.client()).await
+    }
+
+    /// [`Viewer::frame`] of `client`'s helper, whichever the settings name
+    /// by the time it is read: a caller that checked that helper's privacy
+    /// is shown that helper's screen, never another's.
+    pub(super) async fn frame_of(
+        &self,
+        client: &Arc<atlas_client::client::Client>,
+    ) -> Result<(String, Arc<Frame>)> {
         let until = tokio::time::Instant::now() + READ_DEADLINE;
 
         loop {
@@ -96,10 +125,18 @@ impl Viewer {
             let ours = {
                 let mut slot = unpoisoned(&self.capture);
                 match slot.as_ref() {
-                    Some(running) => Err((running.outcome.clone(), running.revision >= revision)),
+                    // One of another helper is waited out, never shared.
+                    Some(running) => Err((
+                        running.outcome.clone(),
+                        running.revision >= revision && Arc::ptr_eq(&running.client, client),
+                    )),
                     None => {
                         let (sender, outcome) = watch::channel(None);
-                        *slot = Some(Capture { revision, outcome });
+                        *slot = Some(Capture {
+                            revision,
+                            client: client.clone(),
+                            outcome,
+                        });
                         Ok(sender)
                     }
                 }
@@ -123,7 +160,7 @@ impl Viewer {
             };
 
             let _clear = Capturing(&self.capture);
-            let outcome = tokio::time::timeout_at(until, self.take_frame())
+            let outcome = tokio::time::timeout_at(until, self.take_frame(client))
                 .await
                 .unwrap_or_else(|_| Err(late()));
             let shared = match &outcome {
@@ -136,10 +173,40 @@ impl Viewer {
         }
     }
 
+    /// [`Viewer::frame`] for anyone but the app: refused while the person
+    /// signs the helper in to an account, and for a frame captured during a
+    /// sign-in or while one began or ended, however recent.
+    pub(super) async fn shown_frame(&self) -> Result<(String, Arc<Frame>)> {
+        // One helper for the whole read: its privacy, and its screen.
+        let client = self.client();
+        let controller = client.controller.clone();
+        let admitted = controller.screen_visible()?;
+        let (key, frame) = self.frame_of(&client).await?;
+        let under = self
+            .frames
+            .lock()
+            .await
+            .visible
+            .iter()
+            .find(|(kept, _)| *kept == key)
+            .map(|(_, visible)| *visible);
+        controller.still_visible(admitted)?;
+        if under != Some(admitted) {
+            return Err(Error::new(
+                Code::Busy,
+                "The helper's screen changed privacy since this picture was taken. Try again.",
+            )
+            .held_by(atlas_core::error::Holder::Person));
+        }
+        Ok((key, frame))
+    }
+
     /// Take a frame, or reuse the last one when it is recent and no input
     /// came since.
-    async fn take_frame(&self) -> Result<(String, Arc<Frame>)> {
-        let client = self.client();
+    async fn take_frame(
+        &self,
+        client: &Arc<atlas_client::client::Client>,
+    ) -> Result<(String, Arc<Frame>)> {
         let current = client.identity().await?.epoch;
         let revision = {
             let mut frames = self.frames.lock().await;
@@ -158,18 +225,26 @@ impl Viewer {
             revision
         };
 
+        let before = client.controller.screen_visible().ok();
         let frame = Arc::new(client.frame(Some(self.frame_width)).await?);
         if frame.at.elapsed() >= FRAME_LIFETIME {
             return Err(Error::stale_frame());
         }
+        let visible = before.filter(|before| client.controller.still_visible(*before).is_ok());
 
         let key = files::token();
         let mut frames = self.frames.lock().await;
         frames.items.push_back((key.clone(), frame.clone()));
         frames.capture_revision = Some(revision);
+        if let Some(visible) = visible {
+            frames.visible.push_back((key.clone(), visible));
+        }
 
         while frames.items.len() > KEPT_FRAMES {
             frames.items.pop_front();
+        }
+        while frames.visible.len() > KEPT_FRAMES {
+            frames.visible.pop_front();
         }
 
         Ok((key, frame))

@@ -74,9 +74,19 @@ impl Named {
 }
 
 impl Viewer {
-    /// The helper's status and overview as the app shows them, with
-    /// whether control is held.
+    /// [`Viewer::status_for`] any caller but the person's own app.
+    #[cfg(test)]
     pub(super) async fn status(self: &Arc<Self>) -> Value {
+        self.status_for(false).await
+    }
+
+    /// The helper's status and overview as the app shows them, with
+    /// whether control is held: its recent rows as the person's own app
+    /// shows them when the caller is that app (`person`), with the account
+    /// each acted in and a browser's action said on its site. Any other
+    /// caller, as `atlas watch`, a chat app's view or a script, is shown
+    /// them as an agent is.
+    pub(super) async fn status_for(self: &Arc<Self>, person: bool) -> Value {
         // Reading waits on the helper, for a few seconds at most, following
         // the settings included.
         let until = tokio::time::Instant::now() + READ_DEADLINE;
@@ -116,6 +126,16 @@ impl Viewer {
         let now = atlas_core::time::timestamp();
         let overview = atlas_client::overview::overview(&doctor, active, pending, &activity, now);
         let mut status = atlas_client::overview::Reading::new(doctor, overview, active, now);
+        // The recent rows as the person's app shows them, with the account
+        // each acted in: no other caller's status carries it.
+        if person {
+            status.value["overview"]["activity"] = json!(
+                activity
+                    .iter()
+                    .map(|row| atlas_client::overview::shown_to_person(row, now))
+                    .collect::<Vec<_>>()
+            );
+        }
         atlas_client::overview::add_host_sessions(&mut status, &client, now).await;
 
         if let Some(name) = status.value["overview"]["account"].as_str() {
@@ -123,16 +143,38 @@ impl Viewer {
             status.value["overview"]["accountName"] = json!(title);
         }
 
+        // The helper's accounts, for the person's app alone: an agent's
+        // status never carries them.
+        if person {
+            let (accounts, note) = super::accounts::for_status(&self.accounts_home());
+            status.value["overview"]["accounts"] = accounts;
+            status.value["overview"]["accountNote"] = note;
+        }
+        let (asks, allowed) = super::accounts::asks_for_status(&client);
+        status.value["overview"]["asks"] = asks;
+        status.value["overview"]["allowed"] = allowed;
+        // While the person signs in, so the app keeps the lease through its
+        // window losing focus or being covered.
+        status.value["overview"]["signingIn"] = client
+            .controller
+            .private_hold()
+            .map_or(Value::Null, |hold| json!(hold));
+
         status.value
     }
 
     /// What was done in the helper lately, newest first, as the app lists
-    /// it: every session's newest rows, or with `session=` in `query` one
-    /// session's, from every file the log keeps, and whether its rows were
-    /// all cleared. An empty key is Terminal's, the commands no host named.
+    /// it: all recent sessions or the session selected by `query`. For the
+    /// person's app (`person`), each row includes its account attribution.
     /// Reading it records nothing.
-    pub(super) async fn activity(&self, query: Option<&str>) -> Result<Value> {
-        activity_of(&self.client(), activity_session(query)?, ACTIVITY_ROWS).await
+    pub(super) async fn activity_for(&self, query: Option<&str>, person: bool) -> Result<Value> {
+        activity_of(
+            &self.client(),
+            activity_session(query)?,
+            ACTIVITY_ROWS,
+            person,
+        )
+        .await
     }
 
     /// The host sessions of the last days, live and ended, newest first:
@@ -433,8 +475,9 @@ async fn account_title(
 /// What was done in the helper lately, newest first, as the app and the
 /// view list it: every session's newest rows, or `whose` rows alone, from
 /// every file the log keeps, at most `most` rows, each with the pictures
-/// taken around it, and whether its rows were all cleared. Reading it
-/// records nothing.
+/// taken around it, and whether its rows were all cleared; for the
+/// person's own app (`person`), each row names the account it acted in.
+/// Reading it records nothing.
 ///
 /// # Errors
 ///
@@ -443,6 +486,7 @@ pub(crate) async fn activity_of(
     client: &Client,
     whose: Option<Whose>,
     most: usize,
+    person: bool,
 ) -> Result<Value> {
     // A folder that can't be read is said, never shown as no activity.
     let directory = client.output_dir()?.to_path_buf();
@@ -491,7 +535,7 @@ pub(crate) async fn activity_of(
         .iter()
         .zip(pictures)
         .map(|(row, picture)| {
-            let mut shown = activity_row(row, now);
+            let mut shown = activity_row(row, now, person);
             let (after, facts) = picture.unwrap_or_default();
             let (after, after_at) = after.unzip();
             shown["after"] = json!(after);
@@ -517,8 +561,20 @@ pub(crate) async fn activity_of(
 /// it. Only these fields go, through [`atlas_client::overview::shown`]:
 /// never typed text, argv, coordinates or titles, which the log never keeps
 /// either.
-pub(super) fn activity_row(row: &atlas_client::activity_log::Row, now: u128) -> Value {
-    let shown = atlas_client::overview::shown(row, now);
+///
+/// For the person's own app (`person`), it names the listed account it
+/// acted in and what let it, and a browser's action is said on its site;
+/// for anyone else, as for agents, neither.
+pub(super) fn activity_row(
+    row: &atlas_client::activity_log::Row,
+    now: u128,
+    person: bool,
+) -> Value {
+    let shown = if person {
+        atlas_client::overview::shown_to_person(row, now)
+    } else {
+        atlas_client::overview::shown(row, now)
+    };
     let keys = shown.keys();
     let mut fields = json!(shown);
     rename(&mut fields, "actionCount", "count");

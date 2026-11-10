@@ -65,7 +65,7 @@
           }
         case .sizes:
           ForEach(ListRow.Size.allCases, id: \.self) { size in
-            GroupedList(Self.heights, style: size == .compact ? .compact : .regular) { row in
+            GroupedList(Self.heights) { row in
               ListRow(row.title, lead: row.lead, trailing: .text(String("\(Int(size.height)) pt")), size: size)
             }
           }

@@ -8,6 +8,7 @@
 //! left, and the input goes then too.
 use super::{Actor, Client, live::read_header};
 use crate::before::{self, Raw};
+use atlas_control::Visible;
 use atlas_core::{
     actions::Action,
     error::{Code, Error, Result},
@@ -30,6 +31,9 @@ pub(super) const WAIT: Duration = Duration::from_millis(150);
 /// The last part of [`WAIT`], kept for the daemon to answer the picture's
 /// cancel.
 const CANCEL: Duration = Duration::from_millis(50);
+/// The longest a question to the person waits for its picture: it is put
+/// up without one after that.
+const FOR_ASK: Duration = Duration::from_secs(1);
 /// The longest the picture after an action is waited for, once due: a
 /// helper that takes longer leaves the action without one, and its process
 /// ends.
@@ -41,6 +45,8 @@ pub(crate) struct Taking {
     task: JoinHandle<Result<Raw>>,
     deadline: Instant,
     cancel: Option<oneshot::Sender<()>>,
+    /// The screen's privacy when it was asked for.
+    admitted: Visible,
 }
 
 impl std::fmt::Debug for Taking {
@@ -59,11 +65,12 @@ impl Drop for Taking {
 }
 
 impl Taking {
-    /// The picture, when it is in hand by its deadline: it is cancelled
-    /// [`CANCEL`] before, and may still come while the daemon answers. None
-    /// when it failed, was cancelled, or nothing came by the deadline, which
-    /// this never waits past.
-    pub(super) async fn taken(mut self) -> Option<Raw> {
+    /// The picture, when it is in hand by its deadline, with the screen's
+    /// privacy when it was asked for: it is cancelled [`CANCEL`] before,
+    /// and may still come while the daemon answers. None when it failed,
+    /// was cancelled, or nothing came by the deadline, which this never
+    /// waits past.
+    pub(super) async fn taken(mut self) -> Option<(Raw, Visible)> {
         let cancel_at = self.deadline.checked_sub(CANCEL).unwrap_or(self.deadline);
         let taken = match tokio::time::timeout_at(cancel_at.into(), &mut self.task).await {
             Ok(taken) => taken,
@@ -75,7 +82,7 @@ impl Taking {
                     .ok()?
             }
         };
-        taken.ok()?.ok()
+        taken.ok()?.ok().map(|raw| (raw, self.admitted))
     }
 }
 
@@ -85,10 +92,12 @@ impl Client {
     /// the settings keep pictures, and its command has none yet: one for
     /// each command, before its first input. It is asked for as soon as the
     /// input's session is known, beside the rest of its preflight, and the
-    /// input stops waiting for it [`WAIT`] after that.
+    /// input stops waiting for it [`WAIT`] after that. None is taken while
+    /// the person signs the helper in to an account.
     pub(super) fn picture_before(&self, epoch: &InputEpoch, capture_pid: u32) -> Option<Taking> {
         let deadline = Instant::now() + WAIT;
         let doing = self.doing.as_ref().filter(|_| self.actor == Actor::Agent)?;
+        let admitted = self.controller.screen_visible().ok()?;
         if !self.config.activity.pictures_before_actions || !doing.before().take() {
             return None;
         }
@@ -103,7 +112,42 @@ impl Client {
             task,
             deadline,
             cancel: Some(cancel),
+            admitted,
         })
+    }
+
+    /// A picture of the helper's screen now, for a question to the person:
+    /// taken once the command's input is cleaned up and its control let go,
+    /// so the person taking over never waits for it; in the helper's session
+    /// as verified afresh, never while the person has stopped agents or
+    /// signs the helper in to an account, and whether or not the settings
+    /// keep pictures of actions. None when none comes within [`FOR_ASK`], or
+    /// a sign-in began or ended while it was taken; otherwise with the
+    /// screen's privacy when it was asked for, which its question checks
+    /// again before it goes up.
+    pub(crate) async fn picture_for_ask(&self) -> Option<(Raw, Visible)> {
+        if self.controller.stop_noted() {
+            return None;
+        }
+        let admitted = self.controller.screen_visible().ok()?;
+        let raw = tokio::time::timeout(FOR_ASK, async {
+            let verified = self.verify().await.ok()?;
+            let epoch = &verified.session().epoch;
+            let (_cancel, cancelled) = oneshot::channel();
+            frame(
+                self.transport.clone(),
+                epoch.input_epoch(),
+                epoch.capture_pid,
+                cancelled,
+            )
+            .await
+            .ok()
+        })
+        .await
+        .ok()
+        .flatten()?;
+        self.controller.still_visible(admitted).ok()?;
+        Some((raw, admitted))
     }
 
     /// Name `raw` on its command's rows from now on, with the facts of the
@@ -141,7 +185,9 @@ impl Client {
     /// # Errors
     ///
     /// Returns the failure to verify the helper or to take or keep the
-    /// picture; the action it follows stands either way.
+    /// picture; the action it follows stands either way. While the person
+    /// signs the helper in to an account none is taken, and one a sign-in
+    /// began or ended during is dropped: both succeed with nothing kept.
     pub async fn picture_after(&self, before: &str, ended: u64) -> Result<()> {
         let output = self.config.output_dir.clone();
         let after = before::after_name(before)
@@ -159,6 +205,10 @@ impl Client {
             return Ok(());
         }
 
+        // Right before capturing, and again before it is kept.
+        let Ok(admitted) = self.controller.screen_visible() else {
+            return Ok(());
+        };
         let taken = tokio::time::timeout(AFTER, async {
             let verified = self.verify().await?;
             let epoch = &verified.session().epoch;
@@ -175,6 +225,9 @@ impl Client {
         let raw = taken
             .await
             .map_err(|_| Error::new(Code::Capture, "The picture took too long"))??;
+        if self.controller.still_visible(admitted).is_err() {
+            return Ok(());
+        }
         let keep = self.config.activity.keep();
         tokio::task::spawn_blocking(move || before::save(&output, &after, &raw, keep))
             .await
@@ -288,6 +341,7 @@ async fn frame(
         width,
         height,
         at,
+        display: (epoch.width, epoch.height),
     })
 }
 

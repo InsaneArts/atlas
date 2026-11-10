@@ -292,10 +292,10 @@ final class ViewerReadingLoop {
     if !reply.ready {
       if shown.ready { shown.ready = false }
       if viewer.holdingControl || control.acquiring {
-        control.releaseControl(ViewerWords.controlEnded(reply.overview.reason))
+        control.suspend(ViewerWords.controlEnded(reply.overview.reason))
       }
     } else if viewer.holdingControl, statusReading > control.controlSince, reply.noViewerInControl {
-      control.releaseControl(ViewerWords.releasedElsewhere)
+      control.suspend(ViewerWords.releasedElsewhere)
     }
     viewer.forgetRecoveryOnceNoneNeeded()
     // Discover and refresh session history; the pane model decides when live sessions also need polling.
@@ -316,7 +316,7 @@ final class ViewerReadingLoop {
     if let viewer, viewer.holdingControl || viewer.control.acquiring, let newest = newestFrame,
       newest.revision.hasPrefix("pipe:") == frame.revision.hasPrefix("pipe:"), newest.revision != frame.revision
     {
-      viewer.control.releaseControl(ViewerWords.helperChanged)
+      viewer.control.suspend(ViewerWords.helperChanged)
     }
     stopAwaiting()
     let wasStale = reading.pictureStale(at: now)
@@ -346,7 +346,7 @@ final class ViewerReadingLoop {
     if shown.picture != nil { shown.picture = nil }
     newestPicture = nil
     newestSize = nil
-    viewer?.control.releaseControl()
+    viewer?.control.suspend()
     let reason = error.localizedDescription
     if shown.unavailable != reason { shown.unavailable = reason }
     awaitPicture()

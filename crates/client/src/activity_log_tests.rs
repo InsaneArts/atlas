@@ -732,3 +732,67 @@ fn a_rows_age_and_time_read_from_its_nanoseconds() {
     let undated = Row::parse(&json!({"operation": "run", "at": "soon"})).unwrap();
     assert_eq!((undated.age(1), undated.at_ms()), (None, None));
 }
+
+#[test]
+fn a_row_keeps_the_account_it_acted_in_and_what_let_it_and_reads_without_them() {
+    let account = json!({"name": "github.com",
+        "key": {"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}});
+    for allowed in ["once", "task", "trusted"] {
+        let written = json!({"at": "1", "operation": "input", "verb": "click",
+            "account": account, "allowed": allowed});
+        let row = Row::parse(&written).unwrap();
+        let read = serde_json::to_value(&row).unwrap();
+        assert_eq!(read["account"], account);
+        assert_eq!(read["allowed"], allowed);
+        let again = Row::parse(&read).unwrap();
+        assert_eq!(
+            (again.account, again.allowed),
+            (row.account, row.allowed),
+            "{allowed}"
+        );
+    }
+    let app = json!({"name": "Slack", "key": {"kind": "app", "id": "com.tinyspeck.slackmacgap"}});
+    let row = Row::parse(&json!({"at": "1", "operation": "input", "account": app})).unwrap();
+    assert_eq!(row.account.as_ref().unwrap().key.browser, None);
+    assert_eq!(row.account.as_ref().unwrap().site(), None);
+    assert_eq!(row.allowed, None);
+    assert_eq!(serde_json::to_value(&row).unwrap()["account"], app);
+
+    // A row an older build wrote has neither, and writes neither back.
+    let old = Row::parse(&json!({"at": "1", "operation": "input", "verb": "click"})).unwrap();
+    assert_eq!((old.account.clone(), old.allowed), (None, None));
+    let written = serde_json::to_value(&old).unwrap();
+    assert!(written.get("account").is_none() && written.get("allowed").is_none());
+}
+
+#[test]
+fn an_account_or_allowance_that_doesnt_read_is_dropped_and_its_row_kept() {
+    for (account, allowed) in [
+        (json!(null), json!(null)),
+        (json!("github.com"), json!("sometimes")),
+        (json!({"name": "github.com"}), json!(3)),
+        (
+            json!({"name": "github.com", "key": {"kind": "page", "id": "github.com"}}),
+            json!(true),
+        ),
+        (
+            json!({"name": 5, "key": {"kind": "site", "id": "github.com"}}),
+            json!({"once": true}),
+        ),
+        (
+            json!({"name": "github.com", "key": {"kind": "site", "id": 7}}),
+            json!(["once"]),
+        ),
+        (
+            json!({"name": "github.com", "key": {"kind": "site", "id": "github.com", "browser": 1}}),
+            json!("Once"),
+        ),
+    ] {
+        let row = Row::parse(&json!({"at": "1", "operation": "input", "verb": "click",
+            "account": account, "allowed": allowed}))
+        .expect("the row is kept");
+        assert_eq!(row.verb.as_deref(), Some("click"));
+        assert_eq!(row.account, None, "{account}");
+        assert_eq!(row.allowed, None, "{allowed}");
+    }
+}

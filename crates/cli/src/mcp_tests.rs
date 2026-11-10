@@ -1604,6 +1604,27 @@ pub(super) const LOOKING: [&str; 6] = [
 ];
 
 #[tokio::test]
+async fn the_views_screen_is_refused_while_the_person_signs_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let server = server(dir.path());
+    *server.last.lock().await = Some((Instant::now(), json!({"state": "control"})));
+    let mut lease = atlas_control::Lease::default();
+    let controller = server.client.controller.clone();
+    let token = lease.acquire(&controller).unwrap();
+    let hold = atlas_control::PrivateHold {
+        site: "github.com".to_owned(),
+        kind: atlas_control::HoldKind::SignIn,
+    };
+    lease.hide_screen(&controller, &token, &hold).unwrap();
+
+    let refused = server.screen(None, None).await.unwrap_err();
+    assert_eq!(refused.code, "busy");
+    assert_eq!(refused.holder, Some(atlas_core::error::Holder::Person));
+    controller.end_private().unwrap();
+    lease.release();
+}
+
+#[tokio::test]
 async fn the_activity_keeps_only_the_marks_of_a_steps_facts_and_where_its_element_stands() {
     let mut facts = json!({
         "action": "type", "display": {"width": 1440, "height": 900},

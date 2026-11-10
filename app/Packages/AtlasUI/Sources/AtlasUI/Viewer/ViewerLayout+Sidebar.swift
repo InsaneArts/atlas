@@ -70,17 +70,8 @@ extension ViewerLayout {
   static let chevronTurn: Double = 90
   /// 24: Ended's heading as a button, its fill a capsule round the line.
   static let endedHeadingHeight = ControlHeight.xs
-  /// 12: the corner of Ended's fill, half its height.
-  static let endedHeadingCorner = endedHeadingHeight / 2
   /// Ended's inset round its button: 6 above and 2 under, so its line stands where another heading's does.
   static let endedHeadingInset = EdgeInsets(top: Spacing.xsPlus, leading: .zero, bottom: Spacing.half, trailing: .zero)
-  /// About 22.5: the helper row's tile, the plate an app's icon draws in a session's icon's 28, so the tile stands the
-  /// size of the session icons above it and its words start where theirs do.
-  static let helperTile = SessionIcon.plate(sidebarIcon)
-  /// About 5.6: the helper tile's corner, a quarter of its side, as a session's tile rounds.
-  static let helperTileCorner = helperTile / 4
-  /// 14: Atlas's orbit across its tile.
-  static let helperMark = IconSize.xsPlus
   /// 6: how far a row of Ended rises from as it comes in, from under its heading, and sinks to as it goes.
   static let endedRise = Spacing.xsPlus
   /// 12: how far past a threshold the window must go to cross back, so a window held near one never flickers between

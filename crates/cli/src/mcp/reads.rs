@@ -177,9 +177,12 @@ impl Server {
     /// (the view's own size), from a recent status read. The tiles go in
     /// the result's `_meta`, which the view reads and the model does not;
     /// `streaming` says they came from the menu bar's frame service, which
-    /// the view may read as often as it likes.
+    /// the view may read as often as it likes. Refused with `busy`, held by
+    /// the person, while they sign the helper in to an account, and when a
+    /// sign-in began or ended while it was read.
     pub(super) async fn screen(&self, since: Option<&str>, drawn: Option<u32>) -> Result<Value> {
         let status = self.recent_status().await?;
+        let admitted = self.client.controller.screen_visible()?;
         let (shot, shared, streaming) = match self.streamed().await {
             Some(streamed) => (
                 Some(Shot::Streamed(streamed.rgb, streamed.layout)),
@@ -193,6 +196,7 @@ impl Server {
                 (screen.map(|screen| Shot::Png(screen.png)), shared, false)
             }
         };
+        self.client.controller.still_visible(admitted)?;
         if let Some((key, _)) = &shared {
             self.saw_frame(key.clone()).await;
         }
@@ -248,7 +252,8 @@ impl Server {
                 || Error::new(Code::BadRequest, "Name a session by its key"),
             )?)),
         };
-        let mut reply = crate::viewer::activity_of(&self.client, whose, ACTIVITY).await?;
+        // The view is an agent's: no row names the account it acted in.
+        let mut reply = crate::viewer::activity_of(&self.client, whose, ACTIVITY, false).await?;
         if let Some(fields) = reply.as_object_mut() {
             fields.remove("ok");
         }

@@ -14,7 +14,7 @@ use atlas_core::{
     screen::{elements::Element, geometry::Bounds},
 };
 use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
-use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType};
+use objc2_core_foundation::{CFBoolean, CFNull, CFRetained, CFString, CFType, CFURL};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt,
@@ -579,6 +579,334 @@ pub(super) fn read<A: Ask>(
     Ok(keyboard)
 }
 
+/// Whether the element with keyboard focus inside the app whose element is
+/// `app` is a password field, and if so, the address of the web page it sits
+/// in, when it sits in one: the nearest web area above it. `None` for any
+/// other field, or none. Nothing a field holds is read.
+pub(super) fn secure_page<A: Ask>(
+    ask: A,
+    app: &A::Element,
+    deadline: Instant,
+) -> Result<Option<Option<String>>> {
+    let mut reader = Reader { ask, deadline };
+    let Some(element) = reader.focused_element(app)? else {
+        return Ok(None);
+    };
+    let role = reader.text(&element, "AXRole")?;
+    let subrole = reader.text(&element, "AXSubrole")?;
+    if crate::native::focus::field_of(role.as_deref(), subrole.as_deref())
+        != Some(crate::native::focus::SECURE)
+    {
+        return Ok(None);
+    }
+    let mut current = element;
+    for _ in 0..PARENTS {
+        match reader.text(&current, "AXRole")?.as_deref() {
+            Some("AXWebArea") => return Ok(Some(reader.text(&current, "AXURL")?)),
+            Some("AXWindow" | "AXApplication") => return Ok(Some(None)),
+            _ => {}
+        }
+        match reader.reference(&current, "AXParent")? {
+            Some(parent) => current = parent,
+            None => return Ok(Some(None)),
+        }
+    }
+    Ok(Some(None))
+}
+
+/// A scripted app for tests elsewhere in the native layer: element 0 is the
+/// app, and each element answers its attributes as scripted, absent
+/// otherwise. It keeps every attribute asked for, so a test can prove what
+/// was never read.
+#[cfg(test)]
+#[derive(Default)]
+pub(in crate::native) struct ScriptedApp {
+    answers: std::collections::HashMap<(usize, &'static str), Answer<usize>>,
+    pub(in crate::native) asked: Vec<&'static str>,
+}
+
+#[cfg(test)]
+impl ScriptedApp {
+    /// `element`'s `attribute` holds `text`.
+    pub(in crate::native) fn text(
+        mut self,
+        element: usize,
+        attribute: &'static str,
+        text: &str,
+    ) -> Self {
+        self.answers
+            .insert((element, attribute), Answer::Text(text.to_owned()));
+        self
+    }
+
+    /// `element`'s `attribute` names element `other`.
+    pub(in crate::native) fn names(
+        mut self,
+        element: usize,
+        attribute: &'static str,
+        other: usize,
+    ) -> Self {
+        self.answers
+            .insert((element, attribute), Answer::Element(other));
+        self
+    }
+
+    /// [`secure_page`] in this app, by `deadline`.
+    pub(in crate::native) fn password_page(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<Option<Option<String>>> {
+        secure_page(&mut *self, &0, deadline)
+    }
+}
+
+#[cfg(test)]
+impl Ask for &mut ScriptedApp {
+    type Element = usize;
+
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn bound(&mut self, _: &usize, _: Duration) -> bool {
+        true
+    }
+
+    fn ask(&mut self, element: &usize, attribute: &'static str) -> Answer<usize> {
+        self.asked.push(attribute);
+        self.answers
+            .get(&(*element, attribute))
+            .cloned()
+            .unwrap_or(Answer::Absent)
+    }
+
+    fn owner(&mut self, _: &usize) -> Option<i64> {
+        Some(812)
+    }
+}
+
+/// What the ask-before-sending gate reads of the element an action aims at:
+/// its role, subrole and name, whether it is a password field, and the
+/// address of the web page it sits in. Nothing a field holds.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(in crate::native) struct Aimed {
+    pub(in crate::native) role: Option<String>,
+    pub(in crate::native) subrole: Option<String>,
+    /// Its title, else its description; none when absent or uncertain.
+    pub(in crate::native) name: Option<String>,
+    /// Its identifier: in a web page, its DOM id.
+    pub(in crate::native) identifier: Option<String>,
+    /// The window it is in, read for the element with keyboard focus.
+    pub(in crate::native) window: Option<Element>,
+    /// Where it is on screen.
+    pub(in crate::native) frame: Option<Bounds>,
+    /// The web page's address, when it sits in one and it reads.
+    pub(in crate::native) url: Option<String>,
+    /// Whether it sits in a web page at all.
+    pub(in crate::native) in_page: bool,
+}
+
+/// The roles a press goes to: a click on text inside one is a click on it.
+const PRESSABLE: [&str; 9] = [
+    "AXButton",
+    "AXLink",
+    "AXMenuItem",
+    "AXMenuButton",
+    "AXPopUpButton",
+    "AXCheckBox",
+    "AXRadioButton",
+    "AXDisclosureTriangle",
+    "AXTab",
+];
+
+/// How far up from the element under a point the gate looks for the
+/// control a press goes to.
+const PRESS_LEVELS: usize = 4;
+
+impl<A: Ask> Reader<A> {
+    /// [`Aimed`] for `element`: its own role and name, or, from the element
+    /// under a point (`pressing`), those of the nearest pressable element a
+    /// few levels up, and the page above it.
+    fn aimed(&mut self, element: A::Element, pressing: bool) -> Result<Aimed> {
+        let mut aimed = Aimed {
+            role: self.text(&element, "AXRole")?,
+            subrole: self.text(&element, "AXSubrole")?,
+            ..Aimed::default()
+        };
+        let mut named = element.clone();
+        if pressing && !PRESSABLE.contains(&aimed.role.as_deref().unwrap_or_default()) {
+            let mut current = element.clone();
+            for _ in 0..PRESS_LEVELS {
+                let Some(parent) = self.reference(&current, "AXParent")? else {
+                    break;
+                };
+                let role = self.text(&parent, "AXRole")?;
+                if PRESSABLE.contains(&role.as_deref().unwrap_or_default()) {
+                    aimed.role = role;
+                    aimed.subrole = self.text(&parent, "AXSubrole")?;
+                    named = parent;
+                    break;
+                }
+                current = parent;
+            }
+        }
+        aimed.frame = self.frame(&named).ok().flatten();
+        let mut failed = false;
+        aimed.name = self
+            .name(&named, "AXTitle", &mut failed)?
+            .filter(|name| !name.is_empty());
+        // A failed title getter does not prove it is absent: a description
+        // cannot stand in for the higher-priority name we could not read.
+        if aimed.name.is_none() && !failed {
+            aimed.name = self
+                .name(&named, "AXDescription", &mut failed)?
+                .filter(|name| !name.is_empty());
+        }
+        if !pressing && let Some(window) = self.reference(&element, "AXWindow")? {
+            aimed.window = Some(self.window(&window)?);
+        }
+        let mut current = element;
+        let mut in_page = None;
+        for _ in 0..PARENTS {
+            match self.text(&current, "AXRole")?.as_deref() {
+                Some("AXWebArea") => {
+                    in_page = Some(true);
+                    aimed.url = self.text(&current, "AXURL").ok().flatten();
+                    break;
+                }
+                Some("AXWindow" | "AXApplication") => {
+                    in_page = Some(false);
+                    break;
+                }
+                _ => {}
+            }
+            match self.reference(&current, "AXParent")? {
+                Some(parent) => current = parent,
+                None => return Err(Unread::Failed.error()),
+            }
+        }
+        aimed.in_page = in_page.ok_or_else(|| Unread::Deep.error())?;
+        let identifier = if aimed.in_page {
+            "AXDOMIdentifier"
+        } else {
+            "AXIdentifier"
+        };
+        aimed.identifier = self
+            .name(&named, identifier, &mut failed)?
+            .filter(|identifier| !identifier.is_empty());
+        Ok(aimed)
+    }
+}
+
+/// The element keyboard focus was on in an app, kept only to tell later
+/// whether it still is: compared with what has focus then, never asked
+/// anything.
+#[derive(Clone)]
+pub(in crate::native) struct Held {
+    pub(in crate::native) pid: i64,
+    element: ffi::Kept,
+}
+
+/// Whether keyboard focus in the app `held` names is still on the element
+/// it keeps, waiting at most `timeout`: the app is asked only which element
+/// has focus.
+pub(in crate::native) fn still_focused(held: &Held, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let Ok(app) = app_element(held.pid) else {
+        return false;
+    };
+    let mut reader = Reader {
+        ask: Live,
+        deadline,
+    };
+    matches!(reader.focused_element(&app), Ok(Some(element)) if *element == *held.element.0)
+}
+
+/// [`Aimed`] for the element with keyboard focus in app `pid`, and that
+/// element, held; none when nothing has focus. Waits at most `timeout` in
+/// all.
+pub(in crate::native) fn focused_aim(pid: i64, timeout: Duration) -> Result<Option<(Held, Aimed)>> {
+    let deadline = Instant::now() + timeout;
+    let app = app_element(pid)?;
+    let mut reader = Reader {
+        ask: Live,
+        deadline,
+    };
+    let Some(element) = reader.focused_element(&app)? else {
+        return Ok(None);
+    };
+    let held = Held {
+        pid,
+        element: ffi::Kept(element.clone()),
+    };
+    reader
+        .aimed(element, false)
+        .map(|aimed| Some((held, aimed)))
+}
+
+/// Read the current page and target attributes of an already revalidated
+/// reference object, within the reference read's original deadline.
+pub(super) fn element_aim(element: CFRetained<AXUIElement>, deadline: Instant) -> Result<Aimed> {
+    Reader {
+        ask: Live,
+        deadline,
+    }
+    .aimed(element, false)
+}
+
+/// [`Aimed`] for what lies at `x`, `y` in app `pid`, a press going to the
+/// nearest pressable element above it; none when nothing is there.
+pub(in crate::native) fn pointed_aim(
+    pid: i64,
+    x: f64,
+    y: f64,
+    timeout: Duration,
+) -> Result<Option<Aimed>> {
+    let deadline = Instant::now() + timeout;
+    let app = app_element(pid)?;
+    #[allow(clippy::cast_possible_truncation)]
+    let Some(element) = ffi::element_at(&app, x as f32, y as f32)
+        .map_err(|status| Unread::Failed.asking("AXUIElementCopyElementAtPosition", status))?
+    else {
+        return Ok(None);
+    };
+    Reader {
+        ask: Live,
+        deadline,
+    }
+    .aimed(element, true)
+    .map(Some)
+}
+
+/// The whole text of the focused, non-secure field in app `pid`, which a
+/// Return would send; none when it can't be read whole, or it is a password
+/// field. Only the gate reads it, for the person's question.
+pub(in crate::native) fn focused_text(pid: i64, timeout: Duration) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    let app = app_element(pid).ok()?;
+    let mut reader = Reader {
+        ask: Live,
+        deadline,
+    };
+    let element = reader.focused_element(&app).ok()??;
+    let subrole = reader.text(&element, "AXSubrole").ok()?;
+    if subrole.as_deref() == Some(crate::native::focus::SECURE) {
+        return None;
+    }
+    // A value longer than Atlas reads is cut, and refused here: it isn't
+    // the whole message.
+    reader.text(&element, "AXValue").ok()?
+}
+
+/// [`secure_page`] in app `pid`, waiting at most `timeout` in all.
+pub(in crate::native) fn password_page(
+    pid: i64,
+    timeout: Duration,
+) -> Result<Option<Option<String>>> {
+    let deadline = Instant::now() + timeout;
+    secure_page(Live, &app_element(pid)?, deadline)
+}
+
 /// Where keyboard focus is inside app `pid`, as far as what is `judged`
 /// needs, waiting at most `timeout` in all. Any read that fails, answers
 /// something else, is cut short or ends past the deadline makes the whole
@@ -703,6 +1031,14 @@ fn answer(value: CFRetained<CFType>) -> Answer<CFRetained<AXUIElement>> {
     }
     if let Some(flag) = value.downcast_ref::<CFBoolean>() {
         return Answer::Flag(flag.as_bool());
+    }
+    // A web page's address, as `AXURL` holds it.
+    if let Some(url) = value.downcast_ref::<CFURL>() {
+        return match bounded_string(&url.string()) {
+            Some((text, false)) => Answer::Text(text),
+            Some((_, true)) => Answer::Cut,
+            None => Answer::Other,
+        };
     }
     if let Some(geometry) = value.downcast_ref::<AXValue>() {
         return geometric(geometry);

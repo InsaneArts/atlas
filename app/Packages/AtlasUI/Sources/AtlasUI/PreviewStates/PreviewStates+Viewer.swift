@@ -10,6 +10,10 @@
     @MainActor public static var viewer: [PreviewState<ViewerState>] {
       [
         PreviewState(name: "Working", value: viewerWorking),
+        PreviewState(name: "Waiting for you", value: viewerAsk),
+        PreviewState(name: "Signing in", value: viewerSigningIn),
+        PreviewState(name: "Signed in", value: viewerSignedIn),
+        PreviewState(name: "Forgot a site", value: viewerForgotten),
         PreviewState(name: "Idle", value: viewerIdle),
         PreviewState(name: "You have control", value: viewerControl),
         PreviewState(name: "Needs you", value: viewerNeedsYou),

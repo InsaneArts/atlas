@@ -38,7 +38,7 @@ pub const FOLDER: &str = "before";
 /// The longest side a picture is taken at, and the JPEG quality it is kept
 /// at.
 pub(crate) const SIDE: u32 = 1280;
-const QUALITY: f64 = 0.6;
+pub(crate) const QUALITY: f64 = 0.6;
 /// The most bytes they take in all, whatever the days they are kept.
 const ROOM: u64 = 500 * 1024 * 1024;
 /// What a file's temporary name adds while it is written.
@@ -243,13 +243,15 @@ pub fn facts(output: &Path, before: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Packed RGB pixels of the helper's screen, three bytes each, and when
-/// they were taken, in nanoseconds since 1970.
+/// Packed RGB pixels of the helper's screen, three bytes each, when they
+/// were taken, in nanoseconds since 1970, and the display they show, in
+/// the points elements are placed in.
 pub(crate) struct Raw {
     pub(crate) rgb: Vec<u8>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) at: u128,
+    pub(crate) display: (f64, f64),
 }
 
 /// How many pictures this process is saving, and the signal that one ended.
@@ -721,6 +723,14 @@ impl Slot {
             held.taken = Taken::Taking;
         }
         first
+    }
+
+    /// The picture's turn comes again: the input it was for sent nothing,
+    /// and the next attempt takes its own.
+    pub(crate) fn reset(&self) {
+        let mut held = self.lock();
+        held.taken = Taken::No;
+        held.facts = Map::new();
     }
 
     /// The picture is in hand, to be saved as `name`, before an input that

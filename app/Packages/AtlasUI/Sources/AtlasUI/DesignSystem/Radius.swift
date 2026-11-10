@@ -7,9 +7,9 @@ enum Radius {
   static let extraSmall: CGFloat = 6
   /// 8: a symbol tile.
   static let small: CGFloat = 8
-  /// 10: a small picture's frame, a card group and a small window's empty stage.
+  /// 10: a small picture's frame and a small window's empty stage.
   static let medium: CGFloat = 10
-  /// 12: a card and a large picture's frame.
+  /// 12: a card, every grouped list's group, and a large picture's frame.
   static let large: CGFloat = 12
   /// 26: a modal surface's corners, such as an alert's (matching macOS 26 alerts), and the menu bar panel's card.
   static let extraLarge: CGFloat = 26

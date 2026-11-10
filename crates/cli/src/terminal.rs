@@ -105,6 +105,9 @@ pub async fn monitor(
             "atlas monitor --terminal requires an interactive terminal for both input and output",
         ));
     }
+    // While the person signs the helper in to an account its screen is
+    // hidden here as from agents, from the start and at each picture.
+    client.controller.screen_visible()?;
     let display = client.identity().await?.epoch.display;
     let points = (display.width, display.height);
     // With the menu bar running for this helper, the terminal shares its
@@ -120,6 +123,7 @@ pub async fn monitor(
             failed: false,
             found: Discovery::of(&client),
             address: address.clone(),
+            controller: Box::new(client.controller.clone()),
         };
         return connected(address, frames, read_only, max_dimension, points).await;
     }
@@ -178,7 +182,9 @@ async fn discover(found: Discovery) -> Option<(String, Value)> {
 }
 
 /// Where the terminal's pictures come from: its own private viewer, or the
-/// menu bar's frame service, shared with every other viewer.
+/// menu bar's frame service, shared with every other viewer. Each picture
+/// is read only while the screen of the helper it comes from is shown to
+/// agents, and kept only when no sign-in began or ended meanwhile.
 enum Frames {
     Private(viewer::TerminalFrames),
     Shared {
@@ -192,6 +198,9 @@ enum Frames {
         /// The menu bar viewer's address control goes to, renewed with the
         /// service when a restarted menu bar is found again.
         address: Address,
+        /// The controller of the helper the menu bar serves for this
+        /// terminal: its sign-in hold hides the screen here too.
+        controller: Box<atlas_control::Controller>,
     },
 }
 
@@ -220,6 +229,7 @@ impl Frames {
                 failed,
                 found,
                 address,
+                controller,
             } => {
                 if *failed && let Some((url, fresh)) = discover(found.clone()).await {
                     *descriptor = fresh;
@@ -227,7 +237,7 @@ impl Frames {
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner) = url;
                 }
-                let result = shared_next(descriptor, client).await;
+                let result = controller.shown(shared_next(descriptor, client)).await;
                 *failed = result.is_err();
                 if *failed {
                     *client = None;

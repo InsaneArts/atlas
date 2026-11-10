@@ -25,7 +25,8 @@ extension HelperActions {
       commands: commands,
       service: service,
       barrier: ControlBarrier(service: service, clock: clock),
-      endControl: endControl
+      endControl: endControl,
+      asks: AskStore(service: service, clock: clock)
     )
   }
 }

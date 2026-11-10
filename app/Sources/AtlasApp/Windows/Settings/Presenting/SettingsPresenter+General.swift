@@ -1,9 +1,10 @@
 import AtlasUI
 
 extension SettingsPresenter {
-  /// The General pane: Open at Login as the panel keeps it, the menu bar's glyph as its item draws it, the picture as
-  /// the main window keeps it, the helper's sound as `atlas sound` says, the pictures of agent actions as Atlas's
-  /// settings keep them with how many this Mac holds, and the saved choices. Paused is offered only while the main window is open, since only it pauses. The
+  /// The General and Activity pages: Open at Login as the panel keeps it, the menu bar's glyph as its item draws it,
+  /// the picture as the main window keeps it, the helper's sound as `atlas sound` says, the pictures of agent actions as
+  /// Atlas's settings keep them with how many this Mac holds, and the saved choices. Paused is offered only while the
+  /// main window is open, since only it pauses. The
   /// helper counts as muted until it says otherwise, as Atlas mutes it unless told not to; a mute the person wants and
   /// the helper cannot make says why, as does a change that did not reach the helper. Days of three or seven read as
   /// their choice unless the person chose Custom….
@@ -38,7 +39,7 @@ extension SettingsPresenter {
       // What a picture's details keep, typed text among them, may be left beside none.
       canDeletePictures: pictures.stored.map { $0.count > 0 || $0.bytes > 0 } ?? false,
       notify: snapshot.notify,
-      notice: notice(snapshot, in: .general, busy: false)
+      notice: notice(snapshot, in: .activity, busy: false)
     )
   }
 }

@@ -31,7 +31,7 @@ struct SidebarEndedHeading: View {
       .padding(.horizontal, ViewerLayout.headingInset.leading)
       .frame(width: ViewerLayout.pillWidth, height: ViewerLayout.endedHeadingHeight)
     }
-    .buttonStyle(.row(corner: ViewerLayout.endedHeadingCorner))
+    .buttonStyle(.pill)
     .help(Text(verbatim: isOpen ? "Hide Ended Sessions" : "Show Ended Sessions"))
     .accessibilityLabel(Text(verbatim: "Ended, \(count)"))
     .accessibilityValue(Text(verbatim: isOpen ? "Shown" : "Hidden"))

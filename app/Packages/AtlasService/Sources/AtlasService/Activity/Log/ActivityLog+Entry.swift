@@ -48,6 +48,11 @@ extension ActivityLog {
     public var afterAt: Date?
     /// What Atlas recorded to mark the spot on its pictures; nil when it recorded nothing.
     public var facts: ActionFacts?
+    /// The listed account an agent's action acted in, when the service says; none for older rows and for actions in
+    /// no listed account.
+    public var account: ActivityLog.Account?
+    /// What let it act there: allowed once or for the task, or a Trusted account; only with an account.
+    public var allowed: ActivityLog.Allowance?
 
     /// The key of the host session an agent's row came from: Terminal's empty key for one no host named.
     public var sessionKey: String { session ?? "" }
@@ -80,6 +85,8 @@ extension ActivityLog {
     ///   - after: The picture of the screen right after it, by its file name.
     ///   - afterAt: When the picture after it was taken.
     ///   - facts: What Atlas recorded to mark the spot on its pictures.
+    ///   - account: The listed account it acted in.
+    ///   - allowed: What let it act there; only with an account.
     public init(
       id: String,
       logicalId: String? = nil,
@@ -101,7 +108,9 @@ extension ActivityLog {
       before: String? = nil,
       after: String? = nil,
       afterAt: Date? = nil,
-      facts: ActionFacts? = nil
+      facts: ActionFacts? = nil,
+      account: ActivityLog.Account? = nil,
+      allowed: ActivityLog.Allowance? = nil
     ) {
       self.id = id
       self.logicalId = logicalId ?? id
@@ -124,6 +133,8 @@ extension ActivityLog {
       self.after = after
       self.afterAt = afterAt
       self.facts = facts
+      self.account = account
+      self.allowed = account == nil ? nil : allowed
     }
 
     /// The fields of one `activity` row this app reads.
@@ -138,6 +149,8 @@ extension ActivityLog {
       case partial
       /// The action's identity across successive rows.
       case logicalId
+      /// The listed account it acted in, and what let it act there.
+      case account, allowed
     }
 
     /// Decodes a row, keeping a safe default for anything missing or of the wrong type: a row that says nothing
@@ -174,6 +187,9 @@ extension ActivityLog {
       after = container.lenientText(.after)
       afterAt = after == nil ? nil : container.lenientDate(milliseconds: .afterAt)
       facts = try? container.decodeIfPresent(ActionFacts.self, forKey: .facts)
+      // An account that does not read whole is none, and what let it act counts only with one.
+      account = container.lenientAccount(.account)
+      allowed = account == nil ? nil : container.lenientAllowance(.allowed)
     }
   }
 }

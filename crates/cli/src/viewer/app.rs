@@ -74,7 +74,8 @@ pub async fn serve(
 
     // The record names a viewer with an app; none is left when the app
     // does not start.
-    let mut app = App::launch(&program, &viewer.url, receiver).await?;
+    let mut app = App::launch(&program, &viewer.url, &viewer.app_secret, receiver).await?;
+    *unpoisoned(&viewer.app_process) = app.process();
     let record = json!({
         "url": viewer.url,
         "pid": std::process::id(),
@@ -186,10 +187,24 @@ async fn start_pipe(
             viewer.remember_committed(key, epoch, at);
         }
     });
+    // While the person signs in, only the app this viewer serves is shown
+    // the screen; afterwards others see only what was captured since.
+    let shown = Arc::downgrade(viewer);
+    let controller = client.controller.clone();
+    let privacy = crate::frame_pipe::broker::Privacy {
+        visible: Arc::new(move || controller.screen_visible().ok()),
+        exempt: Arc::new(move |peer| {
+            let app = shown
+                .upgrade()
+                .and_then(|viewer| *unpoisoned(&viewer.app_process));
+            app == Some(peer.instance)
+        }),
+    };
     let service = crate::frame_pipe::service::start(
         client,
         viewer.frame_width,
         witness,
+        privacy,
         viewer.input_sent.clone(),
     )
     .await

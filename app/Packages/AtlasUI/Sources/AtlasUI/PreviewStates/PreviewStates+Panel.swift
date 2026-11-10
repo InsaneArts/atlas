@@ -25,6 +25,13 @@
         PreviewState(name: "You have control, a command runs", value: panelControlCommandRuns),
         PreviewState(name: "Needs you, a command runs", value: panelNeedsYouCommandRuns),
         PreviewState(name: "Service note", value: panelServiceNote),
+        PreviewState(name: "Accounts", value: panelAccounts),
+        PreviewState(name: "Waiting, a message", value: panelAskTyped),
+        PreviewState(name: "Waiting, a click", value: panelAskNamedClick),
+        PreviewState(name: "Waiting, a click with no name", value: panelAskUnnamedClick),
+        PreviewState(name: "Waiting, a password", value: panelAskPassword),
+        PreviewState(name: "Waiting, for this task or not", value: panelAskTaskOnly),
+        PreviewState(name: "Allowed for a task", value: panelAllowed),
       ]
     }
 
@@ -68,6 +75,13 @@
       recent: earlier,
       controls: PanelControls(main: openAtlas)
     )
+
+    /// Nothing acts in the helper, which Atlas lists as signed in to two accounts.
+    @MainActor static let panelAccounts: PanelState = {
+      var state = panelIdle
+      state.accounts = "Accounts: github.com and Slack"
+      return state
+    }()
 
     /// Nothing happens in the helper, and the note says a macOS service there slowly slows the Mac.
     @MainActor static let panelServiceNote = PanelState(

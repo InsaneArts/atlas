@@ -10,6 +10,9 @@ struct Pixels {
   /// The drawing's width in pixels.
   let width: Int
 
+  /// The drawing's height in pixels.
+  var height: Int { bytes.count / 4 / max(width, 1) }
+
   /// Draws `view`, settled.
   ///
   /// - Parameter view: The view.

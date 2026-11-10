@@ -12,6 +12,17 @@ fn owner(value: &Value) -> String {
     value["owner"].as_str().unwrap_or_default().to_owned()
 }
 
+/// The accounts and grants an agent's request is judged by, when it brings
+/// any.
+fn asking(value: &Value) -> Result<Option<crate::native::asking::Asking>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    crate::native::asking::Asking::deserialize(value)
+        .map(Some)
+        .map_err(|_| Error::new(Code::Input, "The accounts to ask about could not be read"))
+}
+
 fn epoch(value: &Value) -> Result<InputEpoch> {
     InputEpoch::deserialize(&value["epoch"]).map_err(Error::from)
 }
@@ -70,12 +81,14 @@ requests! { value =>
         actions: Result<Vec<Action>>,
         expect: Result<Option<Expect>>,
         app: bool,
+        asking: Result<Option<crate::native::asking::Asking>>,
     } = Self::Input {
         owner: owner(value),
         epoch: epoch(value),
         actions: Vec::deserialize(&value["actions"]).map_err(Error::from),
         expect: Expect::from_request(&value["expect"]),
         app: value["app"] == true,
+        asking: asking(&value["asking"]),
     },
     "elements" Elements {
         epoch: Result<InputEpoch>,

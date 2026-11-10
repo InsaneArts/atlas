@@ -52,6 +52,10 @@
       case .statusPill: IndicatorSamples(.statusPill)
       case .lineSwapLines: LineSwapSamples()
       case .stateBadgeStates: StateBadgeSamples()
+      case .recentRows: RecentRowSamples()
+      case .panelAsks: AskSamples(.panel)
+      case .askBanner: AskSamples(.banner)
+      case .accountLevels: AskSamples(.levels)
       }
     }
   }

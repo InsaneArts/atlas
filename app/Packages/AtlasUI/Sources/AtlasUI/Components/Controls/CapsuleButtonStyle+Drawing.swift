@@ -4,34 +4,39 @@ extension CapsuleButtonStyle {
   /// The label's size: a step larger on a large capsule.
   var textStyle: TextStyle {
     switch size {
-    case .mini, .compact, .small, .regular: .body
+    case .row, .mini, .compact, .small, .medium, .regular: .body
     case .large: .headline
     }
   }
 
-  /// The label's weight: regular for plain text, semibold on a capsule and on an alert's buttons.
+  /// The label's weight: regular for plain text and in a settings row, whatever its look, so a row's button keeps one
+  /// width as it turns from quiet to the accent; semibold on any other capsule and on an alert's buttons.
   var weight: Font.Weight {
+    if size == .row { return .regular }
     switch look {
-    case .plain: .regular
-    case .primary, .secondary, .pressed, .accent, .tinted, .destructive, .glyph, .overPicture: .semibold
+    case .plain: return .regular
+    case .primary, .secondary, .pressed, .accent, .tinted, .destructive, .glyph, .overPicture: return .semibold
     }
   }
 
   /// The label's letter spacing: drawn in on a capsule, to keep short control labels compact; plain text and
   /// an alert's buttons keep the font's own.
   var tracking: CGFloat {
+    if size == .row { return 0 }
     switch look {
-    case .primary, .secondary, .pressed, .overPicture: LetterSpacing.control
-    case .plain, .accent, .tinted, .destructive, .glyph: 0
+    case .primary, .secondary, .pressed, .overPicture: return LetterSpacing.control
+    case .plain, .accent, .tinted, .destructive, .glyph: return 0
     }
   }
 
   /// The capsule's height, and a circle's side.
   var height: CGFloat {
     switch size {
+    case .row: ControlHeight.xxs
     case .mini: ControlHeight.xsPlus
     case .compact: ControlHeight.s
     case .small: ControlHeight.sPlus
+    case .medium: ControlHeight.m
     case .regular: ControlHeight.mPlus
     case .large: ControlHeight.xl
     }
@@ -43,8 +48,9 @@ extension CapsuleButtonStyle {
     if size == .large { return Layout.largeInset }
     // An alert's buttons share a narrow row and hold a mark beside their word. No extra space is reserved
     // beside the mark, so the button's label stays centred.
-    if size == .compact { return .zero }
+    if size == .compact, fill { return .zero }
     if look == .plain { return Spacing.m }
+    if size == .row { return Spacing.sPlus }
     return fill ? Spacing.sPlus : Layout.regularInset
   }
 

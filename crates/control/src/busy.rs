@@ -72,3 +72,15 @@ pub(super) fn busy_command(purpose: Purpose) -> Error {
         }
     })
 }
+
+/// What an agent's look at the screen hears while the person signs the
+/// helper in to or out of an account, or deletes a site's data or the
+/// browser's.
+pub(super) const SCREEN_HIDDEN: &str =
+    "The person is managing an account in the helper; the screen is hidden until they finish.";
+
+/// Busy because the person is managing an account in the helper, so its
+/// screen is hidden from agents: held by the person, as their control is.
+pub(super) fn busy_private() -> Error {
+    Error::new(Code::Busy, SCREEN_HIDDEN).held_by(Holder::Person)
+}

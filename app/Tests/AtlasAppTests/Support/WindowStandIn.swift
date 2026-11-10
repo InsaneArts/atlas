@@ -16,6 +16,8 @@ final class WindowStandIn: WindowPresenting {
   private var closing = false
   /// The coordinator's close hook.
   private let closed: @MainActor (any WindowPresenting) -> Void
+  /// Hears each presentation, so a test can tell which window came forward last.
+  var presented: @MainActor (WindowStandIn) -> Void = { _ in }
 
   /// A closed stand-in.
   ///
@@ -28,6 +30,7 @@ final class WindowStandIn: WindowPresenting {
   func present() {
     presentations += 1
     isPresented = true
+    presented(self)
   }
 
   /// Marks the window closed and calls the close hook, now or, with ``closesLater``, at ``finishClosing()``; a closed

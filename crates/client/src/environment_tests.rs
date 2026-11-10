@@ -8,7 +8,10 @@ use atlas_core::{
     test_support::UID,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use std::{cell::Cell, os::unix::fs::PermissionsExt};
+use std::{
+    cell::Cell,
+    os::unix::fs::{PermissionsExt, symlink},
+};
 
 pub(super) struct Sandbox {
     _root: tempfile::TempDir,
@@ -2617,4 +2620,119 @@ fn the_transaction_replies_keep_their_wire_shape() {
             r#"{"hidden":1,"more":2,"ok":true,"plans":[{"files":[{"operation":"create","target":"x"}],"planId":"PLAN1","session":null,"state":"applied","thisTask":false,"updatedAt":TIME}],"unreadable":3}"#,
         ]
     );
+}
+
+#[tokio::test]
+async fn a_manifest_that_selects_a_secret_is_refused_before_the_helper_is_asked_and_nothing_is_staged()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let manifest = directory.path().join("manifest.toml");
+    fs::write(&manifest, b"").unwrap();
+    let secret = directory.path().join(".env");
+    fs::write(&secret, b"TOKEN=1").unwrap();
+    let selections = vec![Selection {
+        source: ".env".into(),
+        target: ".config/probe/.env".into(),
+        executable: false,
+    }];
+    let error = freeze(&client, &manifest, selections, false)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+    assert!(
+        !directory.path().join("output").exists(),
+        "a stage was made"
+    );
+}
+
+#[tokio::test]
+async fn a_profile_whose_file_or_reference_is_a_store_is_refused_before_the_helper_is_asked() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let store = directory.path().join("cookies.sqlite");
+    fs::write(&store, b"").unwrap();
+    for (name, body) in [
+        (
+            "file.toml",
+            "version = 2\n[[files]]\nsource = \"cookies.sqlite\"\ntarget = \"cookies.sqlite\"\n"
+                .to_owned(),
+        ),
+        (
+            "reference.toml",
+            format!(
+                "version = 2\n[[references]]\npath = \"{}\"\n",
+                store.display()
+            ),
+        ),
+    ] {
+        let profile = directory.path().join(name);
+        fs::write(&profile, body).unwrap();
+        let error = profile::sync(&client, &profile, false).await.unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{name}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn a_manifest_source_that_is_a_link_named_like_a_secret_is_refused_though_it_leads_elsewhere()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let manifest = directory.path().join("manifest.toml");
+    fs::write(&manifest, b"").unwrap();
+    let settings = directory.path().join("settings");
+    fs::write(&settings, b"TOKEN=1").unwrap();
+    symlink(&settings, directory.path().join(".npmrc")).unwrap();
+    let selections = vec![Selection {
+        source: ".npmrc".into(),
+        target: ".npmrc".into(),
+        executable: false,
+    }];
+    let error = freeze(&client, &manifest, selections, false)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+}
+
+/// The refusal that reading `sandbox`'s `settings.toml` as a selection comes
+/// to, once the helper is verified and before it is asked anything.
+async fn refused_as_read(sandbox: &Sandbox) -> atlas_core::error::Error {
+    let (client, helper, _task) = tasked(&sandbox.root);
+    let selections = vec![Selection {
+        source: sandbox.root.join("settings.toml"),
+        target: ".config/probe/settings.toml".into(),
+        executable: false,
+    }];
+    let manifest = sandbox.root.join("manifest.toml");
+    helper
+        .serve(
+            freeze_as(&client, &account(), &manifest, selections, false),
+            |_| panic!("the helper was asked to preview a store"),
+        )
+        .await
+        .unwrap_err()
+}
+
+#[tokio::test]
+async fn a_source_that_became_a_link_to_a_store_after_the_first_check_is_refused_as_it_is_read() {
+    let sandbox = Sandbox::new();
+    let store = sandbox.root.join("cookies.sqlite");
+    fs::write(&store, b"").unwrap();
+    // Passed the first check as a plain file, then turned into a link before it was read.
+    symlink(&store, sandbox.root.join("settings.toml")).unwrap();
+    let error = refused_as_read(&sandbox).await;
+    assert_eq!(error.code, Code::Credentials, "{error}");
+}
+
+#[tokio::test]
+async fn a_source_that_became_a_link_through_a_store_named_link_is_refused_as_it_is_read() {
+    let sandbox = Sandbox::new();
+    let plain = sandbox.root.join("plain.txt");
+    fs::write(&plain, b"TOKEN=1").unwrap();
+    // Two links: the source to a `.npmrc`, which leads on to an ordinary-looking file.
+    let npmrc = sandbox.root.join(".npmrc");
+    symlink(&plain, &npmrc).unwrap();
+    symlink(&npmrc, sandbox.root.join("settings.toml")).unwrap();
+    let error = refused_as_read(&sandbox).await;
+    assert_eq!(error.code, Code::Credentials, "{error}");
 }

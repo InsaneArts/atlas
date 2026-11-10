@@ -16,10 +16,6 @@ extension Color {
   static let brandOpencodeInner = Color(red: 0x5A / 255, green: 0x58 / 255, blue: 0x58 / 255)
   /// The white silhouette on a dark brand card.
   static let brandWhite = Color.white
-  /// Atlas's orbit on its white tile at the sidebar's foot: graphite #3A3A3C in either appearance.
-  static let brandAtlasInk = Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3C / 255)
-  /// The hairline round Atlas's white tile, which only the light ground needs: black at 0.14, or none.
-  static let brandAtlasEdge = Color(light: .black(0.14), dark: .black(0))
   /// Pi's graphite card, at its top edge.
   static let brandPiTop = Color(red: 0x2B / 255, green: 0x2B / 255, blue: 0x2E / 255)
   /// Pi's graphite card, at its bottom edge.
@@ -68,6 +64,11 @@ extension Color {
     .opacity(0.14)
   /// A drawn app tile's letter: white, the same in either appearance.
   static let monogramLetter = Color.white
+  /// The tile under a site's icon: white, the same in either appearance, as a web app's icon stands.
+  static let siteTile = Color.white
+  /// The hairline edge of a site's tile, so its white holds on a light ground: black at 0.1.
+  static let siteTileEdge = Color.black
+    .opacity(0.1)
   /// The ground every window draws on: #F5F5F7, or #161618.
   public static let ground = Color(light: .rgb(0xF5F5F7), dark: .rgb(0x161618))
   /// A ground a step below ``ground``, for a window whose content sits on one card laid over it, such as the
@@ -110,6 +111,9 @@ extension Color {
   static let textSuccess = Color(light: .rgb(0x1F7A36), dark: .rgb(0x32D74B))
   /// Glyphs on ``success``, such as a check: #0B2410.
   static let onSuccess = Color(red: 0x0B / 255, green: 0x24 / 255, blue: 0x10 / 255)
+  /// A soft success ground under a row, such as what the person allowed for a task: #34C759 at 0.12, or #30D158 at
+  /// 0.14.
+  static let fillSuccessSoft = Color(light: .rgb(0x34C759, alpha: 0.12), dark: .rgb(0x30D158, alpha: 0.14))
   /// What needs the person: system orange, #FF9500, or #FF9F0A.
   static let attention = Color(light: .rgb(0xFF9500), dark: .rgb(0xFF9F0A))
   /// The attention colour laid under a flagged field, as a wash: attention at 0.09.
@@ -143,6 +147,11 @@ extension Color {
   static let fillContent = Color(light: .white(1), dark: .rgb(0x1F1F22))
   /// A grouped list's ground (a step over ``fillCard``): white, or white at 0.05.
   static let fillGroup = Color(light: .white(1), dark: .white(0.05))
+  /// A grouped list's ground on a content card, such as Settings' groups, a quiet step under the card's white: black
+  /// at 0.045, or white at 0.055.
+  static let fillGroupInset = Color(light: .black(0.045), dark: .white(0.055))
+  /// A choice's picture tile, such as an account's level: a pale wash of the accent, #E6EEFD, or #252D3D.
+  static let fillLevelTile = Color(light: .rgb(0xE6EEFD), dark: .rgb(0x252D3D))
   /// A chosen row's or thumb's raised fill, such as the selected session's or tab's: white, or white at 0.12.
   static let fillSelection = Color(light: .white(1), dark: .white(0.12))
   /// A slight darkening of a held segmented thumb, without changing its rim or elevation.

@@ -11,6 +11,8 @@ struct PanelLinks {
   var openSessions: @MainActor (ViewerSessionChoice?) -> Void = { _ in }
   /// Opens the Settings window on Helper, which says what the helper needs.
   var openSettings: @MainActor () -> Void = {}
+  /// Opens the Settings window on Accounts, from the accounts line.
+  var openAccounts: @MainActor () -> Void = {}
   /// Asks before one of the helper's commands runs: in the main window when it is open, else in the alert window.
   var showAlert: @MainActor (HelperAlert) -> Void = { _ in }
   /// Whether Atlas's main window holds control now.

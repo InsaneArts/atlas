@@ -17,6 +17,7 @@ import AtlasUI
 /// - `ATLAS_RENDER_SESSIONS` (`one`, `two`, `waiting`, `needsYou` or `more`) shows that many agents at work, each in
 ///   its own host session (``PanelRenderSessions``), in place of the live sessions and rows.
 /// - `ATLAS_RENDER_SERVICE_NOTE=1` shows the note that a macOS service in the helper slowly slows the Mac.
+/// - `ATLAS_RENDER_ACCOUNTS=1` lists two accounts, so the panel shows its accounts line.
 /// - `ATLAS_RENDER_PREVIEW=1` shows a set-up Mac: the helper's names and display, three recent actions, Open at Login
 ///   and, in a debug build, the sample screen when the live one gives none.
 struct PanelRenderOverrides: Equatable, Sendable {
@@ -46,6 +47,8 @@ struct PanelRenderOverrides: Equatable, Sendable {
   var sessions: PanelRenderSessions?
   /// Whether the note that a macOS service in the helper slowly slows the Mac shows.
   var serviceNote: Bool
+  /// Whether two accounts are listed, so the accounts line shows.
+  var accounts: Bool
 
   /// Reads the overrides from an environment.
   ///
@@ -76,6 +79,7 @@ struct PanelRenderOverrides: Equatable, Sendable {
     showsEverything = environment["ATLAS_RENDER_PREVIEW"] == "1"
     sessions = environment["ATLAS_RENDER_SESSIONS"].flatMap(PanelRenderSessions.init(rawValue:))
     serviceNote = environment["ATLAS_RENDER_SERVICE_NOTE"] == "1"
+    accounts = environment["ATLAS_RENDER_ACCOUNTS"] == "1"
   }
 
   /// The alert window's alert to draw, as its controller would hold it, over the panel's overview; nil draws the
@@ -124,6 +128,12 @@ struct PanelRenderOverrides: Equatable, Sendable {
     if serviceNote {
       shown.status.restartingService = .restarting
       shown.serviceNoteDismissed = false
+    }
+    if accounts {
+      shown.status.overview.accounts = [
+        ViewerStatus.Account(kind: .site, key: "github.com", name: "github.com", added: 0),
+        ViewerStatus.Account(kind: .app, key: "com.tinyspeck.slackmacgap", name: "Slack", added: 0),
+      ]
     }
     if connecting {
       // Before the first answer the panel holds nothing the service said, and no picture.

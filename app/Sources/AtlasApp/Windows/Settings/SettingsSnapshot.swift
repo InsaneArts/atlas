@@ -1,4 +1,5 @@
 import AtlasUI
+import Foundation
 
 /// Everything the Settings controller holds and reads, as one value, for the presenter.
 struct SettingsSnapshot {
@@ -12,8 +13,20 @@ struct SettingsSnapshot {
   var notify = false
   /// The helper's sound, as every window shows it.
   var sound = HelperSoundButton()
+  /// The person's files and the helper, as last read.
+  var files = SettingsFiles()
   /// The pictures of agent actions.
   var pictures = SettingsPictures()
   /// What the rest of the app says now.
   var facts = SettingsFacts()
+  /// When the account whose note the person read was added, in milliseconds since 1970.
+  var accountNoteRead: Double = 0
+  /// Sign In to a Site…'s sheet, while it shows.
+  var signIn: SignInSheetState?
+  /// The icons of the accounts listed, by account.
+  var accountIcons: [String: SettingsAccountIcon] = [:]
+  /// Now, which tells the day an account was added.
+  var now = Date()
+  /// The calendar days are told in.
+  var calendar = Calendar.current
 }

@@ -1,4 +1,4 @@
-/// A login Atlas can close, which the Helper pane lists above its checks: a deleted account's login still open, or the
+/// A login Atlas can close, which the Helper page lists above its checks: a deleted account's login still open, or the
 /// helper's own while Atlas there is silent.
 public struct SettingsCloseLoginRow: Equatable, Sendable, Identifiable {
   /// What is open, such as "A deleted account is still logged in".

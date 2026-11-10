@@ -132,3 +132,30 @@ pub fn client_in(directory: &Path) -> Client {
     client.controller = Controller::at(CONFIGURED_UID, &directory.join("state"));
     client
 }
+
+/// The process group of a shell that exited after handing work on in it, as
+/// `atlas run sh -c '(sleep 30; open …) &'` leaves: that work still runs,
+/// until [`end_group`].
+pub fn leftover_group() -> i32 {
+    use std::os::unix::process::CommandExt;
+    let mut shell = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
+            ])
+            .process_group(0),
+    )
+    .unwrap();
+    let group = i32::try_from(shell.id()).unwrap();
+    shell.wait().unwrap();
+    group
+}
+
+/// End everything that runs in process group `group`.
+pub fn end_group(group: i32) {
+    let _ = nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(group),
+        nix::sys::signal::Signal::SIGKILL,
+    );
+}

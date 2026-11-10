@@ -3,13 +3,13 @@ import AtlasCommands
 import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
-import AtlasUI
 import Foundation
 import Observation
 import Testing
 import os
 
 @testable import AtlasApp
+@testable import AtlasUI
 
 @Suite("ViewerController")
 struct ViewerControllerTests {
@@ -18,13 +18,26 @@ struct ViewerControllerTests {
     let parts = StandInParts()
     let coordinator = parts.coordinator()
     coordinator.openSettings()
-    coordinator.settings?.controller.selectTab(.about)
+    coordinator.settings?.controller.select(.about)
     var dependencies = ViewerController.scripted(ScriptedService()).dependencies
     dependencies.openSettings = coordinator.panelLinks().openSettings
     let viewer = ViewerController(dependencies: dependencies)
     viewer.send(.openSettings)
-    #expect(coordinator.settings?.controller.session.tab == .helper)
+    #expect(coordinator.settings?.controller.session.route == .page(.helper))
     #expect(parts.settingsMade == 1)
+  }
+
+  @Test("a click on the sidebar's helper line opens Settings on Helper")
+  func theHelperLineOpensHelperSettings() throws {
+    let parts = StandInParts()
+    let coordinator = parts.coordinator()
+    coordinator.openSettings()
+    coordinator.settings?.controller.select(.privacy)
+    var dependencies = ViewerController.scripted(ScriptedService()).dependencies
+    dependencies.openSettings = coordinator.panelLinks().openSettings
+    let viewer = ViewerController(dependencies: dependencies)
+    viewer.send(SidebarHelperLine.click)
+    #expect(coordinator.settings?.controller.state.route == .page(.helper))
   }
 
   @Test("a reading shows the status and the picture, and control can be taken")

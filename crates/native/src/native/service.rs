@@ -3,7 +3,7 @@
 //! The service retains its gate, registered work and engine through cleanup;
 //! a vanished request or reply cannot acknowledge an unknown outcome.
 use super::{
-    accessibility_trusted,
+    accessibility_trusted, asking,
     ax::Looks,
     events::Engine,
     lease::{Gate, Grant, Who, busy},
@@ -48,7 +48,7 @@ const MAX_REQUEST: usize = 64 * 1024;
 /// app, with the Dock covering where it takes clicks, and the window and
 /// field it names, reading an app's elements as looks a click can name, and
 /// acting on an element of a look through Accessibility.
-const CAPABILITIES: [&str; 9] = [
+const CAPABILITIES: [&str; 10] = [
     atlas_core::session::SHUTDOWN,
     atlas_core::session::HOLD,
     atlas_core::session::FOCUS_APP,
@@ -58,6 +58,7 @@ const CAPABILITIES: [&str; 9] = [
     atlas_core::session::LOOKS,
     atlas_core::session::ELEMENT_ACTIONS,
     atlas_core::session::TYPED_FIELDS,
+    atlas_core::session::ASKS,
 ];
 
 struct Service {
@@ -83,6 +84,13 @@ struct Service {
     /// Where a read of an app's elements is told to the helper's other
     /// processes, as the engine tells of input.
     activity: PathBuf,
+    /// Where the person typed into a password field while they held
+    /// control, by their lease, until they give it back: the app and the
+    /// page's host, never what was typed.
+    seen: Arc<std::sync::Mutex<Option<(String, Value)>>>,
+    /// How a password field is looked for: the Mac's Accessibility, or a
+    /// test's script.
+    look: Arc<dyn PasswordLook>,
 }
 
 /// A file by path and (device, inode).
@@ -175,7 +183,11 @@ impl Service {
                 actions,
                 expect,
                 app,
-            } => self.input(owner, epoch, actions, expect, app, phase).await,
+                asking,
+            } => {
+                self.input_asking(owner, epoch, actions, expect, app, asking, phase)
+                    .await
+            }
             Request::Elements { epoch, expect } => self.look(epoch, expect).await,
         }
     }
@@ -306,7 +318,23 @@ impl Service {
         self.gate.cancel(Some(&owner))?;
         phase.send_replace(ConnectionPhase::Mutation("release"));
         drain_and_release(&self.operations, &self.engine, &self.gate).await?;
-        Ok(json!({ "ok": true, "released": true }))
+        let mut reply = json!({ "ok": true, "released": true });
+        if let Some(seen) = self.take_seen(&owner) {
+            reply["signedIn"] = seen;
+        }
+        Ok(reply)
+    }
+
+    /// What the person's lease `owner` typed a password into, taken once.
+    fn take_seen(&self, owner: &str) -> Option<Value> {
+        let mut seen = self.seen.lock().ok()?;
+        match seen.take() {
+            Some((holder, value)) if holder == owner => Some(value),
+            other => {
+                *seen = other;
+                None
+            }
+        }
     }
 
     fn renew(&self, owner: String, phase: &watch::Sender<ConnectionPhase>) -> Result<Value> {
@@ -388,6 +416,7 @@ impl Service {
         Ok(json!({ "ok": true }))
     }
 
+    #[cfg(test)]
     async fn input(
         &self,
         owner: String,
@@ -395,6 +424,32 @@ impl Service {
         actions: Result<Vec<Action>>,
         expect: Result<Option<Expect>>,
         report_app: bool,
+        phase: &watch::Sender<ConnectionPhase>,
+    ) -> Result<Value> {
+        self.input_asking(
+            owner,
+            expected,
+            actions,
+            expect,
+            report_app,
+            Ok(None),
+            phase,
+        )
+        .await
+    }
+
+    /// [`Service::input`], an agent's request judged first by the accounts
+    /// and grants it brings: refused before its first event when the person
+    /// must be asked, or the account is Look Only.
+    #[allow(clippy::too_many_arguments)]
+    async fn input_asking(
+        &self,
+        owner: String,
+        expected: Result<InputEpoch>,
+        actions: Result<Vec<Action>>,
+        expect: Result<Option<Expect>>,
+        report_app: bool,
+        asking: Result<Option<asking::Asking>>,
         phase: &watch::Sender<ConnectionPhase>,
     ) -> Result<Value> {
         let epoch = self.check_epoch(expected?)?;
@@ -409,16 +464,45 @@ impl Service {
             },
         )?;
         let count = actions.len();
+        let typed = actions
+            .iter()
+            .any(|action| matches!(action, Action::Type { .. } | Action::Key { .. }));
         let expect = expect?;
+        let asking = asking?;
         agent_target(&self.gate, expect.as_ref(), &actions)?;
+        // A command's check before its first request: judged, nothing sent.
+        if let Some(asking) = asking.as_ref().filter(|asking| asking.dry)
+            && grant.person().is_none()
+        {
+            drop(grant.authorize()?);
+            let engine = self.engine.clone().lock_owned().await;
+            let asking = asking.clone();
+            let intended = expect
+                .as_ref()
+                .and_then(|expect| super::apps::bundle_id(expect.pid()));
+            return tokio::task::spawn_blocking(move || {
+                gate_request(&engine, &actions, &asking, intended)
+                    .map(|()| json!({"ok": true, "performed": 0, "dry": true}))
+            })
+            .await
+            .map_err(|cause| worker_failed().with_source(cause))?;
+        }
         phase.send_replace(ConnectionPhase::Mutation("input"));
         let mut cancellation = Cancellation {
             gate: self.gate.clone(),
             owner: Some(owner),
         };
-        let (done, dock_pressed) = match self.execute(grant, actions, expect.clone()).await? {
+        let (performed, noted) = self
+            .execute(grant, actions, expect.clone(), typed, asking)
+            .await?;
+        let (done, dock_pressed) = match performed {
             Ok(done) => done,
-            Err(failure) => return Ok(failure.reply()),
+            // What ran before the failure still acted in its account.
+            Err(failure) => {
+                let mut reply = failure.reply();
+                note(&mut reply, noted);
+                return Ok(reply);
+            }
         };
 
         let acted = done.acted.as_ref();
@@ -454,6 +538,7 @@ impl Service {
         if let Some(reached) = &done.reached {
             reply["element"] = json!(reached);
         }
+        note(&mut reply, noted);
 
         cancellation.owner = None;
         Ok(reply)
@@ -469,9 +554,16 @@ impl Service {
         grant: Grant,
         actions: Vec<Action>,
         expect: Option<Expect>,
+        typed: bool,
+        asking: Option<asking::Asking>,
     ) -> Result<Performed> {
         let engine = self.engine.clone().lock_owned().await;
         let gate = self.gate.clone();
+        let seen = self.seen.clone();
+        let look = self.look.clone();
+        // Who the batch was admitted for, kept with it: a Give Back that
+        // lands while it ends still finds what the person typed into.
+        let person = grant.person().map(str::to_owned);
         let runtime = tokio::runtime::Handle::current();
         let outcome = self
             .operations
@@ -487,10 +579,28 @@ impl Service {
                         .map(super::ax::target_application)
                         .transpose()?;
                     engine.dock_pressed = false;
+                    // An agent's request into an account the person listed is
+                    // judged whole, under the engine's lock, before its first
+                    // event; the person's own input never is.
+                    if let Some(asking) = &asking
+                        && person.is_none()
+                    {
+                        engine.recheck = Some(asking::recheck(&actions, asking));
+                    }
                     let result = run(engine, &gate, actions, expect.as_ref()).await;
+                    // The account it acted in, for its activity row.
+                    let noted = engine
+                        .recheck
+                        .take()
+                        .and_then(|recheck| recheck.noted().cloned());
+                    // Part of the batch's own work, so giving control back
+                    // waits for it before it reads what was seen.
+                    if typed && result.is_ok() {
+                        note_password(person.as_deref(), &*look, &seen);
+                    }
                     engine.target = None;
                     engine.keep_while_held(acting);
-                    Ok::<_, Error>(result.map(|done| (done, engine.dock_pressed)))
+                    Ok::<_, Error>((result.map(|done| (done, engine.dock_pressed)), noted))
                 })
             }))
             .await?;
@@ -502,7 +612,24 @@ impl Service {
 }
 
 /// What a batch came to: see [`Service::execute`].
-type Performed = std::result::Result<(Done, bool), Box<Failure>>;
+/// The listed account the actions that ran acted in comes with it, either
+/// way.
+type Performed = (
+    std::result::Result<(Done, bool), Box<Failure>>,
+    Option<asking::Noted>,
+);
+
+/// Name in `reply` the listed account a request's actions that ran acted
+/// in and what let them, for its activity row: the client keeps both from
+/// the agent's reply.
+fn note(reply: &mut Value, noted: Option<asking::Noted>) {
+    if let Some(noted) = noted {
+        reply["account"] = json!(noted);
+        if let Some(allowed) = noted.allowed {
+            reply["allowed"] = json!(allowed);
+        }
+    }
+}
 
 /// The recipient for the agent's activity log: Dock after AXPress, the app
 /// an action on an element acted in (process `acted`), otherwise the owner
@@ -586,6 +713,183 @@ fn agent_target(gate: &Gate, expect: Option<&Expect>, actions: &[Action]) -> Res
     Ok(())
 }
 
+/// Check `action`, the next of an agent's request, where it lands now: see
+/// [`recheck`]. A referenced element's question shows it where it was just
+/// met, `met`, never where an older look saw it.
+pub(super) fn recheck_action(
+    engine: &mut Engine,
+    action: &Action,
+    met: Option<&atlas_core::screen::geometry::Bounds>,
+) -> Result<()> {
+    recheck(engine, |recheck, look| {
+        asking::met(recheck.check(action, look), action, met)
+    })
+}
+
+/// Check the next event of the action under way: see [`recheck`].
+pub(super) fn recheck_event(engine: &mut Engine) -> Result<()> {
+    recheck(engine, |recheck, look| recheck.event(look))
+}
+
+/// Judge the next of an agent's request where it lands now, by `judge`:
+/// what the grants it brought don't cover stops there, with the rest of the
+/// request, as any refused action does.
+fn recheck(
+    engine: &mut Engine,
+    judge: impl FnOnce(&mut asking::Recheck, &mut asking::live::OnScreen<'_>) -> asking::Decision,
+) -> Result<()> {
+    let Some(mut recheck) = engine.recheck.take() else {
+        return Ok(());
+    };
+    // What it lands in now, as found: the app the request named stands in
+    // for what is in front only in a typing command's check.
+    let mut look = asking::live::OnScreen::observing(
+        &engine.looks,
+        &engine.epoch,
+        std::time::Instant::now() + ASK_BUDGET,
+        recheck.held.take(),
+    );
+    #[cfg(test)]
+    {
+        look.point = engine.asking_point.clone();
+    }
+    let decision = judge(&mut recheck, &mut look);
+    recheck.held = look.held;
+    engine.recheck = Some(recheck);
+    refusal(decision, false)
+}
+
+/// How long the gate may take to read where a request lands, in all.
+const ASK_BUDGET: Duration = Duration::from_millis(300);
+
+/// Judge `actions` by `asking` on the helper's screen as it is now, a
+/// typing command's check before its first character: refused with
+/// `waiting-for-person` while the person must be asked, or `denied` in a
+/// Look Only account. Nothing is sent either way.
+fn gate_request(
+    engine: &Engine,
+    actions: &[Action],
+    asking: &asking::Asking,
+    intended: Option<String>,
+) -> Result<()> {
+    let mut look = asking::live::OnScreen {
+        looks: &engine.looks,
+        epoch: &engine.epoch,
+        deadline: std::time::Instant::now() + ASK_BUDGET,
+        intended,
+        held: None,
+        #[cfg(test)]
+        point: engine.asking_point.clone(),
+    };
+    refusal(asking::decide(actions, asking, &mut look), asking.dry)
+}
+
+/// The refusal `decision` is, when it isn't free; `dry` for a typing
+/// command's check.
+fn refusal(decision: asking::Decision, dry: bool) -> Result<()> {
+    match decision {
+        asking::Decision::Free => Ok(()),
+        asking::Decision::Ask(question) => {
+            let mut details = question.details();
+            details["dry"] = json!(dry);
+            Err(Error::new(
+                Code::WaitingForPerson,
+                format!(
+                    "{} is signed in: Atlas asked the person before sending this, and it wasn't sent.",
+                    question.account
+                ),
+            )
+            .with("ask", details))
+        }
+        asking::Decision::Deny { account } => Err(Error::new(
+            Code::Denied,
+            format!(
+                "{account} is Look Only: the person lets agents read it, not click or type there. \
+                 It wasn't sent."
+            ),
+        )),
+    }
+}
+
+/// How long the whole look at a password field after the person's typing
+/// may take.
+const PASSWORD_READ: Duration = Duration::from_millis(250);
+
+/// After the person's keys or typing, admitted for their lease `person`
+/// (none for an agent's batch, which is never looked at): when keyboard
+/// focus is in a password field, remember its app and page for that lease,
+/// in `seen`. One deadline covers the whole look, and nothing typed is read.
+fn note_password(
+    person: Option<&str>,
+    look: &dyn PasswordLook,
+    seen: &std::sync::Mutex<Option<(String, Value)>>,
+) {
+    let Some(owner) = person else {
+        return;
+    };
+    let deadline = std::time::Instant::now() + PASSWORD_READ;
+    if let (Some(value), Ok(mut seen)) = (look.look(deadline), seen.lock()) {
+        *seen = Some((owner.to_owned(), value));
+    }
+}
+
+/// Where a password field is looked for: the app with keyboard focus, and
+/// the page its focused password field sits in.
+pub(super) trait PasswordLook: Send + Sync {
+    /// The app and page of the focused password field, by `deadline`; none
+    /// when focus is elsewhere or the look doesn't finish in time.
+    fn look(&self, deadline: std::time::Instant) -> Option<Value>;
+}
+
+/// The Mac's own Accessibility.
+pub(super) struct LiveLook;
+
+impl PasswordLook for LiveLook {
+    fn look(&self, deadline: std::time::Instant) -> Option<Value> {
+        let left = || super::ax::remaining(deadline, std::time::Instant::now()).ok();
+        let pid = super::ax::focused_pid(left()?).ok()??;
+        let page = super::ax::password_page(pid, left()?).ok()??;
+        Some(seen_at(
+            &super::apps::bundle_id(pid)?,
+            super::apps::name(pid),
+            page.as_deref(),
+        ))
+    }
+}
+
+/// What the helper saw: the app by its bundle identifier and name, and the
+/// host of the page's `address`, never the address itself.
+pub(super) fn seen_at(app: &str, name: Option<String>, address: Option<&str>) -> Value {
+    json!({
+        "app": app,
+        "name": name,
+        "host": address.and_then(page_host),
+    })
+}
+
+/// The host of a web page's address, as accounts are matched by it (see
+/// [`atlas_core::name::web_host`]): only for `http` and `https`, with any
+/// user, port, path, query and fragment dropped.
+pub(super) fn page_host(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if !["http", "https"]
+        .iter()
+        .any(|web| scheme.eq_ignore_ascii_case(web))
+    {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']')?.0,
+        None => host.split(':').next()?,
+    };
+    let host = atlas_core::name::web_host(host);
+    (!host.is_empty()).then_some(host)
+}
+
 /// How often the service looks for its desktop, and how many looks in a
 /// row must miss it before the service exits.
 const SESSION_CHECK: Duration = Duration::from_secs(1);
@@ -649,6 +953,8 @@ pub async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Result<()>
         gate,
         stop_marker,
         activity,
+        seen: Arc::default(),
+        look: Arc::new(LiveLook),
     });
     service.listen(&listener, controller_uid).await
 }

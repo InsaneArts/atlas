@@ -29,6 +29,10 @@ public struct ViewerOutlineRun: Equatable, Sendable, Identifiable {
   public var grid: ViewerPictureGrid?
   /// Its steps, oldest first, while it is open; none while folded.
   public var steps: [ViewerActivityStep]
+  /// The one listed account its steps acted in, such as "github.com"; nil for none or more than one.
+  public var account: String?
+  /// What let its steps act there, when they all say the same, which a badge after its words says; nil otherwise.
+  public var allowance: AllowanceBadge?
 
   /// Creates a run.
   ///
@@ -47,6 +51,8 @@ public struct ViewerOutlineRun: Equatable, Sendable, Identifiable {
   ///   - strip: Its newest pictures; none by default.
   ///   - grid: Its pictures opened in place; none by default.
   ///   - steps: Its steps while open; none by default.
+  ///   - account: The one listed account its steps acted in; none by default.
+  ///   - allowance: What let its steps act there; none by default.
   public init(
     id: String,
     icon: ActivityIcon,
@@ -61,7 +67,9 @@ public struct ViewerOutlineRun: Equatable, Sendable, Identifiable {
     problemSteps: [ViewerActivityStep] = [],
     strip: ViewerPictureStrip? = nil,
     grid: ViewerPictureGrid? = nil,
-    steps: [ViewerActivityStep] = []
+    steps: [ViewerActivityStep] = [],
+    account: String? = nil,
+    allowance: AllowanceBadge? = nil
   ) {
     self.id = id
     self.icon = icon
@@ -77,6 +85,8 @@ public struct ViewerOutlineRun: Equatable, Sendable, Identifiable {
     self.strip = strip
     self.grid = grid
     self.steps = steps
+    self.account = account
+    self.allowance = allowance
   }
 
   /// Whether it stands in one box with its key items: folded, with problem lines or pictures under its row.
@@ -84,9 +94,10 @@ public struct ViewerOutlineRun: Equatable, Sendable, Identifiable {
     !isOpen && grid == nil && (!problemSteps.isEmpty || strip != nil)
   }
 
-  /// What VoiceOver reads for it: "TextEdit, Typed and clicked · 9 actions, 1 problem, 10:21–10:24".
+  /// What VoiceOver reads for it: "TextEdit, Typed and clicked · 9 actions, 1 problem, 10:21–10:24", with the account
+  /// it acted in, unless it is titled by it, and what let it act there when it says so.
   public var label: String {
-    [name, summary, problems, time]
+    [name, account == name ? "" : account ?? "", summary, problems, allowance?.words ?? "", time]
       .filter { !$0.isEmpty }
       .joined(separator: ", ")
   }

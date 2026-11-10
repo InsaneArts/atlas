@@ -2,7 +2,8 @@ import AtlasUI
 import CoreGraphics
 
 extension ViewerPresenter {
-  /// The Screen: the picture and how it is drawn, or why there is none, and what a right click on the picture offers.
+  /// The Screen: the picture and how it is drawn, or why there is none, and what a
+  /// right click on the picture offers, and the question Atlas asks the person over it.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The screen.
@@ -16,8 +17,24 @@ extension ViewerPresenter {
       empty: reading.picture == nil ? empty(snapshot) : nil,
       actualSize: session.actualSize && reading.picture != nil
         ? display.map { CGSize(width: $0.width, height: $0.height) } : nil,
-      menu: screenMenu(snapshot)
+      menu: screenMenu(snapshot),
+      ask: snapshot.session.signIn == nil ? ask(snapshot) : nil,
+      signingIn: snapshot.session.signIn.map { signIn in
+        SigningInBarState(
+          text: SignInWords.bar(signIn.purpose, site: signIn.site),
+          isWorking: snapshot.session.signInEnding
+        )
+      }
     )
+  }
+
+  /// The question Atlas asks the person, over the Screen, while the window has a status to read it beside.
+  ///
+  /// - Parameter snapshot: What the controller holds.
+  /// - Returns: The question, or nil for none.
+  static func ask(_ snapshot: ViewerSnapshot) -> AskCardState? {
+    guard snapshot.mode.kind != .connecting else { return nil }
+    return AskCards.card(status: snapshot.reading.status, list: snapshot.asks, pictures: [:], at: snapshot.date)
   }
 
   /// How the picture is drawn: inside control's edge, faded while paused, dimmed while the helper needs the person.

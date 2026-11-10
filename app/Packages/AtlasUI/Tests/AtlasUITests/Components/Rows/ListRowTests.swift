@@ -15,12 +15,15 @@ struct ListRowTests {
     }
   }
 
-  @Test("the setup checklist keeps a setup list's inset, where a Settings row sits two points in")
+  @Test("the setup checklist keeps a setup list's inset, where a Settings row sits four points in")
   func checklistKeepsTheSetupInset() {
     #expect(FinishingScreen.rowSize.height == 44)
     #expect(FinishingScreen.rowSize.inset == 14)
     #expect(ListRow.separatorInset(.check(.done), size: FinishingScreen.rowSize) == 42)
-    #expect(ListRow.separatorInset(.check(.done), size: .compact) == 40)
+    #expect(
+      ListRow.separatorInset(.check(.done), size: .compact) == 10,
+      "a Settings group rules its rows at their inset"
+    )
     #expect(ListRow.titleWeight(.check(.done), size: FinishingScreen.rowSize) == .regular)
   }
 }

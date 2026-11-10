@@ -120,6 +120,16 @@ impl Default for Looks {
     }
 }
 
+/// A referenced element as the ask-before-sending gate reads it: the
+/// process it is in, its role and name, and whether it sat in a web page.
+/// Not where it is: that is read when it is met again.
+pub(in crate::native) struct Described {
+    pub(in crate::native) pid: i64,
+    pub(in crate::native) role: Option<String>,
+    pub(in crate::native) name: Option<String>,
+    pub(in crate::native) in_page: bool,
+}
+
 /// One look as read, before it is kept.
 pub(in crate::native) struct Read {
     instance: Instance,
@@ -217,6 +227,11 @@ pub(in crate::native) struct Reached {
 }
 
 impl Reached {
+    /// Where it was met.
+    pub(in crate::native) fn frame(&self) -> &Bounds {
+        &self.frame
+    }
+
     /// `element` as it was met, when it has a frame.
     pub(in crate::native) fn of(element: &Element) -> Option<Self> {
         Some(Self {
@@ -283,6 +298,54 @@ impl Looks {
             seen: read.seen,
         });
         Ok((name, read.snapshot))
+    }
+
+    /// What the ask-before-sending gate reads of the element `reference`
+    /// names, as its look saw it in `epoch`. None when that look is gone or
+    /// was taken elsewhere.
+    pub(in crate::native) fn described(
+        &self,
+        reference: Reference,
+        epoch: &InputEpoch,
+    ) -> Option<Described> {
+        let found = self.find(reference, epoch, Instant::now()).ok()?;
+        let element = &found.chain.first()?.element;
+        let name = element
+            .title
+            .clone()
+            .filter(|title| !title.is_empty())
+            .or_else(|| element.description.clone().filter(|text| !text.is_empty()));
+        Some(Described {
+            pid: i64::from(found.instance.pid),
+            role: element.role.clone(),
+            name,
+            in_page: found.in_web_page(),
+        })
+    }
+
+    /// The reference's current target and page, after proving its process
+    /// and complete retained object path again. Failure conveys no site grant.
+    ///
+    /// # Errors
+    ///
+    /// Refuses stale references, replaced processes, changed paths/pages,
+    /// failed Accessibility reads and exhausted read deadlines.
+    pub(in crate::native) fn aimed(
+        &self,
+        reference: Reference,
+        epoch: &InputEpoch,
+        deadline: Instant,
+    ) -> Result<super::Aimed> {
+        let found = self.find(reference, epoch, Instant::now())?;
+        let target = again(&found, super::remaining(deadline, Instant::now())?)?
+            .pop()
+            .ok_or_else(unavailable)?;
+        let aimed = super::keyboard::element_aim(target.object, deadline)?;
+        check_application(Some(found.instance))?;
+        if found.in_web_page() && !aimed.in_page {
+            return Err(stale("The referenced element's page changed"));
+        }
+        Ok(aimed)
     }
 
     /// What the look `reference` names holds of its element at `now`,

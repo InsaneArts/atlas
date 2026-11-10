@@ -6,6 +6,12 @@ enum SettingsAlert: Equatable {
   case forget(String)
   /// Install this newer version?
   case install(String)
+  /// Let the helper open the home folder again?
+  case openHome
+  /// Let agents copy sign-ins into the helper?
+  case allowSignIns
   /// Delete every picture of agent actions?
   case deletePictures
+  /// Take the account with this id off the list?
+  case removeAccount(String)
 }

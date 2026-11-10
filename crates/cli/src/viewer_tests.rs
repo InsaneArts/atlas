@@ -8,7 +8,7 @@ use super::{
         CONCURRENT_REQUESTS, CONNECTIONS, FIRST_REQUEST, accept, bind, header, json_response,
         respond,
     },
-    local::{answering, exchange, reply_status},
+    local::{answering, exchange, post_local_as_app, reply_status},
     reads::{ACTIVITY_ROWS, activity_row},
     *,
 };
@@ -125,15 +125,31 @@ async fn posted(viewer: &Arc<Viewer>, route: &str, body: &Value) -> (u16, Value)
 }
 
 async fn posted_raw(viewer: &Arc<Viewer>, route: &str, body: &str) -> (u16, Value) {
-    let request = Request::builder()
+    posted_with(viewer, route, body, None).await
+}
+
+/// POST `body` to `route` as the app, which names itself by `secret`.
+async fn posted_as(viewer: &Arc<Viewer>, route: &str, body: &Value, secret: &str) -> (u16, Value) {
+    posted_with(viewer, route, &body.to_string(), Some(secret)).await
+}
+
+async fn posted_with(
+    viewer: &Arc<Viewer>,
+    route: &str,
+    body: &str,
+    secret: Option<&str>,
+) -> (u16, Value) {
+    let mut request = Request::builder()
         .method(Method::POST)
         .uri(format!("{}{route}", viewer.prefix))
         .header("host", &viewer.authority)
         .header("origin", format!("http://{}", viewer.authority))
         .header("content-type", "application/json")
-        .header("content-length", body.len())
-        .body(Body::from(body.to_owned()))
-        .unwrap();
+        .header("content-length", body.len());
+    if let Some(secret) = secret {
+        request = request.header(http::APP_SECRET_HEADER, secret);
+    }
+    let request = request.body(Body::from(body.to_owned())).unwrap();
     let reply = respond(viewer.clone(), request).await;
     let status = reply.status().as_u16();
     let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
@@ -226,11 +242,12 @@ async fn the_person_stops_and_resumes_agents_through_the_viewer() {
     let dir = tempfile::tempdir().unwrap();
     let (viewer, server) = served(dir.path(), CONNECTIONS).await;
     let url = viewer.url.clone();
+    let secret = viewer.app_secret.clone();
 
     // No input service runs here: the Stop is kept on the person's side
     // all the same, and says the service did not hear it.
     let replies = tokio::task::spawn_blocking(move || {
-        [true, false].map(|on| post_local(&url, "control/hold", &json!({"on": on})))
+        [true, false].map(|on| post_local_as_app(&url, &secret, "control/hold", &json!({"on": on})))
     })
     .await
     .unwrap();
@@ -253,8 +270,10 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
     let dir = tempfile::tempdir().unwrap();
     let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
     let client = viewer.client();
+    let secret = viewer.app_secret.clone();
     tokio::time::timeout(Duration::from_secs(5), async {
-        let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
+        let (status, reply) =
+            posted_as(&viewer, "control/hold", &json!({"on": true}), &secret).await;
         assert_eq!(status, 200, "{reply}");
         assert_eq!(reply["held"], true);
         assert!(client.controller.stop_noted());
@@ -270,7 +289,7 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
 
         for stopped in [true, false] {
             let body = format!(r#"{{"on":{stopped},"other":1,"other":2}}"#);
-            let (status, reply) = posted_raw(&viewer, "control/hold", &body).await;
+            let (status, reply) = posted_with(&viewer, "control/hold", &body, Some(&secret)).await;
             assert_eq!(status, 200, "{reply}");
             assert_eq!(reply["held"], stopped);
             if stopped {
@@ -292,7 +311,8 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
                 r#"{"on":[]}"#,
                 r#"{"on":{}}"#,
             ] {
-                let (status, reply) = posted_raw(&viewer, "control/hold", body).await;
+                let (status, reply) =
+                    posted_with(&viewer, "control/hold", body, Some(&secret)).await;
                 let Ok(wire) = serde_json::from_str::<serde_json::Value>(body) else {
                     panic!("invalid stop fixture");
                 };
@@ -301,7 +321,7 @@ async fn stop_fields_use_the_last_boolean_and_invalid_values_leave_the_stop_unch
                     assert_eq!(reply["held"], on, "{body}");
                     assert_eq!(client.controller.stop_noted(), on, "{body}");
                     let (status, reply) =
-                        posted(&viewer, "control/hold", &json!({"on": stopped})).await;
+                        posted_as(&viewer, "control/hold", &json!({"on": stopped}), &secret).await;
                     assert_eq!(status, 200, "{reply}");
                     if stopped {
                         assert!(std::fs::write(&marker, b"stop").is_ok());
@@ -627,8 +647,9 @@ async fn finding_the_viewer_and_ending_control_never_wait_for_a_slot() {
 
     assert_eq!(answering_off(&url).await, Some(std::process::id()));
 
+    let secret = viewer.app_secret.clone();
     let ended = tokio::task::spawn_blocking(move || {
-        let revoked = post_local(&url, "control/revoke", &json!({}))?;
+        let revoked = post_local_as_app(&url, &secret, "control/revoke", &json!({}))?;
         let released = post_local(&url, "control/release", &json!({"lease": "gone"}))?;
         Ok::<_, Error>((revoked, released))
     })
@@ -777,7 +798,11 @@ async fn a_capture_from_before_the_latest_input_is_not_shared() {
     let viewer = unreachable(dir.path()).await;
     let running = |revision| {
         let (sender, outcome) = watch::channel(None);
-        *viewer.capture.lock().unwrap() = Some(Capture { revision, outcome });
+        *viewer.capture.lock().unwrap() = Some(Capture {
+            revision,
+            client: viewer.client(),
+            outcome,
+        });
         sender
     };
 
@@ -1256,6 +1281,7 @@ async fn a_frame_waiting_out_an_older_capture_still_ends_in_time() {
     let (_never, outcome) = watch::channel(None);
     *viewer.capture.lock().unwrap() = Some(Capture {
         revision: 0,
+        client: viewer.client(),
         outcome,
     });
     viewer.frames.lock().await.input_revision = 1;
@@ -1310,11 +1336,13 @@ async fn shutdown_waits_for_changes_in_progress() {
     assert!(viewer.client().controller.pending().unwrap().is_empty());
 
     let url = viewer.url.clone();
-    let refused =
-        tokio::task::spawn_blocking(move || post_local(&url, "control/revoke", &json!({})))
-            .await
-            .unwrap()
-            .unwrap_err();
+    let secret = viewer.app_secret.clone();
+    let refused = tokio::task::spawn_blocking(move || {
+        post_local_as_app(&url, &secret, "control/revoke", &json!({}))
+    })
+    .await
+    .unwrap()
+    .unwrap_err();
     assert_eq!(refused.error, "The viewer is closing");
 
     server.abort();
@@ -1975,7 +2003,7 @@ fn the_apps_activity_row_keeps_its_fields_and_values() {
     let rows = atlas_client::activity_log::recent(dir.path(), 5);
     let shown: Vec<Value> = rows
         .iter()
-        .map(|row| activity_row(row, 100_000_000_000))
+        .map(|row| activity_row(row, 100_000_000_000, true))
         .collect();
     // AtlasService decodes this same fixture, so producer and consumer cannot
     // silently drift while asserting separate copies of the wire contract.
@@ -2008,7 +2036,7 @@ fn a_commands_logical_id_holds_from_start_to_end_and_an_input_runs_holds_as_it_g
         )
         .unwrap();
     };
-    let shown = || activity_row(&recent(dir.path(), 1)[0], 5_000_000_000);
+    let shown = || activity_row(&recent(dir.path(), 1)[0], 5_000_000_000, true);
 
     write(std::slice::from_ref(&start));
     let before = shown();
@@ -2040,7 +2068,10 @@ fn a_commands_logical_id_holds_from_start_to_end_and_an_input_runs_holds_as_it_g
     spoofed["firstInputId"] = json!("untrusted");
     assert_eq!(Row::parse(&spoofed).unwrap().logical_id(), "2000000000");
     let standalone = Row::parse(&json!({"operation": "read"})).unwrap();
-    assert_eq!(activity_row(&standalone, 0)["logicalId"], standalone.id);
+    assert_eq!(
+        activity_row(&standalone, 0, true)["logicalId"],
+        standalone.id
+    );
 }
 
 #[tokio::test]
@@ -2787,6 +2818,327 @@ async fn recovery_replaces_stale_input_during_restart_despite_recent_work_and_wa
             }
         }
     }
+}
+
+/// What the person typed while they had control never reaches the accounts
+/// Atlas records, the status it shows, or the activity log, even when the
+/// helper saw a password field: only the app and the page's host do.
+#[tokio::test]
+async fn a_password_the_person_typed_reaches_no_record_status_or_log() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    const CANARY: &str = "hunter2-canary-73a9";
+
+    let dir = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(dir.path()).unwrap();
+    let home = base.join("home");
+    let socket = base.join("seen.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut stream = BufReader::new(stream);
+                let mut line = String::new();
+                stream.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                // The helper saw a password field in Chrome on github.com's sign-in page.
+                let reply = match request["op"].as_str() {
+                    Some("release") => json!({
+                        "ok": true,
+                        "released": true,
+                        "signedIn": {"app": "com.google.Chrome", "name": "Google Chrome", "host": "github.com"},
+                    }),
+                    _ => json!({"ok": true}),
+                };
+                let _ = stream
+                    .get_mut()
+                    .write_all(format!("{reply}\n").as_bytes())
+                    .await;
+            });
+        }
+    });
+    let (_, viewer) = bind(client_with_input(&base, &socket), 0, None)
+        .await
+        .unwrap();
+    *viewer.accounts_home.lock().unwrap() = Some(home.clone());
+
+    viewer
+        .take_control(&viewer.client(), &epoch())
+        .await
+        .unwrap();
+    let taken = viewer.holder();
+    let output = taken.output_dir().unwrap().to_path_buf();
+    let typed = json!({"op": "input", "actions": [{"type": "type", "text": CANARY}, {"type": "key", "key": "return"}]});
+    taken.record_for_test(&typed, &json!({"ok": true}));
+    viewer.release(None).await.unwrap();
+
+    let record =
+        std::fs::read_to_string(home.join("Library/Application Support/Atlas/sign-ins.json"))
+            .unwrap();
+    assert!(record.contains("github.com"), "{record}");
+    assert!(!record.contains(CANARY));
+    let status = viewer.status_for(true).await.to_string();
+    assert!(
+        status.contains("github.com"),
+        "the status lists the account"
+    );
+    assert!(!status.contains(CANARY));
+    let rows = atlas_client::activity_log::recent(&output, 5);
+    assert!(!rows.is_empty(), "the person's input is logged");
+    assert!(!serde_json::to_string(&rows).unwrap().contains(CANARY));
+    for file in walk(&output) {
+        let text = String::from_utf8_lossy(&std::fs::read(&file).unwrap()).into_owned();
+        assert!(!text.contains(CANARY), "{}", file.display());
+    }
+}
+
+/// Every file under `folder`.
+fn walk(folder: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .flat_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path)
+            } else {
+                vec![path]
+            }
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn only_the_app_may_answer_change_accounts_sign_in_or_revoke() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    *unpoisoned(&viewer.accounts_home) = Some(dir.path().join("home"));
+    let wrong = "0".repeat(viewer.app_secret.len());
+    for route in [
+        "asks/answer",
+        "allowed/end",
+        "accounts/add",
+        "accounts/remove",
+        "accounts/level",
+        "sign-in/start",
+        "forget/start",
+        "reset/start",
+        "sign-in/renew",
+        "sign-in/done",
+        "sign-in/cancel",
+        "control/revoke",
+    ] {
+        for secret in [None, Some(wrong.as_str()), Some("short")] {
+            let (status, reply) = posted_with(&viewer, route, "{}", secret).await;
+            assert_eq!(status, 403, "{route} {secret:?}: {reply}");
+            assert_eq!(reply["code"], "permission", "{route}");
+            assert_eq!(reply["error"], "Only the Atlas app can do this");
+        }
+    }
+    assert!(
+        !dir.path().join("home").exists()
+            || atlas_client::sign_ins::listed_in(&dir.path().join("home"))
+                == atlas_client::sign_ins::Listed::Accounts(Vec::new()),
+        "nothing was added"
+    );
+
+    let secret = viewer.app_secret.clone();
+    let (status, reply) = posted_as(
+        &viewer,
+        "accounts/add",
+        &json!({"id": "com.tinyspeck.slackmacgap", "name": "Slack"}),
+        &secret,
+    )
+    .await;
+    assert_eq!(status, 200, "{reply}");
+}
+
+#[tokio::test]
+async fn taking_and_ending_control_and_stop_stay_open_to_the_terminal_viewer() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
+    assert_eq!(status, 200, "{reply}");
+    let (status, reply) = posted(&viewer, "control/release", &json!({"lease": "gone"})).await;
+    assert_eq!(status, 200, "{reply}");
+}
+
+#[tokio::test]
+async fn signing_in_hides_the_screen_from_ordinary_viewer_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    let controller = viewer.client().controller.clone();
+    let mut lease = atlas_control::Lease::default();
+    let token = lease.acquire(&controller).unwrap();
+    let hold = atlas_control::PrivateHold {
+        site: "github.com".to_owned(),
+        kind: atlas_control::HoldKind::SignIn,
+    };
+    lease.hide_screen(&controller, &token, &hold).unwrap();
+
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("{}frame.png", viewer.prefix))
+        .header("host", &viewer.authority)
+        .body(Body::empty())
+        .unwrap();
+    let reply = respond(viewer.clone(), request).await;
+    assert_eq!(reply.status().as_u16(), 503);
+    let body = to_bytes(reply.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["code"], "busy", "{body}");
+    assert_eq!(body["holder"], "person");
+    assert!(
+        lease.active(),
+        "a refused look never ends the person's control"
+    );
+    assert_eq!(controller.private_hold(), Some(hold));
+    controller.end_private().unwrap();
+    lease.release();
+}
+
+#[tokio::test]
+async fn the_persons_questions_and_resume_are_the_apps_and_stop_is_anyones() {
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = http::configured(client(dir.path()), "127.0.0.1:0".into(), None);
+    let asks = |secret: Option<String>| {
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("{}asks.json", viewer.prefix))
+            .header("host", &viewer.authority);
+        if let Some(secret) = secret {
+            request = request.header(http::APP_SECRET_HEADER, secret);
+        }
+        respond(viewer.clone(), request.body(Body::empty()).unwrap())
+    };
+    let refused = asks(None).await;
+    assert_eq!(refused.status().as_u16(), 403);
+    let body = to_bytes(refused.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["code"], "permission");
+    assert_eq!(
+        asks(Some(viewer.app_secret.clone()))
+            .await
+            .status()
+            .as_u16(),
+        200
+    );
+
+    let (status, reply) = posted(&viewer, "control/hold", &json!({"on": true})).await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(viewer.client().controller.stop_noted());
+
+    for body in [r#"{"on":false}"#, r#"{"on":true,"on":false}"#] {
+        let (status, reply) = posted_raw(&viewer, "control/hold", body).await;
+        assert_eq!(status, 403, "{body}: {reply}");
+        assert_eq!(reply["code"], "permission");
+        assert!(viewer.client().controller.stop_noted(), "the Stop stands");
+    }
+
+    let secret = viewer.app_secret.clone();
+    let (status, reply) = posted_as(&viewer, "control/hold", &json!({"on": false}), &secret).await;
+    assert_eq!(status, 200, "{reply}");
+    assert!(!viewer.client().controller.stop_noted());
+}
+
+#[tokio::test]
+async fn only_the_app_is_shown_which_account_a_row_acted_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let (viewer, server) = served(dir.path(), CONNECTIONS).await;
+    let output = viewer.client().output_dir().unwrap().to_path_buf();
+    let row = json!({"at": "1", "operation": "input",
+        "ok": true, "actor": "agent", "verb": "type", "app": "Google Chrome",
+        "command": "000000000001",
+        "account": {"name": "github.com",
+            "key": {"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}},
+        "allowed": "task"});
+    std::fs::create_dir_all(&output).unwrap();
+    std::fs::write(
+        output.join(atlas_client::activity_log::FILE),
+        format!("{row}\n"),
+    )
+    .unwrap();
+
+    // What `atlas watch --once` and a chat app's status read: no secret.
+    let url = viewer.url.clone();
+    let (status, activity) = tokio::task::spawn_blocking(move || {
+        let read = |route| {
+            serde_json::from_slice::<Value>(
+                &fetch(&url, route, Duration::from_secs(5), 1 << 22).unwrap(),
+            )
+            .unwrap()
+        };
+        (read("status.json"), read("activity.json"))
+    })
+    .await
+    .unwrap();
+    for shown in [&status["overview"]["activity"][0], &activity["activity"][0]] {
+        assert!(shown.get("account").is_none(), "{shown}");
+        assert!(shown.get("allowed").is_none(), "{shown}");
+        assert_eq!(shown["says"], "typed in Google Chrome");
+    }
+    assert!(!status.to_string().contains("github.com"));
+    assert!(!activity.to_string().contains("github.com"));
+
+    // The app, naming itself, is shown both.
+    let secret = viewer.app_secret.clone();
+    for route in ["status.json", "activity.json"] {
+        let request = Request::builder()
+            .method(Method::GET)
+            .uri(format!("{}{route}", viewer.prefix))
+            .header("host", &viewer.authority)
+            .header(http::APP_SECRET_HEADER, &secret)
+            .body(Body::empty())
+            .unwrap();
+        let reply = respond(viewer.clone(), request).await;
+        let body: Value =
+            serde_json::from_slice(&to_bytes(reply.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let shown = match route {
+            "status.json" => &body["overview"]["activity"][0],
+            _ => &body["activity"][0],
+        };
+        assert_eq!(shown["account"]["name"], "github.com", "{route}");
+        assert_eq!(shown["allowed"], "task", "{route}");
+        assert_eq!(shown["says"], "typed on github.com", "{route}");
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn only_app_status_contains_populated_private_account_inventory_and_note() {
+    use atlas_client::sign_ins::{self, Entry, How, Kind, Level};
+    let dir = tempfile::tempdir().unwrap();
+    let viewer = unreachable(dir.path()).await;
+    let home = dir.path().join("person");
+    *unpoisoned(&viewer.accounts_home) = Some(home.clone());
+    sign_ins::add_in(
+        &home,
+        Entry {
+            kind: Kind::Site,
+            id: "private-account.invalid".into(),
+            name: "Account inventory canary".into(),
+            browser: Some("com.google.Chrome".into()),
+            added: 1,
+            how: How::TakeControl,
+            level: Level::Ask,
+        },
+    )
+    .unwrap();
+    let ordinary = viewer.status_for(false).await;
+    assert!(ordinary["overview"].get("accounts").is_none());
+    assert!(ordinary["overview"].get("accountNote").is_none());
+    assert!(!ordinary.to_string().contains("Account inventory canary"));
+    let app = viewer.status_for(true).await;
+    assert_eq!(
+        app["overview"]["accounts"][0]["name"],
+        "Account inventory canary"
+    );
+    assert_eq!(
+        app["overview"]["accountNote"]["name"],
+        "Account inventory canary"
+    );
 }
 
 #[tokio::test]

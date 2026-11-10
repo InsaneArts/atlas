@@ -11,6 +11,10 @@
     static var renders: [PreviewState<ViewerState>] {
       [
         sample("01-working", PreviewStates.viewerWorking),
+        sample("75-waiting-for-you", PreviewStates.viewerAsk),
+        sample("76-signing-in", PreviewStates.viewerSigningIn),
+        sample("77-signed-in", PreviewStates.viewerSignedIn),
+        sample("78-forgot-a-site", PreviewStates.viewerForgotten),
         sample("02-idle", PreviewStates.viewerIdle),
         sample("03-control", PreviewStates.viewerControl),
         sample("04-needs-you", PreviewStates.viewerNeedsYou),
@@ -65,6 +69,8 @@
         sample("74-step-picture-sheet", PreviewStates.viewerStepPicture),
         sample("75-sidebar-realistic", PreviewStates.viewerSidebarRealistic),
         sample("76-activity-realistic", PreviewStates.viewerActivityRealistic),
+        sample("79-activity-allowed", PreviewStates.viewerActivityAllowed),
+        sample("80-activity-allowed-mixed", PreviewStates.viewerActivityAllowedMixed),
       ]
     }
 
@@ -91,7 +97,7 @@
         [
           ("activity", PreviewStates.viewerActivity), ("session", PreviewStates.viewerActivityOneSession),
           ("shots", PreviewStates.viewerActivityShots), ("picture", PreviewStates.viewerPictureSheet),
-          ("step", PreviewStates.viewerStepPicture),
+          ("step", PreviewStates.viewerStepPicture), ("allowed", PreviewStates.viewerActivityAllowedMixed),
         ]
         .map { name, state in
           let size = CGSize(width: width, height: PreviewStates.viewerSize.height)

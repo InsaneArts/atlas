@@ -69,6 +69,9 @@ impl Engine {
             return Err(Error::new(Code::Input, "A mouse button is already held"));
         }
         for click in 1..=count {
+            if click > 1 {
+                crate::native::service::recheck_event(self)?;
+            }
             if !self.dock_click(point, button, modifiers, true).await? {
                 self.post_pointer(PointerPhase::Down, point, button, modifiers, click)
                     .await?;

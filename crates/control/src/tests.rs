@@ -52,7 +52,7 @@ fn the_documented_default_wait_is_the_one_used() {
 fn dropping_ownership_releases_control_while_a_duplicate_descriptor_stays_open() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
-    let ownership = controller.acquire_for_person().unwrap();
+    let ownership = controller.acquire_for_person(Beside::Commands).unwrap();
     let duplicate = ownership._lock.0.try_clone().unwrap();
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
 
@@ -451,7 +451,7 @@ fn an_agent_finding_the_person_in_control_is_told_to_wait_for_them() {
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, &directory.path().join("Atlas"));
 
-    let person = controller.acquire_for_person().unwrap();
+    let person = controller.acquire_for_person(Beside::Commands).unwrap();
     let refused = controller.acquire(false).err().unwrap();
     assert_eq!(refused.code, "busy");
     assert_eq!(refused.error, atlas_core::error::PERSON_HAS_CONTROL);
@@ -743,7 +743,7 @@ fn the_person_in_control_is_never_waited_for() {
     }
     let directory = tempfile::tempdir().unwrap();
     let controller = Controller::at(505, directory.path());
-    let _person = controller.acquire_for_person().unwrap();
+    let _person = controller.acquire_for_person(Beside::Commands).unwrap();
     let (waiter, events) = watched(&controller, Duration::from_secs(5));
 
     let refused = waiter.acquire(false).unwrap_err();

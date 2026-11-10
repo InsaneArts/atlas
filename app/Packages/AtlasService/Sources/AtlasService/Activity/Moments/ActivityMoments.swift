@@ -95,7 +95,10 @@ public struct ActivityMoments: Sendable {
   public func shown(filter: ActivityFilter, query: String) -> [ActivityMoment] {
     let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
     let kept = moments.compactMap { moment -> ActivityMoment? in
-      let named = !words.isEmpty && (moment.app?.name?.localizedStandardContains(words) ?? false)
+      // A run titled by its app or its one listed account keeps every line when the search names it.
+      let named =
+        !words.isEmpty
+        && [moment.app?.name, moment.account?.name].contains { $0?.localizedStandardContains(words) == true }
       var shown = moment
       shown.runs = moment.runs.filter { run in
         filter.admits(run.entry) && (named || ActivityGrouping.matches(run.entry, query: words))

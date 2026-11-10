@@ -1616,3 +1616,61 @@ fn the_overview_says_the_helpers_sound_only_as_its_daemon_did() {
         sound
     );
 }
+
+#[test]
+fn only_the_persons_rows_name_the_account_and_say_a_browsers_action_on_its_site() {
+    let row = Row::parse(&json!({"at": "1", "operation": "input", "ok": true,
+        "actor": "agent", "verb": "click", "label": "Merge", "app": "Google Chrome",
+        "account": {"name": "github.com",
+            "key": {"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}},
+        "allowed": "task"}))
+    .unwrap();
+
+    let anyone = serde_json::to_value(activity::shown(&row, 1)).unwrap();
+    assert!(anyone.get("account").is_none() && anyone.get("allowed").is_none());
+    assert_eq!(anyone["says"], "clicked Merge in Google Chrome");
+
+    let person = serde_json::to_value(shown_to_person(&row, 1)).unwrap();
+    assert_eq!(person["says"], "clicked Merge on github.com");
+    assert_eq!(person["app"], "Google Chrome");
+    assert_eq!(person["allowed"], "task");
+    assert_eq!(
+        person["account"],
+        json!({"name": "github.com",
+            "key": {"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}})
+    );
+
+    // An app account keeps the app's name in its words.
+    let slack = Row::parse(&json!({"at": "1", "operation": "input", "ok": true,
+        "verb": "click", "label": "Send", "app": "Slack",
+        "account": {"name": "Slack", "key": {"kind": "app", "id": "com.tinyspeck.slackmacgap"}},
+        "allowed": "trusted"}))
+    .unwrap();
+    let person = serde_json::to_value(shown_to_person(&slack, 1)).unwrap();
+    assert_eq!(person["says"], "clicked Send in Slack");
+    assert_eq!(person["allowed"], "trusted");
+}
+
+#[test]
+fn typing_in_a_listed_site_is_said_on_the_site_to_the_person_alone() {
+    let site = json!({"name": "github.com",
+        "key": {"kind": "site", "id": "github.com", "browser": "com.google.Chrome"}});
+    let typed = Row::parse(&json!({"at": "1", "operation": "input", "ok": true,
+        "verb": "type", "app": "Google Chrome", "account": site}))
+    .unwrap();
+    assert_eq!(shown_to_person(&typed, 1).says, "typed on github.com");
+    assert_eq!(activity::shown(&typed, 1).says, "typed in Google Chrome");
+
+    let stopped = Row::parse(&json!({"at": "1", "operation": "input", "ok": false,
+        "code": "focus-changed", "partial": true, "verb": "type",
+        "app": "Google Chrome", "account": site}))
+    .unwrap();
+    assert_eq!(
+        shown_to_person(&stopped, 1).says,
+        "stopped typing on github.com"
+    );
+    assert_eq!(
+        activity::shown(&stopped, 1).says,
+        "stopped typing in Google Chrome"
+    );
+}

@@ -23,11 +23,13 @@ public final class InputQueue {
   /// Where the input goes, and who hears how it went.
   public weak var sink: (any InputSink)?
   /// The lease that owns input now; nil while none does.
-  private(set) var owner: String?
+  public private(set) var owner: String?
   private var generation = 0
   /// The batches waiting, oldest first.
   private(set) var pending: [Item] = []
   private var sending = false
+  /// Those waiting for every batch to be answered (``settled()``), woken once nothing is left to send.
+  private var settling: [CheckedContinuation<Void, Never>] = []
 
   /// Whether a batch that scrolls still waits to be sent.
   public var holdsScroll: Bool {
@@ -71,7 +73,15 @@ public final class InputQueue {
     Task { await drain() }
   }
 
-  /// Sends what waits, one batch at a time, while a lease owns the queue; a batch of an older lease is dropped.
+  /// Waits until every batch queued now, and the one in flight, has been answered, or dropped as the queue's owner
+  /// changed; at once when nothing waits or goes.
+  public func settled() async {
+    guard sending || (owner != nil && sink != nil && !pending.isEmpty) else { return }
+    await withCheckedContinuation { settling.append($0) }
+  }
+
+  /// Sends what waits, one batch at a time, while a lease owns the queue; a batch of an older lease is dropped. Once
+  /// nothing is left to send, whatever waits for the queue to settle goes on.
   func drain() async {
     guard !sending else { return }
     sending = true
@@ -86,5 +96,8 @@ public final class InputQueue {
       }
     }
     sending = false
+    let settled = settling
+    settling = []
+    for waiter in settled { waiter.resume() }
   }
 }

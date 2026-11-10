@@ -14,6 +14,10 @@ public struct ViewerScreenState: Equatable, Sendable {
   /// What a right click on the picture offers, in sections; none while this window holds control, where the click is
   /// the helper's.
   public var menu: [ViewerMenuSection]
+  /// The question Atlas asks the person, over the Screen; nil for none.
+  public var ask: AskCardState?
+  /// The bar while the person signs in, with agents paused; nil for none.
+  public var signingIn: SigningInBarState?
 
   /// Creates the Screen's state.
   ///
@@ -23,17 +27,23 @@ public struct ViewerScreenState: Equatable, Sendable {
   ///   - empty: Why there is no picture, in place of one.
   ///   - actualSize: The helper's display in points while drawn at actual size; nil fits it to the card.
   ///   - menu: What a right click on the picture offers; nothing by default.
+  ///   - ask: The question Atlas asks the person; none by default.
+  ///   - signingIn: The bar while the person signs in; none by default.
   public init(
     picture: DesktopPicture? = nil,
     look: PictureLook = .live,
     empty: ViewerEmpty? = nil,
     actualSize: CGSize? = nil,
-    menu: [ViewerMenuSection] = []
+    menu: [ViewerMenuSection] = [],
+    ask: AskCardState? = nil,
+    signingIn: SigningInBarState? = nil
   ) {
     self.picture = picture
     self.look = look
     self.empty = empty
     self.actualSize = actualSize
     self.menu = menu
+    self.ask = ask
+    self.signingIn = signingIn
   }
 }

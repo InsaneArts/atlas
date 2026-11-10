@@ -57,6 +57,80 @@ public protocol ViewerService: Sendable {
   @discardableResult
   func setStopped(_ stopped: Bool) async throws -> StopOutcome
 
+  /// Adds an app to the helper's accounts, by its bundle identifier and name: the person chose it.
+  ///
+  /// - Parameters:
+  ///   - app: The app's bundle identifier.
+  ///   - name: The app's name.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func addAccount(app: String, name: String) async throws
+
+  /// Takes an account off the helper's list.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func removeAccount(_ account: ViewerStatus.Account) async throws
+
+  /// Sets how freely agents act in an account.
+  ///
+  /// - Parameters:
+  ///   - level: The level.
+  ///   - account: The account.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func setLevel(_ level: AccountLevel, of account: ViewerStatus.Account) async throws
+
+  /// Reads the questions Atlas asks the person now, with what each would send, and what they allowed. Reading takes
+  /// down the questions whose time ran out.
+  ///
+  /// - Returns: The questions, oldest first, and the grants.
+  /// - Throws: ``ServiceError/notOffered`` from an older service that asks nothing; else ``ServiceError`` when the
+  ///   service cannot be read or refuses.
+  func asks() async throws(ServiceError) -> AskList
+
+  /// Answers a question as the person.
+  ///
+  /// - Parameters:
+  ///   - ask: The question's id.
+  ///   - answer: The answer.
+  /// - Throws: ``ServiceError`` when the service refuses, as for a question that has ended.
+  func answer(_ ask: String, with answer: AskAnswer) async throws
+
+  /// Ends what the person allowed for a task in an account.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func endAllowed(in account: AccountKey) async throws
+
+  /// Starts a held sign-in: the person's lease beside no agent's command or job, the screen hidden from agents, and
+  /// the site's page open in the helper's browser.
+  ///
+  /// - Parameters:
+  ///   - kind: What it is for.
+  ///   - site: The site, as the person typed it or the account names it.
+  ///   - browser: The browser to open, by its bundle identifier; the helper's own when nil.
+  /// - Returns: The sign-in, with its lease.
+  /// - Throws: ``ServiceError`` when the service refuses, as while an agent's command or job runs.
+  func startSignIn(_ kind: SignInKind, site: String, browser: String?) async throws -> SignInStarted
+
+  /// Renews a held sign-in's lease, with no picture: the window may be covered while the person signs in.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Throws: ``ServiceError`` when it has ended.
+  func renewSignIn(lease: String) async throws
+
+  /// Done: the hold and the lease end, and a site signed in to joins the accounts.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Returns: What it was for and what it added.
+  /// - Throws: ``ServiceError`` when it had ended.
+  func finishSignIn(lease: String) async throws -> SignInEnded
+
+  /// Cancel: the hold and the lease end, and nothing is added.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  func cancelSignIn(lease: String) async throws
+
   /// Sends input to the helper under a lease.
   ///
   /// - Parameters:

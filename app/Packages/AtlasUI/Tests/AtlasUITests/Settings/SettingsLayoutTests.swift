@@ -30,23 +30,21 @@ struct SettingsLayoutTests {
     }
   }
 
-  @Test("Every About state fits a narrow Settings window and lets longer update details wrap")
+  @Test("Every About state fits the card under its bar and lets longer update details wrap")
   @MainActor
-  func aboutFitsANarrowColumn() throws {
-    for width in [PreviewStates.settingsNarrowWidth, SettingsLayout.width] {
+  func aboutFitsTheCard() throws {
+    for width in [PreviewStates.settingsNarrowWidth, SettingsLayout.cardWidth] {
       let sizes = try PreviewStates.settingsAboutSamples
         .map { sample in
           try Self.size(
-            AboutPane(state: sample.value.about) { _ in }
-              .padding(SettingsLayout.aboutInsets)
+            AboutPage(state: sample.value.about) { _ in }
+              .padding(SettingsLayout.pageInsets)
               .frame(width: width)
           )
         }
       #expect(sizes.allSatisfy { $0.width == width }, "the column stays inside \(width) points")
-      #expect(
-        sizes.allSatisfy { $0.height + SettingsLayout.header < SettingsLayout.firstHeight },
-        "every state fits without scrolling: \(sizes)"
-      )
+      let room = SettingsLayout.height - WindowChrome.cardInset * 2 - SettingsLayout.barHeight
+      #expect(sizes.allSatisfy { $0.height <= room }, "every state fits without scrolling: \(sizes)")
       if width == PreviewStates.settingsNarrowWidth {
         #expect(try #require(sizes.last).height > sizes[0].height, "long details grow instead of clipping")
       }
@@ -65,7 +63,7 @@ struct SettingsLayoutTests {
     let widths = sizes.map(\.width)
     #expect(Set(widths).count == 1, "\(widths)")
     let gettingStarted = try Self.size(
-      ListRowTrailing(trailing: .button("Open…"), action: {})
+      ListRowTrailing(trailing: .button("Open…"), size: .compact, action: {})
         .fixedSize()
     )
     #expect(sizes.allSatisfy { $0.height == gettingStarted.height }, "\(sizes), Getting Started: \(gettingStarted)")

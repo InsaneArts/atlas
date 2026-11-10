@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One of the sidebar's rows as a button, on its capsule highlight (``SidebarRowStyle``): selected while what it
+/// One of the sidebar's rows as a button, on its capsule highlight (``PillRowStyle``): selected while what it
 /// chooses shows. VoiceOver reads its words as the button's, and says whether it is selected.
 struct SidebarRow<Content: View>: View {
   /// Whether what the row chooses shows.
@@ -35,8 +35,11 @@ struct SidebarRow<Content: View>: View {
   var body: some View {
     Button(action: choose) {
       content
+        .frame(width: ViewerLayout.rowContentWidth, alignment: .leading)
+        .padding(.horizontal, ViewerLayout.sidebarRowInset)
+        .frame(minHeight: height)
     }
-    .buttonStyle(SidebarRowStyle(isSelected: isSelected, height: height))
+    .buttonStyle(.pill(isSelected: isSelected))
     .accessibilityAddTraits(isSelected ? .isSelected : [])
   }
 }

@@ -8,7 +8,8 @@ extension ViewerPresenter {
   /// the helper is not ready; "Atlas needs you" while it needs the person to recover it, and "The helper is logged
   /// out" while it is, each saying what to do in orange; "Connecting to Atlas…" in grey. Save and Open dialogs that do
   /// not work are no readiness check: the helper stays ready, and its menu, which lists every fact about the helper,
-  /// says they are unavailable. A click offers the facts and the helper's commands.
+  /// says they are unavailable. A click opens Settings on Helper; a right-click offers the facts and the helper's
+  /// commands.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The row.

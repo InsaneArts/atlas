@@ -29,4 +29,13 @@ struct SettingsLinks {
   var switchToHelper: @MainActor () async -> String
   /// Opens the setup window.
   var gettingStarted: @MainActor () -> Void
+  /// Adds an app to the helper's accounts, by its bundle identifier and name, through the viewer service.
+  var addAccount: @MainActor (_ app: String, _ name: String) async throws -> Void = { _, _ in }
+  /// Takes an account off the helper's list, through the viewer service.
+  var removeAccount: @MainActor (ViewerStatus.Account) async throws -> Void = { _ in }
+  /// Sets how freely agents act in an account, through the viewer service.
+  var setLevel: @MainActor (AccountLevel, ViewerStatus.Account) async throws -> Void = { _, _ in }
+  /// Starts a held sign-in in the main window, which comes forward on the Screen: what it is for, the site and the
+  /// browser. Returns why it couldn't start, or nil when it did.
+  var startSignIn: @MainActor (SignInPurpose, String, String?) async -> String? = { _, _, _ in nil }
 }

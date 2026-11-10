@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// A row of choices: both capsule styles share one interruptible, draggable thumb; settings tiles keep their
-/// symbol-over-word layout. Labels retain their size and accessories hang outside their measured frames.
+/// A row of choices: both capsule styles share one interruptible, draggable thumb. Labels retain their size and
+/// accessories hang outside their measured frames.
 struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
   /// How the tabs are drawn.
   typealias Style = TabsStyle
@@ -41,57 +41,9 @@ struct Tabs<Tab: Hashable & Sendable, Accessory: View>: View {
     self.accessory = accessory
   }
 
-  /// The tabs in their track, or as tiles.
+  /// The tabs in their track.
   var body: some View {
-    switch style {
-    case .track, .segment: capsule
-    case .symbolOverWord: tiles
-    }
-  }
-
-  /// The shared interaction for either capsule finish.
-  private var capsule: some View {
     TabsCapsule(state: state, style: style, face: face, send: send, accessory: accessory)
-  }
-
-  /// The tabs as tiles, each its symbol over its word.
-  private var tiles: some View {
-    HStack(spacing: Spacing.xs) {
-      ForEach(state.tabs) { tab in
-        Button {
-          send(tab.id)
-        } label: {
-          VStack(spacing: TabsLayout.tileGap) {
-            if let symbol = tab.symbol {
-              Image(systemName: symbol.rawValue)
-                .font(Typography.symbol(.tab))
-                .foregroundStyle(tab.id == state.selected ? Color.accent : Color.textSecondary)
-                .frame(height: SymbolScale.tab.pointSize)
-            }
-            Text(tab.title)
-              .font(Typography.font(.caption, weight: .medium))
-              .modifier(hanging(tab.id, gap: Spacing.xs))
-          }
-        }
-        .buttonStyle(TileTabStyle(isSelected: tab.id == state.selected))
-        .accessibilityLabel(tab.title)
-        .accessibilityAddTraits(tab.id == state.selected ? .isSelected : [])
-      }
-    }
-    .accessibilityElement(children: .contain)
-    .accessibilityLabel(state.label)
-  }
-
-  /// What hangs `tab`'s accessory `gap` after the trailing edge of its label, outside the label's frame: the label stays
-  /// centred in its tab, the thumb sits on the tab whole, and the gaps between the words stay even, whether or not the
-  /// tab carries anything (an Activity dot that is not showing included).
-  ///
-  /// - Parameters:
-  ///   - tab: The tab.
-  ///   - gap: From the label's trailing edge to the accessory.
-  /// - Returns: The modifier.
-  private func hanging(_ tab: Tab, gap: CGFloat) -> TabsAccessory<Accessory> {
-    TabsAccessory(accessory: accessory(tab), gap: gap)
   }
 }
 

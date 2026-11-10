@@ -18,7 +18,7 @@ extension ViewerController {
   /// - Parameter alert: The alert.
   func ask(_ alert: ViewerAlert) {
     guard !session.alertRunning, !session.recovering else { return say(HelperWords.waitForAction) }
-    control.releaseControl()
+    control.suspend()
     if alert == .helper(.recover) {
       session.recoveryLater = nil
       session.recoveryRefusal = nil
@@ -44,6 +44,7 @@ extension ViewerController {
     if doneHold.isHolding { return doneHold.end() }
     guard !session.alertRunning, !session.recovering, let shown = shownAlert else { return }
     session.alert = nil
+    control.resumeIfEligible()
     session.recoveryRefusal = nil
     if shown == .helper(.recover), let offered = snapshot.offeredRecovery {
       session.recoveryLater = RecoveryKey(offered, status: reading.status)
@@ -52,6 +53,7 @@ extension ViewerController {
 
   /// The alert's button that goes ahead: its command runs once, whatever else is pressed meanwhile.
   func confirmAlert() async {
+    defer { control.resumeIfEligible() }
     switch shownAlert {
     case .helper(.recover): await recover()
     case .helper(.switchToHelper): await run { await self.switchHelper() }
@@ -59,6 +61,8 @@ extension ViewerController {
     case .helper(.logOutAnyway): await run { await self.logOut(force: true) }
     case .restart: await run { await self.restart() }
     case .cleanup(let key, _, _): await run { await self.cleanUp(key) }
+    case .signedIn: session.alert = nil
+    case .removeAfter(let site, let browser): await run { await self.removeAfterSignIn(site: site, browser: browser) }
     case nil: return
     }
   }

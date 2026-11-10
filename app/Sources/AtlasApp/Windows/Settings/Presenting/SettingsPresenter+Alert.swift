@@ -28,6 +28,30 @@ extension SettingsPresenter {
           doneMessage: SettingsWords.forgetMessage
         )
       )
+    case .openHome:
+      HelperAlert.destructive(
+        SettingsWords.openHomeTitle,
+        SettingsWords.openHomeMessage,
+        SettingsWords.letItOpen,
+        cancel: SettingsWords.keepPrivate,
+        phase: progress.phase(
+          running: SettingsWords.changingFiles,
+          done: SettingsWords.letItOpen,
+          doneMessage: SettingsWords.openHomeMessage
+        )
+      )
+    case .allowSignIns:
+      HelperAlert.destructive(
+        SettingsWords.allowSignInsTitle,
+        SettingsWords.allowSignInsMessage,
+        SettingsWords.allow,
+        cancel: SettingsWords.dontAllow,
+        phase: progress.phase(
+          running: SettingsWords.changingFiles,
+          done: SettingsWords.allow,
+          doneMessage: SettingsWords.allowSignInsMessage
+        )
+      )
     case .deletePictures:
       HelperAlert.destructive(
         SettingsWords.deletePicturesTitle,
@@ -37,6 +61,17 @@ extension SettingsPresenter {
           running: SettingsWords.deleting,
           done: SettingsWords.deleteAll,
           doneMessage: SettingsWords.deletePicturesMessage(nil)
+        )
+      )
+    case .removeAccount(let id):
+      HelperAlert.destructive(
+        SettingsWords.removeAccountTitle(accountName(id, snapshot)),
+        SettingsWords.removeAccountMessage,
+        SettingsWords.removeAccount,
+        phase: progress.phase(
+          running: SettingsWords.removingAccount,
+          done: SettingsWords.removeAccount,
+          doneMessage: SettingsWords.removeAccountMessage
         )
       )
     case .install(let version):
@@ -52,5 +87,17 @@ extension SettingsPresenter {
         )
       )
     }
+  }
+
+  /// The name of the account with `id`, as the list shows it; "this account" once it is gone.
+  ///
+  /// - Parameters:
+  ///   - id: The account, as the service names it.
+  ///   - snapshot: What the controller holds and reads.
+  /// - Returns: Its name.
+  static func accountName(_ id: String, _ snapshot: SettingsSnapshot) -> String {
+    snapshot.facts.status.overview.accounts?
+      .first { $0.id == id }?
+      .name ?? "this account"
   }
 }

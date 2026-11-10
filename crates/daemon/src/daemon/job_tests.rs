@@ -331,7 +331,8 @@ fn descendants_that_left_the_group_are_reported_not_signalled() {
         left(&noted, &now, 4312, UID),
         vec![Left {
             pid: 4400,
-            name: "sleep".into()
+            name: "sleep".into(),
+            pgid: Some(4400),
         }]
     );
 }
@@ -362,6 +363,7 @@ fn a_job_record_reads_back_as_it_was_written() {
         left: vec![Left {
             pid: 9,
             name: "sleep".into(),
+            pgid: None,
         }],
     });
     let text = serde_json::to_string(&record).unwrap();
@@ -1332,6 +1334,7 @@ fn the_log_of_an_ended_job_whose_processes_still_write_is_kept_in_bounds() {
         left: vec![Left {
             pid: 4313,
             name: "sleep".into(),
+            pgid: None,
         }],
     });
     let (folder, jobs) = jobs_with(&ended, &table);
@@ -1480,6 +1483,7 @@ fn the_replies_keep_their_wire_shape() {
         left: vec![Left {
             pid: 4313,
             name: "sleep".into(),
+            pgid: None,
         }],
     });
     let table = Table::with(vec![]);
@@ -2415,4 +2419,97 @@ async fn raw_job_expectation_mismatches_never_signal_or_rewrite_the_record() {
     assert_eq!(replies[0]["ok"], true, "{replies:?}");
     assert_eq!(table.signals(), [(4312, Signal::SIGTERM)]);
     assert_ne!(raw_job_files(folder.path()), before);
+}
+
+#[test]
+fn an_ended_jobs_record_is_kept_while_a_process_it_left_still_runs() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    let mut child =
+        atlas_core::spawn::spawn(std::process::Command::new("/bin/sleep").arg("30")).unwrap();
+    let mut job = record();
+    job.uid = nix::unistd::getuid().as_raw();
+    job.state = JobState::Ended;
+    job.ended = Some(Ended {
+        how: How::LeaderGone,
+        at: 5,
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: vec![Left {
+            pid: i32::try_from(child.id()).unwrap(),
+            name: "sleep".into(),
+            pgid: None,
+        }],
+    });
+    assert!(store.put(&job));
+
+    store.prune(u64::MAX);
+    assert!(store.holds(&job.id), "a survivor keeps its record");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    store.prune(u64::MAX);
+    assert!(!store.holds(&job.id), "it goes once nothing it left runs");
+}
+
+#[test]
+fn an_ended_jobs_record_is_kept_while_work_a_survivor_handed_on_still_runs() {
+    use std::os::unix::process::CommandExt;
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = Store::open(directory.path()).unwrap();
+    // A survivor in a group of its own starts a child, and exits.
+    let mut survivor = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args(["-c", "/bin/sleep 30 >/dev/null 2>&1 & echo $!"])
+            .stdout(std::process::Stdio::piped())
+            .process_group(0),
+    )
+    .unwrap();
+    let survivor_pid = i32::try_from(survivor.id()).unwrap();
+    let mut said = String::new();
+    std::io::Read::read_to_string(survivor.stdout.as_mut().unwrap(), &mut said).unwrap();
+    survivor.wait().unwrap();
+    let child: i32 = said.trim().parse().unwrap();
+    assert_eq!(atlas_core::process::info(survivor_pid).unwrap(), None);
+
+    let mut job = record();
+    job.uid = nix::unistd::getuid().as_raw();
+    job.state = JobState::Ended;
+    job.ended = Some(Ended {
+        how: How::LeaderGone,
+        at: 5,
+        signal: None,
+        exit_code: None,
+        exit_signal: None,
+        left: vec![Left {
+            pid: survivor_pid,
+            name: "sh".into(),
+            pgid: Some(survivor_pid),
+        }],
+    });
+    assert!(store.put(&job));
+
+    store.prune(u64::MAX);
+    assert!(
+        store.holds(&job.id),
+        "the survivor's child keeps its record"
+    );
+
+    nix::sys::signal::kill(
+        nix::unistd::Pid::from_raw(child),
+        nix::sys::signal::Signal::SIGKILL,
+    )
+    .unwrap();
+    for _ in 0..100 {
+        if atlas_core::process::info(child)
+            .unwrap()
+            .is_none_or(|info| info.zombie)
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    store.prune(u64::MAX);
+    assert!(!store.holds(&job.id), "it goes once nothing of it runs");
 }

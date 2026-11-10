@@ -3,7 +3,7 @@ import AtlasOnboarding
 import AtlasService
 import Foundation
 
-/// The Agents pane's work: reading which agents are connected and which projects are taught, connecting one agent,
+/// The Integrations page's work: reading which agents are connected and which projects are taught, connecting one agent,
 /// and forgetting a project.
 extension SettingsController {
   /// Reads the agents afresh, replacing any reading still under way.
@@ -46,8 +46,8 @@ extension SettingsController {
   /// - Parameter id: The agent's id, as its row names it.
   func connect(_ id: String) async {
     let installs = dependencies.installs
-    guard !installs.isBusy else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
-    say(nil, in: .agents)
+    guard !installs.isBusy else { return say(HelperWords.waitForAction, in: .integrations, kind: .working) }
+    say(nil, in: .integrations)
     session.connectFailures[id] = nil
     let outcome: Outcome?
     if let agent = AgentID(rawValue: id) {
@@ -55,8 +55,8 @@ extension SettingsController {
     } else {
       return
     }
-    guard let outcome else { return say(HelperWords.waitForAction, in: .agents, kind: .working) }
-    say(Words.agentRestarts(outcome.decode(AgentsChange.self)), in: .agents)
+    guard let outcome else { return say(HelperWords.waitForAction, in: .integrations, kind: .working) }
+    say(Words.agentRestarts(outcome.decode(AgentsChange.self)), in: .integrations)
     var failedAgents: Set<String> = []
     if !outcome.ok {
       let failures = Self.connectFailures(outcome, asked: id)
@@ -74,7 +74,7 @@ extension SettingsController {
     guard let choice = agents.choices.first(where: { $0.id.rawValue == id }), !choice.parts.isEmpty else { return }
     session.connectFailures[id] = nil
     guard let outcome = await dependencies.installs.disconnect(id, parts: choice.parts) else { return }
-    say(Words.agentRestarts(outcome.decode(AgentsChange.self)), in: .agents)
+    say(Words.agentRestarts(outcome.decode(AgentsChange.self)), in: .integrations)
     if !outcome.ok {
       session.connectFailures[id] = SettingsAgentFailure(
         message: "Couldn't disconnect: " + (Self.connectFailures(outcome, asked: id)[id] ?? outcome.message),
@@ -126,7 +126,7 @@ extension SettingsController {
     let outcome = await dependencies.commands.run(.forgetProject(path: path))
     session.alert = nil
     let name = SettingsPresenter.projectName(path)
-    say(outcome.ok ? nil : SettingsWords.notForgotten(name, outcome.message), in: .agents, kind: .problem)
+    say(outcome.ok ? nil : SettingsWords.notForgotten(name, outcome.message), in: .integrations, kind: .problem)
     await loadAgents()
   }
 }

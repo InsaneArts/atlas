@@ -126,6 +126,14 @@ pub(super) struct Engine {
     pub(super) grant: Option<Grant>,
     /// The process resolved for this request, retained through the last post.
     pub(super) target: Option<atlas_core::process::Instance>,
+    /// An agent's request the person's accounts passed: each action, and
+    /// each character typed or click after its first, is judged again just
+    /// before it is sent. A drag is judged whole before its press: let go
+    /// partway, it would drop where it is.
+    pub(super) recheck: Option<super::asking::Recheck>,
+    /// A policy test's synthetic pointed target, independent of the host desktop.
+    #[cfg(test)]
+    pub(super) asking_point: Option<super::asking::Target>,
     /// The looks the service keeps, where a referenced click finds its element.
     pub(super) looks: Arc<Looks>,
     journal: Option<Journal>,
@@ -177,6 +185,9 @@ impl Engine {
             epoch,
             grant: None,
             target: None,
+            recheck: None,
+            #[cfg(test)]
+            asking_point: None,
             looks: Arc::default(),
             journal: None,
             journal_dirty: false,
@@ -771,7 +782,12 @@ impl Engine {
             }
             Action::Type { text } => {
                 let plan = text::Plan::current(CGEventSource::keyboard_type(self.source.get()));
-                for character in text.graphemes(true) {
+                for (index, character) in text.graphemes(true).enumerate() {
+                    // Its first character goes as the action was judged; each
+                    // after it is judged again where it lands.
+                    if index > 0 {
+                        super::service::recheck_event(self)?;
+                    }
                     let units: Vec<u16> = character.encode_utf16().collect();
                     let (code, flags) = plan.key(&units);
                     self.key(code, flags, Some(&units))?;

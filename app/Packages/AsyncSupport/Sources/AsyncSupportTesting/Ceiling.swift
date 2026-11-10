@@ -4,8 +4,9 @@ import Testing
 public enum Ceiling {
   /// The longest a test waits for background work before it fails: long beside the work it waits for, so a loaded
   /// machine never reaches it while the rule holds. A shared CI runner, running every suite at once, takes well over
-  /// two seconds.
-  public static let work: Duration = .seconds(10)
+  /// two seconds, and its windowed tests, which draw on the main actor for up to a minute, keep a waiting test from
+  /// even starting its work for longer than ten. A test that passes never waits on it, so only a failure takes this long.
+  public static let work: Duration = .seconds(60)
 
   /// Runs `passed` once `ceiling` has passed on the wall clock, unless cancelled first: the bound of every wait here.
   ///

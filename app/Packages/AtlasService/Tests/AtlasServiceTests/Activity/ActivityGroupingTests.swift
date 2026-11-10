@@ -75,6 +75,76 @@ struct ActivityGroupingTests {
     )
   }
 
+  @Test("repeats allowed differently in a listed account stay apart, so each keeps its own badge")
+  func repeatsAllowedDifferentlyStayApart() {
+    let account = ActivityLog.Account(name: "github.com", key: AccountKey(kind: .site, id: "github.com"))
+    let rules = ActivityFixtures.rules([
+      ActivityLog.Entry(
+        id: "6",
+        says: "clicked Merge on github.com",
+        ageSeconds: 100,
+        account: account,
+        allowed: .task
+      ),
+      ActivityLog.Entry(
+        id: "5",
+        says: "clicked Merge on github.com",
+        ageSeconds: 101,
+        account: account,
+        allowed: .task
+      ),
+      ActivityLog.Entry(
+        id: "4",
+        says: "clicked Merge on github.com",
+        ageSeconds: 102,
+        account: account,
+        allowed: .task
+      ),
+      ActivityLog.Entry(
+        id: "3",
+        says: "clicked Merge on github.com",
+        ageSeconds: 103,
+        account: account,
+        allowed: .once
+      ),
+      ActivityLog.Entry(
+        id: "2",
+        says: "clicked Merge on github.com",
+        ageSeconds: 104,
+        account: account,
+        allowed: .once
+      ),
+      ActivityLog.Entry(id: "1", says: "clicked Merge on github.com", ageSeconds: 105, account: account),
+    ])
+    let runs = ActivityMoments(rules, captures: [], scope: .all)
+      .shown(filter: .all, query: "")
+      .flatMap(\.runs)
+    #expect(runs.map(\.count) == [3, 1, 1, 1])
+    #expect(runs.map(\.entry.allowed) == [.task, .once, .once, nil])
+  }
+
+  @Test("a search for a listed account finds its rows whatever they say, in a run in that account or across several")
+  func searchFindsTheAccount() {
+    let github = ActivityLog.Account(name: "github.com", key: AccountKey(kind: .site, id: "github.com"))
+    let gitlab = ActivityLog.Account(name: "gitlab.com", key: AccountKey(kind: .site, id: "gitlab.com"))
+    let chrome = "Google Chrome"
+    let one = ActivityFixtures.rules([
+      ActivityLog.Entry(id: "2", says: "clicked Merge in Google Chrome", ageSeconds: 10, app: chrome, account: github),
+      ActivityLog.Entry(id: "1", says: "clicked Files in Google Chrome", ageSeconds: 20, app: chrome, account: github),
+    ])
+    let single = ActivityMoments(one, captures: [], scope: .all)
+      .shown(filter: .all, query: "github.com")
+    #expect(single.flatMap(\.runs).map(\.id) == ["2", "1"])
+    let several = ActivityFixtures.rules([
+      ActivityLog.Entry(id: "3", says: "clicked Close in Google Chrome", ageSeconds: 10, app: chrome, account: gitlab),
+      ActivityLog.Entry(id: "2", says: "clicked Merge in Google Chrome", ageSeconds: 20, app: chrome, account: github),
+      ActivityLog.Entry(id: "1", says: "clicked Search in Google Chrome", ageSeconds: 30, app: chrome),
+    ])
+    let mixed = ActivityMoments(several, captures: [], scope: .all)
+      .shown(filter: .all, query: "GitHub")
+    #expect(mixed.flatMap(\.runs).map(\.id) == ["2"], "only the row in that account, ignoring case")
+  }
+
   @Test("three repeats fold into one line that keeps each row, its first picture before and its last after")
   func threeRepeatsFold() throws {
     let rules = ActivityFixtures.rules([

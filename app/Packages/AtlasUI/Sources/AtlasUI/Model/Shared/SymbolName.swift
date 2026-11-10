@@ -83,6 +83,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case photo
   /// Something locked.
   case lock
+  /// A home folder private from the helper.
+  case lockFilled = "lock.fill"
+  /// Sign-ins and secrets.
+  case key
   /// A popup button's choices.
   case popup = "chevron.up.chevron.down"
   /// A menu that opens under its button.
@@ -97,4 +101,18 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case scrollArrow = "arrow.down"
   /// Show changes: what changed between two pictures.
   case changes = "square.grid.3x3.square"
+  /// Settings' Activity page: what agents did, kept for a time.
+  case history = "clock.arrow.circlepath"
+  /// Settings' Integrations page: the agents Atlas plugs into.
+  case integrations = "square.grid.2x2"
+  /// Something Atlas added, such as an account.
+  case plus
+  /// Settings' Accounts page with none listed.
+  case personCircle = "person.crop.circle"
+  /// Look Only: agents only look.
+  case eye
+  /// Ask Before Sending: agents ask first.
+  case askFirst = "questionmark.bubble"
+  /// Trusted: agents act without asking.
+  case trusted = "checkmark.shield"
 }

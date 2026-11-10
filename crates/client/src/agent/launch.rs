@@ -3,13 +3,17 @@
 //! launchd still holds a finished job for the app or the app is known only
 //! by the task's own install.
 use crate::{
-    client::{AppList, AppRow, Client, Finished},
+    client::{AppList, AppRow, Client, Finished, Verified, WINDOW_LOOKUP},
     handoff, task,
 };
-use atlas_control::Ownership;
+use atlas_control::{Ownership, SharedLease};
 use atlas_core::error::{Code, Error, Result};
 use serde_json::{Value, json};
-use std::{path::Path, sync::Arc, time::Instant};
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 /// Browsers that open the URLs given after `--new-window` in a window of
 /// their own when they are already running, by bundle ID: two agents' pages
@@ -41,6 +45,104 @@ pub async fn open(
     open_in(client, app, targets, environment, Path::new(handoff::ROOT)).await
 }
 
+/// Open `url` in the browser `app` (by its name) for the person, under the
+/// control their lease holds (`ownership`): nothing is handed over and no
+/// task claims it. With `new_window`, the page gets a window of its own: a
+/// web page is the argument of the browser started anew, as Chromium
+/// browsers pass it to the copy already running; one of the browser's own
+/// pages, which Chromium ignores as an argument, opens as a URL once the
+/// new window shows, filling its empty tab.
+/// Each launch, a retry included, is sent only while the person's `lease`
+/// still holds its token, checked once connected and held until it is
+/// sent; success is said only while it still holds.
+///
+/// # Errors
+///
+/// Returns `lease-lost` once the lease ran out or was released, identity,
+/// launch and recording failures, and `spawn-failed` when macOS could not
+/// open it. A lost acknowledgement may follow a launch that went ahead; its
+/// outcome stays pending as any run's.
+pub async fn open_for_person(
+    client: &Client,
+    ownership: &Ownership,
+    lease: (&SharedLease, &str),
+    app: &str,
+    url: &str,
+    new_window: bool,
+) -> Result<Value> {
+    let open_url = [
+        "-a".to_owned(),
+        app.to_owned(),
+        "--".to_owned(),
+        url.to_owned(),
+    ];
+    if !new_window {
+        return launch_for_person(client, ownership, lease, &open_url).await;
+    }
+    let mut new = vec!["-n".to_owned(), "-a".to_owned(), app.to_owned()];
+    new.extend(["--args".to_owned(), "--new-window".to_owned()]);
+    if web_page(url) {
+        new.push(url.to_owned());
+        return launch_for_person(client, ownership, lease, &new).await;
+    }
+    let verified = client.verify().await?;
+    let before = windows_of(client, &verified, app).await;
+    launch_for_person(client, ownership, lease, &new).await?;
+    let waited = Instant::now();
+    while windows_of(client, &verified, app).await <= before && waited.elapsed() < NEW_WINDOW_WAIT {
+        tokio::time::sleep(NEW_WINDOW_POLL).await;
+    }
+    launch_for_person(client, ownership, lease, &open_url).await
+}
+
+/// How long a browser's own page waits for the window opened for it, before
+/// it opens wherever the browser puts it.
+const NEW_WINDOW_WAIT: Duration = Duration::from_secs(5);
+
+/// How often the helper's windows are read while it waits.
+const NEW_WINDOW_POLL: Duration = Duration::from_millis(100);
+
+/// How many windows `app`, by its name, shows in the helper `verified`;
+/// none when they can't be read.
+async fn windows_of(client: &Client, verified: &Verified, app: &str) -> usize {
+    client
+        .windows_in(Some(verified), false, WINDOW_LOOKUP)
+        .await
+        .map_or(0, |shown| {
+            shown
+                .windows
+                .iter()
+                .filter(|window| window.owner.as_deref() == Some(app))
+                .count()
+        })
+}
+
+/// One `open` with `arguments` for the person, under their lease.
+async fn launch_for_person(
+    client: &Client,
+    ownership: &Ownership,
+    lease: (&SharedLease, &str),
+    arguments: &[String],
+) -> Result<Value> {
+    let mut argv = vec!["/usr/bin/open".to_owned()];
+    argv.extend_from_slice(arguments);
+    let leased = Some(lease);
+    let mut finished = client
+        .run_finished_under(ownership, leased, argv.clone(), OUTPUT)
+        .await?;
+    if !finished.succeeded && cleared_stale_launch(client, ownership, leased, &finished).await? {
+        finished = client
+            .run_finished_under(ownership, leased, argv, OUTPUT)
+            .await?;
+    }
+    // A lease that ran out meanwhile ends the person's flow, opened or not.
+    lease.0.lock().await.require(lease.1)?;
+    if !finished.succeeded {
+        return Err(not_opened(&finished, &[]));
+    }
+    Ok(json!({"ok": true, "opened": true}))
+}
+
 /// [`open`], pruning `open`'s old copies under `copies`.
 pub(super) async fn open_in(
     client: &Client,
@@ -57,6 +159,11 @@ pub(super) async fn open_in(
     }
 
     let mut argv = open_argv(environment)?;
+    let wanted = wanted(app, targets);
+    // Before the helper is asked anything: the person's sign-ins and secrets never reach it, by the path given (a link
+    // named like a store) or the one it leads to.
+    crate::credential_files::refuse(given_paths(app, targets, &wanted))?;
+    handoff::refuse_targets(&wanted)?;
     let started = Instant::now();
 
     // Copying, launching and pruning happen under one ownership, so no other
@@ -68,7 +175,7 @@ pub(super) async fn open_in(
     let running = listed.rows();
     task::settle_copies_gone(client, handoff::prune_in(copies, running));
 
-    let handed = handoff::hand_over(client, &ownership, wanted(app, targets), running).await?;
+    let handed = handoff::hand_over(client, &ownership, wanted, running).await?;
     let copied = handed.copied;
     // Web pages for a browser already running get a window of their own:
     // the app as the helper opens it, by its name or the path handed over.
@@ -197,6 +304,27 @@ fn web_page(target: &str) -> bool {
     })
 }
 
+/// The arguments of `open` to check as given, beside `wanted`, what they resolved to: each file named, whether or
+/// not it exists (a missing `.env` is no URL), and whatever exists here, however it looks. An app given by name is
+/// the helper's to look up.
+fn given_paths<'a>(
+    app: Option<&'a str>,
+    targets: &'a [String],
+    wanted: &[handoff::Target],
+) -> Vec<&'a Path> {
+    app.into_iter()
+        .map(|app| (app, app.contains('/')))
+        .chain(
+            targets
+                .iter()
+                .map(|target| (target.as_str(), !handoff::has_scheme(target))),
+        )
+        .zip(wanted)
+        .filter(|((_, file), target)| *file || matches!(target, handoff::Target::Path(_)))
+        .map(|((given, _), _)| Path::new(given))
+        .collect()
+}
+
 /// What `open` hands over to the helper: the app first, then each file or
 /// URL.
 fn wanted(app: Option<&str>, targets: &[String]) -> Vec<handoff::Target> {
@@ -227,7 +355,7 @@ async fn launch(
 ) -> Result<(Finished, bool)> {
     let mut finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
 
-    if !finished.succeeded && cleared_stale_launch(client, ownership, &finished).await? {
+    if !finished.succeeded && cleared_stale_launch(client, ownership, None, &finished).await? {
         finished = client.run_finished(ownership, argv.clone(), OUTPUT).await?;
     }
 
@@ -311,6 +439,7 @@ fn not_opened(finished: &Finished, copied: &[crate::handoff::Copied]) -> Error {
 async fn cleared_stale_launch(
     client: &Client,
     ownership: &Ownership,
+    lease: Option<(&SharedLease, &str)>,
     failed: &Finished,
 ) -> Result<bool> {
     let said = failed.said();
@@ -325,7 +454,9 @@ async fn cleared_stale_launch(
         "sh".to_owned(),
         bundle.to_owned(),
     ];
-    let cleared = client.run_finished(ownership, argv, OUTPUT).await?;
+    let cleared = client
+        .run_finished_under(ownership, lease, argv, OUTPUT)
+        .await?;
 
     Ok(!cleared.output().is_empty())
 }

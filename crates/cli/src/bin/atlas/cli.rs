@@ -1059,6 +1059,31 @@ pub(super) enum OnboardingCommand {
         #[arg(value_enum)]
         state: OnOff,
     },
+    /// Whether the home folder is private from the helper: make it private,
+    /// open it again (the person only), or note the offer was made.
+    Files {
+        #[arg(value_enum)]
+        change: Option<HomeFiles>,
+    },
+    /// Whether agents may copy sign-ins and secrets into the helper; only
+    /// the person allows it.
+    SignIns {
+        #[arg(value_enum)]
+        choice: Option<SignInCopies>,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(super) enum HomeFiles {
+    Private,
+    Open,
+    Offered,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(super) enum SignInCopies {
+    Allow,
+    Refuse,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]

@@ -84,6 +84,51 @@ struct DesktopCanvasViewTests {
     viewer.close()
   }
 
+  @Test(
+    "while an alert shows over a held sign-in, Return goes to the alert, nothing reaches the helper, and the lease holds"
+  )
+  func anAlertTakesItsKeysDuringASignIn() async throws {
+    let service = ScriptedService()
+    let viewer = try await ViewerController.watching(service)
+    _ = await viewer.startSignIn(.signIn, site: "github.com", browser: nil)
+    let window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 200, height: 150),
+      styleMask: [],
+      backing: .buffered,
+      defer: true
+    )
+    let canvas = DesktopCanvasView(frame: window.contentLayoutRect)
+    canvas.controller = viewer
+    canvas.takesKeyboard = { _ in true }
+    window.contentView = canvas
+    try #require(window.makeFirstResponder(canvas))
+    viewer.ask(.restart)
+    let returnKey = try #require(
+      NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        characters: "\r",
+        charactersIgnoringModifiers: "\r",
+        isARepeat: false,
+        keyCode: 36
+      )
+    )
+    #expect(canvas.intercept(returnKey) === returnKey, "Return passes on to the alert's default button")
+    #expect(!viewer.control.canInput)
+    viewer.control.sendKey("return")
+    #expect(service.actions.isEmpty, "nothing reaches the helper while the alert shows")
+    #expect(viewer.control.signInLease == "sign-in-lease", "the sign-in holds")
+    viewer.cancelAlert()
+    #expect(canvas.intercept(returnKey) == nil, "with the alert gone, Return is the helper's again")
+    try await settle("Return never reached the helper") { !service.actions.isEmpty }
+    canvas.stopIntercepting()
+    viewer.close()
+  }
+
   @Test("at actual size one view point maps to one display point, scrolled or not")
   func actualSizeMapsOnePointToOne() async throws {
     let service = ScriptedService()

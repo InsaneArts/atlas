@@ -47,6 +47,19 @@ const SOCKETS: usize = 4 * OBSERVERS_MAX as usize;
 /// aimed at it can be checked against the session and time it shows.
 pub(crate) type Witness = std::sync::Arc<dyn Fn(&str, &Epoch, Instant) + Send + Sync>;
 
+/// The screen's privacy as the broker serves it. While the person signs the
+/// helper in to an account, only an exempt peer (the Atlas app) is shown
+/// pictures; every other observer's credits wait, and lapse. Afterwards an
+/// observer that isn't exempt is shown only a picture captured wholly under
+/// the privacy generation in force now.
+#[derive(Clone)]
+pub(crate) struct Privacy {
+    /// The screen's privacy generation now, or None while it is hidden.
+    pub(crate) visible: source::Visibility,
+    /// Whether this peer is shown every picture, private ones too.
+    pub(crate) exempt: std::sync::Arc<dyn Fn(&Peer) -> bool + Send + Sync>,
+}
+
 /// One accepted socket.
 struct Connection {
     lane: Lane,
@@ -98,6 +111,7 @@ struct Broker {
     /// Whether the source's last answer was a failure.
     failing: bool,
     witness: Witness,
+    privacy: Privacy,
     connections: HashMap<Id, Connection>,
     observers: HashMap<Id, Observer>,
     events: mpsc::Sender<Event>,
@@ -105,14 +119,15 @@ struct Broker {
 }
 
 /// Serve `listeners` for `controller` until `shutdown`, pairing through
-/// `gate` and serving pictures from `source`, then end every observer and
-/// give the source back.
+/// `gate` and serving pictures from `source` as `privacy` lets each
+/// observer see them, then end every observer and give the source back.
 pub(crate) async fn run(
     listeners: Listeners,
     controller: u32,
     gate: Gate,
     source: source::Handle,
     witness: Witness,
+    privacy: Privacy,
     shutdown: impl Future<Output = ()>,
 ) {
     let (events, mut incoming) = mpsc::channel(lane::QUEUE * SOCKETS);
@@ -128,6 +143,7 @@ pub(crate) async fn run(
         epoch: None,
         failing: false,
         witness,
+        privacy,
         connections: HashMap::new(),
         observers: HashMap::new(),
         events,
@@ -748,6 +764,23 @@ impl Broker {
             }
             _ => None,
         };
+        // While the screen is hidden, an observer that isn't exempt asks for
+        // nothing and its credit lapses; afterwards it is shown only a
+        // picture captured under the generation in force now.
+        let Some(peer) = self.connections.get(&control).map(|held| held.peer) else {
+            return;
+        };
+        let exempt = (self.privacy.exempt)(&peer);
+        let visible = if exempt {
+            None
+        } else {
+            (self.privacy.visible)()
+        };
+        if !exempt && visible.is_none() {
+            return;
+        }
+        let candidate = candidate
+            .filter(|picture| exempt || (picture.visible.is_some() && picture.visible == visible));
         let Some(observer) = self.observers.get_mut(&control) else {
             return;
         };

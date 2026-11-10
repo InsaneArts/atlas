@@ -76,7 +76,7 @@ The viewer has two places:
 
 The viewer opens on Screen. Click a session in the sidebar to see its Activity, or **All sessions** to see every session's. **View > Screen** (⌘1) and **View > Activity** (⌘2) switch between them too.
 
-Activity lists sessions, then the runs of work each did in one app, then each run's steps. A folded run shows its problems and its newest screenshots; click **N pictures** to see all of them in place, or open the run to read its steps in order. A step with a picture of the helper just before it has a small picture button; it opens the picture in a sheet, marked where the agent clicked, typed or scrolled, with **Before** and **After** when there is a picture after it. Use the arrows to step through the run's pictures, and **Replay** on an open run to play its steps back. Pictures stay on your Mac for 7 days unless **Settings > General** says otherwise, where you can also turn them off, limit the typed text kept beside them, or delete them all. Text typed into a password field is never kept, and no agent is ever given a picture. The [configuration guide](configuration.md#settings-fields) has the details.
+Activity lists sessions, then the runs of work each did in one app, then each run's steps. A folded run shows its problems and its newest screenshots; click **N pictures** to see all of them in place, or open the run to read its steps in order. A step with a picture of the helper just before it has a small picture button; it opens the picture in a sheet, marked where the agent clicked, typed or scrolled, with **Before** and **After** when there is a picture after it. Use the arrows to step through the run's pictures, and **Replay** on an open run to play its steps back. Pictures stay on your Mac for 7 days unless **Settings > Activity** says otherwise, where you can also turn them off, limit the typed text kept beside them, or delete them all. Text typed into a password field is never kept, and no agent is ever given a picture. The [configuration guide](configuration.md#settings-fields) has the details.
 
 In the sidebar, each session is named by what it did and where, such as "Typing in TextEdit". Sessions that never acted in the helper are not listed. While Screen shows, no session is highlighted; the session Activity shows is.
 
@@ -94,7 +94,7 @@ Choose **Take Control** in the viewer to use your mouse and keyboard in the help
 
 In the native viewer and a visible embedded view, control ends when no displayed picture has been confirmed for 6.5 seconds. A confirmed unchanged picture counts as fresh; successful control renewals alone do not. This prevents a frozen picture from holding control indefinitely.
 
-**Stop** cancels agent input underway and blocks further agent actions. It is separate from pausing the picture and from taking control. Use **Resume** when you want agents to act again. An agent must not resume itself after you stop it.
+**Stop** cancels agent input underway and blocks further agent actions. It is separate from pausing the picture and from taking control. Use **Resume** when you want agents to act again. An agent must not resume itself after you stop it. The terminal viewer (`atlas monitor --terminal`) is your tool too: like Stop and Resume, it holds against agents using Atlas's commands, not against a shell that runs it for them.
 
 If Atlas reports that an action's outcome is unknown, do not send it again. Observe the helper if it is available, follow Atlas's recovery instructions, then inspect the result before continuing. If the helper is unavailable, complete the login or permission step first. Recovery does not prove that the earlier action did nothing. The [error reference](../agents/atlas/skills/atlas/references/troubleshooting.md) gives the next step for each error code.
 
@@ -144,7 +144,19 @@ atlas collect atlas-work/report.pdf
 
 The reply gives the path of the copy on your side. Nothing else comes back.
 
-Some places are readable by every account on your Mac, the helper included: `/Users/Shared`, most external drives, a disk image mounted in either account, and folders in your home that aren't private. Your Desktop, Documents, Downloads and Library are private; a folder you created yourself, such as `~/code`, usually isn't. To make one private:
+Some places are readable by every account on your Mac, the helper included: `/Users/Shared`, most external drives, a disk image mounted in either account, and folders in your home that aren't private. Your Desktop, Documents, Downloads and Library are private; a folder you created yourself, such as `~/code`, usually isn't.
+
+**Keep your home folder private from the helper.** Setup's last screen has this switch, on unless you turned it off before, and **Settings › Privacy › Your Files** shows how your home folder stands, with **Make Private** or **Undo…**. It adds one access entry to your home folder that keeps the helper, and only the helper, from listing it or going into it. Nothing else changes: your apps and other accounts keep their access, and `/Users/Shared` and external drives keep their own permissions. `atlas doctor` in your terminal says how many of your folders the helper can open while it isn't private. Only you open it again; an agent can make it private, never undo it.
+
+While your home folder is private:
+
+- Agents still open your apps and files from it: Atlas copies each one in first, and keeps the copy for 7 days. Rebuilding an app that is still open in the helper can stop at "An earlier copy … is still running"; close it there first.
+- `atlas open` of a folder in your home, and a profile's `[[references]]` to a place in your home, stop working. Put shared material in `/Users/Shared`, or open a single file.
+- An app that loads files by a full path into your home, such as a build that links a library from `~/dev`, can't reach them from the helper.
+
+To undo it without the app, run `chmod -a "user:HELPER deny list,search" ~` with the helper's account name. Uninstalling Atlas leaves it in place and prints that line.
+
+To make only one folder private instead:
 
 ```sh
 chmod go-rwx ~/code
@@ -154,9 +166,33 @@ Atlas still opens builds from a private folder: it copies them for the helper.
 
 Atlas limits what the helper's apps can see. Your agent itself runs in your account and can read what you can, as it does without Atlas.
 
+### Signing the helper into accounts
+
+Atlas never copies your sign-ins into the helper. It refuses to copy, or open there, browser profiles and cookies, keychains, the sign-in storage of apps such as Slack and Discord, SSH, GPG and cloud keys, `.env` and `.npmrc`. The refusal says what the file is. When a task needs an account, sign the helper in to it yourself.
+
+Anything the helper is signed in to, an agent can use: it can read, send, merge or delete there as you could. So sign in only to what the task needs, and prefer a test account or one with few rights. Your agent's own app may also ask you before it runs a command; that is separate from Atlas.
+
+**Sign In to a Site…** in **Settings › Accounts** opens the site in the helper's Google Chrome, or in Firefox when Chrome isn't installed, and gives you control there. Atlas starts it only when no agent's command or background job is running. Until you finish, agents are paused and can't see the helper's screen: their screenshots, element and window reads, the live picture in their apps and the pictures of their actions all answer `busy`, held by you. Sign in as usual; switching to your password manager or covering the viewer keeps control with you. Choose **Done** and the site joins your accounts: a new one starts at Ask Before Sending, so agents ask you before sending there, and one already listed keeps the level you gave it. **Cancel** adds nothing. Either way agents go on as before, and a Stop you chose meanwhile stays.
+
+When an agent asks before sending, Atlas's menu bar icon says Waiting for you, the question shows in the menu bar panel and over the main window's Screen, and a notification tells you unless you are looking at Atlas. Choose **Just This Once**, **Allow for This Task** or **Deny**. A question you don't answer ends after two minutes and nothing is sent; the agent asks again if it still needs to.
+
+An account's **Forget…** and **Reset…** work the same way. Forget opens the browser's settings for that site's data, and Reset its page for clearing all of its data. Delete it there and choose **Done**. Atlas can't see what you deleted, so it then asks whether to remove the account from the list too.
+
+Atlas checks where a file is, not what is in it: a renamed copy of a store, or a project folder copied whole with a `.env` inside, is not recognized.
+
+If you want agents to copy such files in anyway, turn on **Copy sign-ins into the helper** in **Settings › Privacy › Sign-Ins**. It is off unless you turn it on, it asks first, and only you can turn it on; anyone can turn it off. Like Stop, it holds against agents using Atlas's commands, not against a shell that edits Atlas's files itself.
+
 ## Settings and practical limits
 
-Open **Settings** to change picture behavior in **General**, check the account and readiness in **Helper**, manage connections in **Agents**, or view version information in **About**.
+Open **Settings** from the menu bar, or click the helper's line at the foot of the main window's sidebar to open it on **Helper**. Its pages are:
+
+- **Helper**: the helper account, whether it is ready to act with **Check Again**, and **Recover…** and **Log Out…** for when something goes wrong.
+- **General**: opening Atlas at login, the menu bar's icon, how often the helper's screen updates, muting the helper, and notifications.
+- **Activity**: keeping pictures of agent actions, how long, how much typed text beside them, and the pictures stored on this Mac with **Delete All…**.
+- **Accounts**: the accounts agents act in, each with its own page for how freely they act there and its sign-in actions. An app shows its own icon; a site shows its icon, which Atlas reads from the site itself, without your cookies or sign-in, and keeps for 30 days.
+- **Privacy**: keeping your home folder private from the helper, and whether agents may copy sign-ins in.
+- **Integrations**: connecting coding agents, and the projects whose `AGENTS.md` has Atlas's section.
+- **About**: the version, software updates and **Getting Started**.
 
 Keep these limits in mind when choosing a task:
 

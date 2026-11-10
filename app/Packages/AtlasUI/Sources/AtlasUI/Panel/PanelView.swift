@@ -11,6 +11,7 @@ public struct PanelView: View {
   private let state: PanelState
   /// Receives what the person does.
   private let send: @MainActor (PanelEvent) -> Void
+  @Environment(\.motionReduced) private var reduceMotion
 
   /// Creates the panel.
   ///
@@ -22,12 +23,23 @@ public struct PanelView: View {
     self.send = send
   }
 
-  /// The header, the service note while it shows, the picture, Sessions while there are any, else Recent when there is any, then the buttons.
+  /// The header, the service note while it shows, the question Atlas asks the person and what they allowed while
+  /// there are any, the picture, Sessions while there are any, else Recent when there is any, the accounts line while
+  /// Atlas lists any, then the buttons. A question comes and goes in one move (``AskMotion``).
   public var body: some View {
     VStack(alignment: .leading, spacing: PanelLayout.gap) {
       PanelHeader(status: state.status, notice: state.notice, isMoreOpen: state.isMoreOpen, send: send)
       if state.showsServiceNote {
         PanelServiceNote(send: send)
+      }
+      if let ask = state.ask {
+        PanelAskCard(ask: ask, send: send)
+          .id(ask.id)
+          .transition(AskMotion.transition(reduceMotion: reduceMotion))
+      }
+      ForEach(state.allowed) { row in
+        PanelAllowedRow(row: row, send: send)
+          .transition(AskMotion.transition(reduceMotion: reduceMotion))
       }
       PanelPicture(state: state.picture, send: send)
         .animation(PanelLayout.change, value: state.picture.look)
@@ -36,9 +48,14 @@ public struct PanelView: View {
       } else if !state.recent.isEmpty {
         PanelRecent(entries: state.recent, send: send)
       }
+      if let accounts = state.accounts {
+        PanelAccountsLine(line: accounts, send: send)
+      }
       PanelControlRow(controls: state.controls, send: send)
         .animation(PanelLayout.change, value: state.controls.main)
     }
+    .animation(AskMotion.room(shown: state.ask != nil, reduceMotion: reduceMotion), value: state.ask?.id)
+    .animation(AskMotion.room(shown: false, reduceMotion: reduceMotion), value: state.allowed.map(\.id))
     .padding(PanelLayout.inset)
     .frame(width: PanelLayout.width)
     .background(PanelLayout.ground)

@@ -817,7 +817,7 @@ async fn the_launcher_sends_its_private_url_only_through_stdin() {
     let recording = Recording::reader();
     let url = format!("http://127.0.0.1:12345/{:032x}", rand::random::<u128>());
     let args = ["--render", "a path with spaces.png", "--dark"];
-    let (mut child, stdin) = spawn(&recording.program, &url, &args).await.unwrap();
+    let (mut child, stdin) = spawn(&recording.program, &url, None, &args).await.unwrap();
     let instance = recording.started().await;
     assert_eq!(child.id(), Some(instance.pid as u32));
     recording.wait_for("ready").await;
@@ -858,7 +858,9 @@ async fn the_launcher_sends_its_private_url_only_through_stdin() {
 async fn closing_the_launcher_pipe_lets_the_child_exit() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let recording = Recording::reader();
-        let (mut child, mut stdin) = spawn(&recording.program, "private-url", &[]).await.unwrap();
+        let (mut child, mut stdin) = spawn(&recording.program, "private-url", None, &[])
+            .await
+            .unwrap();
         recording.started().await;
         recording.wait_for("ready").await;
         assert!(
@@ -892,7 +894,7 @@ async fn a_failed_launch_leaves_no_owned_child() {
             ));
             // Exceed pipe capacity so launch cannot finish before the child closes stdin.
             let url = "private-launch-canary".repeat(65536);
-            let launching = spawn(&recording.program, &url, &[]);
+            let launching = spawn(&recording.program, &url, None, &[]);
             tokio::pin!(launching);
             tokio::select! {
                 _ = &mut launching => panic!("launch finished before the child closed stdin"),
@@ -923,12 +925,15 @@ async fn dropping_the_launcher_child_ends_only_its_own_process() {
     tokio::time::timeout(Duration::from_secs(30), async {
         let recording = Recording::reader();
         let other = Recording::reader();
-        let (child, stdin) = spawn(&recording.program, "private-url", &[]).await.unwrap();
-        recording.started().await;
-        recording.wait_for("ready").await;
-        let (mut unrelated, unrelated_stdin) = spawn(&other.program, "other-private-url", &[])
+        let (child, stdin) = spawn(&recording.program, "private-url", None, &[])
             .await
             .unwrap();
+        recording.started().await;
+        recording.wait_for("ready").await;
+        let (mut unrelated, unrelated_stdin) =
+            spawn(&other.program, "other-private-url", None, &[])
+                .await
+                .unwrap();
         let identity = other.started().await;
         other.wait_for("ready").await;
 
@@ -1524,4 +1529,28 @@ fn rendering_selects_the_appearance() {
         render_args("/tmp/a.png", true),
         ["--render", "/tmp/a.png", "--dark"]
     );
+}
+
+#[tokio::test]
+async fn the_app_is_given_its_secret_on_stdin_after_the_url_and_nowhere_else() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let recording = Recording::reader();
+        let secret = "5e".repeat(32);
+        let (mut child, stdin) = spawn(&recording.program, "private-url", Some(&secret), &[])
+            .await
+            .unwrap();
+        recording.started().await;
+        recording.wait_for("ready").await;
+        drop(stdin);
+        child.wait().await.unwrap();
+        recording.wait_for("eof").await;
+
+        let read = |name| fs::read_to_string(recording.directory.path().join(name)).unwrap();
+        assert_eq!(read("url"), "private-url\n");
+        assert_eq!(read("rest"), format!("secret {secret}\n"));
+        assert!(!read("argv").contains(&secret));
+        recording.reaped().await;
+    })
+    .await
+    .unwrap();
 }

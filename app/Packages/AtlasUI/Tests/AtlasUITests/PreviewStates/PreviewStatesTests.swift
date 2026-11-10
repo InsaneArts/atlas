@@ -23,9 +23,11 @@
       #expect(
         Set(states.map(\.status.label)) == [
           "Idle", "Working", "You have control", "Needs you", "Stopped", "Logged out", "Not ready", "Connecting",
-          "In use elsewhere",
+          "In use elsewhere", "Waiting for you",
         ]
       )
+      #expect(states.contains { $0.ask?.choices == [.task, .deny] }, "a question offering Allow for This Task alone")
+      #expect(states.contains { !$0.allowed.isEmpty }, "what the person allowed for a task")
       let looks = Set(
         states.map { state -> String in
           switch state.picture.look {
@@ -62,8 +64,12 @@
         ])
       )
       #expect(
-        Set(states.compactMap { $0.alert?.title }).count == 6,
-        "Recover, Switch, Log Out, Log Out Anyway, Restart, Clean Up"
+        Set(states.compactMap { $0.alert?.title }).count == 8,
+        "Recover, Switch, Log Out, Log Out Anyway, Restart, Clean Up, a site added, removing a site too"
+      )
+      #expect(
+        states.contains { $0.screen.signingIn != nil && $0.header.tag != nil },
+        "the bar and the tag while signing in"
       )
       #expect(Set(states.compactMap { $0.screen.picture == nil ? $0.screen.empty?.message.headline : nil }).count == 3)
       let lines = Set(
@@ -104,15 +110,20 @@
       #expect(panes == ["screen", "activity", "activity, empty", "sheet"])
     }
 
-    @Test("the settings previews show every pane, alert and update step")
+    @Test("the settings previews show every page, alert and update step")
     func settingsPreviewsCoverEveryPiece() {
       let states = PreviewStates.settings
         .map(\.value)
-      #expect(Set(states.map(\.tabs.selected)) == Set(SettingsTab.allCases))
+      #expect(Set(states.map(\.route.page)) == Set(SettingsPage.allCases))
       #expect(
-        Set(states.compactMap { $0.alert?.title }).count == 6,
-        "Recover, Switch, Log Out, Log Out Anyway, Forget, Install"
+        Set(states.compactMap { $0.alert?.title }).count == 9,
+        "Recover, Switch, Log Out, Log Out Anyway, Forget, Install, home folder Undo, sign-in copies, remove an account"
       )
+      #expect(states.contains { $0.accounts.rows == [] }, "no accounts")
+      #expect(states.contains { $0.accounts.rows == nil }, "a list Atlas can't read")
+      #expect(states.contains { $0.accounts.note != nil }, "the note that Atlas added one")
+      #expect(states.contains { $0.privacy?.home?.isPrivate == false }, "a home folder open to the helper")
+      #expect(states.contains { $0.privacy?.status?.kind == .problem }, "a change that failed")
       #expect(states.contains { $0.alert?.isBusy == true }, "an alert whose command runs")
       let updates = Set(
         states.map { state in

@@ -475,3 +475,30 @@ fn an_element_met_with_a_frame_is_reported_by_its_frame_role_and_shown_name() {
 fn an_element_met_without_a_frame_is_not_reported() {
     assert!(Reached::of(&button(4, "Save")).is_none());
 }
+
+#[test]
+fn the_gate_reads_a_referenced_element_by_its_own_role_and_name_not_its_windows() {
+    let looks = Looks::default();
+    let window = Element {
+        index: 0,
+        role: Some("AXWindow".into()),
+        title: Some("New Message".into()),
+        ..Element::default()
+    };
+    let read = Read {
+        instance: editor(),
+        snapshot: empty(),
+        seen: vec![seen(1, None, window), seen(2, Some(0), button(1, "Send"))],
+    };
+    let (look, _) = looks.keep(epoch(), read, Instant::now()).unwrap();
+    let Described {
+        pid,
+        role,
+        name,
+        in_page,
+    } = looks.described(at(look, 1), &epoch()).unwrap();
+    assert_eq!(pid, 812);
+    assert_eq!(role.as_deref(), Some("AXButton"));
+    assert_eq!(name.as_deref(), Some("Send"), "the button, not its window");
+    assert!(!in_page);
+}

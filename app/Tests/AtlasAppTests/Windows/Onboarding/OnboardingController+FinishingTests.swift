@@ -170,24 +170,95 @@ struct OnboardingControllerFinishingTests {
     }
   }
 
-  @Test("Done sets Open at Login and opens Atlas, then the window closes")
+  @Test("Done sets Open at Login, keeps the home folder private and opens Atlas, then the window closes")
   func doneClosesTheWindow() async {
-    let commands = ScriptedCommands(["onboarding login": #"{"ok": true}"#, "menubar": #"{"ok": true}"#])
+    let commands = ScriptedCommands([
+      "onboarding login": #"{"ok": true}"#,
+      "onboarding files": Self.privateHome,
+      "menubar": #"{"ok": true}"#,
+    ])
     let controller = OnboardingController.scripted(commands)
     controller.send(.setOpenAtLogin(false))
     await controller.complete()
     let done = commands.ran.filter { $0 != Action.onboardingStatus.arguments }
-    #expect(done == [Action.setOpensAtLogin(false).arguments, Action.openMenuBar.arguments])
+    #expect(
+      done == [Action.setOpensAtLogin(false).arguments, Action.makeHomePrivate.arguments, Action.openMenuBar.arguments]
+    )
     #expect(controller.closeRequested)
+  }
+
+  @Test("with the box unchecked Done only remembers the offer, and leaves the home folder as it is")
+  func anUncheckedBoxOnlyRemembersTheOffer() async {
+    let commands = ScriptedCommands([
+      "onboarding login": #"{"ok": true}"#,
+      "onboarding files": Self.privateHome,
+      "menubar": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands)
+    controller.send(.setKeepHomePrivate(false))
+    await controller.complete()
+    #expect(commands.ran.contains(Action.homeOffered.arguments))
+    #expect(!commands.ran.contains(Action.makeHomePrivate.arguments))
+    #expect(controller.closeRequested)
+  }
+
+  @Test("while Done remembers the offer, the switches wait: a box ticked meanwhile isn't taken")
+  func theSwitchesWaitWhileTheOfferIsRemembered() async throws {
+    let gate = ReleaseSignal()
+    let commands = ScriptedCommands([
+      "onboarding login": #"{"ok": true}"#,
+      "onboarding files": Self.privateHome,
+      "menubar": #"{"ok": true}"#,
+    ])
+    commands.whileRunning { arguments in
+      if arguments == Action.homeOffered.arguments { await gate.wait() }
+    }
+    let controller = OnboardingController.scripted(commands)
+    controller.send(.setKeepHomePrivate(false))
+    let completing = Task { await controller.complete() }
+    try await settle("the offer was never remembered") { commands.ran.contains(Action.homeOffered.arguments) }
+    #expect(!OnboardingPresenter.done(controller.snapshot).isEnabled)
+    controller.send(.setKeepHomePrivate(true))
+    #expect(!controller.snapshot.keepsHomePrivate)
+    gate.open()
+    await completing.value
+    #expect(!controller.snapshot.keepsHomePrivate)
+    #expect(!commands.ran.contains(Action.makeHomePrivate.arguments))
+    #expect(controller.closeRequested)
+  }
+
+  @Test("a home folder Atlas couldn't make private stops Done, saying why; the next Done finishes, still unoffered")
+  func aFailedPrivacyStopsDoneOnce() async {
+    let commands = ScriptedCommands([
+      "onboarding login": #"{"ok": true}"#,
+      "onboarding files":
+        #"{"ok": false, "code": "io", "error": "Atlas couldn't make your home folder private. In Terminal, run: chmod +a# 0 \"user:atlas deny list,search\" ~"}"#,
+      "menubar": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands)
+    await controller.complete()
+    #expect(!controller.closeRequested)
+    #expect(!controller.snapshot.keepsHomePrivate)
+    #expect(controller.snapshot.problem?.hasSuffix("You can make it private later in Settings › Privacy.") == true)
+    #expect(OnboardingPresenter.done(controller.snapshot).keepsHomePrivate == false)
+    await controller.complete()
+    #expect(controller.closeRequested)
+    #expect(!commands.ran.contains(Action.homeOffered.arguments), "a failed attempt stays unoffered")
   }
 
   @Test("Done that fails keeps the window open, saying why")
   func aFailedDoneKeepsTheWindow() async {
-    let controller = OnboardingController.scripted(ScriptedCommands(["onboarding login": #"{"ok": true}"#]))
+    let controller = OnboardingController.scripted(
+      ScriptedCommands(["onboarding login": #"{"ok": true}"#, "onboarding files": Self.privateHome])
+    )
     await controller.complete()
     #expect(!controller.closeRequested)
     #expect(controller.snapshot.problem == "unknown command.")
   }
+
+  /// The reply of a home folder made private.
+  static let privateHome =
+    #"{"ok": true, "private": true, "readable": 0, "examples": [], "offered": true, "signInCopies": false}"#
 
   @Test("Open at Login keeps its saved choice while Done waits for Atlas to open", arguments: [true, false])
   func theLoginChoiceWaitsForDone(started: Bool) async throws {
@@ -195,6 +266,7 @@ struct OnboardingControllerFinishingTests {
     let commands = ScriptedCommands([
       "onboarding status": OnboardingReplies.finishedMac,
       "onboarding login": #"{"ok": true}"#,
+      "onboarding files": Self.privateHome,
       "menubar": started ? #"{"ok": true}"# : #"{"ok": false, "error": "Atlas could not open"}"#,
     ])
     commands.whileRunning { arguments in

@@ -66,6 +66,7 @@ impl Acquire for Scripted {
             display: [measure(4.0), measure(2.0), measure(1.0)],
             backend: Source::Cg,
             epoch: epoch(self.session.load(Ordering::SeqCst)),
+            visible: None,
         })
     }
 
@@ -85,6 +86,12 @@ struct Running {
     source: Scripted,
     /// Every commit witnessed: its frame key and session.
     witnessed: Arc<Mutex<Vec<(String, u64)>>>,
+    /// Whose screen privacy the broker serves by, and the person's lease
+    /// that hides it during a sign-in.
+    controller: atlas_control::Controller,
+    lease: Mutex<atlas_control::Lease>,
+    /// Whether every observer is shown every picture, as the app is.
+    exempt: Arc<AtomicBool>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -107,10 +114,19 @@ impl Running {
             vec![Right::Observe],
             vec![UpdateKind::Full],
         );
+        let controller = atlas_control::Controller::at(505, &folder.path().join("state"));
+        let seen = controller.clone();
+        let exempt = Arc::new(AtomicBool::new(false));
+        let excused = exempt.clone();
+        let privacy = Privacy {
+            visible: Arc::new(move || seen.screen_visible().ok()),
+            exempt: Arc::new(move |_| excused.load(Ordering::SeqCst)),
+        };
         let handle = source::spawn(
             source.clone(),
             Budget::new(BROKER_PIXELS),
             Arc::new(tokio::sync::Notify::new()),
+            privacy.visible.clone(),
         );
         let (stop, stopped) = tokio::sync::oneshot::channel();
         let uid = nix::unistd::getuid().as_raw();
@@ -122,7 +138,7 @@ impl Running {
                 .unwrap()
                 .push((key.to_owned(), epoch.security_session_id));
         });
-        let task = tokio::spawn(run(listeners, uid, gate, handle, witness, async {
+        let task = tokio::spawn(run(listeners, uid, gate, handle, witness, privacy, async {
             let _ = stopped.await;
         }));
         Self {
@@ -133,9 +149,29 @@ impl Running {
             bootstrap,
             source,
             witnessed,
+            controller,
+            lease: Mutex::new(atlas_control::Lease::new(Duration::from_secs(30))),
+            exempt,
             stop: Some(stop),
             task,
         }
+    }
+
+    /// Hide the screen, as the person's sign-in does.
+    fn hide(&self) {
+        let mut lease = self.lease.lock().unwrap();
+        let token = lease.acquire(&self.controller).unwrap();
+        let hold = atlas_control::PrivateHold {
+            site: "github.com".to_owned(),
+            kind: atlas_control::HoldKind::SignIn,
+        };
+        lease.hide_screen(&self.controller, &token, &hold).unwrap();
+    }
+
+    /// Show it again, as Done does.
+    fn show(&self) {
+        self.controller.end_private().unwrap();
+        self.lease.lock().unwrap().release();
     }
 
     async fn shut(mut self) {
@@ -432,6 +468,52 @@ async fn an_unserved_credit_expires_and_the_observer_may_credit_again() {
 }
 
 #[tokio::test]
+async fn an_observer_the_screen_is_hidden_from_gets_no_picture_until_it_is_shown_again() {
+    let broker = Running::start(Scripted::default()).await;
+    let mut client = Client_::pair(&broker).await;
+    let subscribed = client.subscribe().await;
+    broker.hide();
+
+    let request = client.credit(&subscribed, 1, Barrier::Ordinary).await;
+    let (expired, got): (CreditOnly, _) = client.control.expect(Kind::CreditExpired).await;
+    assert_eq!((expired.credit_id.get(), got.head.request), (1, request));
+
+    broker.show();
+    client.credit(&subscribed, 2, Barrier::Ordinary).await;
+    let (metadata, _, _) = client.picture().await;
+    assert_eq!(metadata.credit_id.get(), 2);
+    broker.shut().await;
+}
+
+#[tokio::test]
+async fn a_picture_read_during_a_sign_in_is_never_shown_to_another_observer_after_it() {
+    let broker = Running::start(Scripted::default()).await;
+    let mut app = Client_::pair(&broker).await;
+    let mut agent = Client_::pair(&broker).await;
+    let shown_to_app = app.subscribe().await;
+    let shown_to_agent = agent.subscribe().await;
+
+    // The app is shown a picture read while the person signs in.
+    broker.exempt.store(true, Ordering::SeqCst);
+    broker.hide();
+    app.credit(&shown_to_app, 1, Barrier::Ordinary).await;
+    let (_, private, reference) = app.picture().await;
+    app.settle(1, reference).await;
+    broker.exempt.store(false, Ordering::SeqCst);
+    broker.show();
+
+    // Fresh as it still is, the agent is shown only one read since.
+    agent.credit(&shown_to_agent, 1, Barrier::Ordinary).await;
+    let (_, shown, _) = agent.picture().await;
+    assert!(
+        shown[0] > private[0],
+        "picture {} read during the sign-in was shown after it",
+        private[0]
+    );
+    broker.shut().await;
+}
+
+#[tokio::test]
 async fn a_protocol_error_ends_both_lanes_with_a_fatal_error() {
     let broker = Running::start(Scripted::default()).await;
     let mut client = Client_::pair(&broker).await;
@@ -669,6 +751,12 @@ async fn a_credit_after_a_profile_change_is_retired_and_the_pair_lives_on() {
 
 #[tokio::test]
 async fn a_picture_committed_after_its_freshness_names_no_input() {
+    let folder = tempfile::tempdir().unwrap();
+    let controller = atlas_control::Controller::at(505, &folder.path().join("state"));
+    let privacy = Privacy {
+        visible: Arc::new(move || controller.screen_visible().ok()),
+        exempt: Arc::new(|_| false),
+    };
     let now = Instant::now();
     let committed = now + Duration::from_millis(40);
     let (service, bootstrap) = (Hex32::random(), Hex64::random());
@@ -702,6 +790,7 @@ async fn a_picture_committed_after_its_freshness_names_no_input() {
         Scripted::default(),
         Budget::new(BROKER_PIXELS),
         Arc::new(tokio::sync::Notify::new()),
+        privacy.visible.clone(),
     );
     let latest = source.answers.borrow().clone();
     let (events, _incoming) = mpsc::channel(32);
@@ -717,6 +806,7 @@ async fn a_picture_committed_after_its_freshness_names_no_input() {
         epoch: None,
         failing: false,
         witness: Arc::new(move |key, _, _| record.lock().unwrap().push(key.to_owned())),
+        privacy,
         connections: HashMap::new(),
         observers: HashMap::new(),
         events,
@@ -773,6 +863,7 @@ async fn a_picture_committed_after_its_freshness_names_no_input() {
             .unwrap();
         picture.sequence = credit;
         picture.at = captured;
+        picture.visible = (broker.privacy.visible)();
         observer.sent = Some(Arc::new(picture));
         let settle = Settle {
             credit_id: credit,

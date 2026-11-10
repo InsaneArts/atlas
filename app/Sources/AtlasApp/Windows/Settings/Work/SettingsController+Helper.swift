@@ -1,11 +1,11 @@
 import AtlasCommands
 import AtlasUI
 
-/// The Helper pane's commands: Check Again diagnoses the helper, and Recover, Switch and Log Out run through the
+/// The Helper page's commands: Check Again diagnoses the helper, and Recover, Switch and Log Out run through the
 /// helper's own commands, as the main window's do, each answered with a notice once it ends.
 extension SettingsController {
   /// Check Again: `atlas doctor --verbose` diagnoses the helper, once at a time, then the helper's status every window
-  /// shares is read again. It shows for at least ``AtlasUI/Motion/Duration/leastWork`` on the injected clock, as the
+  /// shares is read again, and the home folder with it. It shows for at least ``AtlasUI/Motion/Duration/leastWork`` on the injected clock, as the
   /// diagnosis often answers in a fraction of that and a check that flickers past reads as nothing done. All ready
   /// says nothing, since the green marks say it; anything else says what was found under "Ready to act".
   func checkAgain() async {
@@ -21,6 +21,7 @@ extension SettingsController {
       say(SettingsWords.diagnosis(answer), in: .helper, kind: .problem, fromCheck: true)
     }
     await dependencies.links.readStatus()
+    await readFiles()
     await least
     session.checking = false
   }

@@ -1,10 +1,10 @@
 import SwiftUI
 
-/// An alert over a whole window, top row and tabs included: the scrim, which takes every click, fades in over
-/// ``Motion/Duration/fade`` while the card fades in and settles from 1.04 to 1 on ``Motion/arrive``, with no bounce;
-/// leaving, the card fades and shrinks to 0.97 over ``Motion/Duration/dismiss`` and the scrim fades on
-/// ``Motion/leave``. Under Reduce Motion
-/// both only fade, on ``Motion/reduced``. Nothing dismisses it but its own buttons.
+/// An alert over a whole window, top row and tabs included: the scrim, which takes every click, and the card come in
+/// together on ``Motion/present``, the card growing from 0.97 to 1 as it fades in, in place; leaving, both go on
+/// ``Motion/close``, the exact reverse, a little quicker. Both are springs with no bounce, so an alert asked for again
+/// as it leaves turns back from where it is. Under Reduce Motion both only fade, on ``Motion/reduced``. Nothing
+/// dismisses it but its own buttons.
 struct AlertLayer<ID: Hashable & Sendable>: View {
   /// What the alert says and offers; nil shows none.
   let state: AlertCardState<ID>?
@@ -25,7 +25,8 @@ struct AlertLayer<ID: Hashable & Sendable>: View {
     .animation(Motion.animation(Motion.fade, reduceMotion: reduceMotion, reduced: Motion.reduced), value: state == nil)
   }
 
-  /// How the scrim comes and goes: a fade in, a quicker fade out; a plain fade under Reduce Motion.
+  /// How the scrim comes and goes: fading in with the card, and out a little quicker; a plain fade under Reduce
+  /// Motion.
   ///
   /// - Parameter reduceMotion: Whether Reduce Motion is on.
   /// - Returns: The scrim's transition.
@@ -36,14 +37,14 @@ struct AlertLayer<ID: Hashable & Sendable>: View {
     }
     return .asymmetric(
       insertion: AnyTransition.opacity
-        .animation(Motion.fade),
+        .animation(Motion.present),
       removal: AnyTransition.opacity
-        .animation(Motion.leave)
+        .animation(Motion.close)
     )
   }
 
-  /// How the card comes and goes: settling from a little larger, leaving a little smaller, fading both ways; a plain
-  /// fade under Reduce Motion.
+  /// How the card comes and goes: growing from a little smaller as it fades in, in place, and the exact reverse as it
+  /// leaves; a plain fade under Reduce Motion.
   ///
   /// - Parameter reduceMotion: Whether Reduce Motion is on.
   /// - Returns: The card's transition.
@@ -53,12 +54,12 @@ struct AlertLayer<ID: Hashable & Sendable>: View {
         .animation(Motion.reduced)
     }
     return .asymmetric(
-      insertion: AnyTransition.scale(scale: AlertCardScale.arriving)
+      insertion: AnyTransition.scale(scale: AlertCardScale.leaving)
         .combined(with: .opacity)
-        .animation(Motion.arrive),
+        .animation(Motion.present),
       removal: AnyTransition.scale(scale: AlertCardScale.leaving)
         .combined(with: .opacity)
-        .animation(Motion.dismiss)
+        .animation(Motion.close)
     )
   }
 }

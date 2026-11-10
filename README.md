@@ -37,7 +37,7 @@ See [Getting started](docs/getting-started.md) for setup and [Daily use](docs/us
 
 ## Connect your agent
 
-Works with Claude Code, Claude Desktop, Codex, opencode and Pi. Connect installed hosts during setup, in **Settings > Agents**, or with:
+Works with Claude Code, Claude Desktop, Codex, opencode and Pi. Connect installed hosts during setup, in **Settings > Integrations**, or with:
 
 ```sh
 atlas agents install

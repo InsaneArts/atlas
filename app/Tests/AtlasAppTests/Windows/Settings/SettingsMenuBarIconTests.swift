@@ -22,9 +22,9 @@ struct SettingsMenuBarIconTests {
     #expect(icon.picks == [.orbit], "a pane with nothing changed picks nothing")
   }
 
-  @Test("the icon row sits in General's first section, after Open Atlas at login")
+  @Test("the icon row sits in General's Menu Bar section, after Open Atlas at login")
   func theRowFollowsOpenAtLogin() {
-    #expect(GeneralRow.start == [.openAtLogin, .menuBarIcon, .picture, .muteHelper])
+    #expect(GeneralRow.menuBar == [.openAtLogin, .menuBarIcon])
   }
 
   @Test("Settings' links read and set the menu bar's icon through the app's parts")

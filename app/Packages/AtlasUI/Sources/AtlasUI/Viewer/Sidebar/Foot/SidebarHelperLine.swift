@@ -2,50 +2,66 @@ import SwiftUI
 
 /// The helper's health, last in the sidebar, as one of its rows: the same height, insets, capsule and hover as a
 /// session's, with Atlas's mark and its dot and a title over a line, such as "Atlas is ready" over "Helper atlas ·
-/// 1440 × 900". A click anywhere on it opens the helper's menu, the row held pressed while the menu is open: every
-/// fact about the helper, read-only, then Check Again, Open Settings on Helper…, Recover…, Switch… and Log Out…. In a
-/// short window the mark and its dot stand alone in a circle that opens the same menu. VoiceOver reads the title and
-/// the line, and offers the menu as a pop-up button's.
+/// 1440 × 900". A click anywhere on it opens Settings on Helper (``click``); a right-click opens the helper's menu:
+/// every fact about the helper, read-only, then Check Again, Open Settings on Helper…, Recover…, Switch… and Log Out….
+/// In a short window the mark and its dot stand alone in a circle that does the same. VoiceOver reads the title and the
+/// line, and hears that the row opens Settings.
 struct SidebarHelperLine: View {
+  /// What a click sends: open Settings on Helper.
+  static let click = ViewerEvent.menu(.openSettings)
+
   /// The helper's health.
   let helper: ViewerHelperLine
   /// Whether the mark stands alone in a circle, as a short window leaves it.
   var isCompact = false
-  /// Receives the command chosen.
+  /// Receives the click, or the command chosen from the menu.
   let send: @MainActor (ViewerEvent) -> Void
 
-  /// The row, or the circle, opening its menu when clicked.
+  /// The row, or the circle, opening Settings when clicked and the helper's menu on a right-click.
   @ViewBuilder var body: some View {
     if isCompact {
-      menu {
-        SidebarHelperMark(tone: helper.tone)
+      button {
+        HelperMark(tone: helper.tone)
           .frame(width: ViewerLayout.helperCircle, height: ViewerLayout.helperCircle)
-          .contentShape(Circle())
       }
-      .buttonStyle(.row(corner: ViewerLayout.helperCircle / 2))
       .fixedSize()
       .padding(.leading, ViewerLayout.helperCircleInset)
     } else {
-      menu {
+      button {
         SidebarHelperLabel(helper: helper)
+          .frame(width: ViewerLayout.rowContentWidth, alignment: .leading)
+          .padding(.horizontal, ViewerLayout.sidebarRowInset)
+          .frame(minHeight: ViewerLayout.sidebarRowHeight)
       }
-      .buttonStyle(SidebarRowStyle(isSelected: false, height: ViewerLayout.sidebarRowHeight))
     }
   }
 
-  /// The helper's menu behind `label`.
+  /// The sections its right-click menu lists: every fact about the helper, then its commands, as the window's
+  /// helper menu has them.
   ///
-  /// - Parameter label: What a click opens the menu from.
-  /// - Returns: The menu.
-  private func menu(@ViewBuilder label: () -> some View) -> some View {
-    Menu {
-      CommandMenu(sections: helper.menu) { send(.menu($0)) }
+  /// - Parameter helper: The helper's health.
+  /// - Returns: The sections.
+  static func contextMenu(_ helper: ViewerHelperLine) -> [ViewerMenuSection] {
+    helper.menu
+  }
+
+  /// `label` as a button that opens Settings, with the helper's menu as its context menu.
+  ///
+  /// - Parameter label: What a click opens Settings from.
+  /// - Returns: The button.
+  private func button(@ViewBuilder label: () -> some View) -> some View {
+    Button {
+      send(Self.click)
     } label: {
       label()
     }
-    .menuStyle(.button)
-    .menuIndicator(.hidden)
+    .buttonStyle(.pill)
+    .contextMenu {
+      CommandMenu(sections: Self.contextMenu(helper)) { send(.menu($0)) }
+    }
+    .help(Text(verbatim: "Open Settings on Helper"))
     .accessibilityLabel(Text(verbatim: helper.line.isEmpty ? helper.title : "\(helper.title), \(helper.line)"))
+    .accessibilityHint(Text(verbatim: "Opens Settings"))
   }
 }
 

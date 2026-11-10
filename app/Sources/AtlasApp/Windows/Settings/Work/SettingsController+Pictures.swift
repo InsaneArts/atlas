@@ -31,14 +31,14 @@ extension SettingsController {
       let outcome = await dependencies.commands.run(next.action)
       guard outcome.ok else {
         pictures.shown = pictures.confirmed
-        return say(Words.sentence(outcome.message), in: .general, kind: .problem)
+        return say(Words.sentence(outcome.message), in: .activity, kind: .problem)
       }
       pictures.confirmed = next.written
     }
-    if session.notice?.tab == .general { say(nil, in: .general) }
+    if session.notice?.route == .page(.activity) { say(nil, in: .activity) }
   }
 
-  /// Applies the General pane's pictures as the person left them: the switch, the days or Custom…, and the typed
+  /// Applies the Activity page's pictures as the person left them: the switch, the days or Custom…, and the typed
   /// text's limit, Limited… keeping 80 characters until the person changes it.
   ///
   /// - Parameter general: The pane as the person left it.
@@ -71,7 +71,7 @@ extension SettingsController {
   func deletePictures() async {
     let outcome = await dependencies.commands.run(.deletePictures)
     session.alert = nil
-    say(outcome.ok ? nil : Words.sentence(outcome.message), in: .general, kind: .problem)
+    say(outcome.ok ? nil : Words.sentence(outcome.message), in: .activity, kind: .problem)
     await readPictures()
   }
 }

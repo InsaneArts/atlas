@@ -2,18 +2,13 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// The Settings window: dark, 680 wide and as tall as its pane, its symbol tabs on the window's ground with no toolbar
-/// behind them. One at a time; it has a Dock icon while open, like any app window (``DockIcon``). It opens where it was
-/// left, its top-left corner kept under ``autosaveName``, centred only the first time; it cannot be minimised, as a
-/// settings window is closed instead, and it comes to the Space the person is on, full-screen apps included.
-///
-/// SwiftUI only reports how tall each pane draws; the window fits it here, in AppKit, keeping its top edge: easing
-/// over 0.35 seconds on (0.25, 0.1, 0.25, 1) while on screen, or at once while hidden or under Reduce Motion. A pane
-/// changed mid-resize eases on from wherever the window is.
+/// The Settings window: 740 by 572 at first and at its smallest, as Rex's Settings stands, with the sidebar of pages
+/// under its window buttons and the content card beside it, titled with the route shown for the Window menu and
+/// VoiceOver. One at a time; it has a Dock icon while open, like any app window (``DockIcon``). It opens where and at
+/// the size it was left, kept whole on its screen (``SettingsWindowFrame``), centred only the first time; it can be
+/// resized, not minimised, as a settings window is closed instead, and it comes to the Space the person is on,
+/// full-screen apps included.
 final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
-  /// Moves a window to a frame, easing or at once.
-  typealias Mover = @MainActor (_ window: NSWindow, _ frame: NSRect, _ animated: Bool) -> Void
-
   /// The name its place is kept under in the app's defaults. Shipped, so it never changes.
   static let autosaveName = "AtlasSettings"
 
@@ -21,8 +16,6 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   let controller: SettingsController
   /// Runs once the window has closed and its controller has stopped.
   let closed: @MainActor (SettingsWindow) -> Void
-  /// Moves the window to each new frame; ``move(_:to:animated:)`` outside tests.
-  private let mover: Mover
   /// Open until closed.
   private(set) var isPresented = false
 
@@ -30,30 +23,25 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   ///
   /// - Parameters:
   ///   - controller: The window's controller.
-  ///   - mover: Moves the window to each new frame; easing through AppKit's animator by default.
   ///   - closed: Runs once the window has closed and its controller has stopped.
-  init(
-    controller: SettingsController,
-    mover: @escaping Mover = SettingsWindow.move,
-    closed: @escaping @MainActor (SettingsWindow) -> Void
-  ) {
+  init(controller: SettingsController, closed: @escaping @MainActor (SettingsWindow) -> Void) {
     self.controller = controller
     self.closed = closed
-    self.mover = mover
     super.init(
-      contentRect: NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.firstHeight),
-      styleMask: [.titled, .closable, .fullSizeContentView],
+      contentRect: NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.height),
+      styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
-    // The title names the pane for the Window menu and VoiceOver; the view draws it in the title bar.
-    title = SettingsWords.tab(controller.session.tab)
+    // The title names the route for the Window menu and VoiceOver; the view draws it in its bar.
+    title = controller.state.title
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
     titlebarSeparatorStyle = .none
-    // An empty compact toolbar lowers the window buttons to 14 from the top, beside the pane's name.
+    // An empty unified toolbar gives the title bar its 52, so the window buttons centre with the sidebar's band and
+    // the page's title, as the main window's do.
     toolbar = NSToolbar(identifier: "settings")
-    toolbarStyle = .unifiedCompact
+    toolbarStyle = .unified
     isReleasedWhenClosed = false
     isMovableByWindowBackground = true
     collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
@@ -61,21 +49,25 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     WindowShell.host(in: self) {
       SettingsView(state: controller.state, edit: controller.update, send: controller.send)
     }
-    controller.reshape = { [weak self] title, height in
-      self?.reshape(title: title, contentHeight: height)
-    }
     setFrameAutosaveName(Self.autosaveName)
+    followTitle()
   }
 
-  /// Brings the window forward at its pane's height: where it was left, its top edge kept, or centred the first time.
-  /// The app shows its Dock icon first.
+  /// Titles the window with the route shown, each time it changes.
+  private func followTitle() {
+    StateTracking.follow { [weak self] in
+      self?.controller.state.title
+    } apply: { [weak self] title in
+      if self?.title != title { self?.title = title }
+    }
+  }
+
+  /// Brings the window forward where it was left, kept whole on its screen, or centred the first time. The app shows
+  /// its Dock icon first.
   func present() {
     if !isPresented {
       let restored = setFrameUsingName(Self.autosaveName)
-      // Draws the pane once, so its height is known before the window shows.
-      contentView?.layoutSubtreeIfNeeded()
-      controller.reshapeWindow()
-      if !restored { center() }
+      if restored { keepOnScreen() } else { center() }
     }
     isPresented = true
     makeKeyAndOrderFront(nil)
@@ -85,47 +77,23 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// Closes the window.
   func dismiss() { close() }
 
-  /// Names the pane shown and fits its height, when known.
-  ///
-  /// - Parameters:
-  ///   - title: The pane's name.
-  ///   - contentHeight: The title and tabs over the pane, or nil until the pane has drawn.
-  func reshape(title: String, contentHeight: CGFloat?) {
-    self.title = title
-    guard let contentHeight else { return }
-    fit(contentHeight: contentHeight)
+  /// Keeps the window at least its smallest and at most its screen, moved just enough to stand whole on it.
+  func keepOnScreen() {
+    let target = SettingsWindowFrame.frame(current: frame, within: screen?.visibleFrame)
+    if target != frame { setFrame(target, display: true) }
   }
 
-  /// Fits a content height from the window's frame now, mid-resize included, keeping its top edge.
-  ///
-  /// - Parameter contentHeight: The title and tabs over the pane.
-  func fit(contentHeight: CGFloat) {
-    let target = SettingsWindowFrame.frame(current: frame, contentHeight: contentHeight, within: screen?.visibleFrame)
-    guard target != frame else { return }
-    let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    mover(self, target, SettingsWindowFrame.animates(isVisible: isVisible, reduceMotion: reduceMotion))
-  }
-
-  /// Moves a window to a frame: through AppKit's animator over ``AtlasUI/Motion/Duration/resize`` on
-  /// ``AtlasUI/Motion/resizeCurve``, which starts from wherever the window is, so a new frame mid-resize retargets;
-  /// or at once.
+  /// The person resizes the window: never smaller than its first 740 by 572, so no page is cut.
   ///
   /// - Parameters:
-  ///   - window: The window.
-  ///   - frame: Its new frame.
-  ///   - animated: Whether it eases there.
-  static func move(_ window: NSWindow, to frame: NSRect, animated: Bool) {
-    guard animated else {
-      window.setFrame(frame, display: true)
-      return
-    }
-    let curve = Motion.resizeCurve
-    NSAnimationContext.runAnimationGroup { context in
-      context.duration = Motion.Duration.resize.seconds
-      context.timingFunction = CAMediaTimingFunction(controlPoints: curve.x1, curve.y1, curve.x2, curve.y2)
-      window.animator()
-        .setFrame(frame, display: true)
-    }
+  ///   - sender: The window.
+  ///   - frameSize: The size asked for.
+  /// - Returns: The size it takes.
+  func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+    NSSize(
+      width: max(frameSize.width, SettingsWindowFrame.smallest.width),
+      height: max(frameSize.height, SettingsWindowFrame.smallest.height)
+    )
   }
 
   /// The window came forward: what it shows from the other windows is read again.
@@ -140,7 +108,6 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// - Parameter notification: The window's notification.
   func windowWillClose(_ notification: Notification) {
     isPresented = false
-    controller.reshape = nil
     controller.close()
     closed(self)
   }

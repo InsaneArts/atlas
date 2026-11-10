@@ -12,7 +12,11 @@ import Observation
 @Observable
 final class ViewerController {
   /// What this window is doing. Written only by the controller's own files; the shells call its methods.
-  var session = ViewerSession()
+  var session = ViewerSession() {
+    didSet {
+      if oldValue.place != session.place { dependencies.placeChanged() }
+    }
+  }
   /// What the helper row's menu lists that the status does not carry. Written only by the controller's own files.
   var helperFacts = ViewerHelperFacts()
   /// The window is on screen.
@@ -72,7 +76,8 @@ final class ViewerController {
       agents: helperFacts.agents,
       loggedInAt: helperFacts.loggedInAt,
       panes: panesModel.panes,
-      date: dependencies.wallClock()
+      date: dependencies.wallClock(),
+      asks: actions.asks.list
     )
   }
 
@@ -129,11 +134,18 @@ final class ViewerController {
       setOverlayShown(false)
       show(place)
     case .menu(let command): perform(command)
+    case .answerAsk(let id, let choice):
+      // The store takes the question away at once, here and in the panel, then answers.
+      Task { await actions.asks.answer(id, with: AskAnswer(choice)) }
     case .togglePause: togglePause()
     // Unstructured, as `send` is the view's synchronous callback; the switch runs one change at a time.
     case .toggleSound: Task { await actions.sound.toggle() }
     case .takeControl: Task { await control.takeControlOnScreen() }
-    case .giveBack: control.releaseControl()
+    // Giving control back during a held sign-in is its Cancel.
+    case .giveBack:
+      if session.signIn != nil { Task { await cancelSignIn() } } else { control.releaseControl() }
+    case .signInDone: Task { await finishSignIn() }
+    case .signInCancel: Task { await cancelSignIn() }
     case .stopAgent: Task { await setStopped(true) }
     case .resumeAgent: Task { await setStopped(false) }
     case .chooseSession(let choice):
@@ -262,9 +274,10 @@ final class ViewerController {
   /// Pauses the picture, or resumes it. Either way control goes back; resuming reads afresh.
   func togglePause() {
     session.paused.toggle()
-    control.releaseControl()
+    control.suspend()
     if !session.paused { readingLoop.forgetFrame() }
     readingLoop.watch(shown)
+    control.resumeIfEligible()
   }
 
   /// Resume reading after the window was hidden; the first time it shows, it reads the helper's facts that the status
@@ -275,7 +288,7 @@ final class ViewerController {
     // Unstructured, as AppKit's notification is synchronous: the facts are read beside it.
     if shown, !self.shown, helperFacts.agents == nil { Task { await readHelperFacts() } }
     self.shown = shown
-    if !shown { control.releaseControl() }
+    if shown { control.resumeIfEligible() } else { control.suspend() }
     readingLoop.watch(shown)
     panesModel.followPane()
   }

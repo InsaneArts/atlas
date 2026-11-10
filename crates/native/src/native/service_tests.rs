@@ -1,6 +1,6 @@
 use super::{
     Action, CAPABILITIES, Duration, Error, Expect, Gate, MAX_REQUEST, Perform, Request, Result,
-    admitted, hold, read_request,
+    admitted, hold, page_host, read_request,
 };
 use crate::native::{
     ax::{Acted, Reached, Resolved},
@@ -65,6 +65,8 @@ fn service(marker: &std::path::Path) -> super::Service {
         stopping: tokio::sync::Notify::new(),
         stop_marker: marker.to_owned(),
         activity: marker.with_extension("activity"),
+        seen: Arc::default(),
+        look: Arc::new(super::LiveLook),
     }
 }
 
@@ -123,6 +125,7 @@ fn input_requests_take_each_member_from_its_last_value() {
             actions,
             expect: actual_expect,
             app: actual_app,
+            ..
         } = Request::decode(body.as_bytes()).unwrap()
         else {
             panic!("expected typed input");
@@ -1813,6 +1816,8 @@ enum Step {
     Break,
     UnacknowledgedPress,
     DockRefusal,
+    /// The person's accounts refuse it where it lands now.
+    Withheld,
 }
 
 /// An engine that logs each check and post, and does at each action
@@ -1979,6 +1984,23 @@ impl Perform for Stand {
         }
     }
 
+    fn recheck(
+        &mut self,
+        _: &Action,
+        _: Option<&atlas_core::screen::geometry::Bounds>,
+    ) -> Result<()> {
+        self.assert_locked();
+        let index = self.logged("post");
+        if self.script.get(index) == Some(&Step::Withheld) {
+            self.log.push(format!("withheld {index}"));
+            return Err(Error::new(
+                Code::WaitingForPerson,
+                "The rest would have gone where the person must be asked first",
+            ));
+        }
+        Ok(())
+    }
+
     async fn perform(&mut self, action: Action) -> Result<()> {
         self.assert_locked();
         let index = self.logged("post");
@@ -2080,6 +2102,24 @@ async fn a_mismatch_posts_nothing_and_is_not_uncertain() {
     let stand = stand.lock().await;
     assert_eq!(stand.log, ["check 0"], "nothing was performed");
     assert_eq!(stand.posted, 0);
+    assert_eq!(stand.releases, 1, "what was held is released");
+}
+
+#[tokio::test]
+async fn an_action_the_accounts_now_refuse_stops_there_with_what_ran_and_sends_nothing_more() {
+    let (outcome, stand) = ran(&[Step::Post, Step::Withheld, Step::Post], 3, app()).await;
+    let reply = outcome.unwrap_err();
+    assert_eq!(reply["code"], "waiting-for-person");
+    assert_eq!(reply["performed"], 1);
+    assert_eq!(reply["partial"], false);
+    assert_eq!(reply["uncertain"], false);
+    let stand = stand.lock().await;
+    assert_eq!(
+        stand.log,
+        ["check 0", "post 0", "check 1", "withheld 1"],
+        "judged just before it would be sent, after its own check"
+    );
+    assert_eq!(stand.posted, 1);
     assert_eq!(stand.releases, 1, "what was held is released");
 }
 
@@ -2991,6 +3031,13 @@ impl Perform for Blocked {
             reached: None,
         })
     }
+    fn recheck(
+        &mut self,
+        _: &Action,
+        _: Option<&atlas_core::screen::geometry::Bounds>,
+    ) -> Result<()> {
+        Ok(())
+    }
     async fn perform(&mut self, _: Action) -> Result<()> {
         self.posted += 1;
         Ok(())
@@ -3883,6 +3930,16 @@ fn display_epoch() -> atlas_core::session::InputEpoch {
 
 /// A service whose engine journals into `directory` and posts only to `tap`.
 fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc<super::Service> {
+    looking_service(directory, tap, gate, Arc::new(super::LiveLook))
+}
+
+/// [`tapped_service`], looking for password fields through `look`.
+fn looking_service(
+    directory: &std::path::Path,
+    tap: Tap,
+    gate: Arc<Gate>,
+    look: Arc<dyn super::PasswordLook>,
+) -> Arc<super::Service> {
     let epoch = display_epoch();
     let mut engine = super::Engine::tapped(epoch.clone(), Some(directory.join("held.json")), tap);
     engine.activity = Some(directory.join("input.activity"));
@@ -3897,6 +3954,8 @@ fn tapped_service(directory: &std::path::Path, tap: Tap, gate: Arc<Gate>) -> Arc
         stopping: tokio::sync::Notify::new(),
         stop_marker: directory.join("stopped"),
         activity: directory.join("input.activity"),
+        seen: Arc::default(),
+        look,
     })
 }
 
@@ -4333,4 +4392,268 @@ async fn input_held_between_requests_keeps_quiet_work_out_until_it_is_let_go() {
     assert_eq!(quiet(), None, "the button is still held");
     service.release(owner, &phase).await.unwrap();
     assert_eq!(quiet(), Some(()), "let go");
+}
+
+#[test]
+fn a_pages_host_is_read_from_its_address_and_nothing_else() {
+    assert_eq!(
+        page_host("https://GitHub.com/login?x=1#y").as_deref(),
+        Some("github.com")
+    );
+    assert_eq!(
+        page_host("http://user:pw@example.org:8080/a").as_deref(),
+        Some("example.org")
+    );
+    assert_eq!(page_host("http://[::1]:3000/").as_deref(), Some("::1"));
+    assert_eq!(
+        page_host("http://localhost:3000").as_deref(),
+        Some("localhost")
+    );
+    assert_eq!(page_host("file:///Users/someone/a.html"), None);
+    assert_eq!(page_host("about:blank"), None);
+}
+
+#[test]
+fn what_the_person_typed_a_password_into_is_given_back_once_to_their_lease_only() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = service(&directory.path().join("stopped"));
+    let seen = serde_json::json!({"app": "com.google.Chrome", "host": "github.com"});
+    *service.seen.lock().unwrap() = Some(("person-lease".to_owned(), seen.clone()));
+
+    assert_eq!(service.take_seen("another-lease"), None);
+    assert_eq!(service.take_seen("person-lease"), Some(seen));
+    assert_eq!(service.take_seen("person-lease"), None);
+}
+
+/// The password the person types in the tests below, which must reach no reply.
+const CANARY: &str = "hunter2-canary-73a9";
+
+/// A scripted Mac where keyboard focus is in a password field holding [`CANARY`], on a page in Chrome whose address
+/// carries it too; `before` runs as the look starts.
+struct ScriptedLook {
+    app: std::sync::Mutex<crate::native::ax::ScriptedApp>,
+    before: Box<dyn Fn() + Send + Sync>,
+}
+
+impl ScriptedLook {
+    fn new(before: impl Fn() + Send + Sync + 'static) -> Self {
+        let app = crate::native::ax::ScriptedApp::default()
+            .names(0, "AXFocusedUIElement", 4)
+            .text(4, "AXRole", "AXTextField")
+            .text(4, "AXSubrole", "AXSecureTextField")
+            .text(4, "AXValue", CANARY)
+            .names(4, "AXParent", 3)
+            .text(3, "AXRole", "AXWebArea")
+            .text(
+                3,
+                "AXURL",
+                &format!("https://github.com/login?password={CANARY}"),
+            );
+        Self {
+            app: std::sync::Mutex::new(app),
+            before: Box::new(before),
+        }
+    }
+}
+
+impl super::PasswordLook for ScriptedLook {
+    fn look(&self, deadline: std::time::Instant) -> Option<Value> {
+        (self.before)();
+        let page = self.app.lock().unwrap().password_page(deadline).ok()??;
+        Some(super::seen_at(
+            "com.google.Chrome",
+            Some("Google Chrome".to_owned()),
+            page.as_deref(),
+        ))
+    }
+}
+
+/// The person types [`CANARY`] under their lease and gives control back; `before` runs as the look starts. The
+/// input's reply, the release's reply and what the look asked for.
+async fn type_the_canary_and_give_back(cancel_first: bool) -> (Value, Value, Vec<&'static str>) {
+    let owner = "b".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, _posted) = Tap::new();
+    let gate = Arc::new(Gate::default());
+    // A Give Back landing between the typing and the look: the grant is cancelled before the look starts.
+    let cancelled = gate.clone();
+    let token = owner.clone();
+    let look = Arc::new(ScriptedLook::new(move || {
+        if cancel_first {
+            cancelled.cancel(Some(&token)).unwrap();
+        }
+    }));
+    let service = looking_service(directory.path(), tap, gate, look.clone());
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Person, LASTING)
+        .unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let typed = vec![serde_json::from_value(json!({"type": "type", "text": CANARY})).unwrap()];
+    let input = service
+        .input(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(typed),
+            Ok(None),
+            false,
+            &phase,
+        )
+        .await
+        .unwrap();
+    let released = service.release(owner, &phase).await.unwrap();
+    let asked = look.app.lock().unwrap().asked.clone();
+    (input, released, asked)
+}
+
+#[tokio::test]
+async fn a_password_the_person_types_reaches_no_reply_and_only_the_pages_host_is_given_back() {
+    let (input, released, asked) = type_the_canary_and_give_back(false).await;
+    assert_eq!(input["ok"], true);
+    assert_eq!(released["signedIn"]["app"], "com.google.Chrome");
+    assert_eq!(released["signedIn"]["host"], "github.com");
+    for reply in [&input, &released] {
+        assert!(!reply.to_string().contains(CANARY), "{reply}");
+    }
+    assert!(
+        !asked.contains(&"AXValue"),
+        "the field's value is never read"
+    );
+}
+
+#[tokio::test]
+async fn a_give_back_landing_as_the_batch_ends_still_finds_what_the_person_typed_into() {
+    let (_, released, _) = type_the_canary_and_give_back(true).await;
+    assert_eq!(released["signedIn"]["host"], "github.com");
+    assert!(!released.to_string().contains(CANARY));
+}
+
+#[tokio::test]
+async fn an_agents_typing_is_never_looked_at_for_a_password() {
+    let owner = "a".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, _posted) = Tap::new();
+    let look = Arc::new(ScriptedLook::new(|| {
+        panic!("an agent's batch was looked at")
+    }));
+    let service = looking_service(directory.path(), tap, Arc::default(), look);
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    let typed = vec![serde_json::from_value(json!({"type": "type", "text": "hello"})).unwrap()];
+    let input = service
+        .input(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(typed),
+            Ok(None),
+            false,
+            &phase,
+        )
+        .await
+        .unwrap();
+    assert_eq!(input["ok"], true);
+    let released = service.release(owner, &phase).await.unwrap();
+    assert_eq!(released.get("signedIn"), None);
+}
+
+#[test]
+fn a_stop_or_release_landing_before_the_batch_runs_keeps_its_own_refusal() {
+    // A Stop between admission and execution: the person's control is never ended by it, an agent's is.
+    let gate = Arc::new(Gate::default());
+    let agent = "c".repeat(48);
+    let grant = gate.acquire(&agent, super::Who::Agent).unwrap();
+    gate.hold(true).unwrap();
+    assert_eq!(grant.person(), None);
+    assert_eq!(
+        grant.authorize().err().map(|error| error.code),
+        Some(Code::Stopped)
+    );
+    gate.hold(false).unwrap();
+
+    // A release between admission and execution.
+    let gate = Arc::new(Gate::default());
+    let person = "d".repeat(48);
+    let grant = gate.acquire(&person, super::Who::Person).unwrap();
+    gate.cancel(Some(&person)).unwrap();
+    assert_eq!(
+        grant.person(),
+        Some(person.as_str()),
+        "who it was granted to"
+    );
+    assert_eq!(
+        grant.authorize().err().map(|error| error.code),
+        Some(Code::Cancelled)
+    );
+}
+
+/// An agent's click, with the accounts the client sends while the person lists any: refused before its first event.
+async fn gated_click(asking: Value) -> (Result<Value>, usize) {
+    let owner = "e".repeat(48);
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, posted) = Tap::new();
+    let service = tapped_service(directory.path(), tap, Arc::default());
+    service.engine.lock().await.asking_point = Some(super::asking::Target::default());
+    service
+        .gate
+        .acquire_lasting(&owner, super::Who::Agent, LASTING)
+        .unwrap();
+    let (phase, _) = super::watch::channel(super::ConnectionPhase::Refusal);
+    // The observer, rather than a screen coordinate, proves the target is unknown.
+    let click = vec![serde_json::from_value(json!({"type": "click", "x": 1, "y": 1})).unwrap()];
+    let asking = serde_json::from_value(asking).unwrap();
+    let reply = service
+        .input_asking(
+            owner.clone(),
+            Ok(display_epoch()),
+            Ok(click),
+            Ok(None),
+            false,
+            Ok(Some(asking)),
+            &phase,
+        )
+        .await;
+    let _ = service.release(owner, &phase).await;
+    (reply, posts(&posted).len())
+}
+
+#[tokio::test]
+async fn a_request_the_person_must_be_asked_about_sends_nothing() {
+    let (reply, posted) = gated_click(json!({"unknown": true})).await;
+    // Judged just before its first event: a refusal that sent nothing.
+    let reply = reply.unwrap();
+    assert_eq!(reply["code"], "waiting-for-person");
+    assert_eq!(reply["ask"]["what"], "unnamed");
+    assert_eq!(
+        (&reply["performed"], &reply["partial"], &reply["uncertain"]),
+        (&json!(0), &json!(false), &json!(false))
+    );
+    assert_eq!(posted, 0, "nothing was sent");
+}
+
+#[tokio::test]
+async fn an_app_that_cant_be_told_takes_the_strictest_level_and_look_only_sends_nothing() {
+    let asking = json!({"accounts": [
+        {"kind": "app", "id": "com.example.bank", "name": "Bank", "level": "lookOnly"},
+        {"kind": "app", "id": "com.example.chat", "name": "Chat", "level": "ask"},
+    ]});
+    let (reply, posted) = gated_click(asking).await;
+    assert_eq!(reply.unwrap()["code"], "denied");
+    assert_eq!(posted, 0, "nothing was sent");
+}
+
+#[test]
+fn a_request_brings_its_accounts_only_when_it_has_any() {
+    let plain = br#"{"op":"input","owner":"o","actions":[]}"#;
+    let Request::Input { asking, .. } = Request::decode(plain).unwrap() else {
+        panic!("input");
+    };
+    assert!(asking.unwrap().is_none());
+    let malformed = br#"{"op":"input","owner":"o","actions":[],"asking":{"accounts":7}}"#;
+    let Request::Input { asking, .. } = Request::decode(malformed).unwrap() else {
+        panic!("input");
+    };
+    assert_eq!(asking.unwrap_err().code, Code::Input);
 }

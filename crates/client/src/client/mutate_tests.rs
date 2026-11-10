@@ -6,7 +6,7 @@ use crate::{
         recovery_settles_the_abandoned_claim, run_of, running, waits,
     },
     doing::Doing,
-    test_support::client_in,
+    test_support::{client_in, end_group, leftover_group},
 };
 use atlas_core::host::Key;
 use atlas_core::{actions, error::Holder};
@@ -20,6 +20,13 @@ fn run() -> Mutation<'static> {
         timeout: Duration::from_secs(1),
         pin: None,
     }
+}
+
+/// The reply of a run whose command led process group `group` and exited
+/// cleanly.
+fn finished(group: i32) -> Value {
+    json!({"ok": true, "exitCode": 0, "timedOut": false,
+        "events": [{"event": "started", "pid": group}]})
 }
 
 fn epoch() -> InputEpoch {
@@ -59,6 +66,7 @@ fn signal_timeout_and_exit_are_distinct_completed_outcomes() {
             picture: None,
             app: false,
             expect: None,
+            asking: None,
         }
         .validate(&json!({"ok":true,"performed":0}))
         .unwrap_err()
@@ -78,6 +86,7 @@ fn an_element_action_is_confirmed_only_with_its_verification() {
         picture: None,
         app: false,
         expect: None,
+        asking: None,
     };
     input()
         .validate(&json!({"ok": true, "performed": 1, "mechanism": "accessibility", "verification": "matched"}))
@@ -159,6 +168,7 @@ fn each_mutation_sends_its_exact_request() {
         picture: None,
         app: true,
         expect,
+        asking: None,
     };
     let epoch_wire = r#"{"displayId":3,"height":982.0,"processId":41,"securitySessionId":7,"uid":502,"width":1512.0}"#;
     let cases = [
@@ -262,6 +272,7 @@ fn a_checked_input_is_confirmed_only_with_its_expectation_echoed() {
             picture: None,
             app: false,
             expect,
+            asking: None,
         }
         .validate(&reply);
         assert_eq!(outcome.is_ok(), confirmed, "{expect:?} {reply}");
@@ -589,4 +600,266 @@ async fn a_stopped_agents_command_is_refused_before_it_starts_and_a_read_is_not(
         reading.code, "stopped",
         "a read goes on (and finds no helper here)"
     );
+}
+
+#[test]
+fn a_check_before_typing_is_confirmed_only_as_judged_with_nothing_performed() {
+    let actions = json!([{"type": "type", "text": "x"}]);
+    let checking = Mutation::Input {
+        actions: Batch::decode(&actions).unwrap(),
+        owner: "owner",
+        epoch: epoch(),
+        picture: None,
+        app: false,
+        expect: None,
+        asking: Some(json!({"accounts": [], "dry": true})),
+    };
+    checking
+        .validate(&json!({"ok": true, "performed": 0, "dry": true}))
+        .unwrap();
+    assert!(
+        checking
+            .validate(&json!({"ok": true, "performed": 1}))
+            .is_err(),
+        "typed instead of checked"
+    );
+    assert!(
+        checking
+            .validate(&json!({"ok": true, "performed": 0}))
+            .is_err(),
+        "never said it only checked"
+    );
+}
+
+#[test]
+fn only_a_refusal_proven_to_have_sent_nothing_drops_its_picture() {
+    let refusal = |extra: Value| {
+        let mut reply = json!({"ok": false, "code": "waiting-for-person"});
+        for (key, value) in extra.as_object().unwrap() {
+            reply[key] = value.clone();
+        }
+        reply
+    };
+    assert!(gated(&refusal(json!({}))), "refused before its first event");
+    assert!(gated(&json!({"ok": false, "code": "denied"})));
+    assert!(gated(&json!({"ok": true, "performed": 0, "dry": true})));
+    assert!(gated(&refusal(
+        json!({"performed": 0, "partial": false, "uncertain": false})
+    )));
+    assert!(
+        !gated(&refusal(
+            json!({"performed": 0, "partial": true, "uncertain": true})
+        )),
+        "stopped by the check before its second typed character"
+    );
+    assert!(
+        !gated(&refusal(
+            json!({"performed": 1, "partial": false, "uncertain": false})
+        )),
+        "stopped after one action ran"
+    );
+    assert!(!gated(&refusal(json!({"uncertain": true}))));
+}
+
+#[tokio::test]
+async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
+    // `atlas run sh -c '(sleep 30; open …) &'`: the shell is gone once it
+    // answers, and the work it handed on runs in its group.
+    let group = leftover_group();
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_in(dir.path());
+    let me = nix::unistd::getuid().as_raw();
+    client.config.helper_uid = me;
+    let reply = finished(group);
+    assert_eq!(started_group(&reply), Some(group));
+
+    client
+        .settle(&run().request(), reply, true, None, Instant::now())
+        .await
+        .unwrap();
+
+    let refused = client.controller.require_no_run_left(me).unwrap_err();
+    assert_eq!(refused.details["running"], "command");
+    end_group(group);
+    for _ in 0..200 {
+        if client.controller.require_no_run_left(me).is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the group ended, and still refuses");
+}
+
+#[tokio::test]
+async fn a_run_whose_leftover_work_cant_be_noted_keeps_the_person_out_until_it_is() {
+    let group = leftover_group();
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_in(dir.path());
+    let me = nix::unistd::getuid().as_raw();
+    client.config.helper_uid = me;
+    client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
+    let claim = client.controller.quarantine_command().unwrap();
+    // The record of leftover work can't be written: a folder stands there.
+    std::fs::create_dir_all(client.controller.run_groups_path()).unwrap();
+
+    let settled = client
+        .settle(
+            &run().request(),
+            finished(group),
+            true,
+            Some(claim),
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+
+    assert!(
+        settled["warnings"]
+            .to_string()
+            .contains("could not be noted")
+    );
+    let mut lease = atlas_control::Lease::default();
+    let refused = lease.acquire(&client.controller).unwrap_err();
+    assert_eq!(
+        refused.code,
+        Code::Uncertain,
+        "the person can't sign in beside it"
+    );
+
+    std::fs::remove_dir(client.controller.run_groups_path()).unwrap();
+    let token = lease.acquire(&client.controller).unwrap();
+    assert_eq!(
+        client
+            .controller
+            .require_no_run_left(me)
+            .unwrap_err()
+            .details["running"],
+        "command",
+        "noted at last, the work still keeps a sign-in out"
+    );
+    drop(token);
+    lease.release();
+    end_group(group);
+}
+
+#[tokio::test]
+async fn an_environment_runs_leftover_work_keeps_the_person_from_signing_in() {
+    // `atlas environment run -- sh -c '(sleep 30; open …) &'`: its worker
+    // execs the command, a run under control the environment holds rather
+    // than an agent's own, and the work the shell handed on runs in its
+    // group once the shell is gone.
+    let group = leftover_group();
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client_in(dir.path());
+    let me = nix::unistd::getuid().as_raw();
+    client.config.helper_uid = me;
+    client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
+    let claim = client.controller.quarantine().unwrap();
+
+    client
+        .settle(
+            &run().request(),
+            finished(group),
+            false,
+            Some(claim),
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+
+    assert!(client.controller.pending().unwrap().is_empty());
+    let refused = client.controller.require_no_run_left(me).unwrap_err();
+    assert_eq!(refused.details["running"], "command");
+
+    // When it can't be noted, the environment's claim stays unknown.
+    let claim = client.controller.quarantine().unwrap();
+    std::fs::remove_file(client.controller.run_groups_path()).unwrap();
+    std::fs::create_dir_all(client.controller.run_groups_path()).unwrap();
+    client
+        .settle(
+            &run().request(),
+            finished(group),
+            false,
+            Some(claim),
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+    let mut lease = atlas_control::Lease::default();
+    assert_eq!(
+        lease.acquire(&client.controller).unwrap_err().code,
+        Code::Uncertain
+    );
+    std::fs::remove_dir(client.controller.run_groups_path()).unwrap();
+    end_group(group);
+}
+
+#[test]
+fn an_agents_input_reply_never_carries_the_account_it_acted_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client_in(dir.path());
+    let doing = crate::doing::Doing::new("type");
+    client.doing = Some(doing.clone());
+    let account = json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com"}});
+    let mut reply = json!({"ok": true, "performed": 1, "account": account, "allowed": "task",
+        "element": {"role": "AXButton"}});
+
+    client.keep_from_reply(&mut reply);
+
+    assert_eq!(reply, json!({"ok": true, "performed": 1}));
+    assert_eq!(
+        doing.noted_account(),
+        Some((account.clone(), Some(json!("task"))))
+    );
+    // A later batch allowed once says so; a weaker one never lowers it.
+    doing.note_account(account.clone(), Some(json!("once")));
+    doing.note_account(account.clone(), Some(json!("trusted")));
+    assert_eq!(doing.noted_account(), Some((account, Some(json!("once")))));
+}
+
+#[test]
+fn a_command_across_accounts_keeps_each_accounts_own_allowance() {
+    let doing = crate::doing::Doing::new("type");
+    let slack = json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com"}});
+    let github = json!({"name": "github.com", "key": {"kind": "site", "id": "github.com"}});
+    doing.note_account(slack.clone(), None);
+    doing.note_account(github.clone(), Some(json!("trusted")));
+    assert_eq!(
+        doing.noted_account(),
+        Some((github.clone(), Some(json!("trusted")))),
+        "never slack.com as Trusted"
+    );
+    doing.note_account(slack.clone(), Some(json!("trusted")));
+    assert_eq!(
+        doing.noted_account().unwrap().0,
+        github,
+        "a tie keeps the first"
+    );
+    doing.note_account(slack.clone(), Some(json!("task")));
+    assert_eq!(doing.noted_account(), Some((slack, Some(json!("task")))));
+}
+
+#[test]
+fn a_refused_inputs_row_still_names_the_account_of_what_ran_and_its_reply_never_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client_in(dir.path());
+    let doing = crate::doing::Doing::new("key");
+    client.doing = Some(doing.clone());
+    let account = json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com"}});
+    // A send allowed for the task ran; the action after it was refused.
+    let mut reply = json!({"ok": false, "code": "denied", "performed": 1,
+        "account": account, "allowed": "task"});
+    let row = client.row(
+        &json!({"op": "input", "actions": [{"type": "key"}, {"type": "type"}]}),
+        &reply,
+        Duration::ZERO,
+        crate::activity_log::Step::End,
+    );
+    assert_eq!(row.ok, Some(false));
+    assert_eq!(row.account.unwrap().name, "slack.com");
+    assert_eq!(row.allowed, Some(crate::activity_log::Allowed::Task));
+
+    client.keep_from_reply(&mut reply);
+    assert!(reply.get("account").is_none() && reply.get("allowed").is_none());
+    assert_eq!(reply["code"], "denied");
 }

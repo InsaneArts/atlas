@@ -254,3 +254,54 @@ async fn a_drag_releases_one_first_step_past_its_target_and_then_rests_on_it() {
         );
     }
 }
+
+/// A look at nothing, for a check that only names the action under way.
+struct Nowhere;
+
+impl crate::native::asking::Look for Nowhere {
+    fn at_point(&mut self, _: f64, _: f64) -> crate::native::asking::Target {
+        crate::native::asking::Target::default()
+    }
+    fn focused(&mut self) -> crate::native::asking::Target {
+        crate::native::asking::Target::default()
+    }
+    fn referenced(
+        &mut self,
+        _: &atlas_core::screen::elements::Reference,
+    ) -> crate::native::asking::Target {
+        crate::native::asking::Target::default()
+    }
+    fn message(&mut self) -> crate::native::asking::Message {
+        crate::native::asking::Message::Unread
+    }
+    fn unmoved(&mut self) -> bool {
+        false
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn each_character_after_the_first_is_judged_again_and_one_that_asks_stops_the_rest() {
+    let directory = tempfile::tempdir().unwrap();
+    let (tap, seen) = tap::Tap::new();
+    let mut engine = Engine::tapped(epoch(), Some(directory.path().join("held.json")), tap);
+    // Every app asks while the list can't be read, and a line break sends.
+    let asking = crate::native::asking::Asking {
+        unknown: true,
+        ..crate::native::asking::Asking::default()
+    };
+    let typing = Action::Type {
+        text: "a\nb".to_owned(),
+    };
+    let mut recheck = crate::native::asking::recheck(std::slice::from_ref(&typing), &asking);
+    let _ = recheck.check(&typing, &mut Nowhere);
+    engine.recheck = Some(recheck);
+
+    let error = engine.perform(typing).await.unwrap_err();
+    assert_eq!(error.code, Code::WaitingForPerson);
+    let posts = posts(&seen.lock().unwrap().clone());
+    assert_eq!(
+        posts.len(),
+        2,
+        "the first character's down and up, nothing after"
+    );
+}

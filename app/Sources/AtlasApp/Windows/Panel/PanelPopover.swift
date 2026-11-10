@@ -60,9 +60,9 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     item.button?.target = self
     item.button?.action = #selector(toggle)
     StateTracking.follow(
-      { [weak controller] in controller?.mode },
-      apply: { [weak self] mode in
-        self?.item.show(mode.kind, description: PanelWords.statusItem(mode.word))
+      { [weak controller] in controller?.glyph },
+      apply: { [weak self] glyph in
+        self?.item.show(glyph.kind, description: PanelWords.statusItem(glyph.word))
       }
     )
     // Hands VoiceOver each state that asks something of the person while the panel is open, once it holds.

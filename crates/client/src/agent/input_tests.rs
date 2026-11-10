@@ -412,3 +412,76 @@ async fn typing_stops_between_parts_and_says_how_much_was_typed() {
     assert_eq!(report["uncertain"], true, "the part under way was cut");
     assert_eq!(report["typed"], 64, "only confirmed parts count");
 }
+
+#[tokio::test]
+async fn typing_stopped_at_a_later_batch_reports_how_far_it_got_and_is_never_typed_again_whole() {
+    let ask = json!({
+        "account": "slack.com",
+        "accountKey": {"kind": "site", "id": "slack.com", "browser": "com.google.Chrome"},
+        "what": "newline",
+        "action": "part",
+        "bind": {"action": "part"},
+        "once": true,
+    });
+    let stopped = json!({"ok": false, "code": "waiting-for-person",
+        "error": "slack.com is signed in", "ask": ask,
+        "performed": 1, "partial": false, "uncertain": false});
+    let report = stopped_at(3, 1, Ok(stopped)).await;
+    assert_eq!(report["typed"], 64 + 16, "the confirmed offset");
+    assert_eq!(
+        report["ask"]["what"], "newline",
+        "the question goes with it"
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    client.controller = client
+        .controller
+        .clone()
+        .waiting(Duration::from_millis(100));
+    let mut attempts = 0;
+    let outcome = crate::asking::after_asking(&client, async || {
+        attempts += 1;
+        Ok(report.clone())
+    })
+    .await
+    .unwrap();
+    assert_eq!(attempts, 1, "what was typed is never typed again");
+    assert!(
+        outcome["next"]
+            .as_str()
+            .unwrap()
+            .contains("from character 81"),
+        "{outcome}"
+    );
+    assert_eq!(
+        client
+            .controller
+            .asks()
+            .open(atlas_core::time::now_ms())
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_typing_commands_row_names_the_account_its_batches_acted_in_and_its_report_never_does() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut client = crate::test_support::client(directory.path());
+    let doing = crate::doing::Doing::new("type");
+    client.doing = Some(doing.clone());
+    let interrupt = Interrupt::new_for_test(Duration::from_secs(10));
+    let batches = type_batches(&"z".repeat(64 * 2)).unwrap();
+    let account = json!({"name": "slack.com", "key": {"kind": "site", "id": "slack.com"}});
+    // Each batch's reply, its account already taken for its own row.
+    let report = type_recorded(&client, &batches, &interrupt, async |actions: &Value| {
+        doing.note_account(account.clone(), Some(json!("trusted")));
+        Ok(json!({"ok": true, "performed": actions.as_array().unwrap().len()}))
+    })
+    .await;
+
+    assert!(report.get("account").is_none() && report.get("allowed").is_none());
+    let rows = crate::activity_log::recent(client.output_dir().unwrap(), 1);
+    assert_eq!(rows[0].account.as_ref().unwrap().name, "slack.com");
+    assert_eq!(rows[0].allowed, Some(crate::activity_log::Allowed::Trusted));
+}

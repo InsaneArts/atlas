@@ -2,11 +2,11 @@ import SwiftUI
 
 extension ViewerLayout {
   /// 8: the content card's inset from the window's top, trailing and bottom edges, and from the sidebar.
-  static let cardInset = Spacing.s
+  static let cardInset = WindowChrome.cardInset
   /// 8: the content card's corner, the window's less its inset, so the two curves run side by side.
-  static let cardRadius = Radius.nested(in: Radius.window, inset: cardInset)
+  static let cardRadius = WindowChrome.cardRadius
   /// 38: the card's header, one line of who has the helper; its centre sits level with the window buttons'.
-  static let headerHeight: CGFloat = 38
+  static let headerHeight = WindowChrome.cardBarHeight
   /// 14: the header's inset at its sides.
   static let headerInset = Spacing.mPlus
   /// 8: between who has the helper and what they do with it.

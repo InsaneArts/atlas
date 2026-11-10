@@ -128,4 +128,14 @@ public enum ViewerEvent: Equatable, Sendable {
   ///
   /// - Parameter name: The screenshot's file name.
   case thumbnailNeeded(String)
+  /// An answer to the question over the Screen.
+  ///
+  /// - Parameters:
+  ///   - id: The question's id.
+  ///   - choice: The answer.
+  case answerAsk(id: String, choice: AskChoice)
+  /// Done on the signing-in bar: the person finished in the helper's browser.
+  case signInDone
+  /// Cancel on the signing-in bar: the hold ends and nothing is added.
+  case signInCancel
 }

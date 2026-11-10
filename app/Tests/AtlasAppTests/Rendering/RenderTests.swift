@@ -118,13 +118,12 @@
       #expect(Set(names).count == names.count)
     }
 
-    @Test("every settings render draws at Settings' width and its pane's height", arguments: SettingsRender.files)
+    @Test("every settings render draws at the window's fixed 740 by 572", arguments: SettingsRender.files)
     func everySettingsRenderDraws(file: String) throws {
       let state = try #require(SettingsRender.renders.first { $0.file == file }?.state)
-      let size = SettingsRender.size(of: state)
+      let size = SettingsRender.size
       #expect(size.width == SettingsLayout.width)
-      #expect(size.height > SettingsLayout.header, "the pane said how tall it draws")
-      #expect(size.height != SettingsLayout.firstHeight, "the pane said how tall it draws")
+      #expect(size.height == SettingsLayout.height)
       let folder = try TemporaryFolder()
       defer { folder.remove() }
       let directory = folder.url
@@ -146,7 +145,7 @@
         #expect(SettingsRender.draw(file, state, to: directory, appearance: appearance))
         let drawn = directory.appendingPathComponent("\(file).png")
         let image = try #require(NSBitmapImageRep(data: Data(contentsOf: drawn)), "\(file) was not drawn")
-        // A corner of the window's ground, clear of the title, the tabs and the panes.
+        // A corner of the sidebar's ground, clear of the search, the rows and the card.
         let corner = try #require(image.colorAt(x: 2, y: 2)?.usingColorSpace(.sRGB))
         grounds.append(corner.brightnessComponent)
       }

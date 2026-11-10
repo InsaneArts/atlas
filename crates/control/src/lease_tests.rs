@@ -12,7 +12,9 @@ fn a_token_is_live_only_before_its_deadline() {
         ttl + Duration::from_nanos(1),
     ] {
         let mut lease = Lease::new(ttl);
-        let owner = lease.acquire_at(&controller, start, || start).unwrap();
+        let owner = lease
+            .acquire_at(&controller, Beside::Commands, start, || start)
+            .unwrap();
         let now = start + elapsed;
         assert_eq!(lease.expires, start + ttl);
         assert_eq!(lease.require_at(&owner, now).is_ok(), elapsed < ttl);
@@ -39,7 +41,7 @@ fn acquisition_grants_a_full_ttl_after_waiting_for_the_controller() {
     let completed = start + ttl * 2;
     let mut lease = Lease::new(ttl);
     let owner = lease
-        .acquire_at(&controller, start, || {
+        .acquire_at(&controller, Beside::Commands, start, || {
             assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
             completed
         })
@@ -63,7 +65,9 @@ fn renewal_grants_a_full_ttl_after_successful_validation() {
     let start = Instant::now();
     let ttl = Duration::from_secs(10);
     let mut lease = Lease::new(ttl);
-    let owner = lease.acquire_at(&controller, start, || start).unwrap();
+    let owner = lease
+        .acquire_at(&controller, Beside::Commands, start, || start)
+        .unwrap();
     let validated = start + ttl - Duration::from_nanos(1);
     let completed = start + ttl * 2;
 
@@ -92,7 +96,9 @@ fn renewal_uses_the_supplied_instant_without_reviving_an_expired_token() {
     let start = Instant::now();
     let ttl = Duration::from_secs(10);
     let mut lease = Lease::new(ttl);
-    let owner = lease.acquire_at(&controller, start, || start).unwrap();
+    let owner = lease
+        .acquire_at(&controller, Beside::Commands, start, || start)
+        .unwrap();
     let renewed = start + ttl - Duration::from_nanos(1);
     lease.renew_at(&owner, renewed, || renewed).unwrap();
     assert_eq!(lease.expires, renewed + ttl);
@@ -128,7 +134,9 @@ fn an_expired_token_cannot_renew_while_its_cleanup_retains_control() {
     let start = Instant::now();
     let ttl = Duration::from_secs(10);
     let mut lease = Lease::new(ttl);
-    let owner = lease.acquire_at(&controller, start, || start).unwrap();
+    let owner = lease
+        .acquire_at(&controller, Beside::Commands, start, || start)
+        .unwrap();
     let deadline = start + ttl;
     lease.expire_at(deadline);
     assert!(lease.expired());
@@ -144,7 +152,7 @@ fn an_expired_token_cannot_renew_while_its_cleanup_retains_control() {
     );
     assert_eq!(
         lease
-            .acquire_at(&controller, deadline, || panic!(
+            .acquire_at(&controller, Beside::Commands, deadline, || panic!(
                 "a busy lease cannot be acquired"
             ))
             .unwrap_err()
@@ -175,7 +183,7 @@ async fn finishing_cleanup_does_not_release_an_input_still_in_flight() {
     let owner = lease
         .lock()
         .await
-        .acquire_at(&controller, start, || start)
+        .acquire_at(&controller, Beside::Commands, start, || start)
         .unwrap();
     let permit = ActionPermit::begin(lease.clone(), &owner).await.unwrap();
     let mut state = lease.lock().await;
@@ -204,7 +212,7 @@ async fn finishing_input_does_not_release_cleanup_still_in_progress() {
     let owner = lease
         .lock()
         .await
-        .acquire_at(&controller, start, || start)
+        .acquire_at(&controller, Beside::Commands, start, || start)
         .unwrap();
     let permit = ActionPermit::begin(lease.clone(), &owner).await.unwrap();
     let deadline = lease.lock().await.expires;
@@ -242,9 +250,13 @@ fn a_refused_acquire_never_ends_a_later_owner_or_unfinished_work() {
     let controller = Controller::at(505, directory.path());
     let now = Instant::now();
     let mut lease = Lease::default();
-    let old = lease.acquire_at(&controller, now, || now).unwrap();
+    let old = lease
+        .acquire_at(&controller, Beside::Commands, now, || now)
+        .unwrap();
     lease.release_at(now);
-    let owner = lease.acquire_at(&controller, now, || now).unwrap();
+    let owner = lease
+        .acquire_at(&controller, Beside::Commands, now, || now)
+        .unwrap();
     end_refused_acquire(&mut lease, &old, now);
     lease.require_at(&owner, now).unwrap();
     assert_eq!(
@@ -256,7 +268,9 @@ fn a_refused_acquire_never_ends_a_later_owner_or_unfinished_work() {
     assert_eq!(controller.acquire(false).unwrap_err().code, "busy");
     lease.end_release_at(now);
     assert!(controller.acquire(false).is_ok());
-    let owner = lease.acquire_at(&controller, now, || now).unwrap();
+    let owner = lease
+        .acquire_at(&controller, Beside::Commands, now, || now)
+        .unwrap();
     lease.inflight = true;
     end_refused_acquire(&mut lease, &owner, now);
     assert!(lease.active_at(now), "input in flight keeps the lock");
@@ -272,7 +286,7 @@ fn a_refused_acquire_that_expired_leaves_cleanup_in_charge() {
     let controller = Controller::at(505, directory.path());
     let mut lease = Lease::default();
     let owner = lease
-        .acquire_at(&controller, Instant::now(), Instant::now)
+        .acquire_at(&controller, Beside::Commands, Instant::now(), Instant::now)
         .unwrap();
     let deadline = lease.expires;
     end_refused_acquire(&mut lease, &owner, deadline);
@@ -313,7 +327,9 @@ fn a_stale_release_never_ends_a_different_owner() {
     let controller = Controller::at(505, directory.path());
     let now = Instant::now();
     let mut lease = Lease::default();
-    let old = lease.acquire_at(&controller, now, || now).unwrap();
+    let old = lease
+        .acquire_at(&controller, Beside::Commands, now, || now)
+        .unwrap();
     // Revoked elsewhere; the owner's own release follows.
     assert_eq!(
         lease.begin_release_at(None, now).unwrap(),
@@ -321,7 +337,9 @@ fn a_stale_release_never_ends_a_different_owner() {
     );
     lease.end_release_at(now);
     assert_eq!(lease.begin_release_at(Some(&old), now).unwrap(), None);
-    let owner = lease.acquire_at(&controller, now, || now).unwrap();
+    let owner = lease
+        .acquire_at(&controller, Beside::Commands, now, || now)
+        .unwrap();
     let error = lease.begin_release_at(Some(&old), now).unwrap_err();
     assert_eq!(error.code, "lease-lost");
     assert_eq!(error.error, "This token cannot release another controller");
@@ -339,7 +357,7 @@ async fn a_permit_requires_a_live_token_and_excludes_another_input() {
     let owner = lease
         .lock()
         .await
-        .acquire_at(&controller, start, || start)
+        .acquire_at(&controller, Beside::Commands, start, || start)
         .unwrap();
     assert_eq!(
         ActionPermit::begin(lease.clone(), "wrong")
@@ -397,7 +415,7 @@ fn a_contended_permit_settles_in_a_runtime_task() {
         let start = Instant::now() + Duration::from_secs(3600);
         let owner = lease
             .blocking_lock()
-            .acquire_at(&controller, start, || start)
+            .acquire_at(&controller, Beside::Commands, start, || start)
             .unwrap();
         let (parked, waiting) = std::sync::mpsc::channel();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -455,7 +473,7 @@ fn a_permit_settles_without_a_runtime() {
         let start = Instant::now() + Duration::from_secs(3600);
         let owner = lease
             .blocking_lock()
-            .acquire_at(&controller, start, || start)
+            .acquire_at(&controller, Beside::Commands, start, || start)
             .unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()

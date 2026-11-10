@@ -3,7 +3,7 @@ import AtlasUI
 import Foundation
 
 extension SettingsPresenter {
-  /// The Agents pane: Claude and Codex, each connected, ready to connect, not installed, or
+  /// The Integrations page: Claude and Codex, each connected, ready to connect, not installed, or
   /// saying why its last Connect failed; then each project taught.
   ///
   /// - Parameter snapshot: What the controller holds and reads.
@@ -31,14 +31,15 @@ extension SettingsPresenter {
           installing: installing,
           isRemoving: snapshot.facts.isRemoving
         ),
-        canDisconnect: choice.hasConnection && installing.isEmpty
+        canDisconnect: choice.hasConnection && installing.isEmpty,
+        hasConnection: choice.hasConnection
       )
       return failing(row, failures[choice.id.rawValue]?.message ?? choice.problem)
     }
     return SettingsAgentsState(
       agents: plugins,
       projects: snapshot.agents.projects.map(project),
-      notice: notice(snapshot, in: .agents, busy: !installing.isEmpty)
+      notice: notice(snapshot, in: .integrations, busy: !installing.isEmpty)
     )
   }
 
@@ -63,7 +64,7 @@ extension SettingsPresenter {
     installing: Set<String>,
     isRemoving: Bool = false
   ) -> SettingsAgentRow.Connection {
-    if installing.contains(id) { return isRemoving ? .note("Disconnecting…") : .connecting }
+    if installing.contains(id) { return isRemoving ? .disconnecting : .connecting }
     if connected { return id == AgentID.cursor.rawValue ? .configured : .connected }
     if !checked { return .note(failed ? SettingsWords.notChecked : SettingsWords.checking) }
     if !found { return .missing }

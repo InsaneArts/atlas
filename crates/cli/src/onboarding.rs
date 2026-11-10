@@ -1082,6 +1082,60 @@ pub fn login(config_path: &Path, on: bool) -> Result<Value> {
     })
 }
 
+/// A change to the home folder's privacy from the helper.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HomeChange {
+    /// Shut the helper out of the home folder.
+    Private,
+    /// Let the helper open it again: the person only.
+    Open,
+    /// Change nothing, only remember that it was offered (Not Now).
+    Offered,
+}
+
+/// Change how the home folder stands for the configured helper, or report
+/// it, with whether it was offered and whether agents may copy sign-ins in.
+///
+/// # Errors
+///
+/// Returns configuration and identity errors, `stopped` when an agent asks
+/// to open the home folder, and `io` with the Terminal line when a change
+/// fails.
+pub fn files(config_path: &Path, change: Option<HomeChange>, by_person: bool) -> Result<Value> {
+    use atlas_client::home_privacy;
+
+    let uid = Config::load(config_path)?.helper_uid;
+    let files = match change {
+        None => home_privacy::status(uid)?,
+        Some(HomeChange::Private) => home_privacy::make_private(uid)?,
+        Some(HomeChange::Open) => home_privacy::open(uid, by_person)?,
+        Some(HomeChange::Offered) => {
+            home_privacy::mark_offered(uid);
+            home_privacy::status(uid)?
+        }
+    };
+    let mut reply = json!(files);
+    reply["ok"] = json!(true);
+    reply["offered"] = json!(home_privacy::offered_now(uid));
+    reply["signInCopies"] = json!(atlas_client::sign_in_copies::allowed());
+    Ok(reply)
+}
+
+/// Let agents copy sign-ins and secrets into the helper (`Some(true)`, the
+/// person only), stop them (`Some(false)`), or say which it is.
+///
+/// # Errors
+///
+/// Returns `stopped` when an agent asks to allow copies, and file errors
+/// when the choice can't be written.
+pub fn sign_ins(allow: Option<bool>, by_person: bool) -> Result<Value> {
+    let allowed = match allow {
+        Some(allow) => atlas_client::sign_in_copies::set(allow, by_person)?,
+        None => atlas_client::sign_in_copies::allowed(),
+    };
+    Ok(json!({"ok": true, "signInCopies": allowed}))
+}
+
 #[cfg(test)]
 #[path = "onboarding_tests.rs"]
 mod tests;

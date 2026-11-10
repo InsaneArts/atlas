@@ -2,7 +2,7 @@ use super::*;
 use crate::agent::tests::refused;
 use crate::handoff::Copied;
 use atlas_core::files::Token;
-use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
+use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf, time::Duration};
 
 #[test]
 fn a_failed_launch_keeps_copied_paths_or_explicit_null_for_non_unicode_paths() {
@@ -471,4 +471,315 @@ async fn an_open_stays_successful_when_its_identity_read_fails_or_the_session_ch
         assert!(rows[0].worked());
         assert_eq!(lists, if changed { 1 } else { 2 });
     }
+}
+
+#[tokio::test]
+async fn opening_a_store_or_a_file_url_to_one_is_refused_before_control_is_taken_or_the_helper_asked()
+ {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let copies = directory.path().join("copies");
+    let store = directory.path().join("logins.json");
+    std::fs::write(&store, b"{}").unwrap();
+    let url = format!("file://{}", directory.path().join(".npm%72c").display());
+    let escaped_host = format!(
+        "file://%6cocalhost{}",
+        directory.path().join(".env").display()
+    );
+    let numeric_host = format!(
+        "file://127.0.0.1{}",
+        directory.path().join(".npmrc").display()
+    );
+    let lone_percent = format!("file://{}", directory.path().join("100%/.env").display());
+    for target in [
+        store.display().to_string(),
+        url,
+        escaped_host,
+        numeric_host,
+        lone_percent,
+    ] {
+        let error = open_in(&client, None, std::slice::from_ref(&target), &[], &copies)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{target}: {error}");
+    }
+    assert!(!copies.exists(), "old copies were pruned");
+    assert!(
+        !directory.path().join("state").exists(),
+        "control was taken"
+    );
+}
+
+#[tokio::test]
+async fn opening_a_link_named_like_a_store_is_refused_though_it_leads_elsewhere() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let settings = directory.path().join("settings");
+    std::fs::write(&settings, b"").unwrap();
+    let link = directory.path().join("cookies.sqlite");
+    std::os::unix::fs::symlink(&settings, &link).unwrap();
+    let error = open_in(
+        &client,
+        None,
+        &[link.display().to_string()],
+        &[],
+        &directory.path().join("copies"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, Code::Credentials, "{error}");
+}
+
+#[tokio::test]
+async fn opening_a_file_reference_url_is_refused_before_the_helper_is_asked() {
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    let reference = "file:///.file/id=6571367.1234".to_owned();
+    let error = open_in(
+        &client,
+        None,
+        std::slice::from_ref(&reference),
+        &[],
+        &directory.path().join("copies"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code, Code::Usage, "{error}");
+    assert!(
+        !directory.path().join("state").exists(),
+        "control was taken"
+    );
+}
+
+#[tokio::test]
+async fn opening_a_path_named_like_a_store_that_does_not_exist_is_refused_before_control_is_taken()
+{
+    let directory = tempfile::tempdir().unwrap();
+    let client = crate::test_support::client(directory.path());
+    for missing in [
+        directory.path().join("missing/.env"),
+        directory.path().join("odd://missing/.env"),
+        PathBuf::from(".env-missing-here/.npmrc"),
+        PathBuf::from(".npmrc"),
+    ] {
+        let missing = missing.display().to_string();
+        let error = open_in(
+            &client,
+            None,
+            std::slice::from_ref(&missing),
+            &[],
+            &directory.path().join("copies"),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code, Code::Credentials, "{missing}: {error}");
+    }
+    assert!(
+        !directory.path().join("state").exists(),
+        "control was taken"
+    );
+}
+
+#[test]
+fn every_file_named_and_every_path_that_exists_is_checked_as_given() {
+    let targets = ["odd:/.env", "https://example.com", ".npmrc"].map(str::to_owned);
+    let wanted = [
+        handoff::Target::Path(PathBuf::from("/real/settings")),
+        handoff::Target::Name("https://example.com".into()),
+        handoff::Target::Name(".npmrc".into()),
+    ];
+    let given = given_paths(None, &targets, &wanted);
+    assert_eq!(
+        given,
+        [Path::new("odd:/.env"), Path::new(".npmrc")],
+        "a URL is no file"
+    );
+    let app = [handoff::Target::Name("Safari".into())];
+    assert!(
+        given_paths(Some("Safari"), &[], &app).is_empty(),
+        "an app's name is the helper's"
+    );
+}
+
+#[tokio::test]
+async fn a_persons_launch_is_never_sent_when_their_lease_runs_out_while_the_helper_is_verified() {
+    use crate::test_support::{Helper, completed};
+    use atlas_control::{Lease, SharedLease};
+    use atlas_core::test_support::UID;
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let lease: SharedLease =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Lease::new(Duration::from_secs(10))));
+    let token = lease.lock().await.acquire(&client.controller).unwrap();
+    let ownership = lease.lock().await.ownership(&token).unwrap();
+
+    // The lease is held still until the helper has been verified for the
+    // launch, and runs out then: before the launch is sent.
+    let verified = helper.proofs();
+    let mut held = lease.clone().lock_owned().await;
+    let expiring = async {
+        while helper.proofs() == verified {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        held.expire_for_test();
+        drop(held);
+    };
+    let mut sent = Vec::new();
+    let launching = helper.serve(
+        async {
+            let (refused, ()) = tokio::join!(
+                open_for_person(
+                    &client,
+                    &ownership,
+                    (&lease, &token),
+                    "Google Chrome",
+                    "https://github.com",
+                    true,
+                ),
+                expiring,
+            );
+            refused
+        },
+        |request| {
+            sent.push(request.clone());
+            Some(completed(""))
+        },
+    );
+    let refused = launching.await.unwrap_err();
+
+    assert_eq!(refused.code, Code::LeaseLost);
+    assert!(helper.proofs() > verified, "the helper was verified first");
+    assert!(sent.is_empty(), "nothing was sent: {sent:?}");
+    assert!(client.controller.pending().unwrap().is_empty());
+    drop(ownership);
+    lease.lock().await.release();
+}
+
+#[tokio::test]
+async fn a_browsers_own_page_opens_for_the_person_once_its_new_window_shows() {
+    use crate::test_support::{Helper, completed};
+    use atlas_control::{Lease, SharedLease};
+    use atlas_core::test_support::UID;
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let lease: SharedLease =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Lease::new(Duration::from_secs(10))));
+    let token = lease.lock().await.acquire(&client.controller).unwrap();
+    let ownership = lease.lock().await.ownership(&token).unwrap();
+    let page = "chrome://settings/clearBrowserData";
+
+    // Chrome ignores its own pages as an argument: an empty window opens
+    // first, then the page goes to it as a URL once the window shows.
+    let mut sent = Vec::new();
+    let mut opened = 0;
+    let mut reads_after = 0;
+    let launched = helper
+        .serve(
+            open_for_person(
+                &client,
+                &ownership,
+                (&lease, &token),
+                "Google Chrome",
+                page,
+                true,
+            ),
+            |request| {
+                if request["op"] == "windows" {
+                    if opened > 0 {
+                        reads_after += 1;
+                    }
+                    let shown = usize::from(opened > 0 && reads_after > 1);
+                    let windows: Vec<Value> = (0..1 + shown)
+                        .map(|number| {
+                            json!({"number": number, "pid": 812, "owner": "Google Chrome",
+                            "title": null, "layer": 0, "alpha": 1.0,
+                            "bounds": {"x": 0, "y": 0, "width": 100, "height": 100}})
+                        })
+                        .collect();
+                    return Some(json!({"ok": true, "starts": {}, "windows": windows}));
+                }
+                if request["argv"][0] == "/usr/bin/open" {
+                    sent.push((request["argv"].clone(), reads_after));
+                    opened += 1;
+                }
+                Some(completed(""))
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(launched["opened"], true);
+    assert_eq!(
+        sent,
+        [
+            (
+                json!([
+                    "/usr/bin/open",
+                    "-n",
+                    "-a",
+                    "Google Chrome",
+                    "--args",
+                    "--new-window"
+                ]),
+                0
+            ),
+            (
+                json!(["/usr/bin/open", "-a", "Google Chrome", "--", page]),
+                2
+            ),
+        ],
+        "the page went once the second read showed the new window"
+    );
+    drop(ownership);
+    lease.lock().await.release();
+}
+
+#[tokio::test]
+async fn a_web_page_opens_for_the_person_in_a_new_window_at_once() {
+    use crate::test_support::{Helper, completed};
+    use atlas_control::{Lease, SharedLease};
+    use atlas_core::test_support::UID;
+    let directory = tempfile::tempdir().unwrap();
+    let (client, helper) = Helper::client(directory.path(), UID);
+    let lease: SharedLease =
+        std::sync::Arc::new(tokio::sync::Mutex::new(Lease::new(Duration::from_secs(10))));
+    let token = lease.lock().await.acquire(&client.controller).unwrap();
+    let ownership = lease.lock().await.ownership(&token).unwrap();
+
+    let mut sent = Vec::new();
+    helper
+        .serve(
+            open_for_person(
+                &client,
+                &ownership,
+                (&lease, &token),
+                "Google Chrome",
+                "https://example.com",
+                true,
+            ),
+            |request| {
+                assert_ne!(request["op"], "windows", "no window is waited for");
+                if request["argv"][0] == "/usr/bin/open" {
+                    sent.push(request["argv"].clone());
+                }
+                Some(completed(""))
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        sent,
+        [json!([
+            "/usr/bin/open",
+            "-n",
+            "-a",
+            "Google Chrome",
+            "--args",
+            "--new-window",
+            "https://example.com"
+        ])]
+    );
+    drop(ownership);
+    lease.lock().await.release();
 }

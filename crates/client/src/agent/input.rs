@@ -126,6 +126,24 @@ pub(super) fn type_parts(batch: &str) -> Vec<String> {
 /// follow earlier text chunks; retain uncertainty and do not replay the text.
 pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>) -> Result<Value> {
     let batches = type_batches(text)?;
+    // A grant the person gives this command is bound to all of its text.
+    client.set_typing(Some(atlas_core::digest::bytes_sha256(text.as_bytes())));
+    let typed =
+        crate::asking::after_asking(client, async || type_once(client, &batches, expected).await)
+            .await;
+    client.set_typing(None);
+    typed
+}
+
+/// [`type_text`] once. While the person lists any account, the input
+/// service first judges a stand-in for the whole text, sending nothing, so
+/// typing never stops halfway to ask; parts the person already allowed
+/// after a stop aren't judged again.
+async fn type_once(
+    client: &Client,
+    batches: &[String],
+    expected: Option<&Expected>,
+) -> Result<Value> {
     let ownership = client.controller.acquire_beside_commands()?;
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
@@ -137,6 +155,41 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
     };
     let epoch = &verified.session().epoch;
 
+    // The parts the person already allowed, each just this once, after
+    // they stopped typing: those are typed under their permits, and only
+    // the rest is judged here.
+    let parts: Vec<String> = batches.iter().flat_map(|batch| type_parts(batch)).collect();
+    let left: Vec<&String> = {
+        let allowed = crate::asking::permitted(client, &parts);
+        parts
+            .iter()
+            .filter(|part| !allowed.contains(part))
+            .collect()
+    };
+    if !left.is_empty() && crate::asking::policy(client).is_some() {
+        // Decided as the whole text: a line break anywhere sends.
+        let probe = if left.iter().any(|part| part.contains(['\n', '\r'])) {
+            "\n"
+        } else {
+            "x"
+        };
+        client.set_checking(true);
+        let checked = client
+            .input_owned(
+                &ownership,
+                atlas_core::actions::Batch::decode(&json!([{"type": "type", "text": probe}])),
+                Some((epoch, Instant::now())),
+                check.clone(),
+            )
+            .await;
+        client.set_checking(false);
+        // A check refused, to ask the person or for a Look Only account:
+        // nothing is typed, and the caller asks.
+        let checked = checked?;
+        if checked["ok"] != true {
+            return Ok(checked);
+        }
+    }
     let send = async |actions: &Value| {
         client
             .input_owned(
@@ -147,7 +200,7 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
             )
             .await
     };
-    Ok(type_recorded(client, &batches, interrupt, send).await)
+    Ok(type_recorded(client, batches, interrupt, send).await)
 }
 
 /// Send each of `batches` as `type` actions through `send`, stopping at
@@ -252,6 +305,16 @@ pub(super) async fn type_recorded(
             reply[field] = value.clone();
         }
     }
+    // The listed account its batches acted in, for this row alone: this
+    // reply is recorded, never returned.
+    if let Some(doing) = &client.doing
+        && let Some((account, allowed)) = doing.noted_account()
+    {
+        reply["account"] = account;
+        if let Some(allowed) = allowed {
+            reply["allowed"] = allowed;
+        }
+    }
     // Count the requested input actions without copying any typed text into
     // the recording request. This request is never sent to the helper.
     let actions: Vec<Value> = batches
@@ -286,7 +349,8 @@ fn unconfirmed(reply: &Value) -> Error {
     if let Some(holder) = reply["holder"].as_str().and_then(Holder::parse) {
         error = error.held_by(holder);
     }
-    for kept in ["reason", "unread", "found"] {
+    // The question a stop before a later batch's text asks the person.
+    for kept in ["reason", "unread", "found", "ask"] {
         if !reply[kept].is_null() {
             error = error.with(kept, reply[kept].clone());
         }

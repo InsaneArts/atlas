@@ -224,12 +224,77 @@ pub struct Row {
     /// [`crate::before`] names it.
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub before: Option<String>,
+    /// The account the person listed that an agent's input acted in, when
+    /// it acted in one: never an app or site they didn't list.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub account: Option<Account>,
+    /// What let it act there: the person allowed it once or for the task,
+    /// or the account is Trusted. None when nothing needed allowing.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<Allowed>,
     /// The row's id, from what it holds as the log keeps it: never written.
     #[serde(skip)]
     pub id: String,
     /// The oldest member's identity while gathering personal input: never written.
     #[serde(skip)]
     pub first_input_id: Option<String>,
+}
+
+/// A listed account as a row names it: the name the person reads, and the
+/// key it is listed by. One whose parts don't read is no account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Account {
+    pub name: String,
+    pub key: AccountKey,
+}
+
+/// Which listed account: a site in a browser, or an app.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountKey {
+    pub kind: AccountKind,
+    pub id: String,
+    /// The bundle identifier of the browser a site was listed in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountKind {
+    Site,
+    App,
+}
+
+/// What let an agent's input act in a listed account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Allowed {
+    /// The person allowed this action once.
+    Once,
+    /// The person allowed the rest of the task in the account.
+    Task,
+    /// The account is Trusted.
+    Trusted,
+}
+
+impl Account {
+    /// The account `value` names, when it reads whole and its names are
+    /// plain: one that doesn't is none.
+    pub(crate) fn of(value: &Value) -> Option<Self> {
+        let account: Self = serde_json::from_value(value.clone()).ok()?;
+        let fits = |text: &str| !text.trim().is_empty() && text.chars().count() <= 200;
+        (fits(&account.name)
+            && fits(&account.key.id)
+            && account.key.browser.as_deref().is_none_or(fits))
+        .then_some(account)
+    }
+
+    /// The site it is, for a site: what a browser's action happened on.
+    pub fn site(&self) -> Option<&str> {
+        (self.key.kind == AccountKind::Site).then_some(self.name.as_str())
+    }
 }
 
 impl Row {

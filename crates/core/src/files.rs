@@ -285,6 +285,25 @@ pub fn open_lock(path: &Path) -> Result<LockFile> {
     Ok(LockFile(file))
 }
 
+/// [`open_lock`], held by this caller alone until it is dropped, once any
+/// other holder lets go; its missing folders are made private (0700) first.
+///
+/// # Errors
+///
+/// Returns the failure to make the folders, to open the lock or to take it.
+pub fn locked(path: &Path) -> Result<LockFile> {
+    if let Some(parent) = path.parent() {
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|error| Error::writing(parent, error))?;
+    }
+    let lock = open_lock(path)?;
+    fs2::FileExt::lock_exclusive(&lock.0).map_err(|error| Error::writing(path, error))?;
+    Ok(lock)
+}
+
 /// Unlocks on drop even while a forked child still has the open file description.
 #[derive(Debug)]
 pub struct LockFile(pub File);
