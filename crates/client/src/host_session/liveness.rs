@@ -160,4 +160,5 @@ pub struct Lifetime {
 }
 
 #[cfg(test)]
+#[path = "liveness_tests.rs"]
 mod tests;

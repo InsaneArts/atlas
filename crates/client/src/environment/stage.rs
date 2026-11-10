@@ -815,3 +815,7 @@ pub(super) fn decode_reply(reply: &Value, mutating: bool, request: &str) -> Resu
 
     Ok(value)
 }
+
+#[cfg(test)]
+#[path = "stage_tests.rs"]
+mod tests;

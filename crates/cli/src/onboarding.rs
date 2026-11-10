@@ -1137,4 +1137,5 @@ pub fn sign_ins(allow: Option<bool>, by_person: bool) -> Result<Value> {
 }
 
 #[cfg(test)]
+#[path = "onboarding_tests.rs"]
 mod tests;

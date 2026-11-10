@@ -125,4 +125,5 @@ fn job_blocker(jobs: &[Shown]) -> Option<String> {
 }
 
 #[cfg(test)]
+#[path = "service_change_tests.rs"]
 mod tests;

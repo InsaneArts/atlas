@@ -140,4 +140,5 @@ pub(super) fn hello(
 }
 
 #[cfg(test)]
+#[path = "facts_tests.rs"]
 mod tests;

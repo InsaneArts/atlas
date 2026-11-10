@@ -770,4 +770,5 @@ fn changed() -> Error {
 }
 
 #[cfg(test)]
+#[path = "live_tests.rs"]
 mod tests;

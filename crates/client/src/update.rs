@@ -729,4 +729,5 @@ async fn install_in(
 }
 
 #[cfg(test)]
+#[path = "update_tests.rs"]
 mod tests;

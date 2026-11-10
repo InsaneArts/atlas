@@ -416,4 +416,5 @@ pub fn first_login_setup(client: &Client, helper: &Account, expected: &Identity)
 }
 
 #[cfg(test)]
+#[path = "job_tests.rs"]
 mod tests;

@@ -145,4 +145,5 @@ pub fn move_between(
 }
 
 #[cfg(test)]
+#[path = "fs_move_tests.rs"]
 mod tests;

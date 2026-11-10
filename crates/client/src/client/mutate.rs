@@ -612,4 +612,5 @@ fn started_group(reply: &Value) -> Option<i32> {
 }
 
 #[cfg(test)]
+#[path = "mutate_tests.rs"]
 mod tests;

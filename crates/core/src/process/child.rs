@@ -51,4 +51,5 @@ pub fn exited(pid: u32) -> io::Result<bool> {
 }
 
 #[cfg(test)]
+#[path = "child_tests.rs"]
 mod tests;

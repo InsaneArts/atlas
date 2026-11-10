@@ -192,4 +192,5 @@ pub(crate) fn resolve_peer(
 }
 
 #[cfg(test)]
+#[path = "verification_tests.rs"]
 mod tests;

@@ -522,4 +522,5 @@ pub fn with_output(mut reply: Value) -> Value {
 }
 
 #[cfg(test)]
+#[path = "transport_tests.rs"]
 mod tests;

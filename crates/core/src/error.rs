@@ -359,4 +359,5 @@ impl From<serde_json::Error> for Error {
 }
 
 #[cfg(test)]
+#[path = "error_tests.rs"]
 mod tests;

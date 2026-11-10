@@ -100,4 +100,5 @@ fn of(pid: i32) -> Option<Usage> {
 }
 
 #[cfg(test)]
+#[path = "resources_tests.rs"]
 mod tests;

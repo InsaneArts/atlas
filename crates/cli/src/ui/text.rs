@@ -100,4 +100,5 @@ pub(crate) fn duration(ms: f64) -> String {
 }
 
 #[cfg(test)]
+#[path = "text_tests.rs"]
 mod tests;

@@ -444,4 +444,5 @@ pub fn to(account: &Account) -> Result<Value> {
 }
 
 #[cfg(test)]
+#[path = "switch_tests.rs"]
 mod tests;

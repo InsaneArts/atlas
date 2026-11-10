@@ -278,4 +278,5 @@ fn make_folder(folder: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "turns_tests.rs"]
 mod tests;

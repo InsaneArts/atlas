@@ -309,3 +309,7 @@ impl Client {
         .await
     }
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;

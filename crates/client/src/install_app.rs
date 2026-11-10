@@ -176,4 +176,5 @@ pub(crate) async fn installed_path(client: &Client, app: &str) -> Option<String>
 }
 
 #[cfg(test)]
+#[path = "install_app_tests.rs"]
 mod tests;

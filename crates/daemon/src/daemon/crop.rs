@@ -172,4 +172,5 @@ pub(super) fn app(
 }
 
 #[cfg(test)]
+#[path = "crop_tests.rs"]
 mod tests;

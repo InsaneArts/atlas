@@ -120,4 +120,5 @@ pub(super) fn failed(result: &Value) -> bool {
 }
 
 #[cfg(test)]
+#[path = "output_tests.rs"]
 mod tests;

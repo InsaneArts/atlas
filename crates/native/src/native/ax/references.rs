@@ -671,4 +671,5 @@ fn same(then: &Seen, now: &Retraced) -> bool {
 }
 
 #[cfg(test)]
+#[path = "references_tests.rs"]
 mod tests;

@@ -67,4 +67,5 @@ pub fn read_sha256(mut file: &fs::File) -> std::io::Result<String> {
 }
 
 #[cfg(test)]
+#[path = "digest_tests.rs"]
 mod tests;

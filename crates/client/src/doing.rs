@@ -603,4 +603,5 @@ fn operation(name: Option<&str>, count: Option<u64>) -> (String, String) {
 }
 
 #[cfg(test)]
+#[path = "doing_tests.rs"]
 mod tests;

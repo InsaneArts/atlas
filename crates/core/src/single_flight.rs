@@ -166,4 +166,5 @@ impl<T, K> Drop for Ending<T, K> {
 }
 
 #[cfg(test)]
+#[path = "single_flight_tests.rs"]
 mod tests;

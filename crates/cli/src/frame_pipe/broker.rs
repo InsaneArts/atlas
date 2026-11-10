@@ -1014,4 +1014,5 @@ fn failure(reason: Reason) -> Failure {
 }
 
 #[cfg(test)]
+#[path = "broker_tests.rs"]
 mod tests;

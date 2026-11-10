@@ -810,4 +810,5 @@ fn write_record(uid: u32, record: &Record) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "canary_tests.rs"]
 mod tests;

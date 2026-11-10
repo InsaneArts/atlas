@@ -1173,4 +1173,5 @@ async fn reply(stream: &mut UnixStream, result: Result<Value>) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "service_tests.rs"]
 mod tests;

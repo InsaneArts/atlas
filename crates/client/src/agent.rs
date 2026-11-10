@@ -21,4 +21,5 @@ pub use target::Target;
 pub use windows::{WindowFilter, list, wait, wait_for_element};
 
 #[cfg(test)]
+#[path = "agent_tests.rs"]
 mod tests;

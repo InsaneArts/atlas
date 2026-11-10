@@ -382,3 +382,7 @@ pub fn keys(keys: &[String]) -> Result<Value> {
             .collect(),
     ))
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

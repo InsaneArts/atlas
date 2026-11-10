@@ -271,10 +271,4 @@ extension Color {
   static let markKeyText = Color(red: 0x1D / 255, green: 0x1D / 255, blue: 0x1F / 255)
   /// A keycap's lower edge: #B8B8BE.
   static let markKeyEdge = Color(red: 0xB8 / 255, green: 0xB8 / 255, blue: 0xBE / 255)
-  /// The shade over what stayed the same between two pictures: black at 0.5.
-  static let pictureUnchanged = Color.black
-    .opacity(0.5)
-  /// A line between parts of a dark panel over a picture: white at 0.12.
-  static let overPictureLine = Color.white
-    .opacity(0.12)
 }

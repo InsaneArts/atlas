@@ -989,4 +989,5 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "dispatch_tests.rs"]
 mod tests;

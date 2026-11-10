@@ -387,4 +387,5 @@ pub(crate) fn jpeg_rgb(
 }
 
 #[cfg(test)]
+#[path = "helper_info_tests.rs"]
 mod tests;

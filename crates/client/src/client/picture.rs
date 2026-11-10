@@ -348,4 +348,5 @@ async fn frame(
 pub(super) mod facts;
 
 #[cfg(test)]
+#[path = "picture_tests.rs"]
 mod tests;

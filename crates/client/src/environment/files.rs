@@ -701,3 +701,7 @@ fn writable_acl(directory: &fs::File) -> Result<bool> {
         .iter()
         .any(|entry| entry.allow && entry.mask & acl::WRITE_RIGHTS != 0))
 }
+
+#[cfg(test)]
+#[path = "files_tests.rs"]
+mod tests;

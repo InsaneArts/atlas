@@ -453,4 +453,5 @@ fn temporary(folder: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[path = "host_tests.rs"]
 mod tests;

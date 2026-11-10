@@ -52,4 +52,5 @@ impl Counts {
 pub(super) static COUNTS: LazyLock<Counts> = LazyLock::new(Counts::default);
 
 #[cfg(test)]
+#[path = "pictures_tests.rs"]
 mod tests;

@@ -332,4 +332,5 @@ pub(crate) fn everyone(output: &Path) -> Vec<Work> {
 }
 
 #[cfg(test)]
+#[path = "task_tests.rs"]
 mod tests;

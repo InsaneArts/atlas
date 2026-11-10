@@ -165,4 +165,5 @@ pub(super) async fn query(state: &Mutex<Option<Worker>>, challenge: &str) -> Res
 }
 
 #[cfg(test)]
+#[path = "proof_tests.rs"]
 mod tests;

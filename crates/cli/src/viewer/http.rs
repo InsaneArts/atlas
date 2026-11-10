@@ -111,6 +111,7 @@ pub(super) fn configured(
         app_secret: atlas_core::name::random_hex(64),
         input_started: std::sync::Mutex::new(None),
         record: std::sync::Mutex::new(None),
+        alone: std::sync::Mutex::new(None),
     })
 }
 

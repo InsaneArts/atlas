@@ -429,4 +429,5 @@ pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
 }
 
 #[cfg(test)]
+#[path = "session_tests.rs"]
 mod tests;

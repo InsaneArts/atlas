@@ -191,4 +191,5 @@ pub(super) fn supported(reply: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+#[path = "graphics_tests.rs"]
 mod tests;

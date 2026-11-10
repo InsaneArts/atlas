@@ -442,4 +442,5 @@ done
 exit 0"#;
 
 #[cfg(test)]
+#[path = "launch_tests.rs"]
 mod tests;

@@ -269,4 +269,5 @@ pub(crate) fn change(connect: bool) -> Changed {
 }
 
 #[cfg(test)]
+#[path = "claude_app_tests.rs"]
 mod tests;

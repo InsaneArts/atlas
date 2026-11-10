@@ -1153,4 +1153,5 @@ fn settling(error: &Error) -> bool {
 }
 
 #[cfg(test)]
+#[path = "bring_tests.rs"]
 mod tests;

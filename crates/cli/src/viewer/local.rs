@@ -364,4 +364,5 @@ fn post_local_with(
 }
 
 #[cfg(test)]
+#[path = "local_tests.rs"]
 mod tests;

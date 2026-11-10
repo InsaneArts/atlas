@@ -128,4 +128,5 @@ fn translocated_bundle(executable: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "processes_tests.rs"]
 mod tests;

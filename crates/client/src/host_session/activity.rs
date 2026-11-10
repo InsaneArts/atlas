@@ -484,4 +484,5 @@ fn plans(record: &Record) -> Vec<Value> {
 }
 
 #[cfg(test)]
+#[path = "activity_tests.rs"]
 mod tests;

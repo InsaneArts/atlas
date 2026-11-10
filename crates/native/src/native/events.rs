@@ -863,4 +863,5 @@ impl From<Button> for Mouse {
 }
 
 #[cfg(test)]
+#[path = "events_tests.rs"]
 mod tests;

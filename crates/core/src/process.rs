@@ -410,6 +410,73 @@ pub fn info(pid: i32) -> Result<Option<Info>> {
     Ok(found.pop().filter(|info| info.instance.pid == pid))
 }
 
+/// The arguments process `pid` was started with, its own name first, as
+/// it was given them.
+///
+/// # Errors
+///
+/// Returns an error when the kernel does not say, as for another account's
+/// process or one that has exited, or says something that does not decode.
+#[allow(unsafe_code, reason = "FFI: KERN_PROCARGS2 has no safe binding")]
+pub fn arguments(pid: i32) -> Result<Vec<String>> {
+    let mut name = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let length = name.len() as libc::c_uint;
+    let mut size = 0;
+    // SAFETY: the MIB is valid for its length; a null output asks only its
+    // size, which the kernel writes back through `size`.
+    let status = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            length,
+            std::ptr::null_mut(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut buffer = vec![0_u8; size];
+    // SAFETY: the MIB is valid and the buffer has the writable capacity
+    // `size` declares on the way in; the kernel writes back how much it
+    // filled through the same `size`.
+    let status = unsafe {
+        libc::sysctl(
+            name.as_mut_ptr(),
+            length,
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    buffer
+        .get(..size)
+        .and_then(command_line)
+        .ok_or_else(|| Error::new(Code::State, "A command line could not be decoded"))
+}
+
+/// The arguments a `KERN_PROCARGS2` reply holds: their count, the
+/// executable's path and the NULs that pad it, then each argument ended by
+/// a NUL (the environment follows).
+fn command_line(reply: &[u8]) -> Option<Vec<String>> {
+    let count = usize::try_from(i32::from_ne_bytes(reply.get(..4)?.try_into().ok()?)).ok()?;
+    let rest = reply.get(4..)?;
+    let rest = rest.get(rest.iter().position(|byte| *byte == 0)?..)?;
+    let mut rest = rest.get(rest.iter().position(|byte| *byte != 0)?..)?;
+    let mut arguments = Vec::new();
+    for _ in 0..count {
+        let end = rest.iter().position(|byte| *byte == 0)?;
+        arguments.push(String::from_utf8_lossy(rest.get(..end)?).into_owned());
+        rest = rest.get(end + 1..)?;
+    }
+    Some(arguments)
+}
+
 /// Every process in group `pgid`, unreaped ones included.
 ///
 /// # Errors
@@ -552,4 +619,5 @@ fn parse(record: &[u8]) -> Option<Info> {
 }
 
 #[cfg(test)]
+#[path = "process_tests.rs"]
 mod tests;

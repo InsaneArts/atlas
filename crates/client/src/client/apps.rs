@@ -216,4 +216,5 @@ impl Client {
 }
 
 #[cfg(test)]
+#[path = "apps_tests.rs"]
 mod tests;

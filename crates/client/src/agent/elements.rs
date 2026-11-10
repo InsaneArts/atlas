@@ -1073,4 +1073,5 @@ fn element_identity(element: &Element) -> Value {
 }
 
 #[cfg(test)]
+#[path = "elements_tests.rs"]
 mod tests;

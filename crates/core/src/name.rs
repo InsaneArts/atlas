@@ -147,6 +147,7 @@ pub fn same_text(a: &str, b: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "name_tests.rs"]
 mod tests;
 
 /// A web host as accounts are listed and matched by it, wherever it is read:

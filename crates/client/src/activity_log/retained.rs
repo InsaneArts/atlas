@@ -209,4 +209,5 @@ fn prune(directory: &Path, now: SystemTime) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "retained_tests.rs"]
 mod tests;

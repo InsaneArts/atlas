@@ -214,4 +214,5 @@ impl Metadata for Resynced {}
 impl Metadata for Close {}
 
 #[cfg(test)]
+#[path = "flow_tests.rs"]
 mod tests;

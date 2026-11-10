@@ -53,4 +53,5 @@ pub fn timestamp() -> u128 {
 }
 
 #[cfg(test)]
+#[path = "time_tests.rs"]
 mod tests;

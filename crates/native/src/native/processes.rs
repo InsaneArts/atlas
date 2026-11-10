@@ -56,4 +56,5 @@ fn snapshot_with<T>(
 }
 
 #[cfg(test)]
+#[path = "processes_tests.rs"]
 mod tests;

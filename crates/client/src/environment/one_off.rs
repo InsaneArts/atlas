@@ -142,4 +142,5 @@ pub(crate) async fn install_states(client: &Client, ids: &[Token]) -> Result<Vec
 }
 
 #[cfg(test)]
+#[path = "one_off_tests.rs"]
 mod tests;

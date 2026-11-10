@@ -291,4 +291,5 @@ impl Grant {
 }
 
 #[cfg(test)]
+#[path = "lease_tests.rs"]
 mod tests;

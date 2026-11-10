@@ -141,4 +141,5 @@ fn guard(input: impl Read) -> Value {
 }
 
 #[cfg(test)]
+#[path = "cursor_tests.rs"]
 mod tests;

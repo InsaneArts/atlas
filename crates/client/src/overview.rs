@@ -509,4 +509,5 @@ fn mode(
 }
 
 #[cfg(test)]
+#[path = "overview_tests.rs"]
 mod tests;

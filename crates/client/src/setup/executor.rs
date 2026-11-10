@@ -852,4 +852,5 @@ pub fn administrator_rights_current() -> bool {
 }
 
 #[cfg(test)]
+#[path = "executor_tests.rs"]
 mod tests;

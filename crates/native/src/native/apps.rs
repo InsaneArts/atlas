@@ -87,4 +87,5 @@ fn launched_at(app: &NSRunningApplication) -> Option<u64> {
 }
 
 #[cfg(test)]
+#[path = "apps_tests.rs"]
 mod tests;

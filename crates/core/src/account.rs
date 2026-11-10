@@ -222,4 +222,5 @@ fn parse_admin_listed(groups: &str) -> Option<bool> {
 }
 
 #[cfg(test)]
+#[path = "account_tests.rs"]
 mod tests;

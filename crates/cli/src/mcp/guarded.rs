@@ -328,4 +328,5 @@ impl Registry {
 }
 
 #[cfg(test)]
+#[path = "guarded_tests.rs"]
 mod tests;

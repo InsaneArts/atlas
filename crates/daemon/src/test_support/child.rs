@@ -214,4 +214,5 @@ impl Drop for Processes {
 }
 
 #[cfg(test)]
+#[path = "child_tests.rs"]
 mod tests;

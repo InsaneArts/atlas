@@ -113,6 +113,9 @@ struct Viewer {
     /// The secret the app names itself by, given only to the app this
     /// viewer starts, on its standard input; never written anywhere.
     app_secret: String,
+    /// The menu bar's hold on the folder its record is kept in, while it
+    /// serves: taken before the record moves into another, after `record`.
+    alone: std::sync::Mutex<Option<atlas_core::files::LockFile>>,
 }
 
 impl Viewer {
@@ -155,4 +158,5 @@ fn unanswered() -> Error {
 }
 
 #[cfg(test)]
+#[path = "viewer_tests.rs"]
 mod tests;

@@ -303,4 +303,5 @@ pub(super) mod made {
 }
 
 #[cfg(test)]
+#[path = "ffi_tests.rs"]
 mod tests;

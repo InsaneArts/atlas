@@ -425,4 +425,5 @@ fn may_restart(measured: &Process, now: Option<&Process>, helper: u32) -> bool {
 }
 
 #[cfg(test)]
+#[path = "recorder_tests.rs"]
 mod tests;
