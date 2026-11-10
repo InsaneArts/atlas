@@ -15,6 +15,9 @@ struct ActivityListContent: View {
   @State private var drawnFolded: Set<String> = []
   /// The sessions that arrived at the top while the person was scrolled down, which wait there until they scroll back.
   @State private var arrivals = ActivityArrivals()
+  /// The filters as last drawn from a reading of whose work the pane lists, which stand in while another choice's reading
+  /// is on its way, so moving between sessions neither takes the track away nor clears its counts.
+  @State private var settledFilters: CapsuleTabsState<ViewerActivityFilter>?
 
   /// 48: above and below an empty filtered list's message.
   private static let emptyInset: CGFloat = 48
@@ -26,7 +29,7 @@ struct ActivityListContent: View {
   var body: some View {
     let waiting = arrivals.waiting(in: state, isAtTop: isAtTop)
     return VStack(alignment: .leading, spacing: .zero) {
-      if state.showsFilters {
+      if showsFilters {
         filters
       }
       ZStack(alignment: .topLeading) {
@@ -39,6 +42,9 @@ struct ActivityListContent: View {
     .listWaiting(ActivityArrivals.words(waiting.count))
     .onChange(of: state, initial: true) { _, state in
       arrivals.meet(state, isAtTop: isAtTop)
+      if state.settled {
+        settledFilters = state.showsFilters ? state.filters : nil
+      }
     }
     .onChange(of: isAtTop) { _, isAtTop in
       guard isAtTop else { return }
@@ -52,6 +58,20 @@ struct ActivityListContent: View {
       width = $0
     }
     .environment(\.outlineWidth, width)
+  }
+
+  /// Whether the track shows: while the log holds anything, or while another choice's reading is on its way after the
+  /// track showed.
+  private var showsFilters: Bool {
+    state.showsFilters || (!state.settled && settledFilters != nil)
+  }
+
+  /// The track's tabs: this reading's, or the last settled ones with the filter chosen now while another choice's
+  /// reading, holding nothing of it yet, is on its way.
+  private var shownFilters: CapsuleTabsState<ViewerActivityFilter> {
+    guard !state.settled, !state.showsFilters, var held = settledFilters else { return state.filters }
+    held.selected = state.filters.selected
+    return held
   }
 
   /// A whole capsule track: narrow panes omit visible counts and use smaller insets, keeping the counts spoken.
@@ -76,7 +96,7 @@ struct ActivityListContent: View {
 
   /// The filters' track, whose thumb slides on its own clock; the list swaps as the filter changes.
   private var tabs: some View {
-    Tabs(state: state.filters, style: .segment) { filter in
+    Tabs(state: shownFilters, style: .segment) { filter in
       send(.filterActivity(filter))
     }
     .fixedSize()
@@ -124,7 +144,7 @@ struct ActivityListContent: View {
             .lineLimit(1)
             .frame(height: ViewerLayout.dayHeight)
             .padding(.leading, ViewerLayout.outlineInset)
-            .padding(.top, place == 0 && state.showsFilters ? .zero : ViewerLayout.dayAbove)
+            .padding(.top, place == 0 && showsFilters ? .zero : ViewerLayout.dayAbove)
             .accessibilityAddTraits(.isHeader)
             .outlineGround()
             .id("day.\(day.id)")
