@@ -2694,64 +2694,45 @@ async fn a_manifest_source_that_is_a_link_named_like_a_secret_is_refused_though_
     assert_eq!(error.code, Code::Credentials, "{error}");
 }
 
-#[tokio::test]
-async fn a_source_that_became_a_link_to_a_store_after_the_first_check_is_refused_as_it_is_read() {
-    let sandbox = Sandbox::new();
+/// The refusal that reading `sandbox`'s `settings.toml` as a selection comes
+/// to, once the helper is verified and before it is asked anything.
+async fn refused_as_read(sandbox: &Sandbox) -> atlas_core::error::Error {
     let (client, helper, _task) = tasked(&sandbox.root);
-    let store = sandbox.root.join("cookies.sqlite");
-    fs::write(&store, b"").unwrap();
-    // Passed the first check as a plain file, then turned into a link before it was read.
-    let source = sandbox.root.join("settings.toml");
-    symlink(&store, &source).unwrap();
     let selections = vec![Selection {
-        source,
+        source: sandbox.root.join("settings.toml"),
         target: ".config/probe/settings.toml".into(),
         executable: false,
     }];
-    let error = helper
+    let manifest = sandbox.root.join("manifest.toml");
+    helper
         .serve(
-            freeze_as(
-                &client,
-                &account(),
-                &sandbox.root.join("manifest.toml"),
-                selections,
-                false,
-            ),
+            freeze_as(&client, &account(), &manifest, selections, false),
             |_| panic!("the helper was asked to preview a store"),
         )
         .await
-        .unwrap_err();
+        .unwrap_err()
+}
+
+#[tokio::test]
+async fn a_source_that_became_a_link_to_a_store_after_the_first_check_is_refused_as_it_is_read() {
+    let sandbox = Sandbox::new();
+    let store = sandbox.root.join("cookies.sqlite");
+    fs::write(&store, b"").unwrap();
+    // Passed the first check as a plain file, then turned into a link before it was read.
+    symlink(&store, sandbox.root.join("settings.toml")).unwrap();
+    let error = refused_as_read(&sandbox).await;
     assert_eq!(error.code, Code::Credentials, "{error}");
 }
 
 #[tokio::test]
 async fn a_source_that_became_a_link_through_a_store_named_link_is_refused_as_it_is_read() {
     let sandbox = Sandbox::new();
-    let (client, helper, _task) = tasked(&sandbox.root);
     let plain = sandbox.root.join("plain.txt");
     fs::write(&plain, b"TOKEN=1").unwrap();
     // Two links: the source to a `.npmrc`, which leads on to an ordinary-looking file.
     let npmrc = sandbox.root.join(".npmrc");
     symlink(&plain, &npmrc).unwrap();
-    let source = sandbox.root.join("settings.toml");
-    symlink(&npmrc, &source).unwrap();
-    let selections = vec![Selection {
-        source,
-        target: ".config/probe/settings.toml".into(),
-        executable: false,
-    }];
-    let error = helper
-        .serve(
-            freeze_as(
-                &client,
-                &account(),
-                &sandbox.root.join("manifest.toml"),
-                selections,
-                false,
-            ),
-            |_| panic!("the helper was asked to preview a store"),
-        )
-        .await
-        .unwrap_err();
+    symlink(&npmrc, sandbox.root.join("settings.toml")).unwrap();
+    let error = refused_as_read(&sandbox).await;
     assert_eq!(error.code, Code::Credentials, "{error}");
 }

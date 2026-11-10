@@ -6,7 +6,7 @@ use crate::{
         recovery_settles_the_abandoned_claim, run_of, running, waits,
     },
     doing::Doing,
-    test_support::client_in,
+    test_support::{client_in, end_group, leftover_group},
 };
 use atlas_core::host::Key;
 use atlas_core::{actions, error::Holder};
@@ -20,6 +20,13 @@ fn run() -> Mutation<'static> {
         timeout: Duration::from_secs(1),
         pin: None,
     }
+}
+
+/// The reply of a run whose command led process group `group` and exited
+/// cleanly.
+fn finished(group: i32) -> Value {
+    json!({"ok": true, "exitCode": 0, "timedOut": false,
+        "events": [{"event": "started", "pid": group}]})
 }
 
 fn epoch() -> InputEpoch {
@@ -656,26 +663,14 @@ fn only_a_refusal_proven_to_have_sent_nothing_drops_its_picture() {
 
 #[tokio::test]
 async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
-    use std::os::unix::process::CommandExt;
     // `atlas run sh -c '(sleep 30; open …) &'`: the shell is gone once it
     // answers, and the work it handed on runs in its group.
-    let mut shell = atlas_core::spawn::spawn(
-        std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
-            ])
-            .process_group(0),
-    )
-    .unwrap();
-    let group = i32::try_from(shell.id()).unwrap();
-    shell.wait().unwrap();
+    let group = leftover_group();
     let dir = tempfile::tempdir().unwrap();
-    let mut client = crate::test_support::client_in(dir.path());
+    let mut client = client_in(dir.path());
     let me = nix::unistd::getuid().as_raw();
     client.config.helper_uid = me;
-    let reply = json!({"ok": true, "exitCode": 0, "timedOut": false,
-        "events": [{"event": "started", "pid": group}]});
+    let reply = finished(group);
     assert_eq!(started_group(&reply), Some(group));
 
     client
@@ -685,10 +680,7 @@ async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
 
     let refused = client.controller.require_no_run_left(me).unwrap_err();
     assert_eq!(refused.details["running"], "command");
-    let _ = nix::sys::signal::killpg(
-        nix::unistd::Pid::from_raw(group),
-        nix::sys::signal::Signal::SIGKILL,
-    );
+    end_group(group);
     for _ in 0..200 {
         if client.controller.require_no_run_left(me).is_ok() {
             return;
@@ -700,31 +692,24 @@ async fn a_finished_run_that_left_work_running_keeps_its_group_until_it_ends() {
 
 #[tokio::test]
 async fn a_run_whose_leftover_work_cant_be_noted_keeps_the_person_out_until_it_is() {
-    use std::os::unix::process::CommandExt;
-    let mut shell = atlas_core::spawn::spawn(
-        std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
-            ])
-            .process_group(0),
-    )
-    .unwrap();
-    let group = i32::try_from(shell.id()).unwrap();
-    shell.wait().unwrap();
+    let group = leftover_group();
     let dir = tempfile::tempdir().unwrap();
-    let mut client = crate::test_support::client_in(dir.path());
+    let mut client = client_in(dir.path());
     let me = nix::unistd::getuid().as_raw();
     client.config.helper_uid = me;
     client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
     let claim = client.controller.quarantine_command().unwrap();
     // The record of leftover work can't be written: a folder stands there.
     std::fs::create_dir_all(client.controller.run_groups_path()).unwrap();
-    let reply = json!({"ok": true, "exitCode": 0, "timedOut": false,
-        "events": [{"event": "started", "pid": group}]});
 
     let settled = client
-        .settle(&run().request(), reply, true, Some(claim), Instant::now())
+        .settle(
+            &run().request(),
+            finished(group),
+            true,
+            Some(claim),
+            Instant::now(),
+        )
         .await
         .unwrap();
 
@@ -754,41 +739,31 @@ async fn a_run_whose_leftover_work_cant_be_noted_keeps_the_person_out_until_it_i
     );
     drop(token);
     lease.release();
-    let _ = nix::sys::signal::killpg(
-        nix::unistd::Pid::from_raw(group),
-        nix::sys::signal::Signal::SIGKILL,
-    );
+    end_group(group);
 }
 
 #[tokio::test]
 async fn an_environment_runs_leftover_work_keeps_the_person_from_signing_in() {
-    use std::os::unix::process::CommandExt;
     // `atlas environment run -- sh -c '(sleep 30; open …) &'`: its worker
     // execs the command, a run under control the environment holds rather
     // than an agent's own, and the work the shell handed on runs in its
     // group once the shell is gone.
-    let mut shell = atlas_core::spawn::spawn(
-        std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
-            ])
-            .process_group(0),
-    )
-    .unwrap();
-    let group = i32::try_from(shell.id()).unwrap();
-    shell.wait().unwrap();
+    let group = leftover_group();
     let dir = tempfile::tempdir().unwrap();
-    let mut client = crate::test_support::client_in(dir.path());
+    let mut client = client_in(dir.path());
     let me = nix::unistd::getuid().as_raw();
     client.config.helper_uid = me;
     client.controller = atlas_control::Controller::at(me, &dir.path().join("state"));
     let claim = client.controller.quarantine().unwrap();
-    let reply = json!({"ok": true, "exitCode": 0, "timedOut": false,
-        "events": [{"event": "started", "pid": group}]});
 
     client
-        .settle(&run().request(), reply, false, Some(claim), Instant::now())
+        .settle(
+            &run().request(),
+            finished(group),
+            false,
+            Some(claim),
+            Instant::now(),
+        )
         .await
         .unwrap();
 
@@ -800,10 +775,14 @@ async fn an_environment_runs_leftover_work_keeps_the_person_from_signing_in() {
     let claim = client.controller.quarantine().unwrap();
     std::fs::remove_file(client.controller.run_groups_path()).unwrap();
     std::fs::create_dir_all(client.controller.run_groups_path()).unwrap();
-    let reply = json!({"ok": true, "exitCode": 0, "timedOut": false,
-        "events": [{"event": "started", "pid": group}]});
     client
-        .settle(&run().request(), reply, false, Some(claim), Instant::now())
+        .settle(
+            &run().request(),
+            finished(group),
+            false,
+            Some(claim),
+            Instant::now(),
+        )
         .await
         .unwrap();
     let mut lease = atlas_control::Lease::default();
@@ -812,10 +791,7 @@ async fn an_environment_runs_leftover_work_keeps_the_person_from_signing_in() {
         Code::Uncertain
     );
     std::fs::remove_dir(client.controller.run_groups_path()).unwrap();
-    let _ = nix::sys::signal::killpg(
-        nix::unistd::Pid::from_raw(group),
-        nix::sys::signal::Signal::SIGKILL,
-    );
+    end_group(group);
 }
 
 #[test]

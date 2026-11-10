@@ -181,10 +181,28 @@ async fn started(
     fails: Fails,
 ) -> Result<Value> {
     let body = json!({"site": "github.com", "browser": "com.google.Chrome"});
+    served_as(helper, steps, fails, viewer.sign_in_start(kind, &body)).await
+}
+
+/// `work`, as the stand-in answers each of its requests, noting each step
+/// in `steps`.
+async fn served<T>(
+    helper: &Helper,
+    steps: &Mutex<Vec<String>>,
+    work: impl Future<Output = T>,
+) -> T {
+    served_as(helper, steps, Fails::Nothing, work).await
+}
+
+/// [`served`], the stand-in answering by `fails`.
+async fn served_as<T>(
+    helper: &Helper,
+    steps: &Mutex<Vec<String>>,
+    fails: Fails,
+    work: impl Future<Output = T>,
+) -> T {
     helper
-        .serve(viewer.sign_in_start(kind, &body), |request| {
-            step(steps, fails, request)
-        })
+        .serve(work, |request| step(steps, fails, request))
         .await
 }
 
@@ -252,10 +270,7 @@ async fn done_adds_the_site_and_ends_the_hold_and_control_while_a_stop_stands() 
     // The person stops agents while they sign in.
     controller.note_stop(true).unwrap();
 
-    let done = helper
-        .serve(viewer.sign_in_done(&lease), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    let done = served(&helper, &steps, viewer.sign_in_done(&lease))
         .await
         .unwrap();
 
@@ -298,10 +313,7 @@ async fn agents_reads_are_refused_during_a_sign_in_and_allowed_after_it() {
         read.error,
         "The person is signing in to an account in the helper; the screen is hidden until they finish."
     );
-    helper
-        .serve(viewer.sign_in_cancel(&lease), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    served(&helper, &steps, viewer.sign_in_cancel(&lease))
         .await
         .unwrap();
 
@@ -323,10 +335,7 @@ async fn cancel_ends_the_hold_and_control_and_adds_nothing() {
     let lease = reply["lease"].as_str().unwrap().to_owned();
 
     // The person typed a password before giving up: it is never listed.
-    let cancelled = helper
-        .serve(viewer.sign_in_cancel(&lease), |request| {
-            step(&steps, Fails::Typed, request)
-        })
+    let cancelled = served_as(&helper, &steps, Fails::Typed, viewer.sign_in_cancel(&lease))
         .await
         .unwrap();
 
@@ -361,10 +370,7 @@ async fn forgetting_opens_the_sites_data_in_settings_and_removes_nothing_on_done
          chrome://settings/content/all?searchSubpage=github.com"
     );
     let lease = reply["lease"].as_str().unwrap().to_owned();
-    let done = helper
-        .serve(viewer.sign_in_done(&lease), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    let done = served(&helper, &steps, viewer.sign_in_done(&lease))
         .await
         .unwrap();
 
@@ -473,10 +479,7 @@ async fn a_sign_in_renews_without_a_frame_and_only_for_its_own_lease() {
         .unwrap();
     let lease = reply["lease"].as_str().unwrap().to_owned();
 
-    helper
-        .serve(viewer.sign_in_renew(&lease), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    served(&helper, &steps, viewer.sign_in_renew(&lease))
         .await
         .unwrap();
     assert_eq!(steps.lock().unwrap().last().unwrap(), "renew");
@@ -498,11 +501,7 @@ async fn any_end_of_the_lease_ends_the_sign_in() {
     assert!(viewer.client().controller.private_hold().is_some());
 
     viewer.lease.lock().await.expire_for_test();
-    helper
-        .serve(viewer.end_expired(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
-        .await;
+    served(&helper, &steps, viewer.end_expired()).await;
 
     nothing_left(&viewer).await;
 }
@@ -554,10 +553,7 @@ async fn done_adds_only_the_site_signed_in_to_whatever_else_was_typed() {
         .unwrap();
     let lease = reply["lease"].as_str().unwrap().to_owned();
 
-    helper
-        .serve(viewer.sign_in_done(&lease), |request| {
-            step(&steps, Fails::Typed, request)
-        })
+    served_as(&helper, &steps, Fails::Typed, viewer.sign_in_done(&lease))
         .await
         .unwrap();
 
@@ -574,10 +570,7 @@ async fn a_frame_read_during_a_sign_in_is_never_shown_from_the_cache_to_anyone_b
     let (viewer, helper) = viewer_of(directory.path());
     let client = viewer.client();
     let steps = Mutex::new(Vec::new());
-    let epoch = helper
-        .serve(client.identity(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    let epoch = served(&helper, &steps, client.identity())
         .await
         .unwrap()
         .epoch;
@@ -595,20 +588,12 @@ async fn a_frame_read_during_a_sign_in_is_never_shown_from_the_cache_to_anyone_b
         .lock()
         .await
         .keep_for_test("private", frame(), None);
-    let refused = helper
-        .serve(viewer.shown_frame(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    let refused = served(&helper, &steps, viewer.shown_frame())
         .await
         .err()
         .expect("refused");
     assert_eq!(refused.code, Code::Busy);
-    let (key, _) = helper
-        .serve(viewer.frame(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
-        .await
-        .unwrap();
+    let (key, _) = served(&helper, &steps, viewer.frame()).await.unwrap();
     assert_eq!(key, "private", "the app is shown it");
 
     let visible = client.controller.screen_visible().unwrap();
@@ -617,12 +602,7 @@ async fn a_frame_read_during_a_sign_in_is_never_shown_from_the_cache_to_anyone_b
         .lock()
         .await
         .keep_for_test("shown", frame(), Some(visible));
-    let (key, _) = helper
-        .serve(viewer.shown_frame(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
-        .await
-        .unwrap();
+    let (key, _) = served(&helper, &steps, viewer.shown_frame()).await.unwrap();
     assert_eq!(key, "shown");
 }
 
@@ -656,7 +636,6 @@ async fn a_launch_the_lease_runs_out_during_ends_the_sign_in_and_cleans_up() {
 
 #[tokio::test]
 async fn a_sign_in_beside_work_an_agents_finished_command_left_running_is_undone() {
-    use std::os::unix::process::CommandExt;
     let directory = tempfile::tempdir().unwrap();
     let (viewer, helper) = viewer_of(directory.path());
     let steps = Mutex::new(Vec::new());
@@ -665,17 +644,7 @@ async fn a_sign_in_beside_work_an_agents_finished_command_left_running_is_undone
     // gone, and the work it handed on runs in its group. It runs as this
     // account, which the stand-in helper's is not, so it is checked as this
     // account's, in the person's words.
-    let mut shell = atlas_core::spawn::spawn(
-        std::process::Command::new("/bin/sh")
-            .args([
-                "-c",
-                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
-            ])
-            .process_group(0),
-    )
-    .unwrap();
-    let group = i32::try_from(shell.id()).unwrap();
-    shell.wait().unwrap();
+    let group = atlas_client::test_support::leftover_group();
     let me = nix::unistd::getuid().as_raw();
     controller.note_run_group(group, me).unwrap();
     let refused = command_running(controller.require_no_run_left(me).unwrap_err());
@@ -685,10 +654,7 @@ async fn a_sign_in_beside_work_an_agents_finished_command_left_running_is_undone
         "An agent's command is still running. Try again when it ends."
     );
     assert_eq!(refused.holder, Some(Holder::Agent));
-    let _ = nix::sys::signal::killpg(
-        nix::unistd::Pid::from_raw(group),
-        nix::sys::signal::Signal::SIGKILL,
-    );
+    atlas_client::test_support::end_group(group);
 
     // The sign-in checks that record once it holds control, and undoes
     // everything when it can't account for it.
@@ -723,10 +689,7 @@ async fn a_revoke_between_taking_control_and_noting_the_sign_in_leaves_nothing_a
     let (viewer, helper) = viewer_of(directory.path());
     let steps = Mutex::new(Vec::new());
     let client = viewer.client();
-    let epoch = helper
-        .serve(client.identity(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    let epoch = served(&helper, &steps, client.identity())
         .await
         .unwrap()
         .epoch;
@@ -738,20 +701,11 @@ async fn a_revoke_between_taking_control_and_noting_the_sign_in_leaves_nothing_a
         .await
         .unwrap();
     // The menu bar's emergency stop lands before the start notes its sign-in.
-    helper
-        .serve(viewer.revoke(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
-        .await
-        .unwrap();
+    served(&helper, &steps, viewer.revoke()).await.unwrap();
 
     let refused = viewer.publish(&signing_under(&lease)).await.unwrap_err();
     assert_eq!(refused.code, Code::LeaseLost);
-    helper
-        .serve(viewer.abandon_start(&client, &lease), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
-        .await;
+    served(&helper, &steps, viewer.abandon_start(&client, &lease)).await;
     nothing_left(&viewer).await;
 
     let reply = started(&viewer, &helper, &steps, HoldKind::SignIn, Fails::Nothing)
@@ -769,10 +723,7 @@ async fn a_failed_start_forgets_its_sign_in_even_when_its_lease_already_ended() 
     let (viewer, helper) = viewer_of(directory.path());
     let steps = Mutex::new(Vec::new());
     let client = viewer.client();
-    let epoch = helper
-        .serve(client.identity(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    let epoch = served(&helper, &steps, client.identity())
         .await
         .unwrap()
         .epoch;
@@ -785,19 +736,10 @@ async fn a_failed_start_forgets_its_sign_in_even_when_its_lease_already_ended() 
         .unwrap();
     viewer.publish(&signing_under(&lease)).await.unwrap();
     // Its lease ends without the sign-in being told.
-    helper
-        .serve(viewer.release(None), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
-        .await
-        .ok();
+    served(&helper, &steps, viewer.release(None)).await.ok();
     *viewer.sign_in.lock().await = Some(signing_under(&lease));
 
-    helper
-        .serve(viewer.abandon_start(&client, &lease), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
-        .await;
+    served(&helper, &steps, viewer.abandon_start(&client, &lease)).await;
 
     nothing_left(&viewer).await;
     let reply = started(&viewer, &helper, &steps, HoldKind::SignIn, Fails::Nothing)
@@ -816,10 +758,7 @@ async fn a_picture_is_taken_of_the_helper_whose_privacy_was_checked_after_the_se
     let (viewer, helper) = viewer_of(directory.path());
     let pinned = viewer.client();
     let steps = Mutex::new(Vec::new());
-    let epoch = helper
-        .serve(pinned.identity(), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    let epoch = served(&helper, &steps, pinned.identity())
         .await
         .unwrap()
         .epoch;
@@ -846,10 +785,7 @@ async fn a_picture_is_taken_of_the_helper_whose_privacy_was_checked_after_the_se
     lease.hide_screen(&moved.controller, &token, &hold).unwrap();
     *unpoisoned(&viewer.client) = moved.clone();
 
-    let (key, frame) = helper
-        .serve(viewer.frame_of(&pinned), |request| {
-            step(&steps, Fails::Nothing, request)
-        })
+    let (key, frame) = served(&helper, &steps, viewer.frame_of(&pinned))
         .await
         .unwrap();
 
