@@ -13,7 +13,12 @@ struct HelperStatusCard: View {
   /// What it draws, from its state.
   var body: some View {
     HStack(spacing: Spacing.m) {
-      SidebarHelperMark(tone: account.status.tone, ground: .fillContent)
+      HelperMark(
+        tone: account.status.tone,
+        tile: HelperMarkLayout.cardTile,
+        ground: .fillContent,
+        wash: .fillGroupInset
+      )
       VStack(alignment: .leading, spacing: Spacing.hairline) {
         Text(account.name)
           .textStyle(.body, weight: .semibold)

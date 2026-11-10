@@ -13,7 +13,7 @@ struct SettingsTopBar: View {
   /// The capsule and the title.
   var body: some View {
     HStack(spacing: SettingsLayout.barGap) {
-      NavCapsule(canGoBack: navigation.canGoBack, canGoForward: navigation.canGoForward, send: send)
+      NavButtons(canGoBack: navigation.canGoBack, canGoForward: navigation.canGoForward, send: send)
       Text(verbatim: title)
         .textStyle(.heading)
         .foregroundStyle(Color.textPrimary)

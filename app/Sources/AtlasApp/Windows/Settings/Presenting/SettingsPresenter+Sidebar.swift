@@ -2,7 +2,7 @@ import AtlasStatus
 import AtlasUI
 
 extension SettingsPresenter {
-  /// The sidebar: a row for every page, Helper's saying how the helper stands with its dot's tone, and the search.
+  /// The sidebar: a row for every page, Helper's saying how the helper stands with its dot's tone.
   ///
   /// - Parameter snapshot: What the controller holds and reads.
   /// - Returns: The sidebar.
@@ -14,7 +14,7 @@ extension SettingsPresenter {
           ? SettingsSidebarRow(page: page, title: SettingsWords.page(page), subtitle: helper.word, tone: helper.tone)
           : SettingsSidebarRow(page: page, title: SettingsWords.page(page))
       }
-    return SettingsSidebarState(rows: rows, query: snapshot.session.query)
+    return SettingsSidebarState(rows: rows)
   }
 
   /// How the helper stands, as the Helper row says it under its title, as the main window's helper line titles it:

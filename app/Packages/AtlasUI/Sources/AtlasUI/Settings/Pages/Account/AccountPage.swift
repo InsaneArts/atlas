@@ -15,7 +15,11 @@ struct AccountPage: View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
       AccountHeaderCard(monogram: state.monogram, title: state.title, line: state.kindLine)
       if state.isUnreadable {
-        AccountsEmptyCard(state: AccountsPage.unreadable)
+        VStack(alignment: .leading, spacing: .zero) {
+          AccountsEmptyCard(state: AccountsPage.unreadable)
+          // What the last change said stays, whatever the reading after it could say.
+          GroupedSectionNotes(notes: notes)
+        }
       } else {
         levelSection
         if state.isSite {

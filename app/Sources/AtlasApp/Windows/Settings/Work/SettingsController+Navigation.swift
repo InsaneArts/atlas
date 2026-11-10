@@ -42,6 +42,17 @@ extension SettingsController {
     if navigation != session.navigation { session.navigation = navigation }
   }
 
+  /// Keeps the history to accounts Atlas lists each time a reading changes the list, for the controller's whole life,
+  /// so a removal read while the window is closed still leaves the history the window reopens on.
+  func followAccounts() {
+    StateTracking.follow { [weak self] () -> Set<String>?? in
+      guard let self else { return nil }
+      return .some(listedAccounts)
+    } apply: { [weak self] (_: Set<String>?) in
+      self?.keepListedAccounts()
+    }
+  }
+
   /// The window came to a route: its page is saved, an account's as Accounts, Integrations reads its agents and
   /// Privacy the person's files, and an account's page keeps the account as listed now, so it keeps its name should
   /// the list turn unreadable.

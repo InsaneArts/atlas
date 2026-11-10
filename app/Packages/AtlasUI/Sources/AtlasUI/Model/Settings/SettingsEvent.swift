@@ -9,8 +9,6 @@ public enum SettingsEvent: Equatable, Sendable {
   case goBack
   /// Goes again to the route Back left.
   case goForward
-  /// Filters the sidebar by what the person typed.
-  case search(String)
   /// Reads the helper's readiness again now.
   case checkAgain
   /// Asks to switch this Mac's screen to the helper.

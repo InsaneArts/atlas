@@ -45,18 +45,6 @@ struct SettingsWindowTests {
     #expect(window.title == "Privacy")
   }
 
-  @Test("the search reports where it stands to the window's field focus, so a press outside it takes its typing")
-  @MainActor
-  func theSearchReportsToTheWindow() {
-    let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
-    let window = SettingsWindow(controller: controller) { _ in }
-    let capsule = CGRect(x: 10, y: 52, width: 194, height: 28)
-    window.fieldFocus.report.report(capsule)
-    #expect(window.fieldFocus.fieldFrame == capsule)
-    #expect(FieldFocus.releases(at: CGPoint(x: 400, y: 300), field: capsule, hitsField: false))
-    #expect(!FieldFocus.releases(at: CGPoint(x: 20, y: 60), field: capsule, hitsField: false))
-  }
-
   @Test("the mouse's back and forward buttons move through the window's history")
   @MainActor
   func theMouseButtonsGoBackAndForward() throws {

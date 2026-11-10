@@ -53,6 +53,7 @@ final class SettingsController {
     icons = AgentRowIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
       dependencies.icon(forFile: path)
     }
+    followAccounts()
   }
 
   /// The helper's own commands, shared with the panel and the main window.
@@ -102,7 +103,6 @@ final class SettingsController {
     case .openAccount(let id): navigate { $0.go(to: .account(id)) }
     case .goBack: navigate { $0.goBack() }
     case .goForward: navigate { $0.goForward() }
-    case .search(let query): session.query = query
     case .checkAgain: Task { await checkAgain() }
     case .askSwitch: ask(.helper(.switchToHelper))
     case .askRecover: ask(.helper(.recover))

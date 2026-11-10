@@ -5,37 +5,29 @@ import Testing
 @Suite("SettingsSidebarState")
 @MainActor
 struct SettingsSidebarStateTests {
-  /// The sample sidebar, searched for `query`.
-  ///
-  /// - Parameter query: What the person typed.
-  /// - Returns: The pages the search leaves.
-  private static func pages(_ query: String) -> [SettingsPage] {
-    var sidebar = PreviewStates.settingsSidebar
-    sidebar.query = query
-    return sidebar.visibleRows.map(\.page)
-  }
-
-  @Test("an empty search shows every page, in order")
-  func anEmptySearchShowsEveryPage() {
-    #expect(Self.pages("") == SettingsPage.allCases)
-    #expect(Self.pages("  ") == SettingsPage.allCases)
-  }
-
-  @Test("a search finds a page by its title or by the words of its rows, ignoring case")
-  func aSearchFindsTitlesAndWords() {
-    #expect(Self.pages("priv") == [.privacy])
-    #expect(Self.pages("MUTE") == [.general])
-    #expect(Self.pages("claude") == [.integrations])
-    #expect(Self.pages("typed") == [.activity])
-  }
-
-  @Test("a search that matches nothing leaves no rows, which the sidebar says")
-  func aSearchWithNoMatchLeavesNone() {
-    #expect(Self.pages("zebra").isEmpty)
+  @Test("the sidebar lists every page in order, each titled by its row")
+  func theSidebarListsEveryPage() {
+    let sidebar = PreviewStates.settingsSidebar
+    #expect(sidebar.rows.map(\.page) == SettingsPage.allCases)
+    #expect(sidebar.title(of: .integrations) == "Integrations")
   }
 
   @Test("the sidebar groups Helper, then General and Activity, then the services, then About")
   func thePagesGroup() {
     #expect(SettingsPage.allCases.map(\.group) == [0, 1, 1, 2, 2, 2, 3])
+  }
+
+  @Test("each page but Helper, which shows the helper's mark, has a symbol of its own")
+  func eachPageHasItsSymbol() {
+    let symbols = SettingsPage.allCases
+      .filter { $0 != .helper }
+      .map(\.symbol)
+    #expect(Set(symbols).count == symbols.count)
+  }
+
+  @Test("Settings' rows answer presses and selection but never light under the pointer, where the viewer's still do")
+  func settingsRowsDoNotHover() {
+    #expect(!PillRowStyle(isSelected: false, hovers: false).hovers)
+    #expect(PillRowStyle().hovers)
   }
 }

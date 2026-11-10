@@ -21,7 +21,7 @@ struct SidebarHelperLine: View {
   @ViewBuilder var body: some View {
     if isCompact {
       button {
-        SidebarHelperMark(tone: helper.tone)
+        HelperMark(tone: helper.tone)
           .frame(width: ViewerLayout.helperCircle, height: ViewerLayout.helperCircle)
       }
       .fixedSize()

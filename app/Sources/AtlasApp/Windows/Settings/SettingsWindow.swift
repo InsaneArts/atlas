@@ -6,9 +6,8 @@ import SwiftUI
 /// content card beside it, titled with the route shown for the Window menu and VoiceOver. One at a time; it has a Dock
 /// icon while open, like any app window (``DockIcon``). It opens where it was left, kept whole on its screen
 /// (``SettingsWindowFrame``), centred only the first time; it cannot be resized or minimised, as a settings window is
-/// closed instead, and it comes to the Space the person is on, full-screen apps included. A press anywhere outside the
-/// search field takes the keyboard back from it (``FieldFocus``), and the mouse's back and forward buttons move
-/// through the window's history as ⌘[ and ⌘] do.
+/// closed instead, and it comes to the Space the person is on, full-screen apps included. The mouse's back and
+/// forward buttons move through the window's history as ⌘[ and ⌘] do.
 final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// The name its place is kept under in the app's defaults. Shipped, so it never changes.
   static let autosaveName = "AtlasSettings"
@@ -21,8 +20,6 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   let controller: SettingsController
   /// Runs once the window has closed and its controller has stopped.
   let closed: @MainActor (SettingsWindow) -> Void
-  /// Takes the keyboard back from the search field on a press anywhere else in the window.
-  let fieldFocus = FieldFocus()
   /// Open until closed.
   private(set) var isPresented = false
 
@@ -53,24 +50,11 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     isMovableByWindowBackground = true
     collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
     delegate = self
-    let fieldReport = fieldFocus.report
     WindowShell.host(in: self) {
       SettingsView(state: controller.state, edit: controller.update, send: controller.send)
-        .environment(\.focusedFieldReport, fieldReport)
     }
     setFrameAutosaveName(Self.autosaveName)
     followTitle()
-    followAccounts()
-  }
-
-  /// Keeps the window's history to accounts Atlas lists, each time a reading changes the list.
-  private func followAccounts() {
-    StateTracking.follow { [weak self] () -> Set<String>?? in
-      guard let self else { return nil }
-      return .some(controller.listedAccounts)
-    } apply: { [weak self] (_: Set<String>?) in
-      self?.controller.keepListedAccounts()
-    }
   }
 
   /// Titles the window with the route shown, each time it changes.
@@ -90,7 +74,6 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       if restored { keepOnScreen() } else { center() }
     }
     isPresented = true
-    fieldFocus.watch(self)
     makeKeyAndOrderFront(nil)
     NSApp.activate()
   }
@@ -122,13 +105,11 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     controller.cameForward()
   }
 
-  /// The window is closing: its controller stops, the search gives up watching presses, and the app settles its Dock
-  /// icon once `closed` has run.
+  /// The window is closing: its controller stops, and the app settles its Dock icon once `closed` has run.
   ///
   /// - Parameter notification: The window's notification.
   func windowWillClose(_ notification: Notification) {
     isPresented = false
-    fieldFocus.stop()
     controller.close()
     closed(self)
   }

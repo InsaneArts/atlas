@@ -101,12 +101,10 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case scrollArrow = "arrow.down"
   /// Show changes: what changed between two pictures.
   case changes = "square.grid.3x3.square"
-  /// Settings' Activity page: the time pictures are kept.
-  case clock
-  /// Settings' Integrations page: what Atlas connects to.
-  case link
-  /// Settings' About page: a lone "i".
-  case infoLetter = "info"
+  /// Settings' Activity page: what agents did, kept for a time.
+  case history = "clock.arrow.circlepath"
+  /// Settings' Integrations page: the agents Atlas plugs into.
+  case extensions = "puzzlepiece.extension"
   /// Something Atlas added, such as an account.
   case plus
   /// Settings' Accounts page with none listed.

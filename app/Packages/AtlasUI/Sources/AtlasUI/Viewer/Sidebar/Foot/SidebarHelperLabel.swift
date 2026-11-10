@@ -10,7 +10,8 @@ struct SidebarHelperLabel: View {
   /// The mark and the two lines.
   var body: some View {
     HStack(spacing: ViewerLayout.sidebarIconGap) {
-      SidebarHelperMark(tone: helper.tone)
+      HelperMark(tone: helper.tone)
+        .frame(width: ViewerLayout.sidebarIcon, height: ViewerLayout.sidebarIcon)
       lines
     }
   }

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The Settings window's own measures, which no other window shares, set as Rex's Settings stands: a 740 by 572
 /// window, a 214 sidebar of 32-point page rows under a 40-point status row, and the page on the content card under a
-/// 52 bar of back and forward and the title.
+/// bar of back and forward and the title.
 public enum SettingsLayout {
   /// 740: the window's width.
   public static let width: CGFloat = 740
@@ -16,8 +16,6 @@ public enum SettingsLayout {
   static let pageWidth = cardWidth - pageInsets.leading - pageInsets.trailing
   /// 10: the sidebar's inset at its sides, which its rows' capsules keep to.
   static let sidebarInset = Spacing.sPlus
-  /// 12: under the search, above the Helper row.
-  static let searchGap = Spacing.m
   /// 40: the Helper row, its 28-point mark and the line under its title.
   static let helperRowHeight = ControlHeight.l
   /// 32: a page's row.
@@ -28,25 +26,17 @@ public enum SettingsLayout {
   static let pageRowGap = Spacing.s
   /// 13: between two groups of rows, as Rex's sidebar leaves.
   static let groupGap: CGFloat = 13
-  /// 20: a page's coloured tile.
-  static let pageTile: CGFloat = 20
-  /// 5: the tile's corner, a quarter of its side.
-  static let pageTileCorner = pageTile / 4
-  /// 12: the tile's symbol.
-  static let pageTileSymbol = IconSize.xs
-  /// 38: the bar over the page inside the card, as the main window's header stands, so the back and forward capsule
-  /// centres about level with the window buttons.
+  /// 28: the slot a row's symbol or the helper's mark stands centred in, so every title starts on one line.
+  static let leadSlot = SessionIcon.rowSide
+  /// 16: a page's symbol.
+  static let pageSymbol = IconSize.s
+  /// 38: the bar over the page inside the card, as the main window's header stands, so back and forward centre about
+  /// level with the window buttons.
   static let barHeight = WindowChrome.cardBarHeight
-  /// 10: the bar's inset before the capsule.
+  /// 10: the bar's inset before Back.
   static let barLeading = Spacing.sPlus
-  /// 16: between the capsule and the title.
+  /// 16: between Forward and the title.
   static let barGap = Spacing.l
-  /// 32: the back and forward capsule's height, clear of the card's edge inside the bar.
-  static let navHeight = ControlHeight.m
-  /// 34: each half of the capsule.
-  static let navHalf = ControlHeight.mPlus
-  /// 18: the hairline between the halves.
-  static let navDivider: CGFloat = 18
   /// The page's insets on the card: 12 under the bar, 20 at the sides and 28 at the foot, so its last control ends
   /// clear of the fade.
   static let pageInsets = EdgeInsets(top: Spacing.m, leading: Spacing.xl, bottom: pageFoot, trailing: Spacing.xl)
@@ -58,10 +48,6 @@ public enum SettingsLayout {
   static let titleGap = Spacing.sPlus
   /// 30: between a page's sections.
   static let sectionGap: CGFloat = 30
-  /// 3: how far a page rises from as it comes in.
-  static let pageRise: CGFloat = 3
-  /// 12: how far an account's page slides in from the trailing edge, and back out.
-  static let pushShift = Spacing.m
   /// 56: the Helper page's status card.
   static let headerRowHeight: CGFloat = 56
   /// 38: the symbol over an empty card's headline.

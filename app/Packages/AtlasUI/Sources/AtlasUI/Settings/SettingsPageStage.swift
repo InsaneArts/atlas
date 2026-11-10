@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// The route's page under the bar. A new page comes in on ``Motion/swapIn``, rising ``SettingsLayout/pageRise`` as it
-/// fades in, over the old one fading out on ``Motion/swapOut``; an account's page slides in
-/// ``SettingsLayout/pushShift`` from the trailing edge as it fades in, and slides back out the same way. Under Reduce
-/// Motion each only crossfades.
+/// The route's page under the bar. A new page, an account's included, crossfades in place: it fades in on
+/// ``Motion/swapIn`` over the old one fading out on ``Motion/swapOut``, nothing moving, and the new page's rows land
+/// where they stand at once rather than travelling there. Under Reduce Motion the page changes at once.
 struct SettingsPageStage: View {
   /// What the window shows.
   let state: SettingsState
@@ -18,10 +17,9 @@ struct SettingsPageStage: View {
     ZStack(alignment: .top) {
       page
         .id(state.route)
-        .transition(Self.transition(for: state.route, reduceMotion: reduceMotion))
+        .transition(Self.transition(reduceMotion: reduceMotion))
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    .animation(Motion.swapIn, value: state.route)
   }
 
   /// The route's page in its scrolling column.
@@ -47,24 +45,18 @@ struct SettingsPageStage: View {
     }
   }
 
-  /// How a route's page comes and goes: an account's slides from the trailing edge, any other rises; both fade, and
-  /// under Reduce Motion only fade.
+  /// How a page comes and goes: a crossfade in place, its own short animations carried with it so nothing else on the
+  /// page animates; at once under Reduce Motion.
   ///
-  /// - Parameters:
-  ///   - route: The route.
-  ///   - reduceMotion: Whether Reduce Motion is on.
+  /// - Parameter reduceMotion: Whether Reduce Motion is on.
   /// - Returns: The transition.
-  static func transition(for route: SettingsRoute, reduceMotion: Bool) -> AnyTransition {
-    let move: AnyTransition =
-      switch route {
-      case .account: .offset(x: SettingsLayout.pushShift)
-      case .page: .offset(y: SettingsLayout.pageRise)
-      }
-    let insertion = reduceMotion ? AnyTransition.opacity : move.combined(with: .opacity)
-    let removal = route.account != nil && !reduceMotion ? move.combined(with: .opacity) : .opacity
+  static func transition(reduceMotion: Bool) -> AnyTransition {
+    guard !reduceMotion else { return .identity }
     return .asymmetric(
-      insertion: insertion.animation(Motion.swapIn),
-      removal: removal.animation(Motion.swapOut)
+      insertion: AnyTransition.opacity
+        .animation(Motion.swapIn),
+      removal: AnyTransition.opacity
+        .animation(Motion.swapOut)
     )
   }
 }

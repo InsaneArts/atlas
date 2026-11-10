@@ -8,12 +8,14 @@ import SwiftUI
 struct PillRowStyle: ButtonStyle {
   /// Whether the row is the one chosen.
   var isSelected = false
+  /// Whether the row lights under the pointer; a row that answers only presses, as Settings' pages do, does not.
+  var hovers = true
 
   /// Draws the label on its capsule.
   ///
   /// - Parameter configuration: The button's label and pressed state.
   /// - Returns: The styled button.
   func makeBody(configuration: Configuration) -> some View {
-    PillRowBody(configuration: configuration, isSelected: isSelected)
+    PillRowBody(configuration: configuration, isSelected: isSelected, hovers: hovers)
   }
 }

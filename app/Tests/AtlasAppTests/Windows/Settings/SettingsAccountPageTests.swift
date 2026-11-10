@@ -133,27 +133,29 @@ struct SettingsAccountPageTests {
     #expect(controller.state.route == .page(.helper), "Back skips the removed account's page")
   }
 
-  @Test("an account removed by another window's reading stays out of the history once the list can't be read")
-  func aRemovalOutlivesAnUnreadableList() async throws {
+  @Test("an account removed while Settings is closed stays out of the history it reopens on, the list unreadable")
+  func aRemovalWhileClosedOutlivesAnUnreadableList() async throws {
     let listed = try Self.listed()
     let reading = Reading(listed)
     let controller = Self.controller(reading)
-    let window = SettingsWindow(controller: controller) { _ in }
-    defer { window.close() }
     let ids = try #require(listed.overview.accounts?.map(\.id))
+    let window = SettingsWindow(controller: controller) { _ in }
     controller.send(.select(.accounts))
     controller.send(.openAccount(ids[0]))
     controller.send(.goBack)
     #expect(controller.session.navigation.forward == [.account(ids[0])])
+    window.close()
     reading.status = try SettingsAccountsTests.reading([
       SettingsAccountsTests.account("app", "com.tinyspeck.slackmacgap", "Slack", added: SettingsAccountsTests.today)
     ])
     for _ in 0..<20 where controller.session.navigation.canGoForward {
       await afterQueuedWork()
     }
-    #expect(!controller.session.navigation.canGoForward, "the window kept the reading's removal in its history")
+    #expect(!controller.session.navigation.canGoForward, "the controller kept the removal with its window closed")
     reading.status = try status(["overview": ["mode": "observing"]])
-    #expect(!controller.state.navigation.canGoForward, "an unreadable list never brings the route back")
+    let reopened = SettingsWindow(controller: controller) { _ in }
+    defer { reopened.close() }
+    #expect(!controller.state.navigation.canGoForward, "reopened on an unreadable list, the route stays gone")
   }
 
   @Test("while an alert or the sign-in sheet is up, the sidebar, Back and Forward wait")

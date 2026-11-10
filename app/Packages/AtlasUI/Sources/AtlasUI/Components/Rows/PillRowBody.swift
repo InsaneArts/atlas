@@ -9,6 +9,8 @@ struct PillRowBody: View {
   let configuration: ButtonStyleConfiguration
   /// Whether the row is the one chosen.
   let isSelected: Bool
+  /// Whether the row lights under the pointer.
+  let hovers: Bool
   /// Whether the pointer is over the row.
   @State private var isHovered = false
   @Environment(\.hoverPaused) private var hoverPaused
@@ -45,6 +47,6 @@ struct PillRowBody: View {
 
   /// Whether the pointer's fill shows: under the pointer, unless the window is being resized.
   private var isLit: Bool {
-    isHovered && !hoverPaused
+    hovers && isHovered && !hoverPaused
   }
 }

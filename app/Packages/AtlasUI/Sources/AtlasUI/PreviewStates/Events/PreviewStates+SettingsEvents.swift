@@ -19,8 +19,6 @@
         next.navigation.goBack()
       case .goForward:
         next.navigation.goForward()
-      case .search(let query):
-        next.sidebar.query = query
       case .askRecover:
         next.alert = settingsRecover.alert
       case .askLogOut:

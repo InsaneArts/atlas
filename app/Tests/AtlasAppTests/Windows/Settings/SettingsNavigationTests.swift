@@ -97,15 +97,6 @@ struct SettingsNavigationTests {
     #expect(await Self.ran(restored, .homeFiles), "restored as the window opens")
   }
 
-  @Test("the sidebar's search filters its rows as the person types, and an empty search shows them all")
-  func theSearchFiltersTheSidebar() {
-    let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
-    controller.send(.search("mute"))
-    #expect(controller.state.sidebar.visibleRows.map(\.page) == [.general])
-    controller.send(.search(""))
-    #expect(controller.state.sidebar.visibleRows.count == SettingsPage.allCases.count)
-  }
-
   @Test("the Helper row says how the helper stands, as the Helper page's card does")
   func theHelperRowFollowsTheHelper() {
     var facts = SettingsFacts()

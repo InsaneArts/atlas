@@ -125,6 +125,13 @@
       isEnabled: false
     )
 
+    /// github.com's page after a level change failed and the reading after it couldn't be read.
+    static let settingsAccountFailedUnreadablePage: SettingsAccountPageState = {
+      var page = settingsAccountUnreadablePage
+      page.notice = SettingsNote(text: "Atlas couldn't change its accounts list. The service stopped.", kind: .problem)
+      return page
+    }()
+
     /// github.com's page, opened from Accounts.
     @MainActor static let settingsAccountOpened: SettingsState = opening(settingsAccountSitePage)
 
@@ -134,6 +141,13 @@
     /// github.com's page while Atlas can't read its list.
     @MainActor static let settingsAccountUnreadable: SettingsState = {
       var state = opening(settingsAccountUnreadablePage)
+      state.accounts.rows = nil
+      return state
+    }()
+
+    /// github.com's page after a change failed while Atlas can't read its list.
+    @MainActor static let settingsAccountFailedUnreadable: SettingsState = {
+      var state = opening(settingsAccountFailedUnreadablePage)
       state.accounts.rows = nil
       return state
     }()

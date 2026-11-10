@@ -24,33 +24,4 @@ public enum SettingsPage: String, CaseIterable, Hashable, Sendable {
     case .about: 3
     }
   }
-
-  /// Words the page holds beside its title, which a search of the sidebar finds it by.
-  public var keywords: [String] {
-    switch self {
-    case .helper:
-      ["helper", "status", "ready", "check", "recover", "log out", "switch", "mouse", "keyboard", "dialogs"]
-    case .general:
-      ["login", "startup", "screen", "updates", "live", "paused", "mute", "sound", "notify", "notifications"]
-    case .activity: ["pictures", "screenshots", "typed", "text", "characters", "storage", "delete", "keep", "days"]
-    case .accounts: ["sign in", "site", "app", "level", "look only", "ask", "trusted", "remove"]
-    case .privacy: ["files", "home", "folder", "private", "sign-ins", "copy", "cookies", "keychain"]
-    case .integrations: ["agents", "claude", "codex", "cursor", "opencode", "pi", "connect", "plugin", "projects"]
-    case .about: ["version", "update", "getting started", "setup"]
-    }
-  }
-
-  /// Whether the page answers a search: its title or one of its words holds the query, ignoring case. An empty query
-  /// matches every page.
-  ///
-  /// - Parameters:
-  ///   - query: What the person typed.
-  ///   - title: The page's title.
-  /// - Returns: Whether it matches.
-  public func matches(_ query: String, title: String) -> Bool {
-    let query = query.trimmingCharacters(in: .whitespaces)
-    guard !query.isEmpty else { return true }
-    let words = [title] + keywords
-    return words.contains { $0.localizedCaseInsensitiveContains(query) }
-  }
 }
