@@ -106,8 +106,8 @@ public struct Ask: Decodable, Equatable, Sendable, Identifiable {
   /// The fields of a question, and of the input service's part of it, as the service writes them.
   enum CodingKeys: String, CodingKey {
     /// Each field by the name the service writes.
-    case id, session, who, task, account, question, what, name, role, key, typed, message, once, asked, ends, expires,
-      picture, frame, pictureSize
+    case id, session, who, task, account, question, what, name, role, key, typed, message, once, asked, ends, picture,
+      frame, pictureSize
   }
 
   /// Decodes a question, reading what the agent would do from its `question`, or, in the status's summary, from its
@@ -133,17 +133,10 @@ public struct Ask: Decodable, Equatable, Sendable, Identifiable {
     offersOnce = question?.lenientFlag(.once) ?? false
     offersTask = question?.lenientFlag(.task) ?? false
     asked = container.lenientDate(milliseconds: .asked) ?? .distantPast
-    let ends = container.lenientDate(milliseconds: .ends)
-    let expires = container.lenientDate(milliseconds: .expires) ?? question?.lenientDate(milliseconds: .expires)
-    self.ends =
-      [ends, expires]
-      .compactMap { $0 }
-      .min() ?? .distantPast
-    picture = (container.lenientText(.picture) ?? question?.lenientText(.picture))
+    ends = container.lenientDate(milliseconds: .ends) ?? .distantPast
+    picture = container.lenientText(.picture)
       .flatMap(Self.fileName)
-    frame =
-      (try? container.decodeIfPresent(Area.self, forKey: .frame))
-      ?? (try? question?.decodeIfPresent(Area.self, forKey: .frame))
+    frame = try? question?.decodeIfPresent(Area.self, forKey: .frame)
     pictureSize = try? question?.decodeIfPresent(ViewerStatus.Size.self, forKey: .pictureSize)
   }
 

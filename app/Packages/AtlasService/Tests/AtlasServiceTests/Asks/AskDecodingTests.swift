@@ -52,15 +52,13 @@ struct AskDecodingTests {
     #expect(!ask.offersOnce && !ask.offersTask)
   }
 
-  @Test(
-    "a question ends at the earlier of its end and its expiry, and a picture that leaves the asks folder is dropped"
-  )
-  func aQuestionEndsAtItsEarliest() throws {
+  @Test("a picture that leaves the asks folder is dropped")
+  func aPictureOutsideTheFolderIsDropped() throws {
     let list = try decoded([
-      "asks": [["id": "a1", "account": "x", "ends": 9_000, "expires": 4_000, "picture": "../secret.jpg"]]
+      "asks": [["id": "a1", "account": "x", "ends": 9_000, "picture": "../secret.jpg"]]
     ])
     let ask = try #require(list.asks.first)
-    #expect(ask.ends == Date(timeIntervalSince1970: 4))
+    #expect(ask.ends == Date(timeIntervalSince1970: 9))
     #expect(ask.picture == nil)
     #expect(ask.kind == .unsure, "no question reads as can't tell")
   }
