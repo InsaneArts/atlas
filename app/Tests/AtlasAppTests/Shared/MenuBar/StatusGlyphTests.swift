@@ -1,5 +1,6 @@
 import AppKit
 import AtlasStatus
+import AtlasUI
 import Testing
 
 @testable import AtlasApp
@@ -10,18 +11,17 @@ struct StatusGlyphTests {
   private static let looks = Mode.Kind.allCases
     .map { (kind: $0, look: StatusGlyph.look(for: $0)) }
 
-  /// An image's alpha, two pixels a point, by pixel.
+  /// An image's pixels, two a point, top down.
   ///
   /// - Parameter image: The image.
   /// - Returns: Its bitmap.
   /// - Throws: When no bitmap could be made.
   private static func bitmap(_ image: NSImage) throws -> NSBitmapImageRep {
-    let side = Int(image.size.width) * 2
     let bitmap = try #require(
       NSBitmapImageRep(
         bitmapDataPlanes: nil,
-        pixelsWide: side,
-        pixelsHigh: side,
+        pixelsWide: Int(image.size.width) * 2,
+        pixelsHigh: Int(image.size.height) * 2,
         bitsPerSample: 8,
         samplesPerPixel: 4,
         hasAlpha: true,
@@ -40,26 +40,32 @@ struct StatusGlyphTests {
     return bitmap
   }
 
-  @Test("the status item is 22 points wide in every state")
+  @Test("the status item is 24 points wide in every state and for either icon")
   func theItemKeepsOneWidth() throws {
     // A bar of its own, which never shows in the person's menu bar.
     let item = StatusItem(bar: NSStatusBar()) { false }
-    #expect(item.length == 22)
-    for (kind, look) in Self.looks {
-      item.show(kind, description: "Atlas")
-      #expect(item.length == 22, "\(kind)")
-      let image = StatusGlyph.image(for: look)
-      #expect(image.size == NSSize(width: 22, height: 22), "\(kind)")
-      if let badge = StatusGlyph.frame(of: look.badge) {
-        #expect(badge.minX >= 0 && badge.maxX <= 22, "\(kind)'s badge stays inside the item")
+    #expect(item.length == 24)
+    for icon in MenuBarIcon.allCases {
+      item.use(icon)
+      for (kind, look) in Self.looks {
+        item.show(kind, description: "Atlas")
+        #expect(item.length == 24, "\(icon) \(kind)")
+        let image = StatusGlyph.image(for: look, icon: icon)
+        #expect(image.size == NSSize(width: 24, height: 22), "\(icon) \(kind)")
+        if let badge = StatusGlyph.frame(of: look.badge) {
+          #expect(badge.minX >= 0 && badge.maxX <= 24, "\(kind)'s badge stays inside the item")
+          #expect(badge.minY >= 0 && badge.maxY <= 22, "\(kind)'s badge stays inside the item")
+        }
       }
     }
   }
 
-  @Test("the orbit is a template in every state, so it reads on a tinted menu bar, and control is a blue dot on it")
+  @Test("either icon is a template in every state, so it reads on a tinted menu bar, and control is a blue dot on it")
   func everyStateKeepsTheTemplate() {
-    for (kind, look) in Self.looks {
-      #expect(StatusGlyph.image(for: look).isTemplate, "\(kind)")
+    for icon in MenuBarIcon.allCases {
+      for (kind, look) in Self.looks {
+        #expect(StatusGlyph.image(for: look, icon: icon).isTemplate, "\(icon) \(kind)")
+      }
     }
     #expect(StatusGlyph.look(for: .control) == StatusGlyph.Look(tint: .template, badge: .accentDot, breathes: false))
   }
@@ -107,10 +113,13 @@ struct StatusGlyphTests {
     #expect(StatusGlyph.colour(of: .attentionSquare) == .systemOrange)
   }
 
-  @Test("a 1-point gap is knocked out of the orbit round the badge, so the menu bar shows through around it")
-  func theRingIsAKnockout() throws {
-    let plain = try Self.bitmap(StatusGlyph.image(for: StatusGlyph.look(for: .idle)))
-    let cut = try Self.bitmap(StatusGlyph.image(for: StatusGlyph.look(for: .needsYou)))
+  @Test(
+    "a 1-point gap is knocked out of the glyph round the badge, so the menu bar shows through around it",
+    arguments: MenuBarIcon.allCases
+  )
+  func theRingIsAKnockout(icon: MenuBarIcon) throws {
+    let plain = try Self.bitmap(StatusGlyph.image(for: StatusGlyph.look(for: .idle), icon: icon))
+    let cut = try Self.bitmap(StatusGlyph.image(for: StatusGlyph.look(for: .needsYou), icon: icon))
     let badge = try #require(StatusGlyph.frame(of: .attentionDot))
     // The gap's outer circle, top down, 1 past the badge; the bitmap runs top down too.
     let gap = badge.width / 2 + 1
@@ -125,7 +134,7 @@ struct StatusGlyphTests {
         if distance < gap - 0.25, (cut.colorAt(x: column, y: row)?.alphaComponent ?? 0) > 0.05 { inkedAfter += 1 }
       }
     }
-    #expect(inkedBefore > 0, "the orbit reaches under the badge")
+    #expect(inkedBefore > 0, "the glyph reaches under the badge")
     #expect(inkedAfter == 0)
   }
 
@@ -171,7 +180,7 @@ struct StatusGlyphTests {
   func theBadgeSitsInTheSamePlaceFlippedOrNot() throws {
     let box = try #require(StatusGlyph.frame(of: .attentionDot))
     // The image as a 24-point-high button draws it: one point down from its top.
-    let image = CGRect(x: 0, y: 1, width: 22, height: 22)
+    let image = CGRect(x: 0, y: 1, width: 24, height: 22)
     let flipped = StatusBadge.place(box, in: image, flipped: true)
     let upright = StatusBadge.place(box, in: image, flipped: false)
     #expect(flipped.minX == box.minX && upright.minX == box.minX)
@@ -192,5 +201,42 @@ struct StatusGlyphTests {
     reduceMotion = false
     item.showBadge()
     #expect(item.badge.layer.animation(forKey: StatusBadge.breathKey) != nil)
+  }
+
+  @Test("Screen draws the display where the Orbit draws nothing, as the item starts and when it is picked later")
+  func screenDrawsTheDisplay() throws {
+    // The display's left edge, well above the ring's left end.
+    let edge = (x: 5, y: 12)
+    let idle = StatusGlyph.look(for: .idle)
+    let orbit = try Self.bitmap(StatusGlyph.image(for: idle, icon: .orbit))
+    let screen = try Self.bitmap(StatusGlyph.image(for: idle, icon: .screen))
+    #expect((orbit.colorAt(x: edge.x, y: edge.y)?.alphaComponent ?? 1) < 0.05)
+    #expect((screen.colorAt(x: edge.x, y: edge.y)?.alphaComponent ?? 0) > 0.5)
+    let started = StatusItem(bar: NSStatusBar(), icon: .screen) { false }
+    started.show(.idle, description: "Atlas")
+    let image = try #require(started.button?.image)
+    #expect((try Self.bitmap(image).colorAt(x: edge.x, y: edge.y)?.alphaComponent ?? 0) > 0.5)
+  }
+
+  @Test("picking another icon redraws the item at once, keeping its state's badge and words")
+  func pickingAnIconKeepsTheState() throws {
+    let item = StatusItem(bar: NSStatusBar()) { false }
+    #expect(item.icon == .orbit)
+    item.show(.needsYou, description: "Atlas needs you")
+    // The display's left edge, which only Screen inks.
+    let edge = (x: 5, y: 12)
+    let before = try #require(item.button?.image)
+    #expect((try Self.bitmap(before).colorAt(x: edge.x, y: edge.y)?.alphaComponent ?? 1) < 0.05)
+    item.use(.screen)
+    #expect(item.icon == .screen)
+    let after = try #require(item.button?.image)
+    #expect((try Self.bitmap(after).colorAt(x: edge.x, y: edge.y)?.alphaComponent ?? 0) > 0.5, "Screen draws now")
+    #expect(after.isTemplate)
+    #expect(after.accessibilityDescription == "Atlas needs you")
+    #expect(item.button?.toolTip == "Atlas needs you")
+    #expect(!item.badge.layer.isHidden, "the badge stays")
+    #expect(item.length == 24)
+    item.use(.screen)
+    #expect(item.button?.image === after, "the same icon again draws nothing new")
   }
 }

@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The General pane: opening at login, how often the screen updates and muting the helper; then Activity, with
-/// pictures of agent actions, how long they are kept, how much typed text is kept, and how many this Mac holds with
-/// Delete All…; then when Atlas needs the person. Its values change through the binding; Delete All… asks first.
+/// The General pane: opening at login, the menu bar's icon, how often the screen updates and muting the helper; then
+/// Activity, with pictures of agent actions, how long they are kept, how much typed text is kept, and how many this Mac
+/// holds with Delete All…; then when Atlas needs the person. Its values change through the binding; Delete All… asks
+/// first.
 struct GeneralPane: View {
   /// The pane's values.
   @Binding var state: SettingsGeneralState
@@ -43,6 +44,10 @@ struct GeneralPane: View {
         size: .compact
       ) { state.opensAtLogin.toggle() }
       .disabled(!state.canOpenAtLogin)
+    case .menuBarIcon:
+      ListRowBody("Menu bar icon", detail: "Pick Screen if another app's icon looks like Atlas's", size: .compact) {
+        PopupButton(label: "Menu bar icon", options: Self.iconOptions, selection: $state.menuBarIcon)
+      }
     case .picture:
       ListRowBody("Screen updates", detail: "How often Atlas's windows show the helper's screen", size: .compact) {
         PopupButton(label: "Screen updates", options: state.pictureOptions, selection: $state.picture)
@@ -130,6 +135,12 @@ struct GeneralPane: View {
     }
     .fixedSize()
   }
+
+  /// The menu bar's icon: the Orbit, or the Orbit on a display.
+  private static let iconOptions = [
+    PopupOption(id: MenuBarIcon.orbit, title: "Orbit"),
+    PopupOption(id: MenuBarIcon.screen, title: "Screen"),
+  ]
 
   /// How long pictures are kept: three days, seven, or a number the person chooses.
   private static let keepOptions = [

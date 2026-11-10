@@ -9,6 +9,7 @@ import {
   appearanceFlags,
   GROUPS,
   MENUBAR_BARS,
+  MENUBAR_ICON_PREFIXES,
   MENUBAR_STATES,
   NOTICE_RENDERS,
   PANEL_MODES,
@@ -115,6 +116,13 @@ test('the render table names exactly the states in MenuBarRender.states', () => 
 test('the render table names exactly the bars in MenuBarRender.bars', () => {
   const bars = [...menuBarLiteral('bars').matchAll(/\(\s*"([^"]+)",/g)].map((match) => match[1]);
   assert.deepEqual(MENUBAR_BARS, bars);
+});
+
+test('the render table names exactly the icon prefixes in MenuBarRender.icons', () => {
+  const prefixes = [...menuBarLiteral('icons').matchAll(/\(\s*"([^"]*)",\s*\.\w+\s*\)/g)].map(
+    (match) => match[1],
+  );
+  assert.deepEqual(MENUBAR_ICON_PREFIXES, prefixes);
 });
 
 test('the menu bar is a render group of its own', () => {

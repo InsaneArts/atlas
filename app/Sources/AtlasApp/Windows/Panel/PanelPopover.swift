@@ -111,6 +111,16 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     }
   }
 
+  /// The glyph the menu bar item draws.
+  var icon: MenuBarIcon { item.icon }
+
+  /// Draws the menu bar item as another glyph, at once.
+  ///
+  /// - Parameter icon: The glyph.
+  func use(_ icon: MenuBarIcon) {
+    item.use(icon)
+  }
+
   /// Closes the panel, as opening a window or an alert from it does.
   func closePanel() {
     if popover.isShown { popover.performClose(nil) }

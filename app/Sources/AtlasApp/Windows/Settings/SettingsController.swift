@@ -72,6 +72,7 @@ final class SettingsController {
         status: helper.status,
         connecting: helper.connecting,
         opensAtLogin: links.opensAtLogin(),
+        menuBarIcon: links.menuBarIcon(),
         picture: links.picture(),
         canPause: links.canPause(),
         running: actions.running,
@@ -115,8 +116,8 @@ final class SettingsController {
   }
 
   /// Writes what changed in the General pane where each value belongs: Open at Login through the panel's command,
-  /// the picture to the main window or its saved rate, muting the helper through `atlas sound`, the pictures of agent
-  /// actions to Atlas's settings, and Notify me to the saved choices.
+  /// the glyph to the menu bar item, the picture to the main window or its saved rate, muting the helper through
+  /// `atlas sound`, the pictures of agent actions to Atlas's settings, and Notify me to the saved choices.
   ///
   /// - Parameter general: The pane as the person left it.
   func update(_ general: SettingsGeneralState) {
@@ -125,6 +126,10 @@ final class SettingsController {
     if general.opensAtLogin != shown.opensAtLogin {
       // Unstructured, as an edit is synchronous: the change runs beside it.
       Task { await links.setOpenAtLogin(general.opensAtLogin) }
+    }
+    if general.menuBarIcon != shown.menuBarIcon {
+      links.chooseMenuBarIcon(general.menuBarIcon)
+      revision += 1
     }
     if general.picture != shown.picture {
       links.choosePicture(general.picture)

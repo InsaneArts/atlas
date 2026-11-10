@@ -38,9 +38,9 @@ extension WindowCoordinator {
     )
   }
 
-  /// What Settings shares with the other windows: the panel's status and Open at Login, the main window's picture, or
-  /// the rate saved for the next one while it is closed (``SettingsLinkRules``), switching to the helper, and the
-  /// setup window.
+  /// What Settings shares with the other windows: the panel's status and Open at Login, the menu bar's glyph, the main
+  /// window's picture, or the rate saved for the next one while it is closed (``SettingsLinkRules``), switching to the
+  /// helper, and the setup window.
   ///
   /// - Returns: The links.
   func settingsLinks() -> SettingsLinks {
@@ -55,6 +55,8 @@ extension WindowCoordinator {
         self?.parts?.panel?.opensAtLogin ?? OpenAtLogin.State(isAvailable: false, isEnabled: false)
       },
       setOpenAtLogin: { [weak self] on in await self?.parts?.panel?.setOpenAtLogin(on) },
+      menuBarIcon: { [weak self] in self?.parts?.menuBarIcon ?? .orbit },
+      chooseMenuBarIcon: { [weak self] icon in self?.parts?.useMenuBarIcon(icon) },
       picture: { [weak self] in
         SettingsLinkRules.picture(viewer: self?.openViewerController, savedRate: preferences.loadRate())
       },

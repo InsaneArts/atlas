@@ -1,10 +1,10 @@
 import AtlasService
 import AtlasUI
 
-/// What Settings shares with the app's other parts, which only ``WindowCoordinator`` knows: the helper's status as the menu
-/// bar last read it, Open at Login as the panel keeps it, the picture as the main window keeps it, switching to the
-/// helper, and the setup window. Reached through closures, so Settings never holds another window, and a value the
-/// panel or the main window also shows stays one value.
+/// What Settings shares with the app's other parts, which only ``WindowCoordinator`` knows: the helper's status as the
+/// menu bar last read it, Open at Login as the panel keeps it, the menu bar's glyph as its item draws it, the picture
+/// as the main window keeps it, switching to the helper, and the setup window. Reached through closures, so Settings
+/// never holds another window, and a value the panel, the menu bar or the main window also shows stays one value.
 struct SettingsLinks {
   /// The helper's latest status, and whether Atlas waits for the service: before its first answer, and again after a
   /// reading that failed.
@@ -15,6 +15,10 @@ struct SettingsLinks {
   var opensAtLogin: @MainActor () -> OpenAtLogin.State
   /// Turns Open at Login on or off.
   var setOpenAtLogin: @MainActor (Bool) async -> Void
+  /// The glyph the menu bar item draws.
+  var menuBarIcon: @MainActor () -> MenuBarIcon
+  /// Draws the menu bar item as another glyph, kept for the next launch.
+  var chooseMenuBarIcon: @MainActor (MenuBarIcon) -> Void
   /// The picture choice in force: the main window's, else the rate saved.
   var picture: @MainActor () -> SettingsPicture
   /// Whether Paused can be chosen: only while the main window is open, since only it pauses.
