@@ -177,13 +177,38 @@ fn encoded(
 ///
 /// Returns an error when the PNG can't be read or encoded.
 pub fn jpeg(png: &[u8], limit: u32, quality: f64) -> Result<(Vec<u8>, u32, u32)> {
+    jpeg_of(png_image(png)?, limit, quality)
+}
+
+/// A PNG's one image.
+fn png_image(png: &[u8]) -> Result<CFRetained<CGImage>> {
     let failed = || Error::new(Code::Capture, "The screenshot could not be read");
     let data = CFData::from_bytes(png);
     // SAFETY: live data holding the image, and no options dictionary.
     let source = unsafe { CGImageSource::with_data(&data, None) }.ok_or_else(failed)?;
     // SAFETY: a live source; index 0 is its one image, and no options.
-    let image = unsafe { source.image_at_index(0, None) }.ok_or_else(failed)?;
-    jpeg_of(image, limit, quality)
+    unsafe { source.image_at_index(0, None) }.ok_or_else(failed)
+}
+
+/// A screenshot's PNG as packed sRGB pixels, at most `limit` pixels on its
+/// longest side.
+///
+/// # Errors
+///
+/// Returns an error when the PNG can't be read or drawn.
+pub fn png_rgb(png: &[u8], limit: u32) -> Result<RawShot> {
+    raw::from_image(&*png_image(png)?, Some(limit), 1.0)
+}
+
+/// Packed 8-bit sRGB pixels, `width`×`height` with rows `stride` bytes
+/// apart, drawn again as packed pixels at most `limit` on the longest side.
+///
+/// # Errors
+///
+/// Returns an error when the pixels don't fill the size given or can't be
+/// drawn.
+pub fn rgb_fitted(rgb: &[u8], layout: (usize, usize, usize), limit: u32) -> Result<RawShot> {
+    raw::from_image(&*rgb_pixels_image(rgb, layout)?, Some(limit), 1.0)
 }
 
 /// Packed 8-bit sRGB pixels, `width`×`height` with rows `stride` bytes
@@ -252,45 +277,6 @@ fn jpeg_of(image: CFRetained<CGImage>, limit: u32, quality: f64) -> Result<(Vec<
     let bytes = encoded(&image, "public.jpeg", Some(properties.as_opaque()))?;
 
     Ok((bytes, size(target_width)?, size(target_height)?))
-}
-
-/// An app's icon as a `size`×`size` PNG, from `image` holding it at
-/// several sizes (the TIFF AppKit gives): drawn from the smallest of them at
-/// least `size` across, else from the largest.
-///
-/// # Errors
-///
-/// Returns an error when the image can't be read or drawn.
-pub(super) fn icon_png(image: &[u8], size: usize) -> Result<Vec<u8>> {
-    let failed = || Error::new(Code::Capture, "The icon could not be read");
-    let data = CFData::from_bytes(image);
-    // SAFETY: live data holding the image, and no options dictionary.
-    let source = unsafe { CGImageSource::with_data(&data, None) }.ok_or_else(failed)?;
-    // SAFETY: a live source.
-    let count = unsafe { source.count() };
-
-    let mut chosen: Option<(usize, CFRetained<CGImage>)> = None;
-    for index in 0..count {
-        // SAFETY: a live source, an index below its count, and no options.
-        let Some(picture) = (unsafe { source.image_at_index(index, None) }) else {
-            continue;
-        };
-        let width = CGImage::width(Some(&picture));
-        let better = chosen.as_ref().is_none_or(|(best, _)| {
-            if *best >= size {
-                width >= size && width < *best
-            } else {
-                width > *best
-            }
-        });
-        if better {
-            chosen = Some((width, picture));
-        }
-    }
-
-    let (_, picture) = chosen.ok_or_else(failed)?;
-    let icon = scaled(&picture, size, size)?;
-    png(&icon)
 }
 
 /// A blank `width`×`height` PNG, for tests of what handles screenshots.

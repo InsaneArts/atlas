@@ -18,6 +18,7 @@ pub(crate) use local::{
     SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, post_local, process,
     read_record, recorded, recorded_port, running,
 };
+pub(crate) use reads::{Named, activity_of};
 pub(crate) use terminal::{TerminalFrames, TerminalService};
 
 use crate::menubar::Line;

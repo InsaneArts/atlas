@@ -21,18 +21,6 @@ pub(super) fn add_points(result: &mut Value, (width, height): (f64, f64)) {
     result["structuredContent"]["points"] = json!({"width": width, "height": height});
 }
 
-/// An app's windows as the view shows them: each one's title and size only,
-/// never its place on the screen or its number.
-pub(super) fn only_title_and_size(app: &mut Value) {
-    for window in app["windows"].as_array_mut().into_iter().flatten() {
-        *window = json!({
-            "title": window["title"],
-            "width": window["width"],
-            "height": window["height"],
-        });
-    }
-}
-
 /// This chat's host session, only where Atlas is certain of it: a Claude
 /// Code session whose host process started this server (`parent`) and
 /// which Atlas has recorded, moved on to the newest session that process

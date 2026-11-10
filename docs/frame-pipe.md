@@ -13,7 +13,7 @@ When the frame service is unavailable, the app reads pictures over the viewer's 
 
 ## The agent apps' screen view
 
-The view the Claude and Codex apps draw from `show_screen` runs inside the app and reaches Atlas only through tool calls, so it can't hold the pipe itself. Its `atlas mcp` server does: each `screen_frame` call takes the newest picture from the frame service and sends it as a JPEG, and the view asks again as soon as it has drawn one (about 7 fresh pictures a second while an agent works or you have control, and one a second otherwise, against one a second at most before). The server lets go of the service ten seconds after the view stops asking. Without the menu bar's frame service, the view reads the viewer's pictures as before.
+The view the Claude and Codex apps draw from `show_screen` runs inside the app and reaches Atlas only through tool calls, so it can't hold the pipe itself. Its `atlas mcp` server does: each `screen_frame` call takes the newest picture from the frame service at the size the view draws it, and sends only the tiles that changed since the picture the view has. Every answer shows one screen everywhere; when the changes don't fit one answer, a small picture of the whole screen comes first and sharp tiles follow. The view asks again as soon as it has drawn one (about 7 fresh pictures a second while an agent works or you have control, and one a second otherwise, against one a second at most before). The server lets go of the service ten seconds after the view stops asking. Without the menu bar's frame service, the view reads the viewer's pictures as before.
 
 ## Private by construction
 
