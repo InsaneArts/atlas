@@ -51,7 +51,8 @@ struct SettingsWindowTests {
     let controller = SettingsController.scripted(commands: ScriptedCommands([:]))
     let window = SettingsWindow(controller: controller) { _ in }
     #expect(window.styleMask.contains(.resizable))
-    #expect(window.contentMinSize == SettingsWindowFrame.smallest)
+    #expect(window.windowWillResize(window, to: NSSize(width: 450, height: 360)) == SettingsWindowFrame.smallest)
+    #expect(window.windowWillResize(window, to: NSSize(width: 900, height: 700)) == NSSize(width: 900, height: 700))
     #expect(window.title == "Helper")
     controller.send(.select(.privacy))
     await afterQueuedWork()

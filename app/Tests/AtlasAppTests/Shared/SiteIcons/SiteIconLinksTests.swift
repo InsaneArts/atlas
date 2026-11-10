@@ -14,11 +14,13 @@ struct SiteIconLinksTests {
     let html = """
       <head><link rel="icon" href="/small.png" sizes="16x16">
       <LINK REL='shortcut icon' HREF='https://cdn.example/big.png' sizes='16x16 64x64'>
+      <link rel="fluid-icon" href="/fluid.png">
       <link rel="apple-touch-icon" href="touch.png"><link rel="stylesheet" href="/site.css"></head>
       """
     #expect(
       SiteIconLinks.candidates(html: html, page: page).map(\.absoluteString) == [
-        "https://github.com/touch.png", "https://cdn.example/big.png", "https://github.com/small.png",
+        "https://github.com/touch.png", "https://github.com/fluid.png", "https://cdn.example/big.png",
+        "https://github.com/small.png",
         "https://github.com/favicon.ico",
       ]
     )

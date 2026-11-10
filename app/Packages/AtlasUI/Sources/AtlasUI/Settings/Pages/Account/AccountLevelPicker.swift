@@ -48,9 +48,9 @@ struct AccountLevelPicker: View {
         }
       }
       .pickerStyle(.segmented)
-      // Only the name is read; a label drawn beside the choices would push them off the tiles.
+      // The name is read, not drawn: a label beside the choices would push them off the tiles they stand for.
       .labelsHidden()
-      .accessibilityLabel(Text(Self.label))
+      .frame(maxWidth: .infinity)
       .accessibilityValue(Text(Self.spokenValue(level)))
       .accessibilityHint(Text(verbatim: "In \(account)"))
       .accessibilityAdjustableAction { direction in

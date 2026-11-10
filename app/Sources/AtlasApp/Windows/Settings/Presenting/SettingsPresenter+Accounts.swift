@@ -54,7 +54,10 @@ extension SettingsPresenter {
     let listed = snapshot.facts.status.overview.accounts
     let account = listed.map { $0.first { $0.id == id } } ?? snapshot.session.knownAccounts[id]
     guard let account else { return nil }
-    let level = listed == nil ? nil : AccountLevelChoice(account.level)
+    // A level being set shows at once; the reading after its change says what Atlas holds.
+    let changing = snapshot.session.changingLevel[id]
+    let held = changing ?? account.level
+    let level = listed == nil ? nil : AccountLevelChoice(held)
     return SettingsAccountPageState(
       id: id,
       letter: letter(account),
@@ -62,10 +65,11 @@ extension SettingsPresenter {
       kindLine: SettingsWords.accountKindLine(account, now: snapshot.now, calendar: snapshot.calendar),
       isSite: account.kind == .site,
       level: level,
-      levelLine: level == nil ? "" : SettingsWords.levelLine(account.level),
+      levelLine: level == nil ? "" : SettingsWords.levelLine(held),
       isEnabled: level != nil && !snapshot.session.accountsWorking,
       notice: notice(snapshot, on: .account(id), busy: snapshot.session.accountsWorking),
-      icon: snapshot.accountIcons[id]
+      icon: snapshot.accountIcons[id],
+      isChanging: changing != nil
     )
   }
 

@@ -49,7 +49,7 @@ struct AccountPage: View {
       SectionTitle(text: "What Agents Can Do Here")
         .padding(.horizontal, ListRow.Size.compact.inset)
       VStack(spacing: .zero) {
-        AccountLevelPicker(account: state.title, level: level, isBusy: !state.isEnabled) {
+        AccountLevelPicker(account: state.title, level: level, isBusy: !state.isEnabled || state.isChanging) {
           send(.setAccountLevel(state.id, $0))
         }
         .padding(.horizontal, ListRow.Size.compact.inset)

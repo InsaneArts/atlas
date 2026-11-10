@@ -208,6 +208,30 @@ struct SettingsAccountPageTests {
     #expect(controller.state.account?.notice == controller.state.accountNotice, "its page says it again")
   }
 
+  @Test("a level shows at once while its change runs, the rest of the page as it is and only the picker waiting")
+  func aLevelShowsAtOnce() async throws {
+    let listed = try Self.listed()
+    let reading = Reading(listed)
+    let gate = IconLookupGate()
+    let controller = Self.controller(reading) { dependencies in
+      dependencies.links.setLevel = { _, _ in await gate.read() }
+    }
+    let id = try #require(listed.overview.accounts?.first?.id)
+    controller.send(.openAccount(id))
+    let changing = Task { await controller.setLevel(.trusted, of: id) }
+    try await settle("the change never started") { gate.count == 1 }
+    let page = try #require(Self.page(controller))
+    #expect(page.level == .trusted && page.levelLine == SettingsWords.levelLine(.trusted))
+    #expect(page.isEnabled, "Sign-In and Remove stay as they are")
+    #expect(page.isChanging, "the picker waits")
+    await controller.setLevel(.lookOnly, of: id)
+    #expect(gate.count == 1, "a second change waits for the first")
+    gate.release()
+    await changing.value
+    #expect(Self.page(controller)?.isChanging == false)
+    #expect(Self.page(controller)?.level == .ask, "the reading after says what Atlas holds")
+  }
+
   @Test("a level change that failed says why on the account's page, not on Accounts")
   func aFailedLevelChangeShowsOnItsPage() async throws {
     let listed = try Self.listed()

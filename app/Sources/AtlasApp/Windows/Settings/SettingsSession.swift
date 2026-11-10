@@ -23,6 +23,8 @@ struct SettingsSession: Equatable {
   var closing = false
   /// Whether a change to the accounts list runs now.
   var accountsWorking = false
+  /// The level each account is being set to, while its change runs, which its page shows at once.
+  var changingLevel: [String: AccountLevel] = [:]
   /// Where a check for updates stands.
   var update = SettingsUpdate.idle
   /// What the last command said, on the page that ran it.

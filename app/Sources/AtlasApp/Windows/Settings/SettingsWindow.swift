@@ -44,7 +44,6 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     toolbarStyle = .unified
     isReleasedWhenClosed = false
     isMovableByWindowBackground = true
-    contentMinSize = SettingsWindowFrame.smallest
     collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
     delegate = self
     WindowShell.host(in: self) {
@@ -82,6 +81,19 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   func keepOnScreen() {
     let target = SettingsWindowFrame.frame(current: frame, within: screen?.visibleFrame)
     if target != frame { setFrame(target, display: true) }
+  }
+
+  /// The person resizes the window: never smaller than its first 740 by 572, so no page is cut.
+  ///
+  /// - Parameters:
+  ///   - sender: The window.
+  ///   - frameSize: The size asked for.
+  /// - Returns: The size it takes.
+  func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+    NSSize(
+      width: max(frameSize.width, SettingsWindowFrame.smallest.width),
+      height: max(frameSize.height, SettingsWindowFrame.smallest.height)
+    )
   }
 
   /// The window came forward: what it shows from the other windows is read again.

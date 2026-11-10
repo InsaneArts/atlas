@@ -1,8 +1,9 @@
 import Foundation
 
 /// Where a site's own page says its icon is: the `<link>` tags whose `rel` names an icon, best first, then the
-/// `/favicon.ico` every browser falls back to. Apple's touch icon comes first, as it is drawn large for a tile; then
-/// the largest of the others by their `sizes`. An SVG icon is left out, as it can't be drawn as a picture here.
+/// `/favicon.ico` every browser falls back to. Apple's touch icon comes first, as it is drawn large for a tile, then a
+/// large `fluid-icon` such as GitHub's, then the largest of the others by their `sizes`. An SVG icon
+/// is left out, as it can't be drawn as a picture here.
 nonisolated enum SiteIconLinks {
   /// The icons `html`, read from `page`, links to, best first, ending with the site's `/favicon.ico`.
   ///
@@ -36,14 +37,15 @@ nonisolated enum SiteIconLinks {
       .lowercased()
       .split(separator: " ")
     let touch = rel.contains { $0.hasPrefix("apple-touch-icon") }
+    let fluid = rel.contains("fluid-icon")
     let href = link["href", default: ""]
       .replacingOccurrences(of: "&amp;", with: "&")
-    guard touch || rel.contains("icon"), !href.isEmpty,
+    guard touch || fluid || rel.contains("icon"), !href.isEmpty,
       let url = URL(string: href, relativeTo: page)?.absoluteURL,
       url.scheme == "https" || url.scheme == "http",
       !url.path.lowercased().hasSuffix(".svg"), link["type"]?.lowercased() != "image/svg+xml"
     else { return nil }
-    return (url, touch ? Int.max : size(link["sizes"]))
+    return (url, touch ? Int.max : fluid ? Int.max - 1 : size(link["sizes"]))
   }
 
   /// Each `<link>` tag's attributes in `html`, by their lower-cased names.

@@ -26,20 +26,30 @@ extension SettingsController {
     }
   }
 
-  /// Sets how freely agents act in the account with `id`. One no longer listed is left alone.
+  /// Sets how freely agents act in the account with `id`: its page shows the level at once and the rest of it stays as
+  /// it is, only the picker waiting while the change runs; one that fails goes back to the level Atlas holds and says
+  /// why. One no longer listed, or whose level is changing already, is left alone.
   ///
   /// - Parameters:
   ///   - level: The level.
   ///   - id: The account, as the service names it.
   func setLevel(_ level: AccountLevel, of id: String) async {
     guard
+      session.changingLevel[id] == nil,
       let account = dependencies.links.status().status.overview.accounts?
         .first(where: { $0.id == id }),
       account.level != level
     else { return }
-    await changeAccounts(on: .account(id)) {
-      try await self.dependencies.links.setLevel(level, account)
+    session.changingLevel[id] = level
+    say(nil, on: .account(id))
+    do {
+      try await dependencies.links.setLevel(level, account)
+    } catch {
+      say(SettingsWords.accountsFailed(error.localizedDescription), on: .account(id), kind: .problem)
     }
+    await dependencies.links.readStatus()
+    keepListedAccounts()
+    session.changingLevel[id] = nil
   }
 
   /// The person read the note that Atlas added an account: it stays read for that account, across launches.

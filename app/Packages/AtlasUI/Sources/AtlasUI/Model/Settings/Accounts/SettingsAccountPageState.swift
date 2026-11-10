@@ -22,6 +22,8 @@ public struct SettingsAccountPageState: Equatable, Sendable {
   public var notice: SettingsNote?
   /// Its app's or site's icon; nil draws its first letter.
   public var icon: SettingsAccountIcon?
+  /// Whether its level is being set now: the picker shows the new one and waits, the rest of the page as it is.
+  public var isChanging: Bool
 
   /// Creates the page's state.
   ///
@@ -36,6 +38,7 @@ public struct SettingsAccountPageState: Equatable, Sendable {
   ///   - isEnabled: Whether its choices take presses now.
   ///   - notice: What the last change on the page said; none by default.
   ///   - icon: Its app's or site's icon; none by default.
+  ///   - isChanging: Whether its level is being set now; not by default.
   public init(
     id: String,
     letter: String,
@@ -46,7 +49,8 @@ public struct SettingsAccountPageState: Equatable, Sendable {
     levelLine: String,
     isEnabled: Bool,
     notice: SettingsNote? = nil,
-    icon: SettingsAccountIcon? = nil
+    icon: SettingsAccountIcon? = nil,
+    isChanging: Bool = false
   ) {
     self.id = id
     self.letter = letter
@@ -58,6 +62,7 @@ public struct SettingsAccountPageState: Equatable, Sendable {
     self.isEnabled = isEnabled
     self.notice = notice
     self.icon = icon
+    self.isChanging = isChanging
   }
 
   /// Whether Atlas can't read its list now, so the page says so and its choices wait.
