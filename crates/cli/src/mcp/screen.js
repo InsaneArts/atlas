@@ -966,9 +966,9 @@ if (typeof document !== 'undefined') {
     polling = true;
     const asked = epoch;
     try {
-      const result = await call('screen_frame', {
-        since: model.frame ? model.frame.id : undefined,
-      });
+      // Hosts check arguments as JSON, where a key can't be undefined: the
+      // first ask leaves it out.
+      const result = await call('screen_frame', model.frame ? { since: model.frame.id } : {});
       if (guardRequired || result?.structuredContent?.guardAppControls === true)
         await observeGuard(result);
       if (superseded || asked !== epoch) {

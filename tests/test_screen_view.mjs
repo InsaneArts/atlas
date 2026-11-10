@@ -3,7 +3,7 @@
 // is a document.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import test from 'node:test';
+import test, { afterEach } from 'node:test';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../crates/cli/src/mcp/screen.js', import.meta.url), 'utf8');
@@ -185,6 +185,26 @@ test('a paused picture keeps its frame while the status moves on', () => {
   same(next.points, { width: 1440, height: 900 }, 'the dimensions belong to the paused picture');
 });
 
+// Where a message holds something JSON can't carry. A host may check what
+// the view sends as JSON and refuse the whole message.
+function notJson(value, path = '') {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? null : `${path} is ${value}`;
+  if (typeof value !== 'object') return `${path} is ${typeof value}`;
+  for (const [key, member] of Object.entries(value)) {
+    const found = notJson(member, Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`);
+    if (found) return found;
+  }
+  return null;
+}
+
+// The view catches what a call throws, so a refusal here could pass
+// unseen: each test checks afterwards that the view sent none.
+const notPlain = [];
+afterEach(() => {
+  same(notPlain.splice(0), [], 'every message the view sends is plain JSON');
+});
+
 function screenView() {
   const nodes = new Map();
   const listeners = new Map();
@@ -291,7 +311,13 @@ function screenView() {
     }
     now = until;
   };
-  const parent = { postMessage: (message) => messages.push(message) };
+  const parent = {
+    postMessage: (message) => {
+      const found = notJson(message);
+      if (found) notPlain.push(`${message.params?.name || message.method || message.id}: ${found}`);
+      messages.push(message);
+    },
+  };
   vm.runInNewContext(source, {
     document: {
       body: node('body'),
@@ -627,6 +653,21 @@ for (const [message, expected] of [
     assert.equal(node('[data-note]').hidden, true);
   });
 }
+
+test('the first ask names no screen, and each later one names the screen the view has', async () => {
+  const { messages, calls, receive, advance, result } = screenView();
+  await receive({
+    method: 'ui/notifications/tool-result',
+    params: { structuredContent: { status: { state: 'idle' }, canControl: false } },
+  });
+  const initialize = messages.find((message) => message.method === 'ui/initialize');
+  await receive({ id: initialize.id, result: {} });
+  const first = calls('screen_frame')[0];
+  assert.equal('since' in first.params.arguments, false);
+  await receive({ id: first.id, result: result('shown', 'shown-key', 100, 100) });
+  await advance(4000);
+  same(calls('screen_frame')[1].params.arguments, { since: 'shown' });
+});
 
 for (const order of ['old first', 'new first']) {
   test(`each screenshot opening owns its full image when replies arrive ${order}`, async () => {
