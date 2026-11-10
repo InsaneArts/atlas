@@ -684,7 +684,6 @@ fn frame_reply(key: String, frame: &Frame) -> Response {
     )
 }
 
-/// A refusal in `message`'s words, with status `code`.
 /// What a request for the app's own routes hears from anyone else.
 fn not_the_app() -> Error {
     Error::new(Code::Permission, "Only the Atlas app can do this")
@@ -700,6 +699,7 @@ fn same_secret(given: &[u8], secret: &[u8]) -> bool {
     given.len() == secret.len() && std::hint::black_box(differs) == 0
 }
 
+/// A refusal in `message`'s words, with status `code`.
 fn refused(code: u16, message: &str) -> Response {
     json_response(code, json!({"ok": false, "error": message}))
 }
