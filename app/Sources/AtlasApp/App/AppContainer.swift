@@ -24,6 +24,8 @@ final class AppContainer {
   let viewerPreferences: ViewerPreferences
   /// Settings' choices that outlast it, in the standard defaults; the signals read Notify me from them.
   let settingsPreferences: SettingsPreferences
+  /// The menu bar item's glyph, in the standard defaults: read as the item is made, saved as Settings changes it.
+  let menuBarPreferences: MenuBarPreferences
   /// Opens and closes every window.
   let coordinator: WindowCoordinator
   /// The app's one icon repository and disk store, shared by the panel and every main window, including reopened
@@ -59,6 +61,7 @@ final class AppContainer {
     let viewerPreferences = ViewerPreferences.stored(in: UserDefaults.standard)
     self.viewerPreferences = viewerPreferences
     settingsPreferences = .stored(in: UserDefaults.standard)
+    menuBarPreferences = .stored(in: UserDefaults.standard)
     appIcons = .live(home: FileManager.default.homeDirectoryForCurrentUser)
     coordinator = WindowCoordinator(windows: .live, viewerPreferences: viewerPreferences)
     coordinator.parts = self

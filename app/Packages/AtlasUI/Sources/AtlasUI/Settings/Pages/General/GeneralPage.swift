@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The General page: opening at login; how often the helper's screen updates, as segments, and muting the helper;
-/// and whether Atlas notifies the person. Its values change through the binding.
+/// The General page: opening at login and the menu bar's icon; how often the helper's screen updates, as segments,
+/// and muting the helper; and whether Atlas notifies the person. Its values change through the binding.
 struct GeneralPage: View {
   /// The page's values, shared with the Activity page.
   @Binding var state: SettingsGeneralState
@@ -9,7 +9,7 @@ struct GeneralPage: View {
   /// What it draws, from its state.
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
-      GroupedSection([GeneralRow.openAtLogin], title: "Startup") { row in
+      GroupedSection(GeneralRow.menuBar, title: "Menu Bar") { row in
         self.row(row)
       }
       GroupedSection([GeneralRow.picture, .muteHelper], title: "Helper Screen") { row in
@@ -35,6 +35,11 @@ struct GeneralPage: View {
         size: .compact
       ) { state.opensAtLogin.toggle() }
       .disabled(!state.canOpenAtLogin)
+    case .menuBarIcon:
+      ListRowBody("Menu bar icon", detail: "Pick Screen if another app's icon looks like Atlas's", size: .compact) {
+        Tabs(state: iconTabs, style: .segment) { picked in state.menuBarIcon = picked }
+          .fixedSize()
+      }
     case .picture:
       ListRowBody("Screen updates", detail: "How often Atlas's windows show the helper's screen", size: .compact) {
         Tabs(state: pictureTabs, style: .segment) { picked in state.picture = picked }
@@ -55,6 +60,15 @@ struct GeneralPage: View {
         size: .compact
       ) { state.notify.toggle() }
     }
+  }
+
+  /// The menu bar's icon as segments: the Orbit, or the Orbit on a display.
+  private var iconTabs: CapsuleTabsState<MenuBarIcon> {
+    CapsuleTabsState(
+      tabs: [CapsuleTab(id: .orbit, title: "Orbit"), CapsuleTab(id: .screen, title: "Screen")],
+      selected: state.menuBarIcon,
+      label: "Menu bar icon"
+    )
   }
 
   /// The screen's choices as segments: those that can be chosen now, Paused only while a main window can pause.

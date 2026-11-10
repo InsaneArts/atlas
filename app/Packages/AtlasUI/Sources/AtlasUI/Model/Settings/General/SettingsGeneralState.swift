@@ -15,6 +15,8 @@ public struct SettingsGeneralState: Equatable, Sendable {
   public var opensAtLogin: Bool
   /// Whether this build can open at login at all; a development build cannot.
   public var canOpenAtLogin: Bool
+  /// The glyph Atlas's menu bar item draws.
+  public var menuBarIcon: MenuBarIcon
   /// How often the windows show the helper's screen.
   public var picture: SettingsPicture
   /// The picture's choices, in menu order, each with whether it can be chosen now.
@@ -47,6 +49,7 @@ public struct SettingsGeneralState: Equatable, Sendable {
   /// - Parameters:
   ///   - opensAtLogin: Whether Atlas opens at login.
   ///   - canOpenAtLogin: Whether this build can open at login at all.
+  ///   - menuBarIcon: The glyph Atlas's menu bar item draws; the Orbit by default.
   ///   - picture: How often the windows show the helper's screen.
   ///   - pictureOptions: The picture's choices, in menu order.
   ///   - muteHelper: Whether apps in the helper stay silent on the person's speakers.
@@ -63,6 +66,7 @@ public struct SettingsGeneralState: Equatable, Sendable {
   public init(
     opensAtLogin: Bool,
     canOpenAtLogin: Bool,
+    menuBarIcon: MenuBarIcon = .orbit,
     picture: SettingsPicture,
     pictureOptions: [PopupOption<SettingsPicture>],
     muteHelper: Bool,
@@ -79,6 +83,7 @@ public struct SettingsGeneralState: Equatable, Sendable {
   ) {
     self.opensAtLogin = opensAtLogin
     self.canOpenAtLogin = canOpenAtLogin
+    self.menuBarIcon = menuBarIcon
     self.picture = picture
     self.pictureOptions = pictureOptions
     self.muteHelper = muteHelper

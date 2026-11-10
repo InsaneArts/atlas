@@ -185,7 +185,7 @@ If you want agents to copy such files in anyway, turn on **Copy sign-ins into th
 Open **Settings** from the menu bar, or click the helper's line at the foot of the main window's sidebar to open it on **Helper**. Its pages are:
 
 - **Helper**: the helper account, whether it is ready to act with **Check Again**, and **Recover…** and **Log Out…** for when something goes wrong.
-- **General**: opening Atlas at login, how often the helper's screen updates, muting the helper, and notifications.
+- **General**: opening Atlas at login, the menu bar's icon, how often the helper's screen updates, muting the helper, and notifications.
 - **Activity**: keeping pictures of agent actions, how long, how much typed text beside them, and the pictures stored on this Mac with **Delete All…**.
 - **Accounts**: the accounts agents act in, each with its own page for how freely they act there and its sign-in actions. An app shows its own icon; a site shows its icon, which Atlas reads from the site itself, without your cookies or sign-in, and keeps for 30 days.
 - **Privacy**: keeping your home folder private from the helper, and whether agents may copy sign-ins in.

@@ -115,6 +115,7 @@ enum PanelRender {
     // The menu bar item at its own size, centred in the strip as the menu bar does.
     let item = MenuBarRender.item(
       PanelPresenter.mode(snapshot).kind,
+      icon: .orbit,
       appearance: appearance ?? NSAppearance.currentDrawing()
     )
     item.setFrameOrigin(

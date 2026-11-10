@@ -1,8 +1,8 @@
 import AtlasService
 import AtlasUI
 
-/// What Settings reads from the rest of the app each time it draws: the helper's status, Open at Login, the picture,
-/// the helper's commands running and the app's version.
+/// What Settings reads from the rest of the app each time it draws: the helper's status, Open at Login, the menu bar's
+/// glyph, the picture, the helper's commands running and the app's version.
 struct SettingsFacts {
   /// The helper's latest status.
   var status = ViewerStatus()
@@ -10,6 +10,8 @@ struct SettingsFacts {
   var connecting = true
   /// Where Open at Login stands.
   var opensAtLogin = OpenAtLogin.State(isAvailable: false, isEnabled: false)
+  /// The glyph the menu bar item draws.
+  var menuBarIcon = MenuBarIcon.orbit
   /// The picture choice in force.
   var picture = SettingsPicture.live
   /// Whether Paused can be chosen now.

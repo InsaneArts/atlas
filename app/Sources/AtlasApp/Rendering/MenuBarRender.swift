@@ -1,9 +1,11 @@
 import AppKit
 import AtlasStatus
+import AtlasUI
 
-/// The menu bar item's render, `--render-menubar DIR`, in release builds too: the item in every state, on a piece of
-/// the light and the dark menu bar, to `DIR/<state>-<light|dark>.png`. The orbit is the status button's own image and
-/// the badge the live ``StatusBadge`` layer, both drawn by ``MenuBarItemView``, held still as under Reduce Motion.
+/// The menu bar item's render, `--render-menubar DIR`, in release builds too: the item in every state, for each glyph,
+/// on a piece of the light and the dark menu bar, to `DIR/<glyph prefix><state>-<light|dark>.png`. The glyph is the
+/// status button's own image and the badge the live ``StatusBadge`` layer, both drawn by ``MenuBarItemView``, held
+/// still as under Reduce Motion.
 enum MenuBarRender {
   /// Each render's file name with the state it draws, every row of the status table. `scripts/render-app.mjs` keeps
   /// the same list; `tests/test_render_table.mjs` checks that it does.
@@ -17,6 +19,12 @@ enum MenuBarRender {
     ("loggedOut", .loggedOut),
     ("connecting", .connecting),
     ("inUseElsewhere", .inUseElsewhere),
+  ]
+  /// Each glyph with the prefix of its renders' file names: none for the Orbit, as before Screen was offered.
+  /// `scripts/render-app.mjs` keeps the same list; `tests/test_render_table.mjs` checks that it does.
+  nonisolated static let icons: [(prefix: String, icon: MenuBarIcon)] = [
+    ("", .orbit),
+    ("screen-", .screen),
   ]
   /// The two menu bars each state is drawn on, by file suffix: light and dark menu bar backgrounds for
   /// contrast checks.
@@ -38,10 +46,13 @@ enum MenuBarRender {
     guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)) != nil else {
       return false
     }
-    return states.flatMap { state in
-      bars.map { bar in
-        draw(state.kind, on: bar.ground, appearance: bar.appearance)
-          .flatMap { try? $0.write(to: folder.appendingPathComponent("\(state.file)-\(bar.suffix).png")) } != nil
+    return icons.flatMap { icon in
+      states.flatMap { state in
+        bars.map { bar in
+          let file = folder.appendingPathComponent("\(icon.prefix)\(state.file)-\(bar.suffix).png")
+          return draw(state.kind, icon: icon.icon, on: bar.ground, appearance: bar.appearance)
+            .flatMap { try? $0.write(to: file) } != nil
+        }
       }
     }
     .allSatisfy { $0 }
@@ -51,29 +62,30 @@ enum MenuBarRender {
   ///
   /// - Parameters:
   ///   - kind: The state.
+  ///   - icon: The glyph.
   ///   - ground: The menu bar's colour.
   ///   - appearance: The menu bar's appearance.
   /// - Returns: The PNG's bytes, or nil when none could be made.
-  static func draw(_ kind: Mode.Kind, on ground: NSColor, appearance: NSAppearance?) -> Data? {
+  static func draw(_ kind: Mode.Kind, icon: MenuBarIcon, on ground: NSColor, appearance: NSAppearance?) -> Data? {
     guard let appearance else { return nil }
     let width = StatusItem.Layout.width + 2 * margin
     let canvas = NSView(frame: NSRect(x: 0, y: 0, width: width, height: barHeight))
     canvas.addSubview(PanelRender.fill(canvas.bounds, ground))
-    let item = item(kind, appearance: appearance)
+    let item = item(kind, icon: icon, appearance: appearance)
     item.setFrameOrigin(NSPoint(x: margin, y: (barHeight - item.frame.height) / 2))
     canvas.addSubview(item)
     return PNG.data(of: canvas, appearance: appearance)
   }
 
-  /// The item as the menu bar shows it: its square, holding the button's image and the badge's layer over it.
+  /// The item as the menu bar shows it: its box, holding the button's image and the badge's layer over it.
   ///
   /// - Parameters:
   ///   - kind: The state.
+  ///   - icon: The glyph.
   ///   - appearance: The menu bar's appearance, which settles the badge's colour.
   /// - Returns: The item's view, at the origin.
-  static func item(_ kind: Mode.Kind, appearance: NSAppearance) -> NSView {
-    let side = StatusItem.Layout.width
-    let bounds = NSRect(x: 0, y: 0, width: side, height: side)
+  static func item(_ kind: Mode.Kind, icon: MenuBarIcon, appearance: NSAppearance) -> NSView {
+    let bounds = NSRect(x: 0, y: 0, width: StatusItem.Layout.width, height: StatusItem.Layout.height)
     let look = StatusGlyph.look(for: kind)
     // A template in the menu bar's own ink: white on the dark bar, black on the light one.
     let label = NSColor.labelColor
@@ -87,7 +99,7 @@ enum MenuBarRender {
     let badge = StatusBadge()
     badge.show(look, in: bounds, flipped: false, appearance: appearance, motion: .still)
     return MenuBarItemView(
-      image: StatusGlyph.image(for: look),
+      image: StatusGlyph.image(for: look, icon: icon),
       opacity: StatusGlyph.opacity(of: look.tint),
       ink: ink,
       badge: badge.layer,

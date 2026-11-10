@@ -3,10 +3,10 @@ import AtlasStatus
 import AtlasUI
 
 /// Atlas's item in the menu bar: it owns the system's status item and its button, which the panel's popover opens
-/// from (``PanelPopover``). One width in every state, so the items to its left never move; the button shows
-/// the orbit (``StatusGlyph``) and a ``StatusBadge`` layer over it.
+/// from (``PanelPopover``). One width in every state and for either icon, so the items to its left never move; the
+/// button shows the glyph the person picked (``StatusGlyph``, ``MenuBarIcon``) and a ``StatusBadge`` layer over it.
 ///
-/// A state change moves: the badge pops and crossfades, and the orbit's dim fades over
+/// A state change moves: the badge pops and crossfades, and the glyph's dim fades over
 /// ``Motion/Duration/dim`` as the button's own layer, which holds the template image, changes its opacity, so the
 /// menu bar still inks the template. Under Reduce Motion, and while a menu is open, a new state swaps in at once
 /// (``StatusMotion``); a menu opening stops whatever a state change set moving, so nothing moves in the frame its
@@ -15,8 +15,10 @@ import AtlasUI
 final class StatusItem {
   /// The item's measures.
   enum Layout {
-    /// 22: the item's width in every state, replacing the variable length that grew with a mark.
-    static let width: CGFloat = 22
+    /// 24: the item's width in every state and for either icon, replacing the variable length that grew with a mark.
+    static let width: CGFloat = 24
+    /// 22: the glyph's height, the menu bar's own item height.
+    static let height: CGFloat = 22
   }
 
   /// The dim's key on the button's layer.
@@ -32,6 +34,8 @@ final class StatusItem {
   private let tracking: () -> Bool
   /// The look shown now; nil before the first.
   private var look: StatusGlyph.Look?
+  /// The glyph the person picked.
+  private(set) var icon: MenuBarIcon
   /// How many menus have begun tracking and not yet ended, so a state change while one is open swaps in at once. It counts only while the run loop tracks, so a lost end cannot hold it open.
   private var menusOpen = 0
   /// The watches that lay the badge out again when the menu bar's appearance or the display's scale changes.
@@ -49,14 +53,17 @@ final class StatusItem {
   ///
   /// - Parameters:
   ///   - bar: The status bar: the system's menu bar, or a bar of its own in tests, which never shows.
+  ///   - icon: The glyph the person picked; the Orbit by default.
   ///   - reduceMotion: Reads whether Reduce Motion is on.
   ///   - tracking: Reads whether the main run loop is tracking events, as it does while a menu is open.
   init(
     bar: NSStatusBar = .system,
+    icon: MenuBarIcon = .orbit,
     reduceMotion: @escaping () -> Bool = { Appearance.reduceMotion },
     tracking: @escaping () -> Bool = { RunLoop.main.currentMode == .eventTracking }
   ) {
     item = bar.statusItem(withLength: Layout.width)
+    self.icon = icon
     self.reduceMotion = reduceMotion
     self.tracking = tracking
     observers = [
@@ -126,7 +133,7 @@ final class StatusItem {
     showBadge()
   }
 
-  /// Shows a mode: its look, and the words the tooltip and VoiceOver say. A new look fades the orbit's dim and pops
+  /// Shows a mode: its look, and the words the tooltip and VoiceOver say. A new look fades the glyph's dim and pops
   /// or crossfades the badge, as ``motion`` allows.
   ///
   /// - Parameters:
@@ -135,21 +142,41 @@ final class StatusItem {
   func show(_ mode: Mode.Kind, description: String) {
     let look = StatusGlyph.look(for: mode)
     guard look != self.look || button?.toolTip != description else { return }
-    let image = StatusGlyph.image(for: look)
-    image.accessibilityDescription = description
-    button?.image = image
-    button?.toolTip = description
+    draw(look, description: description)
     let first = self.look == nil
     self.look = look
     dim(to: StatusGlyph.opacity(of: look.tint), fades: !first && motion == .all)
     showBadge()
   }
 
-  /// Fades the orbit to an opacity: the button's own layer, which holds the template image, so the menu bar keeps
+  /// Swaps the glyph for the one the person picked, at once: the same look, badge and words on the new glyph.
+  ///
+  /// - Parameter icon: The glyph.
+  func use(_ icon: MenuBarIcon) {
+    guard icon != self.icon else { return }
+    self.icon = icon
+    guard let look else { return }
+    draw(look, description: button?.toolTip ?? "")
+    showBadge()
+  }
+
+  /// Puts a look's glyph on the button, with the words the tooltip and VoiceOver say.
+  ///
+  /// - Parameters:
+  ///   - look: The look.
+  ///   - description: The tooltip and accessibility description, which agree.
+  private func draw(_ look: StatusGlyph.Look, description: String) {
+    let image = StatusGlyph.image(for: look, icon: icon)
+    image.accessibilityDescription = description
+    button?.image = image
+    button?.toolTip = description
+  }
+
+  /// Fades the glyph to an opacity: the button's own layer, which holds the template image, so the menu bar keeps
   /// inking it. At once when it may not fade, stopping a fade that runs. Once a fade ends the button draws again.
   ///
   /// - Parameters:
-  ///   - opacity: The orbit's opacity, ``StatusGlyph/dimAlpha`` or whole.
+  ///   - opacity: The glyph's opacity, ``StatusGlyph/dimAlpha`` or whole.
   ///   - fades: Whether the change may animate.
   private func dim(to opacity: CGFloat, fades: Bool) {
     guard let button, let host = button.layer else { return }
@@ -171,7 +198,7 @@ final class StatusItem {
     CATransaction.commit()
   }
 
-  /// Holds the button highlighted while the panel it opens shows, so the system draws its capsule behind the orbit as
+  /// Holds the button highlighted while the panel it opens shows, so the system draws its capsule behind the glyph as
   /// it does behind an open menu's item, and lets it go once the panel closes.
   ///
   /// - Parameter isOpen: Whether the panel shows.
@@ -190,9 +217,9 @@ final class StatusItem {
       .imageRect(forBounds: button.bounds)
       ?? NSRect(
         x: (button.bounds.width - Layout.width) / 2,
-        y: (button.bounds.height - Layout.width) / 2,
+        y: (button.bounds.height - Layout.height) / 2,
         width: Layout.width,
-        height: Layout.width
+        height: Layout.height
       )
     badge.show(
       look,

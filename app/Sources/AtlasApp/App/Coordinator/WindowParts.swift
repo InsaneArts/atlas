@@ -1,4 +1,5 @@
 import AtlasService
+import AtlasUI
 
 /// What the coordinator asks of the app's live parts: the controllers it opens its windows on, and what the windows'
 /// links reach outside the windows. ``AppContainer`` is the live one; tests hand in their own.
@@ -42,6 +43,14 @@ protocol WindowParts: AnyObject {
 
   /// Closes the menu bar panel, as opening a window or an alert from it does.
   func closePanel()
+
+  /// The glyph Atlas's menu bar item draws.
+  var menuBarIcon: MenuBarIcon { get }
+
+  /// Draws Atlas's menu bar item as the glyph picked, and keeps it for the next launch.
+  ///
+  /// - Parameter icon: The glyph.
+  func useMenuBarIcon(_ icon: MenuBarIcon)
 
   /// Quits Atlas, once the coordinator has given the main window's control back.
   ///

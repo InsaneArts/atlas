@@ -139,9 +139,12 @@ export const MENUBAR_STATES = [
 
 export const MENUBAR_BARS = ['light', 'dark'];
 
-// The files --render-menubar writes, one a state on each bar.
-export const MENUBAR_FILES = MENUBAR_STATES.flatMap((state) =>
-  MENUBAR_BARS.map((bar) => `${state}-${bar}.png`),
+// MenuBarRender.icons' file name prefixes: none for the Orbit, then Screen.
+export const MENUBAR_ICON_PREFIXES = ['', 'screen-'];
+
+// The files --render-menubar writes, one a state on each bar for each icon.
+export const MENUBAR_FILES = MENUBAR_ICON_PREFIXES.flatMap((prefix) =>
+  MENUBAR_STATES.flatMap((state) => MENUBAR_BARS.map((bar) => `${prefix}${state}-${bar}.png`)),
 );
 
 export const PANEL_RENDERS = [
