@@ -408,7 +408,8 @@ fn nearest(
 
 /// The project a command works in: the name of the nearest folder from
 /// `directory` up that holds a `.git` entry, else of `directory` itself.
-/// None for the home folder and `/`, which name no project.
+/// None for the home folder, `/` and a temporary folder itself, such as
+/// `$TMPDIR` (whose last part is `T`) or `/tmp`, which name no project.
 pub(crate) fn project_folder(directory: &Path) -> Option<String> {
     let project = directory
         .ancestors()
@@ -416,7 +417,7 @@ pub(crate) fn project_folder(directory: &Path) -> Option<String> {
         .find(|folder| fs::symlink_metadata(folder.join(".git")).is_ok())
         .unwrap_or(directory);
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    if home.as_deref() == Some(project) {
+    if home.as_deref() == Some(project) || temporary(project) {
         return None;
     }
 
@@ -427,5 +428,30 @@ pub(crate) fn project_folder(directory: &Path) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
+/// Whether `folder` is a temporary folder itself: the system's own
+/// (`$TMPDIR`), or `/tmp`, by any spelling of each, as written or with
+/// its links resolved.
+fn temporary(folder: &Path) -> bool {
+    let spellings = |path: &Path| {
+        [
+            Some(path.components().collect::<PathBuf>()),
+            fs::canonicalize(path).ok(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+    };
+    let folder = spellings(folder);
+    [
+        std::env::temp_dir(),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
+    ]
+    .iter()
+    .flat_map(|temporary| spellings(temporary))
+    .any(|temporary| folder.contains(&temporary))
+}
+
 #[cfg(test)]
+#[path = "host_tests.rs"]
 mod tests;

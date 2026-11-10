@@ -159,7 +159,11 @@ impl TerminalFrames {
             self.connected = false;
             self.client = Some(client.clone());
         }
-        let result = self.read(&client).await;
+        // While the person signs this helper in to an account its screen is
+        // hidden here as from agents: the hold checked is the one of the
+        // helper read from, whichever the settings name now.
+        let controller = client.controller.clone();
+        let result = controller.shown(self.read(&client)).await;
         if result.as_ref().is_err_and(|error| {
             !self
                 .stream
@@ -172,7 +176,7 @@ impl TerminalFrames {
         result
     }
 
-    async fn read(&mut self, client: &Client) -> Result<SharedFrame> {
+    async fn read(&mut self, client: &Arc<Client>) -> Result<SharedFrame> {
         if !self.connected {
             // The next stream opens only once the last one's source is
             // confirmed stopped; until then each read asks again and reports
@@ -202,7 +206,8 @@ impl TerminalFrames {
             let key = self.viewer.remember_live(&frame).await;
             Ok(live_frame(frame, key))
         } else {
-            let (key, frame) = self.viewer.frame().await?;
+            // The helper whose privacy this read is checked against.
+            let (key, frame) = self.viewer.frame_of(client).await?;
             Ok(SharedFrame {
                 png: frame.png.to_vec(),
                 rgb: None,
@@ -271,4 +276,5 @@ async fn serve(
 }
 
 #[cfg(test)]
+#[path = "terminal_tests.rs"]
 mod tests;

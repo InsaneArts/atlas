@@ -24,6 +24,8 @@ final class AppContainer {
   let viewerPreferences: ViewerPreferences
   /// Settings' choices that outlast it, in the standard defaults; the signals read Notify me from them.
   let settingsPreferences: SettingsPreferences
+  /// The menu bar item's glyph, in the standard defaults: read as the item is made, saved as Settings changes it.
+  let menuBarPreferences: MenuBarPreferences
   /// Opens and closes every window.
   let coordinator: WindowCoordinator
   /// The app's one icon repository and disk store, shared by the panel and every main window, including reopened
@@ -38,6 +40,10 @@ final class AppContainer {
   var menuBar: PanelPopover?
   /// The notification for when Atlas needs the person; made at launch.
   var signals: AttentionSignals?
+  /// The notifications of the questions Atlas asks the person; made at launch.
+  var askSignals: AskSignals?
+  /// What tells the questions' signals the person may have looked away: the panel closing, and a window going.
+  var lookAways: [any NSObjectProtocol] = []
 
   /// An app that runs `commands` and reads `service`. Nothing runs until ``start()``.
   ///
@@ -55,22 +61,31 @@ final class AppContainer {
     let viewerPreferences = ViewerPreferences.stored(in: UserDefaults.standard)
     self.viewerPreferences = viewerPreferences
     settingsPreferences = .stored(in: UserDefaults.standard)
+    menuBarPreferences = .stored(in: UserDefaults.standard)
     appIcons = .live(home: FileManager.default.homeDirectoryForCurrentUser)
     coordinator = WindowCoordinator(windows: .live, viewerPreferences: viewerPreferences)
     coordinator.parts = self
   }
 
-  /// Builds the app's control work, the signals and the menu bar panel, once the app has launched.
+  /// Builds the app's control work, the signals and the menu bar panel, once the app has launched, then opens the main
+  /// window if it was asked for meanwhile or left open when Atlas last stopped.
   func start() {
     // The app's control work outlives any one main window: a release a closed window sent is still awaited by the
     // next command, and Take Control in a reopened window waits for it. Before a switch, a log-out or a restart, the
     // main window's control ends and its release joins the barrier.
     let barrier = ControlBarrier(service: service, clock: clock)
-    let actions = HelperActions(commands: commands, service: service, barrier: barrier) { [weak coordinator] in
-      coordinator?.releaseViewerControl()
-    }
+    let actions = HelperActions(
+      commands: commands,
+      service: service,
+      barrier: barrier,
+      endControl: { [weak coordinator] in coordinator?.releaseViewerControl() },
+      asks: AskStore(service: service, clock: clock)
+    )
     self.actions = actions
     startSignals()
     startPanel(actions: actions)
+    coordinator.launched()
+    // Unstructured, as nothing at launch can wait: the offer reads once, and asks only while it should.
+    Task { await HomeOffer.offer(commands: commands) }
   }
 }

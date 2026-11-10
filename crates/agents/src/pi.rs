@@ -271,4 +271,5 @@ fn mutate(home: &Path, verb: &str, source: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "pi_tests.rs"]
 mod tests;

@@ -126,6 +126,7 @@ extension OnboardingController {
       }
       if !snapshot.loaded {
         snapshot.opensAtLogin = facts.opensAtLogin(enabledNow: dependencies.loginItem.isEnabled())
+        snapshot.keepsHomePrivate = facts.keepsHomePrivate
         // A failed first reading's message goes with it.
         snapshot.problem = nil
       }

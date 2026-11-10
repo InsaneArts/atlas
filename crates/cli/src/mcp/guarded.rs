@@ -100,6 +100,10 @@ impl Entry {
             root.host_session.clone(),
         );
         child.stream = root.stream.clone();
+        child.tiles = root.tiles.clone();
+        child.picture_tiles = root.picture_tiles.clone();
+        child.decoded = root.decoded.clone();
+        child.picture_decoded = root.picture_decoded.clone();
         child.views.store(true, Ordering::Relaxed);
         Self {
             token: atlas_core::files::token(),
@@ -328,4 +332,5 @@ impl Registry {
 }
 
 #[cfg(test)]
+#[path = "guarded_tests.rs"]
 mod tests;

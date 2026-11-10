@@ -40,47 +40,39 @@ struct ViewerControlTests {
     viewer.close()
   }
 
-  @Test("leaving the window gives control back")
-  func leavingTheWindowGivesControlBack() async throws {
+  @Test("leaving or hiding the window gives control back", arguments: [false, true])
+  func leavingOrHidingTheWindowGivesControlBack(hidden: Bool) async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
     await viewer.control.takeControl()
-    viewer.control.lostFocus()
+    if hidden {
+      viewer.setVisible(false)
+    } else {
+      viewer.control.lostFocus()
+    }
     #expect(viewer.control.lease == nil)
     try await settle("the lease was never released") { service.log.contains("release lease") }
     viewer.close()
   }
 
-  @Test("a grant that arrives after leaving the window is given back")
-  func aGrantThatArrivesAfterLeavingIsGivenBack() async throws {
+  @Test(
+    "a grant that arrives after leaving the window, or while hidden or paused, is given back",
+    arguments: [
+      "left", "hidden", "paused",
+    ]
+  )
+  func aGrantThatArrivesAfterLeavingHidingOrPausingIsGivenBack(change: String) async throws {
     let service = ScriptedService()
     let viewer = try await ViewerController.watching(service)
-    viewer.control.gainedFocus()
+    if change == "left" { viewer.control.gainedFocus() }
     service.hold = ["acquire"]
     let taking = Task { await viewer.control.takeControl() }
     try await settle("control was never asked for") { service.held["acquire"] != nil }
     #expect(viewer.control.acquiring)
-    viewer.control.lostFocus()
-    service.resume("acquire")
-    await taking.value
-    #expect(viewer.control.lease == nil)
-    #expect(!viewer.control.acquiring)
-    try await settle("the late grant was never given back") { service.log.contains("release lease") }
-    viewer.close()
-  }
-
-  @Test("a grant that arrives while hidden or paused is given back", arguments: [true, false])
-  func aGrantThatArrivesWhileHiddenOrPausedIsGivenBack(hidden: Bool) async throws {
-    let service = ScriptedService()
-    let viewer = try await ViewerController.watching(service)
-    service.hold = ["acquire"]
-    let taking = Task { await viewer.control.takeControl() }
-    try await settle("control was never asked for") { service.held["acquire"] != nil }
-    #expect(viewer.control.acquiring)
-    if hidden {
-      viewer.setVisible(false)
-    } else {
-      viewer.togglePause()
+    switch change {
+    case "left": viewer.control.lostFocus()
+    case "hidden": viewer.setVisible(false)
+    default: viewer.togglePause()
     }
     service.resume("acquire")
     await taking.value
@@ -143,15 +135,6 @@ struct ViewerControlTests {
     // The reading under way, which says no viewer holds control, then the one the grant asked for.
     try await settle("the reading after the grant never ended") { service.answered > asked }
     #expect(viewer.control.lease == "lease")
-    viewer.close()
-  }
-
-  @Test("hiding the window gives control back")
-  func hidingTheWindowGivesControlBack() async throws {
-    let viewer = try await ViewerController.watching(ScriptedService())
-    await viewer.control.takeControl()
-    viewer.setVisible(false)
-    #expect(viewer.control.lease == nil)
     viewer.close()
   }
 
@@ -220,7 +203,10 @@ struct ViewerControlTests {
     viewer.say(Words.recovered)
     service.revision = "r2"
     viewer.readingLoop.refresh()
-    try await settle("the changed picture never showed") { viewer.reading.frame?.revision == "r2" }
+    // The feed follows each picture, which the frame it came with is read beside.
+    try await settle("the changed picture never showed") {
+      viewer.readingLoop.feed.picture != nil && viewer.reading.frame?.revision == "r2"
+    }
     #expect(viewer.session.notice == Words.recovered, "no control was held, so none ended")
     viewer.close()
   }

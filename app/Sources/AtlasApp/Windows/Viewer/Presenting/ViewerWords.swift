@@ -1,4 +1,4 @@
-/// The main window's words that depend on its state: the header, the footer's buttons and tooltips, the Library, the
+/// The main window's words that depend on its state: the header, the footer's buttons and tooltips, the
 /// empty messages, the tooltips' facts, the alerts, the menus and every notice.
 ///
 /// The rule every window follows: fixed copy stays in AtlasUI's views; a presenter supplies only the words that

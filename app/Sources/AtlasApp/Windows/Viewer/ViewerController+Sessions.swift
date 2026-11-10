@@ -2,30 +2,28 @@ import AtlasUI
 
 /// The sessions, as the sidebar and the Session menu choose them: every session's work, the one over or under the one
 /// chosen in the sidebar's order, a session's Activity or screenshots from its menu, and Clean Up for the one chosen.
-/// A session chosen in the sidebar or by Previous or Next Session narrows the list that shows, and from the Screen opens
-/// its Activity.
+/// A session chosen in the sidebar or by Previous or Next Session, or All, narrows Activity, and from the Screen opens
+/// it.
 extension ViewerController {
-  /// A row chosen in the sidebar: whose work the list that shows narrows to. From the Screen, one session's choice
-  /// opens its Activity, the picture shrinking into the corner, unless this window holds control, which leaving the
-  /// Screen would give back.
+  /// A row chosen in the sidebar, All included: whose work Activity narrows to. From the Screen it opens Activity, the
+  /// picture shrinking into the corner, the row chosen already included, unless this window holds control, which
+  /// leaving the Screen would give back.
   ///
   /// - Parameter choice: Whose work.
   func openSession(_ choice: ViewerSessionChoice) {
     chooseSession(choice)
-    if Self.opensActivity(for: choice, from: session.place, holdingControl: holdingControl) { show(.activity) }
+    if Self.opensActivity(from: session.place, holdingControl: holdingControl) { show(.activity) }
   }
 
-  /// Whether choosing a session opens its Activity: one session chosen from the Screen while this window doesn't hold
-  /// control. A list that shows stays, narrowed to the session; every session's work keeps the place that shows.
+  /// Whether choosing a session, or All, opens Activity: from the Screen while this window doesn't hold control.
+  /// Activity, when it shows, stays, narrowed to the choice.
   ///
   /// - Parameters:
-  ///   - choice: Whose work.
   ///   - place: What the window shows.
   ///   - holdingControl: Whether this window holds control.
   /// - Returns: Whether Activity opens.
-  static func opensActivity(for choice: ViewerSessionChoice, from place: ViewerPlace, holdingControl: Bool) -> Bool {
-    guard case .one = choice else { return false }
-    return place == .screen && !holdingControl
+  static func opensActivity(from place: ViewerPlace, holdingControl: Bool) -> Bool {
+    place == .screen && !holdingControl
   }
 
   /// All Sessions: every session's work.
@@ -43,10 +41,10 @@ extension ViewerController {
     openSession(sessions.choice(offset, from: snapshot.shownSessions))
   }
 
-  /// A session's work in Activity or its screenshots, as its menu's Show Activity and Show Screenshots offer them.
+  /// A session's work in a place, such as Activity, as its menu's Show Activity offers it.
   ///
   /// - Parameters:
-  ///   - place: Activity or Screenshots.
+  ///   - place: The place, such as Activity.
   ///   - key: The session's key.
   func show(_ place: ViewerPlace, of key: String) {
     chooseSession(.one(key))

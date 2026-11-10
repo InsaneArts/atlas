@@ -2,7 +2,7 @@ import AtlasUI
 import Foundation
 
 /// The helper's facts that its status does not carry: the agents connected to Atlas and when the helper logged in,
-/// which the helper line's tooltip lists. They are read once the window first shows, the login time again whenever
+/// which the helper row's menu lists. They are read once the window first shows, the login time again whenever
 /// the helper's account changes, and both by Check Again, never with every reading. Check Again reads the status too.
 extension ViewerController {
   /// Reads the agents connected to Atlas and the helper's login time. Only the newest reading can replace the agents;

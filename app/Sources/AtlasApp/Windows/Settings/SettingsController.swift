@@ -1,11 +1,13 @@
+import AtlasService
 import AtlasUI
 import Foundation
 import Observation
 
-/// The Settings window's one observed object: the pane shown, the alert asked, the agents and projects, and the
-/// person's choices. Values another window also shows (the helper's status, Open at Login, the picture) are read
+/// The Settings window's one observed object: where the window stands and has been, the alert asked, the agents and
+/// projects, and the person's choices. Values another window also shows (the helper's status, Open at Login, the picture) are read
 /// through ``SettingsLinks`` each time the window draws, so they stay one value; ``SettingsPresenter`` decides what
-/// the window shows. Its parts are in `SettingsController+Helper`, `+Agents`, `+Updates`, `+Alert` and `+Window`.
+/// the window shows. Its parts are in `SettingsController+Navigation`, `+Helper`, `+Agents`, `+Updates`, `+Alert` and
+/// the others beside them.
 @Observable
 final class SettingsController {
   /// What the window is doing. Written only by the controller's own files.
@@ -16,6 +18,21 @@ final class SettingsController {
   private(set) var icons: [String: IconImage] = [:]
   /// Whether Notify me is on.
   private(set) var notify = false
+  /// The pictures of agent actions: shown, confirmed and being written, and how many this Mac holds. Written only by
+  /// the controller's own files.
+  var pictures = SettingsPictures()
+  /// The person's files and the helper, as last read. Written only by the controller's own files.
+  var files = SettingsFiles()
+  /// When the account whose note the person read was added, in milliseconds since 1970. Written only by the
+  /// controller's own files.
+  var accountNoteRead: Double = 0
+  /// Sign In to a Site…'s sheet, while it shows. Written only by the controller's own files.
+  var signIn: SignInSheetState?
+  /// The icons of the accounts listed, by account: an app's own, or a site's. Written only by the controller's own
+  /// files.
+  var accountIcons: [String: SettingsAccountIcon] = [:]
+  /// The accounts whose icon was asked for, so each is asked once while it stays listed.
+  @ObservationIgnored var askedIcons: Set<String> = []
   /// Counts the times the window came forward and a choice was kept where no other window shows it, so what the
   /// links read is read again then.
   private(set) var revision = 0
@@ -28,25 +45,20 @@ final class SettingsController {
   @ObservationIgnored var agentsReading: Task<Void, Never>?
   /// Numbers each agents reading, so only the newest one started is kept.
   @ObservationIgnored var agentsGeneration = 0
-  /// How tall each pane last drew, its insets included, by pane. Written only by the controller's own files.
-  @ObservationIgnored var paneHeights: [SettingsTab: CGFloat] = [:]
-  /// Shapes the window to the pane shown: its name for the title bar, and the window's content height, nil until
-  /// the pane has drawn. The window sets it.
-  @ObservationIgnored var reshape: (@MainActor (_ title: String, _ contentHeight: CGFloat?) -> Void)?
 
-  /// Creates the window's controller on the pane last shown, with the person's saved choices.
+  /// Creates the window's controller on the page last shown, with the person's saved choices.
   ///
   /// - Parameter dependencies: What it reaches outside itself.
   init(dependencies: SettingsDependencies) {
     self.dependencies = dependencies
     let preferences = dependencies.preferences
-    session.tab =
-      preferences.loadTab()
-      .flatMap(SettingsTab.init(rawValue:)) ?? .general
+    session.route = .page(SettingsPage.saved(preferences.loadTab()))
     notify = preferences.loadNotify()
+    accountNoteRead = preferences.loadAccountNoteRead()
     icons = AgentRowIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
       dependencies.icon(forFile: path)
     }
+    followAccounts()
   }
 
   /// The helper's own commands, shared with the panel and the main window.
@@ -64,10 +76,13 @@ final class SettingsController {
       icons: icons,
       notify: notify,
       sound: actions.sound.button,
+      files: files,
+      pictures: pictures,
       facts: SettingsFacts(
         status: helper.status,
         connecting: helper.connecting,
         opensAtLogin: links.opensAtLogin(),
+        menuBarIcon: links.menuBarIcon(),
         picture: links.picture(),
         canPause: links.canPause(),
         running: actions.running,
@@ -75,7 +90,10 @@ final class SettingsController {
         installing: dependencies.installs.installing,
         isRemoving: dependencies.installs.isRemoving,
         version: dependencies.version
-      )
+      ),
+      accountNoteRead: accountNoteRead,
+      signIn: signIn,
+      accountIcons: accountIcons
     )
   }
 
@@ -88,19 +106,34 @@ final class SettingsController {
   func send(_ event: SettingsEvent) {
     // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
-    case .selectTab(let tab): selectTab(tab)
-    case .paneHeight(let tab, let height): fit(tab, height: height)
+    case .select(let page): select(page)
+    case .openAccount(let id): go(to: .account(id))
     case .checkAgain: Task { await checkAgain() }
-    case .askSwitch: ask(.switchToHelper)
-    case .askRecover: ask(.recover)
-    case .askLogOut: ask(.logOut)
+    case .askSwitch: ask(.helper(.switchToHelper))
+    case .askRecover: ask(.helper(.recover))
+    case .askLogOut: ask(.helper(.logOut))
     case .closeLeftovers: Task { await closeLogin(.closeLeftovers) }
     case .closeHelper: Task { await closeLogin(.closeHelper) }
+    case .makeHomePrivate: Task { await changeHome(makePrivate: true) }
+    case .askOpenHome: ask(.openHome)
+    case .setSignInCopies(let allow): askSignInCopies(allow)
     case .connect(let id): Task { await connect(id) }
     case .disconnect(let id): Task { await disconnect(id) }
     case .askForget(let path): askForget(path)
     case .checkForUpdates: Task { await checkForUpdates() }
     case .askInstall: askInstall()
+    case .askDeletePictures: ask(.deletePictures)
+    case .addApp: Task { await addApp() }
+    case .askRemoveAccount(let id): ask(.removeAccount(id))
+    case .setAccountLevel(let id, let level): Task { await setLevel(AccountLevel(level), of: id) }
+    case .dismissAccountNote: dismissAccountNote()
+    case .askSignIn(let site): askSignIn(site)
+    case .editSignInSite(let site): editSignInSite(site)
+    case .continueSignIn: Task { await continueSignIn() }
+    case .cancelSignIn: cancelSignInSheet()
+    case .signOutAccount(let id): Task { await holdFor(.signOut, account: id) }
+    case .forgetAccount(let id): Task { await holdFor(.forget, account: id) }
+    case .resetBrowser(let id): Task { await holdFor(.reset, account: id) }
     case .gettingStarted: dependencies.links.gettingStarted()
     case .showAppInFinder: dependencies.revealFile(Bundle.main.bundlePath)
     case .showAgentFile(let id): showAgentFile(id)
@@ -109,9 +142,9 @@ final class SettingsController {
     }
   }
 
-  /// Writes what changed in the General pane where each value belongs: Open at Login through the panel's command,
-  /// the picture to the main window or its saved rate, muting the helper through `atlas sound`, and Notify me to the
-  /// saved choices.
+  /// Writes what changed on the General and Activity pages where each value belongs: Open at Login through the panel's
+  /// command, the glyph to the menu bar item, the picture to the main window or its saved rate, muting the helper
+  /// through `atlas sound`, the pictures of agent actions to Atlas's settings, and Notify me to the saved choices.
   ///
   /// - Parameter general: The pane as the person left it.
   func update(_ general: SettingsGeneralState) {
@@ -121,6 +154,10 @@ final class SettingsController {
       // Unstructured, as an edit is synchronous: the change runs beside it.
       Task { await links.setOpenAtLogin(general.opensAtLogin) }
     }
+    if general.menuBarIcon != shown.menuBarIcon {
+      links.chooseMenuBarIcon(general.menuBarIcon)
+      revision += 1
+    }
     if general.picture != shown.picture {
       links.choosePicture(general.picture)
       revision += 1
@@ -129,29 +166,22 @@ final class SettingsController {
       // Unstructured, as an edit is synchronous: the change runs beside it.
       Task { await setHelperSound(muted: general.muteHelper) }
     }
+    updatePictures(general)
     if general.notify != notify {
       notify = general.notify
       dependencies.preferences.saveNotify(notify)
     }
   }
 
-  /// Shows a pane, remembered for the next time the window opens. The Agents pane reads the agents afresh.
-  ///
-  /// - Parameter tab: The pane.
-  func selectTab(_ tab: SettingsTab) {
-    guard tab != session.tab else { return }
-    session.tab = tab
-    dependencies.preferences.saveTab(tab.rawValue)
-    reshapeWindow()
-    if tab == .agents { readAgents() }
-  }
-
-  /// The window came forward: what the links read is read again, and the agents, the projects and the helper's
-  /// sound afresh.
+  /// The window came forward: what the links read is read again, and the agents, the projects, the helper's sound
+  /// and the pictures of agent actions afresh.
   func cameForward() {
     revision += 1
     readAgents()
+    // Unstructured, as coming forward is synchronous: the readings run beside it.
     Task { await readHelperSound() }
+    Task { await readPictures() }
+    if session.route == .page(.privacy) { Task { await readFiles() } }
   }
 
   /// The window closed: the agents reading under way stops. A command it started, such as a check for updates or a
@@ -162,14 +192,26 @@ final class SettingsController {
     agentsReading = nil
   }
 
-  /// One line about what a command just did, in the pane that ran it; it stays until the next.
+  /// One line about what a command just did, on the page that ran it; it stays until the next.
   ///
   /// - Parameters:
   ///   - text: The line, or nil to show none.
-  ///   - tab: The pane it shows in.
+  ///   - page: The page it shows on.
   ///   - kind: How it reads: quiet by default, a spinner while what it waits for runs, or the problem line.
-  ///   - fromCheck: Whether Check Again said it, which places it under "Ready to act"; not by default.
-  func say(_ text: String?, in tab: SettingsTab, kind: SettingsNote.Kind = .quiet, fromCheck: Bool = false) {
-    session.notice = text.map { SettingsNotice(tab: tab, text: $0, kind: kind, fromCheck: fromCheck) }
+  ///   - fromCheck: Whether Check Again said it, which places it under "Ready to Act"; not by default.
+  func say(_ text: String?, in page: SettingsPage, kind: SettingsNote.Kind = .quiet, fromCheck: Bool = false) {
+    say(text, on: .page(page), kind: kind, fromCheck: fromCheck)
+  }
+
+  /// One line about what a command just did, on the route that ran it, such as an account's page; it stays until the
+  /// next.
+  ///
+  /// - Parameters:
+  ///   - text: The line, or nil to show none.
+  ///   - route: The route it shows on.
+  ///   - kind: How it reads: quiet by default, a spinner while what it waits for runs, or the problem line.
+  ///   - fromCheck: Whether Check Again said it; not by default.
+  func say(_ text: String?, on route: SettingsRoute, kind: SettingsNote.Kind = .quiet, fromCheck: Bool = false) {
+    session.notice = text.map { SettingsNotice(route: route, text: $0, kind: kind, fromCheck: fromCheck) }
   }
 }

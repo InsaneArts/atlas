@@ -4,26 +4,36 @@
 //! was not confirmed stays quarantined, and is checked again before anything
 //! else may capture. Calls that may stop the native source block, so they
 //! belong off async runtime workers.
+//!
+//! One-shot pictures come from the same native source. With nobody watching,
+//! the source keeps it open for them itself, and gives it to a viewer that
+//! asks, or stops it once no picture was taken for a while.
 use atlas_core::{
     error::{Code, Error, Result},
     frame_pipe::diagnostics::Lifecycle,
+    process::Instance,
     protocol::CaptureBackend,
 };
 use std::{
     collections::VecDeque,
-    sync::{Mutex, MutexGuard, PoisonError, RwLock},
+    sync::{Mutex, MutexGuard, PoisonError, RwLock, TryLockError},
+    time::{Duration, Instant},
 };
 
 /// How many drained generations are remembered for late drain queries.
 const TOMBSTONES: usize = 16;
 
+/// How often work waiting to run between captures looks again.
+const FENCE_CHECK: Duration = Duration::from_millis(5);
+
 /// Stops the native source and drains its callbacks; only Ok confirms it.
 pub type Stop = fn() -> Result<()>;
 
-/// The live source and its owner. `state` is only ever held briefly;
-/// `fence` is held by one-shot captures while they run, and taken whole by
-/// a native stop, so no quarantine begins under a capture that passed its
-/// check.
+/// The live source and its owner. `state` is only ever held briefly, and
+/// only after `fence` when both are held. `fence` is held by every capture
+/// while it runs, one-shot or a frame, and taken whole by a native stop, so
+/// no quarantine begins under a capture that passed its check, and by work
+/// that must run between captures.
 pub struct Source {
     state: Mutex<State>,
     fence: RwLock<()>,
@@ -38,6 +48,12 @@ struct State {
     /// The generation that owns, or last owned without a confirmed stop.
     owner: Option<(u64, CaptureBackend)>,
     drained: VecDeque<Drained>,
+    /// A process that serves captures, signalled to end but not yet seen
+    /// gone: no capture begins until it is.
+    exiting: Option<Instance>,
+    /// When the source itself owns the native source for one-shot pictures,
+    /// when the last of them began.
+    kept: Option<Instant>,
 }
 
 /// A generation whose stop was confirmed, and the stop request that asked
@@ -82,6 +98,13 @@ fn busy() -> Error {
     Error::new(Code::Busy, "A live capture is already open")
 }
 
+fn restarting() -> Error {
+    Error::new(
+        Code::Busy,
+        "macOS's screen recorder is restarting; try again shortly",
+    )
+}
+
 fn quarantined() -> Error {
     Error::new(
         Code::Busy,
@@ -120,7 +143,22 @@ impl Source {
     /// still unconfirmed.
     pub fn admit(&self, backend: CaptureBackend) -> Result<Owner> {
         self.confirm()?;
+        if backend != CaptureBackend::ScreenCaptureKit {
+            self.release_kept(Duration::ZERO)?;
+        }
         let mut state = self.state();
+        // A native source kept for pictures goes on for a native viewer, under
+        // the viewer's own generation: nothing was ever delivered to the source
+        // itself that a stop would have to drain.
+        if state.kept.is_some() && backend == CaptureBackend::ScreenCaptureKit {
+            state.kept = None;
+            state.generation += 1;
+            state.owner = Some((state.generation, backend));
+            return Ok(Owner {
+                generation: state.generation,
+                backend,
+            });
+        }
         if state.lifecycle != Lifecycle::Stopped {
             return Err(busy());
         }
@@ -133,10 +171,14 @@ impl Source {
         })
     }
 
-    /// Run `capture`, a capture outside the live source, unless an earlier
-    /// native source's stop is unconfirmed; such a source is asked to stop
-    /// again first. The source cannot change state while `capture` runs, so
-    /// no quarantine begins between the check and the capture. This blocks.
+    /// Run `capture`, a one-shot picture, unless an earlier native source's
+    /// stop is unconfirmed; such a source is asked to stop again first. With
+    /// nobody owning the source, it keeps the native source for this picture
+    /// and the next ones itself, until [`Source::release_kept`]. Under a
+    /// native owner, `capture` may open the native stream; under a
+    /// CoreGraphics one it may not. The source cannot change state while
+    /// `capture` runs, so no quarantine begins between the check and the
+    /// capture. This blocks.
     ///
     /// # Errors
     ///
@@ -144,11 +186,130 @@ impl Source {
     pub fn one_shot<T>(&self, capture: impl FnOnce() -> T) -> Result<T> {
         self.confirm()?;
         let _capturing = self.fence.read().unwrap_or_else(PoisonError::into_inner);
-        let lifecycle = self.state().lifecycle;
-        if matches!(lifecycle, Lifecycle::Quarantined | Lifecycle::Stopping) {
+        let native;
+        {
+            let mut state = self.state();
+            if matches!(
+                state.lifecycle,
+                Lifecycle::Quarantined | Lifecycle::Stopping
+            ) {
+                return Err(quarantined());
+            }
+            // Nobody owns the source: it keeps the native source for this
+            // picture and the next ones itself.
+            if state.lifecycle == Lifecycle::Stopped {
+                state.generation += 1;
+                state.lifecycle = Lifecycle::Active;
+                state.owner = Some((state.generation, CaptureBackend::ScreenCaptureKit));
+                state.kept = Some(Instant::now());
+            } else if state.kept.is_some() {
+                state.kept = Some(Instant::now());
+            }
+            native = state
+                .owner
+                .is_some_and(|(_, backend)| backend == CaptureBackend::ScreenCaptureKit);
+        }
+        self.exited()?;
+        // Only a picture under a native owner, kept or a viewer's, may open
+        // the native stream: a CoreGraphics owner's source stays CoreGraphics.
+        Ok(if native {
+            super::stream::opening(capture)
+        } else {
+            capture()
+        })
+    }
+
+    /// Run `capture`, one frame of the live source's owner, holding the
+    /// fence a one-shot capture holds, so [`Source::between_captures`]
+    /// waits for it to end. This blocks while that runs.
+    ///
+    /// # Errors
+    ///
+    /// Returns busy while the native source's stop is unconfirmed, or while
+    /// a process that serves captures has been told to end and is not yet
+    /// gone.
+    pub fn frame<T>(&self, capture: impl FnOnce() -> T) -> Result<T> {
+        let _capturing = self.fence.read().unwrap_or_else(PoisonError::into_inner);
+        if matches!(
+            self.state().lifecycle,
+            Lifecycle::Quarantined | Lifecycle::Stopping
+        ) {
             return Err(quarantined());
         }
+        self.exited()?;
         Ok(capture())
+    }
+
+    /// Keep every capture out until `instance`, a process that serves them
+    /// and was told to end, is gone, so none runs while it may still exit.
+    /// Called between captures, where none can be cut.
+    pub fn until_gone(&self, instance: Instance) {
+        self.state().exiting = Some(instance);
+    }
+
+    /// Ok once no process told to end may still serve a capture.
+    fn exited(&self) -> Result<()> {
+        let mut state = self.state();
+        match state.exiting {
+            Some(instance) if !instance.ended() => Err(restarting()),
+            Some(_) => {
+                state.exiting = None;
+                Ok(())
+            }
+            None => Ok(()),
+        }
+    }
+
+    /// Run `quiet` once no capture runs, with none able to begin until it
+    /// returns. A CoreGraphics owner may stay: each of its frames is a
+    /// capture of its own, and the next one waits. A native owner keeps its
+    /// stream open between frames, so that stream is stopped and drained
+    /// first; the owner stays, and its next frame opens a new stream, which
+    /// has no picture from before. When that stop is not confirmed, `quiet`
+    /// does not run and the source stays stopping: nothing captures until
+    /// the owner's own stop settles it. A native source kept for pictures
+    /// has no owner to do that, so it is given back instead: stopped and
+    /// settled like any stop, quarantined when unconfirmed, and the next
+    /// picture keeps a new one. Nor does `quiet` run while an
+    /// earlier native source is stopping or unconfirmed, or when captures
+    /// still run after `within`, so a capture that never ends holds nothing
+    /// else up. None says `quiet` did not run. This blocks for up to
+    /// `within`, and then for the native stop.
+    pub fn between_captures<T>(&self, within: Duration, quiet: impl FnOnce() -> T) -> Option<T> {
+        let deadline = Instant::now() + within;
+        let _fence = loop {
+            match self.fence.try_write() {
+                Ok(fence) => break fence,
+                Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(FENCE_CHECK);
+                }
+                Err(TryLockError::WouldBlock) => return None,
+            }
+        };
+        let (native, kept) = {
+            let mut state = self.state();
+            match (state.lifecycle, state.owner) {
+                (Lifecycle::Stopped, _) => (false, None),
+                (Lifecycle::Active, Some((generation, backend))) => {
+                    let native = backend == CaptureBackend::ScreenCaptureKit;
+                    if native {
+                        state.lifecycle = Lifecycle::Stopping;
+                    }
+                    (native, state.kept.take().map(|_| generation))
+                }
+                _ => return None,
+            }
+        };
+        if let Some(generation) = kept {
+            let stopped = (self.stop)();
+            self.settle(generation, stopped.is_ok(), None);
+            stopped.ok()?;
+        } else if native {
+            (self.stop)().ok()?;
+            self.state().lifecycle = Lifecycle::Active;
+        }
+        Some(quiet())
     }
 
     /// Give the source back. A native source is stopped and drained first;
@@ -168,6 +329,34 @@ impl Source {
             }
         };
         self.settle(owner.generation, stopped.is_ok(), stop_request);
+        stopped
+    }
+
+    /// Stop the native source the source keeps for pictures once none was
+    /// taken for `idle`. Nothing else is touched: a viewer's source, or one
+    /// a viewer took over meanwhile, stays. This blocks while a capture runs,
+    /// and then for the stop.
+    ///
+    /// # Errors
+    ///
+    /// Returns the native stop's failure; the source is then quarantined.
+    pub fn release_kept(&self, idle: Duration) -> Result<()> {
+        let _fence = self.fence.write().unwrap_or_else(PoisonError::into_inner);
+        let generation = {
+            let mut state = self.state();
+            match (state.kept, state.owner, state.lifecycle) {
+                (Some(used), Some((generation, _)), Lifecycle::Active)
+                    if used.elapsed() >= idle =>
+                {
+                    state.kept = None;
+                    state.lifecycle = Lifecycle::Stopping;
+                    generation
+                }
+                _ => return Ok(()),
+            }
+        };
+        let stopped = (self.stop)();
+        self.settle(generation, stopped.is_ok(), None);
         stopped
     }
 
@@ -230,4 +419,5 @@ impl Source {
 }
 
 #[cfg(test)]
+#[path = "source_tests.rs"]
 mod tests;

@@ -61,7 +61,18 @@ enum PNG {
   static func write(_ view: some View, size: NSSize, to file: URL, appearance: NSAppearance?) -> Bool {
     let host = host(view)
     host.frame = NSRect(origin: .zero, size: size)
-    guard let appearance, let data = data(of: host, appearance: appearance) else {
+    return write(host, to: file, appearance: appearance)
+  }
+
+  /// Draws `view` as it is laid out, in `appearance`, to the PNG at `file`.
+  ///
+  /// - Parameters:
+  ///   - view: The view to draw.
+  ///   - file: Where the PNG goes.
+  ///   - appearance: The appearance to draw it in.
+  /// - Returns: Whether the PNG was written.
+  static func write(_ view: NSView, to file: URL, appearance: NSAppearance?) -> Bool {
+    guard let appearance, let data = data(of: view, appearance: appearance) else {
       return false
     }
     // The render reports a failed write as false; why it failed is not its concern.

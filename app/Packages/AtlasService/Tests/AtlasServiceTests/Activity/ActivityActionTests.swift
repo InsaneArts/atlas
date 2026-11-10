@@ -25,7 +25,7 @@ struct ActivityActionTests {
     ]
   )
   func kindFromVerb(says: String, kind: ActivityAction) {
-    #expect(ActivityAction(ActivityFixtures.row(id: "1", says: says, operation: "input")) == kind)
+    #expect(ActivityAction(ActivityLog.Entry(id: "1", says: says, operation: "input")) == kind)
   }
 
   @Test(
@@ -40,13 +40,13 @@ struct ActivityActionTests {
     ]
   )
   func kindOfInstallAndCleanUp(says: String) {
-    #expect(ActivityAction(ActivityFixtures.row(id: "1", says: says, operation: "run")) == .window)
+    #expect(ActivityAction(ActivityLog.Entry(id: "1", says: says, operation: "run")) == .window)
   }
 
   @Test("a screenshot and a change of control read by their operation, and words with no known verb by theirs")
   func kindFromOperation() {
     let entry = { (says: String?, operation: String) in
-      ActivityAction(ActivityFixtures.row(id: "1", says: says, operation: operation))
+      ActivityAction(ActivityLog.Entry(id: "1", says: says, operation: operation))
     }
     #expect(entry("took a screenshot", "screenshot") == .screenshot)
     #expect(entry("gave back control", "release") == .control)
@@ -71,7 +71,7 @@ struct ActivityActionTests {
     ]
   )
   func kindFromVerbField(verb: String, kind: ActivityAction) {
-    let entry = ActivityFixtures.row(id: "1", says: "scrolled in Opie", operation: "input", verb: verb)
+    let entry = ActivityLog.Entry(id: "1", says: "scrolled in Opie", operation: "input", verb: verb)
     #expect(ActivityAction(entry) == kind)
   }
 
@@ -89,15 +89,15 @@ struct ActivityActionTests {
     ]
   )
   func kindOfElementAction(verb: String, says: String, kind: ActivityAction) {
-    let entry = ActivityFixtures.row(id: "1", says: says, operation: "input", verb: verb)
+    let entry = ActivityLog.Entry(id: "1", says: says, operation: "input", verb: verb)
     #expect(ActivityAction(entry) == kind)
   }
 
   @Test("a verb this app does not know reads by the row's words, and a screenshot by its operation")
   func unknownVerbReadsByWords() {
-    let later = ActivityFixtures.row(id: "1", says: "pressed ⌘S", operation: "input", verb: "someday")
+    let later = ActivityLog.Entry(id: "1", says: "pressed ⌘S", operation: "input", verb: "someday")
     #expect(ActivityAction(later) == .keys)
-    let shot = ActivityFixtures.row(id: "2", says: "took a screenshot", operation: "screenshot", verb: "click")
+    let shot = ActivityLog.Entry(id: "2", says: "took a screenshot", operation: "screenshot", verb: "click")
     #expect(ActivityAction(shot) == .screenshot)
   }
 }

@@ -37,4 +37,5 @@ pub async fn from_env_verified(client: &Client) -> Option<HostSession> {
 }
 
 #[cfg(test)]
+#[path = "host_session_tests.rs"]
 mod tests;

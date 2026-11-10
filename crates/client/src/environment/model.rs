@@ -378,3 +378,7 @@ pub(super) fn file_report(plan: &Plan) -> Vec<FileReport> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[path = "model_tests.rs"]
+mod tests;

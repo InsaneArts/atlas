@@ -202,3 +202,7 @@ pub(super) fn app_named(app: &AppRow, name: &str) -> bool {
             .filter_map(|path| path.file_stem()?.to_str())
             .any(|own| same_text(own, name))
 }
+
+#[cfg(test)]
+#[path = "target_tests.rs"]
+mod tests;

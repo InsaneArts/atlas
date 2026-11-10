@@ -24,12 +24,26 @@ public enum PanelEvent: Equatable, Sendable {
   case askRecover
   /// Switch to the Helper…: ask before switching this Mac's screen to it.
   case askSwitch
+  /// An answer to the question at the top of the panel.
+  ///
+  /// - Parameters:
+  ///   - id: The question's id.
+  ///   - choice: The answer.
+  case answerAsk(id: String, choice: AskChoice)
+  /// End on what the person allowed for a task.
+  ///
+  /// - Parameter id: The grant's id.
+  case endAllowed(String)
+  /// Opens Settings › Accounts, from the accounts line.
+  case openAccounts
   /// Open Settings: the Settings window, which shows what the helper needs.
   case openSettings
   /// The pause button on the picture: stop or start the panel's picture. Work in the helper goes on either way.
   case togglePause
   /// The sound button: mute the helper, or let it play.
   case toggleSound
+  /// OK on the note that a macOS service in the helper slowly slows the Mac: never show it again.
+  case dismissServiceNote
   /// ⋯: open the menu under its button.
   ///
   /// - Parameter below: The button's frame in the panel, top left first, so the menu opens under it.

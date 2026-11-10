@@ -64,8 +64,9 @@ const TEAM: &str = match option_env!("ATLAS_LOCAL_TEAM") {
     None => RELEASE_TEAM,
 };
 
-/// The identifier the app's executable inside Atlas.app is signed as.
-pub const APP_IDENTIFIER: &str = "com.insanearts.atlas.bar";
+/// The identifier the app's executable inside Atlas.app is signed as: the bundle's own, as macOS lets only code
+/// signed as the app it runs in ask to notify the person; signed as anything else, it is refused without a word.
+pub const APP_IDENTIFIER: &str = IDENTIFIER;
 
 /// The code requirement for code signed as `identifier`: a Developer ID
 /// Application signature by Atlas's team. install.sh checks the same.
@@ -183,4 +184,5 @@ pub fn require_current(pid: u32, expected: &str) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "signature_tests.rs"]
 mod tests;

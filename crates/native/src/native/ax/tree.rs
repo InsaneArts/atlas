@@ -592,4 +592,5 @@ pub(super) fn unreachable(error: Option<AXError>, trusted: bool, exists: bool) -
 }
 
 #[cfg(test)]
+#[path = "tree_tests.rs"]
 mod tests;

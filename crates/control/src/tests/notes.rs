@@ -221,7 +221,7 @@ fn the_person_taking_control_removes_a_stale_note() {
     killed.write(&person.holder).unwrap();
     assert!(person.holder_note().is_some_and(|note| !note.live()));
 
-    let ownership = person.acquire_for_person().unwrap();
+    let ownership = person.acquire_for_person(Beside::Commands).unwrap();
     assert!(!person.holder.exists());
     drop(ownership);
 }

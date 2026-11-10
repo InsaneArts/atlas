@@ -11,6 +11,8 @@ public struct ActivityGrouping: Sendable {
   static let shotTolerance: TimeInterval = 3
   /// The operation a screenshot row names.
   public static let screenshotOperation = "screenshot"
+  /// 3: the fewest repeats that fold into one line; two in a row read better as two.
+  static let foldsFrom = 3
 
   /// The log, newest first.
   var log: ActivityLog
@@ -83,6 +85,16 @@ public struct ActivityGrouping: Sendable {
     return overflow ? .max : sum
   }
 
+  /// Whether every screenshot row that worked finds its capture among `captures` (``shots(in:)``): while one does
+  /// not, a later listing may still hold it.
+  ///
+  /// - Parameter captures: The screenshots the service lists.
+  /// - Returns: Whether each one does.
+  public func findsEveryShot(in captures: [Screenshot]) -> Bool {
+    let taking = log.entries.filter { $0.operation == Self.screenshotOperation && $0.outcome == .worked }
+    return shots(in: captures).count == taking.count
+  }
+
   /// The capture each screenshot row that worked took: the one the row names, when the screenshots list it; for a row
   /// that names none, as an older service's, the nearest one within ``shotTolerance`` of its start, each capture taken
   /// once, newest rows first. A row whose named capture is gone has none, and no other row ever has one.
@@ -117,7 +129,7 @@ public struct ActivityGrouping: Sendable {
   }
 
   /// Every line of the log in its own order, each with the part of time it falls in: a row with no time stays with
-  /// the row before it, and a row that repeats the line just above it in the same part joins it.
+  /// the row before it, and three or more rows that repeat one another in the same part fold into one line.
   ///
   /// - Parameters:
   ///   - captures: The screenshots the service lists, for the screenshot rows.
@@ -147,16 +159,22 @@ public struct ActivityGrouping: Sendable {
         joined.entry.app = joined.entry.app ?? last.run.entry.app
         joined.logicalIDs = last.run.logicalIDs.union(run.logicalIDs)
         joined.actions = Self.addingActions(run.actions, to: last.run.actions)
+        joined.members = [entry] + last.run.members
         runs[runs.count - 1].run = joined
       } else {
         runs.append((current, run))
       }
     }
-    return runs
+    return runs.flatMap { part, run in
+      guard run.members.count > 1, run.members.count < Self.foldsFrom else { return [(part, run)] }
+      return run.members
+        .reversed()
+        .map { (part, ActivityRun(entry: $0, startedAt: start(of: $0))) }
+    }
   }
 
   /// Whether a row is the same action as the line just above it, by the same actor in the same host session, with the
-  /// same outcome, at most a moment gap apart: running and screenshot rows always stand alone.
+  /// same outcome, in the same listed account allowed the same way, at most ``ActivityMoments/momentGap`` apart: running and screenshot rows always stand alone.
   ///
   /// - Parameters:
   ///   - newer: The line above.
@@ -179,19 +197,20 @@ public struct ActivityGrouping: Sendable {
     else { return false }
     return above.actor == below.actor && above.session == below.session && above.says == below.says
       && above.outcome == below.outcome && above.operation == below.operation && above.reason == below.reason
+      && above.account == below.account && above.allowed == below.allowed
   }
 
-  /// Whether a row matches a search: in what was done, never in who did it.
+  /// Whether a row matches a search: in what was done or the listed account it was done in, never in who did it.
   ///
   /// - Parameters:
   ///   - entry: The row.
   ///   - query: The search; empty, or spaces alone, matches every row.
-  /// - Returns: Whether what the row did holds the search, ignoring case and accents.
+  /// - Returns: Whether what the row did, or its account's name, holds the search, ignoring case and accents.
   static func matches(_ entry: ActivityLog.Entry, query: String) -> Bool {
     let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !words.isEmpty else { return true }
     return done(entry)
-      .localizedStandardContains(words)
+      .localizedStandardContains(words) || entry.account?.name.localizedStandardContains(words) == true
   }
 
   /// What a line says: the person's own action after "You", anyone else's as a sentence's start.

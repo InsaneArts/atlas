@@ -20,9 +20,11 @@ public struct OnboardingFacts: Equatable, Sendable {
   /// The helper, as this account sees it.
   public var helper = Helper()
   /// Whether setup has finished.
-  var finished = false
+  public internal(set) var finished = false
   /// Open at Login was decided once already, so the person's choice stands.
   var loginDecided = false
+  /// Keeping the home folder private was offered for this helper already, so the person's choice stands.
+  public internal(set) var homePrivacyOffered = false
   /// In the helper: the account that asked, and this account's own state.
   public var asker = Asker()
   /// The user IDs of deleted accounts whose logins are still open, which Atlas closes before setup goes on.
@@ -56,6 +58,7 @@ public struct OnboardingFacts: Equatable, Sendable {
     onlyChoice = raw.onlyChoice ?? false
     finished = raw.finished ?? false
     loginDecided = raw.menubarLogin ?? false
+    homePrivacyOffered = raw.homePrivacyOffered ?? false
     leftoverLogins = (raw.leftoverLogins ?? [])
       .compactMap(\.uid)
     guard let side = raw.helper else { return }

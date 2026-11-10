@@ -23,12 +23,23 @@ extension SettingsController {
   func confirmAlert() async {
     guard !session.alertRunning, let alert = session.alert else { return }
     switch alert {
-    case .recover: await run { await self.recover() }
-    case .switchToHelper: await run { await self.switchHelper() }
-    case .logOut: await run { await self.logOut(force: false) }
-    case .logOutAnyway: await run { await self.logOut(force: true) }
+    case .helper(.recover): await run { await self.recover() }
+    case .helper(.switchToHelper): await run { await self.switchHelper() }
+    case .helper(.logOut): await run { await self.logOut(force: false) }
+    case .helper(.logOutAnyway): await run { await self.logOut(force: true) }
     case .forget(let path): await run { await self.forget(path) }
     case .install(let version): await install(version)
+    // The files' alerts close once their change ends; what it said shows under the section.
+    case .openHome:
+      await run { await self.changeHome(makePrivate: false) }
+      session.alert = nil
+    case .allowSignIns:
+      await run { await self.setSignInCopies(true) }
+      session.alert = nil
+    case .deletePictures: await run { await self.deletePictures() }
+    case .removeAccount(let id):
+      await run { await self.removeAccount(id) }
+      session.alert = nil
     }
   }
 

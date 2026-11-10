@@ -2,7 +2,7 @@
 //! that holds it by a token that runs out unless renewed, and keeps the
 //! controller lock until every input and release under it has settled. An
 //! [`ActionPermit`] marks one input under way.
-use super::{Controller, Ownership};
+use super::{Beside, Controller, Ownership, PrivateHold};
 use atlas_core::{
     error::{Code, Error, Result},
     files::token,
@@ -27,8 +27,9 @@ pub struct Lease {
     /// that release can name it and control ends only once it cleaned up.
     pub(super) retired: Option<String>,
     /// The controller lock, held while there is a token, an input in flight
-    /// or a release under way, and only then.
-    descriptor: Option<Ownership>,
+    /// or a release under way, and only then. Shared only with work the
+    /// live token began under it, which keeps the lock until it ends.
+    descriptor: Option<Arc<Ownership>>,
     /// When the owner's token runs out unless renewed.
     pub(super) expires: Instant,
     /// Whether an [`ActionPermit`] is out: never more than one at a time.
@@ -86,12 +87,26 @@ impl Lease {
     /// Refuses unavailable controller exclusion, an unresolved prior outcome or a lease still
     /// being cleaned up.
     pub fn acquire(&mut self, controller: &Controller) -> Result<String> {
-        self.acquire_at(controller, Instant::now(), Instant::now)
+        self.acquire_beside(controller, Beside::Commands)
+    }
+
+    /// [`Lease::acquire`], going on only beside what `beside` names: with
+    /// [`Beside::Nothing`], a command an agent started that still runs
+    /// refuses it, as for a sign-in that agents must not see.
+    ///
+    /// # Errors
+    ///
+    /// Refuses what [`Lease::acquire`] refuses, and with [`Beside::Nothing`]
+    /// a command still running (`busy`, held by an agent, `running`
+    /// `command`).
+    pub fn acquire_beside(&mut self, controller: &Controller, beside: Beside) -> Result<String> {
+        self.acquire_at(controller, beside, Instant::now(), Instant::now)
     }
 
     fn acquire_at(
         &mut self,
         controller: &Controller,
+        beside: Beside,
         now: Instant,
         completed: impl FnOnce() -> Instant,
     ) -> Result<String> {
@@ -101,7 +116,7 @@ impl Lease {
             return Err(Error::new(Code::Busy, "Another viewer has control"));
         }
 
-        self.descriptor = Some(controller.acquire_for_person()?);
+        self.descriptor = Some(Arc::new(controller.acquire_for_person(beside)?));
         let token = token();
         self.owner = Some(token.clone());
         self.expires = completed() + self.ttl;
@@ -241,6 +256,44 @@ impl Lease {
         self.descriptor.is_some()
     }
 
+    /// The control the live `token` holds, for work it carries out under
+    /// it: the lock stays held until that work lets go of it too, even when
+    /// the lease ends first.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a token that does not hold the lease.
+    pub fn ownership(&mut self, token: &str) -> Result<Arc<Ownership>> {
+        self.require(token)?;
+        self.descriptor
+            .clone()
+            .ok_or_else(|| Error::new(Code::LeaseLost, "Control was released. Take control again."))
+    }
+
+    /// Hide the helper's screen from agents while the live `token` holds
+    /// control, for `hold`: the hold names this lease, and ends with it.
+    ///
+    /// # Errors
+    ///
+    /// Refuses a token that does not hold the lease, and failures writing
+    /// the hold or its generation; the screen is then not hidden.
+    pub fn hide_screen(
+        &mut self,
+        controller: &Controller,
+        token: &str,
+        hold: &PrivateHold,
+    ) -> Result<()> {
+        self.require(token)?;
+        let generation = self
+            .descriptor
+            .as_ref()
+            .and_then(|ownership| ownership.generation.as_deref())
+            .ok_or_else(|| {
+                Error::new(Code::LeaseLost, "Control was released. Take control again.")
+            })?;
+        controller.begin_private(generation, hold)
+    }
+
     /// Whether a token ran out and its release has not begun yet.
     pub fn expired(&self) -> bool {
         self.retired.is_some()
@@ -310,4 +363,5 @@ impl Drop for ActionPermit {
 }
 
 #[cfg(test)]
+#[path = "lease_tests.rs"]
 mod tests;

@@ -61,4 +61,5 @@ pub(crate) fn render(headers: &[&str], rows: &[Vec<String>]) -> String {
 }
 
 #[cfg(test)]
+#[path = "table_tests.rs"]
 mod tests;

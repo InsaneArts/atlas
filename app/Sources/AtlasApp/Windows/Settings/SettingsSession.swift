@@ -1,9 +1,14 @@
+import AtlasService
 import AtlasUI
 
-/// What the Settings window is doing: the pane shown, the alert asked, what runs, and what the last command said.
+/// What the Settings window is doing: where it stands, the alert asked, what runs, and what the last
+/// command said.
 struct SettingsSession: Equatable {
-  /// The pane shown.
-  var tab = SettingsTab.general
+  /// The route shown.
+  var route = SettingsRoute.page(.helper)
+  /// Each account as Atlas last listed it, by id, so an account's page keeps its newest name while Atlas can't read
+  /// its list.
+  var knownAccounts: [String: ViewerStatus.Account] = [:]
   /// The alert asked, if any.
   var alert: SettingsAlert?
   /// Whether the alert's command runs now, so its buttons wait.
@@ -16,9 +21,13 @@ struct SettingsSession: Equatable {
   var checking = false
   /// Whether Atlas closes a login now, under the person's approval.
   var closing = false
+  /// Whether a change to the accounts list runs now.
+  var accountsWorking = false
+  /// The level each account is being set to, while its change runs, which its page shows at once.
+  var changingLevel: [String: AccountLevel] = [:]
   /// Where a check for updates stands.
   var update = SettingsUpdate.idle
-  /// What the last command said, in the pane that ran it.
+  /// What the last command said, on the page that ran it.
   var notice: SettingsNotice?
   /// Why each agent's last Connect or Disconnect failed, by id; cleared when status confirms the requested state.
   var connectFailures: [String: SettingsAgentFailure] = [:]

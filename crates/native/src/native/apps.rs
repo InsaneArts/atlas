@@ -62,6 +62,18 @@ pub fn bundle_id(pid: i64) -> Option<String> {
     })
 }
 
+/// The name the app running as process `pid` shows, when one does. Called
+/// on worker threads, so it drains its own autorelease pool.
+pub fn name(pid: i64) -> Option<String> {
+    bundle_id_with(pid, |pid| {
+        objc2::rc::autoreleasepool(|_| {
+            NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?
+                .localizedName()
+                .map(|name| name.to_string())
+        })
+    })
+}
+
 fn bundle_id_with(pid: i64, lookup: impl FnOnce(libc::pid_t) -> Option<String>) -> Option<String> {
     let pid = libc::pid_t::try_from(pid).ok().filter(|pid| *pid > 0)?;
     lookup(pid)
@@ -75,4 +87,5 @@ fn launched_at(app: &NSRunningApplication) -> Option<u64> {
 }
 
 #[cfg(test)]
+#[path = "apps_tests.rs"]
 mod tests;

@@ -197,4 +197,5 @@ mod system {
 }
 
 #[cfg(test)]
+#[path = "text_tests.rs"]
 mod tests;

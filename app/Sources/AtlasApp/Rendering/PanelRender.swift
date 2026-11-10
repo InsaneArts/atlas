@@ -115,6 +115,7 @@ enum PanelRender {
     // The menu bar item at its own size, centred in the strip as the menu bar does.
     let item = MenuBarRender.item(
       PanelPresenter.mode(snapshot).kind,
+      icon: .orbit,
       appearance: appearance ?? NSAppearance.currentDrawing()
     )
     item.setFrameOrigin(
@@ -126,7 +127,7 @@ enum PanelRender {
     canvas.addSubview(item)
     content.frame = NSRect(origin: .zero, size: size)
     canvas.addSubview(content)
-    return write(canvas, to: path, appearance: appearance)
+    return PNG.write(canvas, to: URL(fileURLWithPath: path), appearance: appearance)
   }
 
   /// Draws the alert window's alert, as it stands over whatever is behind it: running, saying why its command did
@@ -145,7 +146,7 @@ enum PanelRender {
     canvas.addSubview(fill(canvas.bounds, .windowBackgroundColor))
     content.frame = canvas.bounds
     canvas.addSubview(content)
-    return write(canvas, to: path, appearance: appearance)
+    return PNG.write(canvas, to: URL(fileURLWithPath: path), appearance: appearance)
   }
 
   /// A plain box in one colour.
@@ -160,20 +161,5 @@ enum PanelRender {
     box.borderWidth = 0
     box.fillColor = colour
     return box
-  }
-
-  /// Writes `canvas` as a PNG at `path`.
-  ///
-  /// - Parameters:
-  ///   - canvas: The view to draw.
-  ///   - path: Where to write it.
-  ///   - appearance: The appearance to draw it in.
-  /// - Returns: Whether the PNG was written.
-  private static func write(_ canvas: NSView, to path: String, appearance: NSAppearance?) -> Bool {
-    guard let appearance, let data = PNG.data(of: canvas, appearance: appearance) else {
-      return false
-    }
-    // The render reports a failed write as false; why it failed is not its concern.
-    return (try? data.write(to: URL(fileURLWithPath: path))) != nil
   }
 }

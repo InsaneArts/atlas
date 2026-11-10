@@ -419,4 +419,5 @@ fn words(key: &str) -> String {
 }
 
 #[cfg(test)]
+#[path = "render_tests.rs"]
 mod tests;

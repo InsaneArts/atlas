@@ -4,7 +4,7 @@
 //! running helper daemon never sees a half-written executable.
 use atlas_core::{
     app_bundle::{
-        self, BUNDLE_EXECUTABLE as EXECUTABLE, installed_app, reachable_by_others,
+        self, BUNDLE_EXECUTABLE as EXECUTABLE, exact_version, installed_app, reachable_by_others,
         require_helper_access,
     },
     error::{Code, Error, Result},
@@ -70,12 +70,6 @@ fn problem(message: impl Into<String>) -> Error {
 /// The version in a release archive's name, `Atlas-X.Y.Z-macos.zip`.
 fn archive_version(name: &str) -> Option<Vec<u64>> {
     exact_version(name.strip_prefix("Atlas-")?.strip_suffix("-macos.zip")?)
-}
-
-/// `X.Y.Z` as numbers, only when every part is one: the versions a release
-/// may have.
-pub fn exact_version(text: &str) -> Option<Vec<u64>> {
-    text.split('.').map(|part| part.parse().ok()).collect()
 }
 
 fn bundle_version(app: &Path) -> Option<String> {
@@ -735,4 +729,5 @@ async fn install_in(
 }
 
 #[cfg(test)]
+#[path = "update_tests.rs"]
 mod tests;

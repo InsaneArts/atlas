@@ -441,7 +441,7 @@ pub async fn click_reference(
         "count": count,
         "modifiers": modifiers,
     });
-    referenced(client, target, &action).await
+    crate::asking::after_asking(client, async || referenced(client, target, &action).await).await
 }
 
 /// Do `action` to the element its `ref` names through Accessibility alone,
@@ -461,6 +461,13 @@ pub async fn click_reference(
 /// errors propagate; an action the app did not acknowledge is uncertain and
 /// must be recovered, never repeated.
 pub async fn element(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
+    // Control is taken again for each attempt, so none is held while the
+    // person is asked.
+    crate::asking::after_asking(client, async || element_once(client, target, action).await).await
+}
+
+/// [`element`] once: a refusal to ask the person comes back as it is.
+async fn element_once(client: &Client, target: Option<&Target>, action: &Value) -> Result<Value> {
     // An action that does not decode is refused as its batch is, below.
     if Action::deserialize(action).is_ok_and(|action| action.element_action().is_none()) {
         return Err(Error::new(
@@ -970,6 +977,21 @@ pub async fn click_element(
     count: u8,
     modifiers: &[String],
 ) -> Result<Value> {
+    crate::asking::after_asking(client, async || {
+        click_element_once(client, target, filter, which, count, modifiers).await
+    })
+    .await
+}
+
+/// [`click_element`] once: a refusal to ask the person comes back as it is.
+async fn click_element_once(
+    client: &Client,
+    target: &Target,
+    filter: &ElementFilter,
+    which: Button,
+    count: u8,
+    modifiers: &[String],
+) -> Result<Value> {
     if filter.role.is_none() && filter.name.is_none() {
         return Err(Error::new(
             Code::Input,
@@ -993,6 +1015,7 @@ pub async fn click_element(
     // checked after native preparation, under the same lock as the click.
     let windows = client.windows_in(None, true, WINDOW_LOOKUP).await?.windows;
     let check = element_check(element, &windows, expect, (x, y))?;
+    client.picture_found(element);
 
     // The name it was found by is kept only as a control's caption: any
     // other element's name may be a document's text, a file or a title.
@@ -1050,4 +1073,5 @@ fn element_identity(element: &Element) -> Value {
 }
 
 #[cfg(test)]
+#[path = "elements_tests.rs"]
 mod tests;

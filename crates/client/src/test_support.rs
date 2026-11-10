@@ -13,7 +13,7 @@ mod requester;
 pub use executor::{
     Fixture, WORKER, executor_ready, executor_worker, interrupted_executor, pause_executor,
 };
-pub use helper::{Helper, completed, exited};
+pub use helper::{Helper, Pictures, completed, exited};
 pub use requester::{Requester, WATCHDOG};
 
 use crate::{
@@ -31,10 +31,22 @@ use std::{os::unix::net::UnixStream, path::Path, time::Instant};
 
 /// The activity log's rotated file.
 pub const PREVIOUS: &str = crate::activity_log::PREVIOUS;
+/// The folder of the activity log's older files.
+pub const HISTORY: &str = crate::activity_log::HISTORY;
 /// The warning a doctor gives of web content.
 pub const WEB_CONTENT: &str = crate::capability::WEB_CONTENT;
 /// The warning a doctor gives of a failed Save/Open check.
 pub const NATIVE_DIALOGS_FAILED: &str = crate::capability::NATIVE_DIALOGS_FAILED;
+
+/// Initialize macOS's encoder before a fixture starts its input/save deadline.
+/// Its first CGImage call can scan the test executable's bundle resources.
+pub(crate) fn prepare_picture_encoder() {
+    static READY: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    READY.get_or_init(|| {
+        crate::helper_info::jpeg_rgb(&[200; 24], (4, 2, 12), (4, 0.6))
+            .expect("the fixture's native picture encoder");
+    });
+}
 
 /// Claim `owned` for `task`, kept in `store`.
 pub fn claim_in(store: Store, task: Task, owned: &Owned, state: State) -> Result<()> {
@@ -55,7 +67,8 @@ pub fn converse_until(
     crate::setup::executor::converse_until(stream, secret, deadline)
 }
 
-/// A client whose endpoints and controller state are entirely temporary.
+/// A client whose endpoints and controller state are entirely temporary. It
+/// keeps no pictures before actions unless a test turns them on.
 pub fn client(directory: &Path) -> Client {
     let mut client = Client::new(Config {
         helper_uid: UID,
@@ -63,6 +76,10 @@ pub fn client(directory: &Path) -> Client {
         identity_probe: directory.join("absent-probe"),
         input_socket: directory.join("absent-input.sock"),
         output_dir: directory.join("output"),
+        activity: atlas_core::config::Activity {
+            pictures_before_actions: false,
+            ..Default::default()
+        },
     })
     .unwrap();
     client.controller = Controller::at(UID, &directory.join("state"));
@@ -114,4 +131,31 @@ pub fn client_in(directory: &Path) -> Client {
     let mut client = Client::new(config).unwrap();
     client.controller = Controller::at(CONFIGURED_UID, &directory.join("state"));
     client
+}
+
+/// The process group of a shell that exited after handing work on in it, as
+/// `atlas run sh -c '(sleep 30; open …) &'` leaves: that work still runs,
+/// until [`end_group`].
+pub fn leftover_group() -> i32 {
+    use std::os::unix::process::CommandExt;
+    let mut shell = atlas_core::spawn::spawn(
+        std::process::Command::new("/bin/sh")
+            .args([
+                "-c",
+                "(/bin/sleep 30; /usr/bin/open https://example.com) >/dev/null 2>&1 &",
+            ])
+            .process_group(0),
+    )
+    .unwrap();
+    let group = i32::try_from(shell.id()).unwrap();
+    shell.wait().unwrap();
+    group
+}
+
+/// End everything that runs in process group `group`.
+pub fn end_group(group: i32) {
+    let _ = nix::sys::signal::killpg(
+        nix::unistd::Pid::from_raw(group),
+        nix::sys::signal::Signal::SIGKILL,
+    );
 }

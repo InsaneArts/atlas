@@ -95,6 +95,8 @@ extension OnboardingFacts {
     let setupProblem: String?
     /// Open at Login was decided once already, so the person's choice stands.
     let menubarLogin: Bool?
+    /// Keeping the home folder private was offered for this helper already.
+    let homePrivacyOffered: Bool?
     /// The helper, as this account sees it, or this account as the helper.
     let helper: Side?
     /// The deleted accounts' logins that are still open.

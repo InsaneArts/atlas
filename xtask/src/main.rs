@@ -4,9 +4,8 @@
 //! and writes a zip with its SHA-256 sum. scripts/release.sh publishes both
 //! as a GitHub release.
 
-use atlas_cli::menubar::LOGIN_JOB;
 use atlas_core::{
-    app_bundle::{APP_EXECUTABLE, IDENTIFIER},
+    app_bundle::{APP_EXECUTABLE, IDENTIFIER, LOGIN_JOB, exact_version},
     digest::read_sha256,
     files::exchange,
 };
@@ -370,7 +369,7 @@ fn committed_version(root: &Path) -> Result<()> {
 /// A release's version must be plain numbers (`0.2.0`, not `0.2.0-beta`):
 /// `atlas update` reads it from the archive's name and refuses any other.
 fn release_version(version: &str) -> Result<()> {
-    if atlas_client::update::exact_version(version).is_some() {
+    if exact_version(version).is_some() {
         return Ok(());
     }
 

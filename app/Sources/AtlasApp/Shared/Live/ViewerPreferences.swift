@@ -1,7 +1,7 @@
 import Foundation
 
-/// The main window's choices that outlast it: how often a picture is read, the corner the small screen keeps to, and
-/// whether the person hid the sidebar. The main window reads and writes them, and Settings writes the rate while no
+/// The main window's choices that outlast it: how often a picture is read, the corner the small screen keeps to,
+/// whether the person hid the sidebar, and whether the window was open when Atlas last stopped. The main window reads and writes them, and Settings writes the rate while no
 /// main window is open, so the two agree. Handed to each controller, so tests keep them in memory and never write the real defaults.
 struct ViewerPreferences {
   /// The defaults key of the picture rate, in seconds. Shipped, so it never changes.
@@ -10,6 +10,8 @@ struct ViewerPreferences {
   static let cornerKey = "viewer.corner"
   /// The defaults key of whether the person hid the sidebar.
   static let sidebarHiddenKey = "viewer.sidebarHidden"
+  /// The defaults key of whether the main window is open.
+  static let windowOpenKey = "viewer.open"
 
   /// The saved picture rate, in seconds; 0 when none is saved.
   var loadRate: @MainActor () -> Double
@@ -23,6 +25,10 @@ struct ViewerPreferences {
   var loadSidebarHidden: @MainActor () -> Bool = { false }
   /// Saves whether the person hid the sidebar.
   var saveSidebarHidden: @MainActor (Bool) -> Void = { _ in }
+  /// Whether the main window was open when Atlas last stopped; false when nothing is saved.
+  var loadWindowOpen: @MainActor () -> Bool = { false }
+  /// Saves whether the main window is open.
+  var saveWindowOpen: @MainActor (Bool) -> Void = { _ in }
 
   /// Preferences kept in `defaults` under the shipped keys.
   ///
@@ -35,7 +41,9 @@ struct ViewerPreferences {
       loadCorner: { defaults.string(forKey: cornerKey) },
       saveCorner: { defaults.set($0, forKey: cornerKey) },
       loadSidebarHidden: { defaults.bool(forKey: sidebarHiddenKey) },
-      saveSidebarHidden: { defaults.set($0, forKey: sidebarHiddenKey) }
+      saveSidebarHidden: { defaults.set($0, forKey: sidebarHiddenKey) },
+      loadWindowOpen: { defaults.bool(forKey: windowOpenKey) },
+      saveWindowOpen: { defaults.set($0, forKey: windowOpenKey) }
     )
   }
 }

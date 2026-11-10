@@ -32,13 +32,17 @@ struct ViewerDependencies {
   /// The date and time now, which the panes tell times and days by.
   var wallClock: @MainActor () -> Date = { Date() }
   /// Where a copied screenshot goes, and how its file is shown; by default nowhere.
-  var shotOutlet = ShotOutlet(copy: { _ in }, reveal: { _ in })
+  var shotOutlet = ShotOutlet(copy: { _, _ in true }, reveal: { _ in true })
   /// Opens Settings on Helper, which says what the helper needs.
   var openSettings: @MainActor () -> Void = {}
   /// Where apps' icons are found and kept; by default none is, and every app draws its tile.
   var icons = AppIcons.none
-  /// Reads all covering windows through the guarded helper command; nil disables window crops.
-  var appWindows: @MainActor () async -> HelperOccluderList? = { nil }
   /// Opens lanes to the frame service; nil reads every picture over the viewer's address.
   var framePipe: (any FramePipeConnector)?
+  /// Told when the window leaves one place for another, such as the Screen for Activity, so a question its banner
+  /// showed is notified once it no longer shows; nothing by default.
+  var placeChanged: @MainActor () -> Void = {}
+  /// Told once the accounts may have changed here, after a sign-in's Done or a removal from its alert, so the panel
+  /// reads them at once and Settings and the menu bar show them; nothing by default.
+  var accountsChanged: @MainActor () async -> Void = {}
 }

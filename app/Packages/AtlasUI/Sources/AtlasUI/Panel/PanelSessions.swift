@@ -58,7 +58,7 @@ struct PanelSessions: View {
         .frame(maxWidth: .infinity, minHeight: PanelLayout.moreRow, alignment: .leading)
         .padding(.leading, PanelLayout.sessionText)
     }
-    .buttonStyle(.row(corner: PanelLayout.sessionCorner))
+    .buttonStyle(.pill)
     .help("Show every session in Atlas")
     .accessibilityHint("Shows every session in Atlas")
   }

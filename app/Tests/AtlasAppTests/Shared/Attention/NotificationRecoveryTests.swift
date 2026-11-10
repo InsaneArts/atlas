@@ -37,12 +37,7 @@ struct NotificationRecoveryTests {
   ///   - seen: Where it counts.
   /// - Returns: The commands.
   private static func actions(_ service: ScriptedService, _ commands: ScriptedCommands, _ seen: Seen) -> HelperActions {
-    HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: ManualClock())
-    ) { seen.endedControl += 1 }
+    HelperActions.scripted(service, commands: commands) { seen.endedControl += 1 }
   }
 
   /// A notification's Recover over `actions` and `service`, recording into `seen`.

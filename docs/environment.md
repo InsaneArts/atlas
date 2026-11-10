@@ -2,7 +2,19 @@
 
 The helper has its own home, tools and application state. Atlas can copy an explicit set of files into that home and later undo the copy. It takes a one-way snapshot; it does not mirror your account or keep files synchronized. To bring a result back, use `atlas collect`: it copies chosen files out and never changes what a snapshot owns.
 
-Use small, task-specific selections. Do not select credentials, browser profiles, account databases or files an app is currently writing. Sign in to an app separately in the helper when the task needs it.
+Use small, task-specific selections. Do not select account databases or files an app is currently writing. Sign in to an app separately in the helper when the task needs it.
+
+Atlas refuses, with the `credentials` code, to copy a file or folder that holds your sign-ins or secrets, and to let a profile's `[[references]]` name one. It goes by where the file is, with links followed:
+
+- keychains: `~/Library/Keychains`, and any `*.keychain` or `*.keychain-db`;
+- browser profiles: Chrome, Chromium, Brave, Edge, Arc, Vivaldi, Opera and Firefox under `~/Library/Application Support`, and Safari's `~/Library/Cookies`, `~/Library/Safari` and its container;
+- a browser's store files anywhere: `Cookies`, `Login Data`, `Web Data`, `cookies.sqlite`, `logins.json`, `key4.db`, `cert9.db`;
+- apps' sign-in storage: Slack and Discord;
+- keys and command-line sign-ins: `~/.ssh` (but `known_hosts` and `config`), `~/.gnupg`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/.netrc`, `~/.docker/config.json`;
+- secrets files anywhere: `.env` and `.env.*` (but `.env.example`, `.env.sample` and `.env.template`), and `.npmrc`;
+- a folder that holds any of the folders above, such as `~/Library` or your home folder.
+
+Names are compared ignoring case, as macOS does. A renamed copy, a hard link, or a store inside a folder selected whole is not recognized, and a profile's named `environment` variables are copied as you name them. The person can let agents copy these anyway with **Copy sign-ins into the helper** in Settings › Privacy; only the person turns it on.
 
 ## Check what the task needs
 

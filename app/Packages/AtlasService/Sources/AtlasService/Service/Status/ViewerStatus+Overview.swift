@@ -46,6 +46,16 @@ extension ViewerStatus {
     public var jobs = Jobs()
     /// Whether the helper's apps can be heard, as its daemon last said; nil when it said nothing.
     public var sound: Sound?
+    /// The accounts Atlas lists for the helper; nil when Atlas can't read its list, or the service didn't say.
+    public var accounts: [Account]?
+    /// The newest account Atlas added after the person typed a password, for its one-time note.
+    public var accountNote: AccountNote?
+    /// The questions Atlas asks the person now, oldest first, without what each would send.
+    public var asks: [Ask] = []
+    /// What the person allowed for a task.
+    public var allowed: [AllowedGrant] = []
+    /// The held sign-in under way, while one is; nil for none.
+    public var signingIn: SigningIn?
 
     /// How long after an agent's last action Stop Agent stays offered, in seconds: an agent between two steps still
     /// reads as working, so Stop stays where the person reaches for it.
@@ -105,7 +115,8 @@ extension ViewerStatus {
     enum CodingKeys: String, CodingKey {
       /// Each field by the name the service writes.
       case mode, state, label, reason, recoverable, recoveryHelps, account, accountName, display, pending, inFlight,
-        commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs, sound
+        commands, activity, sessionsShown, holder, hostSessions, moreSessions, jobs, sound, accounts, accountNote, asks,
+        allowed, signingIn
     }
 
     /// Decodes an overview, keeping the default of anything missing or of the wrong type.
@@ -134,6 +145,17 @@ extension ViewerStatus {
       moreSessions = max(0, (try? container.decodeIfPresent(Int.self, forKey: .moreSessions)) ?? 0)
       jobs = (try? container.decodeIfPresent(Jobs.self, forKey: .jobs)) ?? Jobs()
       sound = try? container.decodeIfPresent(Sound.self, forKey: .sound)
+      // A list keeps each account that reads. One that is missing, null, not a list, or holds accounts none of which
+      // read is unknown: never empty, which would say there are none.
+      let listed = (try? container.nestedUnkeyedContainer(forKey: .accounts))?.count
+      if let listed {
+        let read = container.lenientList(Account.self, forKey: .accounts)
+        accounts = read.isEmpty && listed != 0 ? nil : read
+      }
+      accountNote = try? container.decodeIfPresent(AccountNote.self, forKey: .accountNote)
+      asks = container.lenientList(Ask.self, forKey: .asks)
+      allowed = container.lenientList(AllowedGrant.self, forKey: .allowed)
+      signingIn = try? container.decodeIfPresent(SigningIn.self, forKey: .signingIn)
     }
   }
 }

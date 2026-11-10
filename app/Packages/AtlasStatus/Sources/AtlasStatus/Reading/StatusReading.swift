@@ -40,34 +40,12 @@ public struct StatusReading: Equatable, Sendable {
     )
   }
 
-  /// The session's facts; this viewer knows whether it holds control.
-  ///
-  /// - Parameter holdingControl: Whether this viewer holds control.
-  /// - Returns: The display, input, control and pending actions.
-  public func facts(holdingControl: Bool) -> SessionFacts {
+  /// The session's facts: the helper's display and whether its input is ready.
+  public var facts: SessionFacts {
     let session = status.session
     let input: SessionFacts.Input =
       session.inputReady ? .ready : session.inputReachable ? .notReady : .notAnswering
-    return SessionFacts(
-      display: status.overview.display,
-      input: input,
-      control: availability(holdingControl: holdingControl),
-      pending: status.overview.pending
-    )
-  }
-
-  /// Whether this viewer could take control now, and if not, why.
-  func availability(holdingControl: Bool) -> SessionFacts.Control {
-    let mode = status.overview.mode
-    if mode.isControlled(byThisViewer: holdingControl) { return .thisWindow }
-    return switch mode {
-    // The person may take over while an agent works: its action under way finishes first (``controlBlocked``).
-    case .observing, .stopped, .agent: .available
-    case .controlling: .anotherWindow
-    case .recovering: .afterRecovery
-    case .blocked, .unavailable: .notReady
-    case .loggedOut: .loggedOut
-    }
+    return SessionFacts(display: status.overview.display, input: input)
   }
 
   /// Why a viewer that does not hold control must wait to take it, if it must; `nil` when nothing blocks it. An agent

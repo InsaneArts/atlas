@@ -5,7 +5,8 @@ mod activity;
 mod sessions;
 
 use crate::host_session::reading::SessionFacts;
-pub use activity::shown;
+pub(crate) use activity::reason;
+pub use activity::{shown, shown_to_person};
 pub use sessions::{add_host_sessions, add_sessions_for};
 
 use crate::{
@@ -43,8 +44,14 @@ const REUSE: Duration = Duration::from_secs(30);
 /// directory service, and the app's logged-out mode waits on it.
 const ABSENCE_REUSE: Duration = Duration::from_secs(5);
 
+/// How long one read of launchd's log is reused: reading it takes a moment,
+/// and what it says changes over hours.
+const RESTARTS_REUSE: Duration = Duration::from_secs(10 * 60);
+
 /// The logins Atlas can close, and whether the helper's login is stale.
 static LOGINS: Shared<(Vec<u32>, bool)> = Shared::new(REUSE);
+/// The Apple jobs restarting in the helper, from launchd's log.
+static RESTARTS: Shared<Option<Vec<crate::console_agents::Restart>>> = Shared::new(RESTARTS_REUSE);
 /// Why the silent helper is down.
 static ABSENCE: Shared<Option<atlas_core::session::Absence>> = Shared::new(ABSENCE_REUSE);
 
@@ -67,6 +74,7 @@ pub async fn report(client: &Client, until: Instant) -> crate::capability::Docto
         None
     };
 
+    let answered = crate::console_agents::answered(&reply);
     let mut doctor = crate::capability::doctor_report(reply, uid);
     let status = &mut doctor.diagnosis.value;
     if let Some(absence) = &absence {
@@ -83,6 +91,20 @@ pub async fn report(client: &Client, until: Instant) -> crate::capability::Docto
         .unwrap_or_default();
     status["leftoverLogins"] = json!(leftovers);
     status["helperStale"] = json!(silent && stale);
+    // Whether a macOS agent that slows the Mac keeps restarting in the
+    // helper, from launchd's log; looked at only when the helper itself
+    // answered, and at most once in ten minutes.
+    let restarts = if !answered {
+        None
+    } else {
+        RESTARTS
+            .get(uid, until, move || {
+                crate::console_agents::read_restarting(uid)
+            })
+            .await
+            .flatten()
+    };
+    status["restartingService"] = json!(crate::console_agents::Restarting::of(restarts.as_deref()));
 
     // A Stop kept on the person's side counts as one the helper holds.
     if client.controller.stop_noted() && status["session"]["inputService"].is_object() {
@@ -487,4 +509,5 @@ fn mode(
 }
 
 #[cfg(test)]
+#[path = "overview_tests.rs"]
 mod tests;

@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// The screenshot a step of the Activity pane took: its file name, which Show large opens, its shape, and its
+/// The screenshot a step of the Activity pane took: its file name, which the picture sheet opens, its shape, and its
 /// thumbnail once read. The step's own label names it for VoiceOver.
 public struct ViewerActivityShot: Equatable, Sendable {
   /// 16:10: a screenshot's shape when the service does not say it, as the helper's displays mostly are.

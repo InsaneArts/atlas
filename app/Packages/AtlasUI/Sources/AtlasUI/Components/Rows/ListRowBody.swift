@@ -19,8 +19,6 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
   private let lead: ListRow.Lead
   /// How tall the row is.
   private let size: ListRow.Size
-  /// The row's fill, such as a choice's under the pointer.
-  private let fill: Color
   /// How opaque the lead draws, such as faded for an agent not on this Mac.
   private let leadOpacity: Double
   /// How VoiceOver reads the row.
@@ -39,7 +37,6 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
   ///   - titleFit: How the title fits the row's width; up to two lines by default.
   ///   - lead: What leads the row; nothing by default.
   ///   - size: How tall the row is; a setup list's by default.
-  ///   - fill: The row's fill; none by default.
   ///   - leadOpacity: How opaque the lead draws; whole by default.
   ///   - accessibilityChildren: How VoiceOver reads the row; as one element with its control kept apart by default.
   ///   - trailing: The control at the row's end.
@@ -51,7 +48,6 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
     titleFit: ListRow.TitleFit = .twoLines,
     lead: ListRow.Lead = .none,
     size: ListRow.Size = .regular,
-    fill: Color = .clear,
     leadOpacity: Double = 1,
     accessibilityChildren: AccessibilityChildBehavior = .contain,
     @ViewBuilder trailing: () -> Trailing
@@ -63,7 +59,6 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
       titleFit: titleFit,
       lead: lead,
       size: size,
-      fill: fill,
       leadOpacity: leadOpacity,
       accessibilityChildren: accessibilityChildren,
       detailContent: { detail.map { Text($0) } },
@@ -80,7 +75,6 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
   ///   - titleFit: How the title fits the row's width.
   ///   - lead: What leads the row.
   ///   - size: How tall the row is.
-  ///   - fill: The row's fill.
   ///   - leadOpacity: How opaque the lead draws.
   ///   - accessibilityChildren: How VoiceOver reads the row.
   ///   - detailContent: The content under the title, at the row's detail style.
@@ -92,7 +86,6 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
     titleFit: ListRow.TitleFit = .twoLines,
     lead: ListRow.Lead = .none,
     size: ListRow.Size = .regular,
-    fill: Color = .clear,
     leadOpacity: Double = 1,
     accessibilityChildren: AccessibilityChildBehavior = .contain,
     @ViewBuilder detailContent: () -> Detail,
@@ -105,7 +98,6 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
     self.titleFit = titleFit
     self.lead = lead
     self.size = size
-    self.fill = fill
     self.leadOpacity = leadOpacity
     self.accessibilityChildren = accessibilityChildren
     self.trailing = trailing()
@@ -131,8 +123,8 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
 
   /// The lead, the title over its detail, and the trailing control, with the separator above.
   var body: some View {
-    HStack(spacing: ListRow.gap) {
-      ListRowLead(lead: lead)
+    HStack(spacing: size.gap) {
+      ListRowLead(lead: lead, size: size)
         .opacity(leadOpacity)
       VStack(alignment: .leading, spacing: Spacing.hairline) {
         HStack(spacing: Spacing.s) {
@@ -153,7 +145,6 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
     .padding(.horizontal, size.inset)
     .padding(.vertical, size.verticalInset)
     .frame(minHeight: size.height)
-    .background(fill)
     .overlay(alignment: .top) {
       if drawsSeparator {
         SeparatorLine()

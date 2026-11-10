@@ -12,21 +12,11 @@ extension SettingsPresenter {
     let session = snapshot.session
     guard let kind = session.alert else { return nil }
     let overview = snapshot.facts.status.overview
-    let busy = session.alertRunning || (kind == .recover && snapshot.facts.running.contains(.recovery))
+    let busy = session.alertRunning || (kind == .helper(.recover) && snapshot.facts.running.contains(.recovery))
     let progress = AlertProgress.of(running: busy, failure: session.alertRefusal, done: session.alertDone)
     return switch kind {
-    case .recover:
-      HelperAlert.recover
-        .state(overview: overview, progress: progress, askedByPerson: true)
-    case .switchToHelper:
-      HelperAlert.switchToHelper
-        .state(overview: overview, progress: progress, askedByPerson: true, onConsole: snapshot.facts.isOnConsole)
-    case .logOut:
-      HelperAlert.logOut
-        .state(overview: overview, progress: progress, askedByPerson: true)
-    case .logOutAnyway:
-      HelperAlert.logOutAnyway
-        .state(overview: overview, progress: progress, askedByPerson: true)
+    case .helper(let alert):
+      alert.state(overview: overview, progress: progress, askedByPerson: true, onConsole: snapshot.facts.isOnConsole)
     case .forget(let path):
       HelperAlert.destructive(
         SettingsWords.forgetTitle(projectName(path)),
@@ -36,6 +26,52 @@ extension SettingsPresenter {
           running: SettingsWords.forgetting,
           done: SettingsWords.forget,
           doneMessage: SettingsWords.forgetMessage
+        )
+      )
+    case .openHome:
+      HelperAlert.destructive(
+        SettingsWords.openHomeTitle,
+        SettingsWords.openHomeMessage,
+        SettingsWords.letItOpen,
+        cancel: SettingsWords.keepPrivate,
+        phase: progress.phase(
+          running: SettingsWords.changingFiles,
+          done: SettingsWords.letItOpen,
+          doneMessage: SettingsWords.openHomeMessage
+        )
+      )
+    case .allowSignIns:
+      HelperAlert.destructive(
+        SettingsWords.allowSignInsTitle,
+        SettingsWords.allowSignInsMessage,
+        SettingsWords.allow,
+        cancel: SettingsWords.dontAllow,
+        phase: progress.phase(
+          running: SettingsWords.changingFiles,
+          done: SettingsWords.allow,
+          doneMessage: SettingsWords.allowSignInsMessage
+        )
+      )
+    case .deletePictures:
+      HelperAlert.destructive(
+        SettingsWords.deletePicturesTitle,
+        SettingsWords.deletePicturesMessage(snapshot.pictures.stored?.count),
+        SettingsWords.deleteAll,
+        phase: progress.phase(
+          running: SettingsWords.deleting,
+          done: SettingsWords.deleteAll,
+          doneMessage: SettingsWords.deletePicturesMessage(nil)
+        )
+      )
+    case .removeAccount(let id):
+      HelperAlert.destructive(
+        SettingsWords.removeAccountTitle(accountName(id, snapshot)),
+        SettingsWords.removeAccountMessage,
+        SettingsWords.removeAccount,
+        phase: progress.phase(
+          running: SettingsWords.removingAccount,
+          done: SettingsWords.removeAccount,
+          doneMessage: SettingsWords.removeAccountMessage
         )
       )
     case .install(let version):
@@ -51,5 +87,17 @@ extension SettingsPresenter {
         )
       )
     }
+  }
+
+  /// The name of the account with `id`, as the list shows it; "this account" once it is gone.
+  ///
+  /// - Parameters:
+  ///   - id: The account, as the service names it.
+  ///   - snapshot: What the controller holds and reads.
+  /// - Returns: Its name.
+  static func accountName(_ id: String, _ snapshot: SettingsSnapshot) -> String {
+    snapshot.facts.status.overview.accounts?
+      .first { $0.id == id }?
+      .name ?? "this account"
   }
 }

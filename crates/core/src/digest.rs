@@ -35,6 +35,12 @@ pub fn file_sha256(path: &Path) -> Option<String> {
     sha256(&crate::files::open_plain(path)?)
 }
 
+/// SHA-256 of `bytes`, in hex.
+#[must_use]
+pub fn bytes_sha256(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 /// SHA-256 of everything left to read in `file`.
 pub fn sha256(file: &fs::File) -> Option<String> {
     read_sha256(file).ok()
@@ -61,4 +67,5 @@ pub fn read_sha256(mut file: &fs::File) -> std::io::Result<String> {
 }
 
 #[cfg(test)]
+#[path = "digest_tests.rs"]
 mod tests;

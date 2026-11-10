@@ -3,7 +3,7 @@
 
   /// The app glyph's samples: the drawn tile in every tint at the sides the lists use, each over its app's name,
   /// drawn tiles in a row with real apps' icons at 26 and 44, so a tile can be seen to sit as an icon does, and what
-  /// leads an action at an Activity moment's 26 and a Recent row's 20: an app, Atlas, the person and commands.
+  /// leads an action at an Activity run's 26 and a Recent row's 20: an app, Atlas, the person and commands.
   struct AppGlyphSamples: View {
     /// Which samples show.
     enum Kind: Sendable {
@@ -23,7 +23,7 @@
     static let sides: [CGFloat] = [44, 26, 16]
     /// The sides the tiles stand beside real icons at.
     static let besideSides: [CGFloat] = [44, 26]
-    /// The sides what leads an action is drawn at: a moment's and a Recent row's.
+    /// The sides what leads an action is drawn at: a run's and a Recent row's.
     static let activitySides: [CGFloat] = [26, 20]
 
     /// Which samples show.

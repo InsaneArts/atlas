@@ -19,39 +19,43 @@ struct ViewerPresenterSessionsTests {
     let none = ViewerPresenter.state(try .listing([]))
     #expect(none.sidebar.sessions.groups.isEmpty)
     #expect(none.sidebar.sessions.liveCount == 0, "All sessions says no count")
-    #expect(none.sidebar.sessions.chosen == .all)
+    #expect(none.sidebar.sessions.chosen == nil, "the Screen draws no row chosen")
     var one = try ViewerSnapshot.listing([SessionReplies.claudeActing])
-    #expect(ViewerPresenter.sessions(one).rows(.working).map(\.name) == ["Claude Code · understudy"])
+    #expect(ViewerPresenter.sessions(one).rows(.working).map(\.name) == ["understudy"])
     #expect(ViewerPresenter.header(one).what.isEmpty, "one session has the helper, but no one is told apart")
     one.session.chosenSession = .one("3f9a1c07b2e4")
-    let chosen = ViewerPresenter.sessions(one)
-    #expect(chosen.chosen == .one("3f9a1c07b2e4"))
-    let three = try ViewerSnapshot.listing(Self.three)
+    #expect(ViewerPresenter.sessions(one).chosen == nil, "the Screen draws no row chosen")
+    one.session.place = .activity
+    #expect(ViewerPresenter.sessions(one).chosen == .one("3f9a1c07b2e4"), "Activity draws its session chosen")
+    var three = try ViewerSnapshot.listing(Self.three)
+    three.session.place = .activity
     let column = ViewerPresenter.sessions(three)
     #expect(column.chosen == .all)
     #expect(column.icons.count == 3)
-    #expect(ViewerPresenter.header(three) == ViewerHeaderState(who: "Claude Code · understudy", what: "has the helper"))
+    #expect(
+      ViewerPresenter.header(three) == ViewerHeaderState(who: "understudy", what: "Claude Code · has the helper")
+    )
   }
 
   @Test("acting and waiting sessions are listed under Working, idle ones under Idle, each with its badge")
   func actingAndWaitingSessionsAreListedUnderWorking() throws {
     let sessions = ViewerPresenter.sessions(try .listing(Self.three))
     #expect(sessions.groups.map(\.section) == [.working, .idle])
-    #expect(sessions.rows(.working).map(\.name) == ["Claude Code · understudy", "Codex · atlas-landing"])
+    #expect(sessions.rows(.working).map(\.name) == ["understudy", "atlas-landing"])
     #expect(sessions.rows(.working).map(\.badge) == [.acting, .waiting])
-    #expect(sessions.rows(.idle).map(\.name) == ["Cursor · opie"])
+    #expect(sessions.rows(.idle).map(\.name) == ["opie"])
     #expect(sessions.rows(.idle).first?.badge == nil)
     #expect(sessions.rows(.working).first?.icon == SessionHost.claude.icon)
     #expect(sessions.liveCount == 3)
   }
 
-  @Test("a row's line says what its session last did")
+  @Test("a busy row's line says what its session does, and a quiet one's its agent")
   func aRowsLineSaysWhatItLastDid() throws {
     let sessions = ViewerPresenter.sessions(try .listing(Self.three))
     let lines = sessions.groups
       .flatMap(\.rows)
       .map(\.line)
-    #expect(lines == ["Clicking Show Center in Opie", "Waiting for the helper · 8 s", "Opened Opie · 4 min ago"])
+    #expect(lines == ["Clicking Show Center in Opie", "Waiting for the helper · 8 s", "Cursor"])
   }
 
   @Test("Needs you is listed first and only while a session needs the person")
@@ -64,7 +68,7 @@ struct ViewerPresenterSessionsTests {
     )
     let sessions = ViewerPresenter.sessions(needsYou)
     #expect(sessions.groups.first?.section == .needsYou)
-    #expect(sessions.rows(.needsYou).map(\.name) == ["Claude Code · understudy"])
+    #expect(sessions.rows(.needsYou).map(\.name) == ["understudy"])
     #expect(sessions.rows(.needsYou).first?.badge == .needsYou)
     #expect(sessions.rows(.needsYou).first?.line == "A click may not have finished")
     let calm = ViewerPresenter.sessions(try .listing(Self.three))
@@ -75,8 +79,8 @@ struct ViewerPresenterSessionsTests {
   func endedSessionsFoldUnderEnded() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
     snapshot.panes.sessions.list = HostSessionList(sessions: [
-      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended),
-      HostSessionRecord(key: "aaaa00000001", name: "Claude Code · opie", host: .claude, state: .ended),
+      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended, actions: 1),
+      HostSessionRecord(key: "aaaa00000001", name: "Claude Code · opie", host: .claude, state: .ended, actions: 1),
     ])
     let folded = ViewerPresenter.sessions(snapshot)
     #expect(folded.groups.last?.section == .ended)
@@ -93,8 +97,8 @@ struct ViewerPresenterSessionsTests {
   func aChosenEndedSessionStaysListed() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
     snapshot.panes.sessions.list = HostSessionList(sessions: [
-      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended),
-      HostSessionRecord(key: "aaaa00000001", name: "Claude Code · opie", host: .claude, state: .ended),
+      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended, actions: 1),
+      HostSessionRecord(key: "aaaa00000001", name: "Claude Code · opie", host: .claude, state: .ended, actions: 1),
     ])
     snapshot.session.chosenSession = .one("c0ffee5e5510")
     let sessions = ViewerPresenter.sessions(snapshot)
@@ -109,12 +113,15 @@ struct ViewerPresenterSessionsTests {
     var history =
       (0..<ViewerPresenter.mostEnded)
       .map {
-        HostSessionRecord(key: "ended-\($0)", name: "Codex · \($0)", host: .codex, state: .ended)
+        HostSessionRecord(key: "ended-\($0)", name: "Codex · \($0)", host: .codex, state: .ended, actions: 1)
       }
     let chosen = try #require(history.last?.key)
     snapshot.panes.sessions.list = HostSessionList(sessions: history)
     snapshot.session.chosenSession = .one(chosen)
-    history.insert(HostSessionRecord(key: "new", name: "Codex · new", host: .codex, state: .ended), at: 0)
+    history.insert(
+      HostSessionRecord(key: "new", name: "Codex · new", host: .codex, state: .ended, actions: 1),
+      at: 0
+    )
     snapshot.panes.sessions.list = HostSessionList(sessions: history)
     for open in [false, true] {
       snapshot.session.endedShown = open
@@ -127,19 +134,24 @@ struct ViewerPresenterSessionsTests {
     #expect(ViewerPresenter.sessions(snapshot).rows(.ended).count == ViewerPresenter.mostEnded)
   }
 
-  @Test("the search keeps the rows whose name or line holds the query and folds empty sections")
+  @Test("the search keeps the rows whose name, line or agent holds the query and folds empty sections")
   func theSearchKeepsTheRowsThatHoldTheQuery() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
     snapshot.session.search = ViewerSearchState(isOpen: true, query: "OPIE")
     let sessions = ViewerPresenter.sessions(snapshot)
     #expect(sessions.groups.map(\.section) == [.working, .idle])
-    #expect(sessions.rows(.working).map(\.name) == ["Claude Code · understudy"], "its line names Opie")
-    #expect(sessions.rows(.idle).map(\.name) == ["Cursor · opie"])
+    #expect(sessions.rows(.working).map(\.name) == ["understudy"], "its line names Opie")
+    #expect(sessions.rows(.idle).map(\.name) == ["opie"])
     snapshot.session.search.query = "cursor"
     #expect(ViewerPresenter.sessions(snapshot).groups.map(\.section) == [.idle], "Working holds no match, so it folds")
     #expect(sessions.liveCount == 3, "All sessions still counts every live session")
     snapshot.session.search.query = "waiting"
-    #expect(ViewerPresenter.sessions(snapshot).rows(.working).map(\.name) == ["Codex · atlas-landing"])
+    #expect(ViewerPresenter.sessions(snapshot).rows(.working).map(\.name) == ["atlas-landing"])
+    snapshot.session.search.query = "claude code"
+    #expect(
+      ViewerPresenter.sessions(snapshot).rows(.working).map(\.name) == ["understudy"],
+      "a session titled by its folder is found by its agent"
+    )
     snapshot.session.search.query = " "
     #expect(ViewerPresenter.sessions(snapshot).groups.count == 2, "a blank query keeps every row")
   }
@@ -168,8 +180,8 @@ struct ViewerPresenterSessionsTests {
     ]
     snapshot.panes.sessions.list = HostSessionList(
       sessions: [
-        HostSessionRecord(key: "aaaa00000001", name: "Claude Code · opie", host: .claude),
-        HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended),
+        HostSessionRecord(key: "aaaa00000001", name: "Claude Code · opie", host: .claude, actions: 1),
+        HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended, actions: 1),
       ],
       live: statusOnes + past
     )
@@ -237,8 +249,8 @@ struct ViewerPresenterSessionsTests {
     #expect(ViewerPresenter.latest(own).words == "Clicking Show Center in Opie", "every place shows the same line")
   }
 
-  @Test("in All sessions each moment names its session, and the person's own say You")
-  func inAllSessionsEachMomentNamesItsSession() throws {
+  @Test("in All sessions each session row names its agent and project, and the person's own say You")
+  func inAllSessionsEachSessionNamesItsAgent() throws {
     var snapshot = try ViewerSnapshot.listing([
       SessionReplies.claudeActing, SessionReplies.terminalIdle, SessionReplies.cursorIdle,
     ])
@@ -258,12 +270,17 @@ struct ViewerPresenterSessionsTests {
     ]
     snapshot.panes.activity.log = ActivityLog(entries: rows)
     snapshot.panes.activity.readAt = snapshot.date
-    let moments = ViewerPresenter.activity(snapshot)
+    let listed = ViewerPresenter.activity(snapshot)
       .days
-      .flatMap(\.moments)
-    #expect(moments.map(\.session?.name) == ["Terminal", "Cursor · opie", "You", "Claude Code · understudy"])
-    #expect(moments.map(\.title) == ["Commands", "Opie", "Opie", "TextEdit"])
-    #expect(moments[2].session?.icon == nil, "the person's own moment leads with their mark")
+      .flatMap(\.sessions)
+    #expect(listed.map(\.agent) == ["Terminal", "Cursor", "You", "Claude Code"])
+    #expect(listed.map(\.isOpen) == [false, false, false, true], "only the working session opens")
+    for session in listed { snapshot.panes.activity.sessionChoices[session.id] = true }
+    let sessions = ViewerPresenter.activity(snapshot)
+      .days
+      .flatMap(\.sessions)
+    #expect(sessions.map { $0.runs.first?.name } == ["Commands", "Opie", "Opie", "TextEdit"])
+    #expect(sessions[2].icon == nil, "the person's own session leads with their mark")
   }
 
   @Test("a copy and a plan say what is known, with no empty value where a time would be")
@@ -301,7 +318,7 @@ struct ViewerPresenterSessionsTests {
     snapshot.session.chosenSession = .one("c0ffee5e5510")
     #expect(snapshot.shownSessions == .all, "neither the status nor the list names it")
     snapshot.panes.sessions.list = HostSessionList(sessions: [
-      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended)
+      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended, actions: 1)
     ])
     #expect(snapshot.shownSessions == .one("c0ffee5e5510"), "the list still names it as ended")
     var unread = ViewerSnapshot.presenterSample
@@ -309,11 +326,26 @@ struct ViewerPresenterSessionsTests {
     #expect(unread.shownSessions == .one("3f9a1c07b2e4"), "before the first reading the choice holds")
   }
 
+  @Test("Activity names whose work it lists, so a new session choice is another list")
+  func activityNamesTheSessionShown() throws {
+    var snapshot = try ViewerSnapshot.listing(Self.three)
+    #expect(ViewerPresenter.activity(snapshot).list == ViewerActivityListKey(session: .all, filter: .all))
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
+    snapshot.panes.activity.filter = .problems
+    #expect(
+      ViewerPresenter.activity(snapshot).list
+        == ViewerActivityListKey(session: .one("3f9a1c07b2e4"), filter: .problems)
+    )
+    snapshot.session.chosenSession = .one("c0ffee5e5510")
+    #expect(ViewerPresenter.activity(snapshot).session == .all, "a session gone shows every session's work")
+  }
+
   @Test("the header names the session that has the helper, and gives way to pause and control")
   func theHeaderNamesTheHolder() throws {
     var snapshot = try ViewerSnapshot.listing(Self.three)
     #expect(
-      ViewerPresenter.header(snapshot) == ViewerHeaderState(who: "Claude Code · understudy", what: "has the helper")
+      ViewerPresenter.header(snapshot) == ViewerHeaderState(who: "understudy", what: "Claude Code · has the helper"),
+      "its project, then its agent"
     )
     snapshot.session.paused = true
     #expect(ViewerPresenter.header(snapshot).who == "Paused")
@@ -343,7 +375,7 @@ struct ViewerPresenterSessionsTests {
     snapshot.panes.sessions.notOfferedAt = snapshot.date
     #expect(ViewerPresenter.sessions(snapshot).endedCount == 0)
     let row = try ViewerPresenterSessionMenuTests.row("3f9a1c07b2e4", snapshot)
-    #expect(row.help == "Claude Code · understudy\nClicking Show Center in Opie\nHost: Claude Code")
+    #expect(row.help == "understudy\nClicking Show Center in Opie\nHost: Claude Code\nFolder: understudy")
     #expect(!row.menu.flatMap(\.items).contains { $0.role == .destructive }, "nothing to clean up is known")
   }
   @Test("an ended causer stays under Needs you until recovery without increasing the live count")
@@ -362,7 +394,8 @@ struct ViewerPresenterSessionsTests {
       name: "Claude Code · understudy",
       host: .claude,
       endedAt: Date(timeIntervalSince1970: 1),
-      state: .ended
+      state: .ended,
+      actions: 1
     )
     snapshot.panes.sessions.list = HostSessionList(
       sessions: [record],
@@ -475,7 +508,8 @@ struct ViewerPresenterSessionsTests {
           name: record.name,
           host: record.host,
           endedAt: end ?? snapshot.date,
-          state: .ended
+          state: .ended,
+          actions: 1
         )
       ])
       finished.session.endedShown = true
@@ -484,4 +518,136 @@ struct ViewerPresenterSessionsTests {
     }
   }
 
+  @Test("a session is titled by its project folder exactly as written, in the sidebar and the header")
+  func aSessionIsTitledByItsFolder() throws {
+    let claude = hostSession(
+      "3f9a1c07b2e4",
+      host: "claude",
+      name: "Claude Code · atlas-t2-r2",
+      state: "acting",
+      hostLabel: "Claude Code",
+      folder: "atlas-t2-r2",
+      holdsHelper: true,
+      latest: ["says": "typing in TextEdit", "ok": true, "started": true, "ageSeconds": 0]
+    )
+    var snapshot = try ViewerSnapshot.listing([claude, SessionReplies.cursorIdle])
+    #expect(ViewerPresenter.sessions(snapshot).rows(.working).map(\.name) == ["atlas-t2-r2"])
+    #expect(
+      ViewerPresenter.header(snapshot) == ViewerHeaderState(who: "atlas-t2-r2", what: "Claude Code · has the helper")
+    )
+    snapshot.panes.sessions.list = HostSessionList(sessions: [
+      HostSessionRecord(
+        key: "a1",
+        name: "Codex · atlas",
+        host: .codex,
+        hostLabel: "Codex",
+        folder: "atlas",
+        state: .ended,
+        actions: 3
+      )
+    ])
+    snapshot.session.endedShown = true
+    #expect(ViewerPresenter.sessions(snapshot).rows(.ended).map(\.name) == ["atlas"])
+  }
+
+  @Test("a session with no folder is titled by its agent, never by what it did")
+  func aSessionWithNoFolderIsTitledByItsAgent() throws {
+    var cursor = SessionReplies.cursorIdle
+    cursor["folder"] = nil
+    var snapshot = try ViewerSnapshot.listing([cursor, SessionReplies.terminalIdle])
+    snapshot.panes.activity.log = ActivityLog(entries: [
+      ActivityLog.Entry(id: "k1", says: "typed in TextEdit", session: "5d21e9a04c3f", verb: "type", app: "TextEdit")
+    ])
+    snapshot.panes.activity.readAt = snapshot.date
+    #expect(ViewerPresenter.sessions(snapshot).rows(.idle).map(\.name) == ["Cursor", "Terminal"])
+  }
+
+  @Test("a quiet session's line is its agent and when it started, or the time alone when its agent is its title")
+  func aQuietLineIsTheAgentAndTheStart() {
+    var snapshot = ViewerSnapshot.presenterSample
+    snapshot.locale = Locale(identifier: "en_GB")
+    snapshot.calendar.locale = snapshot.locale
+    let today = Date(timeIntervalSince1970: 1_793_277_960)
+    let yesterday = today.addingTimeInterval(-86_400)
+    #expect(
+      ViewerPresenter.quietLine(agent: "Claude Code", project: "atlas", started: today, snapshot)
+        == "Claude Code · 12:46"
+    )
+    #expect(
+      ViewerPresenter.quietLine(agent: "Claude Code", project: "atlas", started: yesterday, snapshot)
+        == "Claude Code · Wed 12:46"
+    )
+    #expect(ViewerPresenter.quietLine(agent: "Claude Code", project: "", started: today, snapshot) == "12:46")
+  }
+
+  @Test("a working session's line stays what it does now, whatever its title")
+  func aWorkingLineStaysWhatItDoesNow() throws {
+    var claude = SessionReplies.claudeActing
+    claude["folder"] = "atlas"
+    let row = try #require(ViewerPresenter.sessions(try .listing([claude])).rows(.working).first)
+    #expect(row.name == "atlas")
+    #expect(row.line == "Clicking Show Center in Opie")
+  }
+
+  @Test("a session that never acted gets no row unless it works, and one with no record yet keeps its row")
+  func aSessionThatNeverActedGetsNoRow() throws {
+    var snapshot = try ViewerSnapshot.listing([SessionReplies.claudeActing, SessionReplies.cursorIdle])
+    #expect(
+      ViewerPresenter.sessions(snapshot).rows(.idle).map(\.id) == ["5d21e9a04c3f"],
+      "no record says it did nothing"
+    )
+    snapshot.panes.sessions.list = HostSessionList(sessions: [
+      HostSessionRecord(key: "3f9a1c07b2e4", name: "Claude Code · understudy", host: .claude),
+      HostSessionRecord(key: "5d21e9a04c3f", name: "Cursor · opie", host: .cursor),
+      HostSessionRecord(key: "c0ffee5e5510", name: "Pi · notes-sync", host: .pi, state: .ended),
+    ])
+    snapshot.session.endedShown = true
+    let sessions = ViewerPresenter.sessions(snapshot)
+    #expect(sessions.rows(.working).map(\.id) == ["3f9a1c07b2e4"], "it works, so it keeps its row")
+    #expect(sessions.rows(.idle).isEmpty)
+    #expect(sessions.rows(.ended).isEmpty)
+    snapshot.panes.activity.log = ActivityLog(entries: [
+      ActivityLog.Entry(id: "c1", says: "clicked in Opie", ageSeconds: 5, session: "5d21e9a04c3f", app: "Opie")
+    ])
+    snapshot.panes.activity.readAt = snapshot.date
+    #expect(ViewerPresenter.sessions(snapshot).rows(.idle).map(\.id) == ["5d21e9a04c3f"], "a row in the log is work")
+    snapshot.panes.activity.log = ActivityLog(entries: [
+      ActivityLog.Entry(
+        id: "n1",
+        says: "didn't click in Opie",
+        outcome: .notSent,
+        ageSeconds: 5,
+        session: "5d21e9a04c3f",
+        app: "Opie"
+      )
+    ])
+    #expect(ViewerPresenter.sessions(snapshot).rows(.idle).isEmpty, "a row refused before anything was sent is not")
+  }
+
+  @Test("sessions that never acted do not use up the ended sessions listed")
+  func emptySessionsLeaveRoomForEndedWork() throws {
+    var snapshot = try ViewerSnapshot.listing([])
+    let empty = (0..<ViewerPresenter.mostEnded)
+      .map { HostSessionRecord(key: "e\($0)", name: "Codex · T", host: .codex, state: .ended) }
+    let worked = HostSessionRecord(key: "w1", name: "Codex · atlas", host: .codex, state: .ended, actions: 3)
+    snapshot.panes.sessions.list = HostSessionList(sessions: empty + [worked])
+    snapshot.session.endedShown = true
+    #expect(ViewerPresenter.sessions(snapshot).rows(.ended).map(\.id) == ["w1"])
+  }
+
+  @Test("with one session chosen a list's header names it, and says it has the helper only when it does")
+  func theHeaderNamesTheChosenSession() throws {
+    var snapshot = try ViewerSnapshot.listing(Self.three)
+    snapshot.session.chosenSession = .one("8be20c4d1a77")
+    #expect(
+      ViewerPresenter.header(snapshot) == ViewerHeaderState(who: "understudy", what: "Claude Code · has the helper"),
+      "on the Screen the header names whoever has the helper"
+    )
+    snapshot.session.place = .activity
+    #expect(ViewerPresenter.header(snapshot) == ViewerHeaderState(who: "atlas-landing", what: "Codex"))
+    snapshot.session.chosenSession = .one("3f9a1c07b2e4")
+    #expect(
+      ViewerPresenter.header(snapshot) == ViewerHeaderState(who: "understudy", what: "Claude Code · has the helper")
+    )
+  }
 }

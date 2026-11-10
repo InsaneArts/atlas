@@ -21,7 +21,24 @@ impl Viewer {
     /// record follows the helper served on every read, so a move that failed
     /// is tried again.
     pub(super) async fn follow_settings(self: &Arc<Self>) {
+        let pictures = || {
+            let config = &self.client().config;
+            (config.output_dir.clone(), config.activity.keep())
+        };
+        let before = pictures();
         self.apply_settings().await;
+        let after = pictures();
+        if after != before {
+            let (moved, _) = after;
+            // Kept before the signal, which coalesces: a folder served only
+            // between two prunings is pruned all the same.
+            let mut outputs = unpoisoned(&self.outputs);
+            if !outputs.contains(&moved) {
+                outputs.push(moved);
+            }
+            drop(outputs);
+            self.output_moved.notify_one();
+        }
         self.move_record();
     }
 
@@ -121,6 +138,10 @@ impl Viewer {
         if moved == path || client.output_dir().is_err() {
             return;
         }
+        // A folder another menu bar keeps its record in stays its own.
+        let Ok(alone) = crate::menubar::alone(&client.config.output_dir) else {
+            return;
+        };
 
         let written = serde_json::to_vec_pretty(&record)
             .map_err(Error::from)
@@ -128,6 +149,7 @@ impl Viewer {
         if written.is_ok() {
             remove_record(&path);
             *kept = Some((moved, record));
+            *unpoisoned(&self.alone) = Some(alone);
         }
     }
 }
@@ -140,4 +162,5 @@ pub(super) fn remove_record(path: &Path) {
 }
 
 #[cfg(test)]
+#[path = "settings_tests.rs"]
 mod tests;

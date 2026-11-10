@@ -3,13 +3,13 @@
 
   extension PreviewStates {
     /// The main window's transitions drawn as key frames, each spaced along the move that travels furthest, or a
-    /// list's change along its beats: the window's own, then Activity's and Apps'.
+    /// list's change along its beats: the window's own, then Activity's.
     @MainActor public static var viewerMotion: [ViewerMotionPose] {
-      windowMotion + activityMotion + appsMotion
+      windowMotion + activityMotion
     }
 
     /// The sidebar hiding, the Screen turning into Activity with the picture shrinking into its corner, Give Back
-    /// turning the footer back into Take Control, and Ended opening.
+    /// turning the footer back into Take Control and Take Control turning it into Give Back, and Ended opening.
     @MainActor private static var windowMotion: [ViewerMotionPose] {
       [
         ViewerMotionPose(
@@ -20,9 +20,9 @@
           lead: .spring(Motion.Springs.slide)
         ),
         ViewerMotionPose(
-          "library-zoom",
+          "activity-zoom",
           from: viewerWorking,
-          to: viewer(viewerWorking, applying: .chooseLibrary(.activity)),
+          to: viewer(viewerWorking, applying: .show(.activity)),
           size: viewerSize,
           lead: .spring(Motion.Springs.zoom)
         ),
@@ -30,6 +30,13 @@
           "give-back",
           from: viewerControl,
           to: viewer(viewerControl, applying: .giveBack),
+          size: viewerSize,
+          lead: .spring(Motion.Springs.state)
+        ),
+        ViewerMotionPose(
+          "take-control",
+          from: viewerWorking,
+          to: viewer(viewerWorking, applying: .takeControl),
           size: viewerSize,
           lead: .spring(Motion.Springs.state)
         ),
@@ -43,97 +50,117 @@
       ]
     }
 
-    /// Activity's: Notes folding and opening again, and TextEdit's "Show 1 more", as the person asks, each in tenths;
-    /// a new step arriving at the top of the live
-    /// moment, and a new app's moment over it; the Problems filter chosen, which keeps only the failed click and holds
-    /// its moment open.
+    /// Activity's: the Chrome run opening and folding again as the person asks, and the live session folding into its
+    /// pictures and opening out of them again, each in tenths; a new run arriving at the top of the live session; and,
+    /// on the clock, Codex chosen in the sidebar after Claude Code, and the Problems filter chosen, each swapping the
+    /// whole list.
     @MainActor private static var activityMotion: [ViewerMotionPose] {
       [
         ViewerMotionPose(
-          "moment-open",
-          from: viewerActivityNotesFolded,
-          to: viewer(viewerActivityNotesFolded, applying: .toggleMoment("session:|n1", opens: true)),
-          size: viewerSize,
-          lead: .spring(Motion.Springs.state),
-          steps: ViewerMotionPose.tenths,
-          animation: { ActivityMotion.fold(reduceMotion: false) }
-        ),
-        ViewerMotionPose(
-          "moment-fold",
+          "run-open",
           from: viewerActivity,
-          to: viewerActivityNotesFolded,
+          to: viewerActivityOpened,
           size: viewerSize,
           lead: .spring(Motion.Springs.state),
           steps: ViewerMotionPose.tenths,
           animation: { ActivityMotion.fold(reduceMotion: false) }
         ),
         ViewerMotionPose(
-          "moment-more",
+          "run-fold",
           from: viewerActivityOpened,
-          to: viewerActivityEveryStep,
-          size: viewerSize,
-          lead: .spring(Motion.Springs.state),
-          steps: ViewerMotionPose.tenths,
-          animation: { ActivityMotion.fold(reduceMotion: false) }
-        ),
-        ViewerMotionPose(
-          "step-arrive",
-          from: viewerActivityBeforeStep,
           to: viewerActivity,
           size: viewerSize,
-          lead: .list(Motion.Springs.state)
+          lead: .spring(Motion.Springs.state),
+          steps: ViewerMotionPose.tenths,
+          animation: { ActivityMotion.fold(reduceMotion: false) }
         ),
         ViewerMotionPose(
-          "moment-arrive",
+          "session-fold",
           from: viewerActivity,
-          to: viewerActivityNewMoment,
+          to: viewerActivitySessionFolded,
+          size: viewerSize,
+          lead: .spring(Motion.Springs.state),
+          steps: ViewerMotionPose.tenths,
+          animation: { ActivityMotion.fold(reduceMotion: false) }
+        ),
+        ViewerMotionPose(
+          "session-open",
+          from: viewerActivitySessionFolded,
+          to: viewerActivity,
+          size: viewerSize,
+          lead: .spring(Motion.Springs.state),
+          steps: ViewerMotionPose.tenths,
+          animation: { ActivityMotion.fold(reduceMotion: false) }
+        ),
+        ViewerMotionPose(
+          "run-arrive",
+          from: viewerActivity,
+          to: viewerActivityNewRun,
           size: viewerSize,
           lead: .list(Motion.Springs.state)
         ),
         ViewerMotionPose(
-          "filter-problems",
+          "session-choose",
+          from: viewerActivityOneSession,
+          to: viewerActivityOtherSession,
+          size: viewerSize,
+          lead: .clock,
+          steps: ViewerMotionPose.clockMoments
+        ),
+        ViewerMotionPose(
+          "filter-choose",
           from: viewerActivity,
           to: viewerActivityProblems,
           size: viewerSize,
-          lead: .list(Motion.Springs.state),
-          animation: { ActivityMotion.filter(reduceMotion: false) }
+          lead: .clock,
+          steps: ViewerMotionPose.clockMoments
         ),
       ]
     }
 
-    /// Apps': Opie coming to the front over Safari, Notes opening and quitting, and Notes moving from Already open to
-    /// the agents' apps once the helper learns an agent opened it.
-    @MainActor private static var appsMotion: [ViewerMotionPose] {
-      [
-        ViewerMotionPose(
-          "apps-front",
-          from: viewerAppsSafariFront,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .spring(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-open",
-          from: viewerAppsBeforeNotes,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-quit",
-          from: viewerApps,
-          to: viewerAppsBeforeNotes,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-        ViewerMotionPose(
-          "apps-move",
-          from: viewerAppsNotesAlreadyOpen,
-          to: viewerApps,
-          size: viewerSize,
-          lead: .list(Motion.Springs.state)
-        ),
-      ]
+    /// Activity with its live session folded into one box of its row and its newest pictures, as a folded session
+    /// shows them.
+    @MainActor static var viewerActivitySessionFolded: ViewerState {
+      var state = toggling(viewerActivity) { $0.isOpen }
+      guard case .activity(var activity) = state.pane else { return state }
+      for day in activity.days.indices {
+        for index in activity.days[day].sessions.indices where !activity.days[day].sessions[index].isOpen {
+          let session = activity.days[day].sessions[index]
+          guard session.strip == nil, let tiles = session.runs.first(where: { $0.strip != nil })?.strip?.tiles else {
+            continue
+          }
+          activity.days[day].sessions[index].strip = ViewerPictureStrip(
+            run: session.id,
+            tiles: tiles,
+            total: tiles.count + Self.foldedMore,
+            opensSession: true
+          )
+        }
+      }
+      state.pane = .activity(activity)
+      return state
     }
+
+    /// 338: how many more pictures the folded live session holds than its strip shows.
+    private static let foldedMore = 338
+
+    /// `state` with the first session `pick` chooses opened or folded, as the person would.
+    ///
+    /// - Parameters:
+    ///   - state: The Activity sample.
+    ///   - pick: Which session.
+    /// - Returns: The sample after.
+    @MainActor private static func toggling(
+      _ state: ViewerState,
+      pick: (ViewerOutlineSession) -> Bool
+    ) -> ViewerState {
+      guard case .activity(let activity) = state.pane,
+        let session = activity.days
+          .flatMap(\.sessions)
+          .first(where: pick)
+      else { return state }
+      return viewer(state, applying: .toggleSession(session.id, opens: !session.isOpen))
+    }
+
   }
 #endif

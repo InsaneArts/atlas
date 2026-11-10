@@ -6,8 +6,6 @@
 
 <!-- The checks you ran, and for anything on screen, what you did in the helper and what you saw. -->
 
-- [ ] `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings` and `cargo test --workspace --locked`
-- [ ] `npm run format:check` and `npm test`
-- [ ] `node scripts/check-swift.mjs` (if Swift changed)
+- [ ] `scripts/check.sh`
 - [ ] Tried on a real helper (if input, windows, screenshots or setup changed)
 - [ ] Updated affected public documentation, or explained why no update is needed

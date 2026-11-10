@@ -36,6 +36,15 @@ struct ViewerHeader: View {
       }
     }
     .lineLimit(1)
+    .layoutFrame("header words")
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .overlay(alignment: .trailing) {
+      if let tag = state.tag {
+        Tag(text: tag, tone: .accent)
+          .transition(.opacity)
+      }
+    }
+    .animation(Motion.fade, value: state.tag)
     .padding(.leading, leading)
     .padding(.trailing, ViewerLayout.headerInset + hold)
     .frame(maxWidth: .infinity, alignment: .leading)

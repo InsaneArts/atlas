@@ -17,6 +17,7 @@
 mod print;
 mod processes;
 #[cfg(test)]
+#[path = "installs_tests.rs"]
 mod tests;
 
 use super::{
@@ -487,7 +488,8 @@ fn place(
         atlas_core::bounded::COPY,
     );
     match copied {
-        Ok(copied) if copied.status.success() => {}
+        // ditto can skip a folder it cannot read, report it and still exit 0.
+        Ok(copied) if copied.status.success() && copied.stderr.is_empty() => {}
         Ok(_) => {
             return give_up(
                 record,

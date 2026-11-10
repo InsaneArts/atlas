@@ -12,7 +12,7 @@
 //! as its own window's does, so one controller at a time holds it.
 use atlas_client::{
     client::{Actor, Client},
-    helper_info::Icons,
+    screen_tiles::Tiles,
 };
 use atlas_core::error::{Code, Error, Result};
 use atlas_core::host::HostSession;
@@ -71,8 +71,15 @@ struct Server {
     /// The last status read, and when that read began: a read that began
     /// earlier never replaces it.
     last: Mutex<Option<(Instant, Value)>>,
-    /// The last screen made into a frame, by its digest, and that frame.
-    framed: Mutex<Option<([u8; 32], Value)>>,
+    /// The pictures of the screen the views were sent, so each is sent only
+    /// the tiles that changed; shared like the stream.
+    tiles: Arc<std::sync::Mutex<Tiles>>,
+    /// The same for the pictures of the activity opened large.
+    picture_tiles: Arc<std::sync::Mutex<Tiles>>,
+    /// The last screen PNG drawn at a view's size, when the menu bar does
+    /// not stream the screen, and the last picture of the activity opened.
+    decoded: Arc<std::sync::Mutex<reads::Decoded>>,
+    picture_decoded: Arc<std::sync::Mutex<reads::Decoded>>,
     /// The menu bar viewer's newest frame seen.
     shared: Mutex<Option<Seen>>,
     /// The person's control taken from the view.
@@ -80,8 +87,6 @@ struct Server {
     /// The views' observer of the menu bar's frame service, which a guarded
     /// view's context shares with the root that reaps it.
     stream: Arc<Mutex<stream::Stream>>,
-    /// App icons made.
-    icons: Icons,
     /// The host session the server's environment names, read once: the
     /// view says "This chat" only when it is certainly this one.
     host_session: Option<HostSession>,
@@ -274,11 +279,13 @@ impl Server {
             app_views: OnceLock::new(),
             views: AtomicBool::new(false),
             last: Mutex::new(None),
-            framed: Mutex::new(None),
+            tiles: Arc::default(),
+            picture_tiles: Arc::default(),
+            decoded: Arc::default(),
+            picture_decoded: Arc::default(),
             shared: Mutex::new(None),
             held: Mutex::new(None),
             stream: Arc::default(),
-            icons: Icons::default(),
             host_session,
         }
     }
@@ -350,7 +357,12 @@ impl Server {
         match tool {
             Tool::Status | Tool::ShowScreen => self.status_result().await,
             Tool::TakeScreenshot => self.take_screenshot(arguments).await,
-            Tool::ScreenFrame => self.screen(arguments["since"].as_str()).await,
+            Tool::ScreenFrame => {
+                let drawn = arguments["longest"]
+                    .as_u64()
+                    .and_then(|side| u32::try_from(side).ok());
+                self.screen(arguments["since"].as_str(), drawn).await
+            }
             Tool::StopAgent => self.set_stopped(true).await,
             Tool::ResumeAgent => self.set_stopped(false).await,
             Tool::Recover => self.recover().await,
@@ -361,13 +373,12 @@ impl Server {
                 self.send_input(arguments["frame"].as_str(), &arguments["actions"])
                     .await
             }
-            Tool::Activity => self.activity().await,
-            Tool::HelperApps => self.helper_apps().await,
-            Tool::Screenshots => self.screenshots().await,
-            Tool::Screenshot => {
-                self.screenshot(
+            Tool::Activity => self.activity(arguments.get("session")).await,
+            Tool::Picture => {
+                self.activity_picture(
                     arguments["name"].as_str().unwrap_or_default(),
                     arguments["full"] == true,
+                    arguments["since"].as_str(),
                 )
                 .await
             }
@@ -518,4 +529,5 @@ impl Server {
 }
 
 #[cfg(test)]
+#[path = "mcp_tests.rs"]
 mod tests;

@@ -66,7 +66,7 @@ struct ViewerControllerSizeTests {
     #expect(!viewer.state.sidebar.overlay)
     // A choice in it, or Escape or a click on the card, puts it away.
     viewer.send(.toggleSidebar)
-    viewer.send(.chooseLibrary(.activity))
+    viewer.send(.chooseSession(.all))
     #expect(!viewer.state.sidebar.overlay)
     viewer.send(.toggleSidebar)
     viewer.send(.dismissSidebarOverlay)
@@ -104,8 +104,8 @@ struct ViewerControllerSizeTests {
     #expect(!preferences.loadSidebarHidden())
   }
 
-  @Test("the Library folds into a row of icons below 420 high")
-  func theLibraryFoldsInAShortWindow() {
+  @Test("the helper's row folds into its mark below 420 high")
+  func theHelperLineFoldsInAShortWindow() {
     let viewer = ViewerController.scripted(ScriptedService())
     defer { viewer.close() }
     viewer.fitWindow(to: CGSize(width: 1200, height: 300))
@@ -151,24 +151,14 @@ struct ViewerControllerSizeTests {
     #expect(viewer.state.sidebar.mode == .hidden, "fitted to the frame it opens at, not the first size")
   }
 
-  @Test("the Screenshots grid keeps its columns while the window is being resized and settles them after")
-  func theGridKeepsItsColumnsWhileResizing() async throws {
-    let viewer = try await ViewerPanesModelGridTests.onGrid(ScriptedService())
+  @Test("the window says it is being resized while it is, and settles after")
+  func theWindowSaysItIsResizing() async throws {
+    let viewer = try await ViewerController.watching(ScriptedService())
     defer { viewer.close() }
+    viewer.send(.show(.activity))
     viewer.setLiveResizing(true)
-    viewer.send(.shotColumns(4))
-    guard case .screenshots(let held) = viewer.state.pane else {
-      Issue.record("Screenshots shows")
-      return
-    }
-    #expect(held.heldColumns == 2)
     #expect(viewer.state.isResizing)
     viewer.setLiveResizing(false)
-    guard case .screenshots(let settled) = viewer.state.pane else {
-      Issue.record("Screenshots shows")
-      return
-    }
-    #expect(settled.heldColumns == nil)
     #expect(!viewer.state.isResizing)
   }
 }

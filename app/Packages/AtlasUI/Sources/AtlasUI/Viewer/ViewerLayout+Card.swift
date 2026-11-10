@@ -2,11 +2,11 @@ import SwiftUI
 
 extension ViewerLayout {
   /// 8: the content card's inset from the window's top, trailing and bottom edges, and from the sidebar.
-  static let cardInset = Spacing.s
+  static let cardInset = WindowChrome.cardInset
   /// 8: the content card's corner, the window's less its inset, so the two curves run side by side.
-  static let cardRadius = Radius.nested(in: Radius.window, inset: cardInset)
+  static let cardRadius = WindowChrome.cardRadius
   /// 38: the card's header, one line of who has the helper; its centre sits level with the window buttons'.
-  static let headerHeight: CGFloat = 38
+  static let headerHeight = WindowChrome.cardBarHeight
   /// 14: the header's inset at its sides.
   static let headerInset = Spacing.mPlus
   /// 8: between who has the helper and what they do with it.
@@ -32,8 +32,6 @@ extension ViewerLayout {
   static let screenRadius = Radius.extraSmall
   /// 3: control's accent edge, drawn inside the screen's shape.
   static let controlEdge: CGFloat = 3
-  /// 36: the row over the Activity list that holds its filters.
-  static let filtersHeight: CGFloat = 36
   /// 200: the small screen's width over a list, in a card body at least ``pipFullBody`` wide.
   static let pipWidth: CGFloat = 200
   /// 140: the narrowest the small screen draws, in a narrow card.

@@ -65,4 +65,5 @@ fn native(_pid: i32) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
+#[path = "cwd_tests.rs"]
 mod tests;

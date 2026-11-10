@@ -32,13 +32,37 @@ extension OnboardingController {
     snapshot.passSettled = true
   }
 
-  /// Done: set Open at Login, open Atlas, then close the window; on any failure the window stays, saying why.
+  /// Done: set Open at Login, keep the home folder private as the box says, open Atlas, then close the window; on any
+  /// failure the window stays, saying why. A home folder Atlas couldn't make private stops this Done there, with the
+  /// box turned off, and the next Done finishes without it.
   func complete() async {
     guard let login = await act(.setOpensAtLogin(snapshot.opensAtLogin), OnboardingWords.finishing),
       login.ok,
+      await keepHomePrivate(),
       let started = await act(.openMenuBar, OnboardingWords.opening),
       started.ok
     else { return }
     closeRequested = true
+  }
+
+  /// Makes the home folder private when the box is checked, else remembers that it was offered, unless an attempt
+  /// failed: then it stays unoffered, so Atlas offers it again later.
+  ///
+  /// - Returns: Whether Done goes on; false after a failed attempt, which says why and turns the box off, or once the
+  ///   window has closed.
+  func keepHomePrivate() async -> Bool {
+    guard snapshot.keepsHomePrivate else {
+      // Through `act`, so the switches wait while it runs; a failure to remember the offer only asks again later.
+      guard !snapshot.homePrivacyFailed else { return true }
+      return await act(.homeOffered, OnboardingWords.finishing) != nil
+    }
+    guard let made = await act(.makeHomePrivate, OnboardingWords.makingPrivate) else { return false }
+    guard made.ok else {
+      snapshot.homePrivacyFailed = true
+      snapshot.keepsHomePrivate = false
+      snapshot.problem = OnboardingWords.homeNotPrivate(made.message)
+      return false
+    }
+    return true
   }
 }

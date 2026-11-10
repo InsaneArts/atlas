@@ -18,8 +18,8 @@ struct PanelScreen: View {
           .resizable()
           .interpolation(.high)
           .aspectRatio(contentMode: .fit)
-          .saturation(isDimmed ? PanelLayout.dimSaturation : 1)
-          .overlay(Color.letterbox.opacity(isDimmed ? PanelLayout.dimShade : 0))
+          .saturation(PictureTreatment.saturation(for: look))
+          .overlay(Color.letterbox.opacity(PictureTreatment.shade(for: look)))
       } else {
         Color.fillPlaceholder
       }
@@ -31,6 +31,11 @@ struct PanelScreen: View {
         .strokeBorder(Color.strokeHighlight, lineWidth: Stroke.hairline)
     )
     .elevation(.resting)
+  }
+
+  /// How the screen is drawn: greyed and darkened as a paused picture is while dimmed.
+  private var look: PictureLook {
+    isDimmed ? .paused : .live
   }
 
   /// The frame: the screen's own shape, so it fills the frame with no black at its sides.

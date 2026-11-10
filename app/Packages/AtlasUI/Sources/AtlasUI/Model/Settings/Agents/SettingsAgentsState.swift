@@ -1,4 +1,4 @@
-/// The Agents pane: the agents connected to Atlas, and the projects it taught.
+/// The Integrations page: the agents connected to Atlas, and the projects it taught.
 public struct SettingsAgentsState: Equatable, Sendable {
   /// The agents, in order.
   public var agents: [SettingsAgentRow]

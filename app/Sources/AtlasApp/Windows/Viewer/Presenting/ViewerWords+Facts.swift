@@ -1,6 +1,6 @@
 import AtlasUI
 
-/// The tooltips' facts: the helper's names for them, Ready to act's one fact and the count of the checks that pass,
+/// The facts tooltips and menus list: the helper's names for them, Ready to act's one fact and the count of the checks that pass,
 /// a session's plans and screenshots, and one fact as a line.
 extension ViewerWords {
   /// The account fact's name.

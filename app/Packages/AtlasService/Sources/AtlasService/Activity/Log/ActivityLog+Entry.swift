@@ -1,7 +1,8 @@
 import Foundation
 
 extension ActivityLog {
-  /// One thing done in the helper, as shown: no typed text, command, coordinates or window title.
+  /// One thing done in the helper, as shown: no command or window title, and typed text and coordinates only in the
+  /// facts that mark its pictures.
   public struct Entry: Decodable, Equatable, Sendable, Identifiable {
     /// Names the row; never reused for another. A running command's row is replaced by one with a new id.
     public var id: String
@@ -38,6 +39,20 @@ extension ActivityLog {
     public var bundleId: String?
     /// A key press's chords as keycaps, such as `[["⌘", "S"]]`; none for any other row.
     public var keys: [[String]]
+    /// The picture taken right before an agent's action, by Atlas's own file name, when the service says.
+    public var before: String?
+    /// The picture of the screen right after it, by its file name: one Atlas took after it, or the next action's
+    /// picture before, when the service says.
+    public var after: String?
+    /// When the picture after it was taken; nil when there is none or the service did not say.
+    public var afterAt: Date?
+    /// What Atlas recorded to mark the spot on its pictures; nil when it recorded nothing.
+    public var facts: ActionFacts?
+    /// The listed account an agent's action acted in, when the service says; none for older rows and for actions in
+    /// no listed account.
+    public var account: ActivityLog.Account?
+    /// What let it act there: allowed once or for the task, or a Trusted account; only with an account.
+    public var allowed: ActivityLog.Allowance?
 
     /// The key of the host session an agent's row came from: Terminal's empty key for one no host named.
     public var sessionKey: String { session ?? "" }
@@ -66,6 +81,12 @@ extension ActivityLog {
     ///   - label: The control it named, or the keys it pressed.
     ///   - bundleId: The bundle identifier of the app it acted in.
     ///   - keys: A key press's chords as keycaps.
+    ///   - before: The picture taken right before an agent's action, by its file name.
+    ///   - after: The picture of the screen right after it, by its file name.
+    ///   - afterAt: When the picture after it was taken.
+    ///   - facts: What Atlas recorded to mark the spot on its pictures.
+    ///   - account: The listed account it acted in.
+    ///   - allowed: What let it act there; only with an account.
     public init(
       id: String,
       logicalId: String? = nil,
@@ -83,7 +104,13 @@ extension ActivityLog {
       app: String? = nil,
       label: String? = nil,
       bundleId: String? = nil,
-      keys: [[String]] = []
+      keys: [[String]] = [],
+      before: String? = nil,
+      after: String? = nil,
+      afterAt: Date? = nil,
+      facts: ActionFacts? = nil,
+      account: ActivityLog.Account? = nil,
+      allowed: ActivityLog.Allowance? = nil
     ) {
       self.id = id
       self.logicalId = logicalId ?? id
@@ -102,6 +129,12 @@ extension ActivityLog {
       self.label = label
       self.bundleId = bundleId
       self.keys = keys
+      self.before = before
+      self.after = after
+      self.afterAt = afterAt
+      self.facts = facts
+      self.account = account
+      self.allowed = account == nil ? nil : allowed
     }
 
     /// The fields of one `activity` row this app reads.
@@ -110,10 +143,14 @@ extension ActivityLog {
       case id, says, ok, started, actor, ageSeconds, startedAt, reason, operation, count, session, capture, nothingSent
       /// The fields that name what it did and where.
       case verb, app, label, bundleId, keys
+      /// The pictures taken right before and right after it, and what was recorded to mark them.
+      case before, after, afterAt, facts
       /// Whether input was partly sent before a refusal.
       case partial
       /// The action's identity across successive rows.
       case logicalId
+      /// The listed account it acted in, and what let it act there.
+      case account, allowed
     }
 
     /// Decodes a row, keeping a safe default for anything missing or of the wrong type: a row that says nothing
@@ -146,6 +183,13 @@ extension ActivityLog {
       label = container.lenientText(.label)
       bundleId = container.lenientText(.bundleId)
       keys = (try? container.decodeIfPresent([[String]].self, forKey: .keys)) ?? []
+      before = container.lenientText(.before)
+      after = container.lenientText(.after)
+      afterAt = after == nil ? nil : container.lenientDate(milliseconds: .afterAt)
+      facts = try? container.decodeIfPresent(ActionFacts.self, forKey: .facts)
+      // An account that does not read whole is none, and what let it act counts only with one.
+      account = container.lenientAccount(.account)
+      allowed = account == nil ? nil : container.lenientAllowance(.allowed)
     }
   }
 }

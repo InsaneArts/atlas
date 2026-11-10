@@ -23,6 +23,25 @@ struct CardScrollRoomTests {
     #expect(CardScrollRoom.contentInsets(MiniClearance()) == EdgeInsets())
   }
 
+  @Test("the rows keep a classic scroll bar's width beside them, so they never widen or narrow as it comes and goes")
+  func theRowsKeepAClassicScrollBarsWidth() {
+    #expect(CardScrollRoom.scrollerGutter(.legacy) == NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy))
+    #expect(CardScrollRoom.scrollerGutter(.legacy) > 0)
+    // Overlay scroll bars float over the rows and take no room.
+    #expect(CardScrollRoom.scrollerGutter(.overlay) == 0)
+  }
+
+  @Test("a classic scroll bar stays through a pane's fade, while an overlay one waits until the pane has faded in")
+  func aClassicScrollBarStaysThroughAFade() {
+    let classic = CardScrollRoom.scrollerGutter(.legacy)
+    let overlay = CardScrollRoom.scrollerGutter(.overlay)
+    // Hiding a classic scroll bar gives its room to the list and lays the list out again, which a hidden pane must not.
+    #expect(CardScrollRoom.showsScroller(settled: false, gutter: classic))
+    #expect(CardScrollRoom.showsScroller(settled: true, gutter: classic))
+    #expect(!CardScrollRoom.showsScroller(settled: false, gutter: overlay))
+    #expect(CardScrollRoom.showsScroller(settled: true, gutter: overlay))
+  }
+
   @Test("a selected row's room reaches past the picture's band, so a step lands it clear of the picture")
   func aSelectedRowsRoomReachesPastTheBand() {
     let reach = CardScrollRoom.revealReach(MiniClearance(edges: .bottom, length: 149))

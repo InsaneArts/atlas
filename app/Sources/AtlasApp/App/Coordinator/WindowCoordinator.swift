@@ -30,6 +30,8 @@ final class WindowCoordinator {
   private var reopeningOnboarding = false
   /// Whether termination has been requested, so late setup requests cannot reopen a window.
   private var terminating = false
+  /// The main window asked for before launch could make its controller, opened once launch finishes.
+  private var viewerAsked: (place: ViewerPlace?, session: ViewerSessionChoice?)?
 
   /// Reports Copy Diagnostics when its invoking window is not the viewer.
   let diagnosticsNotice: @MainActor (String) -> Void
@@ -50,7 +52,9 @@ final class WindowCoordinator {
     self.viewerPreferences = viewerPreferences
   }
 
-  /// The main window; brought forward when already open, on `place` when one is given.
+  /// The main window; brought forward when already open, on `place` when one is given. Asked for before launch, it
+  /// opens once launch finishes (``launched()``). It is remembered as open until it closes
+  /// (``ViewerController/close()``), so an Atlas that quit or was stopped with it open opens it again.
   ///
   /// - Parameters:
   ///   - place: The place to show, or nil for the one it shows.
@@ -73,7 +77,21 @@ final class WindowCoordinator {
       },
       window: windows.viewer
     )
-    if let place { controller?.show(place) }
+    guard let controller else {
+      viewerAsked = (place ?? viewerAsked?.place, session ?? viewerAsked?.session)
+      return
+    }
+    viewerPreferences.saveWindowOpen(true)
+    if let place { controller.show(place) }
+  }
+
+  /// Launch has made the app's parts: the main window opens if it was asked for meanwhile, or was open when Atlas
+  /// last stopped, as when an update relaunches it.
+  func launched() {
+    let asked = viewerAsked
+    viewerAsked = nil
+    guard asked != nil || viewerPreferences.loadWindowOpen() else { return }
+    openViewer(place: asked?.place, session: asked?.session)
   }
 
   /// The Settings window; brought forward when already open. Its controller is made once and kept.
@@ -89,11 +107,22 @@ final class WindowCoordinator {
     )
   }
 
-  /// Check for Updates: Settings opens on About and checks.
+  /// Check for Updates: Settings opens on About and checks, only once About shows, so its answer is never hidden; while
+  /// Settings asks something in an alert or its sign-in sheet, it waits (``canCheckForUpdates``).
   func checkForUpdates() {
+    guard canCheckForUpdates else { return }
     openSettings()
-    settings?.controller.selectTab(.about)
-    settings?.controller.send(.checkForUpdates)
+    guard let controller = settings?.controller else { return }
+    controller.select(.about)
+    guard controller.session.route == .page(.about) else { return }
+    controller.send(.checkForUpdates)
+  }
+
+  /// Whether Check for Updates can run: not while Settings asks something in an alert or its sign-in sheet, which
+  /// would keep About from showing its answer. Read from the controller, which keeps its question while its window is
+  /// closed and asks it again when it reopens.
+  var canCheckForUpdates: Bool {
+    settingsController?.isAsking != true
   }
 
   /// The setup window; brought forward when already open. Once it closes, the panel reads Open at Login and the
@@ -180,14 +209,14 @@ final class WindowCoordinator {
   /// Whether control work is under way that quitting should wait for: the main window holds or asks for control, or a
   /// release it sent is not answered yet or was refused and needs retrying.
   var holdsUpQuitting: Bool {
-    viewerHoldsControl || controlBarrier?.isBusy == true || controlBarrier?.unreleased.isEmpty == false
+    viewerHoldsControl || controlBarrier?.isBusy == true || controlBarrier?.hasUnanswered == true
   }
 
   /// Gives the main window's control back and waits, at most ``quitWait``, for every release under way to be
   /// answered, a refused one sent once more: what quitting does first, however it was asked.
   func releaseBeforeQuitting() async {
     releaseViewerControl()
-    guard let barrier = controlBarrier, barrier.isBusy || !barrier.unreleased.isEmpty else { return }
+    guard let barrier = controlBarrier, barrier.isBusy || barrier.hasUnanswered else { return }
     let settling = Task { _ = await barrier.settle() }
     let clock = parts?.clock
     // Unstructured, so the ceiling runs beside the wait and calls it off once it passes.
@@ -225,7 +254,7 @@ final class WindowCoordinator {
       inViewer: { [weak self] alert in
         guard let viewer = self?.viewer else { return }
         viewer.window.present()
-        viewer.controller.ask(Self.viewerAlert(alert))
+        viewer.controller.ask(.helper(alert))
       },
       inWindow: { [weak self] alert in self?.showAlertWindow(alert) }
     )
@@ -296,18 +325,5 @@ final class WindowCoordinator {
   private func settleDockIcon() {
     let open = [viewer?.window, onboarding?.window, settings?.window].contains { $0?.isPresented == true }
     parts?.showDockIcon(open)
-  }
-
-  /// The main window's alert for one the panel asks for.
-  ///
-  /// - Parameter alert: The panel's alert.
-  /// - Returns: The same alert as the main window names it.
-  private static func viewerAlert(_ alert: HelperAlert) -> ViewerAlert {
-    switch alert {
-    case .recover: .recover
-    case .switchToHelper: .switchToHelper
-    case .logOut: .logOut
-    case .logOutAnyway: .logOutAnyway
-    }
   }
 }

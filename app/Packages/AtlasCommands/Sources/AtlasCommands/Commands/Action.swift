@@ -48,8 +48,6 @@ public enum Action: Sendable, Equatable {
   case connectClaudeApp
   /// Take the Atlas section out of the project in this folder, and off the list of projects taught.
   case forgetProject(path: String)
-  /// Read every on-screen helper window, including menus and accessory applications.
-  case listWindows
   /// Diagnose the helper, with its full status.
   case doctor
   /// Ask whether a newer Atlas is published, changing nothing.
@@ -60,6 +58,26 @@ public enum Action: Sendable, Equatable {
   case helperSound
   /// Keep apps in the helper silent, or let them play.
   case setHelperSound(muted: Bool)
+  /// Read whether the person's home folder is private from the helper, and what it can open there.
+  case homeFiles
+  /// Make the person's home folder private from the helper.
+  case makeHomePrivate
+  /// Let the helper open the person's home folder again; the person confirmed.
+  case openHome
+  /// Remember that keeping the home folder private was offered, changing nothing.
+  case homeOffered
+  /// Let agents copy sign-ins and secrets into the helper, or stop them; the person confirmed turning it on.
+  case copySignIns(Bool)
+  /// Read Atlas's settings with how many pictures of agent actions this Mac keeps, and their size.
+  case picturesSummary
+  /// Keep pictures of the helper's screen around each agent action, or stop keeping them.
+  case keepPictures(Bool)
+  /// Keep pictures of agent actions this many days.
+  case keepPicturesFor(days: Int)
+  /// Keep at most this many characters of what an agent typed; 0 keeps it all.
+  case limitTypedText(Int)
+  /// Delete every picture of agent actions on this Mac.
+  case deletePictures
 
   /// Recover as the viewer service's own Recover does: restart the helper while an action's outcome is unknown or
   /// under way, else start its input, which never needs the full restart.
@@ -104,7 +122,6 @@ public enum Action: Sendable, Equatable {
     case .connectClaudeApp: ["agents", "install", "--app"]
     // The person confirmed in Settings.
     case .forgetProject(let path): ["agents", "forget", path]
-    case .listWindows: ["windows", "--all"]
     case .doctor: ["doctor", "--verbose"]
     // Only asks: the check downloads nothing and installs nothing.
     case .checkForUpdate: ["update", "--check"]
@@ -112,6 +129,21 @@ public enum Action: Sendable, Equatable {
     case .update: ["update"]
     case .helperSound: ["sound"]
     case .setHelperSound(let muted): ["sound", muted ? "off" : "on"]
+    case .homeFiles: ["onboarding", "files"]
+    case .makeHomePrivate: ["onboarding", "files", "private"]
+    // The person confirmed in Settings.
+    case .openHome: ["onboarding", "files", "open"]
+    case .homeOffered: ["onboarding", "files", "offered"]
+    case .copySignIns(let allow): ["onboarding", "sign-ins", allow ? "allow" : "refuse"]
+    case .picturesSummary: ["config", "--pictures-summary"]
+    // The person turned the switch in Settings.
+    case .keepPictures(let on): ["config", "--pictures-before-actions", on ? "on" : "off"]
+    // The person chose how long in Settings.
+    case .keepPicturesFor(let days): ["config", "--keep-pictures-days", "\(days)"]
+    // The person chose a limit in Settings.
+    case .limitTypedText(let characters): ["config", "--typed-text-limit", "\(characters)"]
+    // The person confirmed in Settings.
+    case .deletePictures: ["config", "--delete-pictures"]
     }
   }
 }

@@ -56,8 +56,6 @@ enum Words {
   static let nothingHappening = "Nothing is happening in the helper"
   /// While the helper is recovered, from the panel or the viewer.
   static let recovering = "Recovering the helper…"
-  /// Recovery gave no answer in time and may still be under way.
-  static let stillRecovering = "The helper is still recovering. This can take a minute."
   /// Once recovery ran without restarting the helper, from the panel or the viewer.
   static let readyAgain = "The helper is ready again."
   /// Once recovery restarted the helper, which ended any control.
@@ -113,14 +111,6 @@ enum Words {
   /// - Returns: "Last: turned Show Center off · 2 min ago", or without the time when it is unknown.
   static func idleLine(last: String, ago: String) -> String {
     ago.isEmpty ? "Last: \(last)" : "Last: \(last) · \(ago)"
-  }
-
-  /// The window an app shows on the screen, beside Idle.
-  ///
-  /// - Parameter app: The app's name.
-  /// - Returns: "Showing Opie's window".
-  static func showingLine(app: String) -> String {
-    "Showing \(app)'s window"
   }
 
   /// What an operation did, after who did it: the service's own words when it gives them, so every app says the same.

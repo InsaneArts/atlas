@@ -11,12 +11,6 @@ final class ViewerPanesModel {
   /// 2 s: Activity's pause between readings. An agent acts every second or two, so a new line shows about as soon as
   /// its caption does on the screen; the log is a file the service reads, which asks nothing of the helper.
   static let activityEvery: Duration = .seconds(2)
-  /// 3 s: Apps' pause. Listing the apps asks the helper itself for its windows, more than a file read; apps open and
-  /// windows move at the person's pace, and 3 s still shows a new window before they look for it.
-  static let appsEvery: Duration = .seconds(3)
-  /// 5 s: the Screenshots list's pause. An agent takes one every few seconds at most while it checks its work, and
-  /// the list is a folder the service reads; 5 s shows a new one within a glance.
-  static let shotsEvery: Duration = .seconds(5)
   /// 10 s: the host sessions' list's pause. The status says every few seconds which sessions are live and what each
   /// does; the list adds those that ended and what each made, which changes at an agent's pace, and is a few files the
   /// service reads.
@@ -29,8 +23,6 @@ final class ViewerPanesModel {
   @ObservationIgnored weak var viewer: ViewerController?
   /// The viewer service it reads.
   @ObservationIgnored let service: any ViewerService
-  /// The guarded read of every covering helper window, independent of the displayed apps.
-  @ObservationIgnored private let appWindows: @MainActor () async -> HelperOccluderList?
   /// The clock every wait runs on; a cancelled wait ends at once.
   @ObservationIgnored let clock: any Clock<Duration>
   /// Elapsed time for session refreshes, independent of the system date.
@@ -39,19 +31,22 @@ final class ViewerPanesModel {
   @ObservationIgnored var sessionsReadAt: TimeInterval?
   /// The date and time now, which the panes tell times and days by.
   @ObservationIgnored let wallClock: @MainActor () -> Date
-  /// The preceding ingested Activity moments; presenting snapshots never writes this history.
+  /// The preceding ingested Activity runs; presenting snapshots never writes this history.
   @ObservationIgnored private var activityMoments: [ActivityMoment] = []
-  /// Where a copied screenshot goes, and how its file is shown.
+  /// The pane generation whose reading Activity last took in; nil before the first.
+  @ObservationIgnored private var activityRead: Int?
+  /// Whether the screenshots were listed with the reading Activity last took in.
+  @ObservationIgnored private var shotsListed = false
+  /// Where a copied picture goes, and how its file is shown.
   @ObservationIgnored private let shotOutlet: ShotOutlet
-  /// Screenshot selection, row navigation and large-picture loading.
-  @ObservationIgnored private(set) lazy var screenshots = ViewerShotNavigation(model: self, service: service)
-  /// Cancellable Copy and Save delivery, and Finder actions.
-  @ObservationIgnored private(set) lazy var exports = ViewerShotExports(
+  /// The picture sheet and the run replayed over Activity: their pictures, Copy, Show in Finder and playing.
+  @ObservationIgnored private(set) lazy var pictures = ViewerPictureViews(
     model: self,
     service: service,
-    shotOutlet: shotOutlet
+    clock: clock,
+    outlet: shotOutlet
   )
-  /// The bounded thumbnail queue shared by Activity and Screenshots.
+  /// The bounded thumbnail queue Activity's pictures share.
   @ObservationIgnored private(set) lazy var thumbnails = ViewerThumbnails(model: self, service: service)
   /// The pane and session readings under way.
   @ObservationIgnored var work = ViewerPaneWork()
@@ -59,12 +54,8 @@ final class ViewerPanesModel {
   @ObservationIgnored let onSessionsRead: @MainActor (HostSessionList) async -> Void
   /// Where the apps' icons are found and kept.
   @ObservationIgnored let icons: AppIcons
-  /// The app-name and bundle pairs already persisted by this viewer.
-  @ObservationIgnored var iconWork = ViewerIconWork()
   /// This window's pending icon deliveries, cancelled when its pane changes or the window closes.
   @ObservationIgnored var iconRequests: [String: Task<Void, Never>] = [:]
-  /// The latest evidence, including updates received before a request's task starts.
-  @ObservationIgnored var iconWants: [String: AppIconWant] = [:]
 
   /// Creates panes that have read nothing yet.
   ///
@@ -79,7 +70,6 @@ final class ViewerPanesModel {
   ) {
     self.viewer = viewer
     service = dependencies.service
-    appWindows = dependencies.appWindows
     clock = dependencies.clock
     uptime = dependencies.uptime
     wallClock = dependencies.wallClock
@@ -88,104 +78,104 @@ final class ViewerPanesModel {
     self.onSessionsRead = onSessionsRead
   }
 
-  /// Reads the shown pane while the window is on screen, every its own pause, and stops reading any other. The
-  /// thumbnails being read are let go unless Activity or Screenshots shows, and the large picture follows the window.
-  /// With the window gone, nothing shows, and the sessions' list is not read.
+  /// Reads Activity while it shows and the window is on screen, every ``activityEvery``, and stops otherwise. The
+  /// thumbnails being read are let go unless Activity shows, and the pictures the sheet and the replay show follow the
+  /// window. With the window gone, nothing shows, and the sessions' list is not read.
   func followPane() {
     followSessions()
     work.generation += 1
     for request in iconRequests.values { request.cancel() }
     iconRequests = [:]
-    iconWants = [:]
     work.reading?.cancel()
     work.reading = nil
     let shown = viewer?.shown == true
     let place = viewer?.session.place ?? .screen
     thumbnails.follow(shown: shown, place: place)
-    screenshots.followLarge()
+    pictures.refresh()
     guard shown, place != .screen else { return }
     let number = work.generation
     work.reading = Task { [weak self, clock] in
       while !Task.isCancelled {
         guard self?.work.generation == number else { return }
-        await self?.read(place, number)
+        await self?.readActivity(number)
         guard self?.work.generation == number, !Task.isCancelled else { return }
         // A cancelled pause ends at once, and the loop's condition ends the loop.
-        try? await clock.sleep(for: Self.pause(for: place))
+        try? await clock.sleep(for: Self.activityEvery)
       }
     }
   }
 
-  /// The pause between a pane's readings.
-  ///
-  /// - Parameter place: The place.
-  /// - Returns: Its pause.
-  static func pause(for place: ViewerPlace) -> Duration {
-    switch place {
-    case .activity: activityEvery
-    case .apps: appsEvery
-    case .screen, .screenshots: shotsEvery
-    }
-  }
-
-  /// One reading of a pane.
-  ///
-  /// - Parameters:
-  ///   - place: The place.
-  ///   - number: The reading's generation; a newer one drops its reply.
-  func read(_ place: ViewerPlace, _ number: Int) async {
-    switch place {
-    case .activity: await readActivity(number)
-    case .apps: await readApps(number)
-    case .screenshots: await readShots(number)
-    case .screen: return
-    }
-  }
-
-  /// Applies one of the other panes' events.
+  /// Applies one of Activity's events.
   ///
   /// - Parameter event: What the person did.
   func sendPane(_ event: ViewerEvent) {
     switch event {
     case .filterActivity(let filter): panes.activity.filter = filter
-    case .toggleMoment(let id, let opens): panes.activity.choices[id] = opens
-    case .showMomentSteps(let id): panes.activity.expanded.insert(id)
-    case .showWindow(let app, let window): showWindow(app: app, window: window)
-    case .clearOutline: panes.apps.shown = nil
-    case .shotColumns(let columns): if panes.shots.columns != columns { panes.shots.columns = columns }
-    case .selectShot(let name): screenshots.select(name)
-    case .openShot(let name): openShot(name)
-    case .toggleShot: toggleShot()
-    case .previousShot: stepShot(by: -1)
-    case .nextShot: stepShot(by: 1)
-    case .shotAbove: stepRow(by: -1)
-    case .shotBelow: stepRow(by: 1)
-    case .clearShotSelection: screenshots.clearSelection()
-    case .closeShot: closeShot()
-    case .copyShot: copyShot()
-    case .showShotInFinder: showShotInFinder()
-    case .thumbnailNeeded(let name): thumbnailNeeded(name)
+    case .toggleSession(let id, let opens): panes.activity.sessionChoices[id] = opens
+    case .toggleRun(let id, let opens): panes.activity.choices[id] = opens
+    case .showRunPictures(let id): panes.activity.pictureRuns[id] = false
+    case .showAllRunPictures(let id): panes.activity.pictureRuns[id] = true
+    case .hideRunPictures(let id): panes.activity.pictureRuns[id] = nil
+    case .showDaySessions(let id): panes.activity.shownDays.insert(id)
+    case .thumbnailNeeded(let name): thumbnails.thumbnailNeeded(name)
+    case .openShot(let name): pictures.openShot(name)
+    case .openAction(let step): pictures.openStep(step)
+    case .previousPicture: pictures.step(by: -1)
+    case .nextPicture: pictures.step(by: 1)
+    case .pictureSide(let side): pictures.side(side)
+    case .copyPicture: pictures.copy()
+    case .showPictureInFinder: pictures.reveal()
+    case .closePicture: pictures.close()
+    case .openReplay(let run): pictures.openReplay(run)
+    case .replayFrame(let index): pictures.show(frame: index)
+    case .previousFrame: pictures.step(frames: -1)
+    case .nextFrame: pictures.step(frames: 1)
+    case .togglePlay: pictures.togglePlay()
+    case .closeReplay: pictures.closeReplay()
     default: return
     }
   }
 
-  /// Reads the log, and the screenshots while the log has a screenshot's row. A reply overtaken by a newer start or
-  /// stop has no effect; a failure is kept until a reading succeeds, and a cancelled request says nothing.
+  /// Reads the log, the chosen session's own while one shows, and the screenshots while the log has a screenshot's
+  /// row. A reply overtaken by a newer start or stop has no effect; a failure is kept until a reading succeeds, and a
+  /// cancelled request says nothing. A later reading of the same log, while the pane shows, changes nothing
+  /// (``unchanged(_:readAt:number:)``). The screenshots are listed again only with a changed log, while the picture
+  /// sheet shows (its Show in Finder acts on their folder), or until a listing has worked and found every screenshot
+  /// row's capture (``shotsFound(readAt:)``).
   ///
   /// - Parameter number: The reading's generation.
   func readActivity(_ number: Int) async {
+    let scope = ActivityScope(viewer?.snapshot.shownSessions ?? .all)
     do {
-      let log = try await service.activity()
+      let log =
+        switch scope {
+        case .all: try await service.activity()
+        case .session(let key): try await service.activity(of: key)
+        }
       // Each row's age counts back from the moment the log arrived, never from after the screenshots' reply.
       let readAt = wallClock()
-      let wantsShots = log.entries.contains { $0.operation == ActivityGrouping.screenshotOperation }
-      let list = wantsShots ? try? await service.screenshots() : nil
+      // The screenshots' list sizes and finds the pictures: wanted while the log names a screenshot or a picture shows.
+      let wantsShots =
+        panes.activity.sheet != nil || log.entries.contains { $0.operation == ActivityGrouping.screenshotOperation }
+      let lists =
+        wantsShots
+        && (panes.activity.sheet != nil || panes.activity.scope != scope
+          || !unchanged(log, readAt: readAt, number: number)
+          || !shotsFound(readAt: readAt))
+      let list = lists ? try? await service.screenshots() : nil
       guard number == work.generation else { return }
+      if lists { shotsListed = list != nil }
+      if let list { keep(list) }
+      if panes.activity.scope == scope, unchanged(log, readAt: readAt, number: number) {
+        return followUnchanged(log)
+      }
+      activityRead = number
       panes.activity.log = log
+      panes.activity.scope = scope
       panes.activity.readAt = readAt
       let preparation = ViewerActivityPreparation(
         log: log,
-        captures: list?.shots ?? panes.shots.shots ?? [],
+        captures: panes.shots.shots ?? [],
         readAt: readAt,
         calendar: viewer?.snapshot.zonedCalendar ?? .current,
         now: readAt,
@@ -195,118 +185,68 @@ final class ViewerPanesModel {
       panes.activity.preparation = preparation
       panes.activity.failure = nil
       wantIcons(for: log.entries)
-      if let list { screenshots.keep(list) }
-      // What the pane now shows is seen, also while the picture, and with it the status, is paused.
-      viewer?.noteActivitySeen()
+      // A newer reading may name the picture after a step in the sheet, or a replay's next frame.
+      if panes.activity.sheet != nil || panes.activity.replay != nil { pictures.refresh() }
     } catch {
       guard number == work.generation, !error.isCancelled else { return }
       panes.activity.failure = error.message
     }
   }
 
-  /// Reads the apps and wants the icons not found yet. A reply overtaken by a newer start or stop has no effect; a
-  /// failure is kept to say only while nothing was read, and a cancelled request says nothing.
-  ///
-  /// - Parameter number: The reading's generation.
-  func readApps(_ number: Int) async {
-    do {
-      let list = try await service.apps()
-      let occluders = await appWindows()
-      guard number == work.generation else { return }
-      panes.apps.steadyWindows = Self.steadyWindows(list.apps, since: panes.apps.apps)
-      panes.apps.apps = list.apps
-      panes.apps.occluders = occluders
-      panes.apps.sessions = list.sessions
-      panes.apps.failure = nil
-      wantIcons(for: list.apps)
-    } catch {
-      guard number == work.generation, !error.isCancelled else { return }
-      panes.apps.failure = error.message
-    }
-  }
-
-  /// The windows that stand where they stood in the reading before, at the same size, whose pictures may be cut
-  /// from the live picture.
+  /// Whether a reading of `log` would change nothing the pane shows: the pane took in a reading of the very same log
+  /// since it last showed, and the runs prepared from it stand on the same day, with the screenshots listed now. The
+  /// first reading each time the pane shows is always taken in.
   ///
   /// - Parameters:
-  ///   - apps: The apps just read.
-  ///   - earlier: The apps the reading before listed; nil for none.
-  /// - Returns: The steady windows' numbers.
-  static func steadyWindows(_ apps: [HelperApp], since earlier: [HelperApp]?) -> Set<Int> {
-    let before = Dictionary(
-      (earlier ?? []).flatMap(\.windows)
-        .map { ($0.id, $0) },
-      uniquingKeysWith: { first, _ in first }
-    )
-    return Set(
-      apps.flatMap(\.windows)
-        .filter { window in before[window.id].map(window.standsAsBefore) ?? false }
-        .map(\.id)
+  ///   - log: The log just read.
+  ///   - readAt: When it was read.
+  ///   - number: The reading's generation.
+  /// - Returns: Whether nothing would change.
+  private func unchanged(_ log: ActivityLog, readAt: Date, number: Int) -> Bool {
+    let facts = panes.activity
+    guard number == work.generation, activityRead == number, let kept = facts.log, let keptAt = facts.readAt,
+      let preparation = facts.preparation, kept.isSameReading(as: log)
+    else { return false }
+    return preparation.matches(
+      log: kept,
+      captures: panes.shots.shots ?? [],
+      readAt: keptAt,
+      calendar: viewer?.snapshot.zonedCalendar ?? .current,
+      now: readAt
     )
   }
 
-  /// Show on screen: outlines a window as it is now and shows the Screen pane. View-only: nothing goes to the helper.
+  /// Whether the last listing of the screenshots worked and found the capture of every screenshot row of the log the
+  /// pane took in; until it does, a later listing may still hold what is missing.
   ///
-  /// - Parameters:
-  ///   - pid: The app's process id.
-  ///   - id: The window's number.
-  func showWindow(app pid: Int, window id: Int) {
-    guard let app = panes.apps.apps?.first(where: { $0.pid == pid }),
-      let window = app.windows.first(where: { $0.id == id })
-    else { return }
-    panes.apps.shown = ViewerShownWindow(app: app.name, bundleId: app.bundleId, window: window)
-    viewer?.show(.screen)
+  /// - Parameter readAt: When the log was read again.
+  /// - Returns: Whether it did.
+  private func shotsFound(readAt: Date) -> Bool {
+    guard shotsListed, let kept = panes.activity.log, let keptAt = panes.activity.readAt else { return false }
+    let calendar = viewer?.snapshot.zonedCalendar ?? .current
+    return ActivityGrouping(log: kept, readAt: keptAt, now: readAt, calendar: calendar)
+      .findsEveryShot(in: panes.shots.shots ?? [])
   }
 
-  /// Reads the screenshots and their folder. A reply overtaken by a newer start or stop has no effect; a failure is
-  /// kept to say only while nothing was read, and a cancelled request says nothing.
+  /// A reading of the log the pane already shows: nothing is taken in again, but what is still missing is asked for
+  /// again, as after any reading: the icons not found, and the sheet's or the replay's pictures not read. A failure
+  /// kept from before goes.
   ///
-  /// - Parameter number: The reading's generation.
-  func readShots(_ number: Int) async {
-    do {
-      let list = try await service.screenshots()
-      guard number == work.generation else { return }
-      screenshots.keep(list)
-      panes.shots.failure = nil
-      screenshots.followLarge()
-    } catch {
-      guard number == work.generation, !error.isCancelled else { return }
-      panes.shots.failure = error.message
-    }
+  /// - Parameter log: The log just read.
+  private func followUnchanged(_ log: ActivityLog) {
+    if panes.activity.failure != nil { panes.activity.failure = nil }
+    wantIcons(for: log.entries)
+    if panes.activity.sheet != nil || panes.activity.replay != nil { pictures.refresh() }
   }
 
-  /// Screenshot operations keep their own task generations and cancellation.
-  var actedShot: String? { exports.actedShot }
-  /// Shows the named screenshot large, switching to Screenshots when needed.
+  /// Keeps the screenshots' list: their names, sizes and folder.
   ///
-  /// - Parameter name: The screenshot file name.
-  func openShot(_ name: String) { screenshots.openShot(name) }
-  /// Opens the selected screenshot large, or closes the large view.
-  func toggleShot() { screenshots.toggleShot() }
-  /// Moves the screenshot selection along the displayed order.
-  ///
-  /// - Parameter offset: The number of screenshots to move.
-  func stepShot(by offset: Int) { screenshots.stepShot(by: offset) }
-  /// Moves the screenshot selection by a displayed grid row.
-  ///
-  /// - Parameter offset: Minus one for up, one for down.
-  func stepRow(by offset: Int) { screenshots.stepRow(by: offset) }
-  /// Closes the large screenshot and cancels its pending load.
-  func closeShot() { screenshots.closeShot() }
-  /// Copies the acted-on screenshot as taken.
-  func copyShot() { exports.copyShot() }
-  /// Saves the acted-on screenshot where the person chooses.
-  func saveShot() { exports.saveShot() }
-  /// Cancels pending Copy or Save delivery before the window is released.
-  func stopCopy() { exports.stopCopy() }
-  /// Reveals the listed large screenshot in the folder named by the service.
-  func showShotInFinder() { exports.showShotInFinder() }
-  /// Queues a visible screenshot thumbnail unless it is already kept or pending.
-  ///
-  /// - Parameter name: The screenshot file name.
-  func thumbnailNeeded(_ name: String) { thumbnails.thumbnailNeeded(name) }
-  /// Holds new thumbnail reads during resizing, then resumes the queue.
-  ///
-  /// - Parameter held: Whether new reads wait.
-  func holdThumbnails(_ held: Bool) { thumbnails.holdThumbnails(held) }
+  /// - Parameter list: The list.
+  func keep(_ list: ScreenshotList) {
+    if panes.shots.shots != list.shots { panes.shots.shots = list.shots }
+    if panes.shots.folder != list.folder { panes.shots.folder = list.folder }
+  }
+
+  /// Stops reading the sheet's pictures and copying one, before the window is released.
+  func stopPictures() { pictures.stop() }
 }

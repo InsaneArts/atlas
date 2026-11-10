@@ -49,6 +49,8 @@ public struct PointerGesture: Sendable {
 
   /// Whether a button is held.
   public var isActive: Bool { active != nil }
+  /// The button held now; nil while none is.
+  public var heldButton: MouseButton? { active?.button }
   /// Where the held button last was.
   public var last: DesktopPoint? { active?.last }
 

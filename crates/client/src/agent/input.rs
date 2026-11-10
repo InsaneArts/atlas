@@ -126,7 +126,24 @@ pub(super) fn type_parts(batch: &str) -> Vec<String> {
 /// follow earlier text chunks; retain uncertainty and do not replay the text.
 pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>) -> Result<Value> {
     let batches = type_batches(text)?;
+    // A grant the person gives this command is bound to all of its text.
+    client.set_typing(Some(atlas_core::digest::bytes_sha256(text.as_bytes())));
+    let typed =
+        crate::asking::after_asking(client, async || type_once(client, &batches, expected).await)
+            .await;
+    client.set_typing(None);
+    typed
+}
 
+/// [`type_text`] once. While the person lists any account, the input
+/// service first judges a stand-in for the whole text, sending nothing, so
+/// typing never stops halfway to ask; parts the person already allowed
+/// after a stop aren't judged again.
+async fn type_once(
+    client: &Client,
+    batches: &[String],
+    expected: Option<&Expected>,
+) -> Result<Value> {
     let ownership = client.controller.acquire_beside_commands()?;
     // A signal's stop waits for the report of how much was typed.
     let interrupt = client.controller.interrupt();
@@ -138,6 +155,41 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
     };
     let epoch = &verified.session().epoch;
 
+    // The parts the person already allowed, each just this once, after
+    // they stopped typing: those are typed under their permits, and only
+    // the rest is judged here.
+    let parts: Vec<String> = batches.iter().flat_map(|batch| type_parts(batch)).collect();
+    let left: Vec<&String> = {
+        let allowed = crate::asking::permitted(client, &parts);
+        parts
+            .iter()
+            .filter(|part| !allowed.contains(part))
+            .collect()
+    };
+    if !left.is_empty() && crate::asking::policy(client).is_some() {
+        // Decided as the whole text: a line break anywhere sends.
+        let probe = if left.iter().any(|part| part.contains(['\n', '\r'])) {
+            "\n"
+        } else {
+            "x"
+        };
+        client.set_checking(true);
+        let checked = client
+            .input_owned(
+                &ownership,
+                atlas_core::actions::Batch::decode(&json!([{"type": "type", "text": probe}])),
+                Some((epoch, Instant::now())),
+                check.clone(),
+            )
+            .await;
+        client.set_checking(false);
+        // A check refused, to ask the person or for a Look Only account:
+        // nothing is typed, and the caller asks.
+        let checked = checked?;
+        if checked["ok"] != true {
+            return Ok(checked);
+        }
+    }
     let send = async |actions: &Value| {
         client
             .input_owned(
@@ -148,7 +200,7 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
             )
             .await
     };
-    Ok(type_recorded(client, &batches, interrupt, send).await)
+    Ok(type_recorded(client, batches, interrupt, send).await)
 }
 
 /// Send each of `batches` as `type` actions through `send`, stopping at
@@ -160,7 +212,10 @@ pub async fn type_text(client: &Client, text: &str, expected: Option<&Expected>)
 /// With a command under way, its terminal row describes all batches,
 /// including confirmed text before a later refusal. The reader replaces
 /// the individual batch rows with this one. Only action counts and the
-/// reply's safe projection are kept.
+/// reply's safe projection are kept: the field only when every batch sent
+/// named the same one. The whole text is noted for the facts beside the
+/// command's picture just before that row, when every batch's row has
+/// said which field it went into.
 pub(super) async fn type_recorded(
     client: &Client,
     batches: &[String],
@@ -169,6 +224,8 @@ pub(super) async fn type_recorded(
 ) -> Value {
     let started = Instant::now();
     let mut identity = json!({});
+    // The field each batch sent went into, as its reply says.
+    let mut fields = Vec::new();
     let (mut typed, mut confirmed) = (0, 0);
     let mut stopped = None;
     for batch in batches {
@@ -181,15 +238,18 @@ pub(super) async fn type_recorded(
             Ok(()) => send(&Value::Array(actions)).await,
             Err(stop) => Err(stop),
         };
-        if let Ok(reply) = &outcome {
-            if !reply["app"].is_null() {
-                identity["app"] = reply["app"].clone();
-                identity["bundleId"] = reply["bundleId"].clone();
-            }
-            if !reply["field"].is_null() {
-                identity["field"] = reply["field"].clone();
-            }
+        if let Ok(reply) = &outcome
+            && !reply["app"].is_null()
+        {
+            identity["app"] = reply["app"].clone();
+            identity["bundleId"] = reply["bundleId"].clone();
         }
+        // A batch that failed, or whose reply was lost, may have typed some
+        // of its text where nobody can tell.
+        fields.push(match &outcome {
+            Ok(reply) if reply["ok"] == true => reply["field"].clone(),
+            Ok(_) | Err(_) => Value::Null,
+        });
 
         let (error, performed, partial) = match outcome {
             Ok(reply) if reply["ok"] == true => {
@@ -227,13 +287,32 @@ pub(super) async fn type_recorded(
         return report;
     }
 
+    if let Some(first) = fields.first()
+        && !first.is_null()
+        && fields.iter().all(|field| field == first)
+    {
+        identity["field"] = first.clone();
+    }
     let mut reply = report.clone();
     if report["uncertain"] == true {
         reply["code"] = json!(Code::Uncertain);
     }
+    if let Some(doing) = &client.doing {
+        doing.before().typing(&batches.concat());
+    }
     for field in ["app", "bundleId", "field"] {
         if let Some(value) = identity.get(field) {
             reply[field] = value.clone();
+        }
+    }
+    // The listed account its batches acted in, for this row alone: this
+    // reply is recorded, never returned.
+    if let Some(doing) = &client.doing
+        && let Some((account, allowed)) = doing.noted_account()
+    {
+        reply["account"] = account;
+        if let Some(allowed) = allowed {
+            reply["allowed"] = allowed;
         }
     }
     // Count the requested input actions without copying any typed text into
@@ -270,7 +349,8 @@ fn unconfirmed(reply: &Value) -> Error {
     if let Some(holder) = reply["holder"].as_str().and_then(Holder::parse) {
         error = error.held_by(holder);
     }
-    for kept in ["reason", "unread", "found"] {
+    // The question a stop before a later batch's text asks the person.
+    for kept in ["reason", "unread", "found", "ask"] {
         if !reply[kept].is_null() {
             error = error.with(kept, reply[kept].clone());
         }
@@ -302,3 +382,7 @@ pub fn keys(keys: &[String]) -> Result<Value> {
             .collect(),
     ))
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

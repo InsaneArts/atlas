@@ -202,6 +202,99 @@ done"#;
     Ok(answers)
 }
 
+/// Refuses `targets` when one is, or holds, the person's sign-ins or secrets: a path here, or a local `file:` URL
+/// to one, copied or opened in place alike. Copies already made for the helper are its own. Callers check before
+/// anything else, so nothing of theirs is done first.
+///
+/// # Errors
+///
+/// Returns the `credentials` refusal for the first such target.
+pub(crate) fn refuse_targets(targets: &[Target]) -> Result<()> {
+    let root = Path::new(ROOT);
+    let mut paths = Vec::new();
+    for target in targets {
+        match target {
+            Target::Path(path) if !path.starts_with(root) => paths.push(path.clone()),
+            Target::Name(name) if is_file_url(name) => {
+                // A file URL Atlas cannot read is never handed on unchecked.
+                paths.push(local_file(name).ok_or_else(|| {
+                    Error::new(
+                        Code::Usage,
+                        "Atlas can't tell which file that file URL names",
+                    )
+                })?);
+            }
+            Target::Name(_) | Target::Path(_) => {}
+        }
+    }
+    crate::credential_files::refuse(paths.iter().map(PathBuf::as_path))
+}
+
+/// Whether `name` starts with a URL scheme, as `https:` or `file:` do: letters, then letters, digits, `+`, `-` or
+/// `.`, then a colon.
+pub(crate) fn has_scheme(name: &str) -> bool {
+    name.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.starts_with(|first: char| first.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|part| part.is_ascii_alphanumeric() || "+-.".contains(part))
+    })
+}
+
+/// Whether `name` is a `file:` URL.
+fn is_file_url(name: &str) -> bool {
+    name.get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+}
+
+/// The path a `file:` URL names on this Mac, its escapes decoded; None for anything else.
+pub(crate) fn local_file(url: &str) -> Option<PathBuf> {
+    if !is_file_url(url) {
+        return None;
+    }
+    let rest = &url[5..];
+    // macOS opens a file URL's path on this Mac whatever host it names, so the host is passed over.
+    let path = match rest.strip_prefix("//") {
+        Some(authority) => &authority[authority.find('/')?..],
+        None => rest,
+    };
+    let path = path.split(['?', '#']).next()?;
+    // macOS keeps an escaped `/` inside a name: decoded here it would name another file, so it can't be judged.
+    if path.to_ascii_lowercase().contains("%2f") {
+        return None;
+    }
+    let path = PathBuf::from(percent_decoded(path)?);
+    // A file reference names a file by its volume and number, not where it is: it can't be judged.
+    if path.starts_with("/.file") {
+        return None;
+    }
+    Some(path)
+}
+
+/// `text` with its `%XX` escapes decoded, as macOS reads a file URL: a `%` that starts no escape stays as it is.
+/// None when the result is not UTF-8.
+fn percent_decoded(text: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        let escaped = (byte == b'%')
+            .then(|| after.get(..2))
+            .flatten()
+            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+        match escaped {
+            Some(decoded) => {
+                bytes.push(decoded);
+                rest = &after[2..];
+            }
+            None => {
+                bytes.push(byte);
+                rest = after;
+            }
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
 /// Something `open` hands the helper: a name or URL, or a path here.
 pub(crate) enum Target {
     /// An app name or URL, passed through.
@@ -258,6 +351,7 @@ pub(crate) async fn hand_over(
     running: &[AppRow],
 ) -> Result<Handed> {
     let root_path = PathBuf::from(ROOT);
+    refuse_targets(&targets)?;
     let checks: Vec<PathBuf> = targets
         .iter()
         .filter_map(|target| match target {
@@ -325,6 +419,9 @@ impl Handing {
         prepare: impl FnOnce() -> Result<PathBuf>,
         copy: impl FnMut(&Path, &Path, &Token) -> Result<PathBuf>,
     ) -> Result<Handed> {
+        // Checked again here, after the helper was asked what it can read: a path replaced by a link to a store since
+        // the first check is refused before anything is made for it.
+        refuse_targets(&self.targets)?;
         // The app the targets open with: its copies go when it is closed.
         let opened_with: Vec<String> = match self.targets.first() {
             Some(Target::Name(name)) if self.targets.len() > 1 => vec![name.clone()],
@@ -552,6 +649,9 @@ fn copy(path: &Path, root: &Path, token: &Token) -> Result<PathBuf> {
     let name = path
         .file_name()
         .ok_or_else(|| Error::new(Code::Input, format!("Cannot open {}", path.display())))?;
+    // The last check, as close to the copy as it gets: what `ditto` reads is the real path checked now.
+    let checked = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    crate::credential_files::refuse([path, checked.as_path()])?;
     let folder = root.join(token.as_str());
     fs::DirBuilder::new()
         .mode(0o700)
@@ -561,7 +661,7 @@ fn copy(path: &Path, root: &Path, token: &Token) -> Result<PathBuf> {
     let copy = folder.join(name);
     let made = quiet(
         "/usr/bin/ditto",
-        &["--noacl", &path.to_string_lossy()],
+        &["--noacl", &checked.to_string_lossy()],
         &copy,
         atlas_core::bounded::COPY,
     )
@@ -1061,4 +1161,5 @@ fn root_if_owned_in(root: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "handoff_tests.rs"]
 mod tests;

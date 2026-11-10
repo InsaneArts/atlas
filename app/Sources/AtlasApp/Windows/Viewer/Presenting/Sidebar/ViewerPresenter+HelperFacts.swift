@@ -4,7 +4,7 @@ import AtlasUI
 import Foundation
 
 extension ViewerPresenter {
-  /// Every fact about the helper, as the helper line's tooltip lists them: its account, its state and its display;
+  /// Every fact about the helper, as the helper row's menu lists them: its account, its state and its display;
   /// whether it is ready to act; its Save and Open dialogs while they are not known to work; how often the picture updates and how old the newest is; and, once read, when the
   /// helper logged in and the agents connected to Atlas.
   ///
@@ -12,7 +12,7 @@ extension ViewerPresenter {
   /// - Returns: The facts, in order.
   static func helperFacts(_ snapshot: ViewerSnapshot) -> [Fact] {
     let reading = snapshot.reading.statusReading
-    let facts = reading.facts(holdingControl: snapshot.holdingControl)
+    let facts = reading.facts
     return [
       Fact(name: ViewerWords.accountRow, value: account(snapshot.reading.status)),
       Fact(name: ViewerWords.stateRow, value: facts.input.word),

@@ -1,7 +1,19 @@
 import AtlasCommands
 
-/// The Helper tab's words: the helper's line, a login Atlas can close, and what a check of it found.
+/// The Helper page's words: how the helper stands, the helper's line, a login Atlas can close, and what a check of it
+/// found.
 extension SettingsWords {
+  /// The Helper row's line while Atlas waits for the service.
+  static let helperConnecting = "Connecting"
+  /// The Helper row's line while the helper is logged out.
+  static let helperLoggedOut = "Logged out"
+  /// The Helper row's line while the helper needs recovering.
+  static let helperNeedsYou = "Needs you"
+  /// The Helper row's line while a readiness check fails.
+  static let helperNeedsSetup = "Needs setup"
+  /// The Helper row's line while the helper can act.
+  static let helperReady = "Ready"
+
   /// A deleted account's login is still open.
   static let leftoverTitle = "A deleted account is still logged in"
   /// Why closing it matters.

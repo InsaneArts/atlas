@@ -92,7 +92,7 @@ pub(super) enum Command {
     #[command(hide = true)]
     SetupHelper(SetupHelper),
     /// Show where Atlas keeps its settings, sockets and screenshots.
-    Config,
+    Config(Config),
     /// Show the helper: who it is, where it is and what it may do.
     Status,
     /// List what this agent session did in the helper.
@@ -135,7 +135,7 @@ pub(super) enum Command {
         /// Override automatic Retina-aware capture sizing (320–4096 pixels).
         #[arg(long, requires = "terminal", value_name = "PIXELS", value_parser = clap::value_parser!(u32).range(320..=4096))]
         max_dimension: Option<u32>,
-        /// Capture with cg (default) or experimental sck; requires the updated signed helper.
+        /// Capture with sck (default), one ScreenCaptureKit stream, or cg, a CoreGraphics capture per picture.
         #[arg(long, requires = "terminal", value_name = "BACKEND", value_parser = ["cg", "sck"], hide_possible_values = true)]
         capture_backend: Option<String>,
         /// Local port for the native viewer.
@@ -456,6 +456,17 @@ pub(super) enum Command {
     /// After an update, run by the new executable: move the helper onto it.
     #[command(hide = true)]
     UpdateFinish,
+    /// Take the picture a moment after an agent's action, in a process of
+    /// its own, for Atlas.app.
+    #[command(hide = true)]
+    PictureAfter {
+        /// The name of the picture taken before the action.
+        #[arg(long)]
+        before: String,
+        /// When the action ended, in milliseconds since 1970.
+        #[arg(long)]
+        ended: u64,
+    },
     /// The steps the Atlas window's onboarding drives (JSON only).
     #[command(hide = true)]
     Onboarding {
@@ -550,7 +561,7 @@ pub(super) struct Mcp {
 #[derive(clap::Args)]
 pub(super) struct Menubar {
     /// Local port for the viewer it opens.
-    #[arg(long, default_value_t = 8765, value_parser = clap::value_parser!(u16).range(1..))]
+    #[arg(long, default_value_t = atlas_cli::menubar::PORT, value_parser = clap::value_parser!(u16).range(1..))]
     pub(super) port: u16,
     /// Serve the menu bar from this process (how it runs on its own).
     #[arg(long, hide = true, conflicts_with_all = ["render", "login"])]
@@ -561,6 +572,40 @@ pub(super) struct Menubar {
     /// Instead, turn "Open at Login" on or off, or report it.
     #[arg(long, value_name = "on|off|status", conflicts_with = "render")]
     pub(super) login: Option<atlas_cli::menubar::Login>,
+}
+
+#[derive(clap::Args)]
+pub(super) struct Config {
+    /// Keep a picture of the helper's screen right before each agent action
+    /// for the person to see in Atlas.app (on, the default, or off). Atlas.app
+    /// sets it from Settings, so agents are not told of it.
+    #[arg(long, value_enum, value_name = "STATE", hide = true)]
+    pub(super) pictures_before_actions: Option<OnOff>,
+    /// Keep the pictures this many days (a week unless set).
+    #[arg(long, value_name = "DAYS", hide = true)]
+    pub(super) keep_pictures_days: Option<u32>,
+    /// Keep at most this many characters of typed text with them; 0 keeps
+    /// all of it.
+    #[arg(long, value_name = "CHARACTERS", hide = true)]
+    pub(super) typed_text_limit: Option<u32>,
+    /// Delete every picture kept.
+    #[arg(long, hide = true)]
+    pub(super) delete_pictures: bool,
+    /// Say how many pictures are kept and the space they take.
+    #[arg(long, hide = true)]
+    pub(super) pictures_summary: bool,
+}
+
+impl Config {
+    /// Whether it changes the settings or the pictures, which needs no
+    /// helper.
+    pub(super) fn changes(&self) -> bool {
+        self.pictures_before_actions.is_some()
+            || self.keep_pictures_days.is_some()
+            || self.typed_text_limit.is_some()
+            || self.delete_pictures
+            || self.pictures_summary
+    }
 }
 
 #[derive(clap::Args)]
@@ -1014,6 +1059,31 @@ pub(super) enum OnboardingCommand {
         #[arg(value_enum)]
         state: OnOff,
     },
+    /// Whether the home folder is private from the helper: make it private,
+    /// open it again (the person only), or note the offer was made.
+    Files {
+        #[arg(value_enum)]
+        change: Option<HomeFiles>,
+    },
+    /// Whether agents may copy sign-ins and secrets into the helper; only
+    /// the person allows it.
+    SignIns {
+        #[arg(value_enum)]
+        choice: Option<SignInCopies>,
+    },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(super) enum HomeFiles {
+    Private,
+    Open,
+    Offered,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(super) enum SignInCopies {
+    Allow,
+    Refuse,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -1397,4 +1467,5 @@ impl AppTarget {
 }
 
 #[cfg(test)]
+#[path = "cli_tests.rs"]
 mod tests;

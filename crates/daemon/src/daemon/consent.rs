@@ -588,4 +588,5 @@ fn open_settings(page: &str) {
 }
 
 #[cfg(test)]
+#[path = "consent_tests.rs"]
 mod tests;

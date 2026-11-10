@@ -7,8 +7,8 @@ import Testing
 
 @Suite("Viewer panes teardown")
 struct ViewerPanesTeardownTests {
-  @Test("closing the window cancels screenshot navigation before a late picture arrives")
-  func closingCancelsScreenshotNavigation() async throws {
+  @Test("closing the window cancels the picture sheet's read before a late picture arrives")
+  func closingCancelsTheSheetsRead() async throws {
     let service = ScriptedService()
     let viewer = try await ViewerPanesModelTests.onShots(service)
     defer {
@@ -17,28 +17,31 @@ struct ViewerPanesTeardownTests {
     }
     let name = ViewerPanesModelTests.newer
     viewer.send(.openShot(name))
-    let navigation = viewer.panesModel.screenshots
-    let load = try #require(navigation.load)
-    try await settle("the large picture was never requested") {
+    let pictures = viewer.panesModel.pictures
+    let load = try #require(pictures.loads[name])
+    try await settle("the picture was never requested") {
       service.heldShots.contains { $0.name == name && $0.full }
     }
     viewer.close()
     #expect(load.isCancelled)
-    #expect(navigation.load == nil)
+    #expect(pictures.loads.isEmpty)
     service.resumeAllShots()
     try await load.value("the cancelled picture never replied")
-    #expect(viewer.panes.shots.full == nil)
+    #expect(viewer.panes.activity.pictures[name] == nil)
   }
 
   @Test("closing the window cancels Copy and Save before either delivers", arguments: [false, true])
-  func closingCancelsScreenshotExports(saves: Bool) async throws {
+  func closingCancelsPictureExports(saves: Bool) async throws {
     let service = ScriptedService()
     var deliveries: [Data] = []
     let viewer = try await ViewerPanesModelTests.onShots(
       service,
       shotOutlet: ShotOutlet(
-        copy: { deliveries.append($0) },
-        reveal: { _ in },
+        copy: { png, _ in
+          deliveries.append(png)
+          return true
+        },
+        reveal: { _ in true },
         save: { data, _ in
           deliveries.append(data)
           return true
@@ -49,14 +52,15 @@ struct ViewerPanesTeardownTests {
       viewer.close()
       service.resumeAllShots()
     }
-    viewer.send(.selectShot(ViewerPanesModelTests.newer))
-    if saves { viewer.panesModel.saveShot() } else { viewer.send(.copyShot) }
-    let exports = viewer.panesModel.exports
-    let pending = try #require(exports.pending)
-    try await settle("the export was never requested") { service.heldShots.count == 1 }
+    viewer.send(.openShot(ViewerPanesModelTests.newer))
+    if saves { viewer.panesModel.pictures.save {} } else { viewer.send(.copyPicture) }
+    let pictures = viewer.panesModel.pictures
+    let pending = try #require(pictures.copying)
+    // The sheet reads the picture to show it, and the export reads it again.
+    try await settle("the export was never requested") { service.heldShots.count == 2 }
     viewer.close()
     #expect(pending.isCancelled)
-    #expect(exports.pending == nil)
+    #expect(pictures.copying == nil)
     service.resumeAllShots()
     try await pending.value("the cancelled export never replied")
     #expect(deliveries.isEmpty)

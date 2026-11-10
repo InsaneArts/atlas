@@ -3,13 +3,14 @@
 //! argv or output. The log itself is [`crate::activity_log`]'s.
 use super::{Actor, Client, timestamp};
 use crate::activity_log::{self, Failure, Op, Row, Step};
+use atlas_core::host::Key;
 use atlas_core::{
     error::{Code, Error, Result},
     name::same_text,
 };
 use serde_json::{Value, json};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, PoisonError},
     time::Duration,
@@ -23,6 +24,41 @@ pub(crate) const PERSON_INPUT_SPAN: Duration = Duration::from_secs(5);
 /// The warning on a valid result whose activity row could not be written.
 pub(crate) const NOT_RECORDED: &str =
     "Operation result is valid; local metadata could not be recorded";
+
+/// The most host sessions [`LOGGED`] keeps, the newest: a process acts for
+/// one, or a few.
+const LOGGED_SESSIONS: usize = 64;
+
+/// When this process last wrote an activity row naming each host session,
+/// in milliseconds since 1970, whichever client wrote it: what the
+/// session's record keeps once the command ends, through a client of its
+/// own.
+static LOGGED: Mutex<BTreeMap<Key, u64>> = Mutex::new(BTreeMap::new());
+
+/// Note that a row naming `session` was written at `at`.
+fn note_logged(session: &Key, at: u64) {
+    let mut logged = LOGGED.lock().unwrap_or_else(PoisonError::into_inner);
+    let newest = logged.get(session).map_or(at, |kept| at.max(*kept));
+    logged.insert(session.clone(), newest);
+    if logged.len() > LOGGED_SESSIONS
+        && let Some(oldest) = logged
+            .iter()
+            .min_by_key(|(_, at)| **at)
+            .map(|(key, _)| key.clone())
+    {
+        logged.remove(&oldest);
+    }
+}
+
+/// When this process last wrote an activity row naming `session`, in
+/// milliseconds since 1970.
+pub(crate) fn logged_at(session: &Key) -> Option<u64> {
+    LOGGED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(session)
+        .copied()
+}
 
 /// The person's input through a viewer, gathered into one row a span,
 /// [`PERSON_INPUT_SPAN`] unless made with another: their mouse and keyboard
@@ -296,6 +332,8 @@ impl Client {
     /// [`Client::write_row`] on a blocking thread: a row waits its turn
     /// behind another command's, which must not hold up the runtime. Only
     /// the row goes there, never the request or reply it was projected from.
+    /// The facts beside the command's picture are kept there first, saying
+    /// how it went as its row does.
     async fn recorded(
         &self,
         request: &Value,
@@ -304,10 +342,20 @@ impl Client {
         step: Step,
     ) -> Result<()> {
         let (row, ok) = (self.row(request, reply, elapsed, step), worked(reply));
+        let facts = (step == Step::End)
+            .then(|| self.picture_facts(request, &row, reply))
+            .flatten();
         let client = self.clone();
-        let written = tokio::task::spawn_blocking(move || client.write_row(row, step, ok))
-            .await
-            .map_err(row_worker_failed)?;
+        let written = tokio::task::spawn_blocking(move || {
+            if let Some((before, facts)) = facts {
+                // Facts that cannot be kept leave the picture unmarked; the
+                // row stands.
+                let _ = crate::before::keep_facts(&client.config.output_dir, &before, &facts);
+            }
+            client.write_row(row, step, ok)
+        })
+        .await
+        .map_err(row_worker_failed)?;
 
         // The person's gathered input is written once its span ends, even
         // when no more comes.
@@ -387,13 +435,17 @@ impl Client {
             gathering.flush()?;
         }
 
-        activity_log::append(directory, &row)
+        activity_log::append(directory, &row)?;
+        if let Some(session) = self.host_session.as_ref().filter(|_| row.session.is_some()) {
+            note_logged(session.key(), atlas_core::time::now_ms());
+        }
+        Ok(())
     }
 
     /// The activity row for `step` of `request`, unstamped. No input text, argv,
     /// coordinates, window titles, output or image payloads reach it: only
     /// what `Doing` names.
-    fn row(&self, request: &Value, reply: &Value, elapsed: Duration, step: Step) -> Row {
+    pub(super) fn row(&self, request: &Value, reply: &Value, elapsed: Duration, step: Step) -> Row {
         let start = step == Step::Start;
         let ok = worked(reply);
         let mut row = Row {
@@ -439,6 +491,17 @@ impl Client {
                 .as_ref()
                 .filter(|task| task.name().is_some())
                 .map(|task| task.key().as_str().to_owned());
+            // The picture before its first input, once saved: never one
+            // still being written.
+            row.before = self.doing.as_ref().and_then(|doing| doing.before().name());
+            // The listed account its input acted in, as the input service
+            // found it, and what let it act there: never for an app or site
+            // the person didn't list.
+            row.account = activity_log::Account::of(&reply["account"]);
+            row.allowed = row
+                .account
+                .as_ref()
+                .and_then(|_| serde_json::from_value(reply["allowed"].clone()).ok());
         }
 
         // A collection says how many files and bytes it kept, never which.
@@ -478,4 +541,5 @@ impl Client {
 }
 
 #[cfg(test)]
+#[path = "record_tests.rs"]
 mod tests;

@@ -15,6 +15,8 @@ struct ViewerHostContent: View {
   var placement = CardScrollPlacement()
   /// Observes the layout under test without depending on accessibility services.
   var frameReport: LayoutFrameReport?
+  /// The window's size.
+  var size = PreviewStates.viewerSize
 
   /// The window's content, its pictures painted flat.
   var body: some View {
@@ -26,6 +28,6 @@ struct ViewerHostContent: View {
     .environment(\.motionReductionOverride, reduceMotion)
     .environment(\.cardScrollPlacement, placement)
     .environment(\.layoutFrameReport, frameReport)
-    .frame(width: PreviewStates.viewerSize.width, height: PreviewStates.viewerSize.height)
+    .frame(width: size.width, height: size.height)
   }
 }

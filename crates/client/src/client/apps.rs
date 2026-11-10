@@ -28,7 +28,6 @@ pub struct AppRow {
     bundle_id: Option<String>,
     executable: Option<String>,
     active: bool,
-    hidden: bool,
     policy: Option<String>,
     launched_at: Option<u64>,
     projection: Map<String, Value>,
@@ -128,7 +127,9 @@ impl AppRow {
             Some(value) => value.as_str().map(|text| Some(text.to_owned())),
         };
         let flag = |key: &str| fields.get(key).map_or(Some(false), Value::as_bool);
-        if fields.get("policy").is_some_and(Value::is_null) {
+        // A row whose hidden flag is not one is malformed, though nothing
+        // reads it.
+        if fields.get("policy").is_some_and(Value::is_null) || flag("hidden").is_none() {
             return None;
         }
         Some(Self {
@@ -137,7 +138,6 @@ impl AppRow {
             bundle_id: text("bundleId")?,
             executable: text("executable")?,
             active: flag("active")?,
-            hidden: flag("hidden")?,
             policy: text("policy")?,
             launched_at: fields.get("launchedAt").and_then(Value::as_u64),
             projection: fields,
@@ -158,13 +158,6 @@ impl AppRow {
     }
     pub(crate) fn active(&self) -> bool {
         self.active
-    }
-    pub(crate) fn hidden(&self) -> bool {
-        self.hidden
-    }
-    /// The row as the helper sent it, for output and its size.
-    pub(crate) fn fields(&self) -> &Map<String, Value> {
-        &self.projection
     }
     pub(crate) fn policy(&self) -> Option<&str> {
         self.policy.as_deref()
@@ -216,4 +209,5 @@ impl Client {
 }
 
 #[cfg(test)]
+#[path = "apps_tests.rs"]
 mod tests;

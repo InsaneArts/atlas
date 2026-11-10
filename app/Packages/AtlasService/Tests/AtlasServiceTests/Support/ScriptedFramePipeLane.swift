@@ -4,16 +4,16 @@ import os
 @testable import AtlasService
 
 /// One lane to a ``ScriptedFramePipeBroker``: what the client writes goes to the broker, and what the broker answers
-/// on this lane is read back in order. The broker can wait until the client has read all it sent, to order what
+/// on this lane is read back in order. The broker can wait until the client has handled all it sent, to order what
 /// comes next after it without a pause.
 final class ScriptedFramePipeLane: FramePipeTransport, Sendable {
   /// What the lane sent and what of it the client read, and who waits for the two to meet.
   private struct Delivery {
     /// Chunks sent.
     var sent = 0
-    /// Chunks read.
-    var read = 0
-    /// Waiting until everything sent is read.
+    /// Reads the client began: each after it handled the chunk before.
+    var asked = 0
+    /// Waiting until everything sent is handled.
     var waiting: [CheckedContinuation<Void, Never>] = []
   }
 
@@ -39,11 +39,12 @@ final class ScriptedFramePipeLane: FramePipeTransport, Sendable {
     sink.yield(data)
   }
 
-  /// Returns once the client has read everything this lane sent so far.
+  /// Returns once the client has handled everything this lane sent so far: it read the last chunk, and asked for the
+  /// next, so whatever it decoded from it is already passed on.
   func drained() async {
     await withCheckedContinuation { continuation in
       let caughtUp = delivery.withLock { delivery in
-        guard delivery.read < delivery.sent else { return true }
+        guard delivery.asked <= delivery.sent else { return true }
         delivery.waiting.append(continuation)
         return false
       }
@@ -52,16 +53,15 @@ final class ScriptedFramePipeLane: FramePipeTransport, Sendable {
   }
 
   func read(upTo limit: Int) async throws -> Data {
-    var iterator = replies.makeAsyncIterator()
-    let data = await iterator.next() ?? Data()
     let caughtUp = delivery.withLock { delivery in
-      delivery.read += 1
-      guard delivery.read >= delivery.sent else { return [CheckedContinuation<Void, Never>]() }
+      delivery.asked += 1
+      guard delivery.asked > delivery.sent else { return [CheckedContinuation<Void, Never>]() }
       defer { delivery.waiting = [] }
       return delivery.waiting
     }
     for waiter in caughtUp { waiter.resume() }
-    return data
+    var iterator = replies.makeAsyncIterator()
+    return await iterator.next() ?? Data()
   }
 
   func write(_ data: Data) async throws {

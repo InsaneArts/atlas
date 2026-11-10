@@ -2,10 +2,10 @@ import AppKit
 import AtlasUI
 
 /// The main menu's Helper items as Settings answers them while it is in front: Recover…, Switch and Log Out ask on the
-/// Helper pane, as its own buttons do, and each item is validated against the same state those buttons draw
+/// Helper page, as its own buttons do, and each item is validated against the same state those buttons draw
 /// (``SettingsHelperButtons``). Settings offers no restart, so Restart Helper… waits.
 extension SettingsWindow: HelperMenuActions {
-  /// Asks before recovering the helper, on the Helper pane.
+  /// Asks before recovering the helper, on the Helper page.
   ///
   /// - Parameter sender: The menu item.
   func askRecover(_ sender: Any?) { ask(.askRecover) }
@@ -15,17 +15,17 @@ extension SettingsWindow: HelperMenuActions {
   /// - Parameter sender: The menu item.
   func askRestart(_ sender: Any?) {}
 
-  /// Asks before switching to the helper, on the Helper pane.
+  /// Asks before switching to the helper, on the Helper page.
   ///
   /// - Parameter sender: The menu item.
   func askSwitch(_ sender: Any?) { ask(.askSwitch) }
 
-  /// Asks before logging the helper out, on the Helper pane.
+  /// Asks before logging the helper out, on the Helper page.
   ///
   /// - Parameter sender: The menu item.
   func askLogOut(_ sender: Any?) { ask(.askLogOut) }
 
-  /// Whether a Helper item can be chosen now, as the Helper pane's button for it, with the helper's name in Switch and
+  /// Whether a Helper item can be chosen now, as the Helper page's button for it, with the helper's name in Switch and
   /// Log Out; every other item is the window's to validate, as for any window.
   ///
   /// - Parameter item: The item.
@@ -48,11 +48,11 @@ extension SettingsWindow: HelperMenuActions {
     }
   }
 
-  /// Shows the Helper pane and asks there, as its own button would.
+  /// Shows the Helper page and asks there, as its own button would.
   ///
-  /// - Parameter event: The Helper pane's event.
+  /// - Parameter event: The Helper page's event.
   private func ask(_ event: SettingsEvent) {
-    controller.selectTab(.helper)
+    controller.select(.helper)
     controller.send(event)
   }
 }

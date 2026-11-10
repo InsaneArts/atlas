@@ -5,9 +5,9 @@ import SwiftUI
 /// The main window: resizable to any size, with no least size of its own, the sidebar under its window buttons and the
 /// content card beside it, which give way to its size as the controller fits them (``ViewerController/fitWindow(to:)``),
 /// titled with the helper's name for the Window menu. It reads only while on screen, gives control back whenever it closes, hides or
-/// loses focus, hands a dragged screenshot to the system, takes the keyboard back from the search field on a press
-/// anywhere else in it (``FieldFocus``), reads the Screenshots
-/// list's keys (``ShotKeys``) and Escape for a window outlined on the Screen, hands VoiceOver the states that ask
+/// loses focus, takes the keyboard back from the search field on a press anywhere else in it (``FieldFocus``), reads
+/// the picture sheet's and the replay's keys (``ActionKeys``) and Escape for the sidebar over the card
+/// (``WindowKeys``), hands VoiceOver the states that ask
 /// something of the person (``ViewerController/askingStatus``), and answers the main menu's View, File, Edit and
 /// Helper items (`ViewerWindow+Menus`) as the window itself, which the responder chain reaches. Built on the one
 /// shell (``WindowShell``), and opened and closed by the coordinator (``WindowPresenting``).
@@ -28,8 +28,6 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// The empty toolbar that gives the title bar its height, so the window buttons line up with the card's header;
   /// taken off in full screen, where it would become the auto-hiding full-screen toolbar.
   private let rowToolbar = NSToolbar(identifier: "viewer")
-  /// Whether a screenshot surface itself owns focus; read-only outside the window, including native dispatch tests.
-  private(set) var screenshotFocused = false
   /// Takes the keyboard back from the search field on a press anywhere else in the window.
   private let fieldFocus = FieldFocus()
 
@@ -65,28 +63,15 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     controller.fitWindow(to: frame.size)
     delegate = self
     let fieldReport = fieldFocus.report
-    let screenshotReport = ScreenshotFocusReport { [weak self] focused in
-      self?.screenshotFocused = focused
-    }
+    let feed = controller.readingLoop.feed
     WindowShell.host(in: self) {
       ViewerView(
-        state: controller.state,
+        state: controller.drawnState(),
         send: { controller.send($0) },
         input: { DesktopInput(controller: controller) },
-        livePicture: { LayerPictureView(live: $0) }
-      )
-      .environment(
-        \.shotDrag,
-        ShotDragSource { name in
-          ShotDrag.provider(
-            name: name,
-            suggestedName: ViewerPresenter.shotFileName(name, controller.snapshot),
-            service: controller.service
-          )
-        }
+        livePicture: { LayerPictureView(live: $0, feed: feed) }
       )
       .environment(\.focusedFieldReport, fieldReport)
-      .environment(\.screenshotFocusReport, screenshotReport)
     }
     followTitle()
     followAnnouncements()
@@ -136,25 +121,26 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     followScreen()
   }
 
-  /// Dispatches screenshot keys only while their subtree owns focus; all other events reach the native responder.
+  /// Dispatches the window's own keys first; all other events reach the native responder.
   ///
   /// - Parameter event: The window event being dispatched.
   override func sendEvent(_ event: NSEvent) {
-    if event.type == .keyDown, shotKey(event) == nil { return }
+    if event.type == .keyDown, windowKey(event) == nil { return }
     super.sendEvent(event)
   }
 
-  /// A key on the Screenshots list: its event goes to the controller, and the key goes no further.
+  /// A key the window answers itself, over the sidebar shown over the card, or over the picture sheet or the replay:
+  /// its event goes to the controller, and the key goes no further.
   ///
   /// - Parameter event: The key.
   /// - Returns: The key, to pass on, or nil once handled.
-  private func shotKey(_ event: NSEvent) -> NSEvent? {
+  private func windowKey(_ event: NSEvent) -> NSEvent? {
     guard event.window === self, !(firstResponder is NSText) else { return event }
     let snapshot = controller.snapshot
     guard ViewerPresenter.alert(snapshot) == nil else { return event }
     let held = event.modifierFlags.intersection([.command, .control, .option])
     if snapshot.session.overlayShown {
-      if let dismiss = ShotKeys.overlayEvent(
+      if let dismiss = WindowKeys.overlayEvent(
         keyCode: event.keyCode,
         hasModifiers: !held.isEmpty,
         holdingControl: snapshot.holdingControl
@@ -164,35 +150,19 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
       }
       return event
     }
-    if snapshot.session.place == .screen {
-      return outlineKey(event, hasModifiers: !held.isEmpty, snapshot: snapshot)
+    if snapshot.session.place == .activity {
+      let shown = ViewerPresenter.shownOverlays(snapshot)
+      let key = ActionKeys.event(
+        keyCode: event.keyCode,
+        hasModifiers: !held.isEmpty,
+        sheet: shown.sheet,
+        replaying: shown.replay
+      )
+      guard let key else { return event }
+      controller.send(key)
+      return nil
     }
-    guard snapshot.session.place == .screenshots, screenshotFocused else { return event }
-    let largeShown = snapshot.panes.shots.large != nil
-    guard let shot = ShotKeys.event(keyCode: event.keyCode, hasModifiers: !held.isEmpty, largeShown: largeShown)
-    else { return event }
-    controller.send(shot)
-    return nil
-  }
-
-  /// Escape on the Screen stops showing the window outlined there, as its label's × does; while this window holds
-  /// control every key is the helper's.
-  ///
-  /// - Parameters:
-  ///   - event: The key.
-  ///   - hasModifiers: Whether ⌘, ⌃ or ⌥ is held with it.
-  ///   - snapshot: What the window held when the key arrived.
-  /// - Returns: The key, to pass on, or nil once handled.
-  private func outlineKey(_ event: NSEvent, hasModifiers: Bool, snapshot: ViewerSnapshot) -> NSEvent? {
-    let key = ShotKeys.screenEvent(
-      keyCode: event.keyCode,
-      hasModifiers: hasModifiers,
-      holdingControl: snapshot.holdingControl,
-      outlineShown: ViewerPresenter.outline(snapshot) != nil
-    )
-    guard let key else { return event }
-    controller.send(key)
-    return nil
+    return event
   }
 
   /// Reads only while the window is on screen: off screen (minimised, covered, on another Space, or behind a locked
@@ -255,7 +225,7 @@ final class ViewerWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     controller.setLiveResizing(true)
   }
 
-  /// The person let go of the window's edge: the Screenshots grid settles its columns and the thumbnails read.
+  /// The person let go of the window's edge: the thumbnails read again.
   ///
   /// - Parameter notification: The window's notification.
   func windowDidEndLiveResize(_ notification: Notification) {

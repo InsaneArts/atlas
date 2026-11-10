@@ -24,6 +24,16 @@ enum OnboardingWords {
   static let finishing = "Finishing…"
   /// While Atlas opens in the menu bar.
   static let opening = "Opening Atlas…"
+  /// While Done makes the home folder private from the helper.
+  static let makingPrivate = "Keeping your home folder private…"
+
+  /// Why Done stopped: the home folder couldn't be made private, with Atlas's own line, and where to do it later.
+  ///
+  /// - Parameter message: What the command said.
+  /// - Returns: The line.
+  static func homeNotPrivate(_ message: String) -> String {
+    "\(Words.sentence(message)) You can make it private later in Settings › Privacy."
+  }
   /// While the helper allows the account that asked.
   static let settingUpHere = "Setting Atlas up in this account…"
 

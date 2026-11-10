@@ -1,7 +1,7 @@
 import AtlasCommands
 import Foundation
 
-/// What the helper line's tooltip lists that the helper's status does not carry, read once the window first shows
+/// What the helper row's menu lists that the helper's status does not carry, read once the window first shows
 /// and by Check Again.
 struct ViewerHelperFacts {
   /// The agents connected to Atlas, as last read; nil before they are read, or when they could not be.

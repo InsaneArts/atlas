@@ -24,4 +24,10 @@ extension OnboardingFacts {
   public func opensAtLogin(enabledNow: Bool) -> Bool {
     loginDecided ? enabledNow : true
   }
+
+  /// The home folder box's first value on the Done screen: checked, unless keeping the home folder private was
+  /// offered for this helper before, when the person already chose.
+  public var keepsHomePrivate: Bool {
+    !homePrivacyOffered
+  }
 }

@@ -64,6 +64,11 @@ extension Color {
     .opacity(0.14)
   /// A drawn app tile's letter: white, the same in either appearance.
   static let monogramLetter = Color.white
+  /// The tile under a site's icon: white, the same in either appearance, as a web app's icon stands.
+  static let siteTile = Color.white
+  /// The hairline edge of a site's tile, so its white holds on a light ground: black at 0.1.
+  static let siteTileEdge = Color.black
+    .opacity(0.1)
   /// The ground every window draws on: #F5F5F7, or #161618.
   public static let ground = Color(light: .rgb(0xF5F5F7), dark: .rgb(0x161618))
   /// A ground a step below ``ground``, for a window whose content sits on one card laid over it, such as the
@@ -106,6 +111,9 @@ extension Color {
   static let textSuccess = Color(light: .rgb(0x1F7A36), dark: .rgb(0x32D74B))
   /// Glyphs on ``success``, such as a check: #0B2410.
   static let onSuccess = Color(red: 0x0B / 255, green: 0x24 / 255, blue: 0x10 / 255)
+  /// A soft success ground under a row, such as what the person allowed for a task: #34C759 at 0.12, or #30D158 at
+  /// 0.14.
+  static let fillSuccessSoft = Color(light: .rgb(0x34C759, alpha: 0.12), dark: .rgb(0x30D158, alpha: 0.14))
   /// What needs the person: system orange, #FF9500, or #FF9F0A.
   static let attention = Color(light: .rgb(0xFF9500), dark: .rgb(0xFF9F0A))
   /// The attention colour laid under a flagged field, as a wash: attention at 0.09.
@@ -139,6 +147,11 @@ extension Color {
   static let fillContent = Color(light: .white(1), dark: .rgb(0x1F1F22))
   /// A grouped list's ground (a step over ``fillCard``): white, or white at 0.05.
   static let fillGroup = Color(light: .white(1), dark: .white(0.05))
+  /// A grouped list's ground on a content card, such as Settings' groups, a quiet step under the card's white: black
+  /// at 0.045, or white at 0.055.
+  static let fillGroupInset = Color(light: .black(0.045), dark: .white(0.055))
+  /// A choice's picture tile, such as an account's level: a pale wash of the accent, #E6EEFD, or #252D3D.
+  static let fillLevelTile = Color(light: .rgb(0xE6EEFD), dark: .rgb(0x252D3D))
   /// A chosen row's or thumb's raised fill, such as the selected session's or tab's: white, or white at 0.12.
   static let fillSelection = Color(light: .white(1), dark: .white(0.12))
   /// A slight darkening of a held segmented thumb, without changing its rim or elevation.
@@ -148,11 +161,8 @@ extension Color {
   static let groundSelected = Color(light: .white(1), dark: .rgb(0x343436))
   /// A row under the pointer: black at 0.035, or white at 0.035.
   static let fillRowHover = Color(light: .black(0.035), dark: .white(0.035))
-  /// A tile resting on the card, such as an open app's: black at 0.035, or white at 0.045.
+  /// A tile resting on the card, such as the panel's service note: black at 0.035, or white at 0.045.
   static let fillTile = Color(light: .black(0.035), dark: .white(0.045))
-  /// A tile raised off the card in place, such as the app in front: white under ``Elevation/selection``'s shadow, or
-  /// white at 0.10 with none.
-  static let fillTileRaised = Color(light: .white(1), dark: .white(0.1))
   /// A control's fill, such as a secondary capsule, a symbol tile or a hovered menu row: black at 0.05, or white at
   /// 0.08.
   static let fillControl = Color(light: .black(0.05), dark: .white(0.08))
@@ -241,4 +251,29 @@ extension Color {
   /// A heavier shadow, for a surface over other content, such as the mini screen's or a large screenshot's:
   /// black at 0.22, or black at 0.55.
   static let dropShadowStrong = Color(light: .black(0.22), dark: .black(0.55))
+  /// A mark over a picture of the helper's screen that worked, the same in either appearance as the picture is:
+  /// system blue, #0A84FF.
+  static let markWorked = Color(red: 0x0A / 255, green: 0x84 / 255, blue: 0xFF / 255)
+  /// A mark that did not work or may not have finished: #FF9500.
+  static let markFailed = Color(red: 0xFF / 255, green: 0x95 / 255, blue: 0x00 / 255)
+  /// A mark that sent nothing: #8E8E93.
+  static let markQuiet = Color(red: 0x8E / 255, green: 0x8E / 255, blue: 0x93 / 255)
+  /// The halo that lifts a mark off the screen under it: white at 0.95.
+  static let markHalo = Color.white
+    .opacity(0.95)
+  /// A word or arrow on a mark's own colour: white.
+  static let onMark = Color.white
+  /// The bubble that says what was typed or pressed: rgb(20, 20, 22) at 0.92.
+  static let markBubble = Color(red: 0x14 / 255, green: 0x14 / 255, blue: 0x16 / 255)
+    .opacity(0.92)
+  /// The words in a bubble: #F5F5F7.
+  static let markBubbleText = Color(red: 0xF5 / 255, green: 0xF5 / 255, blue: 0xF7 / 255)
+  /// A bubble's quiet line: #A1A1A6.
+  static let markBubbleDim = Color(red: 0xA1 / 255, green: 0xA1 / 255, blue: 0xA6 / 255)
+  /// A keycap in a bubble: white.
+  static let markKey = Color.white
+  /// A keycap's letter: #1D1D1F.
+  static let markKeyText = Color(red: 0x1D / 255, green: 0x1D / 255, blue: 0x1F / 255)
+  /// A keycap's lower edge: #B8B8BE.
+  static let markKeyEdge = Color(red: 0xB8 / 255, green: 0xB8 / 255, blue: 0xBE / 255)
 }

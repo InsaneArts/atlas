@@ -2,10 +2,6 @@
 public enum ViewerEvent: Equatable, Sendable {
   /// A place picked, from the View menu, or the mini screen pressed for the Screen.
   case show(ViewerPlace)
-  /// A Library row pressed: its list, or the Screen again when its list already shows.
-  ///
-  /// - Parameter place: The row's list.
-  case chooseLibrary(ViewerPlace)
   /// A command chosen from one of the window's context menus.
   ///
   /// - Parameter command: The command.
@@ -22,7 +18,7 @@ public enum ViewerEvent: Equatable, Sendable {
   case stopAgent
   /// Resume: let agents act in the helper again.
   case resumeAgent
-  /// A host session chosen in the sessions column, or All sessions, whose work Activity and Screenshots show.
+  /// A host session chosen in the sessions column, or All sessions: Activity shows its work.
   ///
   /// - Parameter choice: Whose work.
   case chooseSession(ViewerSessionChoice)
@@ -34,7 +30,7 @@ public enum ViewerEvent: Equatable, Sendable {
   case toggleEnded
   /// The sidebar's search circle: open the search field and give it the focus.
   case openSearch
-  /// The sidebar's search, as the person typed it, which narrows the sessions and the Activity or Apps list shown.
+  /// The sidebar's search, as the person typed it, which narrows the sessions and Activity.
   ///
   /// - Parameter query: The query; empty keeps everything.
   case search(String)
@@ -58,60 +54,88 @@ public enum ViewerEvent: Equatable, Sendable {
   ///
   /// - Parameter filter: The filter.
   case filterActivity(ViewerActivityFilter)
-  /// An Activity moment opened or folded by the person, which keeps their choice for the window's life.
+  /// An Activity session opened or folded by the person, which keeps their choice for the window's life.
   ///
   /// - Parameters:
-  ///   - id: The moment's identity.
+  ///   - id: The session's identity.
   ///   - opens: True to open it, false to fold it.
-  case toggleMoment(String, opens: Bool)
-  /// "Show N more" pressed under an open Activity moment, which then lists every step it holds.
-  ///
-  /// - Parameter id: The moment's identity.
-  case showMomentSteps(String)
-  /// Show on screen: outline a window on the Screen tab.
+  case toggleSession(String, opens: Bool)
+  /// An Activity run opened or folded by the person, which keeps their choice for the window's life.
   ///
   /// - Parameters:
-  ///   - app: The app's process id.
-  ///   - window: The window's number.
-  case showWindow(app: Int, window: Int)
-  /// The outlined window's ×, or Escape: stop outlining it.
-  case clearOutline
+  ///   - id: The run's identity.
+  ///   - opens: True to open it, false to fold it.
+  case toggleRun(String, opens: Bool)
+  /// A run's "120 pictures" pressed: its pictures open in place.
+  ///
+  /// - Parameter id: The run's identity.
+  case showRunPictures(String)
+  /// "Show N more" under a run's pictures: every one of them shows.
+  ///
+  /// - Parameter id: The run's identity.
+  case showAllRunPictures(String)
+  /// Show fewer under a run's pictures: they fold back to the run's newest few.
+  ///
+  /// - Parameter id: The run's identity.
+  case hideRunPictures(String)
+  /// "46 more sessions on Wednesday" pressed: every session of that day shows.
+  ///
+  /// - Parameter id: The day's identity.
+  case showDaySessions(String)
   /// The small screen let go of in a corner, which the window remembers.
   ///
   /// - Parameter corner: The corner it settled in.
   case moveCorner(MiniCorner)
-  /// How many screenshots stand in each of the grid's rows now, which ↑ and ↓ step by.
-  ///
-  /// - Parameter columns: The grid's columns.
-  case shotColumns(Int)
-  /// A screenshot picked in the grid.
-  ///
-  /// - Parameter name: The screenshot's file name.
-  case selectShot(String)
-  /// Show a screenshot large, from the grid or an Activity line's Open.
+  /// A screenshot pressed in the outline: it opens in the picture sheet.
   ///
   /// - Parameter name: The screenshot's file name.
   case openShot(String)
-  /// Space: show the selected screenshot large, or close the large view.
-  case toggleShot
-  /// Previous, or ←: the screenshot before.
-  case previousShot
-  /// Next, or →: the screenshot after.
-  case nextShot
-  /// Close, or Esc: close the large view.
-  case closeShot
-  /// ↑: the screenshot a row above the selected one.
-  case shotAbove
-  /// ↓: the screenshot a row below the selected one.
-  case shotBelow
-  /// Esc with no screenshot shown large: no screenshot selected.
-  case clearShotSelection
-  /// Copy: put the large screenshot, as taken, on the clipboard.
-  case copyShot
-  /// Show in Finder: show the large screenshot's file.
-  case showShotInFinder
+  /// A step's picture button pressed: the screen just before it opens in the picture sheet.
+  ///
+  /// - Parameter id: The step's identity.
+  case openAction(String)
+  /// ‹, or ←: the run's picture before.
+  case previousPicture
+  /// ›, or →: the run's picture after.
+  case nextPicture
+  /// Before or After picked: which of a step's pictures the sheet shows.
+  ///
+  /// - Parameter side: The side.
+  case pictureSide(ViewerPictureSide)
+  /// Copy: put the sheet's picture, as taken, on the clipboard.
+  case copyPicture
+  /// Show in Finder: show the sheet's picture's file.
+  case showPictureInFinder
+  /// Done, Return or Escape: close the sheet, back where the picture was opened.
+  case closePicture
+  /// An opened run's Replay: its steps played over the whole window.
+  ///
+  /// - Parameter id: The run's identity.
+  case openReplay(String)
+  /// A frame of the replay picked, from its strip or its bar.
+  ///
+  /// - Parameter index: The frame.
+  case replayFrame(Int)
+  /// Previous, or ←: the replay's frame before.
+  case previousFrame
+  /// Next, or →: the replay's frame after.
+  case nextFrame
+  /// Play or Pause, or Space.
+  case togglePlay
+  /// Done, or Esc: close the replay.
+  case closeReplay
   /// A thumbnail came into view, to be read if it is not yet.
   ///
   /// - Parameter name: The screenshot's file name.
   case thumbnailNeeded(String)
+  /// An answer to the question over the Screen.
+  ///
+  /// - Parameters:
+  ///   - id: The question's id.
+  ///   - choice: The answer.
+  case answerAsk(id: String, choice: AskChoice)
+  /// Done on the signing-in bar: the person finished in the helper's browser.
+  case signInDone
+  /// Cancel on the signing-in bar: the hold ends and nothing is added.
+  case signInCancel
 }

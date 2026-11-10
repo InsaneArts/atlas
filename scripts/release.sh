@@ -6,9 +6,10 @@
 #
 # Sets the version in Cargo.toml and Cargo.lock (committing the bump when it
 # changes), runs the checks, builds, signs, notarizes and staples Atlas.app
-# with cargo xtask dist, then tags v<version>, pushes main and the tag, and
-# publishes the zip and SHA256SUMS. Releases are cut from a clean main that
-# matches origin/main.
+# with cargo xtask dist, then tags v<version>, pushes main and the tag,
+# publishes the zip and SHA256SUMS, and points the Homebrew cask in
+# InsaneArts/homebrew-tap at the new release. Releases are cut from a clean
+# main that matches origin/main.
 #
 # Environment:
 #   SIGN_IDENTITY   Developer ID Application identity
@@ -19,6 +20,7 @@ set -eu
 identity=${SIGN_IDENTITY:-"Developer ID Application: Techzy LLC (539293JFA3)"}
 profile=${NOTARY_PROFILE:-camus-notary}
 releases="https://github.com/InsaneArts/atlas/releases"
+tap="InsaneArts/homebrew-tap"
 
 step() { printf '\n> %s\n' "$*"; }
 fail() {
@@ -49,6 +51,10 @@ git fetch -q origin main
 	fail "main differs from origin/main; pull or push first"
 ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null || fail "$tag already exists"
 gh auth status >/dev/null 2>&1 || fail "gh is not signed in; run gh auth login"
+case $(gh repo view "$tap" --json viewerPermission --jq .viewerPermission 2>/dev/null) in
+ADMIN | MAINTAIN | WRITE) ;;
+*) fail "you cannot push to $tap, whose cask this release updates" ;;
+esac
 security find-identity -v -p codesigning | grep -qF "\"$identity\"" ||
 	fail "the keychain has no signing identity named $identity"
 xcrun notarytool history --keychain-profile "$profile" >/dev/null 2>&1 ||
@@ -68,13 +74,8 @@ if [ "$current" != "$version" ]; then
 fi
 
 step "Checks"
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
 npm ci --silent
-npm run format:check
-npm test
-node scripts/check-swift.mjs
+scripts/check.sh
 
 step "Building, signing and notarizing"
 cargo xtask dist --sign "$identity" --notarize "$profile"
@@ -87,6 +88,8 @@ step "Checking the archive"
 work=$(mktemp -d "${TMPDIR:-/tmp}/atlas-release.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 (cd "$dist" && shasum -a 256 -c -s SHA256SUMS) || fail "SHA256SUMS does not match $zip"
+awk -v name="Atlas-$version-macos.zip" '$2 == name { print $1 }' "$dist/SHA256SUMS" | grep -qx '[0-9a-f]\{64\}' ||
+	fail "SHA256SUMS has no checksum for Atlas-$version-macos.zip"
 ditto -x -k "$zip" "$work"
 codesign --verify --strict --deep "$work/Atlas.app" || fail "the app's signature is invalid"
 spctl --assess --type execute "$work/Atlas.app" || fail "the app is not notarized"
@@ -97,6 +100,7 @@ step "Publishing $tag"
 previous=$(git describe --tags --abbrev=0 2>/dev/null || true)
 {
 	printf '## Install\n\n```sh\ncurl -fsSL https://atlas.insanearts.io/install.sh | sh\n```\n\n'
+	printf 'Or with Homebrew:\n\n```sh\nbrew trust insanearts/tap && brew install --cask insanearts/tap/atlas\n```\n\n'
 	printf 'Requires macOS 14 or later. An installed Atlas updates with `atlas update`.\n\n## Changes\n\n'
 	# The version's section of CHANGELOG.md, when it has one.
 	if grep -q "^## \[$version\]" CHANGELOG.md 2>/dev/null; then
@@ -111,6 +115,10 @@ git tag -a "$tag" -m "Atlas $version"
 git push -q origin main "$tag"
 gh release create "$tag" "$zip" "$dist/SHA256SUMS" --verify-tag \
 	--title "Atlas $version" --notes-file "$work/notes.md"
+
+step "Updating the Homebrew cask"
+scripts/update-cask.sh "$version" ||
+	fail "$tag is published, but the cask was not updated; retry with scripts/update-cask.sh $version"
 
 step "Checking the download"
 if curl -fsSL "$releases/latest/download/SHA256SUMS" | grep -q "Atlas-$version-macos.zip"; then

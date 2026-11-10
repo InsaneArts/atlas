@@ -405,6 +405,16 @@ pub const LOOKS: &str = "looks";
 /// Accessibility alone, and says whether it reads as asked afterwards.
 pub const ELEMENT_ACTIONS: &str = "element-actions";
 
+/// The input-service capability that names the field a batch's text went
+/// into, a password field by its subrole too, and none when its typing
+/// actions found different fields: what typed text may be kept by.
+pub const TYPED_FIELDS: &str = "typed-fields";
+
+/// An input service with this asks the person before an agent sends from
+/// an account they listed: it reads the request's `asking` and refuses with
+/// `waiting-for-person` or `denied` before anything is sent.
+pub const ASKS: &str = "asks";
+
 /// Whether an input service's hello lists `name` among its capabilities.
 pub fn has_capability(native: &Value, name: &str) -> bool {
     capability_names(native)
@@ -419,4 +429,5 @@ pub fn input_current(status: &Value, uid: u32, pid: u32) -> bool {
 }
 
 #[cfg(test)]
+#[path = "session_tests.rs"]
 mod tests;

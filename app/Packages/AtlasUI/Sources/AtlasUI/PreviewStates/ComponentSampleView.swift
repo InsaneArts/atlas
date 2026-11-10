@@ -18,10 +18,8 @@
       switch sample {
       case .capsuleButtons: CapsuleButtonSamples(.every)
       case .statusDots: IndicatorSamples(.statusDot)
-      case .floatingChip: FloatingChipSamples()
       case .alertCard: AlertCardSamples()
       case .emptyMessage: EmptyMessageSamples()
-      case .pictureFrame: PictureFrameSamples()
       case .miniScreen: MiniScreenSamples()
       case .searchField: SearchFieldSamples()
       case .groupLabel: GroupLabelSamples()
@@ -32,9 +30,9 @@
       case .tagTones: IndicatorSamples(.tag)
       case .activityGlyphs: AppGlyphSamples(.activity)
       case .keycapsSoft: KeycapSamples()
-      case .appCards: AppsSamples(.cards)
+      case .helperRows: HelperRowSamples()
       case .activitySteps: ActivitySamples(.steps)
-      case .activityMoments: ActivitySamples(.moments)
+      case .activityRuns: ActivitySamples(.runs)
       case .accountPictureSizes: BrandSamples(.accountPicture)
       case .listRowChoices: ListRowSamples(.choices)
       case .listRowLeads: ListRowSamples(.leads)
@@ -54,6 +52,10 @@
       case .statusPill: IndicatorSamples(.statusPill)
       case .lineSwapLines: LineSwapSamples()
       case .stateBadgeStates: StateBadgeSamples()
+      case .recentRows: RecentRowSamples()
+      case .panelAsks: AskSamples(.panel)
+      case .askBanner: AskSamples(.banner)
+      case .accountLevels: AskSamples(.levels)
       }
     }
   }

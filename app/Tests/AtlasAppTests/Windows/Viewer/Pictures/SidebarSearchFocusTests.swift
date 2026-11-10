@@ -122,13 +122,15 @@ struct SidebarSearchFocusTests {
   /// - Parameters:
   ///   - point: Where it lands.
   ///   - window: The window.
+  ///   - type: The mouse event; a press down by default.
   /// - Returns: The press.
   /// - Throws: When AppKit makes no event.
-  static func press(at point: CGPoint, in window: NSWindow) throws -> NSEvent {
+  static func press(at point: CGPoint, in window: NSWindow, type: NSEvent.EventType = .leftMouseDown) throws -> NSEvent
+  {
     let height = window.contentView?.bounds.height ?? .zero
     return try #require(
       NSEvent.mouseEvent(
-        with: .leftMouseDown,
+        with: type,
         location: NSPoint(x: point.x, y: height - point.y),
         modifierFlags: [],
         timestamp: .zero,

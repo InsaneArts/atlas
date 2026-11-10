@@ -3,7 +3,7 @@ import AppKit
 /// Atlas.app once it is set up, as AppKit sees it: launch, the lines `atlas menubar` sends, termination, and the
 /// main menu's own actions, each handed to the coordinator. Everything the app runs is the container's
 /// (``AppContainer``). The app has no Dock icon unless a window is open (``DockIcon``).
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   /// Everything the running app built.
   let container: AppContainer
 
@@ -66,13 +66,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     container.coordinator.dockMenu()
   }
 
-  /// The app is quitting: the screenshots dragged out of the main window leave no copy behind.
-  ///
-  /// - Parameter notification: The app's notification.
-  func applicationWillTerminate(_ notification: Notification) {
-    ShotDrag.emptyFolder()
-  }
-
   /// A line from `atlas menubar` on standard input: `viewer` opens the main window.
   ///
   /// - Parameter line: The line, as read.
@@ -107,6 +100,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// - Parameter sender: The menu item.
   @objc func checkForUpdatesFromMenu(_ sender: Any?) {
     container.coordinator.checkForUpdates()
+  }
+
+  /// Whether one of the app's own menu items can be chosen now: Check for Updates… waits while Settings asks something,
+  /// as About couldn't show its answer; every other item can.
+  ///
+  /// - Parameter menuItem: The item.
+  /// - Returns: Whether it can be chosen.
+  func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+    guard menuItem.action == #selector(checkForUpdatesFromMenu(_:)) else { return true }
+    return container.coordinator.canCheckForUpdates
   }
 
   /// Open Atlas (⌘O) in the File menu: the main window, brought forward.

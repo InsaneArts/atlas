@@ -1,5 +1,6 @@
 //! CoreGraphics input belongs to one private event source in the helper session.
 use super::{
+    activity::{self, Acting},
     ax::Looks,
     journal::{self, Held, Journal},
     lease::Grant,
@@ -125,6 +126,14 @@ pub(super) struct Engine {
     pub(super) grant: Option<Grant>,
     /// The process resolved for this request, retained through the last post.
     pub(super) target: Option<atlas_core::process::Instance>,
+    /// An agent's request the person's accounts passed: each action, and
+    /// each character typed or click after its first, is judged again just
+    /// before it is sent. A drag is judged whole before its press: let go
+    /// partway, it would drop where it is.
+    pub(super) recheck: Option<super::asking::Recheck>,
+    /// A policy test's synthetic pointed target, independent of the host desktop.
+    #[cfg(test)]
+    pub(super) asking_point: Option<super::asking::Target>,
     /// The looks the service keeps, where a referenced click finds its element.
     pub(super) looks: Arc<Looks>,
     journal: Option<Journal>,
@@ -145,6 +154,12 @@ pub(super) struct Engine {
     /// When macOS last confirmed that this process may post events; none
     /// until it has, or after it said no.
     post_access: Option<Instant>,
+    /// Where input is told to the helper's other processes, so their work
+    /// that must not overlap it waits; none tells no one.
+    pub(super) activity: Option<PathBuf>,
+    /// Held while input stays held between requests, such as a button
+    /// pressed and not yet let go, so no such work starts under it.
+    acting: Option<Acting>,
     #[cfg(test)]
     tap: Option<tap::Tap>,
 }
@@ -170,6 +185,9 @@ impl Engine {
             epoch,
             grant: None,
             target: None,
+            recheck: None,
+            #[cfg(test)]
+            asking_point: None,
             looks: Arc::default(),
             journal: None,
             journal_dirty: false,
@@ -185,6 +203,8 @@ impl Engine {
             drag_started: false,
             flags: 0,
             post_access: None,
+            activity: None,
+            acting: None,
             #[cfg(test)]
             tap: None,
         }
@@ -423,12 +443,33 @@ impl Engine {
         self.post(event, flags, point)
     }
 
+    /// Input about to be posted, told to the helper's other processes once
+    /// work that keeps input out has ended (see [`activity::acting`]); none
+    /// when input held from before is told already, or no one is told.
+    pub(super) fn acting(&self) -> Option<Acting> {
+        if self.acting.is_some() {
+            return None;
+        }
+        self.activity.as_deref().and_then(activity::acting)
+    }
+
+    /// After posting under `acting`: input still held stays told until it
+    /// is let go; otherwise it has ended now.
+    pub(super) fn keep_while_held(&mut self, acting: Option<Acting>) {
+        if !self.held_input() {
+            self.acting = None;
+        } else if self.acting.is_none() {
+            self.acting = acting;
+        }
+    }
+
     pub(super) fn release(&mut self) -> Result<()> {
         self.grant = None;
         self.target = None;
         self.dock_down = None;
 
         if !self.held_input() {
+            self.acting = None;
             return if self.journal_dirty {
                 self.commit()
             } else {
@@ -436,6 +477,14 @@ impl Engine {
             };
         }
 
+        let acting = self.acting();
+        let released = self.release_held();
+        self.keep_while_held(acting);
+        released
+    }
+
+    /// Let go of every button and key still held, and save that.
+    fn release_held(&mut self) -> Result<()> {
         if let Some(button) = self.held {
             self.mouse(
                 Mouse::from(button).up,
@@ -733,7 +782,12 @@ impl Engine {
             }
             Action::Type { text } => {
                 let plan = text::Plan::current(CGEventSource::keyboard_type(self.source.get()));
-                for character in text.graphemes(true) {
+                for (index, character) in text.graphemes(true).enumerate() {
+                    // Its first character goes as the action was judged; each
+                    // after it is judged again where it lands.
+                    if index > 0 {
+                        super::service::recheck_event(self)?;
+                    }
                     let units: Vec<u16> = character.encode_utf16().collect();
                     let (code, flags) = plan.key(&units);
                     self.key(code, flags, Some(&units))?;
@@ -809,4 +863,5 @@ impl From<Button> for Mouse {
 }
 
 #[cfg(test)]
+#[path = "events_tests.rs"]
 mod tests;

@@ -282,4 +282,5 @@ pub fn clear(file: &File) -> io::Result<()> {
 }
 
 #[cfg(test)]
+#[path = "acl_tests.rs"]
 mod tests;

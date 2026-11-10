@@ -12,7 +12,6 @@ pub mod account;
 pub use account::{FULL_NAME, validate_account_name};
 pub use configuration::configure_helper;
 pub use executor::{AdministratorRights, administrator_rights_current};
-pub use installed_app::link_installed_command as link_command;
 pub use job::{first_login_setup, prepare_helper, refresh_helper, restart_helper};
 
 /// Notices emitted while a complete helper operation retains ownership.
@@ -596,4 +595,5 @@ pub fn missing(status: &Value) -> Vec<&'static str> {
 }
 
 #[cfg(test)]
+#[path = "setup_tests.rs"]
 mod tests;

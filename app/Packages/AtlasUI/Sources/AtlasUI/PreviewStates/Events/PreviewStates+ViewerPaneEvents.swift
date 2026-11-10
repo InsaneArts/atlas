@@ -2,40 +2,38 @@
   import CoreGraphics
 
   extension PreviewStates {
-    /// The Screenshots sample's captures, newest first, by their place in ``shotNames`` and their time.
-    private static let shotTimes = [
-      (0, "10:31:45"), (1, "10:31:44"), (2, "10:31:20"), (3, "10:31:14"), (4, "10:12:03"), (5, "09:58:41"),
-    ]
-
-    /// A tab's sample after a filter, a moment opened or folded, or a screenshot picked or moved through, so the
-    /// Interactive previews answer them roughly as the app does: the samples' own steps and screenshots, narrowed and
-    /// selected.
+    /// A tab's sample after a filter, a session or run opened or folded, pictures opened in place, or a picture opened,
+    /// so the Interactive previews answer them roughly as the app does: the samples' own runs and steps, narrowed.
     ///
     /// - Parameters:
     ///   - state: The sample shown.
     ///   - event: What was done.
     /// - Returns: The sample to show next.
     @MainActor static func viewerPane(_ state: ViewerState, applying event: ViewerEvent) -> ViewerState {
+      guard case .activity(let activity) = state.pane else { return state }
       var next = state
-      switch (state.pane, event) {
-      case (.activity(let activity), .filterActivity(let filter)):
+      switch event {
+      case .filterActivity(let filter):
         next.pane = .activity(activitySample(activity, query: state.sidebar.search.query, filter: filter))
-      case (.activity(let activity), .toggleMoment(let id, let opens)):
-        next.pane = .activity(activitySample(activity, moment: id, opens: opens))
-      case (.activity(let activity), .showMomentSteps(let id)):
-        next.pane = .activity(activitySample(activity, moment: id, opens: true, every: true))
-      case (.screenshots(let shots), _):
-        next.pane = .screenshots(shotsSample(shots, applying: event))
-      case (_, .openShot(let name)):
-        next = viewerShots
-        next.pane = .screenshots(shotsSample(selected: name, large: name))
+      case .toggleSession(let id, let opens):
+        next.pane = .activity(outlineSample(activity, session: { if $0.id == id { $0.isOpen = opens } }))
+      case .toggleRun(let id, let opens):
+        next.pane = .activity(outlineSample(activity, run: { if $0.id == id { opened(&$0, opens) } }))
+      case .showRunPictures(let id), .showAllRunPictures(let id):
+        let all = event == .showAllRunPictures(id)
+        next.pane = .activity(outlineSample(activity, run: { if $0.id == id { pictures(&$0, all: all) } }))
+      case .hideRunPictures(let id):
+        next.pane = .activity(outlineSample(activity, run: { if $0.id == id { $0.grid = nil } }))
+      case .openAction, .openShot, .closePicture, .pictureSide, .openReplay, .replayFrame, .previousFrame, .nextFrame,
+        .togglePlay, .closeReplay:
+        next.pane = .activity(actionSample(activity, applying: event))
       default:
         return state
       }
       return next
     }
 
-    /// The Activity or Apps sample narrowed by the sidebar's search, as the list shown follows it.
+    /// The Activity sample narrowed by the sidebar's search, as the list shown follows it.
     ///
     /// - Parameters:
     ///   - state: The sample shown.
@@ -46,23 +44,64 @@
       switch state.pane {
       case .activity(let activity):
         next.pane = .activity(activitySample(activity, query: query, filter: activity.filters.selected))
-      case .apps(var apps):
-        apps.groups = sampleAppsPane.groups
-          .map { group in
-            var kept = group
-            kept.cards = group.cards.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
-            return kept
-          }
-          .filter { !$0.cards.isEmpty }
-        next.pane = .apps(apps)
-      case .screen, .screenshots:
+      case .screen:
         break
       }
       return next
     }
 
-    /// The Activity sample narrowed by a search and a filter: each open moment's steps the filter and the search keep,
-    /// and the moments left with any.
+    /// The sample with every session and run changed as asked.
+    ///
+    /// - Parameters:
+    ///   - activity: The pane shown.
+    ///   - session: What happens to each session.
+    ///   - run: What happens to each run.
+    /// - Returns: The pane.
+    @MainActor private static func outlineSample(
+      _ activity: ViewerActivityState,
+      session: (inout ViewerOutlineSession) -> Void = { _ in },
+      run: (inout ViewerOutlineRun) -> Void = { _ in }
+    ) -> ViewerActivityState {
+      var next = activity
+      for day in next.days.indices {
+        for place in next.days[day].sessions.indices {
+          session(&next.days[day].sessions[place])
+          for index in next.days[day].sessions[place].runs.indices {
+            run(&next.days[day].sessions[place].runs[index])
+          }
+        }
+      }
+      return next
+    }
+
+    /// A run opened or folded, its steps from the sample that lists them.
+    ///
+    /// - Parameters:
+    ///   - run: The run.
+    ///   - opens: Whether it opens.
+    @MainActor private static func opened(_ run: inout ViewerOutlineRun, _ opens: Bool) {
+      run.isOpen = opens
+      run.canReplay = opens
+      run.steps = opens ? (run.id == chromeRun.id ? chromeSteps : run.problemSteps) : []
+    }
+
+    /// A run's pictures opened in place: its first eight, or every one.
+    ///
+    /// - Parameters:
+    ///   - run: The run.
+    ///   - all: Whether every picture shows.
+    @MainActor private static func pictures(_ run: inout ViewerOutlineRun, all: Bool) {
+      guard let strip = run.strip else { return }
+      let count = all ? min(strip.total, 24) : min(strip.total, ViewerLayout.pictureGridFirst)
+      run.grid = ViewerPictureGrid(
+        run: run.id,
+        tiles: outlineTiles(run.id, count: count),
+        more: all ? 0 : strip.total - count
+      )
+    }
+
+    /// The Activity sample narrowed by a search and a filter: each open run's steps the filter and the search keep,
+    /// and the runs left with any.
     ///
     /// - Parameters:
     ///   - activity: The pane shown.
@@ -76,119 +115,34 @@
     ) -> ViewerActivityState {
       var next = activity
       next.filters.selected = filter
+      guard filter != .all || !query.isEmpty else { return next }
       next.days = activity.days.compactMap { day in
         var kept = day
-        kept.moments = day.moments.compactMap { moment in
-          var shown = moment
-          shown.steps = moment.steps.filter { step in
-            let passes =
-              switch filter {
-              case .all: true
-              case .problems: step.mark == .failed
-              case .screenshots: step.kind == .screenshot
-              case .typing: step.kind == .typing || step.kind == .keys
-              }
-            return passes && (query.isEmpty || step.words.text.localizedCaseInsensitiveContains(query))
+        kept.sessions = day.sessions.compactMap { session in
+          var shown = session
+          shown.runs = session.runs.compactMap { run in
+            var open = run
+            opened(&open, true)
+            open.steps = open.steps.filter { step in
+              let passes =
+                switch filter {
+                case .all: true
+                case .problems: step.mark == .failed
+                case .pictures: step.kind == .screenshot
+                case .typing: step.kind == .typing || step.kind == .keys
+                }
+              return passes && (query.isEmpty || step.words.text.localizedCaseInsensitiveContains(query))
+            }
+            return open.steps.isEmpty ? nil : open
           }
-          return !shown.steps.isEmpty || (filter == .all && query.isEmpty) ? shown : nil
+          return shown.runs.isEmpty ? nil : shown
         }
-        return kept.moments.isEmpty ? nil : kept
+        return kept.sessions.isEmpty ? nil : kept
       }
       next.empty =
         next.days.isEmpty
         ? EmptyMessageState(headline: "No actions match", message: "Choose All, or search for other words.") : nil
       return next
-    }
-
-    /// The Activity sample with a moment opened or folded: its steps from whichever sample lists them, or none.
-    ///
-    /// - Parameters:
-    ///   - activity: The pane shown.
-    ///   - id: The moment's identity.
-    ///   - opens: Whether it opens.
-    ///   - every: Whether every step it holds shows, as after Show N more.
-    /// - Returns: The pane.
-    @MainActor private static func activitySample(
-      _ activity: ViewerActivityState,
-      moment id: String,
-      opens: Bool,
-      every: Bool = false
-    ) -> ViewerActivityState {
-      var next = activity
-      for day in next.days.indices {
-        for index in next.days[day].moments.indices where next.days[day].moments[index].id == id {
-          next.days[day].moments[index].isOpen = opens
-          let sample = sampleMoments.first { $0.id == id && !$0.steps.isEmpty }
-          next.days[day].moments[index].steps = opens ? sample?.steps ?? [] : []
-          next.days[day].moments[index].more = opens && !every ? sample?.more : nil
-        }
-      }
-      return next
-    }
-
-    /// Every sample's moments, for the steps a moment opened in a preview shows.
-    @MainActor private static var sampleMoments: [ViewerActivityMoment] {
-      [openedActivity, workingActivity, bySessionActivity, oneSessionActivity, manyActivity, daysActivity]
-        .flatMap(\.days)
-        .flatMap(\.moments)
-    }
-
-    /// The Screenshots sample after one of its events.
-    ///
-    /// - Parameters:
-    ///   - shots: The pane shown.
-    ///   - event: What was done.
-    /// - Returns: The pane.
-    @MainActor private static func shotsSample(_ shots: ViewerShotsState, applying event: ViewerEvent)
-      -> ViewerShotsState
-    {
-      let tiles = shots.days.flatMap(\.shots)
-      let selected = tiles.first(where: \.isSelected)?.id
-      let large = shots.large?.id
-      switch event {
-      case .selectShot(let name): return shotsSample(selected: name, large: large)
-      case .openShot(let name): return shotsSample(selected: name, large: name)
-      case .toggleShot: return shotsSample(selected: selected, large: large == nil ? selected : nil)
-      case .closeShot: return shotsSample(selected: selected, large: nil)
-      case .previousShot, .nextShot:
-        let ids = tiles.map(\.id)
-        let from = ids.firstIndex(of: large ?? selected ?? "") ?? 0
-        let to = min(max(from + (event == .nextShot ? 1 : -1), 0), max(ids.count - 1, 0))
-        guard ids.indices.contains(to) else { return shots }
-        return shotsSample(selected: ids[to], large: large == nil ? nil : ids[to])
-      default: return shots
-      }
-    }
-
-    /// The Screenshots sample with one capture selected and one perhaps large.
-    ///
-    /// - Parameters:
-    ///   - selected: The capture selected; the first when it is not one of them.
-    ///   - large: The capture shown large.
-    /// - Returns: The pane.
-    @MainActor private static func shotsSample(selected: String?, large: String?) -> ViewerShotsState {
-      let kept = shotTimes
-      let ids = kept.map { shotNames[$0.0] }
-      let picked = ids.contains(selected ?? "") ? selected : ids.first
-      let tiles = kept.map { shotTile($0.0, $0.1, isSelected: shotNames[$0.0] == picked) }
-      let days = [
-        ViewerShotDay(id: "hour", title: "Now", shots: tiles.filter { $0.time.hasPrefix("10:31") }),
-        ViewerShotDay(id: "morning", title: "Earlier today", shots: tiles.filter { !$0.time.hasPrefix("10:31") }),
-      ]
-      .filter { !$0.shots.isEmpty }
-      let largeShot = large.flatMap { name in tiles.first { $0.id == name } }
-        .map { tile in
-          ViewerLargeShot(
-            id: tile.id,
-            picture: tile.thumbnail,
-            aspect: ViewerLayout.placeholderAspect,
-            caption: "\(tile.time) · 2560 × 1440",
-            canGoBack: tile.id != ids.first,
-            canGoForward: tile.id != ids.last,
-            canShowInFinder: true
-          )
-        }
-      return ViewerShotsState(meta: "6 today", days: days, large: largeShot)
     }
   }
 #endif

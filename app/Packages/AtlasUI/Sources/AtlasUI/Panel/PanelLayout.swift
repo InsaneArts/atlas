@@ -34,13 +34,15 @@ enum PanelLayout {
   /// panel's edge as the text above it does, 8 after the state, clear of the fill's curve, and 4 above and below, so
   /// the name over its line, 33 high, keeps the row at 44 with the icon centred 8 from its edges.
   static let sessionInset = EdgeInsets(top: Spacing.xs, leading: Spacing.xs, bottom: Spacing.xs, trailing: Spacing.s)
-  /// 14: a session row's hover corner, the card's less the panel's inset, so the two curves run side by side.
-  static let sessionCorner = Radius.nested(in: corner, inset: inset)
   /// 4: the header's, a heading's and a Recent row's inset inside the panel's, so their words start 16 from its edge,
   /// in line with the session rows' icons.
   static let textInset = Spacing.xs
   /// 10: between a session row's icon and its words.
   static let sessionGap = Spacing.sPlus
+  /// 12: the service note's inset round its words and OK.
+  static let noteInset = Spacing.m
+  /// 14: the service note's corners, the card's less the panel's inset, so the two curves run side by side.
+  static let noteCorner = Radius.nested(in: corner, inset: inset)
   /// Where a session row's words start: past its inset, its icon and the gap after it, so the row under the sessions
   /// lines up with their names.
   static let sessionText = sessionInset.leading + sessionIcon + sessionGap
@@ -78,10 +80,6 @@ enum PanelLayout {
   static let ringCorner = pictureCorner + ringReach
   /// 1.015: the rim settles in from a little larger.
   static let rimArrival: CGFloat = 1.015
-  /// 0.5: how much colour the picture keeps while it needs the person or is paused.
-  static let dimSaturation = 0.5
-  /// 0.3: the black over a dimmed picture, which leaves it at 70% brightness.
-  static let dimShade = 0.3
   /// 0.55: the mark on the empty stage at rest.
   static let markRest = 0.55
   /// 0.3: the low point of the connecting mark's breath.

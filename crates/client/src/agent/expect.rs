@@ -26,6 +26,13 @@ use serde_json::{Value, json};
 /// uncertain outcome may include delivered input and must be recovered rather than
 /// replayed.
 pub async fn act(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
+    // Control is taken again for each attempt, so none is held while the
+    // person is asked.
+    crate::asking::after_asking(client, async || act_once(client, expected, actions).await).await
+}
+
+/// [`act`] once: a refusal to ask the person comes back as it is.
+async fn act_once(client: &Client, expected: Option<&Expected>, actions: &Value) -> Result<Value> {
     let decoded = actions::Batch::decode(actions);
     let point = lone_point(&decoded, actions);
     let remembered = Expected::remembered(client, expected, point)?;
@@ -240,4 +247,5 @@ pub(super) fn other_app(window: &Window, app: &Target) -> Error {
 }
 
 #[cfg(test)]
+#[path = "expect_tests.rs"]
 mod tests;

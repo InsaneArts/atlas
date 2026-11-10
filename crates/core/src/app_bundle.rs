@@ -20,6 +20,16 @@ pub const BUNDLE_EXECUTABLE: &str = "Contents/MacOS/atlas";
 /// The app's executable, shipped beside `atlas` in Atlas.app.
 pub const APP_EXECUTABLE: &str = "AtlasApp";
 
+/// The login agent that runs `atlas menubar` from inside the app; launchd
+/// names the job in XPC_SERVICE_NAME.
+pub const LOGIN_JOB: &str = "com.insanearts.atlas.menubar";
+
+/// `X.Y.Z` as numbers, only when every part is one: the versions a release
+/// may have.
+pub fn exact_version(text: &str) -> Option<Vec<u64>> {
+    text.split('.').map(|part| part.parse().ok()).collect()
+}
+
 /// The command that installs Atlas, served by its website.
 pub const INSTALL_COMMAND: &str = "curl -fsSL https://atlas.insanearts.io/install.sh | sh";
 
@@ -194,4 +204,5 @@ pub fn shipped_app() -> Result<Option<PathBuf>> {
 }
 
 #[cfg(test)]
+#[path = "app_bundle_tests.rs"]
 mod tests;

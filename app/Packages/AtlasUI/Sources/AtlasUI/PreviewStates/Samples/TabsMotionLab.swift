@@ -11,7 +11,7 @@
       VStack(alignment: .leading, spacing: Spacing.m) {
         HStack(spacing: Spacing.s) {
           Button(String("All")) { selected = .all }
-          Button(String("Screenshots")) { selected = .screenshots }
+          Button(String("Pictures")) { selected = .pictures }
           Toggle(String("Reduce Motion"), isOn: $reduced)
         }
         control
@@ -32,7 +32,7 @@
     /// A deterministic frame series in tenths, including both endpoints.
     private func series(release: Bool) -> some View {
       VStack(alignment: .leading, spacing: Spacing.s) {
-        Text(release ? "Drag release · 180 pt/s" : "Tap slide · All to Screenshots")
+        Text(release ? "Drag release · 180 pt/s" : "Tap slide · All to Pictures")
           .font(Typography.font(.body, weight: .medium))
         ForEach(0...10, id: \.self) { step in
           HStack(spacing: Spacing.m) {
@@ -51,7 +51,7 @@
       CapsuleTab(id: ViewerActivityFilter.all, title: "All"),
       CapsuleTab(id: ViewerActivityFilter.problems, title: "Problems", count: 3),
       CapsuleTab(id: ViewerActivityFilter.typing, title: "Typing"),
-      CapsuleTab(id: ViewerActivityFilter.screenshots, title: "Screenshots", count: 64),
+      CapsuleTab(id: ViewerActivityFilter.pictures, title: "Pictures", count: 64),
     ]
   }
 

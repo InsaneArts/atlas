@@ -2,12 +2,13 @@ import AppKit
 import AtlasStatus
 import AtlasUI
 
-/// The menu bar item's look: Atlas's orbit, a flat planet with a ring passing in front of it, in a box as wide as the
-/// item (``StatusItem/StatusGlyphLayout/width``) for every state, so the items to its left never move. The orbit is always a
-/// template the menu bar inks in its own colour, so it reads on any menu bar, tinted or under Reduce Transparency; a
-/// state tells itself apart by a small badge at the orbit's lower right, and two quiet states dim the orbit too:
+/// The menu bar item's look: Atlas's orbit, a flat planet with a ring passing in front of it, or, when the person
+/// picks Screen, the orbit on a display (``MenuBarIcon``), in a box the item's size (``StatusItem/Layout``) for every
+/// state, so the items to its left never move. The glyph is always a template the menu bar inks in its own colour, so
+/// it reads on any menu bar, tinted or under Reduce Transparency; a state tells itself apart by a small badge at the
+/// item's lower right, and two quiet states dim the glyph too:
 ///
-/// | State | Orbit | Badge |
+/// | State | Glyph | Badge |
 /// |---|---|---|
 /// | Idle | whole | none |
 /// | Working | whole | a blue disc that breathes |
@@ -19,14 +20,14 @@ import AtlasUI
 /// | Logged out | dimmed | a grey ring |
 /// | Connecting | dimmed | none |
 ///
-/// ``look(for:)`` decides everything and the drawing only follows it: ``image(for:)`` draws the orbit with a 1-point
-/// knockout round the badge's place, and ``StatusBadge`` draws the badge itself as a layer in that hole, so the gap
-/// round it is the menu bar's own colour in light and dark, as a Dock badge stands clear of its icon.
+/// ``look(for:)`` decides everything and the drawing only follows it: ``image(for:icon:)`` draws the glyph with a
+/// 1-point knockout round the badge's place, and ``StatusBadge`` draws the badge itself as a layer in that hole, so the
+/// gap round it is the menu bar's own colour in light and dark, as a Dock badge stands clear of its icon.
 ///
-/// Its numbers (`StatusGlyphLayout`) are the glyph's drawing geometry, sized to the menu bar, not design tokens, so they stay
-/// here as they are.
+/// Its numbers (`StatusGlyphLayout`, `StatusScreenLayout`) are the glyph's drawing geometry, sized to the menu bar, not
+/// design tokens, so they stay there as they are.
 enum StatusGlyph {
-  /// How the orbit is inked.
+  /// How the glyph is inked.
   enum Tint: Equatable {
     /// A template image, which the menu bar inks in its own label colour.
     case template
@@ -35,7 +36,7 @@ enum StatusGlyph {
     case dimmed
   }
 
-  /// The mark at the orbit's lower right.
+  /// The mark at the item's lower right.
   enum Badge: Equatable {
     /// No badge.
     case none
@@ -55,7 +56,7 @@ enum StatusGlyph {
 
   /// Everything the item shows for a state.
   struct Look: Equatable {
-    /// How the orbit is inked.
+    /// How the glyph is inked.
     let tint: Tint
     /// The badge, if any.
     let badge: Badge
@@ -66,7 +67,7 @@ enum StatusGlyph {
   /// 0.42: the dimmed template's alpha.
   static let dimAlpha: CGFloat = 0.42
 
-  /// How opaque the orbit shows for a tint. The image is always drawn whole, and the dim is the opacity of the layer
+  /// How opaque the glyph shows for a tint. The image is always drawn whole, and the dim is the opacity of the layer
   /// that holds it, so it can fade.
   ///
   /// - Parameter tint: The tint.
@@ -93,27 +94,35 @@ enum StatusGlyph {
     }
   }
 
-  /// The orbit for a look, centred in the item's square and drawn whole (a dimmed look fades it with
-  /// ``opacity(of:)``), with the badge's ring knocked out of it.
+  /// The glyph for a look, filling the item and drawn whole (a dimmed look fades it with ``opacity(of:)``), with the
+  /// badge's ring knocked out of it.
   ///
-  /// - Parameter look: The look.
+  /// - Parameters:
+  ///   - look: The look.
+  ///   - icon: The glyph the person picked.
   /// - Returns: The image for the status item's button, always a template.
-  static func image(for look: Look) -> NSImage {
-    let side = StatusItem.Layout.width
-    let image = NSImage(size: NSSize(width: side, height: side), flipped: true) { _ in
+  static func image(for look: Look, icon: MenuBarIcon) -> NSImage {
+    let size = NSSize(width: StatusItem.Layout.width, height: StatusItem.Layout.height)
+    let image = NSImage(size: size, flipped: true) { _ in
       guard let context = NSGraphicsContext.current?.cgContext else { return false }
       NSColor.black
         .set()
       context.saveGState()
-      // Drawn in one layer, so the knockout cuts the orbit alone.
+      // Drawn in one layer, so the knockout cuts the glyph alone.
       context.beginTransparencyLayer(auxiliaryInfo: nil)
-      Orbit(
-        center: CGPoint(x: side / 2, y: side / 2),
-        width: StatusGlyphLayout.orbit,
-        pixel: 1 / pixelScale(),
-        least: StatusGlyphLayout.orbitLeast
-      )
-      .draw(in: context)
+      let pixel = 1 / pixelScale()
+      switch icon {
+      case .orbit:
+        Orbit(
+          center: StatusGlyphLayout.orbitCentre,
+          width: StatusGlyphLayout.orbit,
+          pixel: pixel,
+          least: StatusGlyphLayout.orbitLeast
+        )
+        .draw(in: context)
+      case .screen:
+        drawScreen(in: context, pixel: pixel)
+      }
       if let ring = ring(look.badge) {
         context.setBlendMode(.destinationOut)
         context.addPath(ring)
@@ -127,7 +136,7 @@ enum StatusGlyph {
     return image
   }
 
-  /// Where a badge sits in the item's square, top down: at the orbit's lower right, on whole points, so it lands on
+  /// Where a badge sits in the item, top down: at its lower right, on whole points, so it lands on
   /// whole pixels at one pixel a point too. Every badge shares the box.
   ///
   /// - Parameter badge: The badge.
@@ -174,10 +183,10 @@ enum StatusGlyph {
     }
   }
 
-  /// The badge's outline grown by its ring, which is cut out of the orbit.
+  /// The badge's outline grown by its ring, which is cut out of the glyph.
   ///
   /// - Parameter badge: The badge.
-  /// - Returns: The ring's outer outline in the item's square, or nil for none.
+  /// - Returns: The ring's outer outline in the item's box, or nil for none.
   private static func ring(_ badge: Badge) -> CGPath? {
     guard let frame = frame(of: badge) else { return nil }
     let outer = frame.insetBy(dx: -StatusGlyphLayout.ring, dy: -StatusGlyphLayout.ring)

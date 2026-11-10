@@ -21,8 +21,10 @@ actor ScriptedFramePipeBroker {
     case lateAcceptance
     /// A state change between the picture's pieces.
     case interleaved
-    /// The source stops working.
+    /// The source stops working: a state, then the credit expires unserved, as the service's own lapse does.
     case unavailable
+    /// A picture whose pieces have the source's failing state between them.
+    case unavailableMidPicture
     /// A picture whose commit comes too late: the credit is retired instead.
     case staleCommit
   }
@@ -125,24 +127,18 @@ actor ScriptedFramePipeBroker {
       await frame?.drained()
       reply(.creditAccepted, request, ["creditID": credit])
       return
-    case .interleaved:
+    case .interleaved, .unavailableMidPicture:
       reply(.creditAccepted, request, ["creditID": credit])
       sequence += 1
-      picture(credit: credit, request: request, split: true)
+      picture(credit: credit, request: request, split: answer == .interleaved ? "live" : "unavailable")
       return
     default: reply(.creditAccepted, request, ["creditID": credit])
     }
     switch answer {
-    case .lateAcceptance, .interleaved: return
+    case .lateAcceptance, .interleaved, .unavailableMidPicture: return
     case .unavailable:
-      reply(
-        .state,
-        0,
-        [
-          "phase": "unavailable", "streamGeneration": stream, "geometryGeneration": stream, "inputReady": false,
-          "controlOwner": "none", "failure": failure("source-stale"),
-        ]
-      )
+      state("unavailable")
+      reply(.creditExpired, request, ["creditID": credit])
     case .staleCommit:
       retireCommit = true
       sequence += 1
@@ -175,7 +171,19 @@ actor ScriptedFramePipeBroker {
     ["code": "protocol", "stage": "protocol", "uncertain": false, "dispatched": false, "reason": reason]
   }
 
-  private func picture(credit: UInt64, request: UInt64, split: Bool = false) {
+  /// The source's state, `phase`: failing with a reason, or working.
+  private func state(_ phase: String) {
+    var state: [String: Any] = [
+      "phase": phase, "streamGeneration": stream, "geometryGeneration": stream, "inputReady": phase == "live",
+      "controlOwner": "none",
+    ]
+    if phase == "unavailable" { state["failure"] = failure("source-stale") }
+    reply(.state, 0, state)
+  }
+
+  /// A full picture for `credit`; with `split`, its pieces have a state of that phase between them: the client has
+  /// decoded the header and the first piece before the state, and the state before the rest.
+  private func picture(credit: UInt64, request: UInt64, split: String? = nil) {
     let metadata: [String: Any] = [
       "serviceInstance": Self.service, "observerID": Self.observer, "observerGeneration": 1,
       "streamGeneration": stream, "geometryGeneration": stream, "creditID": credit, "sourceSequence": sequence,
@@ -187,21 +195,15 @@ actor ScriptedFramePipeBroker {
     guard let body = try? JSONSerialization.data(withJSONObject: metadata),
       let head = try? FramePacketCodec.encode(kind: .fullFrame, request: request, metadata: body, payloadLength: 24)
     else { return }
-    guard split else {
+    guard let split else {
       frame?.send(head + pixels)
       return
     }
     frame?.send(head + pixels.prefix(10))
-    reply(
-      .state,
-      0,
-      [
-        "phase": "live", "streamGeneration": stream, "geometryGeneration": stream, "inputReady": true,
-        "controlOwner": "none",
-      ]
-    )
-    Task { [frame] in
+    Task { [frame, control] in
       await frame?.drained()
+      state(split)
+      await control?.drained()
       frame?.send(pixels.dropFirst(10))
     }
   }

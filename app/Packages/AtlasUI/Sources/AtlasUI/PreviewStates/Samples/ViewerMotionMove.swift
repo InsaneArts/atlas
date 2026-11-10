@@ -2,7 +2,7 @@
   import SwiftUI
 
   /// One of the main window's transitions the motion lab plays (``ViewerMotionLab``), the window's own and then
-  /// Activity's and Apps': each turns the window one way, and played again turns it back, so a second press straight
+  /// Activity's: each turns the window one way, and played again turns it back, so a second press straight
   /// after the first reverses it mid-way. A list's move shows that list first.
   enum ViewerMotionMove: String, CaseIterable, Identifiable {
     /// The sidebar hiding or showing.
@@ -16,37 +16,28 @@
     /// A session's badge stepping from acting to waiting to needs you to none.
     case badge = "Badge cycle"
     /// The Screen turning into Activity, the picture shrinking into its corner, or back.
-    case library = "Library and Screen"
-    /// Activity giving way to Screenshots sideways, or back.
-    case lists = "List to list"
+    case activity = "Activity and Screen"
     /// Take Control, or Give Back.
     case control = "Take Control"
     /// Stop, or Resume.
     case agent = "Stop and Resume"
     /// The footer's capsules turning into circles, or back.
     case compact = "Compact footer"
-    /// Activity's Notes folding, or opening again.
-    case moment = "Fold a moment"
-    /// TextEdit's "Show 1 more" opening its last step, or the list before it.
-    case more = "Show more"
-    /// A new step arriving at the top of the live moment, or the list before it.
-    case step = "New step"
-    /// A new app's moment arriving over the live one, or the list before it.
-    case newMoment = "New moment"
+    /// Activity's Chrome run opening, or folding again.
+    case run = "Fold a run"
+    /// The live TextEdit run's pictures opening in place, or folding back.
+    case pictures = "A run's pictures"
+    /// A new app's run arriving over the live one, or the list before it.
+    case newRun = "New run"
     /// Activity's Problems filter chosen, or All again.
     case problems = "Problems filter"
-    /// Opie coming to the front of Apps over Safari, or Safari again.
-    case front = "Front app"
-    /// Notes opening in Apps, or quitting.
-    case app = "Open or quit"
-    /// Notes moving from Already open to the agents' apps, or back.
-    case group = "Move group"
 
     /// The move's title, which identifies it.
     var id: String { rawValue }
 
-    /// The animation the move runs in, as the view wraps the person's own change: opening or folding a moment, "Show N
-    /// more" and choosing a filter; none for the rest, which only the views' own animations move, as when the window reads.
+    /// The animation the move runs in, as the view wraps the person's own change: opening or folding a run and its
+    /// pictures opening in place; none for the rest, which only the views' own animations move, as when the window
+    /// reads or a filter swaps the list.
     ///
     /// - Parameters:
     ///   - state: The window as it is.
@@ -54,8 +45,7 @@
     /// - Returns: The animation, or nil.
     func animation(on state: ViewerState, reduceMotion: Bool) -> Animation? {
       switch self {
-      case .moment, .more: ActivityMotion.fold(reduceMotion: reduceMotion)
-      case .problems: ActivityMotion.filter(reduceMotion: reduceMotion)
+      case .run, .pictures: ActivityMotion.fold(reduceMotion: reduceMotion)
       default: nil
       }
     }
@@ -77,12 +67,9 @@
         next = PreviewStates.viewer(state, applying: .toggleEnded)
       case .badge:
         next.sidebar.sessions.groups = Self.cycled(state.sidebar.sessions.groups)
-      case .library:
+      case .activity:
         next.pane = state.pane.place == .screen ? PreviewStates.viewerActivity.pane : PreviewStates.viewerWorking.pane
         next.mini = next.pane.place == .screen ? nil : PreviewStates.viewerActivity.mini
-      case .lists:
-        next.pane = state.pane.place == .activity ? PreviewStates.viewerShots.pane : PreviewStates.viewerActivity.pane
-        next.mini = PreviewStates.viewerActivity.mini
       case .control:
         let isInControl = state.footer.controls.control?.look == .accent
         let sample = isInControl ? PreviewStates.viewerWorking : PreviewStates.viewerControl
@@ -95,42 +82,35 @@
         next.footer.controls = (isStopped ? PreviewStates.viewerWorking : PreviewStates.viewerStopped).footer.controls
       case .compact:
         next.footer.fit = state.footer.fit == .full ? .compact : .full
-      case .moment:
+      case .run:
         next = PreviewStates.viewer(
           Self.showing(PreviewStates.viewerActivity, on: state),
-          applying: .toggleMoment(Self.notes, opens: Self.isFolded(state))
+          applying: .toggleRun(Self.chrome, opens: Self.isFolded(state))
         )
-      case .more:
-        next = Self.toggled(state, PreviewStates.viewerActivityOpened, PreviewStates.viewerActivityEveryStep)
-      case .step:
-        next = Self.toggled(state, PreviewStates.viewerActivityBeforeStep, PreviewStates.viewerActivity)
-      case .newMoment:
-        next = Self.toggled(state, PreviewStates.viewerActivity, PreviewStates.viewerActivityNewMoment)
+      case .pictures:
+        next = Self.toggled(state, PreviewStates.viewerActivity, PreviewStates.viewerActivityShots)
+      case .newRun:
+        next = Self.toggled(state, PreviewStates.viewerActivity, PreviewStates.viewerActivityNewRun)
       case .problems:
         next = Self.toggled(state, PreviewStates.viewerActivity, PreviewStates.viewerActivityProblems)
-      case .front:
-        next = Self.toggled(state, PreviewStates.viewerAppsSafariFront, PreviewStates.viewerApps)
-      case .app:
-        next = Self.toggled(state, PreviewStates.viewerAppsBeforeNotes, PreviewStates.viewerApps)
-      case .group:
-        next = Self.toggled(state, PreviewStates.viewerAppsNotesAlreadyOpen, PreviewStates.viewerApps)
       }
       return next
     }
 
-    /// Notes' moment in the Activity sample.
-    private static let notes = "session:|n1"
+    /// The Chrome run in the Activity sample.
+    private static let chrome = "run.chrome"
 
-    /// Whether Activity shows with Notes folded, so the moment move opens it; not while another place shows, where the
-    /// move first shows Activity with Notes open.
+    /// Whether Activity shows with Chrome folded, so the run move opens it; not while another place shows, where the
+    /// move first shows Activity with Chrome folded.
     ///
     /// - Parameter state: The window as it is.
-    /// - Returns: Whether Notes is folded.
+    /// - Returns: Whether Chrome is folded.
     private static func isFolded(_ state: ViewerState) -> Bool {
       guard case .activity(let activity) = state.pane else { return false }
       return activity.days
-        .flatMap(\.moments)
-        .contains { $0.id == notes && !$0.isOpen }
+        .flatMap(\.sessions)
+        .flatMap(\.runs)
+        .contains { $0.id == chrome && !$0.isOpen }
     }
 
     /// `state` showing `sample`'s list with its small screen, unless it shows that place already.
@@ -144,7 +124,6 @@
       var next = state
       next.pane = sample.pane
       next.mini = sample.mini
-      next.sidebar.library = sample.sidebar.library
       return next
     }
 
@@ -160,7 +139,6 @@
       var next = state
       next.pane = sample.pane
       next.mini = sample.mini
-      next.sidebar.library = sample.sidebar.library
       return next
     }
 

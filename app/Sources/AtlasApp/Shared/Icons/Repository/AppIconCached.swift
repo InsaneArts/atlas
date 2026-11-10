@@ -1,6 +1,6 @@
-/// One decoded image or recorded miss, with the evidence it processed and its place in the bounded LRU cache.
+/// One decoded image or recorded miss, with what was looked up and its place in the bounded LRU cache.
 nonisolated struct AppIconCached {
-  /// The evidence processed, so only new live evidence bypasses this entry.
+  /// What was looked up, whose name a found bundle identifier stands in for.
   var want: AppIconWant
   /// The decoded icon, or a recorded miss.
   var found: AppIconFound?

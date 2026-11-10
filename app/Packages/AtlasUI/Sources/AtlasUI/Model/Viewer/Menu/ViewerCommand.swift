@@ -35,8 +35,4 @@ public enum ViewerCommand: Equatable, Sendable {
   ///
   /// - Parameter session: The session's key; empty for Terminal.
   case showActivity(session: String)
-  /// Show Screenshots: a session's screenshots.
-  ///
-  /// - Parameter session: The session's key; empty for Terminal.
-  case showScreenshots(session: String)
 }

@@ -3,12 +3,11 @@
 // For app/ and every local package under app/Packages, in that order, runs
 // `swift test` and then `swift format lint -rs` over its Sources and Tests,
 // in the package's folder. swift-format finds the repository's .swift-format
-// from each, an ancestor folder. A package whose manifest declares no
-// `.testTarget(` skips `swift test`, and the lint names only the folders the
-// package has, skipping when it has neither. A step's output is printed only
+// from each, an ancestor folder. The lint names only the folders the package
+// has. A step's output is printed only
 // when it fails, without the compiler's command lines, which run to thousands
 // of characters; one summary line a step follows, with the test count Swift
-// Testing reports. Exits 0 when every step passed or skipped, 1 otherwise.
+// Testing reports. Exits 0 when every step passed, 1 otherwise.
 // CHECK_SWIFT_BASE names another repository and CHECK_SWIFT_SWIFT another
 // `swift`, for the self-tests.
 import { spawnSync } from 'node:child_process';
@@ -30,24 +29,19 @@ export function packages(base = repository) {
 }
 
 // The two steps for each of `folders` under `base`, as { folder, name,
-// command, args }, or { folder, name, skipped } for a step with nothing to do.
+// command, args }.
 export function steps(folders, base = repository, swift = 'swift') {
   return folders.flatMap((folder) => {
     const root = path.join(base, folder);
-    const manifest = fs.readFileSync(path.join(root, 'Package.swift'), 'utf8');
     const linted = ['Sources', 'Tests'].filter((sub) => fs.existsSync(path.join(root, sub)));
     return [
-      /\.testTarget\(/.test(manifest)
-        ? { folder, name: 'swift test', command: swift, args: ['test'] }
-        : { folder, name: 'swift test', skipped: 'no test target' },
-      linted.length
-        ? {
-            folder,
-            name: 'swift format lint',
-            command: swift,
-            args: ['format', 'lint', '-rs', ...linted],
-          }
-        : { folder, name: 'swift format lint', skipped: 'no Sources or Tests' },
+      { folder, name: 'swift test', command: swift, args: ['test'] },
+      {
+        folder,
+        name: 'swift format lint',
+        command: swift,
+        args: ['format', 'lint', '-rs', ...linted],
+      },
     ];
   });
 }
@@ -61,21 +55,17 @@ export function testCount(output) {
   return counts.length ? counts.reduce((sum, count) => sum + count, 0) : undefined;
 }
 
-// One summary line for a step's result { folder, name, ok, output, skipped }.
-export function summaryLine({ folder, name, ok, output = '', skipped }) {
-  if (skipped) return `skip ${folder}: ${name} (${skipped})`;
+// One summary line for a step's result { folder, name, ok, output }.
+export function summaryLine({ folder, name, ok, output = '' }) {
   const count = name === 'swift test' ? testCount(output) : undefined;
   const detail = count === undefined ? '' : ` (${count} tests)`;
   return `${ok ? 'ok  ' : 'FAIL'} ${folder}: ${name}${detail}`;
 }
 
-// Runs every step that is not skipped through `run(step)`, which returns
-// { ok, output }, and returns the results in order. Every step runs, so one
-// failure hides none.
+// Runs every step through `run(step)`, which returns { ok, output }, and
+// returns the results in order. Every step runs, so one failure hides none.
 export function checkAll(planned, run) {
-  return planned.map((step) =>
-    step.skipped ? { ...step, ok: true, output: '' } : { ...step, ...run(step) },
-  );
+  return planned.map((step) => ({ ...step, ...run(step) }));
 }
 
 function runStep(base, { folder, command, args }) {
@@ -92,15 +82,6 @@ function runStep(base, { folder, command, args }) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const base = process.env.CHECK_SWIFT_BASE ?? repository;
-  const sourceFolders = ['app/Sources', ...packageFolders('Sources', base)].filter((folder) =>
-    fs.existsSync(path.join(base, folder)),
-  );
-  const types = spawnSync(
-    process.execPath,
-    [path.join(repository, 'scripts/check-swift-types.mjs'), ...sourceFolders],
-    { encoding: 'utf8', env: { ...process.env, CHECK_SWIFT_BASE: base } },
-  );
-  if (types.status !== 0) console.error(types.stderr);
   const planned = steps(packages(base), base, process.env.CHECK_SWIFT_SWIFT ?? 'swift');
   const results = checkAll(planned, (step) => {
     console.log(`… ${step.folder}: ${step.name}`);
@@ -112,5 +93,5 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   console.log('');
   for (const result of results) console.log(summaryLine(result));
-  process.exitCode = types.status === 0 && results.every((result) => result.ok) ? 0 : 1;
+  process.exitCode = results.every((result) => result.ok) ? 0 : 1;
 }

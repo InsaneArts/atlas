@@ -38,6 +38,11 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
              ATLAS_SESSION=NAME before the task's first command, then install again.",
         )
     })?;
+    // Before anything is made or the helper asked: the person's sign-ins and secrets never reach it, by the path
+    // given or the bundle it leads to.
+    let target = Target::Path(bundle);
+    crate::credential_files::refuse([path])?;
+    handoff::refuse_targets(std::slice::from_ref(&target))?;
     let app = atlas_core::name::bounded(name.trim_end_matches(".app"));
     let output = client.output_dir()?;
     let claims = Claims::in_store(Tasks::at(output), task.clone());
@@ -65,14 +70,13 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     };
     claims.claim(&install, State::Intent)?;
 
-    let handed =
-        match handoff::hand_over(client, &ownership, vec![Target::Path(bundle)], running).await {
-            Ok(handed) => handed,
-            Err(error) => {
-                let _ = claims.settle_all(&[(install, State::Gone)]);
-                return Err(error);
-            }
-        };
+    let handed = match handoff::hand_over(client, &ownership, vec![target], running).await {
+        Ok(handed) => handed,
+        Err(error) => {
+            let _ = claims.settle_all(&[(install, State::Gone)]);
+            return Err(error);
+        }
+    };
     let source = PathBuf::from(handed.paths.first().cloned().unwrap_or_default());
     let transport = handed.copied.first().map(|copied| copied.token.clone());
 
@@ -172,4 +176,5 @@ pub(crate) async fn installed_path(client: &Client, app: &str) -> Option<String>
 }
 
 #[cfg(test)]
+#[path = "install_app_tests.rs"]
 mod tests;

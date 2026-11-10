@@ -241,3 +241,7 @@ pub(super) fn listing(here: &[Frozen], there: &Transactions, labels: &Labels, al
         "unreadable": unreadable,
     })
 }
+
+#[cfg(test)]
+#[path = "list_tests.rs"]
+mod tests;

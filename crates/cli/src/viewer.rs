@@ -2,14 +2,15 @@
 //! interface that answers status, pictures of the helper, control and input
 //! for one menu bar, and keeps a private record of itself in the output
 //! directory so `atlas monitor` and the login item can find it.
+mod accounts;
 mod app;
 mod control;
 mod frames;
 mod http;
 mod local;
-mod origins;
 mod reads;
 mod settings;
+mod sign_in;
 mod terminal;
 
 pub(crate) use app::{launched_url, open_viewer};
@@ -19,10 +20,11 @@ pub(crate) use local::{
     SharedFrame, address, answering, fetch, fetch_frame, frame_service, local, post_local, process,
     read_record, recorded, recorded_port, running,
 };
+pub(crate) use reads::{Named, activity_of};
 pub(crate) use terminal::{TerminalFrames, TerminalService};
 
 use crate::menubar::Line;
-use atlas_client::{client::Client, helper_info};
+use atlas_client::client::Client;
 use atlas_control::SharedLease;
 use atlas_core::{
     error::{Code, Error},
@@ -30,7 +32,7 @@ use atlas_core::{
 };
 use serde_json::Value;
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard, Semaphore};
+use tokio::sync::{Mutex, Notify, RwLock, RwLockReadGuard, Semaphore};
 
 /// How long control lasts without a renewal; the app is told the same.
 const LEASE_SECONDS: u64 = 10;
@@ -51,6 +53,11 @@ struct Viewer {
     settings: Option<PathBuf>,
     /// That file's text when last found to match the client.
     settings_text: std::sync::Mutex<Option<Vec<u8>>>,
+    /// Every output folder served since the viewer started, the pictures
+    /// kept in each pruned while it runs, and the signal that the settings
+    /// added one or changed how long pictures are kept.
+    outputs: std::sync::Mutex<Vec<PathBuf>>,
+    output_moved: tokio::sync::Notify,
     lease: SharedLease,
     lease_epoch: Mutex<Option<Epoch>>,
     /// The helper the lease was taken on. Control ends there, and input
@@ -71,6 +78,9 @@ struct Viewer {
     /// The frame service this viewer runs, when it runs one: what a client
     /// needs to pair with it. A bearer secret, like the URL.
     pipe: std::sync::Mutex<Option<Value>>,
+    /// Told each time input was sent, so the frame service reads the
+    /// helper again at once rather than at a still screen's slower pace.
+    input_sent: Arc<Notify>,
     /// The widest picture a capture asks for, in pixels.
     frame_width: u32,
     /// How recent the last frame must be to stand in for a capture.
@@ -93,8 +103,20 @@ struct Viewer {
     input_started: std::sync::Mutex<Option<String>>,
     /// Where this viewer's record is kept and what it says, once written.
     record: std::sync::Mutex<Option<(PathBuf, Value)>>,
-    /// The helper's app icons, made once.
-    icons: helper_info::Icons,
+    /// The home folder whose record of the helper's accounts this viewer
+    /// shows and changes: the person's.
+    accounts_home: std::sync::Mutex<Option<PathBuf>>,
+    /// The sign-in under way, while its lease holds; it ends with the lease.
+    sign_in: Mutex<Option<sign_in::SignIn>>,
+    /// The app this viewer serves, as macOS names its process once started:
+    /// the frame service shows it the screen while agents may not see it.
+    app_process: std::sync::Mutex<Option<atlas_core::process::Instance>>,
+    /// The secret the app names itself by, given only to the app this
+    /// viewer starts, on its standard input; never written anywhere.
+    app_secret: String,
+    /// The menu bar's hold on the folder its record is kept in, while it
+    /// serves: taken before the record moves into another, after `record`.
+    alone: std::sync::Mutex<Option<atlas_core::files::LockFile>>,
 }
 
 impl Viewer {
@@ -137,4 +159,5 @@ fn unanswered() -> Error {
 }
 
 #[cfg(test)]
+#[path = "viewer_tests.rs"]
 mod tests;

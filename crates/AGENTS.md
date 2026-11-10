@@ -223,9 +223,12 @@ preservation of unknown ownership. Keep recovery records separate from public re
 
 ## Checks
 
-Unit tests of private code live in a `tests.rs` beside their module, behind
-`#[cfg(test)] mod tests;`. Tests through the public API live in `cli/tests/it/`,
-which builds as one binary. Modules are `foo.rs` plus `foo/`, never `foo/mod.rs`.
+Unit tests of private code live in `foo_tests.rs` beside `foo.rs`, declared in
+`foo.rs` as `#[cfg(test)] #[path = "foo_tests.rs"] mod tests;` (`lib_tests.rs`
+and `main_tests.rs` for a crate root). A suite split over several files keeps
+`foo/tests.rs` and `foo/tests/`. A folder holds submodules, never a lone test
+file. Tests through the public API live in `cli/tests/it/`, which builds as
+one binary. Modules are `foo.rs` plus `foo/`, never `foo/mod.rs`.
 
 Run `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets --locked -- -D warnings`,

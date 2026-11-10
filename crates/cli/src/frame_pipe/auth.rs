@@ -256,4 +256,5 @@ fn granted<T: Copy + PartialEq>(asked: &[T], allowed: &[T]) -> Vec<T> {
 }
 
 #[cfg(test)]
+#[path = "auth_tests.rs"]
 mod tests;

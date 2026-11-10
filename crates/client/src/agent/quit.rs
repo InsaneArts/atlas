@@ -334,3 +334,7 @@ fn closed(
 
     reply
 }
+
+#[cfg(test)]
+#[path = "quit_tests.rs"]
+mod tests;

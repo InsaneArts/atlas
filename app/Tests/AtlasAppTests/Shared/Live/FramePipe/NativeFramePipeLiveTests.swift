@@ -26,7 +26,7 @@ struct NativeFramePipeLiveTests {
     var last: FramePipePicture?
     for _ in 0..<count {
       let picture = try await client.next(longest: ViewerFramePump.longest)
-      let decoded = try #require(await ViewerFramePump.decode(picture))
+      let decoded = try #require(await ViewerFramePump.decode(picture, reusing: nil))
       #expect(decoded.picture.image.width == picture.width)
       ages.append(picture.ageAtHeader)
       #expect(try await client.commit(picture))

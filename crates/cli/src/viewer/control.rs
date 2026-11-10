@@ -3,7 +3,7 @@
 //! recovery and cleanup, which wait until no control is held.
 use super::{LEASE_SECONDS, Viewer, frames::Observation, unpoisoned};
 use atlas_client::client::Client;
-use atlas_control::ActionPermit;
+use atlas_control::{ActionPermit, Beside};
 use atlas_core::{
     error::{Code, Error, Result},
     session::Epoch,
@@ -41,7 +41,9 @@ impl From<Code> for LeaseRefusal {
             | Code::Collect
             | Code::Config
             | Code::ConfigInvalid
+            | Code::Credentials
             | Code::Daemon
+            | Code::Denied
             | Code::Elements
             | Code::Environment
             | Code::FocusChanged
@@ -79,6 +81,7 @@ impl From<Code> for LeaseRefusal {
             | Code::Uninstall
             | Code::Update
             | Code::Usage
+            | Code::WaitingForPerson
             | Code::WaitFailed
             | Code::Windows => Self::Failed,
         }
@@ -94,10 +97,23 @@ impl Viewer {
             (lease.begin_release(owner)?, self.holder())
         };
 
+        // A sign-in under this lease ends with it: the screen is shown to
+        // agents again before control goes back.
+        let guided = match previous.as_deref() {
+            Some(previous) => self.end_sign_in(&client, previous).await,
+            None => false,
+        };
+
         let completion = match previous.as_deref() {
             Some(previous) => release_native(&client, previous, false).await,
-            None => Ok(()),
+            None => Ok(None),
         };
+        // A password the person typed while they had control names the
+        // account they signed in to: Atlas lists it. Never after a guided
+        // sign-in: Done adds its site itself, and Cancel adds nothing.
+        if !guided && let Ok(Some(seen)) = &completion {
+            super::accounts::note_sign_in(&self.accounts_home(), seen);
+        }
 
         // Native execution can end before its background recording does.
         // Shutdown also flushes when ownership has already ended.
@@ -145,6 +161,17 @@ impl Viewer {
     /// lease ended meanwhile, or the answer is unknown, control is ended
     /// again on that same helper.
     pub(super) async fn take_control(&self, client: &Arc<Client>, epoch: &Epoch) -> Result<String> {
+        self.take_control_beside(client, epoch, Beside::Commands)
+            .await
+    }
+
+    /// [`Viewer::take_control`], going on only beside what `beside` names.
+    pub(super) async fn take_control_beside(
+        &self,
+        client: &Arc<Client>,
+        epoch: &Epoch,
+        beside: Beside,
+    ) -> Result<String> {
         let token = {
             let mut lease = self.lease.lock().await;
 
@@ -153,7 +180,7 @@ impl Viewer {
                 return Err(Error::session_changed());
             }
 
-            let token = lease.acquire(&client.controller)?;
+            let token = lease.acquire_beside(&client.controller, beside)?;
             *unpoisoned(&self.lease_client) = Some(client.clone());
             *self.lease_epoch.lock().await = Some(epoch.clone());
             token
@@ -194,7 +221,7 @@ impl Viewer {
         }
 
         Err(match cleanup {
-            Ok(()) => error,
+            Ok(_) => error,
             Err(mut cleanup) => {
                 cleanup.error = format!("{} {}", error.error, cleanup.error);
                 cleanup
@@ -297,6 +324,10 @@ impl Viewer {
             .map_err(|_| Error::new(Code::Busy, "Wait for the current input to finish"))?;
         let _permit = ActionPermit::begin(self.lease.clone(), owner).await?;
         let client = self.holder();
+        // The frame service reads the helper at its full pace from the
+        // first event, and again once the last is done: a long paste must
+        // not wait out a still screen's slower pace.
+        self.input_sent.notify_one();
         let result = client
             .input(
                 actions,
@@ -306,6 +337,7 @@ impl Viewer {
             .await;
 
         self.frames.lock().await.input_revision += 1;
+        self.input_sent.notify_one();
         result
     }
 }
@@ -324,7 +356,7 @@ pub(super) async fn release_native(
     client: &Client,
     owner: &str,
     unknown_acquire: bool,
-) -> Result<()> {
+) -> Result<Option<Value>> {
     let pending = client.controller.quarantine();
     let result = client.native_control("release", owner).await;
     let generation = pending?;
@@ -336,7 +368,12 @@ pub(super) async fn release_native(
             );
             Err(Error::new(Code::Uncertain, message).uncertain())
         }
-        _ => client.controller.clear_if(&generation),
+        result => {
+            client.controller.clear_if(&generation)?;
+            Ok(result
+                .ok()
+                .and_then(|mut reply| reply.get_mut("signedIn").map(Value::take)))
+        }
     }
 }
 

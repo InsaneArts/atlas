@@ -9,8 +9,8 @@ use atlas_core::{
     actions::{self, Expect},
     error::{Code, Error, Holder, Result},
     session::{
-        ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
-        NativeObservation, Observation, Session,
+        ASKS, ELEMENT_ACTIONS, Epoch, FOCUS_APP, FOCUS_DOCK, FOCUS_FIELD, FOCUS_WINDOW, LOOKS,
+        NativeObservation, Observation, Session, TYPED_FIELDS,
     },
     transport::Transport,
 };
@@ -336,6 +336,13 @@ impl Client {
     ) -> Result<Value> {
         let observation = Observation::decode(status);
         let session = observation.require_hidden(self.config.helper_uid)?;
+        // An input service older than this one may call a password field a
+        // plain one: no text typed through it is kept.
+        if !observation.native.has_capability(TYPED_FIELDS)
+            && let Some(doing) = &self.doing
+        {
+            doing.before().typed_into(None);
+        }
         let expect = expectation(&observation.native, check)?;
 
         if expected.is_some_and(|(epoch, _)| *epoch != session.epoch) {
@@ -357,6 +364,18 @@ impl Client {
         }
 
         let actions = actions?;
+        // An older input service would ignore the accounts and send without
+        // asking: while the person lists any, it must ask.
+        if lease.is_none()
+            && !observation.native.has_capability(ASKS)
+            && crate::asking::policy(self).is_some()
+        {
+            return Err(Error::new(
+                Code::Startup,
+                "The helper's input service can't ask the person before sending: run atlas \
+                 start-input, then try again",
+            ));
+        }
         if actions
             .actions()
             .iter()
@@ -390,6 +409,8 @@ impl Client {
         session: &Session,
     ) -> Result<Value> {
         self.controller.interrupt().check()?;
+        // Asked for now, so its capture runs beside the grant and the claim.
+        let picture = self.picture_before(&session.epoch.input_epoch(), session.epoch.capture_pid);
         let standalone = atlas_core::files::token();
         let owner = lease.map(|(_, token)| token).unwrap_or(&standalone);
         if lease.is_none()
@@ -411,16 +432,28 @@ impl Client {
             .is_none()
             .then(|| self.controller.quarantine())
             .transpose()?;
+        // An agent's input is judged by the person's accounts while they
+        // list any; the person's own never is.
+        let (asking, permits) = if lease.is_none() {
+            crate::asking::policy_for(self, actions.actions())
+        } else {
+            (None, Vec::new())
+        };
         let mutation = Mutation::Input {
             actions,
             owner,
             epoch: session.epoch.input_epoch(),
+            picture,
             app: self.doing.is_some(),
             expect: expect.as_ref(),
+            asking,
         };
         let result = self
             .mutate(mutation, lease, expected.map(|(_, at)| at), None)
             .await;
+        // A permit is spent by the request that took it, unless that request
+        // is proven to have sent nothing.
+        crate::asking::return_permits(self, permits, &result);
 
         match &generation {
             Some(generation) => self.release_input(owner, generation, result).await,
@@ -481,3 +514,7 @@ impl Client {
         outcome
     }
 }
+
+#[cfg(test)]
+#[path = "input_tests.rs"]
+mod tests;

@@ -1,6 +1,7 @@
 //! What Atlas knows things by: types that hold only text their own rule
-//! accepts, the plain labels hosts and agents give, and the lowercase
-//! hexadecimal digits digests and random names are written in.
+//! accepts, the plain labels hosts and agents give, web hosts as accounts
+//! are matched by, and the lowercase hexadecimal digits digests and random
+//! names are written in.
 use rand::RngCore;
 
 /// The most characters an app name or element label keeps.
@@ -146,4 +147,14 @@ pub fn same_text(a: &str, b: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "name_tests.rs"]
 mod tests;
+
+/// A web host as accounts are listed and matched by it, wherever it is read:
+/// lowercased, without the dot a fully qualified name may end with. Its
+/// labels stay as written, punycode or Unicode, as the public-suffix list
+/// reads them.
+#[must_use]
+pub fn web_host(host: &str) -> String {
+    host.trim_end_matches('.').to_lowercase()
+}

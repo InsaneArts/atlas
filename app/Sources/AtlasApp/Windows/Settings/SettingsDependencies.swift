@@ -4,8 +4,8 @@ import CoreGraphics
 import Foundation
 
 /// What the Settings window's controller reaches outside itself, handed in so tests can stand in for each: the
-/// `atlas` command line, the helper's own commands, the saved choices, the icon a file shows, the app's version, its
-/// links to the other windows, the app's clock and the Finder.
+/// `atlas` command line, the helper's own commands, the saved choices, the icons of files, apps and sites, the app's
+/// version, its links to the other windows, the app's clock and the Finder.
 struct SettingsDependencies {
   /// The `atlas` command line: the agents and updates run through it.
   var commands: any CommandRunning
@@ -17,6 +17,10 @@ struct SettingsDependencies {
   var preferences: SettingsPreferences
   /// The icon a file or an app shows, by its path, or nil where nothing is there (``FileIcons`` in the app).
   var fileIcon: @MainActor (String) -> CGImage?
+  /// The icon of an app on this Mac, by its bundle identifier, as an account's tile shows it; none by default.
+  var appIcon: @MainActor (String) -> CGImage? = { _ in nil }
+  /// A site's own icon, by its domain, read from the site itself (``SiteIcons`` in the app); none by default.
+  var siteIcon: @Sendable (String) async -> CGImage? = { _ in nil }
   /// The app's version, such as `0.1.0`; nil in a build with no bundle, such as a development one.
   var version: String?
   /// What Settings shares with the other windows.
@@ -25,6 +29,8 @@ struct SettingsDependencies {
   var clock: any Clock<Duration>
   /// Shows a file or an app in the Finder, by its path, such as Atlas itself for Show in Finder.
   var revealFile: @MainActor (String) -> Void = { _ in }
+  /// Lets the person choose an app, in a panel that lists only apps; nil when they cancel.
+  var chooseApp: @MainActor () async -> ChosenApp? = { nil }
 
   /// The icon a file or an app shows: the agents' apps' icons come from here, never from the workspace directly.
   ///

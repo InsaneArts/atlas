@@ -1,5 +1,5 @@
 extension ActivityMoment {
-  /// What a moment is titled by.
+  /// What a run is titled by.
   public enum Subject: Equatable, Sendable {
     /// The app its actions were in.
     ///
@@ -10,9 +10,9 @@ extension ActivityMoment {
     /// Screenshots alone.
     case screenshots
 
-    /// What a moment in no app is titled by: Screenshots while every line took one, else Commands.
+    /// What a run in no app is titled by: Screenshots while every line took one, else Commands.
     ///
-    /// - Parameter runs: The moment's lines.
+    /// - Parameter runs: The run's lines.
     /// - Returns: The subject.
     static func appless(_ runs: [ActivityRun]) -> Subject {
       let shots = runs.allSatisfy { $0.entry.operation == ActivityGrouping.screenshotOperation }

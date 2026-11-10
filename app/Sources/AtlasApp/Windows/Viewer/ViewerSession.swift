@@ -6,9 +6,9 @@ import CoreGraphics
 /// the alert asked, and its cleanups. Each is observed, so the window follows every change at once. Control, and what the
 /// input method is composing, are ``ViewerControl``'s.
 struct ViewerSession {
-  /// The place shown: the Screen, or a list from the Library.
+  /// The place shown: the Screen, or Activity.
   var place = ViewerPlace.screen
-  /// Whose work Activity and Screenshots show: every host session's, or one's.
+  /// Whose work Activity shows: every host session's, or one's.
   var chosenSession = ViewerSessionChoice.all
   /// Whether the person hid the sidebar, which the next window remembers.
   var sidebarHidden = false
@@ -21,9 +21,6 @@ struct ViewerSession {
   var fit = ViewerFit()
   /// Whether the person is resizing the window now.
   var liveResizing = false
-  /// How many screenshots stood to a row as the resize under way began, which the grid keeps until it ends; nil while
-  /// no resize is under way.
-  var heldShotColumns: Int?
   /// Whether Ended is open in the sidebar, listing every session that ended.
   var endedShown = false
   /// The sidebar's search: whether it is open, its query, and Find's asks for its focus.
@@ -49,6 +46,10 @@ struct ViewerSession {
   var alert: ViewerAlert?
   /// Whether the asked alert's command runs now, which holds its buttons.
   var alertRunning = false
+  /// The held sign-in this window runs, while the person signs in with agents paused; nil for none.
+  var signIn: ViewerSignIn?
+  /// Whether Done or Cancel on the signing-in bar runs now, which holds both.
+  var signInEnding = false
   /// Where this window's cleanups of sessions' work stand, which hold Clean Up This Session's Work… while one runs.
   var cleanup = ViewerCleanupState()
   /// The screen takes the keyboard (while in control).
@@ -61,9 +62,6 @@ struct ViewerSession {
   var toast: String?
   /// Take Control's refusals counted, so each one is its own footer line and only the newest toast's wait removes it.
   var refusals = 0
-  /// What the person has seen of the helper's activity: what the Activity pane showed, or the first reading's; nil
-  /// before the first reading, when nothing is unseen yet.
-  var activitySeen: ViewerSeenActivity?
   /// The corner the small screen keeps to, as the person last left it.
   var corner = MiniCorner.bottomTrailing
   /// What VoiceOver says about the helper's state once it has held a moment, while it asks something of the person;

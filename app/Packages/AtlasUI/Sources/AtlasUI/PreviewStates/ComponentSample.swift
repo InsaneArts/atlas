@@ -5,14 +5,10 @@
     case capsuleButtons = "capsule-buttons"
     /// The status dot's marks.
     case statusDots = "status-dots"
-    /// A chip floating over a picture.
-    case floatingChip = "floating-chip"
     /// The alert card, side by side and stacked, asked, running, refused and done.
     case alertCard = "alert-card"
     /// A message in place of a picture.
     case emptyMessage = "empty-message"
-    /// One letterboxed picture in each look.
-    case pictureFrame = "picture-frame"
     /// The live corner picture.
     case miniScreen = "mini-screen"
     /// The search field.
@@ -29,17 +25,17 @@
     case monogramTints = "monogram-tints"
     /// A tag in each tone.
     case tagTones = "tag-tones"
-    /// What leads an action: an app, an app's tile, Atlas, the person and commands, at a moment's and a Recent row's
+    /// What leads an action: an app, an app's tile, Atlas, the person and commands, at a run's and a Recent row's
     /// size.
     case activityGlyphs = "activity-glyphs"
     /// Soft keycaps alone and in chords.
     case keycapsSoft = "keycaps-soft"
-    /// The Apps sample's cards in a grid, the front one raised, with their pictures, maps and tags.
-    case appCards = "app-cards"
+    /// The helper's row at the sidebar's foot in each state, and its mark alone for a short window.
+    case helperRows = "helper-rows"
     /// Activity's steps of every kind and mark.
     case activitySteps = "activity-steps"
-    /// Activity's moments, open, folded and held.
-    case activityMoments = "activity-moments"
+    /// Activity's runs, folded with their problems and pictures, and open.
+    case activityRuns = "activity-runs"
     /// The account picture in its circle at each size.
     case accountPictureSizes = "account-picture-sizes"
     /// Choose's accounts in a grouped list, the new one picked.
@@ -78,5 +74,14 @@
     case lineSwapLines = "line-swap-lines"
     /// A session icon's badge, acting, waiting, needing the person and none.
     case stateBadgeStates = "state-badge-states"
+    /// Recent's rows with the account each acted in and what let it act there, at the panel's width and narrow.
+    case recentRows = "recent-rows"
+    /// The panel asking before an agent sends: a message, a named click, a click with no name, a password, a
+    /// question offering Allow for This Task and Deny alone, and what the person allowed.
+    case panelAsks = "panel-asks"
+    /// The question over the viewer's Screen, wide and narrow.
+    case askBanner = "ask-banner"
+    /// An account's level, as three segments at each level, and as the popup where they don't fit.
+    case accountLevels = "account-levels"
   }
 #endif

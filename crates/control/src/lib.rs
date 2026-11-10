@@ -8,6 +8,7 @@
 //! Beside the lock and the marker it keeps labels for people and agents:
 //! which host session holds control, which waits, and which claimed each
 //! pending change. Nothing here decides anything by them.
+pub mod asks;
 mod busy;
 mod by_generation;
 mod commands;
@@ -18,6 +19,8 @@ pub mod interrupt;
 mod lease;
 mod marker;
 mod notes;
+mod privacy;
+mod run_groups;
 #[cfg(test)]
 mod tests;
 mod turns;
@@ -28,6 +31,7 @@ pub use executor::{ExecutorClaims, record_executor};
 pub use lease::Lease;
 pub use lease::{ActionPermit, SharedLease};
 pub use notes::Note;
+pub use privacy::{HoldKind, PrivateHold, Visible};
 #[cfg(any(test, feature = "test-support"))]
 pub use wait::WaitEvent;
 #[cfg(any(test, feature = "test-support"))]
@@ -154,6 +158,9 @@ pub struct Ownership {
     /// The note that the person holds this ownership through a viewer, gone
     /// with it.
     person: Option<PathBuf>,
+    /// The generation of the person's lease that note holds: a private hold
+    /// names it, and is honoured only while the note still does.
+    generation: Option<String>,
     /// The note naming the host session that holds it, gone before the lock
     /// is, so the lock is never free while a note still names its holder.
     holder: Option<PathBuf>,
@@ -195,6 +202,20 @@ pub struct Controller {
     /// Present while the person has stopped agents: kept on the person's
     /// side, so a Stop holds even while the helper's input service is down.
     stopped: PathBuf,
+    /// Present while the person signs the helper in to an account, beside
+    /// the person's note: the screen is hidden from agents meanwhile.
+    private: PathBuf,
+    /// How many times a private hold began or ended, never removed: a read
+    /// of the screen is kept only when it did not change meanwhile.
+    private_generation: PathBuf,
+    /// The process groups of agents' finished commands that left something
+    /// running, kept until nothing in them runs.
+    run_groups: PathBuf,
+    /// The groups of agents' finished commands that could not be recorded
+    /// there, by the generation of the claim kept for each.
+    unrecorded_runs: PathBuf,
+    /// The helper account this controller is for.
+    helper: u32,
     name: String,
     /// How long [`Controller::acquire`] may keep trying, in all, while
     /// another controller has the lock, before answering busy. Zero
@@ -229,6 +250,18 @@ pub struct Controller {
 }
 
 impl Controller {
+    /// The person's questions about this helper's agents, and what they
+    /// allowed, kept beside the Stop: a wait for an answer ends on Stop too.
+    pub fn asks(&self) -> asks::Asks {
+        asks::Asks::at(
+            self.directory.join(format!("{}.asks", self.name)),
+            self.directory.join(format!("{}.allowed.json", self.name)),
+            self.stopped.clone(),
+        )
+    }
+}
+
+impl Controller {
     /// # Errors
     ///
     /// Returns an error when this account's home is unavailable.
@@ -247,6 +280,11 @@ impl Controller {
             marker_lock: directory.join(format!("{name}.state.lock")),
             person: directory.join(format!("{name}.person")),
             stopped: directory.join(format!("{name}.stopped")),
+            private: directory.join(format!("{name}.signing-in")),
+            private_generation: directory.join(format!("{name}.private-gen")),
+            run_groups: directory.join(format!("{name}.run-groups.json")),
+            unrecorded_runs: directory.join(format!("{name}.run-unrecorded.json")),
+            helper: uid,
             name: name.to_owned(),
             wait: Duration::ZERO,
             until: None,
@@ -425,6 +463,9 @@ impl Controller {
     /// [`Controller::acquire`] for `purpose`.
     fn acquire_for(&self, purpose: Purpose) -> Result<Ownership> {
         let lock = self.take_lock()?;
+        // A command whose leftover work could not be recorded is settled
+        // once it is, or once that work ended.
+        self.settle_unrecorded_runs();
         match purpose {
             Purpose::Recovery => self.require_nothing_running()?,
             Purpose::Change(beside) => self.require_known_beside(beside)?,
@@ -446,6 +487,7 @@ impl Controller {
     /// refusal here; it is the returned `bool`.
     pub fn acquire_for_cleanup(&self) -> Result<(Ownership, bool)> {
         let lock = self.take_lock()?;
+        self.settle_unrecorded_runs();
         let unknown = match self.require_known_beside(Beside::Nothing) {
             Ok(()) => false,
             Err(error) if error.code == Code::Uncertain => true,
@@ -473,6 +515,7 @@ impl Controller {
         Ownership {
             _lock: lock,
             person: None,
+            generation: None,
             holder: self.note_holder(),
         }
     }
@@ -572,6 +615,19 @@ impl Controller {
         &self.holder
     }
 
+    /// Where the groups agents' finished commands left running are kept,
+    /// for tests that break it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn run_groups_path(&self) -> &Path {
+        &self.run_groups
+    }
+
+    /// Where the screen's privacy generation is kept, for tests that break it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn private_generation_path(&self) -> &Path {
+        &self.private_generation
+    }
+
     /// Where the marker of pending changes is kept, for tests that break it.
     #[cfg(any(test, feature = "test-support"))]
     pub fn marker_path(&self) -> &Path {
@@ -616,17 +672,25 @@ impl Controller {
     /// Refuses what [`Controller::acquire_for_person`] refuses.
     #[cfg(any(test, feature = "test-support"))]
     pub fn acquire_for_person_for_test(&self) -> Result<Ownership> {
-        self.acquire_for_person()
+        self.acquire_for_person(Beside::Commands)
     }
 
     /// [`Controller::acquire`] for the person's control through a viewer:
-    /// while it is held, others hear that the person has control. A command
-    /// an agent started keeps running beside it, as it does beside other
-    /// agents' actions.
-    pub(crate) fn acquire_for_person(&self) -> Result<Ownership> {
-        let mut ownership = self.acquire_beside_commands()?;
-        fs::write(&self.person, b"").map_err(|error| Error::writing(&self.directory, error))?;
+    /// while it is held, others hear that the person has control. Beside
+    /// [`Beside::Commands`], a command an agent started keeps running beside
+    /// it, as it does beside other agents' actions; beside
+    /// [`Beside::Nothing`], one still running refuses it. The person's note
+    /// holds a new lease generation, which a private hold names.
+    pub(crate) fn acquire_for_person(&self, beside: Beside) -> Result<Ownership> {
+        let mut ownership = self.acquire_for(Purpose::Change(beside))?;
+        // No earlier lease holds control now: a hold it left is cleared
+        // before the new lease could be taken for its holder.
+        self.clear_stale_private()?;
+        let generation = atlas_core::files::token();
+        fs::write(&self.person, generation.as_bytes())
+            .map_err(|error| Error::writing(&self.directory, error))?;
         ownership.person = Some(self.person.clone());
+        ownership.generation = Some(generation);
         Ok(ownership)
     }
 

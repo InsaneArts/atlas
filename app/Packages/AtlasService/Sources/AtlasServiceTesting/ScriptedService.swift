@@ -53,10 +53,11 @@ public final class ScriptedService: ViewerService {
   public var leaseHeld: Bool?
   /// What was done in the helper lately, as the activity reply lists it.
   public var activityLog = ActivityLog()
-  /// The apps open in the helper, front to back.
-  public var openApps: [HelperApp] = []
-  /// The host sessions the apps' origins name, by key.
-  public var appSessions: [String: HostSessionSummary] = [:]
+  /// What one session's activity reply lists, by its key; a session not named here gets ``activityLog``'s rows of
+  /// its own, as the service narrows them.
+  public var sessionLogs: [String: ActivityLog] = [:]
+  /// The sessions whose activity was asked for, in order.
+  public var activitySessions: [String] = []
   /// The screenshots agents took, newest first.
   public var shots: [Screenshot] = []
   /// The folder the screenshots are kept in; nil names none.
@@ -87,8 +88,18 @@ public final class ScriptedService: ViewerService {
   public var cleanupUnanswered = false
   /// The cleanup requests made, in order: "preview KEY" or "apply KEY".
   public var cleanups: [String] = []
-  /// Apps requests made.
-  public var appsCalls = 0
+  /// What `asks.json` answers.
+  public var askList = AskList()
+  /// `asks.json` requests made.
+  public var asksCalls = 0
+  /// The answers given, in order, as "ID choice".
+  public var answers: [String] = []
+  /// The service's own refusal each route answers with, its code included, in place of `fail`'s codeless one.
+  public var refusals: [String: ServiceError] = [:]
+  /// What a sign-in's start answers; its kind and site follow the request.
+  public var signInLease = "sign-in-lease"
+  /// What Done answers of `added`, for a sign-in.
+  public var signInAdded = true
 
   /// A service that answers every request at once, ready and observing.
   public init() {}
@@ -139,6 +150,7 @@ public final class ScriptedService: ViewerService {
       // The live client suspends on every request, so an unheld one never answers in line either.
       await Task.yield()
     }
+    if let refusal = refusals[route] { throw refusal }
     if fail.contains(route) { throw ServiceError("\(route) failed") }
   }
 
@@ -243,6 +255,134 @@ public final class ScriptedService: ViewerService {
     leaseHeld = false
   }
 
+  /// Records adding an app to the accounts, unless held or failed.
+  ///
+  /// - Parameters:
+  ///   - app: The app's bundle identifier.
+  ///   - name: The app's name.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func addAccount(app: String, name: String) async throws {
+    log.append("add account \(app)")
+    try await pause("accounts/add")
+  }
+
+  /// Records taking an account off the list, unless held or failed.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func removeAccount(_ account: ViewerStatus.Account) async throws {
+    log.append("remove account \(account.key)")
+    try await pause("accounts/remove")
+  }
+
+  /// Records setting an account's level, unless held or failed.
+  ///
+  /// - Parameters:
+  ///   - level: The level.
+  ///   - account: The account.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func setLevel(_ level: AccountLevel, of account: ViewerStatus.Account) async throws {
+    log.append("level \(account.key) \(level.rawValue)")
+    try await pause("accounts/level")
+  }
+
+  /// Answers `askList` as it was when asked, as a live reply is read before it travels, unless held or failed.
+  ///
+  /// - Returns: The scripted questions and grants.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func asks() async throws(ServiceError) -> AskList {
+    asksCalls += 1
+    let reply = askList
+    try await pause("asks.json")
+    return reply
+  }
+
+  /// Records a sign-in's start and answers its lease, unless held or failed: the route is the kind's own.
+  ///
+  /// - Parameters:
+  ///   - kind: What it is for.
+  ///   - site: The site.
+  ///   - browser: The browser.
+  /// - Returns: The sign-in.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func startSignIn(_ kind: SignInKind, site: String, browser: String?) async throws -> SignInStarted {
+    log.append("start \(kind.rawValue) \(site)")
+    let route = ["signIn": "sign-in/start", "forget": "forget/start", "reset": "reset/start"][kind.rawValue] ?? ""
+    try await pause(route)
+    // The person's lease is held from here, as the service's status then says.
+    leaseHeld = true
+    return SignInStarted(lease: signInLease, kind: kind, site: site, browser: browser)
+  }
+
+  /// Records a sign-in's renewal, unless held or failed.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func renewSignIn(lease: String) async throws {
+    log.append("renew sign-in \(lease)")
+    try await pause("sign-in/renew")
+  }
+
+  /// Records Done, unless held or failed.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Returns: The kind and site of the last start, and `signInAdded` for a sign-in.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func finishSignIn(lease: String) async throws -> SignInEnded {
+    log.append("done \(lease)")
+    try await pause("sign-in/done")
+    leaseHeld = false
+    let started =
+      log.last { $0.hasPrefix("start ") }?
+      .split(separator: " ")
+      .map(String.init) ?? []
+    let kind = started.count > 2 ? SignInKind(rawValue: started[1]) ?? .signIn : .signIn
+    let site = started.count > 2 ? started[2] : ""
+    return SignInEnded(kind: kind, site: site, added: kind == .signIn ? signInAdded : nil)
+  }
+
+  /// Records Cancel, unless held or failed.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func cancelSignIn(lease: String) async throws {
+    log.append("cancel \(lease)")
+    try await pause("sign-in/cancel")
+    leaseHeld = false
+  }
+
+  /// Records an answer and takes its question off `askList`, unless held or failed.
+  ///
+  /// - Parameters:
+  ///   - ask: The question's id.
+  ///   - answer: The answer.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func answer(_ ask: String, with answer: AskAnswer) async throws {
+    answers.append("\(ask) \(answer.rawValue)")
+    try await pause("asks/answer")
+    askList.asks.removeAll { $0.id == ask }
+  }
+
+  /// Records ending what was allowed in an account and takes its grants off `askList`, unless held or failed.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: A ``ServiceError`` when the route fails.
+  @MainActor
+  public func endAllowed(in account: AccountKey) async throws {
+    log.append("end allowed \(account.id)")
+    try await pause("allowed/end")
+    askList.allowed.removeAll { $0.account == account }
+  }
+
   /// Records stopping or resuming agents, unless held or failed.
   ///
   /// - Parameter stopped: Whether agents stop.
@@ -270,15 +410,6 @@ public final class ScriptedService: ViewerService {
     try await pause("input")
   }
 
-  /// Records the recovery, which always restarts the helper.
-  ///
-  /// - Returns: True.
-  @MainActor
-  public func recover() async throws -> Bool {
-    log.append("recover")
-    return true
-  }
-
   /// Answers `activityLog`, unless held or failed.
   ///
   /// - Returns: The activity log.
@@ -290,15 +421,21 @@ public final class ScriptedService: ViewerService {
     return activityLog
   }
 
-  /// Answers `openApps`, unless held or failed.
+  /// Answers the session's ``sessionLogs`` entry, else ``activityLog``'s rows of that session, unless held or failed.
+  /// It counts as an activity request, and holds and fails as one.
   ///
-  /// - Returns: The apps open in the helper, and the sessions that opened them.
+  /// - Parameter session: The session's key; empty for Terminal.
+  /// - Returns: The session's activity log.
   /// - Throws: A ``ServiceError`` when the route fails.
   @MainActor
-  public func apps() async throws(ServiceError) -> HelperAppList {
-    appsCalls += 1
-    try await pause("apps")
-    return HelperAppList(apps: openApps, sessions: appSessions)
+  public func activity(of session: String) async throws(ServiceError) -> ActivityLog {
+    activityCalls += 1
+    activitySessions.append(session)
+    try await pause("activity")
+    if let log = sessionLogs[session] { return log }
+    var narrowed = activityLog
+    narrowed.entries = activityLog.entries.filter { $0.groupKey == session }
+    return narrowed
   }
 
   /// Answers `shots` and `shotsFolder`, unless held or failed.

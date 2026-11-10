@@ -5,9 +5,9 @@ import AtlasUI
 /// Builds the main window's state from what its controller holds. Pure: every choice the window shows is made here,
 /// from the snapshot, its rules (`ViewerSnapshot+Rules`, which the controller's guards follow too), the status table
 /// (`Mode+StatusSummary`), the shared ``Words`` and the domain packages' (``Mode``, ``StatusReading``,
-/// ``ActivityGrouping``, ``ShotGrouping``). Its parts are in `ViewerPresenter+Header`, `+Footer`, `+Screen`,
-/// `+ScreenMenu`, `+Sidebar`, `+SessionMenu`, `+SessionFacts`, `+Sessions`, `+Library`, `+HelperLine`, `+HelperFacts`,
-/// `+Alert`, `+Activity`, `+Apps` and `+Shots`.
+/// ``ActivityGrouping``). Its parts are in `ViewerPresenter+Header`, `+Footer`, `+Screen`, `+ScreenMenu`, `+Sidebar`,
+/// `+SessionMenu`, `+SessionFacts`, `+Sessions`, `+HelperLine`, `+HelperFacts`, `+Alert`, `+Activity`, `+Outline`,
+/// `+PictureSheet` and `+Replay`.
 enum ViewerPresenter {
   /// The window as it should look now, given way to the window's size as the controller last fitted it.
   ///
@@ -16,12 +16,12 @@ enum ViewerPresenter {
   static func state(_ snapshot: ViewerSnapshot) -> ViewerState {
     let place = snapshot.session.place
     let state = ViewerState(
-      header: header(snapshot),
+      header: tagged(header(snapshot), snapshot),
       screen: screen(snapshot),
       footer: footer(snapshot),
       sidebar: sidebar(snapshot),
       alert: alert(snapshot),
-      // The screen keeps the corner over every list, faded while paused.
+      // The screen keeps the corner over Activity, faded while paused.
       mini: place.keepsScreenInCorner
         ? snapshot.reading.picture.map { MiniScreenState(picture: $0, isPaused: snapshot.session.paused) } : nil,
       miniCorner: snapshot.session.corner,
@@ -43,7 +43,7 @@ enum ViewerPresenter {
     return session.overlayShown || (!session.sidebarHidden && session.fit.sidebar != .hidden)
   }
 
-  /// What the card shows: the screen, or the chosen list's pane, made only while it shows.
+  /// What the card shows: the screen, or Activity, made only while it shows.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: The pane.
@@ -51,8 +51,6 @@ enum ViewerPresenter {
     switch snapshot.session.place {
     case .screen: .screen
     case .activity: .activity(activity(snapshot))
-    case .apps: .apps(apps(snapshot))
-    case .screenshots: .screenshots(shots(snapshot))
     }
   }
 

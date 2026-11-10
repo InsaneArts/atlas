@@ -881,4 +881,5 @@ pub async fn brief(config_path: &Path, session: Option<&HostSession>) -> String 
 }
 
 #[cfg(test)]
+#[path = "lib_tests.rs"]
 mod tests;

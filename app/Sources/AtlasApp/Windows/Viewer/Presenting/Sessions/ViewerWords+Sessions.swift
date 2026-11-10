@@ -3,7 +3,7 @@ import AtlasStatus
 import Foundation
 
 /// The main window's words for host sessions that depend on what it holds: a session's line in the sessions column
-/// and its menu, Activity's groups, the Screenshots count, and a session's facts. Fixed copy, such as the column's
+/// and its menu, Activity's groups, and a session's facts. Fixed copy, such as the column's
 /// headings, the groups' names and the recovery line's buttons, stays in AtlasUI's views; the words the panel shares
 /// are ``Words``'.
 extension ViewerWords {
@@ -19,8 +19,6 @@ extension ViewerWords {
     "\(Words.leadingCapital(Words.mayNotHaveFinished)). Every session waits until you recover."
   /// One session's Activity holds nothing yet: the sentence.
   static let noSessionActivityMessage = "What this session does in the helper shows up here."
-  /// One session's Screenshots holds nothing: the sentence.
-  static let noSessionShotsMessage = "Screenshots this session takes show up here."
   /// The host fact's name.
   static let hostFact = "Host"
   /// The folder fact's name.
@@ -37,25 +35,8 @@ extension ViewerWords {
   static let sessionsUnread = "Couldn't read sessions; this may be out of date"
   /// The Terminal session's host, which no host named.
   static let noHost = "None named"
-  /// An app the session opened, open in the helper now.
-  static let appOpen = "Open"
-  /// An app the session opened from a copy Atlas made, open now.
-  static let appOpenCopy = "Open · a copy"
-  /// An app the session opened, closed since.
-  static let appClosed = "Closed"
   /// A plan whose phase is not known.
   static let plan = "A plan"
-
-  /// An ended session's line, as its row in the sidebar says it.
-  ///
-  /// - Parameters:
-  ///   - record: The session, as `sessions.json` lists it.
-  ///   - now: The time now.
-  /// - Returns: "Ended 20 min ago", or "Last seen 2 h ago" for one that only went quiet.
-  static func endedSubtitle(_ record: HostSessionRecord, now: Date) -> String {
-    let line: SessionLine = record.endedAt == nil ? .lastSeen(at: record.lastSeenAt) : .ended(at: record.endedAt)
-    return Words.sessionLine(line, now: now)
-  }
 
   /// Idle, with how long ago it last did something when that is known.
   ///
@@ -82,16 +63,6 @@ extension ViewerWords {
   /// - Returns: "Show all 14 from Codex · atlas-landing".
   static func showAll(_ count: Int, from name: String) -> String {
     "Show all \(count) from \(name)"
-  }
-
-  /// How many screenshots one session took, beside the Screenshots title.
-  ///
-  /// - Parameters:
-  ///   - count: How many.
-  ///   - name: The session's name.
-  /// - Returns: "6 by Claude Code · understudy", or "None by …".
-  static func shotsBy(_ count: Int, name: String) -> String {
-    count == 0 ? "None by \(name)" : "\(count) by \(name)"
   }
 
   /// The copies of an app Atlas made for a session, as their fact's name.

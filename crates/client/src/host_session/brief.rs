@@ -106,4 +106,5 @@ fn them(left: &Leftovers, installed: usize) -> &'static str {
 }
 
 #[cfg(test)]
+#[path = "brief_tests.rs"]
 mod tests;

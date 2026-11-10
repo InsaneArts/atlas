@@ -2,7 +2,7 @@
 //! are stopped, kept pending until a reply proves what they did, and cut
 //! short by a stop. A reply's completion is checked against its mutation.
 use super::{
-    Actor, Client,
+    Actor, Client, picture,
     record::{NOT_RECORDED, recorded_code},
     run::RUN_MARGIN,
 };
@@ -22,6 +22,22 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tokio::sync::MutexGuard;
 
+/// Whether the input service proved it sent nothing for a request: only
+/// checked it before a command types, or refused it before its first event
+/// to ask the person, or for a Look Only account. A refusal after some of
+/// it ran, partly or uncertainly, keeps its picture.
+fn gated(reply: &Value) -> bool {
+    reply["dry"] == true
+        || reply["ok"] == false
+            && matches!(
+                Code::of_reply(reply, Code::Native),
+                Code::WaitingForPerson | Code::Denied
+            )
+            && reply["performed"].as_u64().unwrap_or(0) == 0
+            && reply["partial"] != true
+            && reply["uncertain"] != true
+}
+
 /// One change to the helper. Its wire request, completion proof, destination
 /// and ownership all come from this one value, independently of the tolerant
 /// activity-log vocabulary, so they cannot disagree.
@@ -31,9 +47,14 @@ pub(crate) enum Mutation<'a> {
         actions: Batch<'a>,
         owner: &'a str,
         epoch: InputEpoch,
+        /// The picture before it, being taken since its session was known.
+        picture: Option<picture::Taking>,
         /// An agent's command names the app it acted in.
         app: bool,
         expect: Option<&'a Expect>,
+        /// The accounts and grants an agent's input is judged by, while the
+        /// person lists any; none keeps the request as it always was.
+        asking: Option<Value>,
     },
     Run {
         argv: Vec<String>,
@@ -66,6 +87,8 @@ impl Mutation<'_> {
                 epoch,
                 app,
                 expect,
+                asking,
+                ..
             } => {
                 let mut request = json!({
                     "op": "input",
@@ -76,6 +99,9 @@ impl Mutation<'_> {
                 });
                 if let Some(expect) = expect {
                     request["expect"] = json!(expect);
+                }
+                if let Some(asking) = asking {
+                    request["asking"] = asking.clone();
                 }
                 request
             }
@@ -132,6 +158,12 @@ impl Mutation<'_> {
             // service that ignored it posted the input unchecked. An action
             // on an element is confirmed only with how it was verified, and
             // one already as asked (matched) sent nothing, so is not counted.
+            // A check before a command types sends nothing: confirmed only as
+            // judged, with nothing performed.
+            Self::Input {
+                asking: Some(asking),
+                ..
+            } if asking["dry"] == true => reply["dry"] == true && reply["performed"] == 0,
             Self::Input {
                 actions, expect, ..
             } => {
@@ -239,7 +271,7 @@ impl Client {
     /// `observed_at` the frame it acts on must still be fresh.
     pub(crate) async fn mutate(
         &self,
-        mutation: Mutation<'_>,
+        mut mutation: Mutation<'_>,
         lease: Option<(&SharedLease, &str)>,
         observed_at: Option<Instant>,
         // Control to let go of once the request has reached the helper; its
@@ -263,9 +295,24 @@ impl Client {
             return Err(Error::stopped());
         }
 
+        // The picture before an agent's input is taken beside its preflight,
+        // and kept only when it is in hand before the input is sent: the
+        // input waits for it until its deadline at most, and goes either way.
+        let picture = match &mut mutation {
+            Mutation::Input { picture, .. } => picture.take(),
+            _ => None,
+        };
         // Connect without holding the lease. Release can cancel slow preflight.
         let connection = self.connect(&mutation).await?;
         let authorization = authorize(lease, observed_at).await?;
+        // The only picture ever saved or shown is the frame in hand here,
+        // before the input is sent. A frame later than this is never read:
+        // `taken` drops its task, and with it the frame, should the helper
+        // still take one after the input.
+        let picture = match picture {
+            Some(taking) => taking.taken().await,
+            None => None,
+        };
         let mut claim = self.claim(&mutation, lease.is_some(), command)?;
         let request = mutation.request();
         let sent = self.send(connection, &request, claim.as_ref()).await?;
@@ -278,13 +325,74 @@ impl Client {
 
         let reply = if agent_command {
             self.run_to_its_end(sent, &request, command, &mut claim, started)
-                .await?
+                .await
         } else {
-            self.answer(sent).await?
+            self.answer(sent).await
         };
+        // A request the person must be asked about, or that a Look Only
+        // account refused, sent nothing: no picture is kept for it, and the
+        // attempt allowed after it takes its own. A lost reply may follow
+        // input that was sent, so its picture is kept.
+        if let Some((picture, admitted)) = picture
+            && let Mutation::Input {
+                actions,
+                epoch,
+                expect,
+                ..
+            } = &mutation
+        {
+            if reply.as_ref().is_ok_and(gated) {
+                if let Some(doing) = &self.doing {
+                    doing.before().reset();
+                }
+                // What the person is asked about shows it, in their question
+                // alone: never in activity. Not when the input service brought
+                // an app or window forward first, for a target or a
+                // referenced element: then the screen is taken afresh.
+                let prepared = expect.is_some()
+                    || actions.actions().iter().any(|action| {
+                        matches!(action, atlas_core::actions::Action::Reference { .. })
+                    });
+                if crate::asking::asks_person(&reply) && !prepared {
+                    self.keep_for_ask(picture, admitted);
+                }
+            } else {
+                self.keep_picture(picture, actions.actions(), epoch);
+            }
+        }
+        let reply = reply?;
         mutation.validate(&reply)?;
 
-        self.settle(&request, reply, command, claim, started).await
+        let mut reply = self
+            .settle(&request, reply, command, claim, started)
+            .await?;
+        // What the input service says of the element an input reached is
+        // for the facts of its picture alone, and the account it acted in
+        // and what let it are for its activity row alone: kept as its row
+        // was written, never in the reply. A command that types in batches
+        // keeps the account for the row that stands for them all.
+        if matches!(mutation, Mutation::Input { .. }) {
+            self.keep_from_reply(&mut reply);
+        }
+        Ok(reply)
+    }
+
+    /// Take from an input's `reply`, its row written, what is for that row
+    /// and its picture alone: the element it reached, and the listed
+    /// account it acted in with what let it, noted for the row that stands
+    /// for all of a command's batches.
+    pub(super) fn keep_from_reply(&self, reply: &mut Value) {
+        let Some(reply) = reply.as_object_mut() else {
+            return;
+        };
+        reply.remove("element");
+        let account = reply.remove("account");
+        let allowed = reply.remove("allowed");
+        if let Some(doing) = &self.doing
+            && let Some(account) = account
+        {
+            doing.note_account(account, allowed);
+        }
     }
 
     /// Where `mutation` goes: the input service for input, and the helper
@@ -442,6 +550,26 @@ impl Client {
         }
 
         let mut warnings = Vec::new();
+        // Any command run in the helper under a claim (an agent's own, an
+        // environment's step, an app opened) may leave work running in its
+        // group: it is kept before its claim is cleared, so the person never
+        // signs in beside it. Work that can't be noted keeps the claim, as
+        // an unknown outcome, until a later look notes it or finds it ended.
+        if request["op"] == "run"
+            && reply["uncertain"] != true
+            && let Some(group) = started_group(&reply)
+            && let Err(error) = self
+                .controller
+                .note_run_group(group, self.config.helper_uid)
+        {
+            if let Some(claim) = claim.take() {
+                self.controller.keep_unrecorded_run(claim, group);
+            }
+            warnings.push(format!(
+                "The command finished, but what it left running could not be noted, so Atlas \
+                 treats its outcome as unknown until it can: {error}"
+            ));
+        }
         if let Some(claim) = &claim
             && reply["uncertain"] != true
             && let Err(error) = self.controller.clear_if(claim)
@@ -467,5 +595,22 @@ impl Client {
     }
 }
 
+/// The process group of the command a `run` reply is of: the PID its
+/// `started` event names, as the helper starts each command in a group of
+/// its own.
+fn started_group(reply: &Value) -> Option<i32> {
+    reply["pid"]
+        .as_i64()
+        .or_else(|| {
+            reply["events"]
+                .as_array()?
+                .iter()
+                .find(|event| event["event"] == "started")?["pid"]
+                .as_i64()
+        })
+        .and_then(|pid| i32::try_from(pid).ok())
+}
+
 #[cfg(test)]
+#[path = "mutate_tests.rs"]
 mod tests;

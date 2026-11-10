@@ -29,4 +29,12 @@ struct OnboardingFactsDefaultsTests {
     #expect(!facts.opensAtLogin(enabledNow: false))
     #expect(facts.opensAtLogin(enabledNow: true))
   }
+
+  @Test("the home folder box starts checked, unless keeping it private was offered for this helper before")
+  func keepsHomePrivate() throws {
+    var facts = try controller()
+    #expect(facts.keepsHomePrivate)
+    facts.homePrivacyOffered = true
+    #expect(!facts.keepsHomePrivate)
+  }
 }

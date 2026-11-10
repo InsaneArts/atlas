@@ -354,10 +354,28 @@ pub(super) async fn freeze(
     }
 
     unique_targets(selections.iter().map(|file| file.target.as_path()))?;
+    // Before the helper is asked anything: the person's sign-ins and secrets never reach it, by the path given or the
+    // one it leads to. Each source is checked once more as it is read.
+    let given = selections
+        .iter()
+        .map(|file| source_path(manifest, &file.source))
+        .collect::<Result<Vec<_>>>()?;
+    crate::credential_files::refuse(given.iter().map(PathBuf::as_path))?;
     client.identity().await?;
 
     let helper = helper_name(client.config.helper_uid)?;
     freeze_as(client, &helper, manifest, selections, apply_now).await
+}
+
+/// Where a selection's `source` is: as given when absolute, else beside `manifest`.
+fn source_path(manifest: &Path, source: &Path) -> Result<PathBuf> {
+    if source.is_absolute() {
+        return Ok(source.to_path_buf());
+    }
+    Ok(manifest
+        .parent()
+        .ok_or_else(|| problem("Missing manifest parent"))?
+        .join(source))
 }
 
 /// [`freeze`] for the helper account `helper`, once the helper is verified.
@@ -381,16 +399,11 @@ pub(super) async fn freeze_as(
         let mut total = 0;
 
         for (index, file) in selections.into_iter().enumerate() {
-            let source = if file.source.is_absolute() {
-                file.source
-            } else {
-                manifest
-                    .parent()
-                    .ok_or_else(|| problem("Missing manifest parent"))?
-                    .join(file.source)
-            };
-
-            let source = fs::canonicalize(source)?;
+            let given = source_path(manifest, &file.source)?;
+            let source = fs::canonicalize(&given)?;
+            // Checked again as it is read, as given and where it leads: a link changed, or a source made, since the
+            // first check counts too.
+            crate::credential_files::refuse([given.as_path(), source.as_path()])?;
             let bytes = read_limited(&source, MAX_FILE)?;
             total += bytes.len() as u64;
 
@@ -802,3 +815,7 @@ pub(super) fn decode_reply(reply: &Value, mutating: bool, request: &str) -> Resu
 
     Ok(value)
 }
+
+#[cfg(test)]
+#[path = "stage_tests.rs"]
+mod tests;

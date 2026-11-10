@@ -1,4 +1,5 @@
 import AtlasCommands
+import AtlasService
 import AtlasUI
 import Foundation
 
@@ -36,12 +37,14 @@ struct ViewerSnapshot {
   var timeZone = TimeZone.current
   /// The locale the facts tell their times in, and the lists their times and days.
   var locale = Locale.current
-  /// What the Activity, Apps and Screenshots panes hold.
+  /// What the Activity pane holds.
   var panes = ViewerPanes()
   /// The date and time now, which the panes tell Now, today and the last hour by.
   var date = Date()
   /// The calendar the panes tell days and hours by; its time zone is ``timeZone``'s.
   var calendar = Calendar(identifier: .gregorian)
+  /// The questions Atlas asks the person and what they allowed, as `asks.json` last said; nil before it was read.
+  var asks: AskList?
 
   /// Whether this window holds control.
   var holdingControl: Bool { lease != nil }

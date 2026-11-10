@@ -1,37 +1,75 @@
 import SwiftUI
 
-/// One step of an open moment: its disc on the moment's line under the moment's icon, what was done from the
-/// moment's title's edge, and when at the end; a soft capsule under the pointer, reaching past the words on each side
-/// so nothing moves. A screenshot's step offers Show large under the pointer and shows its thumbnail under its words;
-/// a step that did not work holds its words in a callout that says why and what came next. It reads as one, with its
-/// screenshot's Show large, or Show Screen and Recover…, as its actions.
+/// One step of an opened run, or a folded run's problem line, on one 28-point line: its glyph in the lead column, what
+/// was done, whole in its tooltip where a narrow card cuts it short, a picture button when it kept a picture of the
+/// screen just before it, and its time when the minute
+/// changed, with the listed account it acted in after its words where its run does not name it, and, where the
+/// words fit whole beside it, a badge saying what let it act there. A screenshot's step shows its picture framed in
+/// place under its line; the action of unknown outcome offers Show Screen and Recover… under it. Steps are not
+/// pressable, so they have no highlight.
 struct ActivityStepRow: View {
   /// The step.
   let step: ViewerActivityStep
+  /// Its level in the outline: one under its run's.
+  let level: Int
   /// Receives what the person does.
   let send: @MainActor (ViewerEvent) -> Void
-  /// Whether the pointer is over the step's line.
-  @State private var isHovered = false
-  @Environment(\.hoverPaused) private var hoverPaused
 
-  /// The step's line, then its thumbnail, on the moment's line.
+  /// The line, then its picture or its recovery.
   var body: some View {
     VStack(alignment: .leading, spacing: .zero) {
       line
-      if let shot = step.shot {
-        thumbnail(shot)
-          .background(alignment: .leading) {
-            if !step.isLast {
-              ActivityTimelineSegment()
-            }
-          }
+      if step.offersRecovery {
+        ActivityLineRecovery(send: send)
+          .padding(.leading, ViewerLayout.outlineText(level: level))
+          .padding(.bottom, ViewerLayout.stepsBelow)
+      }
+      if let shot = step.inPlace {
+        ActivityPictureButton(
+          tile: shot,
+          size: ViewerLayout.pictureInPlace,
+          send: send
+        )
+        .padding(.leading, ViewerLayout.outlineText(level: level))
+        .padding(.bottom, ViewerLayout.stepsBelow)
       }
     }
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .contain)
+  }
+
+  /// The glyph, the words and the picture button, and the time.
+  private var line: some View {
+    HStack(alignment: .firstTextBaseline, spacing: ViewerLayout.outlineTimeGap) {
+      // The badge shows only where the words fit whole beside it; VoiceOver reads it either way.
+      ViewThatFits(in: .horizontal) {
+        details(showsBadge: true)
+        details(showsBadge: false)
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      if !step.time.isEmpty {
+        OutlineTime(time: step.time)
+      }
+    }
+    .padding(.leading, ViewerLayout.outlineText(level: level))
+    .padding(.trailing, ViewerLayout.outlineInset)
+    .frame(height: ViewerLayout.stepRowHeight)
+    .overlay(alignment: .leading) {
+      glyph
+        .frame(width: ViewerLayout.outlineLead)
+        .padding(
+          .leading,
+          ViewerLayout.outlineText(level: level) - ViewerLayout.outlineLeadGap - ViewerLayout.outlineLead
+        )
+    }
+    .accessibilityElement(children: .ignore)
     .accessibilityLabel(step.label)
+    .takesFocusAfterSheet(isCurrent: step.isCurrent || step.returnsFocus, keys: false)
     .accessibilityActions {
-      if let shot = step.shot {
-        Button("Show large") { send(.openShot(shot.name)) }
+      if step.hasPicture {
+        Button("Show the screen before this step") { send(.openAction(step.id)) }
+      }
+      if let shot = step.inPlace {
+        Button("Open the picture") { send(.openShot(shot.id)) }
       }
       if step.offersRecovery {
         Button("Show Screen") { send(.show(.screen)) }
@@ -40,95 +78,68 @@ struct ActivityStepRow: View {
     }
   }
 
-  /// The disc, the words or the callout, Show large, and the time.
-  private var line: some View {
-    HStack(spacing: .zero) {
-      ActivityStepDisc(kind: step.kind, mark: step.mark)
-        .frame(width: ViewerLayout.appIcon)
-        .frame(width: ViewerLayout.stepLeading, alignment: .leading)
-      HStack(spacing: Spacing.s) {
-        if step.problem != nil {
-          ActivityProblemCallout(step: step, send: send)
-            .padding(.vertical, Spacing.half)
-        } else {
-          ActivityStepWords(words: step.words, isLive: step.mark == .live)
-        }
-        if let shot = step.shot {
-          Button("Show large") { send(.openShot(shot.name)) }
-            .buttonStyle(.textLink)
-            .fixedSize()
-            .revealsOnHover(isHovered && !hoverPaused)
-            .help("Show this screenshot large")
-        }
-        Spacer(minLength: Spacing.s)
-        Text(verbatim: step.time)
-          .font(Typography.digits(.callout))
-          .foregroundStyle(Color.textTertiary)
-          .contentTransition(.identity)
-          .fixedSize()
+  /// What was done, the account its run does not name, Not kept, the badge when asked, and the picture button. The
+  /// words give way first, then the account.
+  ///
+  /// - Parameter showsBadge: Whether what let it act in its account shows.
+  /// - Returns: The line's details.
+  private func details(showsBadge: Bool) -> some View {
+    HStack(alignment: .center, spacing: ViewerLayout.pictureButtonGap) {
+      words
+        .help(Text(verbatim: step.label))
+      if let account = step.account {
+        Text(verbatim: account)
+          .font(Typography.font(.body))
+          .foregroundStyle(Color.textSecondary)
+          .lineLimit(1)
+          .layoutPriority(1)
       }
-      .frame(minHeight: ViewerLayout.stepHeight)
-      .padding(.horizontal, ViewerLayout.capsuleReach)
-      .background(
-        // Only the capsule's opacity takes the hover's fade, so the row moves as one when the list moves it.
-        Capsule()
-          .fill(Color.fillRowHover)
-          .animation(Motion.hover(isHovered)) { capsule in
-            capsule.opacity(isHovered && !hoverPaused && step.problem == nil ? 1 : 0)
-          }
-      )
-      .padding(.horizontal, -ViewerLayout.capsuleReach)
+      if step.notKept {
+        notKept
+      }
+      if showsBadge, let allowance = step.allowance {
+        AllowanceTag(badge: allowance)
+      }
+      if step.hasPicture {
+        ActivityStepPictureButton { send(.openAction(step.id)) }
+          .takesFocusAfterSheet(isCurrent: step.isCurrent || step.returnsFocus, voiceOver: false)
+      }
     }
-    .background(alignment: .leading) {
-      ActivityTimelineSegment(endsHere: step.isLast)
-    }
-    .contentShape(Rectangle())
-    .onHover { isHovered = $0 }
   }
 
-  /// The whole screenshot at its own shape, which shows it large: 132 across, or as tall as a 4:3 one where it is
-  /// narrower, standing at the leading edge of its room.
-  ///
-  /// - Parameter shot: The screenshot.
-  /// - Returns: The thumbnail.
-  private func thumbnail(_ shot: ViewerActivityShot) -> some View {
-    Button {
-      send(.openShot(shot.name))
-    } label: {
-      ShotThumbnail(
-        picture: shot.thumbnail,
-        shape: shot.shape,
-        radius: ViewerLayout.stepThumbnailRadius,
-        showsEdge: false,
-        ground: .fillControl,
-        alignment: .leading
-      )
-      // Its room keeps the list's shape for it, so it never resizes as the thumbnail arrives.
-      .frame(width: ViewerLayout.stepThumbnail, height: ViewerLayout.stepThumbnail / clamped(shot.aspect))
-    }
-    .buttonStyle(.plain)
-    .help("Show this screenshot large")
-    .asksForThumbnail(shot.name, send: send)
-    .padding(.top, Spacing.xs)
-    .padding(.bottom, ViewerLayout.stepInset)
-    .padding(.leading, ViewerLayout.stepLeading)
+  /// The step's glyph: its kind's symbol, blue while it runs, or the problem's mark.
+  private var glyph: some View {
+    let failed = step.mark == .failed
+    return Image(systemName: failed ? SymbolName.attention.rawValue : step.kind.symbol.rawValue)
+      .font(Typography.symbol(.row))
+      .foregroundStyle(failed ? Color.attention : step.mark == .live ? Color.accent : Color.textSecondary)
+      .frame(width: ViewerLayout.stepGlyph, height: ViewerLayout.stepGlyph)
+      .animation(ActivityMotion.disc, value: step.mark)
+      .accessibilityHidden(true)
   }
 
-  /// A screenshot's shape kept between 4:3 and 16:9.
-  ///
-  /// - Parameter aspect: Its width over its height.
-  /// - Returns: The shape the thumbnail takes.
-  private func clamped(_ aspect: CGFloat) -> CGFloat {
-    min(max(aspect, ViewerLayout.shotAspects.lowerBound), ViewerLayout.shotAspects.upperBound)
+  /// What was done: a problem's words in orange then why in grey, else the step's words, semibold while it runs.
+  @ViewBuilder private var words: some View {
+    if let problem = step.problem {
+      ActivityProblemWords(words: step.words, problem: problem, failed: step.mark == .failed)
+    } else {
+      ActivityStepWords(words: step.words, isLive: step.mark == .live)
+    }
+  }
+
+  /// A small lock badge saying a password's text was not kept.
+  private var notKept: some View {
+    HStack(spacing: Spacing.xs) {
+      Image(systemName: SymbolName.lock.rawValue)
+        .font(Typography.font(.caption2, weight: .semibold))
+      Text("Not kept")
+        .font(Typography.font(.caption, weight: .semibold))
+    }
+    .foregroundStyle(Color.textSecondary)
+    .padding(.horizontal, Spacing.s)
+    .padding(.vertical, Stroke.regular)
+    .background(Capsule().fill(Color.fillPill))
+    .fixedSize()
+    .help("Atlas never keeps what is typed into a password field")
   }
 }
-
-#if DEBUG
-  #Preview("Steps") {
-    ActivitySamples(.steps)
-  }
-
-  #Preview("Interactive") {
-    ActivitySamples(.arriving)
-  }
-#endif

@@ -221,6 +221,11 @@ async fn end_group(group: Pid) {
     let deadline = Instant::now() + GRACE;
 
     while signal_group(group, None) {
+        if atlas_core::process::group(group.as_raw())
+            .is_ok_and(|members| members.iter().all(|member| member.zombie))
+        {
+            break;
+        }
         if Instant::now() >= deadline {
             signal_group(group, Signal::SIGKILL);
         }
@@ -529,6 +534,26 @@ fn sleep_until(due: Option<tokio::time::Instant>) -> tokio::time::Sleep {
     tokio::time::sleep_until(due.unwrap_or_else(tokio::time::Instant::now))
 }
 
+/// Observe an owned child's exit without reaping it. Its PID reserves the
+/// group until timeout/cancel cleanup has sent its last signal.
+async fn child_exited(child: &tokio::process::Child) -> std::io::Result<()> {
+    let pid = child
+        .id()
+        .ok_or_else(|| std::io::Error::other("The command's child identity is gone"))?;
+    // Subscribe before checking so an exit between the check and recv is
+    // retained. SIGCHLD is a wakeup; only waitid authorizes the observation.
+    let mut changes = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())?;
+    loop {
+        if atlas_core::process::child_exited(pid)? {
+            return Ok(());
+        }
+        changes
+            .recv()
+            .await
+            .ok_or_else(|| std::io::Error::other("The child exit signal stream ended"))?;
+    }
+}
+
 /// [`run`] with `home` as the helper's home.
 async fn run_at(
     argv: &[String],
@@ -553,9 +578,10 @@ async fn run_at(
     tokio::pin!(deadline, cancel);
 
     let mut buffer = vec![0; FLUSH];
+    let mut exited = false;
 
-    while watch.status.is_none() || !watch.closed {
-        if watch.cause.abandoned() && !watch.stopping && watch.status.is_none() {
+    while !exited || !watch.closed {
+        if watch.cause.abandoned() && !watch.stopping && !exited {
             watch.terminate(group);
             deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
         }
@@ -565,11 +591,19 @@ async fn run_at(
             }
             () = sleep_until(watch.output.due),
                 if watch.output.due.is_some() && !watch.cause.abandoned() => watch.flush(&events),
-            exited = spawned.child.wait(), if watch.status.is_none() => {
-                watch.status = Some(exited);
+            observed = child_exited(&spawned.child), if !exited => {
+                exited = true;
+                match observed {
+                    // No termination began, so no later group signal is
+                    // permitted: preserve prompt ordinary reaping even
+                    // while a descendant still holds the output pipe.
+                    Ok(()) if !watch.stopping => watch.status = Some(spawned.child.wait().await),
+                    Ok(()) => {},
+                    Err(error) => watch.status = Some(Err(error)),
+                }
                 watch.linger = Some(tokio::time::Instant::now() + LINGER);
             }
-            () = &mut deadline, if watch.status.is_none() => {
+            () = &mut deadline, if !exited => {
                 watch.deadline_passed(group);
                 deadline.as_mut().reset(tokio::time::Instant::now() + GRACE);
             }
@@ -583,8 +617,11 @@ async fn run_at(
     }
 
     // A command that already finished keeps whatever it left running.
-    if watch.stopping {
+    if watch.stopping && watch.status.is_none() {
         end_group(group).await;
+    }
+    if watch.status.is_none() {
+        watch.status = Some(spawned.child.wait().await);
     }
 
     let timed_out = match watch.cause {
@@ -613,4 +650,5 @@ async fn run_at(
 }
 
 #[cfg(test)]
+#[path = "run_tests.rs"]
 mod tests;

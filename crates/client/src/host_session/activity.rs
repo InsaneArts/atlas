@@ -368,7 +368,9 @@ impl Reading<'_> {
     }
 
     /// One recent action, in words: what it did, whether it worked and how
-    /// long ago, why not when it failed and the screenshot it took.
+    /// long ago, why not when it failed and the screenshot it took. The
+    /// pictures taken around it are the person's alone: no agent is given
+    /// them.
     fn row(&self, row: &Row) -> Value {
         let shown = crate::overview::shown(row, self.now);
         let mut said = json!({
@@ -482,4 +484,5 @@ fn plans(record: &Record) -> Vec<Value> {
 }
 
 #[cfg(test)]
+#[path = "activity_tests.rs"]
 mod tests;

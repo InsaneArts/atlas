@@ -28,6 +28,9 @@
       case (.screen(.done(var screen)), .setOpenAtLogin(let on)):
         screen.opensAtLogin = on
         next.content = .screen(.done(screen))
+      case (.screen(.done(var screen)), .setKeepHomePrivate(let on)):
+        screen.keepsHomePrivate = on
+        next.content = .screen(.done(screen))
       case (.screen(.choose), .back):
         return onboardingWelcome
       case (.screen(.create), .back):

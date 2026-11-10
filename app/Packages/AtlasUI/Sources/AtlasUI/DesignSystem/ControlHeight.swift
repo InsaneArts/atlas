@@ -3,6 +3,8 @@ import CoreGraphics
 /// Heights of controls and rows, in points, named by size as ``Spacing`` is: a `Plus` step is 2 points above its
 /// named step.
 enum ControlHeight {
+  /// 22: a capsule in a settings row, as Rex's Settings sets them.
+  static let xxs: CGFloat = 22
   /// 24: a status badge, and the mini screen's Live chip.
   static let xs: CGFloat = 24
   /// 26: a mini capsule, as Settings' buttons are.

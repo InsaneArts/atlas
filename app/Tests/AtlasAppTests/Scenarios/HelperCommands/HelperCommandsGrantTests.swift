@@ -25,7 +25,7 @@ struct HelperCommandsGrantTests {
     service.hold = ["acquire"]
     let taking = Task { await viewer.control.takeControl() }
     try await settle("control was never asked for") { service.held["acquire"] != nil }
-    viewer.send(.show(.apps))
+    viewer.send(.show(.activity))
     let switching = Task { await viewer.actions.switchTo("atlas") }
     try await settle("the switch never reached its wait") { viewer.barrier.waiters == 1 }
     #expect(commands.ran.isEmpty, "nothing runs while the acquisition is unanswered")
@@ -83,12 +83,7 @@ struct HelperCommandsGrantTests {
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
     let lifetime = ControlBarrier.lateGrant + ControlBarrier.leaseLifetime
     let clock = ManualClock()
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: clock)
-    )
+    let actions = HelperActions.scripted(service, commands: commands, clock: clock)
     let viewer = try await ViewerController.watching(
       service,
       commands: commands,
@@ -121,12 +116,7 @@ struct HelperCommandsGrantTests {
     let commands = ScriptedCommands(["switch": #"{"ok": true}"#])
     let lifetime = ControlBarrier.lateGrant + ControlBarrier.leaseLifetime
     let clock = ManualClock()
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: clock)
-    )
+    let actions = HelperActions.scripted(service, commands: commands, clock: clock)
     let viewer = try await ViewerController.watching(
       service,
       commands: commands,

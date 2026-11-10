@@ -224,7 +224,9 @@ codes! {
     Collect => ("collect", LOCAL),
     Config => ("config", LOCAL),
     ConfigInvalid => ("config-invalid", LOCAL),
+    Credentials => ("credentials", LOCAL),
     Daemon => ("daemon", LOCAL),
+    Denied => ("denied", NATIVE),
     Elements => ("elements", LOCAL),
     Environment => ("environment", LOCAL),
     FocusChanged => ("focus-changed", NATIVE),
@@ -266,6 +268,7 @@ codes! {
     Uninstall => ("uninstall", LOCAL),
     Update => ("update", LOCAL),
     Usage => ("usage", LOCAL),
+    WaitingForPerson => ("waiting-for-person", NATIVE),
     WaitFailed => ("wait-failed", LOCAL),
     Windows => ("windows", LOCAL),
 }
@@ -356,4 +359,5 @@ impl From<serde_json::Error> for Error {
 }
 
 #[cfg(test)]
+#[path = "error_tests.rs"]
 mod tests;

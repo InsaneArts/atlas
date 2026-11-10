@@ -38,8 +38,12 @@ final class StandInParts: WindowParts {
   private(set) var terminations = 0
   /// How often the panel was asked to close, leaving its controller running.
   private(set) var panelClosures = 0
+  /// The glyph the menu bar item draws, as the links last set it.
+  private(set) var menuBarIcon = MenuBarIcon.orbit
   /// Every window made, in order.
   private(set) var windows: [WindowStandIn] = []
+  /// The window presented last, opened or brought forward: the one in front.
+  private(set) var front: WindowStandIn?
 
   /// The coordinator's window making: a stand-in for each window, kept in ``windows``.
   var making: WindowMaking {
@@ -98,12 +102,7 @@ final class StandInParts: WindowParts {
     let service = ScriptedService()
     return AlertController(
       alert: alert,
-      actions: HelperActions(
-        console: SessionConsole(read: { true }),
-        commands: ScriptedCommands([:]),
-        service: service,
-        barrier: ControlBarrier(service: service, clock: clock)
-      ),
+      actions: HelperActions.scripted(service, clock: clock),
       links: links
     )
   }
@@ -115,6 +114,11 @@ final class StandInParts: WindowParts {
 
   /// Records closing the panel, without stopping its controller.
   func closePanel() { panelClosures += 1 }
+
+  /// Records the glyph picked.
+  ///
+  /// - Parameter icon: The glyph.
+  func useMenuBarIcon(_ icon: MenuBarIcon) { menuBarIcon = icon }
 
   /// Records the quit, which no test performs, after what runs as it is asked.
   ///
@@ -140,6 +144,7 @@ final class StandInParts: WindowParts {
   /// - Returns: The stand-in.
   private func standIn(_ closed: @escaping @MainActor (any WindowPresenting) -> Void) -> WindowStandIn {
     let window = WindowStandIn(closed: closed)
+    window.presented = { [unowned self] in front = $0 }
     windows.append(window)
     return window
   }

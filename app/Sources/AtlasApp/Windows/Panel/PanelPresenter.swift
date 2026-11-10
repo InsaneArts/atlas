@@ -18,15 +18,27 @@ enum PanelPresenter {
     let reading = StatusReading(snapshot.status)
     var status = mode.panelSummary(reading, paused: snapshot.session.paused, reconnecting: snapshot.reconnecting)
     if let line = sessionLine(reading, mode: mode) { status.line = line }
+    if waitsForYou(snapshot, mode: mode) { status = waitingSummary }
     let sessions = sessions(reading, mode: mode, now: snapshot.date)
     return PanelState(
       status: status,
       notice: snapshot.session.notice,
+      showsServiceNote: SlowServiceNote.shows(snapshot.status, dismissed: snapshot.serviceNoteDismissed),
       isMoreOpen: snapshot.session.moreOpen,
+      ask: mode.kind == .connecting
+        ? nil
+        : AskCards.card(
+          status: snapshot.status,
+          list: snapshot.asks,
+          pictures: snapshot.askPictures,
+          at: snapshot.date
+        ),
+      allowed: AskCards.allowed(status: snapshot.status, list: snapshot.asks, at: snapshot.date),
       picture: picture(snapshot, mode: mode, reading: reading),
       recent: hidesRecent(mode) || !sessions.isEmpty ? [] : recent(reading, mode: mode, icons: snapshot.icons),
       sessions: sessions,
       moreSessions: moreSessions(reading, rows: sessions),
+      accounts: PanelWords.accountsLine(snapshot.status.overview.accounts?.map(\.name) ?? []),
       controls: controls(snapshot, mode: mode),
       announcement: snapshot.session.announcement
     )
@@ -87,8 +99,8 @@ enum PanelPresenter {
   /// 3: the most rows Recent lists.
   static let recentRows = 3
 
-  /// Recent's rows, newest first, each led by its icon: the newest is live only while an agent works, so only it
-  /// carries the blue dot, and only then.
+  /// Recent's rows, newest first, each led by its icon, with what let it act in a listed account: the newest is live
+  /// only while an agent works, so only it carries the blue dot, and only then.
   ///
   /// - Parameters:
   ///   - reading: The status, read.
@@ -103,12 +115,29 @@ enum PanelPresenter {
         return PanelRecentEntry(
           id: entry.id,
           icon: recentIcon(item, icons: icons),
-          line: entry.line,
+          line: recentLine(entry.line, account: item.row.account),
           when: entry.when,
           isFailed: entry.mark == .failed,
-          isLive: mode.kind == .working && index == 0
+          isLive: mode.kind == .working && index == 0,
+          account: item.row.account?.name,
+          allowance: Words.allowance(item.row.allowed)
         )
       }
+  }
+
+  /// A Recent row's words, less the account they end in, which the row names beside them whatever the words say:
+  /// "Clicked Merge" for "Clicked Merge on github.com", "Typed into Message" for "Typed into Message in Slack".
+  ///
+  /// - Parameters:
+  ///   - line: The row's words.
+  ///   - account: The listed account it acted in, or nil.
+  /// - Returns: The words.
+  static func recentLine(_ line: String, account: ActivityLog.Account?) -> String {
+    guard let name = account?.name else { return line }
+    for ending in [" on \(name)", " in \(name)"] where line.hasSuffix(ending) {
+      return String(line.dropLast(ending.count))
+    }
+    return line
   }
 
   /// What leads one of Recent's rows: Atlas's own mark for what Atlas did itself, recovering or logging out the

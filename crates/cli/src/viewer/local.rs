@@ -164,6 +164,19 @@ pub(super) fn exchange(
     deadline: Duration,
     limit: usize,
 ) -> Result<Reply> {
+    exchange_with(url, method, route, body, &[], deadline, limit)
+}
+
+/// [`exchange`], sending `headers` too.
+fn exchange_with(
+    url: &str,
+    method: &str,
+    route: &str,
+    body: Option<&[u8]>,
+    headers: &[(&str, &str)],
+    deadline: Duration,
+    limit: usize,
+) -> Result<Reply> {
     use std::io::{Read, Write};
 
     // Any trouble on the wire reads the same to the person.
@@ -192,6 +205,9 @@ pub(super) fn exchange(
             "Origin: http://{authority}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
             body.len()
         ));
+    }
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
     }
 
     head.push_str("\r\n");
@@ -297,11 +313,38 @@ pub(super) fn reply_status(reply: &[u8]) -> Option<u16> {
 /// POST `body` to `route` of the local viewer at `url`, as its own origin,
 /// and read its JSON reply; a refusal is an error in its own words.
 pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> {
-    let exchanged = exchange(
+    post_local_with(url, route, body, &[])
+}
+
+/// [`post_local`] as the app, which names itself by `secret`.
+#[cfg(test)]
+pub(crate) fn post_local_as_app(
+    url: &str,
+    secret: &str,
+    route: &str,
+    body: &Value,
+) -> Result<Value> {
+    post_local_with(
+        url,
+        route,
+        body,
+        &[(super::http::APP_SECRET_HEADER, secret)],
+    )
+}
+
+/// [`post_local`], sending `headers` too.
+fn post_local_with(
+    url: &str,
+    route: &str,
+    body: &Value,
+    headers: &[(&str, &str)],
+) -> Result<Value> {
+    let exchanged = exchange_with(
         url,
         "POST",
         route,
         Some(&serde_json::to_vec(body)?),
+        headers,
         Duration::from_secs(5),
         REPLY_LIMIT,
     )?;
@@ -321,4 +364,5 @@ pub(crate) fn post_local(url: &str, route: &str, body: &Value) -> Result<Value> 
 }
 
 #[cfg(test)]
+#[path = "local_tests.rs"]
 mod tests;

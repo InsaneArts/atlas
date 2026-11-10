@@ -45,11 +45,6 @@ pub enum Outcome {
     Rejected,
     Cancelled,
     Timeout,
-    CreditRetired,
-    PairClosed,
-    SourceStopped,
-    CleanupPending,
-    CleanupConfirmed,
 }
 
 /// Where in an acquisition, delivery or cleanup something ended.
@@ -235,10 +230,6 @@ impl Record {
         self.stage = stage;
         self.reason = reason;
     }
-
-    fn failed(&self) -> bool {
-        self.outcome != Outcome::Accepted
-    }
 }
 
 /// `elapsed` in whole nanoseconds, saturating.
@@ -246,13 +237,11 @@ pub fn nanos(elapsed: Duration) -> u64 {
     u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
 }
 
-/// The newest records, and the first failure of the latest outage.
+/// The newest records.
 #[derive(Debug, Default)]
 pub struct Ring {
     records: VecDeque<(u64, Record)>,
     next: u64,
-    first_outage: Option<Record>,
-    in_outage: bool,
 }
 
 /// Records after a cursor, and the cursor to ask from next.
@@ -267,20 +256,11 @@ pub struct Page {
 impl Ring {
     /// Keep `record`, dropping the oldest beyond [`RING`].
     pub fn push(&mut self, record: Record) {
-        if record.failed() && !self.in_outage {
-            self.first_outage = Some(record);
-        }
-        self.in_outage = record.failed();
         self.records.push_back((self.next, record));
         self.next += 1;
         while self.records.len() > RING {
             self.records.pop_front();
         }
-    }
-
-    /// The first failure of the latest outage, kept after it ends.
-    pub fn first_outage(&self) -> Option<&Record> {
-        self.first_outage.as_ref()
     }
 
     /// The newest record.
@@ -319,4 +299,5 @@ impl Ring {
 }
 
 #[cfg(test)]
+#[path = "diagnostics_tests.rs"]
 mod tests;

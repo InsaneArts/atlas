@@ -7,7 +7,7 @@ import AppKit
 final class MenuBarItemView: NSView {
   /// The status button's image.
   private let image: NSImage
-  /// The opacity the button's layer shows the image at: less than whole for a dimmed orbit.
+  /// The opacity the button's layer shows the image at: less than whole for a dimmed glyph.
   private let opacity: CGFloat
   /// What a template is inked in: the menu bar's label colour.
   private let ink: NSColor
@@ -21,7 +21,7 @@ final class MenuBarItemView: NSView {
   ///   - opacity: The opacity the button's layer shows it at.
   ///   - ink: What a template is inked in.
   ///   - badge: The badge's layer.
-  ///   - frame: The view's frame, the item's square.
+  ///   - frame: The view's frame, the item's box.
   init(image: NSImage, opacity: CGFloat, ink: NSColor, badge: CALayer, frame: NSRect) {
     self.image = image
     self.opacity = opacity

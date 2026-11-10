@@ -5,6 +5,9 @@ import SwiftUI
 /// and the content keeps the small screen's band as room at the end it floats over, so the last row, or the first,
 /// can always be scrolled wholly clear of it. Headings scroll with their rows; none is pinned.
 enum CardScrollRoom {
+  /// The identity of the content's top, which a list scrolls to as the person asks for what waits above.
+  static let top = "card scroll top"
+
   /// The room the content keeps at its ends: the small screen's band at the end it floats over, none elsewhere.
   ///
   /// - Parameter clearance: Where the small screen floats.
@@ -16,6 +19,27 @@ enum CardScrollRoom {
       bottom: clearance.edges.contains(.bottom) ? clearance.length : .zero,
       trailing: .zero
     )
+  }
+
+  /// The room the rows leave beside them for the scroll bar: a classic scroll bar's width, which it takes from the
+  /// list whenever it shows, so the rows keep one width as it comes and goes; none for overlay scroll bars, which
+  /// take no room.
+  ///
+  /// - Parameter style: The scroll bars' style the Mac prefers now.
+  /// - Returns: The room.
+  static func scrollerGutter(_ style: NSScroller.Style) -> CGFloat {
+    style == .legacy ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy) : .zero
+  }
+
+  /// Whether the list's scroll bar may show: an overlay one only once the pane has faded in, so it never flashes over
+  /// a fade; a classic one always, as it takes room beside the rows and hiding it would lay the list out again.
+  ///
+  /// - Parameters:
+  ///   - settled: Whether the pane has faded in.
+  ///   - gutter: The room kept beside the rows for the scroll bar (``scrollerGutter(_:)``).
+  /// - Returns: Whether it may show.
+  static func showsScroller(settled: Bool, gutter: CGFloat) -> Bool {
+    settled || gutter > .zero
   }
 
   /// How far a selected row's room reaches past it, which a step scrolls wholly into view

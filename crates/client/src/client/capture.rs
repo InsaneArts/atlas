@@ -342,6 +342,8 @@ impl Client {
     }
 
     /// [`Client::capture`], kept in the output folder but not in the log.
+    /// An agent's is refused while the person signs the helper in to an
+    /// account, and never kept when a sign-in began or ended while it ran.
     async fn capture_unrecorded(
         &self,
         expected: Option<&Epoch>,
@@ -349,7 +351,14 @@ impl Client {
         crop: Option<&Crop>,
         new_file: bool,
     ) -> Result<Value> {
+        let admitted = match self.actor {
+            super::Actor::Agent => Some(self.controller.screen_visible()?),
+            super::Actor::Viewer => None,
+        };
         let (frame, shows) = self.framed(size, crop, expected).await?;
+        if let Some(admitted) = admitted {
+            self.controller.still_visible(admitted)?;
+        }
         let output = self.output_dir()?;
         let kept = last_capture::keep(
             output,
@@ -392,3 +401,7 @@ impl Client {
         Ok(saved)
     }
 }
+
+#[cfg(test)]
+#[path = "capture_tests.rs"]
+mod tests;

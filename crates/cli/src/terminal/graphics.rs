@@ -2,7 +2,6 @@
 //! resolution and let the terminal perform the final fit.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flate2::{Compression, write::ZlibEncoder};
-use sha2::{Digest, Sha256};
 use std::io::{self, Write};
 
 mod patches;
@@ -86,17 +85,6 @@ pub(super) struct Painter {
     base: u32,
     origin: (u16, u16),
     current: Option<u32>,
-    drawn: Option<([u8; 32], Layout)>,
-    synchronized: bool,
-}
-
-impl Default for Painter {
-    fn default() -> Self {
-        Self {
-            synchronized: true,
-            ..Self::at(IMAGE, (0, 0))
-        }
-    }
 }
 
 impl Painter {
@@ -105,8 +93,6 @@ impl Painter {
             base,
             origin,
             current: None,
-            drawn: None,
-            synchronized: false,
         }
     }
     pub(super) fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
@@ -114,17 +100,11 @@ impl Painter {
             delete_image(out, self.base)?;
             delete_image(out, self.base + 2)?;
             self.current = None;
-            self.drawn = None;
         }
         Ok(())
     }
 
-    /// Root edits change the current image's data. A later full paint must
-    /// upload fresh pixels, even if its old full-frame digest happens to match.
-    pub(super) fn invalidate(&mut self) {
-        self.drawn = None;
-    }
-
+    /// Root edits change the current image's data in place.
     pub(super) fn patch_rgb(
         &mut self,
         out: &mut impl Write,
@@ -135,19 +115,7 @@ impl Painter {
         let image = self
             .current
             .ok_or_else(|| io::Error::other("No image canvas for a root edit"))?;
-        patches::upload(out, image, rgb, size, origin, 2)?;
-        self.invalidate();
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(super) fn draw(
-        &mut self,
-        out: &mut impl Write,
-        png: &[u8],
-        layout: Layout,
-    ) -> io::Result<()> {
-        self.paint(out, png, layout, None, None)
+        patches::upload(out, image, rgb, size, origin, 2)
     }
 
     pub(super) fn draw_rgb(
@@ -156,88 +124,26 @@ impl Painter {
         rgb: &[u8],
         size: (u32, u32),
         layout: Layout,
-        digest: [u8; 32],
     ) -> io::Result<()> {
-        self.paint(out, rgb, layout, Some(size), Some(digest))
-    }
-
-    fn paint(
-        &mut self,
-        out: &mut impl Write,
-        pixels: &[u8],
-        layout: Layout,
-        size: Option<(u32, u32)>,
-        digest: Option<[u8; 32]>,
-    ) -> io::Result<()> {
-        let digest = digest.unwrap_or_else(|| {
-            let mut hash = Sha256::new();
-            hash.update(pixels);
-            if let Some((width, height)) = size {
-                hash.update(width.to_le_bytes());
-                hash.update(height.to_le_bytes());
-            }
-            hash.finalize().into()
-        });
-        if self.drawn == Some((digest, layout)) {
-            return Ok(());
-        }
-        let unchanged = self.drawn.is_some_and(|(previous, _)| previous == digest);
-        let image = if unchanged {
-            self.current.unwrap_or(self.base)
-        } else if self.current == Some(self.base) {
+        let image = if self.current == Some(self.base) {
             self.base + 2
         } else {
             self.base
         };
-        if self.synchronized {
-            let mut frame = Vec::new();
-            self.write_change(&mut frame, pixels, image, size, layout, unchanged)?;
-            out.write_all(&frame)?;
-            out.flush()?;
-        } else {
-            // A tiled frame already owns one output buffer and presentation
-            // scope. Append directly rather than allocating and copying one
-            // extra wire buffer for each tile.
-            self.write_change(out, pixels, image, size, layout, unchanged)?;
-        }
-        self.current = Some(image);
-        self.drawn = Some((digest, layout));
-        Ok(())
-    }
-
-    fn write_change(
-        &self,
-        frame: &mut impl Write,
-        pixels: &[u8],
-        image: u32,
-        size: Option<(u32, u32)>,
-        layout: Layout,
-        unchanged: bool,
-    ) -> io::Result<()> {
-        if !unchanged {
-            upload(frame, pixels, image, size)?;
-        }
-        // Terminals with synchronized output present this swap together.
-        // Others still place the new image before removing the old one.
-        if self.synchronized {
-            frame.write_all(b"\x1b[?2026h")?;
-        }
+        upload(out, rgb, image, size)?;
+        // The new image is placed before the old one is removed.
         write!(
-            frame,
+            out,
             "\x1b[{};{}H\x1b_Ga=p,i={image},p=1,c={},r={},C=1,q=2\x1b\\",
             self.origin.1 + 1,
             self.origin.0 + 1,
             layout.columns,
             layout.rows
         )?;
-        if let Some(previous) = self.current
-            && previous != image
-        {
-            delete_image(frame, previous)?;
+        if let Some(previous) = self.current {
+            delete_image(out, previous)?;
         }
-        if self.synchronized {
-            frame.write_all(b"\x1b[?2026l")?;
-        }
+        self.current = Some(image);
         Ok(())
     }
 }
@@ -247,27 +153,22 @@ fn upload(
     out: &mut impl Write,
     pixels: &[u8],
     image: u32,
-    size: Option<(u32, u32)>,
+    (width, height): (u32, u32),
 ) -> io::Result<()> {
-    let (encoded, format) = if let Some((width, height)) = size {
-        (
-            Some(payload::compress(pixels, width)?),
-            format!("f=24,s={width},v={height},o=z"),
-        )
-    } else {
-        (None, "f=100".into())
-    };
-    let payload = encoded.as_ref().map_or(pixels, |bytes| bytes.as_slice());
+    let payload = payload::compress(pixels, width)?;
     // 3072 binary bytes become exactly 4096 base64 bytes. Encode each
     // protocol chunk directly instead of allocating a full-frame String and
     // then copying that String into the reusable presentation buffer.
-    let mut chunks = payload.chunks(3072).peekable();
+    let mut chunks = payload.as_slice().chunks(3072).peekable();
     let mut encoded = [0; 4096];
     let mut first = true;
     while let Some(chunk) = chunks.next() {
         let more = u8::from(chunks.peek().is_some());
         if first {
-            write!(out, "\x1b_Ga=t,{format},t=d,i={image},q=2,m={more};")?;
+            write!(
+                out,
+                "\x1b_Ga=t,f=24,s={width},v={height},o=z,t=d,i={image},q=2,m={more};"
+            )?;
             first = false;
         } else {
             write!(out, "\x1b_Gm={more};")?;
@@ -290,4 +191,5 @@ pub(super) fn supported(reply: &[u8]) -> bool {
 }
 
 #[cfg(test)]
+#[path = "graphics_tests.rs"]
 mod tests;

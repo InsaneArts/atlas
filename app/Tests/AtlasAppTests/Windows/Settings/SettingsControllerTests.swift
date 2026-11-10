@@ -51,7 +51,7 @@ struct SettingsControllerTests {
     #expect(controller.session.alert == nil)
   }
 
-  @Test("a Forget that fails says why in the Agents pane")
+  @Test("a Forget that fails says why on the Integrations page")
   func aFailedForgetSaysWhy() async {
     let commands = ScriptedCommands([
       "agents status": Self.statusWithOpie,
@@ -63,7 +63,7 @@ struct SettingsControllerTests {
     await controller.confirmAlert()
     let notice = controller.state.agents.notice
     #expect(notice?.text.contains("AGENTS.md has an Atlas marker without its pair") == true)
-    #expect(notice?.isProblem == true, "drawn in the attention colour")
+    #expect(notice?.kind == .problem, "drawn in the attention colour")
   }
 
   @Test("Connect on Claude connects the installed Claude app alone")
@@ -114,7 +114,7 @@ struct SettingsControllerTests {
     try await clock.untilSleeping(for: least, "Check Again never held for its least time")
     clock.advance(by: least)
     await checking.value
-    #expect(commands.ran == [Action.doctor.arguments])
+    #expect(commands.ran == [Action.doctor.arguments, Action.homeFiles.arguments])
     #expect(
       controller.state.helper.readyNote
         == SettingsNote(text: "Start the helper: run atlas init (safe to run again).", kind: .problem)
@@ -131,7 +131,7 @@ struct SettingsControllerTests {
     let checking = Task { await controller.checkAgain() }
     let least = Duration.seconds(Motion.Duration.leastWork.seconds)
     try await clock.untilSleeping(for: least, "Check Again never held for its least time")
-    try await settle("the diagnosis never ran") { commands.ran == [Action.doctor.arguments] }
+    try await settle("the diagnosis never ran") { commands.ran.contains(Action.doctor.arguments) }
     #expect(controller.session.checking, "answered at once, yet still checking")
     clock.advance(by: least)
     await checking.value
@@ -152,7 +152,7 @@ struct SettingsControllerTests {
       status: try status(["checks": checks])
     )
     let before = controller.state.helper.ready
-    try #require(!before.isEmpty, "the Helper pane lists its checks")
+    try #require(!before.isEmpty, "the Helper page lists its checks")
     #expect(!before.contains { $0.spokenValue == "Checking" })
     controller.send(.checkAgain)
     try await settle("Check Again never started") { controller.state.helper.ready.allSatisfy(\.isChecking) }
@@ -217,12 +217,7 @@ struct SettingsControllerTests {
     let gate = ReleaseSignal()
     commands.whileRunning { _ in await gate.wait() }
     let service = ScriptedService()
-    let actions = HelperActions(
-      console: SessionConsole(read: { true }),
-      commands: commands,
-      service: service,
-      barrier: ControlBarrier(service: service, clock: ManualClock())
-    )
+    let actions = HelperActions.scripted(service, commands: commands)
     let controller = SettingsController.scripted(commands: commands, actions: actions)
     #expect(controller.state.helper.waiting == nil)
     // Another window's Recover, through the commands every window shares.

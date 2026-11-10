@@ -7,7 +7,7 @@ use atlas_core::{
     protocol::Left,
 };
 use nix::{errno::Errno, sys::signal::Signal, unistd::Pid};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The most descendants a job keeps note of.
 pub(super) const SEEN_MAX: usize = 256;
@@ -84,8 +84,12 @@ pub(super) fn observe(
         add(seen, member.instance);
     }
 
+    // A reporting pass reuses its own census. Session reads, including
+    // misses, may be shared within it; later reports and all signal checks
+    // still read fresh kernel facts.
+    let mut sessions = HashMap::new();
     loop {
-        let parents: Vec<i32> = seen
+        let parents: HashSet<i32> = seen
             .iter()
             .filter(|instance| {
                 alive
@@ -98,7 +102,10 @@ pub(super) fn observe(
         for process in processes.iter().filter(|process| !process.zombie) {
             let descends = parents.contains(&process.ppid)
                 || (process.ppid != 1 && process.ppid == job.pid)
-                || session_of(process.instance.pid) == Some(job.pid);
+                || *sessions
+                    .entry(process.instance.pid)
+                    .or_insert_with(|| session_of(process.instance.pid))
+                    == Some(job.pid);
             if descends {
                 grew |= add(seen, process.instance);
             }
@@ -128,5 +135,6 @@ pub(super) fn as_left(process: &Info) -> Left {
     Left {
         pid: process.instance.pid,
         name: process.name.clone(),
+        pgid: Some(process.pgid),
     }
 }

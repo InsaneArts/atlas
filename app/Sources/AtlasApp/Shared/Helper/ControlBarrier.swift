@@ -28,6 +28,8 @@ final class ControlBarrier {
   private(set) var waiters = 0
   /// Leases whose release the service refused, sent again before the next command.
   private(set) var unreleased: [String] = []
+  /// Held sign-ins' leases whose Cancel failed, sent again before the next command, as a refused release is.
+  private(set) var uncancelled: [String] = []
   /// Why a lost acquisition could not be confirmed over: no status reading answered once its lease could no longer
   /// be alive. The next command reads the status once more and is refused, saying this, until one answers.
   private(set) var unconfirmed: String?
@@ -53,6 +55,9 @@ final class ControlBarrier {
   /// Whether control work is under way, so Take Control waits.
   var isBusy: Bool { outstanding > 0 }
 
+  /// Whether a release or a sign-in's Cancel is still to be sent again before anything that needs the helper free.
+  var hasUnanswered: Bool { !unreleased.isEmpty || !uncancelled.isEmpty }
+
   /// Counts `work`, an acquisition's request and whatever it must undo, until it ends.
   ///
   /// - Parameter work: The work.
@@ -62,6 +67,19 @@ final class ControlBarrier {
     begin()
     defer { end() }
     return try await work()
+  }
+
+  /// Counts `work` from now until it ends, running it beside the caller: control work a synchronous caller starts, such
+  /// as ending a held sign-in, which a settle asked for right after waits for.
+  ///
+  /// - Parameter work: The work.
+  func run(_ work: @escaping @MainActor () async -> Void) {
+    begin()
+    // Unstructured, as the caller is synchronous; the count ends with the work.
+    Task {
+      await work()
+      end()
+    }
   }
 
   /// Holds the barrier for an acquisition whose outcome is unknown: its reply was lost, timed out or cancelled, so the
@@ -147,7 +165,49 @@ final class ControlBarrier {
     for lease in unreleased {
       refusal = await releaseNow(lease) ?? refusal
     }
+    for lease in uncancelled {
+      refusal = await cancelSignInNow(lease) ?? refusal
+    }
     return refusal
+  }
+
+  /// Ends a held sign-in at the service, counted from now until it answers; one that fails stays to be sent again by
+  /// ``settle()``, so nothing that needs the helper free runs while its hold may still stand.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  func cancelSignIn(_ lease: String) {
+    begin()
+    // Unstructured, so the Cancel is counted and sent at once while the caller goes on; `settle()` waits for it.
+    Task {
+      _ = await sendCancel(lease)
+      end()
+    }
+  }
+
+  /// Ends a held sign-in at the service and waits for the answer, counted meanwhile; one that fails stays pending.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Returns: Why it failed, or nil once the service answered.
+  func cancelSignInNow(_ lease: String) async -> String? {
+    await tracking { await sendCancel(lease) }
+  }
+
+  /// Sends one sign-in's Cancel, keeping its lease pending while the outcome is unknown. A sign-in already ended
+  /// answers as cancelled, and so does a lost lease.
+  ///
+  /// - Parameter lease: The sign-in's lease.
+  /// - Returns: Why it failed, or nil once it was answered.
+  private func sendCancel(_ lease: String) async -> String? {
+    do {
+      try await service.cancelSignIn(lease: lease)
+    } catch let refusal as ServiceError where refusal.code == Self.leaseLost {
+      // Settled below: the hold ended with its lease.
+    } catch {
+      if !uncancelled.contains(lease) { uncancelled.append(lease) }
+      return error.localizedDescription
+    }
+    uncancelled.removeAll { $0 == lease }
+    return nil
   }
 
   /// Sends one release, keeping the lease pending while its outcome is unknown. The service saying the lease is lost

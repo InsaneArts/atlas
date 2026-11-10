@@ -7,16 +7,10 @@ public struct ViewerClient: ViewerService {
   /// How long a request may take, in seconds: 8, well beyond a picture's capture, short enough that a silent helper
   /// reads as unavailable soon.
   static let timeout: TimeInterval = 8
-  /// How long recovery may take, in seconds: 60, beyond the service's worst case of about 50 s. Its restart may
-  /// start input first (a 3 s launch, then up to 6 s until ready), clean it up (up to 5 s), wait up to 20 s for the new
-  /// helper, and read the status between steps (a few seconds each when the helper is slow).
-  static let recoveryTimeout: TimeInterval = 60
   /// The status the service answers while it is busy for a moment.
   static let busy = 503
   /// What a request that timed out says.
   static let lateReply = "The helper did not answer in time."
-  /// The code of a Recover that gave no answer in time, which carries on in the service: the app says it still runs.
-  public static let stillRecoveringCode = "still-recovering"
 
   /// The capability URL every route is under.
   let base: URL
@@ -24,20 +18,27 @@ public struct ViewerClient: ViewerService {
   let origin: String
   /// An ephemeral session that caches nothing.
   let session: URLSession
+  /// This launch's secret, which the viewer service gave the app on its standard input and asks for on every request
+  /// that only the person's app may make; kept in memory only, never printed. Nil sends none, as for a render.
+  let appSecret: String?
+  /// The header that carries ``appSecret``.
+  static let secretHeader = "X-Atlas-App-Secret"
 
   /// A client for `text`, which must be the service's local capability URL.
   ///
   /// - Parameters:
   ///   - text: The capability URL: `http://127.0.0.1:<port>/<secret>/`, surrounding whitespace allowed.
+  ///   - appSecret: This launch's secret, sent on every request; none by default.
   ///   - session: The session requests go through; by default an ephemeral one that caches nothing and gives up
   ///     after ``timeout``. A test passes one of its own, answered by a scripted protocol.
-  public init?(_ text: String, session: URLSession? = nil) {
+  public init?(_ text: String, appSecret: String? = nil, session: URLSession? = nil) {
     guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
       url.scheme == "http", url.host == "127.0.0.1", let port = url.port,
       url.absoluteString.hasSuffix("/")
     else { return nil }
     base = url
     origin = "http://127.0.0.1:\(port)"
+    self.appSecret = appSecret
     if let session {
       self.session = session
     } else {
@@ -74,6 +75,7 @@ public struct ViewerClient: ViewerService {
     var request = URLRequest(url: url)
     request.timeoutInterval = timeout
     request.setValue(origin, forHTTPHeaderField: "Origin")
+    if let appSecret { request.setValue(appSecret, forHTTPHeaderField: Self.secretHeader) }
     return request
   }
 
@@ -209,6 +211,43 @@ public struct ViewerClient: ViewerService {
     return outcome
   }
 
+  /// Posts to `accounts/add`.
+  ///
+  /// - Parameters:
+  ///   - app: The app's bundle identifier.
+  ///   - name: The app's name.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  public func addAccount(app: String, name: String) async throws {
+    /// The request: the app by its bundle identifier and name.
+    struct Body: Encodable {
+      /// The app's bundle identifier.
+      let id: String
+      /// The app's name.
+      let name: String
+    }
+    _ = try await post("accounts/add", Body(id: app, name: name))
+  }
+
+  /// Posts to `accounts/remove`.
+  ///
+  /// - Parameter account: The account.
+  /// - Throws: ``ServiceError`` when the service refuses.
+  public func removeAccount(_ account: ViewerStatus.Account) async throws {
+    /// The request: the account by its kind, key and browser.
+    struct Body: Encodable {
+      /// `site` or `app`.
+      let kind: String
+      /// The site's domain, or the app's bundle identifier.
+      let id: String
+      /// For a site, the browser it was seen in.
+      let browser: String?
+    }
+    _ = try await post(
+      "accounts/remove",
+      Body(kind: account.kind.rawValue, id: account.key, browser: account.browser)
+    )
+  }
+
   /// Posts to `input`.
   ///
   /// - Parameters:
@@ -230,52 +269,42 @@ public struct ViewerClient: ViewerService {
     _ = try await post("input", Body(lease: lease, frame: frame, actions: actions))
   }
 
-  /// Recover the helper; whether it restarted (rather than starting input).
-  ///
-  /// - Returns: Whether the helper restarted.
-  /// - Throws: ``ServiceError`` when recovery did not run, or one that ``ServiceError/isStillRecovering`` when no
-  ///   answer came in time: the service carries on, so the caller reads the status rather than offering Recover again.
-  ///   The message is generic; the app words these errors with `HelperRecovery.notice(_:)`.
-  public func recover() async throws -> Bool {
-    /// The request, with nothing in it.
-    struct Body: Encodable {}
-    /// The reply: whether the helper restarted; missing counts as not.
-    struct Reply: Decodable {
-      /// Whether the helper restarted; missing counts as not.
-      let restarted: Bool?
-    }
-    let data = try await post("recover", Body(), timeout: Self.recoveryTimeout, lateCode: Self.stillRecoveringCode)
-    return Self.decoded(Reply.self, from: data)?.restarted == true
-  }
-
   /// POST `body` to `route`; the reply when it says `ok`, else its error.
   ///
   /// - Parameters:
   ///   - route: The route, under the capability URL.
   ///   - body: The request's JSON body.
-  ///   - timeout: How long the reply may take, in seconds.
-  ///   - lateCode: The code of the error when no reply came in time; nil for none.
   /// - Returns: The reply's body.
-  /// - Throws: ``ServiceError`` with the service's error, or ``lateReply`` with `lateCode` when no reply came in time.
-  func post(
-    _ route: String,
-    _ body: some Encodable & Sendable,
-    timeout: TimeInterval = ViewerClient.timeout,
-    lateCode: String? = nil
-  ) async throws -> Data {
+  /// - Throws: ``ServiceError`` with the service's error, or ``lateReply`` when no reply came in time.
+  func post(_ route: String, _ body: some Encodable & Sendable) async throws -> Data {
     let data: Data
     let response: URLResponse
     do {
-      (data, response) = try await session.data(for: request(route, body: body, timeout: timeout))
+      (data, response) = try await session.data(for: request(route, body: body))
     } catch let error as URLError where error.code == .timedOut {
-      throw ServiceError(Self.lateReply, code: lateCode)
+      throw ServiceError(Self.lateReply)
     }
     let ok = Self.decoded(Acknowledgement.self, from: data)?.ok == true
     guard (response as? HTTPURLResponse)?.statusCode == 200, ok else {
-      throw Self.failure(data, fallback: "Request was refused")
+      throw unsecured(Self.failure(data, fallback: "Request was refused"))
     }
     return data
   }
+
+  /// A refusal as the person reads it: one for want of this launch's secret says how to get it back, never what the
+  /// service said, which names no secret anyway.
+  ///
+  /// - Parameter refusal: The service's refusal.
+  /// - Returns: The refusal to show.
+  func unsecured(_ refusal: ServiceError) -> ServiceError {
+    guard appSecret == nil, refusal.code == Self.permissionCode else { return refusal }
+    return ServiceError(Self.noSecret, code: Self.permissionCode)
+  }
+
+  /// The code of a refusal for want of this launch's secret, among others.
+  static let permissionCode = "permission"
+  /// What a refusal for want of this launch's secret says.
+  static let noSecret = "Atlas lost its private link to the helper's service. Quit Atlas and open it again."
 
   /// Every POST reply says whether it worked.
   private struct Acknowledgement: Decodable { let ok: Bool? }

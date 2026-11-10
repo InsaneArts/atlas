@@ -10,6 +10,10 @@ import AtlasService
 /// (``LaunchArguments``).
 @main
 enum AtlasApp {
+  /// The longest a launch waits for its secret after the viewer's URL, in seconds: past it the app goes on without one,
+  /// and what only the person's app may do says how to get it back.
+  static let secretWait: TimeInterval = 2
+
   /// Starts the launch its arguments ask for: one function each.
   static func main() {
     // A command that exits before reading what it was given must not end
@@ -57,8 +61,8 @@ enum AtlasApp {
     }
   }
 
-  /// The app itself, once `atlas menubar` has given it the viewer's capability URL on stdin: the menu bar item and the
-  /// windows it opens, built by the container. With `--render PATH`, the panel is drawn instead.
+  /// The app itself, once `atlas menubar` has given it the viewer's capability URL and this launch's secret on stdin:
+  /// the menu bar item and the windows it opens, built by the container. With `--render PATH`, the panel is drawn instead.
   ///
   /// - Parameters:
   ///   - configuration: What the app took from its environment.
@@ -73,7 +77,18 @@ enum AtlasApp {
     render: String?,
     dark: Bool
   ) {
-    guard let line = readLine(), let service = ViewerClient(line) else {
+    let input = LaunchInput()
+    guard case .line(let line) = input.next() else {
+      FileHandle.standardError
+        .write(Data("Expected the viewer URL on stdin\n".utf8))
+      exit(2)
+    }
+    // The launch's secret comes next, kept in memory only; a render is given none, and a launch never waits for it
+    // longer than ``secretWait``. A line that is not one is the parent's first, passed on once the app listens.
+    var next: String?
+    if render == nil, case .line(let line) = input.next(within: secretWait) { next = line }
+    let secret = next.flatMap(ViewerClient.appSecret(fromLine:))
+    guard let service = ViewerClient(line, appSecret: secret) else {
       FileHandle.standardError
         .write(Data("Expected the viewer URL on stdin\n".utf8))
       exit(2)
@@ -81,7 +96,7 @@ enum AtlasApp {
     let app = NSApplication.shared
     DockIcon.settle(windowOpen: false)
     if let render {
-      drawPanel(service: service, overrides: configuration.renderOverrides, to: render, dark: dark)
+      drawPanel(service: service, input: input, overrides: configuration.renderOverrides, to: render, dark: dark)
     }
     let delegate = AppDelegate(
       container: AppContainer(
@@ -92,7 +107,9 @@ enum AtlasApp {
       )
     )
     app.delegate = delegate
-    listen(received: { line in delegate.received(line) }, closed: { delegate.parentClosed() })
+    // Unstructured, so the line is handled once the app runs, as every later one is.
+    if secret == nil, let next { Task { @MainActor in delegate.received(next) } }
+    input.listen(received: { line in delegate.received(line) }, closed: { delegate.parentClosed() })
     withExtendedLifetime(delegate) { app.run() }
   }
 
@@ -136,13 +153,20 @@ enum AtlasApp {
   ///
   /// - Parameters:
   ///   - service: The viewer service to read.
+  ///   - input: The parent's lines, whose close quits.
   ///   - overrides: How the drawing differs from the live panel.
   ///   - path: Where the PNGs go.
   ///   - dark: Whether the panel and its menu bar strip are drawn dark.
   /// - Returns: Never; the process exits.
-  static func drawPanel(service: ViewerClient, overrides: PanelRenderOverrides, to path: String, dark: Bool) -> Never {
+  static func drawPanel(
+    service: ViewerClient,
+    input: LaunchInput,
+    overrides: PanelRenderOverrides,
+    to path: String,
+    dark: Bool
+  ) -> Never {
     let app = NSApplication.shared
-    listen(received: { _ in }, closed: { NSApp.terminate(nil) })
+    input.listen(received: { _ in }, closed: { NSApp.terminate(nil) })
     // Unstructured, as the drawing needs the app running below; it exits the process once drawn.
     Task {
       let drawn = await PanelRender.draw(
@@ -157,21 +181,4 @@ enum AtlasApp {
     exit(0)
   }
 
-  /// Pass each line from the parent on, and quit when it closes stdin, so the app never outlives it.
-  ///
-  /// - Parameters:
-  ///   - received: Called with each line.
-  ///   - closed: Called once stdin closes.
-  static func listen(
-    received: @escaping @MainActor @Sendable (String) -> Void,
-    closed: @escaping @MainActor @Sendable () -> Void
-  ) {
-    Thread.detachNewThread {
-      // Unstructured, as this thread is outside any actor: each line, then the close, hops to the main actor.
-      while let line = readLine() {
-        Task { @MainActor in received(line) }
-      }
-      Task { @MainActor in closed() }
-    }
-  }
 }

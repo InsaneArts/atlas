@@ -67,8 +67,8 @@ struct ViewerPresenterSessionMenuTests {
     let lines = row.help
       .split(separator: "\n")
       .map(String.init)
-    #expect(Array(lines.prefix(2)) == ["Claude Code · understudy", "Clicking Show Center in Opie"])
-    // Before the Apps list has read anything, an app reads by its name alone.
+    #expect(Array(lines.prefix(2)) == ["understudy", "Clicking Show Center in Opie"])
+    // An app the session opened reads by its name alone.
     #expect(
       Array(lines.dropFirst(2)) == [
         "Host: Claude Code", "Folder: understudy", "Started: 09:12", "Last seen: just now", "Opie", "Notes",
@@ -80,12 +80,10 @@ struct ViewerPresenterSessionMenuTests {
     #expect(details.title == "Details")
     #expect(details.items.allSatisfy { $0.isInfo && !$0.isEnabled }, "facts cannot be chosen")
     #expect(details.items.map(\.title) == Array(lines.dropFirst(2)), "the menu lists the tooltip's facts")
-    snapshot.panes.apps.apps = [HelperApp(pid: 1, name: "Opie")]
-    let opened = try Self.row(Self.key, snapshot).help
-    #expect(opened.contains("Opie: Open · a copy") && opened.contains("Notes: Closed"))
     // A live session the list does not name yet has the status's own facts.
     #expect(
-      try Self.row("8be20c4d1a77", snapshot).help == "Codex · atlas-landing\nWaiting for the helper · 8 s\nHost: Codex"
+      try Self.row("8be20c4d1a77", snapshot).help
+        == "atlas-landing\nWaiting for the helper · 8 s\nHost: Codex\nFolder: atlas-landing"
     )
   }
 
@@ -106,8 +104,8 @@ struct ViewerPresenterSessionMenuTests {
     let recover = try Self.item("Recover…", in: needsYou)
     #expect(recover.isEnabled && snapshot.helperMenu.canRecover, "set aside, it can be chosen as the Helper menu's")
     #expect(!Self.titles(try Self.row("5d21e9a04c3f", snapshot).menu).contains("Recover…"))
-    #expect(Self.titles(needsYou).prefix(2) == ["Show Activity", "Show Screenshots"])
-    #expect(try Self.item("Show Screenshots", in: needsYou).command == .showScreenshots(session: Self.key))
+    #expect(Self.titles(needsYou).prefix(2) == ["Show Activity", "Recover…"])
+    #expect(try Self.item("Show Activity", in: needsYou).command == .showActivity(session: Self.key))
   }
 
   @Test("a row offers Clean Up only when its session left work to clean up")
@@ -148,7 +146,7 @@ struct ViewerPresenterSessionMenuTests {
   func anUnreadListSaysSo() throws {
     var snapshot = try ViewerSnapshot.listing([SessionReplies.claudeActing, SessionReplies.terminalIdle])
     snapshot.panes.sessions.list = HostSessionList(sessions: [
-      HostSessionRecord(key: "", name: "Terminal", host: .terminal)
+      HostSessionRecord(key: "", name: "Terminal", host: .terminal, actions: 1)
     ])
     #expect(!(try Self.row("", snapshot).help.contains("Sessions:")))
     snapshot.panes.sessions.failure = "The service did not answer"

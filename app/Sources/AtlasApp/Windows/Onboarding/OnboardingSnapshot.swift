@@ -44,6 +44,11 @@ struct OnboardingSnapshot {
   var agentsFailed = false
   /// Whether Atlas opens at login once setup is done.
   var opensAtLogin = true
+  /// Whether Done makes the home folder private from the helper.
+  var keepsHomePrivate = true
+  /// Whether Done tried to make the home folder private and couldn't: the next Done finishes without it, and leaves
+  /// it unoffered, so Atlas offers it again.
+  var homePrivacyFailed = false
   /// Whether the helper chosen in this window was readied for its first login, so Atlas opens there by itself; false
   /// when this macOS could not ready it, and the person opens Atlas there.
   var helperReadied = true

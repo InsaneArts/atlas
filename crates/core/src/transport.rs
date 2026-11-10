@@ -16,7 +16,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::UnixStream,
-    time::{Instant, sleep, timeout_at},
+    time::{Instant, sleep, sleep_until, timeout_at},
 };
 
 /// Longest the request itself may take to send. Both helper-side servers act
@@ -25,6 +25,15 @@ const DISPATCH: Duration = Duration::from_millis(500);
 /// How long a failed send looks for a refusal the peer already sent.
 const WAITING: Duration = Duration::from_millis(100);
 const IDENTITY_RETRY: Duration = Duration::from_millis(10);
+/// Pauses before connecting again after the kernel denied a connection
+/// (EACCES), 175 ms in all. This account's search of the helper's folders
+/// rests on an ACL entry the kernel checks through an identity lookup, which
+/// can briefly fail under load.
+const DENIED_PAUSES: [Duration; 3] = [
+    Duration::from_millis(25),
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+];
 /// Longest reply, every line together.
 const MAX_REPLY: usize = 64 * 1024 * 1024;
 
@@ -71,6 +80,7 @@ impl Transport {
         mut connect: impl FnMut() -> F,
         mut peer_uid: impl FnMut(&S) -> io::Result<u32>,
     ) -> Result<S> {
+        let mut pauses = DENIED_PAUSES.into_iter();
         loop {
             let timed_out = || {
                 Error::new(
@@ -81,7 +91,7 @@ impl Transport {
             if Instant::now() >= deadline {
                 return Err(timed_out());
             }
-            let stream = timeout_at(deadline, connect())
+            let stream = timeout_at(deadline, retry_denied(deadline, &mut pauses, &mut connect))
                 .await
                 .map_err(|cause| timed_out().with_source(cause))?
                 .map_err(|cause| refused(&self.path, cause))?;
@@ -139,6 +149,48 @@ impl Transport {
             .await?
             .finish()
             .await
+    }
+}
+
+/// Connect to the socket at `path`, trying again briefly while the kernel
+/// denies the connection, never pausing up to `deadline`. The caller verifies
+/// the peer.
+///
+/// # Errors
+///
+/// Returns the last failure to connect, as the kernel gave it.
+pub async fn connect_socket(path: &Path, deadline: Instant) -> io::Result<UnixStream> {
+    retry_denied(deadline, &mut DENIED_PAUSES.into_iter(), &mut || {
+        UnixStream::connect(path)
+    })
+    .await
+}
+
+/// One connection from `connect`, tried again after each of `pauses` while
+/// it fails with EACCES and the pause ends before `deadline`; a denial that
+/// leaves no time for another try is returned as it is. A connection
+/// that failed sent nothing, so trying again cannot repeat a request; only
+/// the connection is retried, never a send or a read.
+async fn retry_denied<S, F: Future<Output = io::Result<S>>>(
+    deadline: Instant,
+    pauses: &mut impl Iterator<Item = Duration>,
+    connect: &mut impl FnMut() -> F,
+) -> io::Result<S> {
+    loop {
+        match connect().await {
+            Err(cause) if cause.raw_os_error() == Some(libc::EACCES) => {
+                let wake = pauses.next().map(|pause| Instant::now() + pause);
+                let Some(wake) = wake.filter(|wake| *wake < deadline) else {
+                    return Err(cause);
+                };
+                sleep_until(wake).await;
+                // A late wake-up never connects past the deadline.
+                if Instant::now() >= deadline {
+                    return Err(cause);
+                }
+            }
+            outcome => return outcome,
+        }
     }
 }
 
@@ -470,4 +522,5 @@ pub fn with_output(mut reply: Value) -> Value {
 }
 
 #[cfg(test)]
+#[path = "transport_tests.rs"]
 mod tests;

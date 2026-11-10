@@ -513,4 +513,5 @@ pub fn open_at_login() -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "first_login_tests.rs"]
 mod tests;

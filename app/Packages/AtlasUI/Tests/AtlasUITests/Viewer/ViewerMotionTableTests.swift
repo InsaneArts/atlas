@@ -54,10 +54,6 @@ struct ViewerMotionTableTests {
         ActivityMotion.fold(reduceMotion: true)
       ),
       (
-        "Activity filter", ActivityMotion.filter(reduceMotion: false), Motion.listMove,
-        ActivityMotion.filter(reduceMotion: true)
-      ),
-      (
         "moment header", ActivityMotion.header(reduceMotion: false), Motion.state,
         ActivityMotion.header(reduceMotion: true)
       ),
@@ -67,14 +63,13 @@ struct ViewerMotionTableTests {
       ),
       ("step disc", ActivityMotion.disc, Motion.crossfade, nil),
       (
-        "app cards", AppsMotion.layout(reduceMotion: false), Motion.listMove,
-        AppsMotion.layout(reduceMotion: true)
+        "sheet in", PictureSheetLayer.motion(opening: true, reduceMotion: false), Motion.present,
+        PictureSheetLayer.motion(opening: true, reduceMotion: true)
       ),
       (
-        "app in front", AppsMotion.front(reduceMotion: false), Motion.state,
-        AppsMotion.front(reduceMotion: true)
+        "sheet out", PictureSheetLayer.motion(opening: false, reduceMotion: false), Motion.close,
+        PictureSheetLayer.motion(opening: false, reduceMotion: true)
       ),
-      ("app picture", AppsMotion.picture, Motion.fade, nil),
     ]
     let fades = [Motion.reduced, Motion.crossfadeReduced, Motion.swapIn, Motion.swapOut]
     for row in table {
@@ -91,16 +86,14 @@ struct ViewerMotionTableTests {
     #expect(!ScreenZoom.zooms(from: .screen, to: .activity, screen: screen, reduceMotion: true))
   }
 
-  @Test("Activity and Apps take nothing from where they move and under Reduce Motion only fade")
+  @Test("Activity takes nothing from where it moves and under Reduce Motion only fades")
   func listsOnlyFadeUnderReduceMotion() {
-    // Under Reduce Motion the rows and cards make room at once, as a new step's rows and an opening moment's height
-    // do, and fade over 0.15 seconds.
-    #expect(AppsMotion.layout(reduceMotion: true) == nil)
+    // Under Reduce Motion the rows make room at once, as a new step's rows and an opening moment's height do, and
+    // fade over 0.15 seconds.
     #expect(ActivityMotion.fold(reduceMotion: true) == nil)
     #expect(ActivityScroll.moving(isAtTop: true, reduceMotion: true) == nil)
-    // A colour change, the disc's or the picture's, is no movement, so Reduce Motion keeps it, and it is short.
+    // A colour change, the disc's, is no movement, so Reduce Motion keeps it, and it is short.
     #expect(ActivityMotion.disc == Animation.easeOut(duration: 0.2))
-    #expect(AppsMotion.picture == Animation.easeOut(duration: 0.2))
   }
 
   @Test("a row leaving a list fades before any row moves over it, and one arriving fades in once the room is made")
@@ -108,7 +101,6 @@ struct ViewerMotionTableTests {
     // Out, then move, then in: the rows that stay wait out the fade of those leaving, so nothing moves over words
     // still drawn, and a row arriving waits until a move that began at once or after that fade has gone nine tenths of
     // the way, so it never fades in under a row still passing.
-    #expect(Motion.swapOut == Animation.easeIn(duration: 0.1))
     #expect(Motion.listMove == Animation.spring(Motion.Springs.state).delay(0.1))
     #expect(Motion.listIn == Animation.easeOut(duration: 0.15).delay(0.1 + 0.2))
     let made = Motion.Duration.makeRoom.seconds
@@ -117,11 +109,19 @@ struct ViewerMotionTableTests {
     #expect(Motion.swapInAfterOut == Animation.easeOut(duration: 0.15).delay(0.1))
   }
 
+  @Test("the sheet comes in on a spring with no bounce, goes a little quicker, and grows from a touch smaller")
+  func theSheetComesAndGoesOnSprings() {
+    #expect(Motion.present == Animation.spring(Motion.Springs.present))
+    #expect(Motion.close == Animation.spring(Motion.Springs.close))
+    #expect(Motion.Springs.present.bounce == 0)
+    #expect(Motion.Springs.close.bounce == 0)
+    #expect(Motion.Springs.close.duration < Motion.Springs.present.duration)
+    #expect(ViewerLayout.sheetEnterScale == 0.97)
+  }
+
   @Test("every fade kept under Reduce Motion lasts at most 0.2 seconds")
   func everyKeptFadeIsShort() {
     #expect(Motion.reduced == Animation.easeOut(duration: 0.2))
     #expect(Motion.crossfadeReduced == Animation.easeOut(duration: 0.15))
-    #expect(Motion.swapIn == Animation.easeOut(duration: 0.15))
-    #expect(Motion.swapOut == Animation.easeIn(duration: 0.1))
   }
 }

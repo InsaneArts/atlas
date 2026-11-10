@@ -1,10 +1,16 @@
 //! The activity log: one row for each step of a request that changes the
 //! helper, appended to [`FILE`] in the output folder and read back from its
-//! tail. A row keeps only what [`crate::doing::Doing`] names and fixed
-//! codes: never typed text, argv, coordinates, window titles, output or
-//! image payloads.
+//! tail. Once it grows past [`ROTATE_AT`] it starts over, and the files it
+//! filled are kept by age and size, as [`retained`] says. A row keeps only
+//! what [`crate::doing::Doing`] names and fixed codes: never typed text,
+//! argv, coordinates, window titles, output or image payloads.
+mod retained;
+pub mod session;
 pub mod snapshot;
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use retained::HISTORY;
+pub use session::{Reach, SessionRows, Whose, session_rows};
 pub use snapshot::{recent, try_recent};
 
 use atlas_core::{
@@ -16,6 +22,7 @@ use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs::{self, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::OpenOptionsExt,
@@ -24,7 +31,8 @@ use std::{
 
 /// The log's file name in the output folder.
 pub const FILE: &str = "metadata.jsonl";
-/// What the log is renamed to once it grows past [`ROTATE_AT`].
+/// What the log is renamed to once it grows past [`ROTATE_AT`]: the newest
+/// of the files it keeps.
 pub(crate) const PREVIOUS: &str = "metadata.previous.jsonl";
 /// The file whose lock writers take turns by.
 pub(crate) const LOCK: &str = "metadata.lock";
@@ -212,12 +220,81 @@ pub struct Row {
     /// Whether it is a command's first step.
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub started: Option<bool>,
+    /// The file name of the picture taken right before an agent's input, as
+    /// [`crate::before`] names it.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub before: Option<String>,
+    /// The account the person listed that an agent's input acted in, when
+    /// it acted in one: never an app or site they didn't list.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub account: Option<Account>,
+    /// What let it act there: the person allowed it once or for the task,
+    /// or the account is Trusted. None when nothing needed allowing.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<Allowed>,
     /// The row's id, from what it holds as the log keeps it: never written.
     #[serde(skip)]
     pub id: String,
     /// The oldest member's identity while gathering personal input: never written.
     #[serde(skip)]
     pub first_input_id: Option<String>,
+}
+
+/// A listed account as a row names it: the name the person reads, and the
+/// key it is listed by. One whose parts don't read is no account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Account {
+    pub name: String,
+    pub key: AccountKey,
+}
+
+/// Which listed account: a site in a browser, or an app.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountKey {
+    pub kind: AccountKind,
+    pub id: String,
+    /// The bundle identifier of the browser a site was listed in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AccountKind {
+    Site,
+    App,
+}
+
+/// What let an agent's input act in a listed account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Allowed {
+    /// The person allowed this action once.
+    Once,
+    /// The person allowed the rest of the task in the account.
+    Task,
+    /// The account is Trusted.
+    Trusted,
+}
+
+impl Account {
+    /// The account `value` names, when it reads whole and its names are
+    /// plain: one that doesn't is none.
+    pub(crate) fn of(value: &Value) -> Option<Self> {
+        let account: Self = serde_json::from_value(value.clone()).ok()?;
+        let fits = |text: &str| !text.trim().is_empty() && text.chars().count() <= 200;
+        (fits(&account.name)
+            && fits(&account.key.id)
+            && account.key.browser.as_deref().is_none_or(fits))
+        .then_some(account)
+    }
+
+    /// The site it is, for a site: what a browser's action happened on.
+    pub fn site(&self) -> Option<&str> {
+        (self.key.kind == AccountKind::Site).then_some(self.name.as_str())
+    }
 }
 
 impl Row {
@@ -311,8 +388,9 @@ fn id(value: &Value) -> String {
 }
 
 /// Append `row` to the log in `directory`, under the log's lock, starting
-/// the log over once it has grown past [`ROTATE_AT`]. It waits its turn
-/// behind other writers, so it runs off any async runtime.
+/// the log over once it has grown past [`ROTATE_AT`] and keeping the file
+/// it filled, as [`retained::rotate`] does. It waits its turn behind other
+/// writers, so it runs off any async runtime.
 pub(crate) fn append(directory: &Path, row: &Row) -> Result<()> {
     append_using(directory, row, |file, bytes| file.write_all(bytes)).map_err(
         atlas_core::context::context("Append activity log in", directory),
@@ -338,7 +416,7 @@ fn append_using(
     let mut file = open_log(&path)?;
     repair_tail(&mut file)?;
     if file.metadata()?.len() > ROTATE_AT {
-        fs::rename(&path, directory.join(PREVIOUS))?;
+        retained::rotate(directory)?;
         file = open_log(&path)?;
     }
 
@@ -444,6 +522,21 @@ pub(crate) fn checked_since(directory: &Path, since: u64) -> Option<Vec<Row>> {
     }
     rows.retain(|row| row.at_ms().is_some_and(|at| at >= since));
     Some(rows)
+}
+
+/// Candidates read in reverse append order, ordered for [`selected`]. Wall-clock
+/// time can move backwards during a command, so its last committed step wins
+/// by append order before timestamps order the commands for display.
+/// Equal or missing times keep reverse append order; rows without a readable
+/// time follow those with one.
+fn ordered(rows: &mut Vec<Row>) {
+    let mut commands = HashSet::new();
+    rows.retain(|row| {
+        row.command
+            .as_ref()
+            .is_none_or(|command| commands.insert(command.clone()))
+    });
+    rows.sort_by_key(|row| std::cmp::Reverse(row.at_nanos()));
 }
 
 /// Select commands and complete personal input runs from ordered candidates.
@@ -556,4 +649,5 @@ fn gathered(rows: &mut [Row], row: &Row, oldest_at: Option<u64>) -> bool {
 }
 
 #[cfg(test)]
+#[path = "activity_log_tests.rs"]
 mod tests;

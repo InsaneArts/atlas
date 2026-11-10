@@ -1,21 +1,14 @@
 import SwiftUI
 
-/// Rows in one group, as System Settings sets them: one quiet fill with no edge, and a separator above each row
-/// but the first, inset to that row's text at its start and to the row's inset at its end. A long list can scroll inside its group, showing three
-/// and a half rows with its bottom edge fading, so the header and footer around it never move.
+/// Rows in one group, as System Settings sets them: one quiet fill with no edge on ``Radius/large``, every window's
+/// group corner, and a separator above each row but the first, inset to that row's text at its start and to the row's
+/// inset at its end. A long list can scroll inside its group, showing three and a half rows with its bottom edge
+/// fading, so the header and footer around it never move.
 struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
-  /// How the group is drawn.
-  enum Style: Sendable {
-    /// Radius 12: setup's grouped lists.
-    case regular
-    /// Radius 10: Settings' groups.
-    case compact
-  }
-
   /// The rows' items, in order.
   private let items: Items
-  /// How the group is drawn.
-  private let style: Style
+  /// The group's ground: white on a window's ground, a quiet tint on a content card.
+  private let fill: Color
   /// The size of its rows when it scrolls past three and a half of them, or nil when it always grows.
   private let scrolling: ListRow.Size?
   /// Draws one item's row.
@@ -25,17 +18,17 @@ struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.E
   ///
   /// - Parameters:
   ///   - items: The rows' items, in order.
-  ///   - style: How the group is drawn; regular by default.
+  ///   - fill: The group's ground; ``Color/fillGroup``, for a window's ground, by default.
   ///   - scrolling: The size of its rows, when it scrolls past three and a half of them; nil, by default, grows.
   ///   - row: Draws one item's row, usually a ``ListRow``.
   init(
     _ items: Items,
-    style: Style = .regular,
+    fill: Color = .fillGroup,
     scrolling: ListRow.Size? = nil,
     @ViewBuilder row: @escaping (Items.Element) -> Row
   ) {
     self.items = items
-    self.style = style
+    self.fill = fill
     self.scrolling = scrolling
     self.row = row
   }
@@ -46,7 +39,7 @@ struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.E
       .clipShape(shape)
       .background(
         shape
-          .fill(Color.fillGroup)
+          .fill(fill)
       )
   }
 
@@ -76,7 +69,7 @@ struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.E
 
   /// The group's outline.
   private var shape: RoundedRectangle {
-    RoundedRectangle(cornerRadius: style == .regular ? Radius.large : Radius.medium, style: .continuous)
+    RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
   }
 }
 

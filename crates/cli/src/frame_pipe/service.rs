@@ -5,7 +5,7 @@
 use super::{
     auth::Gate,
     broker::{
-        self, Witness,
+        self, Privacy, Witness,
         source::{self, Live},
     },
     endpoint::{self, Endpoint},
@@ -22,7 +22,7 @@ use atlas_core::{
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::oneshot;
+use tokio::sync::{Notify, oneshot};
 
 /// A running frame service.
 pub(crate) struct Service {
@@ -49,14 +49,21 @@ impl Service {
 }
 
 /// Start the frame service for `client`'s helper, reading pictures at most
-/// `longest` pixels on their longest side, and telling `witness` of each
-/// committed picture.
+/// `longest` pixels on their longest side, telling `witness` of each
+/// committed picture, showing each observer what `privacy` lets it see, and
+/// leaving a still screen's slower pace on each notice on `input`.
 ///
 /// # Errors
 ///
 /// Returns the endpoint's refusals (an unsafe folder, another service for
 /// this helper) and failures to write its record.
-pub(crate) async fn start(client: Arc<Client>, longest: u32, witness: Witness) -> Result<Service> {
+pub(crate) async fn start(
+    client: Arc<Client>,
+    longest: u32,
+    witness: Witness,
+    privacy: Privacy,
+    input: Arc<Notify>,
+) -> Result<Service> {
     let controller = nix::unistd::getuid().as_raw();
     let helper = client.transport.peer_uid;
     let (listeners, endpoint) = endpoint::bind(controller, helper).await?;
@@ -80,8 +87,10 @@ pub(crate) async fn start(client: Arc<Client>, longest: u32, witness: Witness) -
         vec![UpdateKind::Full],
     );
     let source = source::spawn(
-        Live::new(client, longest, CaptureBackend::CoreGraphics),
+        Live::new(client, longest, CaptureBackend::ScreenCaptureKit),
         Budget::new(BROKER_PIXELS),
+        input,
+        privacy.visible.clone(),
     );
     let (stop, stopped) = oneshot::channel();
     let task = tokio::spawn(broker::run(
@@ -90,6 +99,7 @@ pub(crate) async fn start(client: Arc<Client>, longest: u32, witness: Witness) -
         gate,
         source,
         witness,
+        privacy,
         async {
             let _ = stopped.await;
         },

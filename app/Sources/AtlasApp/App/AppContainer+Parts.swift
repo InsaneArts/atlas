@@ -33,11 +33,9 @@ extension AppContainer: WindowParts {
         shotOutlet: .live(NSWorkspace.shared),
         openSettings: coordinator.panelLinks().openSettings,
         icons: appIcons,
-        appWindows: {
-          let outcome = await commands.run(.listWindows)
-          return outcome.ok ? outcome.decode(HelperOccluderList.self) : nil
-        },
-        framePipe: NativeFramePipeConnector()
+        framePipe: NativeFramePipeConnector(),
+        placeChanged: { [weak self] in self?.askSignals?.lookedAway() },
+        accountsChanged: { [weak self] in await self?.panel?.readStatus() }
       )
     )
   }
@@ -55,13 +53,19 @@ extension AppContainer: WindowParts {
         installs: installs,
         preferences: watchedPreferences(),
         fileIcon: FileIcons.icon(forFile:),
+        appIcon: FileIcons.icon(forApp:),
+        siteIcon: { site in
+          await SiteIcons.live
+            .icon(for: site)
+        },
         version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
         links: links,
         clock: clock,
         revealFile: { path in
           let workspace = NSWorkspace.shared
           workspace.activateFileViewerSelecting([URL(fileURLWithPath: path)])
-        }
+        },
+        chooseApp: { await AppChooser.choose() }
       )
     )
   }

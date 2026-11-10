@@ -5,9 +5,8 @@ import Foundation
 
 extension ViewerPresenter {
   /// Every fact about a session, as its row's tooltip and the Details part of its menu list them: its host, folder,
-  /// start and when it was last seen or ended; the apps it opened as the Apps list last saw them, the copies Atlas made
-  /// for it, the environment plans it applied with where each stands, and how many screenshots it took. The list's
-  /// record says the most; a live session the list has not named yet has the status's own.
+  /// start and when it was last seen or ended; the apps it opened, the copies Atlas made for it, the environment plans
+  /// it applied with where each stands, and how many screenshots it took. The list's record says the most; a live session the list has not named yet has the status's own.
   ///
   /// - Parameters:
   ///   - session: The session as the status or the list has it; nil for one only the list names.
@@ -20,7 +19,7 @@ extension ViewerPresenter {
     _ snapshot: ViewerSnapshot
   ) -> [Fact] {
     if let record {
-      return sessionFacts(record, snapshot) + sessionApps(record, snapshot) + sessionCopies(record)
+      return sessionFacts(record, snapshot) + sessionApps(record) + sessionCopies(record)
         + sessionPlans(record, snapshot) + sessionShots(record)
     }
     guard let session else { return [] }
@@ -74,22 +73,12 @@ extension ViewerPresenter {
     )
   }
 
-  /// The apps a session opened: Open while the Apps list's last reading lists it, "Open · a copy" when the session
-  /// opened a copy of it, Closed otherwise; before any reading, its name alone.
+  /// The apps a session opened, each by its name.
   ///
-  /// - Parameters:
-  ///   - record: The session, as the list has it.
-  ///   - snapshot: What the controller holds.
+  /// - Parameter record: The session, as the list has it.
   /// - Returns: The facts.
-  static func sessionApps(_ record: HostSessionRecord, _ snapshot: ViewerSnapshot) -> [Fact] {
-    let open = snapshot.panes.apps.apps.map { Set($0.map(\.name)) }
-    return record.apps.map { app in
-      guard let open else { return Fact(name: app.name, value: "") }
-      let value =
-        open.contains(app.name)
-        ? (app.copied ? ViewerWords.appOpenCopy : ViewerWords.appOpen) : ViewerWords.appClosed
-      return Fact(name: app.name, value: value)
-    }
+  static func sessionApps(_ record: HostSessionRecord) -> [Fact] {
+    record.apps.map { Fact(name: $0.name, value: "") }
   }
 
   /// The copies Atlas made for a session, one fact an app: "Copy of Opie", or "Copies of Opie" with how many when it
@@ -123,7 +112,7 @@ extension ViewerPresenter {
     }
   }
 
-  /// How many screenshots a session took, while it took any; Show Screenshots in its menu shows them.
+  /// How many screenshots a session took, while it took any; Activity's Pictures filter shows them.
   ///
   /// - Parameter record: The session, as the list has it.
   /// - Returns: The fact, or none.

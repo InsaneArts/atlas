@@ -9,6 +9,7 @@ mod input;
 mod install;
 pub mod live;
 mod mutate;
+mod picture;
 mod record;
 mod run;
 pub mod service;
@@ -16,6 +17,7 @@ mod service_change;
 mod session;
 mod stop;
 #[cfg(test)]
+#[path = "client_tests.rs"]
 mod tests;
 mod windows;
 
@@ -24,8 +26,8 @@ pub use apps::{AppList, AppRow};
 pub(crate) use capture::prune_captures;
 pub(crate) use input::require_looks;
 pub(crate) use mutate::{Mutation, unconfirmed};
-pub(crate) use record::NOT_RECORDED;
 pub use record::PersonInput;
+pub(crate) use record::{NOT_RECORDED, logged_at};
 pub(crate) use run::{Finished, Run};
 pub use run::{RUN_TIMEOUT, RUN_TIMEOUT_MAX};
 pub(crate) use windows::{Seen, WINDOW_LOOKUP};
@@ -46,6 +48,9 @@ use std::{path::Path, sync::Arc, time::Duration};
 
 /// Identity (device, inode, size, mtime) of the installed executable and its hash.
 type BuildCache = Arc<std::sync::Mutex<Option<((u64, u64, u64, i64, i64), String)>>>;
+
+#[cfg(test)]
+type AskShown = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// A helper session a command has just verified, and whether its daemon
 /// refuses a read meant for another session. Only [`Client::verify`] makes
@@ -109,6 +114,10 @@ pub struct Client {
     /// A local stand-in's socket peer, separate from its reported helper UID.
     #[cfg(any(test, feature = "test-support"))]
     pub input_peer_uid: Option<u32>,
+    /// A test's stand-in for the person's account list; none never reads
+    /// theirs.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) listed: Option<crate::sign_ins::Listed>,
     pub controller: Controller,
     pub actor: Actor,
     /// What the command acting through this client does, for the log.
@@ -127,6 +136,21 @@ pub struct Client {
     /// logged; none for every other client, whose rows are written at once.
     pub person_input: Option<record::PersonInput>,
     installed: BuildCache,
+    /// What the person allowed this command once, for its next attempt only.
+    granted: std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
+    /// Whether this command's next input is only its check before typing:
+    /// judged, nothing sent.
+    checking: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The digest of the whole text this command types, which its check
+    /// and each of its requests carry.
+    typing: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// The picture of the screen a refusal to ask the person came with, for
+    /// the person's question alone, and the screen's privacy when it was
+    /// taken: it goes up only while that is unchanged.
+    for_ask: std::sync::Arc<std::sync::Mutex<Option<(crate::before::Raw, atlas_control::Visible)>>>,
+    /// Observe a published question while its preview is still shown, before waiting.
+    #[cfg(test)]
+    pub(crate) ask_shown: Option<AskShown>,
 }
 
 impl Client {
@@ -149,6 +173,8 @@ impl Client {
             },
             #[cfg(any(test, feature = "test-support"))]
             input_peer_uid: None,
+            #[cfg(any(test, feature = "test-support"))]
+            listed: None,
             installed: BuildCache::default(),
             actor: Actor::Agent,
             doing: None,
@@ -156,8 +182,77 @@ impl Client {
             allow_disrupt: false,
             task: None,
             person_input: None,
+            granted: std::sync::Arc::default(),
+            checking: std::sync::Arc::default(),
+            typing: std::sync::Arc::default(),
+            for_ask: std::sync::Arc::default(),
+            #[cfg(test)]
+            ask_shown: None,
             config,
         })
+    }
+
+    /// What the person allowed this command once, for its next attempt.
+    pub(crate) fn granted(&self) -> Vec<Value> {
+        self.granted
+            .lock()
+            .map(|granted| granted.clone())
+            .unwrap_or_default()
+    }
+
+    /// Keep `grant` for this command's next attempt.
+    pub(crate) fn grant(&self, grant: Value) {
+        if let Ok(mut granted) = self.granted.lock() {
+            granted.push(grant);
+        }
+    }
+
+    /// Whether this command's next input is only its check.
+    pub(crate) fn checking(&self) -> bool {
+        self.checking.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Make this command's next inputs only its check, or real again.
+    pub(crate) fn set_checking(&self, on: bool) {
+        self.checking.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// The digest of the whole text this command types, while it types.
+    pub(crate) fn typing(&self) -> Option<String> {
+        self.typing.lock().ok().and_then(|typing| typing.clone())
+    }
+
+    /// Say this command types the text `digest` names, or no longer types.
+    pub(crate) fn set_typing(&self, digest: Option<String>) {
+        if let Ok(mut typing) = self.typing.lock() {
+            *typing = digest;
+        }
+    }
+
+    /// Keep `raw`, taken while the screen's privacy was `admitted`, for the
+    /// question the refusal just come back asks.
+    pub(crate) fn keep_for_ask(&self, raw: crate::before::Raw, admitted: atlas_control::Visible) {
+        if let Ok(mut kept) = self.for_ask.lock() {
+            *kept = Some((raw, admitted));
+        }
+    }
+
+    /// The picture kept for the question asked now, taken: none kept
+    /// stays.
+    pub(crate) fn take_for_ask(&self) -> Option<(crate::before::Raw, atlas_control::Visible)> {
+        self.for_ask.lock().ok()?.take()
+    }
+
+    /// Whether a picture is kept for the question asked now.
+    pub(crate) fn kept_for_ask(&self) -> bool {
+        self.for_ask.lock().is_ok_and(|kept| kept.is_some())
+    }
+
+    /// Spend what was allowed once: an attempt used it.
+    pub(crate) fn clear_granted(&self) {
+        if let Ok(mut granted) = self.granted.lock() {
+            granted.clear();
+        }
     }
 
     /// This client, recording what its command does in each activity row.

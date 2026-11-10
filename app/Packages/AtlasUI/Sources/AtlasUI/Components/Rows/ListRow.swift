@@ -2,8 +2,8 @@ import SwiftUI
 
 /// The one row every list draws: something leading, a medium title over a secondary detail, and something
 /// trailing, at the height its window uses. In a ``GroupedList`` it draws the separator above it, from where its
-/// title starts to its trailing inset, so the line never meets the group's edge. A row with a radio is a choice: the whole row picks it, the radio is its only
-/// mark, and the row's fill answers the pointer.
+/// title starts to its trailing inset, so the line never meets the group's edge. A row with a radio is a choice: the
+/// whole row picks it, the radio is its only mark, and the row's inset fill answers the pointer (``CardRowStyle``).
 struct ListRow: View {
   /// What leads the row.
   enum Lead: Equatable, Sendable {
@@ -19,6 +19,13 @@ struct ListRow: View {
     case picture
     /// An account's first letter on an avatar disc.
     case letter(String)
+    /// A name's first letter on its own tint's tile, as an app without its own icon shows, such as an account's.
+    case monogram(AppMonogram)
+    /// An app's own icon whose body fills the lead, its icon-grid margin overhanging, so it stands as large as a
+    /// monogram or a site's tile beside it, such as an account's.
+    case appIcon(IconImage)
+    /// A site's icon on a white tile, as a web app's icon stands, such as an account's.
+    case siteIcon(IconImage)
     /// A check's mark: a spinner, a green check or an orange round "!".
     case check(CheckState)
     /// A check not run yet: an empty ring in a check mark's place.
@@ -92,7 +99,7 @@ struct ListRow: View {
   enum Size: Sendable, CaseIterable {
     /// 48: a setup list.
     case regular
-    /// 44: a Settings group.
+    /// 39, or 44 with a detail: a Settings group.
     case compact
     /// 44: a setup checklist, at a setup list's inset.
     case checklist
@@ -101,19 +108,24 @@ struct ListRow: View {
     /// 34: a window under its app.
     case tight
 
-    /// The space above and below the row's content: 10 on a setup row, 7 in a Settings group; the tighter
-    /// rows and a checklist keep 4, so their least height sets their rhythm.
+    /// The space above and below the row's content: 10 on a setup row, 6 in a Settings group, so a title over its
+    /// detail stands 44; the tighter rows and a checklist keep 4, so their least height sets their rhythm.
     var verticalInset: CGFloat {
       switch self {
       case .regular: Spacing.sPlus
-      case .compact: ListRowLayout.compactVerticalInset
+      case .compact: Spacing.xsPlus
       case .dense, .tight, .checklist: Spacing.xs
       }
     }
 
-    /// The row's inset on each side: 14, or 12 in a Settings group.
+    /// The row's inset on each side: 14, or 10 in a Settings group.
     var inset: CGFloat {
-      self == .compact ? Spacing.m : Spacing.mPlus
+      self == .compact ? Spacing.sPlus : Spacing.mPlus
+    }
+
+    /// Between the lead, the text and the trailing control: ``ListRow/gap``, or 10 in a Settings group.
+    var gap: CGFloat {
+      self == .compact ? Spacing.sPlus : ListRow.gap
     }
 
     /// The detail's style: callout, or caption in a Settings group, its 11-point detail.
@@ -125,7 +137,8 @@ struct ListRow: View {
     var height: CGFloat {
       switch self {
       case .regular: ListRowLayout.regularHeight
-      case .compact, .checklist: ControlHeight.xl
+      case .compact: ListRowLayout.compactHeight
+      case .checklist: ControlHeight.xl
       case .dense: ListRowLayout.denseHeight
       case .tight: ControlHeight.mPlus
       }
@@ -150,7 +163,6 @@ struct ListRow: View {
   private let size: Size
   /// What the row's control does: flips its switch, presses its button or picks its choice.
   private let action: (@MainActor () -> Void)?
-  @State private var isHovered = false
 
   /// Creates a row.
   ///
@@ -186,7 +198,8 @@ struct ListRow: View {
     self.action = action
   }
 
-  /// The row; a choice is a plain button around it, so Tab, Full Keyboard Access and VoiceOver can pick it.
+  /// The row; a choice is a button around it on a card row's fill, so Tab, Full Keyboard Access and VoiceOver can pick
+  /// it.
   var body: some View {
     if isChoice {
       Button {
@@ -194,14 +207,14 @@ struct ListRow: View {
       } label: {
         content
       }
-      .buttonStyle(.plain)
+      .buttonStyle(.cardRow)
       .accessibilityAddTraits(trailing == .radio(isOn: true) ? .isSelected : [])
     } else {
       content
     }
   }
 
-  /// The row's body with its trailing control, its fill answering the pointer over a choice.
+  /// The row's body with its trailing control.
   private var content: some View {
     ListRowBody(
       title,
@@ -211,13 +224,10 @@ struct ListRow: View {
       titleFit: titleFit,
       lead: lead,
       size: size,
-      fill: rowFill,
       accessibilityChildren: accessibilityChildren
     ) {
-      ListRowTrailing(trailing: trailing, label: title, action: action)
+      ListRowTrailing(trailing: trailing, label: title, size: size, action: action)
     }
-    .onHover { isHovered = $0 }
-    .animation(Motion.hover(isHovered), value: isHovered)
   }
 
   /// How VoiceOver reads the row: as one element, except where it ends in a switch or a button, which stays its own
@@ -227,11 +237,6 @@ struct ListRow: View {
     case .toggle, .button: .contain
     case .none, .text, .check, .radio, .progress: .combine
     }
-  }
-
-  /// The row's fill: the hover fill while the pointer is over a choice, none otherwise.
-  private var rowFill: Color {
-    isHovered && isChoice ? .fillRowHover : .clear
   }
 
   /// Whether the whole row is a choice: it ends in a radio and has an action.
@@ -244,27 +249,31 @@ struct ListRow: View {
   nonisolated static let gap = Spacing.m
 
   /// Where the separator above a row starts: where its title starts, past its inset, its lead and the gap
-  /// after it.
+  /// after it; in a Settings group, at the row's inset whatever leads it, as Settings' groups rule their rows.
   ///
   /// - Parameters:
   ///   - lead: What leads the row.
   ///   - size: How tall the row is, which sets its inset; a setup list's by default.
   /// - Returns: The separator's inset from the row's leading edge: 14 with nothing leading, 42 after a check's mark,
-  /// 56 after a tile, a picture or a letter; 2 less in a Settings group.
+  /// 56 after a tile, a picture or a letter; 10 in a Settings group.
   nonisolated static func separatorInset(_ lead: Lead, size: Size = .regular) -> CGFloat {
-    let width = leadWidth(lead)
-    return width == 0 ? size.inset : size.inset + width + gap
+    let width = leadWidth(lead, size: size)
+    return width == 0 || size == .compact ? size.inset : size.inset + width + size.gap
   }
 
   /// How wide a row's lead is.
   ///
-  /// - Parameter lead: What leads the row.
-  /// - Returns: None for nothing, 16 for a check's mark or a ring, 30 for a tile, an icon, a picture or a letter.
-  nonisolated static func leadWidth(_ lead: Lead) -> CGFloat {
+  /// - Parameters:
+  ///   - lead: What leads the row.
+  ///   - size: How tall the row is; a setup list's by default.
+  /// - Returns: None for nothing, 16 for a check's mark or a ring, 30 for a tile, an icon, a picture or a letter, or
+  /// 26 in a Settings group.
+  nonisolated static func leadWidth(_ lead: Lead, size: Size = .regular) -> CGFloat {
     switch lead {
     case .none: 0
     case .check, .pending: IconSize.s
-    case .tile, .image, .mark, .picture, .letter: IconSize.l
+    case .tile, .image, .mark, .picture, .letter, .monogram, .appIcon, .siteIcon:
+      size == .compact ? IconSize.mPlus : IconSize.l
     }
   }
 
@@ -279,7 +288,7 @@ struct ListRow: View {
     if size == .compact || size == .checklist { return .regular }
     switch lead {
     case .check, .pending: return .regular
-    case .none, .tile, .image, .mark, .picture, .letter: return .medium
+    case .none, .tile, .image, .mark, .picture, .letter, .monogram, .appIcon, .siteIcon: return .medium
     }
   }
 }

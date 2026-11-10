@@ -6,7 +6,8 @@ import Observation
 
 /// Reading: the status, then a picture unless paused, one reading at a time while the window is on screen, and the
 /// picture on screen, copied or saved as it is, never captured anew. ``ViewerController`` owns one; its state is
-/// written here alone.
+/// written here alone, each part only when it changes, so a reading that changes nothing presents nothing. A picture
+/// that changes only the picture reaches the live slots alone (``feed``).
 @Observable
 final class ViewerReadingLoop {
   /// Between pictures while holding control: 500 ms, so the person sees what their input did at once.
@@ -14,8 +15,12 @@ final class ViewerReadingLoop {
   /// How often the time is read again while pictures arrive: 1 s, as a picture's age reads in whole seconds.
   static let tickEvery: Duration = .seconds(1)
 
-  /// What the last reading showed.
-  private(set) var reading = ViewerReading()
+  /// What the window is laid out by from the last reading, observed. Its picture changes only as a picture comes or
+  /// goes, or comes at another size, and its frame only as a frame comes or goes, or names another display; the newest
+  /// picture and frame are unobserved (``newestPicture``, ``newestFrame``).
+  private var shown = ViewerReading()
+  /// The newest picture, which only the live slots observe; every picture replaces it.
+  let feed = LivePictureFeed()
   /// How often a picture is read while watching.
   private(set) var rate = ViewerPictureRate.live {
     didSet {
@@ -36,8 +41,16 @@ final class ViewerReadingLoop {
   @ObservationIgnored private let clock: any Clock<Duration>
   /// Where a copied or saved picture goes.
   @ObservationIgnored private let pictures: PictureOutlet
+  /// The newest picture, as the feed has it, unobserved here so reading it follows nothing.
+  @ObservationIgnored private var newestPicture: DesktopPicture?
+  /// The newest frame: its id, revision and display, which input is aimed by. Unobserved, as every frame replaces it.
+  @ObservationIgnored private var newestFrame: (id: String, revision: String, display: ViewerStatus.Size)?
+  /// The newest picture's size in points, which input is mapped through.
+  @ObservationIgnored private var newestSize: CGSize?
+  /// When the newest picture arrived, in seconds of uptime.
+  @ObservationIgnored private var newestAt: TimeInterval?
   /// The time last read, in seconds of uptime, which a picture's age is told by: refreshed each ``tickEvery`` while
-  /// pictures arrive. Unobserved: the window redraws with each reading.
+  /// pictures arrive. Unobserved: a tick presents nothing, and an age is read as the window presents.
   @ObservationIgnored private(set) var now: TimeInterval = 0
   /// Whether readings run: the window is on screen.
   @ObservationIgnored private(set) var watching = false
@@ -74,6 +87,17 @@ final class ViewerReadingLoop {
       ViewerFramePump(service: dependencies.service, connector: $0, clock: dependencies.clock)
     }
     rate = ViewerPictureRate(rawValue: preferences.loadRate()) ?? .live
+  }
+
+  /// What the last reading showed: what the window is laid out by (``shown``), with the newest frame's facts as they
+  /// are now, which input is aimed and mapped by. Whoever reads it follows only the first, so a picture that changes
+  /// nothing else presents nothing.
+  var reading: ViewerReading {
+    var reading = shown
+    reading.frame = newestFrame
+    reading.pictureSize = newestSize
+    reading.frameAt = newestAt
+    return reading
   }
 
   /// Read while the window is on screen; stop otherwise.
@@ -162,7 +186,7 @@ final class ViewerReadingLoop {
     let paused = viewer?.session.paused == true
     // While the frame service streams pictures, a reading reads the status alone.
     let streaming = pump?.streaming == true
-    let needsEarlyFrame = !paused && reading.frame == nil && !streaming
+    let needsEarlyFrame = !paused && newestFrame == nil && !streaming
     // With no picture yet, the first one is asked for alongside the
     // status, so the window shows the helper at once.
     async let early = needsEarlyFrame ? (try? await service.frame()) : nil
@@ -171,7 +195,7 @@ final class ViewerReadingLoop {
       guard current() else { return }
       show(reply, soundAsked: soundAsked)
       guard !paused else {
-        reading.unavailable = nil
+        if shown.unavailable != nil { shown.unavailable = nil }
         return
       }
       if let reason = reply.unobservable?.word { throw ServiceError(reason) }
@@ -223,9 +247,11 @@ final class ViewerReadingLoop {
     }
   }
 
-  /// Reads the clock into ``now``.
+  /// Reads the clock into ``now``; the window presents again only if the time changed what it shows
+  /// (``ViewerController/clockMoved()``).
   func readClock() {
     now = uptime()
+    viewer?.clockMoved()
   }
 
   /// What the panel last saw, shown while the first reading is under way. It is only a picture: control waits for a
@@ -235,24 +261,26 @@ final class ViewerReadingLoop {
   ///   - status: The service's last answer to the panel, or nil when it has none.
   ///   - picture: The panel's latest picture, if any.
   func begin(with status: ViewerStatus?, picture: DesktopPicture?) {
-    guard !reading.hasStatus, reading.frame == nil else { return }
-    reading.status = status ?? ViewerStatus()
-    reading.hasStatus = status != nil
-    reading.picture = picture
-    reading.lastPicture = picture
+    guard !shown.hasStatus, newestFrame == nil else { return }
+    shown.status = status ?? ViewerStatus()
+    shown.hasStatus = status != nil
+    shown.picture = picture
+    shown.lastPicture = picture
+    newestPicture = picture
+    if let picture { feed.show(picture) }
   }
 
   /// Shows a status. Input not ready ends control now, and so does a status asked after the grant that says no
   /// viewer holds it, as after Release Control in the menu bar; a recovery set aside is forgotten once nothing needs
-  /// it.
+  /// it. The same status again changes nothing the window shows.
   ///
   /// - Parameters:
   ///   - reply: The status read; only the newest reading started is shown, so it is ``statusReading``'s.
   ///   - soundAsked: The helper sound switch's generation when the status was asked for; nil shows no sound.
   func show(_ reply: ViewerStatus, soundAsked: Int? = nil) {
-    let newAccount = reply.overview.account != reading.status.overview.account
-    reading.status = reply
-    reading.hasStatus = true
+    let newAccount = reply.overview.account != shown.status.overview.account
+    if shown.status != reply { shown.status = reply }
+    if !shown.hasStatus { shown.hasStatus = true }
     guard let viewer else { return }
     if let soundAsked {
       viewer.actions.sound.adopt(reply.overview.sound.flatMap(HelperSound.init), asked: soundAsked)
@@ -262,21 +290,21 @@ final class ViewerReadingLoop {
     // Input not ready: control ends now, not with the next picture, saying why in the status's own words.
     let control = viewer.control
     if !reply.ready {
-      reading.ready = false
+      if shown.ready { shown.ready = false }
       if viewer.holdingControl || control.acquiring {
-        control.releaseControl(ViewerWords.controlEnded(reply.overview.reason))
+        control.suspend(ViewerWords.controlEnded(reply.overview.reason))
       }
     } else if viewer.holdingControl, statusReading > control.controlSince, reply.noViewerInControl {
-      control.releaseControl(ViewerWords.releasedElsewhere)
+      control.suspend(ViewerWords.releasedElsewhere)
     }
     viewer.forgetRecoveryOnceNoneNeeded()
-    viewer.noteActivitySeen()
     // Discover and refresh session history; the pane model decides when live sessions also need polling.
     viewer.panesModel.followSessions()
   }
 
   /// Shows a new picture, read with a status that says whether the helper takes input. A picture from a changed
-  /// helper ends control first, when this viewer holds or asks for it.
+  /// helper ends control first, when this viewer holds or asks for it. The picture goes to the live slots (``feed``);
+  /// the window presents again only when it comes at another size or its frame names another display.
   ///
   /// - Parameters:
   ///   - frame: The picture's frame.
@@ -285,33 +313,67 @@ final class ViewerReadingLoop {
   func show(_ frame: Frame, decoded: DesktopPicture.Decoded, ready: Bool) {
     // A change between the viewer's pictures and the frame service's is a change of transport, not of helper:
     // their revisions are compared only with their own kind.
-    if let viewer, viewer.holdingControl || viewer.control.acquiring, let shown = reading.frame,
-      shown.revision.hasPrefix("pipe:") == frame.revision.hasPrefix("pipe:"), shown.revision != frame.revision
+    if let viewer, viewer.holdingControl || viewer.control.acquiring, let newest = newestFrame,
+      newest.revision.hasPrefix("pipe:") == frame.revision.hasPrefix("pipe:"), newest.revision != frame.revision
     {
-      viewer.control.releaseControl(ViewerWords.helperChanged)
+      viewer.control.suspend(ViewerWords.helperChanged)
     }
     stopAwaiting()
-    reading.frame = (frame.id, frame.revision, frame.display)
-    reading.picture = decoded.picture
-    reading.lastPicture = decoded.picture
-    reading.pictureSize = decoded.size
-    reading.frameAt = uptime()
-    reading.unavailable = nil
-    reading.ready = ready
+    let wasStale = reading.pictureStale(at: now)
+    setFrame((frame.id, frame.revision, frame.display))
+    newestSize = decoded.size
+    newestAt = uptime()
+    newestPicture = decoded.picture
+    feed.show(decoded.picture)
+    if !laysOutLike(decoded.picture) {
+      shown.picture = decoded.picture
+      shown.lastPicture = decoded.picture
+    }
+    if shown.unavailable != nil { shown.unavailable = nil }
+    if shown.ready != ready { shown.ready = ready }
+    // A fresh picture after a stale one may offer control again at once, not at the clock's next tick.
+    if wasStale { viewer?.clockMoved() }
     viewer?.control.pictureArrived()
   }
 
-  /// No picture: say why, and give control back.
+  /// No picture: say why, and give control back. The newest picture drawn stays behind the words.
   ///
   /// - Parameter error: Why the reading failed.
   func lost(_ error: any Error) {
-    reading.ready = false
-    reading.frame = nil
-    reading.picture = nil
-    reading.pictureSize = nil
-    viewer?.control.releaseControl()
-    reading.unavailable = error.localizedDescription
+    if shown.ready { shown.ready = false }
+    setFrame(nil)
+    if let newest = drawnPicture, shown.lastPicture?.id != newest.id { shown.lastPicture = newest }
+    if shown.picture != nil { shown.picture = nil }
+    newestPicture = nil
+    newestSize = nil
+    viewer?.control.suspend()
+    let reason = error.localizedDescription
+    if shown.unavailable != reason { shown.unavailable = reason }
     awaitPicture()
+  }
+
+  /// The newest frame, and the window's frame with it while it comes, goes or names another display: the window is
+  /// laid out by whether there is one and its display, never by which one it is.
+  ///
+  /// - Parameter frame: The newest frame, or nil for none.
+  private func setFrame(_ frame: (id: String, revision: String, display: ViewerStatus.Size)?) {
+    newestFrame = frame
+    if shown.frame?.display != frame?.display { shown.frame = frame }
+  }
+
+  /// Whether `picture` draws at the size of the picture the window was laid out with, so it changes nothing but the
+  /// picture.
+  ///
+  /// - Parameter picture: A new picture.
+  /// - Returns: Whether it does; false while the window has no picture.
+  private func laysOutLike(_ picture: DesktopPicture) -> Bool {
+    guard let laidOut = shown.picture else { return false }
+    return laidOut.image.width == picture.image.width && laidOut.image.height == picture.image.height
+  }
+
+  /// The picture on screen now, the newest the live slots draw; nil while there is none.
+  private var drawnPicture: DesktopPicture? {
+    shown.picture.map { newestPicture ?? $0 }
   }
 
   /// Rings the waiting stage's mark once the window has waited ``Motion/Duration/appearDelay`` for a picture,
@@ -319,13 +381,13 @@ final class ViewerReadingLoop {
   /// and as the picture is lost; a picture's arrival, or reading stopping, ends the wait and puts the ring
   /// away.
   private func awaitPicture() {
-    guard reading.picture == nil, waiting == nil, !reading.waitedLong else { return }
+    guard shown.picture == nil, waiting == nil, !shown.waitedLong else { return }
     // Unstructured, as the wait runs while readings go on; cancelled the moment a picture arrives.
     waiting = Task { [weak self, clock] in
       try? await clock.sleep(for: .seconds(Motion.Duration.appearDelay.seconds))
       guard let self, !Task.isCancelled else { return }
       waiting = nil
-      if reading.picture == nil { reading.waitedLong = true }
+      if shown.picture == nil { shown.waitedLong = true }
     }
   }
 
@@ -334,27 +396,27 @@ final class ViewerReadingLoop {
   private func stopAwaiting() {
     waiting?.cancel()
     waiting = nil
-    reading.waitedLong = false
+    if shown.waitedLong { shown.waitedLong = false }
   }
 
   /// Resuming the picture reads afresh: the last picture is not one to aim at, nor is the helper known to take input,
   /// until a reading says so. The picture stays drawn meanwhile.
   func forgetFrame() {
-    reading.ready = false
-    reading.frame = nil
-    reading.frameAt = nil
+    if shown.ready { shown.ready = false }
+    setFrame(nil)
+    newestAt = nil
   }
 
   /// Copy Picture: the frame on screen goes to the clipboard.
   func copyPicture() {
-    guard let picture = reading.picture else { return }
+    guard let picture = drawnPicture else { return }
     pictures.copy(picture.image)
     viewer?.say(ViewerWords.pictureCopied)
   }
 
   /// Save Picture…: asks where, then writes the frame on screen as a PNG. Nothing is asked of the helper.
   func savePicture() {
-    guard let picture = reading.picture else { return }
+    guard let picture = drawnPicture else { return }
     if pictures.save(picture.image) == false { viewer?.say(ViewerWords.pictureNotSaved) }
   }
 }

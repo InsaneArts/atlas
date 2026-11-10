@@ -38,10 +38,11 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
         .accessibilityLabel(Text(verbatim: "The helper's screen"))
     } else if let empty = state.empty {
       WaitingStage(empty: empty, send: send)
+        .overlay { ScreenBanners(state: state, send: send) }
     }
   }
 
-  /// The picture at actual size, or fitted, under what lies over it, with control's edge.
+  /// The picture at actual size, or fitted, under the input surface, with control's edge.
   ///
   /// - Parameter picture: The picture.
   /// - Returns: The screen.
@@ -51,38 +52,22 @@ struct ViewerScreen<Input: View, LivePicture: View>: View {
       ActualSizeScreen(size: actual) {
         treated(picture)
         input
-        spotlight(size)
       }
       .overlay { ViewerControlEdge(isInControl: state.look == .inControl) }
+      .overlay { ScreenBanners(state: state, send: send) }
     } else {
       ZStack {
         treated(picture)
         input
-        spotlight(size)
       }
       .clipShape(shape)
       .overlay { ViewerControlEdge(isInControl: state.look == .inControl, corner: corner) }
       .screenZoom(in: zoom)
       .aspectRatio(size, contentMode: .fit)
+      // Inside the picture and its edge, never across them.
+      .overlay { ScreenBanners(state: state, send: send) }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-  }
-
-  /// A window shown from the Apps list, as a spotlight over the picture and its input surface, so the label's × takes
-  /// its click, fading in and out; showing another window glides it there. It is drawn dark in either appearance, as
-  /// it lies on the helper's screen.
-  ///
-  /// - Parameter picture: The picture's size in pixels.
-  /// - Returns: The spotlight, or nothing.
-  private func spotlight(_ picture: CGSize) -> some View {
-    ZStack {
-      if let outline = state.outline {
-        ScreenOutline(outline: outline, picture: picture, send: send)
-          .transition(.opacity)
-      }
-    }
-    .animation(Motion.fade, value: state.outline == nil)
-    .environment(\.colorScheme, .dark)
   }
 
   /// The picture through the live slot, with the colour its look keeps and the black that darkens it.

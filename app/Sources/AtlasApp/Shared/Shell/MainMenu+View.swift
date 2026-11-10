@@ -2,7 +2,7 @@ import AppKit
 import AtlasUI
 
 extension MainMenu {
-  /// The Screen and the Library's lists, ⌘1 to ⌘4 in the sidebar's order; Hide Sidebar (⌃⌘S), Pause Picture, Actual
+  /// The Screen and Activity, ⌘1 and ⌘2; Hide Sidebar (⌃⌘S), Pause Picture, Actual
   /// Size and Picture Updates, ticking the rate pictures arrive at; and Enter Full Screen.
   ///
   /// - Returns: The menu.

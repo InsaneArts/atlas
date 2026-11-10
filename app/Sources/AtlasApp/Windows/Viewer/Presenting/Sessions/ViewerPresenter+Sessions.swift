@@ -25,8 +25,8 @@ extension ViewerPresenter {
   }
 
   /// One session as every surface names it, looked up once: the status first, then the sessions' list's live
-  /// sessions, its records, and last the names the log or the apps list gives, so the sidebar, Activity, Screenshots,
-  /// Apps, the menus and the card's header agree on its name, icon and state.
+  /// sessions, its records, and last the names the log gives, so the sidebar, Activity, the menus and the card's
+  /// header agree on its name, icon and state.
   ///
   /// - Parameters:
   ///   - key: The session's key; empty for Terminal.
@@ -38,7 +38,7 @@ extension ViewerPresenter {
       .first { $0.key == key }
     let listLive = listed == nil ? current : nil
     let record = snapshot.panes.sessions.record(key)
-    let logged = snapshot.panes.activity.log?.sessions[key] ?? snapshot.panes.apps.sessions[key]
+    let logged = snapshot.panes.activity.log?.sessions[key]
     let live = current.flatMap { StatusReading.isRelevant($0) ? $0 : nil }
     let ended = current?.state == .ended || (current == nil && record?.isEnded == true)
     let named = listed != nil || listLive != nil || record != nil || logged != nil

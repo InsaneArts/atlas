@@ -364,7 +364,9 @@ impl HistorySource<'_> {
     /// when an end is known, otherwise Idle: current status separately
     /// describes work and recovery attention. `installs` names the apps its
     /// tasks installed into the helper that may still be there; `cleanup`
-    /// says how far its newest unfinished cleanup got.
+    /// says how far its newest unfinished cleanup got. `counts` says how
+    /// many of each action it did and `appCounts` how many of them named
+    /// each app, so it can be named by its work once its rows are gone.
     pub fn history_with(&self, processes: &Snapshot, work: impl Fn(&Key) -> bool) -> Vec<Value> {
         let kept = atlas_core::time::ms(IDLE_FOR);
 
@@ -412,6 +414,8 @@ impl HistorySource<'_> {
                     "endedAt": ended_at,
                     "state": state,
                     "actions": record.counts.values().sum::<u64>(),
+                    "counts": record.counts,
+                    "appCounts": record.apps,
                     "apps": self.apps(record, copies),
                     "copies": copies.iter().map(|app| json!({"app": app})).collect::<Vec<_>>(),
                     "plans": plans,
@@ -485,4 +489,5 @@ fn looks(row: &Row) -> bool {
 }
 
 #[cfg(test)]
+#[path = "session_view_tests.rs"]
 mod tests;

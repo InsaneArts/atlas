@@ -1,18 +1,16 @@
 import Foundation
 
-/// A moment of the Activity pane: one stream's work in one app, its actions at most two minutes apart on one day,
-/// newest first. Actions in no app, such as a screenshot or a command, belong to the moment around them.
+/// A run of the Activity outline: one stream's work in one app, its actions at most two minutes apart on one day,
+/// newest first. Actions in no app, such as a screenshot or a command, belong to the run around them, and neighbouring
+/// ones in no app form one run.
 public struct ActivityMoment: Equatable, Sendable, Identifiable {
-  /// 8: the most steps an open moment shows before "Show N more".
-  public static let mostSteps = 8
-
-  /// The moment's identity, retained across readings with overlapping actions, even when its oldest row leaves.
+  /// The run's identity, retained across readings with overlapping actions, even when its oldest row leaves.
   public var id: String
   /// Whose work it follows.
   public var stream: ActivityStream
-  /// What it is titled by: its app, or Commands or Screenshots for a moment in no app.
+  /// What it is titled by: its app, or Commands or Screenshots for a run in no app.
   public var subject: Subject
-  /// Its lines, newest first: every line of the moment, or those a filter and a search keep.
+  /// Its lines, newest first: every line of the run, or those a filter and a search keep.
   public var runs: [ActivityRun]
   /// The first moment of the day it falls on, in the person's time zone.
   public var day: Date
@@ -21,7 +19,7 @@ public struct ActivityMoment: Equatable, Sendable, Identifiable {
   /// When its newest line's newest row started, when known.
   public var endedAt: Date?
 
-  /// Creates a moment.
+  /// Creates a run.
   ///
   /// - Parameters:
   ///   - id: Its identity.
@@ -65,12 +63,23 @@ public struct ActivityMoment: Equatable, Sendable, Identifiable {
     runs.contains { $0.entry.outcome == .running }
   }
 
-  /// The lines an open moment shows, and how many more "Show N more" holds.
-  ///
-  /// - Parameter expanded: Whether the person asked for every line.
-  /// - Returns: The newest ``mostSteps`` lines and the count of the rest, or every line and none when expanded.
-  public func steps(expanded: Bool) -> (shown: [ActivityRun], more: Int) {
-    guard !expanded, runs.count > Self.mostSteps else { return (runs, 0) }
-    return (Array(runs.prefix(Self.mostSteps)), runs.count - Self.mostSteps)
+  /// Its lines oldest first, as an opened run reads, like a story.
+  public var story: [ActivityRun] {
+    runs.reversed()
+  }
+
+  /// Its screenshots that kept a capture, newest first: the pictures a folded run shows.
+  public var shots: [ActivityRun] {
+    runs.filter { $0.shot != nil }
+  }
+
+  /// Its lines that did not work, newest first: the problems a folded run shows.
+  public var problems: [ActivityRun] {
+    runs.filter { $0.entry.outcome == .failed }
+  }
+
+  /// What kinds of action it held and in which apps.
+  public var tally: ActivityTally {
+    ActivityTally(runs)
   }
 }

@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// Recover asked for from the Helper pane, with the main window's words.
+    /// Recover asked for from the Helper page, with the main window's words.
     @MainActor static let settingsRecover: SettingsState = {
       var state = selecting(.helper)
       state.alert = AlertCardState(
@@ -14,7 +14,7 @@
       return state
     }()
 
-    /// Log Out asked for from the Helper pane, with the main window's words.
+    /// Log Out asked for from the Helper page, with the main window's words.
     @MainActor static let settingsLogOut: SettingsState = {
       var state = selecting(.helper)
       state.alert = AlertCardState(
@@ -30,7 +30,7 @@
 
     /// Forget asked for a project: it stays listed until the person confirms.
     @MainActor static let settingsForget: SettingsState = {
-      var state = selecting(.agents)
+      var state = selecting(.integrations)
       state.alert = AlertCardState(
         title: "Forget “opie”?",
         message:
@@ -38,6 +38,20 @@
         buttons: [
           AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
           AlertCardButton(id: .confirm, title: "Forget", role: .destructive),
+        ]
+      )
+      return state
+    }()
+
+    /// Delete All… asked for the pictures of agent actions on this Mac.
+    @MainActor static let settingsDeletePictures: SettingsState = {
+      var state = settingsGeneral
+      state.alert = AlertCardState(
+        title: "Delete all pictures of agent actions?",
+        message: "Atlas deletes the 1,240 pictures on this Mac. Activity keeps its steps, without pictures.",
+        buttons: [
+          AlertCardButton(id: .cancel, title: "Cancel", role: .safeCancel),
+          AlertCardButton(id: .confirm, title: "Delete All", role: .destructive),
         ]
       )
       return state
@@ -57,7 +71,7 @@
       return state
     }()
 
-    /// Switch asked for from the Helper pane, with the main window's words.
+    /// Switch asked for from the Helper page, with the main window's words.
     @MainActor static let settingsSwitch: SettingsState = {
       var state = selecting(.helper)
       state.alert = AlertCardState(

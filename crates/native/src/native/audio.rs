@@ -990,4 +990,5 @@ impl Drop for Listener {
 }
 
 #[cfg(test)]
+#[path = "audio_tests.rs"]
 mod tests;

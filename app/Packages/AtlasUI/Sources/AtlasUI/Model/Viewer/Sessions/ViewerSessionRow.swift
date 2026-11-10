@@ -6,7 +6,7 @@ public struct ViewerSessionRow: Equatable, Sendable, Identifiable {
   public var id: String
   /// The host's icon.
   public var icon: RowIcon
-  /// The session's name, such as "Claude Code · understudy".
+  /// The session's title: its project folder, such as "understudy", else its agent.
   public var name: String
   /// What it last did, such as "Clicking Show Center in Opie", "Waiting for the helper · 8 s", "Opened Opie · 4 min
   /// ago", "Ended 20 min ago", or "Cleaning up…" while its work is cleaned up.

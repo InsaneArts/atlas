@@ -337,6 +337,15 @@ pub async fn run(
     if !yes {
         confirm(&found, config_path, keep_config, &facts, ask, progress)?;
     }
+    if let Some(name) = &found.helper {
+        for line in home_note(
+            name,
+            atlas_client::home_privacy::entry_index(name),
+            remove_helper,
+        ) {
+            progress(Progress::Say(&line));
+        }
+    }
 
     let mut live = Live {
         found: &found,
@@ -967,6 +976,34 @@ fn confirm(
     Ok(())
 }
 
+/// What uninstall says while the home folder is private from the helper
+/// `name`, its entry at `index` (unreadable: perhaps): it stays, as only the person opens the home
+/// folder, and how to open it. Once the account is deleted its name no longer
+/// works in `chmod`, so the entry's place is given too.
+fn home_note(name: &str, index: Result<Option<usize>>, remove_helper: bool) -> Vec<String> {
+    let undo = atlas_client::home_privacy::undo_line(name);
+    let index = match index {
+        Ok(None) => return Vec::new(),
+        Ok(Some(index)) => index,
+        // Unreadable: it may be set, so say how to undo it, by name.
+        Err(_) => {
+            return vec![format!(
+                "If your home folder is private from the helper, run this to open it again: {undo}"
+            )];
+        }
+    };
+    let mut lines = vec![
+        "Your home folder stays private from the helper.".to_owned(),
+        format!("To let it open your home folder again, run: {undo}"),
+    ];
+    if remove_helper {
+        lines.push(format!(
+            "Once the helper is deleted, run instead: chmod -a# {index} ~ (check with ls -le ~ first)"
+        ));
+    }
+    lines
+}
+
 /// Why the helper cannot settle an action whose outcome is unknown: its
 /// account is gone, or it is logged out. None while it could: a helper
 /// that is logged in but not answering may answer again after atlas
@@ -1211,4 +1248,5 @@ fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "uninstall_tests.rs"]
 mod tests;

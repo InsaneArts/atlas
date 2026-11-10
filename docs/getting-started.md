@@ -20,6 +20,14 @@ curl -fsSL https://atlas.insanearts.io/install.sh | sh
 
 The installer checks the download's checksum, Developer ID signature and notarization. It installs `/Applications/Atlas.app`, links the `atlas` command into `~/.local/bin` and opens Atlas for setup.
 
+To install with Homebrew instead, trust the InsaneArts tap and install the cask; Homebrew adds the tap by itself. Homebrew checks the same checksum and notarization, installs `/Applications/Atlas.app` and links `atlas` into its own `bin` folder. Open Atlas from Applications to set it up, or run `atlas init`.
+
+```sh
+brew trust insanearts/tap && brew install --cask insanearts/tap/atlas
+```
+
+Either way, Atlas updates itself with `atlas update`; `brew upgrade` leaves it alone.
+
 If your shell cannot find `atlas`, add that directory to your shell's `PATH`. For the current terminal:
 
 ```sh
@@ -37,7 +45,7 @@ Open Atlas from Applications if it did not open automatically. Follow the setup 
 2. Follow Atlas's instructions to switch to the helper and log in. Keep the helper's password so you can log in again after a Mac restart.
 3. Open Atlas in the helper if prompted. Allow **Accessibility** and **Screen Recording** in System Settings under **Privacy & Security**, following the setup window. These let Atlas send input to the helper and capture its screen. The exact permission label can vary by macOS version.
 4. Switch back to your own account without logging the helper out. Atlas checks that the helper is running in the background and that its permissions work.
-5. Choose the agent connections you want, then finish setup. You can change these later in **Settings > Agents**.
+5. Choose the agent connections you want, then finish setup. You can change these later in **Settings > Integrations**.
 
 Existing permissions or an existing helper can shorten the sequence. Follow the step Atlas shows rather than repeating a completed step. Both the app's setup and the terminal alternative below can be run again.
 

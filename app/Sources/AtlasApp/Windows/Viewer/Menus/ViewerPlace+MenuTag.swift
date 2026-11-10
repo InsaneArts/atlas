@@ -1,8 +1,7 @@
 import AtlasUI
 
 extension ViewerPlace {
-  /// The place's View menu item tag: its place in the sidebar's order, Screen, Activity, Screenshots, Apps, as ⌘1 to ⌘4
-  /// number them.
+  /// The place's View menu item tag: Screen, then Activity, as ⌘1 and ⌘2 number them.
   var menuTag: Int {
     Self.allCases
       .firstIndex(of: self) ?? 0

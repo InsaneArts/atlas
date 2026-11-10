@@ -1,9 +1,11 @@
 import AppKit
 import AtlasCommands
 import AtlasService
+import AtlasUI
 
 /// The menu bar item and its panel, built once at launch: the panel's controller, linked to the other windows by the
-/// coordinator, Atlas's item in the menu bar, and the popover it opens; helper discovery starts in its own task.
+/// coordinator, Atlas's item in the menu bar in the glyph last picked, and the popover it opens; helper discovery
+/// starts in its own task.
 extension AppContainer {
   /// Builds the panel and puts Atlas's item in the menu bar.
   ///
@@ -17,12 +19,13 @@ extension AppContainer {
         loginItem: loginItem,
         links: coordinator.panelLinks(),
         clock: clock,
-        icons: appIcons
+        icons: appIcons,
+        preferences: .stored(in: UserDefaults.standard)
       )
     )
     menuBar = PanelPopover(
       controller: controller,
-      item: StatusItem(),
+      item: StatusItem(icon: menuBarPreferences.loadIcon()),
       openSettings: { [weak coordinator] in coordinator?.openSettings() },
       gettingStarted: { [weak coordinator] in coordinator?.showOnboarding() }
     )
@@ -34,6 +37,17 @@ extension AppContainer {
   /// Closes the panel, as opening a window or an alert from it does.
   func closePanel() {
     menuBar?.closePanel()
+  }
+
+  /// The glyph Atlas's menu bar item draws: the item's, else the one saved, before launch has made it.
+  var menuBarIcon: MenuBarIcon { menuBar?.icon ?? menuBarPreferences.loadIcon() }
+
+  /// Draws Atlas's menu bar item as the glyph picked, and keeps it for the next launch.
+  ///
+  /// - Parameter icon: The glyph.
+  func useMenuBarIcon(_ icon: MenuBarIcon) {
+    menuBarPreferences.saveIcon(icon)
+    menuBar?.use(icon)
   }
 
   /// The app's control work not yet answered, shared by the main window and the helper's commands.
@@ -68,5 +82,8 @@ extension AppContainer {
   /// - Parameter status: The reading, or nil when it failed.
   func read(_ status: ViewerStatus?) {
     signals?.read(status)
+    guard let status, let askSignals else { return }
+    // Unstructured, as a reading is handed on synchronously; macOS is asked once, while the reading goes on.
+    Task { await askSignals.statusRead(status) }
   }
 }

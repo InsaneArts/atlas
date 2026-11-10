@@ -329,7 +329,9 @@ fn summarize(events: &[Event]) -> Value {
 }
 
 #[cfg(test)]
+#[path = "login_log_extraction_tests.rs"]
 mod extraction_tests;
 
 #[cfg(test)]
+#[path = "login_log_tests.rs"]
 mod tests;

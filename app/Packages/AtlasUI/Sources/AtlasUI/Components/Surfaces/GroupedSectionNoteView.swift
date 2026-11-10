@@ -11,7 +11,7 @@ struct GroupedSectionNoteView: View {
     case .text(let text):
       Text(text)
         .textStyle(.caption)
-        .foregroundStyle(Color.textTertiary)
+        .foregroundStyle(Color.textSecondary)
         .fixedSize(horizontal: false, vertical: true)
     case .status(let kind, let text):
       StatusLine(kind: kind, text: text, size: .small)

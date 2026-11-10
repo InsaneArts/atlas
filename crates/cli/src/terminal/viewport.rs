@@ -195,4 +195,5 @@ impl Projection {
 }
 
 #[cfg(test)]
+#[path = "viewport_tests.rs"]
 mod tests;

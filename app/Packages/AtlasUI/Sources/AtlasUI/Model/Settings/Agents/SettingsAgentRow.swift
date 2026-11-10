@@ -1,4 +1,4 @@
-/// One agent in the Agents pane: its tile, name and what Atlas does in it, then whether it is connected; and, when a
+/// One agent on the Integrations page: its tile, name and what Atlas does in it, then whether it is connected; and, when a
 /// Connect failed, why, in the row itself.
 public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
   /// Where the agent stands, which the row's right side shows.
@@ -11,6 +11,8 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
     case connect(isEnabled: Bool)
     /// It is being connected now.
     case connecting
+    /// It is being disconnected now.
+    case disconnecting
     /// It isn't on this Mac: nothing at the row's end, and its icon faded.
     case missing
     /// Its state isn't known yet, saying so, such as "Checking…".
@@ -32,8 +34,10 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
   public var problem: String?
   /// Whether Show File stands beside Connect, opening the file the problem is in.
   public var showsFile: Bool
-  /// Whether any connected parts can be disconnected now.
+  /// Whether any connected parts can be disconnected now: some are connected, and no other change runs.
   public var canDisconnect: Bool
+  /// Whether any of its parts use Atlas, whatever else runs now; it keeps the switch on while another change waits.
+  public var hasConnection: Bool
 
   /// Creates an agent's row.
   ///
@@ -46,6 +50,7 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
   ///   - problem: Why its last Connect failed; none by default.
   ///   - showsFile: Whether Show File stands beside Connect; not by default.
   ///   - canDisconnect: Whether connected parts can be disconnected now.
+  ///   - hasConnection: Whether any of its parts use Atlas; as `canDisconnect` by default.
   public init(
     id: String,
     title: String,
@@ -54,7 +59,8 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
     connection: Connection,
     problem: String? = nil,
     showsFile: Bool = false,
-    canDisconnect: Bool = false
+    canDisconnect: Bool = false,
+    hasConnection: Bool? = nil
   ) {
     self.id = id
     self.title = title
@@ -64,5 +70,12 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
     self.problem = problem
     self.showsFile = showsFile
     self.canDisconnect = canDisconnect
+    self.hasConnection = hasConnection ?? canDisconnect
+  }
+
+  /// Whether the agent is connected only in part: some of its parts use Atlas, and Connect can finish the rest.
+  public var isPartlyConnected: Bool {
+    guard case .connect = connection else { return false }
+    return hasConnection
   }
 }

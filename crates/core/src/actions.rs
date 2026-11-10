@@ -16,7 +16,7 @@ use std::time::Duration;
 /// for malformed fields that must retain their later admission order.
 macro_rules! actions {
     ($($kind:ident { $($(#[$attr:meta])* $field:ident: $ty:ty),* $(,)? } => $personal:expr),* $(,)?) => {
-        #[derive(Debug, Deserialize)]
+        #[derive(Debug, Clone, Deserialize)]
         #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
         pub enum Action {
             $($kind { $($(#[$attr])* $field: $ty),* }),*
@@ -238,6 +238,13 @@ impl Action {
             | Self::Key { .. }
             | Self::Wait { .. } => None,
         }
+    }
+
+    /// The digest of this action's whole payload: its kind, text, keys,
+    /// modifiers, button, count, points and element. A permit the person
+    /// gives for one stopped action is bound to it.
+    pub fn digest(&self) -> String {
+        crate::digest::bytes_sha256(format!("{self:?}").as_bytes())
     }
 
     /// The element it acts on through Accessibility and what it does to
@@ -918,4 +925,5 @@ impl Action {
 }
 
 #[cfg(test)]
+#[path = "actions_tests.rs"]
 mod tests;

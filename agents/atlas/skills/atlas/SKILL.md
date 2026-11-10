@@ -120,7 +120,7 @@ with an Atlas command still running (see Limits).
   outside it; never run `atlas init` for this.
 - `session-changed`, `stale-frame` or `lease-lost`: look again first.
 - `cancelled`: the person stopped your input; look, then ask.
-- Anything else: read `error` and `next`, then the error reference.
+- Anything else: follow `next`; if unclear, the error reference.
 
 ## Clean up
 

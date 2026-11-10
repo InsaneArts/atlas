@@ -9,7 +9,7 @@
     static let alert: CGFloat = 228
     /// 300: a side column of cards, and about the panel's content.
     static let narrow: CGFloat = 300
-    /// A settings form: ``SettingsLayout/formWidth``.
-    static let form = SettingsLayout.formWidth
+    /// A settings page's sections: ``SettingsLayout/pageWidth``.
+    static let form = SettingsLayout.pageWidth
   }
 #endif

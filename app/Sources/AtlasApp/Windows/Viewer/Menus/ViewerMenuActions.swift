@@ -3,7 +3,7 @@ import Foundation
 /// What the main menu's View, Session, File, Edit and Helper items and the Dock menu's ask of the window in front. The main
 /// window answers each and validates its item against the same state its buttons draw.
 @objc protocol ViewerMenuActions {
-  /// Screen, Activity, Screenshots or Apps, by the item's tag (``ViewerPlace/menuTag``).
+  /// Screen or Activity, by the item's tag (``ViewerPlace/menuTag``).
   ///
   /// - Parameter sender: The menu item.
   func showPlace(_ sender: Any?)
@@ -27,7 +27,7 @@ import Foundation
   ///
   /// - Parameter sender: The menu item.
   func toggleAgent(_ sender: Any?)
-  /// Save Picture…, or Save Screenshot… in the Screenshots list.
+  /// Save Picture…, or Save Screenshot… while the picture sheet shows.
   ///
   /// - Parameter sender: The menu item.
   func savePicture(_ sender: Any?)

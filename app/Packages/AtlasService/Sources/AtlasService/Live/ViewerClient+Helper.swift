@@ -1,8 +1,8 @@
 import Foundation
 
 extension ViewerClient {
-  /// The most a list reply may hold, in bytes: 4 MiB. Two hundred activity rows or screenshots take tens of
-  /// kilobytes; the apps list carries at most 64 icons of 64 points as base64 PNG, under 2 MiB.
+  /// The most a list reply may hold, in bytes: 4 MiB. Two hundred activity rows, the sessions or the screenshots
+  /// take tens of kilobytes, well under it.
   static let listLimit = 4 << 20
   /// The most a screenshot may hold, in bytes: 16 MiB, the service's own limit on a picture.
   static let pictureLimit = 16 << 20
@@ -28,15 +28,30 @@ extension ViewerClient {
     return try await Self.decodedReply { () throws(ServiceError) in try Self.activity(data, response: response) }
   }
 
-  /// Reads `apps.json`.
+  /// Reads `activity.json` for one session.
   ///
-  /// - Returns: The apps, front to back, and the sessions that opened them, every missing field at its safe default.
-  /// - Throws: ``ServiceError`` with the service's error, such as a 503 when it cannot reach the helper, or when it
-  ///   cannot be read.
-  public func apps() async throws(ServiceError) -> HelperAppList {
-    let route = base.appendingPathComponent("apps.json")
-    let (data, response) = try await fetched(request(to: route), limit: Self.listLimit)
-    return try await Self.decodedReply { () throws(ServiceError) in try Self.apps(data, response: response) }
+  /// - Parameter session: The session's key; empty for Terminal.
+  /// - Returns: The session's rows, newest first, every missing field at its safe default.
+  /// - Throws: ``ServiceError`` with the service's error, such as for a key it does not take, or when it cannot be
+  ///   read.
+  public func activity(of session: String) async throws(ServiceError) -> ActivityLog {
+    let (data, response) = try await fetched(activityRequest(session: session), limit: Self.listLimit)
+    return try await Self.decodedReply { () throws(ServiceError) in try Self.activity(data, response: response) }
+  }
+
+  /// A GET of `activity.json` for `session`, the key percent-encoded.
+  ///
+  /// - Parameter session: The session's key; empty for Terminal.
+  /// - Returns: The request.
+  /// - Throws: ``ServiceError`` when the key cannot be put in a URL.
+  func activityRequest(session: String) throws(ServiceError) -> URLRequest {
+    let route = base.appendingPathComponent("activity.json")
+    guard let encoded = session.addingPercentEncoding(withAllowedCharacters: Self.unreserved),
+      var components = URLComponents(url: route, resolvingAgainstBaseURL: false)
+    else { throw ServiceError("No such session") }
+    components.percentEncodedQuery = "session=\(encoded)"
+    guard let url = components.url else { throw ServiceError("No such session") }
+    return request(to: url)
   }
 
   /// Reads `screenshots.json`.
@@ -112,18 +127,6 @@ extension ViewerClient {
   ///   object.
   static func activity(_ data: Data, response: HTTPURLResponse) throws(ServiceError) -> ActivityLog {
     try listed(ActivityLog.self, data, response: response, fallback: "The activity log could not be read.")
-  }
-
-  /// An `apps.json` reply read: only a 200 carries apps, so a refusal never reads as no apps.
-  ///
-  /// - Parameters:
-  ///   - data: The reply's body.
-  ///   - response: The reply's response.
-  /// - Returns: The apps, front to back, and the sessions that opened them, every missing field at its safe default.
-  /// - Throws: ``ServiceError`` with the service's error for any reply that is not a 200, or when its body is not an
-  ///   object.
-  static func apps(_ data: Data, response: HTTPURLResponse) throws(ServiceError) -> HelperAppList {
-    try listed(HelperAppList.self, data, response: response, fallback: "No apps")
   }
 
   /// A `screenshots.json` reply read: only a 200 carries screenshots.

@@ -95,4 +95,5 @@ pub(crate) fn nested(record: &Record, key: &'static str) -> Option<CFRetained<Re
 }
 
 #[cfg(test)]
+#[path = "cf_tests.rs"]
 mod tests;

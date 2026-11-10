@@ -4,7 +4,7 @@ Atlas connects supported agent hosts to the helper on your Mac. A connection giv
 
 ## Connect a host
 
-Install the host you want to use first. You can connect it in Atlas's **Settings > Agents**, or use the CLI:
+Install the host you want to use first. You can connect it in Atlas's **Settings > Integrations**, or use the CLI:
 
 ```sh
 atlas agents install
@@ -20,7 +20,7 @@ With no selectors, `install` connects the supported hosts Atlas finds on your Ma
 | Codex          | `--codex`        | The bundled Atlas plugin through a local marketplace, with skills, MCP and session hooks. | Start a new session or task. Review the plugin's hook trust prompt if shown. | `show_screen` in the Codex app when embedded views are supported, or the native viewer.                         |
 | opencode       | `--opencode`     | A linked plugin with the Atlas skill, MCP connection and session brief.                   | Restart opencode after connecting, disconnecting or updating the plugin.     | The native viewer. `show_screen` returns text.                                                                  |
 | Pi             | `--pi`           | The bundled Pi package with the Atlas skill, MCP connection and session brief.            | Start a fresh Pi session or use `/reload`.                                   | The native viewer. `show_screen` returns text.                                                                  |
-| Cursor         | `--cursor`       | A copied local plugin with the Atlas skills, guarded MCP connection and Cursor hooks.     | Reload the Cursor window, or start a new Cursor Agent CLI session.           | Embedded view in the IDE; native viewer in the Agent CLI. Person-control qualification is in progress.          |
+| Cursor         | `--cursor`       | A copied local plugin with the Atlas skills, guarded MCP connection and Cursor hooks.     | Reload the Cursor window, or start a new Cursor Agent CLI session.           | Embedded view in the IDE; native viewer in the Agent CLI.                                                       |
 
 For example, to connect only Claude Desktop:
 
@@ -31,19 +31,15 @@ atlas agents status
 
 Claude Desktop reads its configuration when it starts, so a new chat without restarting the app may still use the old connection. Atlas preserves other settings and refuses to overwrite an unrelated MCP entry also named `atlas`.
 
-Atlas's Settings groups Claude Code and Claude Desktop into one **Claude** row. The CLI reports them separately as `claude` and `claude-app`. The combined row is connected when all installed parts are connected. Use `atlas agents status` when you need to see which part needs attention.
+Atlas's **Settings > Integrations** groups Claude Code and Claude Desktop into one **Claude** row. The CLI reports them separately as `claude` and `claude-app`. The row's switch is on while any installed part is connected; when only some are, it says **Partly connected** and offers **Connect** to finish. Use `atlas agents status` when you need to see which part needs attention.
 
 ### Cursor
 
 Connect Cursor with `atlas agents install --cursor`. The Cursor IDE and its separate Agent CLI share one Atlas row; either can be installed on its own. The editor's `cursor` launcher is different from Cursor Agent's `agent` or `cursor-agent` executable.
 
-The tested Agent CLI baseline is `2026.10.22-27dcf5f`. Its normal local plugin discovery loads Atlas's skills, session context, shell guard and MCP status tools. This CLI does not negotiate embedded MCP Apps; it receives observation tools and uses Atlas's native viewer. Cursor IDE `3.27.12` loads the plugin and renders embedded frames. Person-operated control qualification is still in progress.
+Cursor's embedded view sets up its own controls before enabling them.
 
-During qualification, Cursor IDE made app-only control descriptions and schemas available to its agent despite their visibility metadata. Atlas therefore guards Cursor's person-operated tools with private authority established by each embedded view. Discovering a tool's name or schema does not authorize its use. A view establishes its own context before enabling controls; another view cannot inherit its control lease. Existing helper, consent and input guards remain in force.
-
-The server also enables this guard when Cursor identifies itself during MCP negotiation, including when Cursor imports Atlas's Claude plugin instead of using the local Cursor launcher. Client identity can only add this restriction; it never authorizes a person action or removes an enabled guard. Reload Cursor after updating Atlas so imported connections also restart with the new server.
-
-Cursor currently offers inline presentation rather than fullscreen. Use **Controls** to expand the embedded view and reach Screen, Activity, Apps, Screenshots and person controls, then **Collapse** to return to the compact card. If a view expires after 15 minutes without requests or cannot establish private controls, reload that view. Atlas does not silently replace expired authority. The native viewer remains available independently.
+Cursor currently offers inline presentation rather than fullscreen. Use **Controls** to expand the embedded view and reach the screen, the activity with its pictures and person controls, then **Collapse** to return to the compact card. If a view expires after 15 minutes without requests or cannot establish private controls, reload that view. Atlas does not silently replace expired authority. The native viewer remains available independently.
 
 The agent uses the Atlas CLI for GUI tasks, subject to Atlas's existing helper and input checks. After an Atlas update, reload Cursor fully or end the old Agent session before using the refreshed connection; an existing MCP process can retain its previous tool set.
 
@@ -62,30 +58,12 @@ Use `atlas agents project` in a project to add Atlas's maintained section to `AG
 More than one agent, on the same host or different ones, can use the helper at the same time. Atlas lets one input or other change happen at a time: such a command waits its turn, up to 30 seconds (`--wait SECONDS`, or `ATLAS_WAIT`), and waiting commands go in the order they began. Programs agents start with `atlas run` (up to 8) keep running beside them. Agents pass `--app NAME` to keyboard and pointer commands, so nothing is sent when another agent's app is in front, and close only what they opened.
 
 Atlas tells agents' sessions apart by themselves. Claude Code, Codex and Pi give each command their session id; opencode's comes from Atlas's plugin. Cursor commands carry no session yet. `ATLAS_SESSION=NAME` names the work of a command that has no host session, such as a script or a Cursor agent; a host session id the command inherits always wins over it, so within one host session use `ATLAS_TASK` to keep work apart. Within a session, `ATLAS_TASK=NAME` keeps one part of the work apart: Atlas records the copies, environment plans and apps that task made on its own, and `atlas activity` lists them per task. Subagents share their parent's session, so subagents working side by side put their own `ATLAS_TASK=NAME` on every command, cleanup included: a plain `atlas cleanup` covers the whole session. A plain `atlas cleanup` covers the whole session, every task included; keep the same `ATLAS_TASK` through cleanup, and check the preview's session, task and steps before `--apply`. Sessions and tasks grant no authority: they never decide what an agent may do, but they do select whose work a cleanup or listing covers.
-For Claude Code, Codex, opencode and Pi, Atlas keeps the host's exact process identity when it can verify it among the command's same-account ancestors. Subagents sharing that host use its project folder's basename, even when their shell works in another folder. Atlas reads the host's working directory only during detection; it never keeps the full path. Independently nested Codex hosts cannot be associated with a root id from their command names alone, so their process and folder stay unknown. A refused process or directory read leaves those facts unknown without failing the command.
-
-When local process reads cannot verify a host, the CLI asks the configured daemon to verify the socket caller's ancestry. The kernel supplies the caller's PID and account; Atlas checks exact process starts before trusting the result. The request waits at most 250 ms. A verified result can create a session record even for an apps-only command. If the daemon is unavailable or cannot verify the host, the command continues with unknown identity. A refused host directory read still leaves the folder unknown.
-
-A verified start or read can create lifetime metadata before the first action; it adds no action count. A resumed host attaches its new process before dispatch. A verified running or stopped host stays live even while idle. Once it is gone, Atlas reports an inferred end using its last-seen time, which is a bound rather than an exact exit time. Unknown process state does not prove an end. Sessions without a verified process keep the bounded recent-activity fallback.
-
-An end always means not live and not active. An ended session can still appear under Needs you for its own unresolved action, or under Working while its verified command continues. That attention does not increase the live count or grant control. Proven work postpones an inferred host-death end until the work finishes; it never removes an explicit end. Recovery still follows the existing ownership rules.
-
-Each host also stops a shell command that runs too long. A stop in the middle of a change can leave its outcome unknown, which blocks every agent until the agent whose command it was, or you, runs `atlas restart`. So agents keep each shell call, every chained command and its wait included, under their host's limit with about 10 seconds to spare, keep checking a command the host handed back until it finishes, and never leave an Atlas command running when their turn ends:
-
-| Host        | Shell time limit                                                                                                                                 |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Claude Code | At 2 minutes, unless the Bash call asks for more (up to 10), the command moves to the background and keeps running                               |
-| Codex       | At its tool timeout, about 10 seconds unless the call asks for longer, the command is handed back still running; it is killed when the turn ends |
-| opencode    | 2 minutes unless the agent passes a timeout; stopped, then killed 0.2 seconds later                                                              |
-| Pi          | None unless the agent passes one; killed at once at the limit or when you abort                                                                  |
-| Cursor      | Not known yet; agents keep each shell call under 2 minutes                                                                                       |
+Each host also stops a shell command that runs too long, and a stop in the middle of a change can leave its outcome unknown, which blocks every agent until the agent whose command it was, or you, runs `atlas restart`. So agents keep each shell call under their host's limit; the [bundled limits reference](../agents/atlas/skills/atlas/references/limits.md) gives each host's.
 
 ## Verify the connection
 
 First run `atlas doctor --json` and check for `ready: true`. Then run `atlas agents status` and check the host you connected. These are separate checks: a connected plugin does not make a logged-out helper ready.
-Doctor reports `ready: false` while an action has an unresolved outcome or Atlas cannot read pending state. A running command alone does not require recovery. An unreadable check asks you to run doctor again; it does not authorize recovering another session's action. Compact not-ready output retains the checks and next steps, while clean compact output remains `{"ok":true,"ready":true}` unless an existing warning applies.
-
-After refreshing the host, ask the agent to check Atlas's status. For a host with embedded viewing, ask it to use Atlas's `show_screen` tool. Confirm that you see a changing helper picture and that the Apps panel loads. A saved screenshot or a newly opened native window does not verify the embedded view.
+After refreshing the host, ask the agent to check Atlas's status. For a host with embedded viewing, ask it to use Atlas's `show_screen` tool. Confirm that you see a changing helper picture and that the activity loads. A saved screenshot or a newly opened native window does not verify the embedded view.
 
 In Claude Desktop, use the desktop Atlas connector for the embedded view. Claude's different task types can use different tool connections. A tool name appearing in a conversation does not prove that connection supports the view. If the card reports that the view is unavailable, check the selected connection and start a fresh conversation after refreshing it.
 

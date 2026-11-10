@@ -6,12 +6,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-atlas-cli.workspace = true
-atlas-client.workspace = true
 atlas-core.workspace = true
-sha2.workspace = true
 
 [dev-dependencies]
+sha2.workspace = true
 tempfile.workspace = true
 
 [lints]

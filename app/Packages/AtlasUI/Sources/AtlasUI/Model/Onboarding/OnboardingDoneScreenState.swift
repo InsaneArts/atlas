@@ -4,7 +4,9 @@ public struct OnboardingDoneScreenState: Equatable, Sendable {
   public var lede: String
   /// Whether Open Atlas at login is on.
   public var opensAtLogin: Bool
-  /// Whether the Open Atlas at login switch takes changes.
+  /// Whether the box to keep the home folder private from the helper is checked.
+  public var keepsHomePrivate: Bool
+  /// Whether the screen's switches take changes.
   public var isEnabled: Bool
 
   /// Creates the done screen's state.
@@ -12,10 +14,12 @@ public struct OnboardingDoneScreenState: Equatable, Sendable {
   /// - Parameters:
   ///   - lede: What to do after a restart, naming the helper.
   ///   - opensAtLogin: Whether Open Atlas at login is on.
-  ///   - isEnabled: Whether the Open Atlas at login switch takes changes.
-  public init(lede: String, opensAtLogin: Bool, isEnabled: Bool = true) {
+  ///   - keepsHomePrivate: Whether the box to keep the home folder private is checked; checked by default.
+  ///   - isEnabled: Whether the screen's switches take changes.
+  public init(lede: String, opensAtLogin: Bool, keepsHomePrivate: Bool = true, isEnabled: Bool = true) {
     self.lede = lede
     self.opensAtLogin = opensAtLogin
+    self.keepsHomePrivate = keepsHomePrivate
     self.isEnabled = isEnabled
   }
 }

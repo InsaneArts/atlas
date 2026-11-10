@@ -159,6 +159,9 @@ fn run(
         ),
         _ => None,
     };
+    // `atlas mcp` reads its host's requests until the host closes the pipe,
+    // and a host that ends it with a signal may never close it.
+    let reads_stdin = matches!(command, Command::Mcp(_));
 
     // Commands that ask questions or wait for the person stop cleanly on
     // Ctrl-C, saying what that means for each. Those that run agent tools
@@ -213,7 +216,7 @@ fn run(
         .map_err(|error| or_logged_out(error, &config));
     interrupt.ended();
 
-    match result {
+    let status = match result {
         Ok(result) => {
             output::emit(format, &policy.view, &result, !machine);
             exit_status(output::failed(&result), interrupt.asked())
@@ -229,7 +232,49 @@ fn run(
             report_failure(format, &error, !machine);
             exit_status(true, interrupt.asked())
         }
+    };
+    // The picture a moment after an agent's action is another process's
+    // to take. The picture before it may still be being saved: it has a
+    // moment more, never longer.
+    if let Some(before) = policy
+        .doing
+        .as_ref()
+        .and_then(atlas_client::doing::Doing::picture)
+    {
+        picture_after(&config, &before);
     }
+    atlas_client::before::settle(std::time::Duration::from_millis(500));
+    // Its own cleanup done, nothing it started still matters: the read of
+    // standard input left waiting would otherwise keep the process from
+    // ending until the host kills it.
+    if reads_stdin {
+        runtime.shutdown_background();
+    }
+    status
+}
+
+/// Start the process that takes the picture a moment after the action whose
+/// picture before is `before`, on its own: no agent waits for it, and it
+/// outlives this command. One that cannot start leaves the action with its
+/// picture before alone.
+fn picture_after(config: &std::path::Path, before: &str) {
+    use std::os::unix::process::CommandExt;
+
+    let Ok(atlas) = std::env::current_exe() else {
+        return;
+    };
+    let ended = atlas_core::time::now_ms().to_string();
+    let mut command = std::process::Command::new(atlas);
+    command
+        .arg("--config")
+        .arg(config)
+        .args(["picture-after", "--before", before, "--ended", &ended])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0);
+    // Not waited for: it ends on its own, a moment later.
+    let _ = atlas_core::spawn::spawn(&mut command);
 }
 
 /// Print a failure on stderr as `format` asks, with what to do about it
@@ -446,4 +491,5 @@ fn stop_cleanly_on_interrupt(message: Option<&'static str>) {
 }
 
 #[cfg(test)]
+#[path = "main_tests.rs"]
 mod tests;

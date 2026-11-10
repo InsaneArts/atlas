@@ -3,7 +3,7 @@
 //! inspection, each stopped after its timeout. [`Run`] says which, and
 //! [`Client::run`] runs it.
 use super::{Client, Mutation, Verified};
-use atlas_control::Ownership;
+use atlas_control::{Ownership, SharedLease};
 use atlas_core::{
     error::{Code, Error, Result},
     transport::{OutputError, accepted, run_output},
@@ -30,6 +30,10 @@ pub(crate) struct Run<'a> {
     /// The session the caller verified moments before, if it names one.
     pin: Option<&'a Verified>,
     mode: Mode,
+    /// The person's lease the command is sent under, by its token: checked
+    /// once connected and held until the request is sent, so a lease that
+    /// ran out before then sends nothing.
+    lease: Option<(&'a SharedLease, &'a str)>,
 }
 
 /// Under whose control a command runs, and what is recorded of it.
@@ -54,7 +58,13 @@ impl<'a> Run<'a> {
             timeout,
             pin: None,
             mode,
+            lease: None,
         }
+    }
+
+    /// This run, sent only while the person's `lease` still holds `token`.
+    pub(crate) fn leased(self, lease: Option<(&'a SharedLease, &'a str)>) -> Self {
+        Self { lease, ..self }
     }
 
     /// A recorded change under control taken for it. Control stays held
@@ -183,7 +193,7 @@ impl Client {
         match run.mode {
             // Control taken for a held run stays held until the command
             // ends; one beside others lets go of it once its request is sent.
-            Mode::Held | Mode::Owned => self.mutate(mutation, None, None, None).await,
+            Mode::Held | Mode::Owned => self.mutate(mutation, run.lease, None, None).await,
             Mode::Beside => self.mutate(mutation, None, None, taken).await,
             Mode::Pending => self.run_unrecorded(&mutation).await,
             Mode::Inspect => self.run_unrecorded(&mutation).await.map_err(Error::certain),
@@ -230,7 +240,20 @@ impl Client {
         argv: Vec<String>,
         limit: usize,
     ) -> Result<Finished> {
-        let reply = accepted(self.run(argv, Run::owned(ownership)).await?)?;
+        self.run_finished_under(ownership, None, argv, limit).await
+    }
+
+    /// [`Client::run_finished`], sent only while `lease` still holds, when
+    /// it names the person's lease and its token.
+    pub(crate) async fn run_finished_under(
+        &self,
+        ownership: &Ownership,
+        lease: Option<(&SharedLease, &str)>,
+        argv: Vec<String>,
+        limit: usize,
+    ) -> Result<Finished> {
+        let run = Run::owned(ownership).leased(lease);
+        let reply = accepted(self.run(argv, run).await?)?;
         Ok(Finished::decode(&reply, limit))
     }
 

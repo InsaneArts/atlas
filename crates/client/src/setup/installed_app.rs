@@ -78,4 +78,5 @@ pub fn link_installed_command() -> Result<Value> {
 }
 
 #[cfg(test)]
+#[path = "installed_app_tests.rs"]
 mod tests;

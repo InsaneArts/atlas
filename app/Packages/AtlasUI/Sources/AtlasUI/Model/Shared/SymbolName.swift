@@ -13,8 +13,6 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case speakerMuted = "speaker.slash.fill"
   /// The helper can be heard; pressing mutes it.
   case speakerOn = "speaker.wave.2.fill"
-  /// Stop showing the window outlined on the screen, in its label.
-  case clear = "xmark"
   /// Empty a search field.
   case clearText = "xmark.circle.fill"
   /// Keys, while in control.
@@ -29,12 +27,12 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case expand = "arrow.up.left.and.arrow.down.right"
   /// A search field.
   case search = "magnifyingglass"
-  /// Show on Screen.
-  case show = "eye"
   /// Check again.
   case reload = "arrow.clockwise"
   /// The previous screenshot.
   case back = "chevron.left"
+  /// Up to sessions waiting at the top of a scrolled-down list.
+  case up = "chevron.up"
   /// The next screenshot, and the helper's allow pairing: the asking account handing over to Atlas.
   case next = "chevron.right"
   /// Copy.
@@ -67,6 +65,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case exclamation = "exclamationmark"
   /// A check that passed.
   case passed = "checkmark.circle.fill"
+  /// Something just done, such as a picture copied.
+  case done = "checkmark"
   /// The General settings.
   case gear = "gearshape"
   /// The helper's screen.
@@ -75,14 +75,18 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case sparkles
   /// About.
   case info = "info.circle"
-  /// Activity, in the Library.
+  /// Activity, on its empty message.
   case list = "list.bullet"
-  /// Apps, in the Library.
-  case windows = "macwindow.on.rectangle"
-  /// Screenshots, in the Library.
+  /// A set of pictures, in the component samples.
   case photos = "photo.on.rectangle"
+  /// A picture: a step's picture button.
+  case photo
   /// Something locked.
   case lock
+  /// A home folder private from the helper.
+  case lockFilled = "lock.fill"
+  /// Sign-ins and secrets.
+  case key
   /// A popup button's choices.
   case popup = "chevron.up.chevron.down"
   /// A menu that opens under its button.
@@ -93,4 +97,22 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case hand = "hand.point.up.left"
   /// The drag ghost's hand, its fill.
   case handFill = "hand.point.up.left.fill"
+  /// A scroll mark's arrow, pointing the way the page moved.
+  case scrollArrow = "arrow.down"
+  /// Show changes: what changed between two pictures.
+  case changes = "square.grid.3x3.square"
+  /// Settings' Activity page: what agents did, kept for a time.
+  case history = "clock.arrow.circlepath"
+  /// Settings' Integrations page: the agents Atlas plugs into.
+  case integrations = "square.grid.2x2"
+  /// Something Atlas added, such as an account.
+  case plus
+  /// Settings' Accounts page with none listed.
+  case personCircle = "person.crop.circle"
+  /// Look Only: agents only look.
+  case eye
+  /// Ask Before Sending: agents ask first.
+  case askFirst = "questionmark.bubble"
+  /// Trusted: agents act without asking.
+  case trusted = "checkmark.shield"
 }

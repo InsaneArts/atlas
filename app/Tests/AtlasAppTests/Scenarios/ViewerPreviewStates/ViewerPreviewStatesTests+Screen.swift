@@ -30,6 +30,31 @@
       let gone = "Atlas isn't answering in the helper."
       return [
         "Working": shown(try reported("agent", state: "working", activity: Self.working)),
+        "Signing in": shown(try reported("controlling", state: "control")) {
+          $0.lease = "lease"
+          $0.session.signIn = ViewerSignIn(purpose: .signIn, site: "github.com")
+        },
+        "Signed in": shown(try reported("agent", state: "working", activity: Self.working)) {
+          $0.session.alert = .signedIn(site: "github.com", browser: nil, added: true)
+        },
+        "Forgot a site": shown(try reported("agent", state: "working", activity: Self.working)) {
+          $0.session.alert = .removeAfter(site: "github.com", browser: nil)
+        },
+        "Waiting for you": shown(try reported("agent", state: "working", activity: Self.working)) { snapshot in
+          let asked = snapshot.date - 18
+          snapshot.asks = AskList(asks: [
+            Ask(
+              id: "v1",
+              who: "Claude Code · release",
+              task: "ship the setup fix",
+              account: "github.com",
+              kind: .click,
+              element: "Merge pull request",
+              asked: asked,
+              ends: asked + 120
+            )
+          ])
+        },
         "Idle": shown(idle),
         "You have control": shown(try reported("controlling", state: "control")) { $0.lease = "lease" },
         "Needs you": shown(try reported("recovering", state: "needsYou")),
@@ -83,9 +108,9 @@
           $0.reading.lastPicture = SampleDesktop.picture
           $0.reading.waitedLong = true
         },
-        "Switch": shown(loggedOut, picture: false, unavailable: gone) { $0.session.alert = .switchToHelper },
-        "Log out": shown(idle) { $0.session.alert = .logOut },
-        "Log out anyway": shown(idle) { $0.session.alert = .logOutAnyway },
+        "Switch": shown(loggedOut, picture: false, unavailable: gone) { $0.session.alert = .helper(.switchToHelper) },
+        "Log out": shown(idle) { $0.session.alert = .helper(.logOut) },
+        "Log out anyway": shown(idle) { $0.session.alert = .helper(.logOutAnyway) },
         "Restart": shown(idle) { $0.session.alert = .restart },
         "Typing": shown(try reported("controlling", state: "control")) {
           $0.lease = "lease"

@@ -1,15 +1,17 @@
 import SwiftUI
 
-/// How the Activity list moves, each rule pure so the motion table can check it. A moment opens and folds as one
-/// disclosure on one spring. Any other change runs in three beats so no two rows ever share a place: rows leaving fade
-/// out where they stand, then the rows that stay move into place on ``Motion/state``, then the rows arriving fade in
-/// where room was made. Under Reduce Motion nothing moves or scales
-/// and only opacity changes, over at most 0.2 seconds.
+/// How the Activity list moves, each rule pure so the motion table can check it. A session or a run opens and folds
+/// as one disclosure on one spring: what it holds fades and slides in as its key items fade out, all on that spring,
+/// with the rows below moving with it. Another session or another filter is another list, which takes the old one's
+/// place as one piece: the old list fades out, then the new one fades in, and no row moves. New work in the same list
+/// runs in three beats so no two rows ever share a place: rows leaving fade out where they stand, then the rows that
+/// stay move into place on ``Motion/state``, then the rows arriving fade in where room was made. Under Reduce Motion
+/// nothing moves or scales and only opacity changes, over at most 0.2 seconds.
 enum ActivityMotion {
-  /// How a moment opens or folds, and how "Show N more" opens the rest: its disclosure grows or shrinks on
-  /// ``Motion/state``, one spring with no bounce that turns back from where it is when pressed again, revealing or
-  /// covering its steps in place as the moments below move with it; under Reduce Motion the height changes at once,
-  /// and fully fitting steps appear in place.
+  /// How a session or a run opens or folds, its pictures open in place, or a day shows its other sessions: what it
+  /// holds grows or shrinks on ``Motion/state``, one spring with no bounce that turns back from where it is when pressed
+  /// again, revealing or covering what it holds in place as the rows below move with it; under Reduce Motion the height
+  /// changes at once and what it holds only fades.
   ///
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation, or nil for none.
@@ -17,13 +19,49 @@ enum ActivityMotion {
     Motion.layout(Motion.state, reduceMotion: reduceMotion)
   }
 
-  /// How the list changes as the person picks a filter or asks for more steps: the rows that stay move into place
-  /// once the rows leaving have faded (``Motion/listMove``); geometry changes at once under Reduce Motion.
+  /// How the list gives way to another as the person picks another session or filter: the old list goes and the new
+  /// one comes as two whole pieces, each only fading, in the place the list stands (``swapOut(isAtTop:reduceMotion:)``,
+  /// ``swapIn(isAtTop:reduceMotion:)``). Nothing in either list moves, and no row comes in as new work does.
   ///
-  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Parameters:
+  ///   - isAtTop: Whether the list sat at its very top as the person changed it.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The transition.
+  static func swap(isAtTop: Bool, reduceMotion: Bool) -> AnyTransition {
+    let removal = swapOut(isAtTop: isAtTop, reduceMotion: reduceMotion)
+      .map { fading in
+        AnyTransition.opacity
+          .animation(fading)
+      }
+    return .asymmetric(
+      insertion: AnyTransition.opacity
+        .animation(swapIn(isAtTop: isAtTop, reduceMotion: reduceMotion)),
+      removal: removal ?? .identity
+    )
+  }
+
+  /// How the old list fades as another takes its place: on ``Motion/swapOut`` at the top, so the new one waits for it
+  /// and the two are never drawn over each other; at once when the person had scrolled down, as the list goes back to
+  /// its top and the old one would only jump, and under Reduce Motion.
+  ///
+  /// - Parameters:
+  ///   - isAtTop: Whether the list sat at its very top as the person changed it.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The animation, or nil for none.
+  static func swapOut(isAtTop: Bool, reduceMotion: Bool) -> Animation? {
+    isAtTop && !reduceMotion ? Motion.swapOut : nil
+  }
+
+  /// How the new list fades in: on ``Motion/swapInAfterOut`` once the old one has faded at the top; at once on
+  /// ``Motion/swapIn`` when the old one went at once; on ``Motion/crossfadeReduced`` under Reduce Motion.
+  ///
+  /// - Parameters:
+  ///   - isAtTop: Whether the list sat at its very top as the person changed it.
+  ///   - reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation.
-  static func filter(reduceMotion: Bool) -> Animation? {
-    Motion.layout(Motion.listMove, reduceMotion: reduceMotion)
+  static func swapIn(isAtTop: Bool, reduceMotion: Bool) -> Animation {
+    guard !reduceMotion else { return Motion.crossfadeReduced }
+    return isAtTop ? Motion.swapInAfterOut : Motion.swapIn
   }
 
   /// How a row comes and goes: out with a quick fade where it stands on ``Motion/swapOut``, before anything moves
@@ -50,29 +88,41 @@ enum ActivityMotion {
     )
   }
 
-  /// How a row under an open moment's header comes and goes while the moment stays open: the newest, at the top, as
-  /// any row comes into the list (``row(isAtTop:reduceMotion:)``). Other rows wait for the departing link to fade on
-  /// ``Motion/swapOut`` before fading in, so Show more never overprints its replacement. Only opacity changes.
+  /// How what a session or a run holds comes in and goes as the person opens or folds it, or asks for more of a day's
+  /// sessions: a fade with a drop of ``Spacing/xsPlus`` on the change's own animation, the fold's spring, with no beat
+  /// of its own and no delay, so it moves with the rows it pushes down, and the folded row's key items fade the other
+  /// way at the same time; only a short fade under Reduce Motion, where nothing moves.
+  ///
+  /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
+  /// - Returns: The transition.
+  static func disclosure(reduceMotion: Bool) -> AnyTransition {
+    guard !reduceMotion else {
+      return AnyTransition.opacity
+        .animation(Motion.crossfadeReduced)
+    }
+    return AnyTransition.opacity
+      .combined(with: .offset(y: -Spacing.xsPlus))
+  }
+
+  /// How a session's run comes in and goes: with the session's disclosure while the person opens it, else as any row
+  /// arrives (``row(isAtTop:reduceMotion:)``); it goes with the change that takes it, the fold's spring as its session
+  /// folds, so it never vanishes before the rows below have moved.
   ///
   /// - Parameters:
-  ///   - index: The row's place under the header, the newest first.
+  ///   - disclosing: Whether the person is opening its session, or asking for its day's other sessions, just now.
   ///   - isAtTop: Whether the list sits at its very top.
   ///   - reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The transition.
-  static func step(at index: Int, isAtTop: Bool, reduceMotion: Bool) -> AnyTransition {
-    guard index > 0 else { return row(isAtTop: isAtTop, reduceMotion: reduceMotion) }
-    guard isAtTop else { return .identity }
-    return .asymmetric(
-      insertion: AnyTransition.opacity
-        .animation(Motion.swapInAfterOut),
-      removal: AnyTransition.opacity
-        .animation(Motion.swapOut)
+  static func run(disclosing: Bool, isAtTop: Bool, reduceMotion: Bool) -> AnyTransition {
+    .asymmetric(
+      insertion: disclosing
+        ? disclosure(reduceMotion: reduceMotion) : row(isAtTop: isAtTop, reduceMotion: reduceMotion),
+      removal: disclosure(reduceMotion: reduceMotion)
     )
   }
 
-  /// How a moment's header answers its opening or folding at once, on the spring its steps grow on: its chevron turns
-  /// and its capsule's fill fades on ``Motion/state``; under Reduce Motion the chevron does not turn, its symbol swaps
-  /// in a short fade, and the fill fades as briefly.
+  /// How a session's or a run's chevron answers its opening or folding at once, on the spring what it holds grows on:
+  /// it turns on ``Motion/state``; under Reduce Motion it does not turn, and its symbol swaps in a short fade.
   ///
   /// - Parameter reduceMotion: Whether the Reduce Motion setting is on.
   /// - Returns: The animation.

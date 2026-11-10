@@ -2,7 +2,10 @@
 //! stream, one acquisition at a time, on demand, keeping just the latest
 //! picture; observers that stop waiting never cancel an acquisition half
 //! way, and a source left without demand gives the helper's stream back.
+//! A screen that stays still is read less often, until it changes or input
+//! is sent; every picture is still read anew and timed when it was read.
 use atlas_client::client::{Client, live::LiveStream};
+use atlas_control::Visible;
 use atlas_core::{
     frame_pipe::{
         budget::Budget,
@@ -18,12 +21,19 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 /// How long a source may go without demand before it gives the stream back.
 pub(crate) const IDLE: Duration = Duration::from_secs(2);
 /// The shortest time between two acquisitions: 30 a second at most.
 const CADENCE: Duration = Duration::from_millis(33);
+/// The time between acquisitions while the screen stays still. Every picture
+/// is copied and sent whole, so reading a still screen less often saves the
+/// helper and the broker CPU.
+const STILL_CADENCE: Duration = Duration::from_millis(250);
+/// How many pictures in a row must match the one before for the screen to
+/// count as still.
+const STILL_AFTER: u32 = 10;
 
 /// One verified picture of the helper, shared by every observer it serves.
 pub(crate) struct Picture {
@@ -35,6 +45,58 @@ pub(crate) struct Picture {
     pub(crate) backend: Source,
     /// The helper session both its proofs named.
     pub(crate) epoch: Epoch,
+    /// The screen's privacy generation through the whole acquisition, or
+    /// None when it was hidden or a sign-in began or ended meanwhile: such
+    /// a picture is shown to the app alone.
+    pub(crate) visible: Option<Visible>,
+}
+
+impl Picture {
+    /// Whether `other` shows exactly what this one does, in the same session.
+    fn same_as(&self, other: &Self) -> bool {
+        self.epoch == other.epoch
+            && self.display == other.display
+            && self.pixels.width() == other.pixels.width()
+            && self.pixels.height() == other.pixels.height()
+            && self.pixels.as_slice() == other.pixels.as_slice()
+    }
+}
+
+/// How long the screen has looked the same, by the source's own pictures.
+#[derive(Default)]
+struct Stillness {
+    /// The newest picture, also held by the latest answer. It is let go
+    /// once that answer is a failure or the stream was given back.
+    last: Option<Arc<Picture>>,
+    /// How many pictures in a row matched the one before.
+    repeats: u32,
+}
+
+impl Stillness {
+    /// Note `picture`, the newest.
+    fn saw(&mut self, picture: &Arc<Picture>) {
+        let same = self.last.as_ref().is_some_and(|last| last.same_as(picture));
+        self.repeats = if same {
+            self.repeats.saturating_add(1)
+        } else {
+            0
+        };
+        self.last = Some(picture.clone());
+    }
+
+    /// Input was sent: the screen may change at any moment.
+    fn stirred(&mut self) {
+        self.repeats = 0;
+    }
+
+    /// The time from one acquisition's start to the next one's.
+    fn cadence(&self) -> Duration {
+        if self.repeats >= STILL_AFTER {
+            STILL_CADENCE
+        } else {
+            CADENCE
+        }
+    }
 }
 
 /// What reads pictures for the source.
@@ -90,8 +152,19 @@ impl Handle {
     }
 }
 
-/// Start the source over `acquire`, charging its pictures to `budget`.
-pub(crate) fn spawn(mut acquire: impl Acquire, budget: Budget) -> Handle {
+/// The screen's privacy generation now, or None while it is hidden.
+pub(crate) type Visibility = Arc<dyn Fn() -> Option<Visible> + Send + Sync>;
+
+/// Start the source over `acquire`, charging its pictures to `budget` and
+/// marking each with the privacy generation `visible` held through its
+/// acquisition. A notice on `input` says input was just sent to the helper,
+/// which ends a still screen's slower cadence at once.
+pub(crate) fn spawn(
+    mut acquire: impl Acquire,
+    budget: Budget,
+    input: Arc<Notify>,
+    visible: Visibility,
+) -> Handle {
     let (demand, mut wanted) = watch::channel(0_u64);
     let (answer, answers) = watch::channel(Answer {
         demand: 0,
@@ -100,13 +173,23 @@ pub(crate) fn spawn(mut acquire: impl Acquire, budget: Budget) -> Handle {
     let task = tokio::spawn(async move {
         let mut answered = 0;
         let mut active = false;
+        let mut still = Stillness::default();
         loop {
             let asked = *wanted.borrow_and_update();
             if asked > answered {
                 let began = tokio::time::Instant::now();
-                let latest = match acquire.acquire(&budget).await {
-                    Ok(picture) => Latest::Picture(Arc::new(picture)),
-                    Err(reason) => Latest::Failed(reason),
+                let before = visible();
+                let latest = match read(&mut acquire, &budget).await {
+                    Ok(mut picture) => {
+                        picture.visible = before.filter(|before| visible() == Some(*before));
+                        let picture = Arc::new(picture);
+                        still.saw(&picture);
+                        Latest::Picture(picture)
+                    }
+                    Err(reason) => {
+                        still = Stillness::default();
+                        Latest::Failed(reason)
+                    }
                 };
                 active = true;
                 answered = asked;
@@ -114,13 +197,23 @@ pub(crate) fn spawn(mut acquire: impl Acquire, budget: Budget) -> Handle {
                     demand: asked,
                     latest,
                 });
-                tokio::time::sleep_until(began + CADENCE).await;
+                // Waiting only puts off the next acquisition, which still
+                // begins after the demand it answers: no picture is kept
+                // longer or offered again.
+                tokio::select! {
+                    () = tokio::time::sleep_until(began + still.cadence()) => {}
+                    () = input.notified() => {
+                        still.stirred();
+                        tokio::time::sleep_until(began + CADENCE).await;
+                    }
+                }
                 continue;
             }
             tokio::select! {
                 changed = wanted.changed() => if changed.is_err() { break },
                 () = tokio::time::sleep(IDLE), if active => {
                     active = false;
+                    still = Stillness::default();
                     let latest = match acquire.stop().await {
                         Ok(()) => Latest::Idle,
                         Err(reason) => Latest::Failed(reason),
@@ -135,6 +228,19 @@ pub(crate) fn spawn(mut acquire: impl Acquire, budget: Budget) -> Handle {
         demand,
         answers,
         task,
+    }
+}
+
+/// The next picture from `acquire`. One that came too late is read again,
+/// once and at once: the helper was slow for a moment, as when WindowServer
+/// stalls, and its stream is still at a frame boundary. Reported as a
+/// failure, it would end every observer's credits and, with no demand left,
+/// the helper's stream; the new reading still begins after the demand it
+/// answers.
+async fn read(acquire: &mut impl Acquire, budget: &Budget) -> Result<Picture, Reason> {
+    match acquire.acquire(budget).await {
+        Err(Reason::SourceStale) => acquire.acquire(budget).await,
+        read => read,
     }
 }
 
@@ -195,6 +301,8 @@ impl Acquire for Live {
                         CaptureBackend::ScreenCaptureKit => Source::Sck,
                     },
                     epoch: frame.epoch,
+                    // The source marks it once read.
+                    visible: None,
                 })
             }
             Err(error) => {
@@ -223,4 +331,5 @@ impl Acquire for Live {
 }
 
 #[cfg(test)]
+#[path = "source_tests.rs"]
 mod tests;

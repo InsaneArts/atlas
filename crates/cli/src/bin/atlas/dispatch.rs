@@ -1,8 +1,8 @@
 //! Command execution, activity attribution and helper-change policy.
 use super::{
     cli::{
-        self, AgentPicks, AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, JobCommand,
-        OnOff, OnboardingCommand, WindowState,
+        self, AgentPicks, AgentsCommand, Command, CursorHookEvent, EnvironmentCommand, HomeFiles,
+        JobCommand, OnOff, OnboardingCommand, SignInCopies, WindowState,
     },
     doctor, help,
     output::{self, print},
@@ -274,6 +274,10 @@ async fn carry_out(
         Command::SetupHelper(args) => setup_helper(&args),
         Command::Update(args) => update::run(config, args, host, allow_disrupt).await,
         Command::UpdateFinish => update::update_finish(config, host, allow_disrupt).await,
+        Command::PictureAfter { before, ended } => {
+            client()?.picture_after(&before, ended).await?;
+            Ok(json!({"ok": true}))
+        }
         Command::Init => super::init::run(config, allow_disrupt).await,
         Command::Onboarding { step } => onboarding(config, step).await,
         Command::Agents { action } => agents(config, host, action).await,
@@ -281,7 +285,7 @@ async fn carry_out(
         Command::Menubar(args) => menu_bar(config, client, args).await,
         Command::Switch(args) => switch(config, args),
         Command::Setup(args) => setup(config, client, args).await,
-        Command::Config => Ok(json!({ "ok": true, "config": client()?.config, "path": config })),
+        Command::Config(args) => settings(config, client, &args),
         Command::Status => Ok(client()?.status().await),
         Command::Sound { state: None } => atlas_client::sound::show(&client()?).await,
         Command::Sound { state: Some(state) } => {
@@ -311,10 +315,10 @@ async fn carry_out(
             capture_backend,
             ..
         } => {
-            let backend = if capture_backend.as_deref() == Some("sck") {
-                atlas_core::protocol::CaptureBackend::ScreenCaptureKit
-            } else {
+            let backend = if capture_backend.as_deref() == Some("cg") {
                 atlas_core::protocol::CaptureBackend::CoreGraphics
+            } else {
+                atlas_core::protocol::CaptureBackend::ScreenCaptureKit
             };
             atlas_cli::terminal::monitor(client()?, config, read_only, max_dimension, backend)
                 .await?;
@@ -323,13 +327,19 @@ async fn carry_out(
         Command::Monitor { port, .. } => {
             viewer::monitor(config, port, client()?.output_dir()?).await
         }
-        Command::Screenshot(args) => screenshot(&client()?, args).await,
+        Command::Screenshot(args) => {
+            let client = client()?;
+            client.controller.shown(screenshot(&client, args)).await
+        }
         Command::Apps { all } => Ok(atlas_client::app_selection::listed(
             client()?.apps().await?,
             all,
         )),
         Command::Click(args) => click(&client()?, args).await,
-        Command::Elements(args) => elements(&client()?, args).await,
+        Command::Elements(args) => {
+            let client = client()?;
+            client.controller.shown(elements(&client, args)).await
+        }
         Command::Element(args) => {
             let action = args.as_input()?;
             agent::element(&client()?, args.target.target().as_ref(), &action).await
@@ -343,7 +353,12 @@ async fn carry_out(
         Command::Type(args) => type_text(client, args).await,
         Command::Key(args) => press_keys(client, args).await,
         Command::Windows { app, title, all } => {
-            agent::list(&client()?, &agent::WindowFilter { app, title, all })
+            let client = client()?;
+            let filter = agent::WindowFilter { app, title, all };
+            let listed = agent::list(&client, &filter);
+            client
+                .controller
+                .shown(listed)
                 .await
                 .map(|windows| json!({"ok": true, "windows": windows}))
         }
@@ -351,7 +366,10 @@ async fn carry_out(
         Command::InstallApp { path } => atlas_client::install_app::install(&client()?, &path).await,
         Command::Cleanup(args) => cleanup(&client()?, &args).await,
         Command::Close { app, .. } => close(&client()?, app.as_deref()).await,
-        Command::Wait(args) => wait(&client()?, args).await,
+        Command::Wait(args) => {
+            let client = client()?;
+            client.controller.shown(wait(&client, args)).await
+        }
         Command::Input { actions, target } => input(&client()?, actions, target).await,
         Command::Job { command } => job(&client()?, command).await,
         Command::Collect { files, max_size } => {
@@ -692,6 +710,22 @@ async fn onboarding(config: &Path, step: OnboardingCommand) -> Result<Value> {
         OnboardingCommand::Close { helper: true } => onboarding::close_helper(config),
         OnboardingCommand::Finish => onboarding::finish(config).await,
         OnboardingCommand::Login { state } => onboarding::login(config, state == OnOff::On),
+        OnboardingCommand::Files { change } => {
+            let change = change.map(|change| match change {
+                HomeFiles::Private => onboarding::HomeChange::Private,
+                HomeFiles::Open => onboarding::HomeChange::Open,
+                HomeFiles::Offered => onboarding::HomeChange::Offered,
+            });
+            let (config, by_person) = (config.to_path_buf(), actor() == Actor::Viewer);
+            // `ls` and `chmod` wait on their own, off the command's async work.
+            tokio::task::spawn_blocking(move || onboarding::files(&config, change, by_person))
+                .await
+                .map_err(|error| Error::new(Code::Io, error.to_string()))?
+        }
+        OnboardingCommand::SignIns { choice } => onboarding::sign_ins(
+            choice.map(|choice| choice == SignInCopies::Allow),
+            actor() == Actor::Viewer,
+        ),
     }
 }
 
@@ -858,6 +892,35 @@ fn actions_batch(actions: String) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// `atlas config`: change the settings and the pictures as `args` asks,
+/// then show the settings, with the pictures kept when asked.
+fn settings(
+    config: &Path,
+    client: &impl Fn() -> Result<Client>,
+    args: &cli::Config,
+) -> Result<Value> {
+    if let Some(state) = args.pictures_before_actions {
+        atlas_core::config::keep_pictures(config, state == cli::OnOff::On)?;
+    }
+    if let Some(days) = args.keep_pictures_days {
+        atlas_core::config::keep_days(config, days)?;
+    }
+    if let Some(limit) = args.typed_text_limit {
+        atlas_core::config::typed_text_limit(config, (limit > 0).then_some(limit))?;
+    }
+    let client = client()?;
+    let output = &client.config.output_dir;
+    if args.delete_pictures {
+        atlas_client::before::delete_all(output)?;
+    }
+    let mut reply = json!({ "ok": true, "config": client.config, "path": config });
+    if args.pictures_summary {
+        let (count, bytes) = atlas_client::before::summary(output);
+        reply["pictures"] = json!({"count": count, "bytes": bytes});
+    }
+    Ok(reply)
+}
+
 /// Lock the screen so the person can switch to the helper (or an account
 /// named). macOS asks for that account's password on the lock screen; there
 /// is nothing to choose here beyond whether to lock now.
@@ -926,4 +989,5 @@ fn refuse_root(command: &str, root: bool) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "dispatch_tests.rs"]
 mod tests;

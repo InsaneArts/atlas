@@ -49,16 +49,13 @@ struct ScreenZoomTests {
     #expect(coming == [nil, .corner])
   }
 
-  @Test(
-    "a switch to a list turned straight back keeps one picture on the stage, never a gap",
-    arguments: [ViewerPlace.activity, .screenshots]
-  )
-  func aSwitchTurnedBackKeepsOnePicture(list: ViewerPlace) throws {
+  @Test("a switch to Activity turned straight back keeps one picture on the stage, never a gap")
+  func aSwitchTurnedBackKeepsOnePicture() throws {
     let previous = Motion.Pose.moment
     Motion.Pose.hold(at: .zero)
     defer { Motion.Pose.hold(at: previous) }
     let host = ViewerHost(try Self.state(.screen))
-    host.show(try Self.state(list))
+    host.show(try Self.state(.activity))
     host.show(try Self.state(.screen))
     let colours = try host.colours(at: [Self.middle, Self.corner])
     // The small screen had not left the stage's middle, so the picture coming back starts there, whole: the middle
@@ -73,18 +70,17 @@ struct ScreenZoomTests {
   /// card's edge, which is 8 in from the window's, and its foot 12 over the footer's 46.
   static let corner = CGPoint(x: PreviewStates.viewerSize.width - 120, y: PreviewStates.viewerSize.height - 120)
 
-  /// The window on the Screen, or on Activity or Screenshots with the small screen in its corner. The stage and the
+  /// The window on the Screen, or on Activity with the small screen in its corner. The stage and the
   /// corner read one picture in the window; here each has its own, so the slot can paint them apart.
   ///
-  /// - Parameter place: The Screen, Activity or Screenshots.
+  /// - Parameter place: The Screen or Activity.
   /// - Returns: What the window shows.
   /// - Throws: When a picture cannot be made.
   static func state(_ place: ViewerPlace) throws -> ViewerState {
     var state =
       switch place {
       case .screen: PreviewStates.viewerWorking
-      case .screenshots: PreviewStates.viewerShots
-      case .activity, .apps: PreviewStates.viewerActivity
+      case .activity: PreviewStates.viewerActivity
       }
     state.screen.picture = try LayerPictureTests.picture(PictureColour.stage.rawValue)
     state.mini =

@@ -64,4 +64,5 @@ impl FramePixels {
 }
 
 #[cfg(test)]
+#[path = "pixels_tests.rs"]
 mod tests;

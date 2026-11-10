@@ -255,4 +255,5 @@ fn rolled_back(reply: WorkerReply) -> Undone {
 }
 
 #[cfg(test)]
+#[path = "undo_tests.rs"]
 mod tests;

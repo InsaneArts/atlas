@@ -1,4 +1,5 @@
-//! Dock taps use AXPress; a viewer's held press is deferred until it is
+//! Dock taps use AXPress, and a right or Control click AXShowMenu, as the
+//! Dock's own menu opens; a viewer's held press is deferred until it is
 //! known to be a tap or a drag. Deferred presses have posted nothing.
 use super::{Button, Engine, Point, PointerPhase};
 use crate::native::{ax, focus::Reason};
@@ -68,6 +69,9 @@ impl Engine {
             return Err(Error::new(Code::Input, "A mouse button is already held"));
         }
         for click in 1..=count {
+            if click > 1 {
+                crate::native::service::recheck_event(self)?;
+            }
             if !self.dock_click(point, button, modifiers, true).await? {
                 self.post_pointer(PointerPhase::Down, point, button, modifiers, click)
                     .await?;
@@ -105,7 +109,7 @@ impl Engine {
                 press,
                 guard,
                 || ax::dock_item(display, point.x, point.y),
-                |item| ax::act(item, &CFString::from_static_str("AXPress")),
+                |item, action| ax::act(item, &CFString::from_static_str(action)),
             )
         })
         .await
@@ -188,7 +192,7 @@ fn resolve<T>(
     press: bool,
     guard: impl Fn() -> Result<()>,
     find: impl FnOnce() -> Result<Option<T>>,
-    act: impl FnOnce(&T) -> AXError,
+    act: impl FnOnce(&T, &'static str) -> AXError,
 ) -> Result<bool> {
     guard()?;
     let Some(item) = find()? else {
@@ -199,17 +203,27 @@ fn resolve<T>(
             "The Dock is at that point, not the app; no click was sent",
         ));
     }
-    if button != Button::Left || !modifiers.is_empty() {
-        return Err(Error::new(
-            Code::Input,
-            "Dock input supports only unmodified left clicks; no click was sent",
-        ));
-    }
+    let action = dock_action(button, modifiers)?;
     if press {
         guard()?;
-        press_result(act(&item))?;
+        press_result(act(&item, action))?;
     }
     Ok(true)
+}
+
+/// The Accessibility action a click on a Dock item does: a plain left
+/// click presses it; a right click, or a left click with Control alone,
+/// shows its menu. Any other gesture is refused.
+fn dock_action(button: Button, modifiers: &[String]) -> Result<&'static str> {
+    let control = matches!(modifiers, [only] if only == "ctrl");
+    match (button, modifiers.is_empty(), control) {
+        (Button::Left, true, _) => Ok("AXPress"),
+        (Button::Right, true, _) | (Button::Left, false, true) => Ok("AXShowMenu"),
+        _ => Err(Error::new(
+            Code::Input,
+            "Dock input supports left clicks, and right or Control clicks for an item's menu; no click was sent",
+        )),
+    }
 }
 
 fn off_target(message: &str) -> Error {
@@ -229,4 +243,5 @@ fn press_result(status: AXError) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "dock_tests.rs"]
 mod tests;

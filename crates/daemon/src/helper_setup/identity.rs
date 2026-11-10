@@ -179,4 +179,5 @@ pub fn verified(uid: u32) -> Option<Identity> {
 }
 
 #[cfg(test)]
+#[path = "identity_tests.rs"]
 mod tests;

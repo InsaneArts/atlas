@@ -74,7 +74,7 @@ final class DesktopCanvasView: NSView {
   }
 
   /// Keys are seen before menus and the window's own shortcuts: while in control, so a shortcut, the main menu's
-  /// ⌘1 to ⌘4, ⌘. and ⌘S included, reaches the helper rather than this app, and always, so a held
+  /// ⌘1 to ⌘3, ⌘. and ⌘S included, reaches the helper rather than this app, and always, so a held
   /// Control-Shift-Escape's repeats reach neither. Only Control-Shift-Escape, which gives control back, and Command-Q
   /// stay with this Mac (``KeyRoute``).
   private func startIntercepting() {
@@ -124,6 +124,9 @@ final class DesktopCanvasView: NSView {
     // take each repeat as Take Control: the repeats go nowhere, in control or not.
     if KeyRoute.swallows(keyCode: event.keyCode, modifiers: modifiers, repeating: event.isARepeat) { return nil }
     guard let controller, controller.holdingControl, window.firstResponder === self else { return event }
+    // An alert over the window takes its own keys, Return, Escape and ⌘. among them: nothing reaches the helper while
+    // it shows, as during a held sign-in, whose lease still renews.
+    guard controller.shownAlert == nil else { return event }
     let route = KeyRoute(
       keyCode: event.keyCode,
       modifiers: modifiers,

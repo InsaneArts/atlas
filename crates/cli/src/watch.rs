@@ -403,8 +403,23 @@ pub(crate) struct Screen {
 }
 
 /// The helper's newest screen: the viewer's shared frame when it runs, else
-/// a capture of the verified helper.
+/// a capture of the verified helper. None while the person signs the helper
+/// in to an account, or when a sign-in began or ended while it was read.
 pub(crate) async fn screen(client: &Client, output: &Path, port: u16) -> Option<Screen> {
+    client
+        .controller
+        .shown(async { screen_now(client, output, port).await.ok_or_else(unseen) })
+        .await
+        .ok()
+}
+
+/// No screen was read.
+fn unseen() -> Error {
+    Error::new(Code::Capture, "The helper's screen could not be read")
+}
+
+/// [`screen`], whatever the screen's privacy.
+async fn screen_now(client: &Client, output: &Path, port: u16) -> Option<Screen> {
     let output = output.to_path_buf();
     let shared = tokio::task::spawn_blocking(move || {
         let url = crate::viewer::local(&output, port)?;
@@ -510,4 +525,5 @@ impl Watch {
 }
 
 #[cfg(test)]
+#[path = "watch_tests.rs"]
 mod tests;

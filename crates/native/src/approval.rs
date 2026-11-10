@@ -250,4 +250,5 @@ fn execution_started<T>(status: i32, pipe: Option<T>) -> Result<T, Refusal> {
 }
 
 #[cfg(test)]
+#[path = "approval_tests.rs"]
 mod tests;

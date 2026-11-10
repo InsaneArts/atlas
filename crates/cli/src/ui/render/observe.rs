@@ -139,7 +139,9 @@ pub(super) fn doctor(value: &Value, verbose: bool) -> String {
         }
     }
 
+    lines.extend(accounts(&value["accounts"]));
     lines.extend(warnings(value));
+    lines.extend(open_files(&value["files"]));
 
     let native = &value["capabilities"]["nativeDialogs"];
     if verbose {
@@ -154,6 +156,42 @@ pub(super) fn doctor(value: &Value, verbose: bool) -> String {
 pub(super) fn warnings(value: &Value) -> impl Iterator<Item = String> {
     strings(&value["warnings"])
         .map(|warning| format!("{} {}", style::warn(), text::printable(warning)))
+}
+
+/// The accounts Atlas lists for the helper, by name: the person's terminal
+/// only, never an agent's reply.
+fn accounts(names: &Value) -> Option<String> {
+    let names: Vec<String> = strings(names)
+        .map(|name| text::printable(name).into_owned())
+        .collect();
+    (!names.is_empty()).then(|| format!("{} Accounts: {}", style::ok(), names.join(", ")))
+}
+
+/// What the helper can open in the person's home folder, while it isn't
+/// private: the person's terminal only, never an agent's reply.
+fn open_files(files: &Value) -> Vec<String> {
+    let count = files["readable"].as_u64().unwrap_or_default();
+    if files["private"] != false || count == 0 {
+        return Vec::new();
+    }
+    let names: Vec<String> = strings(&files["examples"])
+        .map(|name| text::printable(name).into_owned())
+        .collect();
+    let others = count.saturating_sub(names.len() as u64);
+    let shown = match (names.as_slice(), others) {
+        ([], _) => String::new(),
+        ([one], 0) => format!(" ({one})"),
+        ([one, two], 0) => format!(" ({one} and {two})"),
+        (names, others) => format!(" ({} and {others} more)", names.join(", ")),
+    };
+    let folders = if count == 1 { "folder" } else { "folders" };
+    vec![
+        format!(
+            "{} Your files: the helper can open {count} {folders} in your home{shown}.",
+            style::warn()
+        ),
+        "  Make them private in Atlas › Settings › Privacy.".to_owned(),
+    ]
 }
 
 /// The facts behind a doctor report, for `doctor --verbose`.
@@ -214,6 +252,17 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
                 text::printable(step)
             ));
         }
+    }
+
+    // Apple jobs seen quitting at once and restarting in the helper: only
+    // reported, as Atlas cannot stop them.
+    for job in items(&value["restartingJobs"]) {
+        lines.push(format!(
+            "{}  {} restarted {} times in the last hour",
+            style::dim(format!("{:<13}", "Restarting")),
+            text::printable(job["label"].as_str().unwrap_or("A job")),
+            job["runs"].as_u64().unwrap_or(0)
+        ));
     }
 
     lines.push(style::dim("--json --verbose has everything."));
@@ -286,6 +335,14 @@ pub(super) fn config(value: &Value) -> String {
         ("Shared command", path(&config["identity_probe"])),
         ("Helper socket", path(&config["socket_path"])),
         ("Input socket", path(&config["input_socket"])),
+        (
+            "Pictures",
+            if config["activity"]["pictures_before_actions"] == false {
+                "off".into()
+            } else {
+                "before each action".into()
+            },
+        ),
     ];
 
     labelled(&rows, 14).join("\n")
@@ -577,4 +634,5 @@ pub(super) fn readiness(value: &Value) -> String {
 }
 
 #[cfg(test)]
+#[path = "observe_tests.rs"]
 mod tests;

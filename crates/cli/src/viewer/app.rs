@@ -29,7 +29,8 @@ impl Viewer {
 
 /// Serve the viewer for the menu bar app until the person quits it, or
 /// until interrupted, terminated or hung up: nothing to report then. When
-/// the menu bar already runs on `port`, it says so instead.
+/// the menu bar already runs on `port`, it says so instead; one serving the
+/// same records on another port refuses it.
 /// `ready` receives the redacted startup record after the app launches and its
 /// private record is saved, before accepting requests. Binding, launching or
 /// recording failures are returned without reporting readiness.
@@ -56,6 +57,9 @@ pub async fn serve(
         }
         Err(error) => return Err(error),
     };
+    // One menu bar keeps its record in a folder, on whatever port, until
+    // the record is gone; another is refused before it launches or records.
+    *unpoisoned(&viewer.alone) = Some(crate::menubar::alone(&output)?);
 
     // Stopping it any of these ways releases control and removes its record.
     let mut terminated = signal(SignalKind::terminate())?;
@@ -70,7 +74,8 @@ pub async fn serve(
 
     // The record names a viewer with an app; none is left when the app
     // does not start.
-    let mut app = App::launch(&program, &viewer.url, receiver).await?;
+    let mut app = App::launch(&program, &viewer.url, &viewer.app_secret, receiver).await?;
+    *unpoisoned(&viewer.app_process) = app.process();
     let record = json!({
         "url": viewer.url,
         "pid": std::process::id(),
@@ -86,6 +91,7 @@ pub async fn serve(
 
     ready(&shown);
 
+    let pictures = tokio::spawn(prune_pictures(viewer.clone()));
     let expiry = expire_control(viewer.clone());
 
     // Changes in progress in the helper (taking control, input, recovery)
@@ -106,6 +112,7 @@ pub async fn serve(
     .await;
 
     expiry.abort();
+    pictures.abort();
     viewer.close().await;
     let _ = viewer.release(None).await;
     let _ = pipe_stop.send(());
@@ -115,6 +122,7 @@ pub async fn serve(
     if let Some((path, _)) = unpoisoned(&viewer.record).take() {
         remove_record(&path);
     }
+    unpoisoned(&viewer.alone).take();
 
     Ok(Value::Null)
 }
@@ -179,9 +187,28 @@ async fn start_pipe(
             viewer.remember_committed(key, epoch, at);
         }
     });
-    let service = crate::frame_pipe::service::start(client, viewer.frame_width, witness)
-        .await
-        .ok()?;
+    // While the person signs in, only the app this viewer serves is shown
+    // the screen; afterwards others see only what was captured since.
+    let shown = Arc::downgrade(viewer);
+    let controller = client.controller.clone();
+    let privacy = crate::frame_pipe::broker::Privacy {
+        visible: Arc::new(move || controller.screen_visible().ok()),
+        exempt: Arc::new(move |peer| {
+            let app = shown
+                .upgrade()
+                .and_then(|viewer| *unpoisoned(&viewer.app_process));
+            app == Some(peer.instance)
+        }),
+    };
+    let service = crate::frame_pipe::service::start(
+        client,
+        viewer.frame_width,
+        witness,
+        privacy,
+        viewer.input_sent.clone(),
+    )
+    .await
+    .ok()?;
     *unpoisoned(&viewer.pipe) = Some(service.descriptor().clone());
     Some(service)
 }
@@ -204,6 +231,32 @@ impl Viewer {
             let _ = self.release(None).await;
         }
         true
+    }
+}
+
+/// Keep the pictures taken before agents' actions to their week and room
+/// while the viewer runs, even once none is taken any more: pruned now, and
+/// again when the oldest left expires or the settings move the output
+/// folder, never more often. Every folder served since it started is
+/// pruned, so pictures left in an earlier one still expire. Saving a
+/// picture prunes too, and none taken later expires before the oldest left.
+pub(super) async fn prune_pictures(viewer: Arc<Viewer>) {
+    loop {
+        let pruning = unpoisoned(&viewer.outputs).clone();
+        let keep = viewer.client().config.activity.keep();
+        let next = tokio::task::spawn_blocking(move || {
+            pruning
+                .iter()
+                .map(|folder| atlas_client::before::prune(folder, keep))
+                .min()
+        });
+        let Ok(Some(next)) = next.await else {
+            return;
+        };
+        tokio::select! {
+            () = tokio::time::sleep(next) => {}
+            () = viewer.output_moved.notified() => {}
+        }
     }
 }
 

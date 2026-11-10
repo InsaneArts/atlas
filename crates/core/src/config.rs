@@ -1,12 +1,16 @@
-//! Atlas's settings: which account is the helper and where its sockets, the
-//! shared command and the screenshots live, read from a small TOML file
-//! whose relative paths resolve against the file itself.
+//! Atlas's settings: which account is the helper, where its sockets, the
+//! shared command and the screenshots live, and what the activity keeps,
+//! read from a small TOML file whose relative paths resolve against the
+//! file itself.
 use crate::context::context;
 use crate::error::{Code, Error, Result};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     fs,
+    io::Write,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 pub(crate) const DEFAULT_PATH: &str = "atlas.local.toml";
@@ -58,10 +62,79 @@ pub struct Config {
     pub input_socket: PathBuf,
     #[serde(default = "default_output")]
     pub output_dir: PathBuf,
+    #[serde(default, skip_serializing_if = "Activity::is_default")]
+    pub activity: Activity,
 }
 
 fn default_output() -> PathBuf {
     PathBuf::from("runs")
+}
+
+/// What the activity keeps, under `[activity]`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Activity {
+    /// Whether a picture of the helper's screen is kept right before each
+    /// agent action, for the person to see in Atlas.app. On unless turned
+    /// off.
+    #[serde(default = "on")]
+    pub pictures_before_actions: bool,
+    /// How many days the pictures are kept: a week unless set.
+    #[serde(default = "a_week")]
+    pub keep_days: u32,
+    /// The most characters of typed text a picture's facts keep; all of it
+    /// unless set.
+    #[serde(default)]
+    pub typed_text_limit: Option<u32>,
+}
+
+impl Default for Activity {
+    fn default() -> Self {
+        Self {
+            pictures_before_actions: true,
+            keep_days: a_week(),
+            typed_text_limit: None,
+        }
+    }
+}
+
+impl Activity {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// How long the pictures are kept.
+    pub fn keep(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.keep_days) * 24 * 60 * 60)
+    }
+
+    /// Refuse a setting no picture could keep to.
+    fn validate(&self) -> Result<()> {
+        if !(1..=KEEP_DAYS_MAX).contains(&self.keep_days) {
+            return Err(Error::new(
+                Code::Config,
+                format!("Pictures are kept 1 to {KEEP_DAYS_MAX} days"),
+            ));
+        }
+        if self.typed_text_limit == Some(0) {
+            return Err(Error::new(
+                Code::Config,
+                "A typed text limit keeps at least one character",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The most days pictures may be kept.
+pub const KEEP_DAYS_MAX: u32 = 365;
+
+fn on() -> bool {
+    true
+}
+
+fn a_week() -> u32 {
+    7
 }
 
 /// Parse user-authored TOML. Unknown keys are rejected by the target type and
@@ -89,7 +162,8 @@ pub fn parse_toml<T: DeserializeOwned>(bytes: &[u8], origin: &Path) -> Result<T>
 }
 
 impl Config {
-    /// Only output placement can change without ending control in the current helper.
+    /// Only output placement and what the activity keeps can change without
+    /// ending control in the current helper.
     /// Destructuring makes every added setting choose its reload behavior here.
     pub fn same_helper(&self, other: &Self) -> bool {
         let Self {
@@ -98,6 +172,7 @@ impl Config {
             identity_probe,
             input_socket,
             output_dir: _,
+            activity: _,
         } = self;
         (*helper_uid, socket_path, identity_probe, input_socket)
             == (
@@ -181,8 +256,10 @@ impl Config {
             identity_probe,
             input_socket,
             output_dir,
+            activity,
         } = &mut config;
         crate::session::validate_uid(*helper_uid)?;
+        activity.validate()?;
 
         let parent = path
             .parent()
@@ -231,6 +308,154 @@ impl Config {
         toml::to_string(self)
             .map_err(|error| Error::new(Code::Config, error.to_string()).with_source(error))
     }
+}
+
+/// Turn pictures before actions `on` or off in the settings at `path`,
+/// changing only that setting: every other line, comment and order stays
+/// as the file has it. The file is replaced in one rename, only with
+/// settings that load, and only while it still holds what was read.
+///
+/// # Errors
+///
+/// Returns the failure to read, parse or write the settings, or a refusal
+/// when the file changed while it was being updated.
+pub fn keep_pictures(path: &Path, on: bool) -> Result<()> {
+    set_activity(path, "pictures_before_actions", (!on).then(|| false.into()))
+}
+
+/// Keep pictures `days` days in the settings at `path`, as
+/// [`keep_pictures`] writes them; a week leaves the setting out.
+///
+/// # Errors
+///
+/// As [`keep_pictures`], and a refusal of a number of days out of range.
+pub fn keep_days(path: &Path, days: u32) -> Result<()> {
+    let set = (days != a_week()).then(|| i64::from(days).into());
+    set_activity(path, "keep_days", set)
+}
+
+/// Keep at most `limit` characters of typed text in the settings at
+/// `path`, or all of it with none, as [`keep_pictures`] writes them.
+///
+/// # Errors
+///
+/// As [`keep_pictures`].
+pub fn typed_text_limit(path: &Path, limit: Option<u32>) -> Result<()> {
+    set_activity(
+        path,
+        "typed_text_limit",
+        limit.map(|limit| i64::from(limit).into()),
+    )
+}
+
+/// How long a settings write waits for another to finish.
+const WRITING: Duration = Duration::from_secs(5);
+
+/// The settings file at `path`, locked for this writer alone, so two
+/// settings writes never lose one another's change: the lock is on the file
+/// in place, taken again when another writer replaced it meanwhile.
+fn locked(path: &Path) -> Result<crate::files::LockFile> {
+    let deadline = Instant::now() + WRITING;
+    loop {
+        let file = fs::File::open(path).map_err(context("Read settings in", path))?;
+        let file = crate::files::LockFile(file);
+        crate::files::lock_retrying(&file, crate::files::Lock::Exclusive, deadline, |deadline| {
+            Instant::now() < deadline
+        })
+        .map_err(|_| {
+            Error::new(
+                Code::Config,
+                format!("{} is being updated; try again", tilde(path)),
+            )
+        })?;
+        let (held, placed) = (file.0.metadata()?, fs::metadata(path)?);
+        if (held.dev(), held.ino()) == (placed.dev(), placed.ino()) {
+            return Ok(file);
+        }
+    }
+}
+
+/// Set `key` of `[activity]` to `value`, or leave it out with none, in the
+/// settings at `path`, changing nothing else in the file. Another settings
+/// write waits its turn.
+fn set_activity(path: &Path, key: &str, value: Option<toml_edit::Value>) -> Result<()> {
+    let path = fs::canonicalize(path).map_err(context("Read settings in", path))?;
+    let _writing = locked(&path)?;
+    let read = || -> Result<Vec<u8>> {
+        let file = fs::File::open(&path)?;
+        let bytes = crate::files::read_up_to(file, LIMIT + 1)?;
+        if bytes.len() as u64 > LIMIT {
+            return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
+        }
+        Ok(bytes)
+    };
+    let before = read()?;
+    let invalid = |error: &dyn std::fmt::Display| {
+        Error::new(Code::Config, format!("{}: {error}", tilde(&path)))
+    };
+    let mut document = std::str::from_utf8(&before)
+        .map_err(|error| invalid(&error))?
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| invalid(&error))?;
+    let not_a_table = || invalid(&"activity is not a table");
+    match value {
+        Some(mut value) => {
+            let activity = document
+                .entry("activity")
+                .or_insert_with(toml_edit::table)
+                .as_table_like_mut()
+                .ok_or_else(not_a_table)?;
+            match activity
+                .get_mut(key)
+                .and_then(toml_edit::Item::as_value_mut)
+            {
+                Some(written) => {
+                    *value.decor_mut() = written.decor().clone();
+                    *written = value;
+                }
+                None => {
+                    activity.insert(key, toml_edit::Item::Value(value));
+                }
+            }
+        }
+        None => {
+            if let Some(activity) = document.get_mut("activity") {
+                let activity = activity.as_table_like_mut().ok_or_else(not_a_table)?;
+                activity.remove(key);
+                if activity.is_empty() {
+                    document.remove("activity");
+                }
+            }
+        }
+    }
+    let text = document.to_string();
+    if text.as_bytes() == before {
+        return Ok(());
+    }
+    // Only settings that load again are written.
+    if text.len() as u64 > LIMIT {
+        return Err(Error::new(Code::Config, "Configuration exceeds 16 KiB"));
+    }
+    Config::parse(text.as_bytes(), &path)?;
+
+    let mode = fs::metadata(&path)?.permissions().mode() & 0o777;
+    crate::files::write_beside(
+        &path,
+        mode,
+        |file| Ok(file.write_all(text.as_bytes())?),
+        |temporary| {
+            if read()? != before {
+                return Err(Error::new(
+                    Code::Config,
+                    format!(
+                        "{} changed while Atlas was updating it; try again",
+                        tilde(&path)
+                    ),
+                ));
+            }
+            fs::rename(temporary, &path).map_err(context("Place settings at", &path))
+        },
+    )
 }
 
 fn missing(path: &Path) -> Error {
@@ -299,4 +524,5 @@ pub(crate) fn resolve_path(path: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "config_tests.rs"]
 mod tests;

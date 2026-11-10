@@ -610,4 +610,5 @@ fn log_tail(path: &Path, bytes: u64) -> std::io::Result<(Vec<u8>, u64)> {
 }
 
 #[cfg(test)]
+#[path = "job_tests.rs"]
 mod tests;

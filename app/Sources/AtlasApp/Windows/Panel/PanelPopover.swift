@@ -60,9 +60,9 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
     item.button?.target = self
     item.button?.action = #selector(toggle)
     StateTracking.follow(
-      { [weak controller] in controller?.mode },
-      apply: { [weak self] mode in
-        self?.item.show(mode.kind, description: PanelWords.statusItem(mode.word))
+      { [weak controller] in controller?.glyph },
+      apply: { [weak self] glyph in
+        self?.item.show(glyph.kind, description: PanelWords.statusItem(glyph.word))
       }
     )
     // Hands VoiceOver each state that asks something of the person while the panel is open, once it holds.
@@ -109,6 +109,16 @@ final class PanelPopover: NSObject, NSPopoverDelegate {
       watchKeys()
       controller.watch(open: true)
     }
+  }
+
+  /// The glyph the menu bar item draws.
+  var icon: MenuBarIcon { item.icon }
+
+  /// Draws the menu bar item as another glyph, at once.
+  ///
+  /// - Parameter icon: The glyph.
+  func use(_ icon: MenuBarIcon) {
+    item.use(icon)
   }
 
   /// Closes the panel, as opening a window or an alert from it does.

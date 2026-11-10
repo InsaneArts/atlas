@@ -124,7 +124,7 @@ kinds! {
 
 impl Kind {
     /// Whether the kind carries a binary payload: only changed pictures do.
-    pub fn has_payload(self) -> bool {
+    fn has_payload(self) -> bool {
         matches!(self, Self::FullFrame | Self::DeltaFrame)
     }
 
@@ -391,4 +391,5 @@ impl Decoder {
 }
 
 #[cfg(test)]
+#[path = "wire_tests.rs"]
 mod tests;

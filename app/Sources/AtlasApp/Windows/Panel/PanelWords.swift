@@ -64,4 +64,18 @@ enum PanelWords {
   static func logInThenSwitchBack(to helper: String) -> String {
     "Log in to \(helper), then switch back."
   }
+
+  /// The panel's line of the accounts listed: "Accounts: github.com", "Accounts: github.com and Slack", or the first
+  /// two and how many more.
+  ///
+  /// - Parameter names: The accounts' names, in the list's order.
+  /// - Returns: The line, or nil for none.
+  static func accountsLine(_ names: [String]) -> String? {
+    switch names.count {
+    case 0: nil
+    case 1: "Accounts: \(names[0])"
+    case 2: "Accounts: \(names[0]) and \(names[1])"
+    default: "Accounts: \(names[0]), \(names[1]) and \(names.count - 2) more"
+    }
+  }
 }
