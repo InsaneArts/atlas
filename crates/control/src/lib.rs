@@ -615,23 +615,11 @@ impl Controller {
         &self.holder
     }
 
-    /// Where the private hold's marker is kept, for tests that break it.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn private_path(&self) -> &Path {
-        &self.private
-    }
-
     /// Where the groups agents' finished commands left running are kept,
     /// for tests that break it.
     #[cfg(any(test, feature = "test-support"))]
     pub fn run_groups_path(&self) -> &Path {
         &self.run_groups
-    }
-
-    /// Where the groups that could not be recorded are kept, for tests.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn unrecorded_runs_path(&self) -> &Path {
-        &self.unrecorded_runs
     }
 
     /// Where the screen's privacy generation is kept, for tests that break it.
