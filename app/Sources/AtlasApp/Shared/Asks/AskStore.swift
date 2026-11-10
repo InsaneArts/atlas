@@ -18,8 +18,6 @@ final class AskStore {
   /// The pictures of the questions up, decoded, by their file name: a rerun that replaces a picture names it anew, so
   /// a question shows only the picture its own reading named, beside the frame that reading gave.
   private(set) var pictures: [String: DesktopPicture] = [:]
-  /// Whether the person refused Atlas's notifications, so the menu bar badges while a question is up.
-  var notificationsRefused = false
   /// The viewer service it reads and answers through.
   @ObservationIgnored private let service: any ViewerService
   /// The clock the wait for the earliest end runs on.

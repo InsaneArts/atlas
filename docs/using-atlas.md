@@ -174,6 +174,8 @@ Anything the helper is signed in to, an agent can use: it can read, send, merge 
 
 **Sign In to a Site…** in **Settings › Accounts** opens the site in the helper's Google Chrome, or in Firefox when Chrome isn't installed, and gives you control there. Atlas starts it only when no agent's command or background job is running. Until you finish, agents are paused and can't see the helper's screen: their screenshots, element and window reads, the live picture in their apps and the pictures of their actions all answer `busy`, held by you. Sign in as usual; switching to your password manager or covering the viewer keeps control with you. Choose **Done** and the site joins your accounts: a new one starts at Ask Before Sending, so agents ask you before sending there, and one already listed keeps the level you gave it. **Cancel** adds nothing. Either way agents go on as before, and a Stop you chose meanwhile stays.
 
+When an agent asks before sending, Atlas's menu bar icon says Waiting for you, the question shows in the menu bar panel and over the main window's Screen, and a notification tells you unless you are looking at Atlas. Choose **Just This Once**, **Allow for This Task** or **Deny**. A question you don't answer ends after two minutes and nothing is sent; the agent asks again if it still needs to.
+
 An account's **Forget…** and **Reset…** work the same way. Forget opens the browser's settings for that site's data, and Reset its page for clearing all of its data. Delete it there and choose **Done**. Atlas can't see what you deleted, so it then asks whether to remove the account from the list too.
 
 Atlas checks where a file is, not what is in it: a renamed copy of a store, or a project folder copied whole with a `.env` inside, is not recognized.

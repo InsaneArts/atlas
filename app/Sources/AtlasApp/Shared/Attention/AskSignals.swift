@@ -3,15 +3,15 @@ import Foundation
 
 /// What Atlas shows outside its windows of the questions it asks the person: a notification for each new one the
 /// person isn't looking at, posted once macOS lets Atlas notify them and taken away once it is answered or ends,
-/// whatever Notify me says; and, when the person said no
-/// to notifications, the menu bar's badge while one is up (``AskStore/notificationsRefused``). macOS is asked whether
-/// Atlas may notify them once, the first time an account joins the list.
+/// whatever Notify me says. The menu bar's badge shows while one is up whatever macOS lets Atlas do
+/// (``PanelController/glyph``). macOS is asked whether Atlas may notify them once, the first time an account joins the
+/// list.
 final class AskSignals {
   /// The notifications.
   private let notifications: AskNotifications
   /// Whether macOS was asked already, kept across launches.
   private let preferences: SettingsPreferences
-  /// The store the menu bar's badge follows.
+  /// The questions up.
   private let store: AskStore
   /// The id of the question the person sees now, in the open panel or over the viewer's Screen; nil for none.
   private let inView: @MainActor () -> String?
@@ -30,7 +30,7 @@ final class AskSignals {
   /// - Parameters:
   ///   - notifications: The notifications.
   ///   - preferences: Where asking macOS once is kept.
-  ///   - store: The store the menu bar's badge follows.
+  ///   - store: The questions up.
   ///   - inView: The id of the question the person sees now; nil for none.
   init(
     notifications: AskNotifications,
@@ -44,19 +44,18 @@ final class AskSignals {
     self.inView = inView
   }
 
-  /// Reads whether the person let Atlas notify them, as macOS last said, for the menu bar's badge; once it says yes,
+  /// Reads whether the person let Atlas notify them, as macOS last said; once it says yes,
   /// every question still up and not seen posts. Nothing is read while macOS is being asked.
   func readConsent() async {
     guard !asking else { return }
     resolve(await notifications.consent())
   }
 
-  /// Takes what macOS said: the badge follows a no, and a yes posts every question still up and not seen.
+  /// Takes what macOS said: a yes posts every question still up and not seen.
   ///
   /// - Parameter answer: Whether Atlas may notify the person; nil while undecided.
   func resolve(_ answer: Bool?) {
     consent = answer
-    store.notificationsRefused = answer == false
     if answer == true, let list = store.list { post(list) }
   }
 

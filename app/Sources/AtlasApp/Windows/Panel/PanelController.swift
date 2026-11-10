@@ -153,17 +153,15 @@ final class PanelController {
     )
   }
 
-  /// What the menu bar glyph shows: the helper's mode, or, while a question waits and the person refused Atlas's
-  /// notifications, Needs you's badge saying Waiting for you, so the question is not missed.
+  /// What the menu bar glyph shows: the helper's mode, or, while a question waits, Needs you's badge saying Waiting
+  /// for you, so the question is not missed whether or not a notification told of it.
   var glyph: PanelGlyph {
     let mode = mode
     let store = actions.asks
-    let waits =
-      store.notificationsRefused
-      && PanelPresenter.waitsForYou(
-        PanelSnapshot(status: status, date: wallClock(), asks: store.list),
-        mode: mode
-      )
+    let waits = PanelPresenter.waitsForYou(
+      PanelSnapshot(status: status, date: wallClock(), asks: store.list),
+      mode: mode
+    )
     return waits ? PanelGlyph(kind: .needsYou, word: AskWords.waiting) : PanelGlyph(kind: mode.kind, word: mode.word)
   }
 

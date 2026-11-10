@@ -221,7 +221,7 @@ struct AskNotificationsTests {
     #expect(recorded.withdrawn == ["a1"])
   }
 
-  @Test("macOS is asked once, when the first account joins the list, and a no badges the menu bar")
+  @Test("macOS is asked once, when the first account joins the list")
   func consentIsAskedOnce() async throws {
     let recorded = Recorded()
     var asked = false
@@ -236,6 +236,5 @@ struct AskNotificationsTests {
     await signals.statusRead(listed)
     await signals.statusRead(listed)
     #expect(recorded.asked == 1)
-    #expect(store.notificationsRefused)
   }
 }

@@ -41,14 +41,17 @@ extension AppContainer {
     Task { await signals.readConsent() }
   }
 
-  /// Tells the questions' signals each time the person may have looked away from a question: the panel closing, or a
-  /// window minimised, covered or closing. The main window leaving the Screen tells them through its own dependency.
+  /// Tells the questions' signals each time the person may have looked away from a question: the panel closing, a
+  /// window minimised, covered, closing or no longer the one they type in, or Atlas no longer the app in front. The main
+  /// window leaving the Screen tells them through its own dependency.
   func watchLookAways() {
     let names: [Notification.Name] = [
       NSPopover.didCloseNotification,
       NSWindow.didMiniaturizeNotification,
       NSWindow.didChangeOcclusionStateNotification,
       NSWindow.willCloseNotification,
+      NSWindow.didResignKeyNotification,
+      NSApplication.didResignActiveNotification,
     ]
     lookAways = names.map { name in
       NotificationCenter.default
@@ -68,13 +71,18 @@ extension AppContainer {
   }
 
   /// The question the person sees now: the oldest one up, which the open panel's card shows, and the banner over the
-  /// main window's Screen while it is on screen showing the Screen; nil while neither shows it, as on Activity or Apps.
+  /// main window's Screen while that window is the one they are in, in front and showing the Screen; nil while neither
+  /// shows it, as on Activity, behind another app's window or with Atlas in the background, where a banner is easily
+  /// missed and the question notifies instead.
   ///
   /// - Returns: The question's id, or nil.
   func askInView() -> String? {
     guard let store = actions?.asks, let panel else { return nil }
     let panelShows = menuBar?.popover.isShown == true
-    let screenShows = viewerOnScreen() && coordinator.viewer?.controller.session.place == .screen
+    let window = coordinator.viewer?.window as? NSWindow
+    let screenShows =
+      NSApp.isActive && window?.isKeyWindow == true && viewerOnScreen()
+      && coordinator.viewer?.controller.session.place == .screen
     guard panelShows || screenShows else { return nil }
     return StatusReading(panel.status)
       .asks(from: store.list, at: Date())
