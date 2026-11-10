@@ -3,10 +3,11 @@
 //! Some macOS agents work only for the login on the screen: in the helper
 //! they quit a few milliseconds after starting, and launchd starts them
 //! again every ten seconds for as long as the helper stays logged in. With
-//! System Integrity Protection on, launchd ignores a disable for them, so
-//! nothing Atlas may do stops it. One of them leaves a window server
-//! connection behind at many starts, through a macOS bug, which slowly
-//! slows the whole Mac; logging the helper out clears what has built up.
+//! System Integrity Protection on, launchd ignores a disable for them. One
+//! of them leaves a window server connection behind at many starts, through
+//! a macOS bug, which slowly slows the whole Mac. The helper's daemon tries
+//! to keep that one paused while the helper is hidden; while it is paused
+//! it does not restart. Logging the helper out clears what built up before.
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -45,14 +46,16 @@ pub const SLOWING: &[&str] = &[
     "com.apple.BTServer.cloudpairing",
 ];
 
-/// Whether an agent that slows the Mac keeps restarting in the helper.
+/// Whether an agent that slows the Mac restarted often in the helper in
+/// the last hour.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Restarting {
-    /// None does.
+    /// None restarted often in the last hour.
     #[serde(rename = "none")]
     Quiet,
-    /// One does, so the Mac slows while the helper stays logged in.
+    /// One restarted often in the last hour: before it was paused, or
+    /// because it could not be.
     Restarting,
     /// launchd's log could not be read.
     Unknown,

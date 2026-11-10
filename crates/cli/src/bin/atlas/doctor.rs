@@ -12,13 +12,14 @@ use std::io::IsTerminal;
 /// Doctor's check that no change's outcome is unknown: while one is, Atlas
 /// refuses every agent's action until the helper is recovered.
 const NO_UNKNOWN_OUTCOME: &str = "No action of unknown outcome";
-/// Doctor's warning while a macOS service that slows the Mac keeps
-/// restarting in the helper: Atlas can't stop it, and a log-out clears what
-/// it has built up.
-const SLOWING: &str = "A macOS service in the helper restarts every 10 seconds, and a macOS \
-                       bug makes the restarts slowly slow your whole Mac. Atlas can't turn it \
-                       off. Log the helper out and back in every few days to clear it: run \
-                       atlas logout, then log in to the helper and switch back.";
+/// Doctor's warning once a macOS service that slows the Mac has restarted
+/// over and over in the helper: Atlas tries to keep it paused there, and a
+/// log-out clears what it built up.
+const SLOWING: &str = "A macOS service in the helper restarted over and over, and a macOS \
+                       bug makes that slowly slow your whole Mac. Atlas tries to keep it \
+                       paused while the helper is hidden. To clear what has built up, log \
+                       the helper out and back in: run atlas logout, then log in to the \
+                       helper and switch back.";
 
 const GIGABYTE: u64 = 1 << 30;
 

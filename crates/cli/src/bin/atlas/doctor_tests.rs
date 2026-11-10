@@ -261,7 +261,7 @@ fn a_service_slowing_the_mac_warns_without_making_the_helper_not_ready() {
     assert_eq!(report["checks"], json!([]));
     let warning = report["warnings"][0].as_str().unwrap().to_owned();
     assert_eq!(warning, SLOWING);
-    assert!(warning.contains("can't turn it off"));
+    assert!(warning.contains("Atlas tries to keep it paused"));
     assert!(warning.contains("atlas logout"));
     assert!(report.get("restartingJobs").is_none());
     assert_eq!(

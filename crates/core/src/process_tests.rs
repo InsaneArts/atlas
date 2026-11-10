@@ -100,6 +100,20 @@ fn a_process_group_lists_only_its_members() {
 }
 
 #[test]
+fn a_parents_children_are_listed_until_they_are_reaped() {
+    let me = std::process::id() as i32;
+    let mut child = crate::spawn::spawn(std::process::Command::new("/bin/sleep").arg("5")).unwrap();
+    let pid = child.id() as i32;
+    assert!(children(me).unwrap().contains(&pid));
+    assert!(!children(1).unwrap().is_empty());
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(!children(me).unwrap().contains(&pid));
+    assert_eq!(children(pid).unwrap(), Vec::<i32>::new());
+}
+
+#[test]
 fn a_session_is_read_for_a_live_process() {
     assert_eq!(
         session(std::process::id() as i32),

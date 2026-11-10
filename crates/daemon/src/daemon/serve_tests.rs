@@ -853,6 +853,7 @@ async fn replies_keep_their_shapes() {
     assert_eq!(
         keys(hello),
         [
+            "consoleAgent",
             "daemon",
             "display",
             "ok",
@@ -873,6 +874,10 @@ async fn replies_keep_their_shapes() {
             "resources",
             "version"
         ]
+    );
+    assert_eq!(
+        hello["consoleAgent"],
+        json!({"state": "off", "pauses": 0, "misses": 0})
     );
     assert_eq!(
         keys(&hello["daemon"]["pictureStats"]),

@@ -118,6 +118,10 @@ mod journal;
 #[cfg(target_os = "macos")]
 mod lease;
 #[cfg(target_os = "macos")]
+pub mod process_token;
+#[cfg(target_os = "macos")]
+pub mod process_watch;
+#[cfg(target_os = "macos")]
 pub mod processes;
 #[cfg(target_os = "macos")]
 pub mod resources;

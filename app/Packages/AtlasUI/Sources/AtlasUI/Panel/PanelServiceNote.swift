@@ -14,7 +14,7 @@ struct PanelServiceNote: View {
         Text("A macOS service in the helper slowly slows your Mac")
           .textStyle(.callout, weight: .semibold)
           .foregroundStyle(Color.textPrimary)
-        Text("It's a macOS bug Atlas can't turn off. Log the helper out and back in every few days to clear it.")
+        Text("It's a macOS bug. Atlas tries to keep the service paused. Log the helper out and back in to clear it.")
           .textStyle(.callout)
           .foregroundStyle(Color.textSecondary)
       }

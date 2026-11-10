@@ -254,8 +254,7 @@ fn details(value: &Value, native: &Value) -> Vec<String> {
         }
     }
 
-    // Apple jobs seen quitting at once and restarting in the helper: only
-    // reported, as Atlas cannot stop them.
+    // Apple jobs that restarted often in the helper in the last hour.
     for job in items(&value["restartingJobs"]) {
         lines.push(format!(
             "{}  {} restarted {} times in the last hour",

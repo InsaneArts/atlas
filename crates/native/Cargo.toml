@@ -15,7 +15,7 @@ test-support = []
 atlas-core.workspace = true
 fs2.workspace = true
 libc.workspace = true
-nix = { workspace = true, features = ["process", "signal", "user"] }
+nix = { workspace = true, features = ["event", "process", "signal", "user"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
