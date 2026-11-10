@@ -10,8 +10,6 @@ public struct SettingsAccountsState: Equatable, Sendable {
   public var note: String?
   /// The account the note is about, by its row's id, whose level Change… sets; nil for none.
   public var noteAccount: String?
-  /// The account whose row is open, showing what else can be done with it, by its row's id; nil for none.
-  public var open: String?
   /// What the pane says under the list while pictures of agent actions are off in General, such as "Activity won't
   /// keep pictures of what agents do here."; nil while they are kept.
   public var picturesOff: String?
@@ -27,7 +25,6 @@ public struct SettingsAccountsState: Equatable, Sendable {
   ///   - empty: What the pane says when there are none.
   ///   - note: The note Atlas shows once after it added an account.
   ///   - noteAccount: The account the note is about; none by default.
-  ///   - open: The account whose row is open; none by default.
   ///   - picturesOff: What the pane says while pictures are off; none by default.
   ///   - notice: What the last change said.
   ///   - isWorking: Whether a change runs now.
@@ -36,7 +33,6 @@ public struct SettingsAccountsState: Equatable, Sendable {
     empty: EmptyMessageState,
     note: String? = nil,
     noteAccount: String? = nil,
-    open: String? = nil,
     picturesOff: String? = nil,
     notice: SettingsNote? = nil,
     isWorking: Bool = false
@@ -45,7 +41,6 @@ public struct SettingsAccountsState: Equatable, Sendable {
     self.empty = empty
     self.note = note
     self.noteAccount = noteAccount
-    self.open = open
     self.picturesOff = picturesOff
     self.notice = notice
     self.isWorking = isWorking

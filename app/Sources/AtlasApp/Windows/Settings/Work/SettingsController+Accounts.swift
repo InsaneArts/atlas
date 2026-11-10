@@ -1,14 +1,14 @@
 import AtlasService
 import AtlasUI
 
-/// The Accounts pane's work: adding an app the person chooses, setting an account's level, taking an account off the
+/// The Accounts pages' work: adding an app the person chooses, setting an account's level, taking an account off the
 /// list once they confirm, and the note read once. Each change goes through the viewer service, then the helper's status every window shares is
 /// read again, so the list shows what Atlas now holds; a failure says why under the list.
 extension SettingsController {
   /// Lets the person choose an app, then adds it to the accounts.
   func addApp() async {
     guard !session.accountsWorking, let app = await dependencies.chooseApp() else { return }
-    await changeAccounts {
+    await changeAccounts(on: .page(.accounts)) {
       try await self.dependencies.links.addAccount(app.bundleID, app.name)
     }
   }
@@ -21,7 +21,7 @@ extension SettingsController {
       let account = dependencies.links.status().status.overview.accounts?
         .first(where: { $0.id == id })
     else { return }
-    await changeAccounts {
+    await changeAccounts(on: .account(id)) {
       try await self.dependencies.links.removeAccount(account)
     }
   }
@@ -37,7 +37,7 @@ extension SettingsController {
         .first(where: { $0.id == id }),
       account.level != level
     else { return }
-    await changeAccounts {
+    await changeAccounts(on: .account(id)) {
       try await self.dependencies.links.setLevel(level, account)
     }
   }
@@ -49,18 +49,22 @@ extension SettingsController {
     dependencies.preferences.saveAccountNoteRead(note.added)
   }
 
-  /// Runs one change to the list at a time, saying why one failed, then reads the status again.
+  /// Runs one change to the list at a time, saying why one failed on the route that asked for it, then reads the
+  /// status again; a route to an account the reading no longer lists leaves the window's history.
   ///
-  /// - Parameter change: The change.
-  private func changeAccounts(_ change: @MainActor () async throws -> Void) async {
+  /// - Parameters:
+  ///   - route: Where the change was asked for, which says why it failed.
+  ///   - change: The change.
+  private func changeAccounts(on route: SettingsRoute, _ change: @MainActor () async throws -> Void) async {
     session.accountsWorking = true
-    say(nil, in: .accounts)
+    say(nil, on: route)
     do {
       try await change()
     } catch {
-      say(SettingsWords.accountsFailed(error.localizedDescription), in: .accounts, kind: .problem)
+      say(SettingsWords.accountsFailed(error.localizedDescription), on: route, kind: .problem)
     }
     await dependencies.links.readStatus()
+    session.navigation = SettingsPresenter.navigation(snapshot)
     session.accountsWorking = false
   }
 }

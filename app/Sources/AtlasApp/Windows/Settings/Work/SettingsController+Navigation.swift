@@ -15,6 +15,8 @@ extension SettingsController {
   ///
   /// - Parameter move: The move.
   func navigate(_ move: (inout SettingsNavigation) -> Void) {
+    // History walks only routes to accounts Atlas still lists.
+    session.navigation = SettingsPresenter.navigation(snapshot)
     let before = session.navigation.current
     move(&session.navigation)
     let route = session.navigation.current
@@ -22,8 +24,9 @@ extension SettingsController {
     arrived(at: route)
   }
 
-  /// The window came to a route: its page is saved, an account's as Accounts, and Integrations reads its agents and
-  /// Privacy the person's files.
+  /// The window came to a route: its page is saved, an account's as Accounts, Integrations reads its agents and
+  /// Privacy the person's files, and an account's page keeps the account as listed now, so it keeps its name should
+  /// the list turn unreadable.
   ///
   /// - Parameter route: The route.
   func arrived(at route: SettingsRoute) {
@@ -31,6 +34,10 @@ extension SettingsController {
     switch route {
     case .page(.integrations): readAgents()
     case .page(.privacy): Task { await readFiles() }
+    case .account(let id):
+      let listed = dependencies.links.status().status.overview.accounts?
+        .first { $0.id == id }
+      if let listed { session.knownAccounts[id] = listed }
     default: break
     }
   }

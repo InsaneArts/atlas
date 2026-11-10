@@ -47,6 +47,44 @@ extension SettingsWords {
     return account.kind == .app ? "App · added \(day)" : "Added \(day)"
   }
 
+  /// An account's line in the list: its level, then when it was added.
+  ///
+  /// - Parameters:
+  ///   - account: The account.
+  ///   - now: Now.
+  ///   - calendar: The calendar days are told in.
+  /// - Returns: "Ask before sending · Added today", or "Trusted · App · added Nov 5".
+  static func accountRowDetail(_ account: ViewerStatus.Account, now: Date, calendar: Calendar) -> String {
+    "\(levelShort(account.level)) · \(accountDetail(account, now: now, calendar: calendar))"
+  }
+
+  /// What an account is and when it was added, under its name on its page.
+  ///
+  /// - Parameters:
+  ///   - account: The account.
+  ///   - now: Now.
+  ///   - calendar: The calendar days are told in.
+  /// - Returns: "Website · added today", or "App · added Nov 5".
+  static func accountKindLine(_ account: ViewerStatus.Account, now: Date, calendar: Calendar) -> String {
+    let detail = accountDetail(account, now: now, calendar: calendar)
+    guard account.kind == .site else { return detail }
+    let first = detail.prefix(1)
+      .lowercased()
+    return "Website · \(first)\(detail.dropFirst())"
+  }
+
+  /// A level in a sentence's case, as an account's line names it.
+  ///
+  /// - Parameter level: The level.
+  /// - Returns: "Look only", "Ask before sending" or "Trusted".
+  static func levelShort(_ level: AccountLevel) -> String {
+    switch level {
+    case .lookOnly: "Look only"
+    case .ask: "Ask before sending"
+    case .trusted: "Trusted"
+    }
+  }
+
   /// The note Atlas shows once after it added an account, with what its level lets agents do there.
   ///
   /// - Parameters:

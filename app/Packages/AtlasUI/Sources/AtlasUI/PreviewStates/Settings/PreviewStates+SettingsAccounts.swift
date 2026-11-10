@@ -13,15 +13,20 @@
           id: "site\u{1F}github.com",
           letter: "G",
           title: "github.com",
-          detail: "Added today",
+          detail: "Ask before sending · Added today",
           isSite: true
         ),
-        SettingsAccountRow(id: "app\u{1F}slack", letter: "S", title: "Slack", detail: "App · added Nov 5"),
+        SettingsAccountRow(
+          id: "app\u{1F}slack",
+          letter: "S",
+          title: "Slack",
+          detail: "Ask before sending · App · added Nov 5"
+        ),
         SettingsAccountRow(
           id: "site\u{1F}staging.acme.dev",
           letter: "S",
           title: "staging.acme.dev",
-          detail: "Added Nov 3",
+          detail: "Trusted · Added Nov 3",
           level: .trusted,
           isSite: true
         ),
@@ -62,14 +67,14 @@
           id: "site\u{1F}github.com",
           letter: "G",
           title: "github.com",
-          detail: "Added today",
+          detail: "Ask before sending · Added today",
           isSite: true
         ),
         SettingsAccountRow(
           id: "site\u{1F}mybank.com",
           letter: "M",
           title: "mybank.com",
-          detail: "Added Nov 2",
+          detail: "Look only · Added Nov 2",
           level: .lookOnly,
           isSite: true
         ),
@@ -84,12 +89,65 @@
       return state
     }()
 
-    /// The Accounts page with github.com opened: signing out, forgetting it, resetting the browser and removing it.
-    @MainActor static let settingsAccountOpened: SettingsState = {
-      var state = selecting(.accounts)
-      state.accounts.open = "site\u{1F}github.com"
+    /// github.com's page: what agents may do there, signing out, forgetting it, resetting the browser and removing it.
+    static let settingsAccountSitePage = SettingsAccountPageState(
+      id: "site\u{1F}github.com",
+      letter: "G",
+      title: "github.com",
+      kindLine: "Website · added today",
+      isSite: true,
+      level: .ask,
+      levelLine: "Agents ask you before sending there.",
+      isEnabled: true
+    )
+
+    /// Slack's page: what agents may do there and removing it.
+    static let settingsAccountAppPage = SettingsAccountPageState(
+      id: "app\u{1F}slack",
+      letter: "S",
+      title: "Slack",
+      kindLine: "App · added Nov 5",
+      isSite: false,
+      level: .trusted,
+      levelLine: "Agents act there without asking.",
+      isEnabled: true
+    )
+
+    /// github.com's page while Atlas can't read its list: its name stays, its choices wait.
+    static let settingsAccountUnreadablePage = SettingsAccountPageState(
+      id: "site\u{1F}github.com",
+      letter: "G",
+      title: "github.com",
+      kindLine: "Website · added today",
+      isSite: true,
+      level: nil,
+      levelLine: "",
+      isEnabled: false
+    )
+
+    /// github.com's page, opened from Accounts.
+    @MainActor static let settingsAccountOpened: SettingsState = opening(settingsAccountSitePage)
+
+    /// Slack's page, opened from Accounts.
+    @MainActor static let settingsAccountApp: SettingsState = opening(settingsAccountAppPage)
+
+    /// github.com's page while Atlas can't read its list.
+    @MainActor static let settingsAccountUnreadable: SettingsState = {
+      var state = opening(settingsAccountUnreadablePage)
+      state.accounts.rows = nil
       return state
     }()
+
+    /// An account's page, opened from Accounts.
+    ///
+    /// - Parameter page: The account's page.
+    /// - Returns: The sample.
+    @MainActor static func opening(_ page: SettingsAccountPageState) -> SettingsState {
+      var state = selecting(.accounts)
+      state.navigation.go(to: .account(page.id))
+      state.account = page
+      return state
+    }
 
     /// Sign In to a Site… over the Accounts page, a site typed.
     @MainActor static let settingsSignIn: SettingsState = {

@@ -1,11 +1,12 @@
 import SwiftUI
 
 /// The Accounts page: the note Atlas shows once after it added an account, then the accounts it lists for the helper,
-/// each with its level and Remove…, and Add an App… under them, with a line under the list while pictures of agent
-/// actions are off. With none, it says so and offers Add an App…; when Atlas can't read its list, it says that
-/// instead. The note grows in and leaves in place, and the list below moves with it.
+/// each with its level and when it was added, opening its own page; Add an App… and Sign In to a Site… under them,
+/// then what the levels mean and a line while pictures of agent actions are off. With none, it says so and offers both;
+/// when Atlas can't read its list, it says that instead. The note grows in and leaves in place, and the list below
+/// moves with it.
 struct AccountsPage: View {
-  /// What the pane shows.
+  /// What the page shows.
   let state: SettingsAccountsState
   /// Receives what the person does.
   let send: @MainActor (SettingsEvent) -> Void
@@ -17,9 +18,9 @@ struct AccountsPage: View {
       if let note = state.note {
         AccountNoteCard(
           text: note,
-          level: notedLevel,
-          pick: { level in
-            if let id = state.noteAccount { send(.setAccountLevel(id, level)) }
+          canChange: notedAccount != nil,
+          change: {
+            if let id = notedAccount { send(.openAccount(id)) }
             send(.dismissAccountNote)
           },
           dismiss: { send(.dismissAccountNote) }
@@ -52,7 +53,7 @@ struct AccountsPage: View {
       VStack(alignment: .trailing, spacing: Spacing.sPlus) {
         // The window's title already says Accounts, so the list needs no heading of its own.
         GroupedSection(rows) { row in
-          AccountRow(row: row, isOpen: state.open == row.id, isEnabled: !state.isWorking, send: send)
+          AccountListRow(row: row) { send(.openAccount(row.id)) }
         }
         addButtons(signInLeads: false)
           .padding(.trailing, ListRow.Size.compact.inset)
@@ -77,9 +78,9 @@ struct AccountsPage: View {
     .disabled(state.isWorking)
   }
 
-  /// The level of the account the note is about, which its Change… opens on; nil when the note names none listed.
-  private var notedLevel: AccountLevelChoice? {
-    state.rows?.first { $0.id == state.noteAccount }?.level
+  /// The account the note is about, whose page Change… opens; nil when the note names none listed.
+  private var notedAccount: String? {
+    state.rows?.first { $0.id == state.noteAccount }?.id
   }
 
   /// What the page says when Atlas can't read its list.
@@ -88,7 +89,7 @@ struct AccountsPage: View {
     message: "Nothing was changed. Try again in a moment."
   )
 
-  /// What the pane says under the list or the message: that pictures are off, then what the last change said.
+  /// What the page says under the list or the message: that pictures are off, then what the last change said.
   private var notes: [GroupedSectionNote] {
     [state.picturesOff.map(GroupedSectionNote.text), state.notice?.sectionNote]
       .compactMap { $0 }

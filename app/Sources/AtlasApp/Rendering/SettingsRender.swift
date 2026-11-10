@@ -52,8 +52,10 @@
       "42-accounts-look-only",
       "43-sign-in",
       "44-sign-in-refused",
-      "45-account-opened",
-      "46-accounts-pictures-off",
+      "45-account-site",
+      "46-account-app",
+      "47-account-unreadable",
+      "48-accounts-pictures-off",
     ]
 
     /// The window's size: Settings' fixed 740 by 572.

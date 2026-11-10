@@ -37,13 +37,13 @@ struct SettingsAnnouncementTests {
   }
 
   @Test(
-    "a failure on Activity, on Privacy or on Accounts is heard once as it shows, and not again while it stays",
+    "a failure on Activity, Privacy, Accounts or an account's page is heard once as it shows, not again as it stays",
     arguments: [
-      "pictures", "privacy", "accounts",
+      "pictures", "privacy", "accounts", "account",
     ]
   )
   func pageFailuresAnnounceOnce(page: String) async throws {
-    var state = PreviewStates.settingsGeneral
+    var state = page == "account" ? PreviewStates.settingsAccountOpened : PreviewStates.settingsGeneral
     var announced: [String] = []
     let told = ReleaseSignal()
     let announce: @MainActor (String) -> Void = {
@@ -60,6 +60,7 @@ struct SettingsAnnouncementTests {
     switch page {
     case "pictures": state.general.notice = failure
     case "privacy": state.privacy?.status = failure
+    case "account": state.account?.notice = failure
     default: state.accounts.notice = failure
     }
     for _ in 0..<2 {

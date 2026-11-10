@@ -65,6 +65,7 @@ public struct SettingsView: View {
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.general.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.accounts.notice) { _, notice in if let notice { announce(notice.text) } }
+    .onChange(of: state.account?.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.privacy?.status) { _, status in if let status { announce(status.text) } }
     .onChange(of: state.agents.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.about.status) { _, status in if let status { announce(status.text) } }

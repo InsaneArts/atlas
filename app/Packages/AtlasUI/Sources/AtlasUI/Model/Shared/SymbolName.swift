@@ -107,6 +107,8 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case link
   /// Settings' About page: a lone "i".
   case infoLetter = "info"
+  /// Something Atlas added, such as an account.
+  case plus
   /// Settings' Accounts page with none listed.
   case personCircle = "person.crop.circle"
   /// Look Only: agents only look.

@@ -1,55 +1,47 @@
 import SwiftUI
 
-/// The note Atlas shows once after it added an account: a key, what it added and that agents ask before sending
-/// there, Change…, which opens the account's levels, and OK, on a card tinted with the accent.
+/// The note Atlas shows once after it added an account, on a group's card: a plus on an accent tile, what it added and
+/// what agents may do there, Change…, which opens the account's page, and OK.
 struct AccountNoteCard: View {
   /// What it says.
   let text: String
-  /// The account's level now, which Change… opens on; nil offers no Change….
-  let level: AccountLevelChoice?
-  /// Receives the level picked from Change….
-  let pick: @MainActor (AccountLevelChoice) -> Void
+  /// Whether Change… shows: the note names an account listed.
+  let canChange: Bool
+  /// Opens the account's page.
+  let change: @MainActor () -> Void
   /// The person read it.
   let dismiss: @MainActor () -> Void
 
   /// What it draws.
   var body: some View {
-    HStack(spacing: ListRow.gap) {
-      Image(systemName: SymbolName.key.rawValue)
-        .font(Typography.font(size: IconSize.s))
-        .foregroundStyle(Color.accent)
-        .frame(width: IconSize.s, height: IconSize.s)
+    HStack(spacing: ListRow.Size.compact.gap) {
+      Image(systemName: SymbolName.plus.rawValue)
+        .font(Typography.font(.callout, weight: .bold))
+        .foregroundStyle(Color.onAccent)
+        .frame(width: IconSize.m, height: IconSize.m)
+        .background(
+          RoundedRectangle(cornerRadius: Radius.extraSmall, style: .continuous)
+            .fill(Color.accent)
+        )
         .accessibilityHidden(true)
       Text(text)
         .textStyle(.body)
         .foregroundStyle(Color.textPrimary)
+        .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
-      if let level {
-        Menu {
-          Picker("Level", selection: Binding(get: { level }, set: { pick($0) })) {
-            ForEach(AccountLevelChoice.allCases, id: \.self) { choice in
-              Text(choice.title)
-                .tag(choice)
-            }
-          }
-          .pickerStyle(.inline)
-          .labelsHidden()
-        } label: {
-          Text("Change…")
-        }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
-        .buttonStyle(.capsule(.secondary, size: .row))
-        .fixedSize()
+      if canChange {
+        Button("Change…", action: change)
+          .buttonStyle(.capsule(.secondary, size: .row))
       }
       Button("OK", action: dismiss)
-        .buttonStyle(.capsule(.secondary, size: .row))
+        .buttonStyle(.capsule(.accent, size: .row))
     }
-    .padding(Spacing.m)
+    .padding(.horizontal, ListRow.Size.compact.inset)
+    .padding(.vertical, Spacing.m)
     .background(
       RoundedRectangle(cornerRadius: Radius.large, style: .continuous)
-        .fill(Color.accentWash)
+        .fill(Color.fillGroupInset)
     )
-    .accessibilityElement(children: .combine)
+    .accessibilityElement(children: .contain)
   }
 }

@@ -9,11 +9,12 @@ enum SettingsPresenter {
   /// - Returns: The window's state.
   static func state(_ snapshot: SettingsSnapshot) -> SettingsState {
     SettingsState(
-      navigation: snapshot.session.navigation,
+      navigation: navigation(snapshot),
       sidebar: sidebar(snapshot),
       general: general(snapshot),
       helper: helper(snapshot),
       accounts: accounts(snapshot),
+      account: accountPage(snapshot),
       privacy: files(snapshot.files),
       agents: agents(snapshot),
       about: about(snapshot),

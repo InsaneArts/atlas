@@ -11,6 +11,8 @@ public struct SettingsState: Equatable, Sendable {
   public var helper: SettingsHelperState
   /// The Accounts page.
   public var accounts: SettingsAccountsState
+  /// The page of the account shown; nil while no account's page shows.
+  public var account: SettingsAccountPageState?
   /// The Privacy page; nil until Atlas has looked at the person's files.
   public var privacy: SettingsFilesState?
   /// The Integrations page.
@@ -30,6 +32,7 @@ public struct SettingsState: Equatable, Sendable {
   ///   - general: The values of the General and Activity pages.
   ///   - helper: The Helper page.
   ///   - accounts: The Accounts page.
+  ///   - account: The page of the account shown; none by default.
   ///   - privacy: The Privacy page; nil until Atlas has looked.
   ///   - agents: The Integrations page.
   ///   - about: The About page.
@@ -41,6 +44,7 @@ public struct SettingsState: Equatable, Sendable {
     general: SettingsGeneralState,
     helper: SettingsHelperState,
     accounts: SettingsAccountsState,
+    account: SettingsAccountPageState? = nil,
     privacy: SettingsFilesState?,
     agents: SettingsAgentsState,
     about: SettingsAboutState,
@@ -52,6 +56,7 @@ public struct SettingsState: Equatable, Sendable {
     self.general = general
     self.helper = helper
     self.accounts = accounts
+    self.account = account
     self.privacy = privacy
     self.agents = agents
     self.about = about
@@ -66,7 +71,8 @@ public struct SettingsState: Equatable, Sendable {
   public var title: String {
     switch route {
     case .page(let page): sidebar.title(of: page)
-    case .account(let id): accounts.rows?.first { $0.id == id }?.title ?? sidebar.title(of: .accounts)
+    case .account(let id):
+      account.map(\.title) ?? accounts.rows?.first { $0.id == id }?.title ?? sidebar.title(of: .accounts)
     }
   }
 }

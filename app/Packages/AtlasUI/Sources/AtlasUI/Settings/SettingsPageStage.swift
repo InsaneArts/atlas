@@ -32,7 +32,14 @@ struct SettingsPageStage: View {
       case .page(.helper): HelperPage(state: state.helper, send: send)
       case .page(.general): GeneralPage(state: general)
       case .page(.activity): ActivityPage(state: general, send: send)
-      case .page(.accounts), .account: AccountsPage(state: state.accounts, send: send)
+      case .page(.accounts): AccountsPage(state: state.accounts, send: send)
+      case .account:
+        // An account Atlas has never listed while this window was open has no page to keep; Accounts says why.
+        if let account = state.account {
+          AccountPage(state: account, send: send)
+        } else {
+          AccountsPage(state: state.accounts, send: send)
+        }
       case .page(.privacy): PrivacyPage(state: state.privacy, send: send)
       case .page(.integrations): IntegrationsPage(state: state.agents, send: send)
       case .page(.about): AboutPage(state: state.about, send: send)

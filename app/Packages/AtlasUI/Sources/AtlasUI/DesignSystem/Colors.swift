@@ -149,6 +149,8 @@ extension Color {
   /// A grouped list's ground on a content card, such as Settings' groups, a quiet step under the card's white: black
   /// at 0.045, or white at 0.055.
   static let fillGroupInset = Color(light: .black(0.045), dark: .white(0.055))
+  /// A choice's picture tile, such as an account's level: a pale wash of the accent, #E6EEFD, or #252D3D.
+  static let fillLevelTile = Color(light: .rgb(0xE6EEFD), dark: .rgb(0x252D3D))
   /// A chosen row's or thumb's raised fill, such as the selected session's or tab's: white, or white at 0.12.
   static let fillSelection = Color(light: .white(1), dark: .white(0.12))
   /// A slight darkening of a held segmented thumb, without changing its rim or elevation.

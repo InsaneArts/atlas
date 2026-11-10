@@ -93,16 +93,15 @@
     /// The sample screen's height over its width, 900 by 1440.
     static let screenShape: CGFloat = 0.625
 
-    /// The level control at each level, and the popup.
+    /// The level tiles at each level, and with none known.
     private var levels: some View {
-      VStack(alignment: .leading, spacing: Spacing.m) {
+      VStack(alignment: .leading, spacing: Spacing.l) {
         ForEach(AccountLevelChoice.allCases, id: \.self) { level in
-          AccountLevelControl(account: "github.com", level: level) { _ in }
+          AccountLevelPicker(account: "github.com", level: level) { _ in }
         }
-        AccountLevelMenu(account: "github.com", level: .ask, isEnabled: true, pick: { _ in }) {
-          Button("Remove from List…", role: .destructive) {}
-        }
+        AccountLevelPicker(account: "github.com", level: nil) { _ in }
       }
+      .frame(width: SampleWidth.form)
       .padding(Spacing.xl)
       .sampleSurface()
     }

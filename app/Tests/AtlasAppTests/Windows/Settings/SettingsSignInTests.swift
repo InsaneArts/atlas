@@ -65,14 +65,16 @@ struct SettingsSignInTests {
       }
     }
     let id = try #require(status.overview.accounts?.first?.id)
+    controller.send(.openAccount(id))
     await controller.holdFor(.forget, account: id)
     await controller.holdFor(.reset, account: id)
     #expect(asked == ["forget github.com org.mozilla.firefox", "reset github.com org.mozilla.firefox"])
-    #expect(SettingsAccountsTests.pane(controller).notice?.kind == .problem)
+    #expect(controller.state.account?.notice?.kind == .problem, "the refusal shows on the account's page")
+    #expect(SettingsAccountsTests.pane(controller).notice == nil)
   }
 
-  @Test("clicking an account opens it, one at a time, and clicking it again closes it")
-  @MainActor func anAccountOpensAndCloses() throws {
+  @Test("clicking an account opens its own page, a site's with its sign-in, an app's without, and Back returns")
+  @MainActor func anAccountOpensItsPage() throws {
     let controller = SettingsController.scripted(
       commands: ScriptedCommands([:]),
       status: try SettingsAccountsTests.reading([
@@ -80,14 +82,19 @@ struct SettingsSignInTests {
         SettingsAccountsTests.account("app", "com.tinyspeck.slackmacgap", "Slack", added: SettingsAccountsTests.today),
       ])
     )
+    controller.send(.select(.accounts))
     let rows = try #require(SettingsAccountsTests.pane(controller).rows)
-    controller.send(.toggleAccount(rows[0].id))
-    #expect(SettingsAccountsTests.pane(controller).open == rows[0].id)
-    controller.send(.toggleAccount(rows[1].id))
-    #expect(SettingsAccountsTests.pane(controller).open == rows[1].id, "one at a time")
-    controller.send(.toggleAccount(rows[1].id))
-    #expect(SettingsAccountsTests.pane(controller).open == nil)
-    #expect(rows[0].isSite && !rows[1].isSite, "only a site offers Sign Out, Forget and Reset")
+    controller.send(.openAccount(rows[0].id))
+    #expect(controller.state.route == .account(rows[0].id))
+    #expect(controller.state.title == "github.com")
+    #expect(controller.state.account?.isSite == true)
+    controller.send(.goBack)
+    controller.send(.openAccount(rows[1].id))
+    #expect(controller.state.account?.title == "Slack")
+    #expect(controller.state.account?.isSite == false, "only a site offers Sign Out, Forget and Reset")
+    controller.send(.goBack)
+    #expect(controller.state.route == .page(.accounts))
+    #expect(controller.state.account == nil)
   }
 
   @Test("the sheet says what Atlas does while the person signs in")

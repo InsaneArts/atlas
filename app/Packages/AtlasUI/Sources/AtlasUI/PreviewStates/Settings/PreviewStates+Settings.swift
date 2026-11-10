@@ -49,7 +49,9 @@
         PreviewState(name: "Accounts, look only", value: settingsAccountsLookOnly),
         PreviewState(name: "Sign in to a site", value: settingsSignIn),
         PreviewState(name: "Sign in to a site, refused", value: settingsSignInRefused),
-        PreviewState(name: "Accounts, one opened", value: settingsAccountOpened),
+        PreviewState(name: "Account, a site", value: settingsAccountOpened),
+        PreviewState(name: "Account, an app", value: settingsAccountApp),
+        PreviewState(name: "Account, list unreadable", value: settingsAccountUnreadable),
         PreviewState(name: "Accounts, pictures off", value: settingsAccountsPicturesOff),
       ]
     }

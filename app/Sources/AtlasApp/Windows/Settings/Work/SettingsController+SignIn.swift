@@ -1,7 +1,7 @@
 import AtlasService
 import AtlasUI
 
-/// Sign In to a Site…, and Sign Out…, Forget… and Reset… on an opened account, from the Accounts pane: each starts a held
+/// Sign In to a Site… from the Accounts page, and Sign Out…, Forget… and Reset… from an account's page: each starts a held
 /// sign-in in the main window, which comes forward on the Screen with control, agents paused and the screen hidden
 /// from them. Sign In asks for the site first in its sheet, which shows why Atlas couldn't start, if it couldn't;
 /// Forget and Reset start at once for the account's site, a refusal said under the list.
@@ -20,13 +20,6 @@ extension SettingsController {
     guard signIn?.isWorking == false else { return }
     signIn?.site = site
     signIn?.refusal = nil
-  }
-
-  /// Opens an account's row to show what else can be done with it, or closes it; one opens at a time.
-  ///
-  /// - Parameter id: The account, as the service names it.
-  func toggleAccount(_ id: String) {
-    openAccount = openAccount == id ? nil : id
   }
 
   /// Cancel: the sheet closes, unless Continue runs.
@@ -50,8 +43,8 @@ extension SettingsController {
     }
   }
 
-  /// Sign Out…, Forget… or Reset… on an opened account: starts the held flow for the account's site in the browser it
-  /// was seen in; a refusal says why under the list.
+  /// Sign Out…, Forget… or Reset… on an account's page: starts the held flow for the account's site in the browser it
+  /// was seen in; a refusal says why on the account's page.
   ///
   /// - Parameters:
   ///   - purpose: Sign out, forget or reset.
@@ -62,9 +55,9 @@ extension SettingsController {
         .first(where: { $0.id == id }),
       account.kind == .site
     else { return }
-    say(nil, in: .accounts)
+    say(nil, on: .account(id))
     if let refusal = await dependencies.links.startSignIn(purpose, account.key, account.browser) {
-      say(refusal, in: .accounts, kind: .problem)
+      say(refusal, on: .account(id), kind: .problem)
     }
   }
 }

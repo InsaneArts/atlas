@@ -13,6 +13,8 @@
         next.navigation.go(to: .page(page))
       case .openAccount(let id):
         next.navigation.go(to: .account(id))
+        next.account =
+          [settingsAccountSitePage, settingsAccountAppPage].first { $0.id == id } ?? settingsAccountSitePage
       case .goBack:
         next.navigation.goBack()
       case .goForward:
@@ -44,7 +46,11 @@
       case .alertConfirm:
         if next.alert == settingsForget.alert { next.agents.projects.removeFirst() }
         if next.alert == settingsInstall.alert { next.about = settingsAbout.about }
-        if next.alert == settingsRemoveAccount.alert { next.accounts.rows?.removeFirst() }
+        if next.alert == settingsRemoveAccount.alert, let id = next.accounts.rows?.first?.id {
+          next.accounts.rows?.removeFirst()
+          next.navigation.keep(accounts: Set(next.accounts.rows?.map(\.id) ?? []))
+          if next.account?.id == id { next.account = nil }
+        }
         if next.alert == settingsDeletePictures.alert {
           next.general.storedPictures = "No pictures"
           next.general.canDeletePictures = false
@@ -68,6 +74,7 @@
         if let index = next.accounts.rows?.firstIndex(where: { $0.id == id }) {
           next.accounts.rows?[index].level = level
         }
+        if next.account?.id == id { next.account?.level = level }
       case .dismissAccountNote:
         next.accounts.note = nil
       case .askSignIn(let site):
@@ -77,8 +84,6 @@
         next.signIn?.refusal = nil
       case .continueSignIn, .cancelSignIn:
         next.signIn = nil
-      case .toggleAccount(let id):
-        next.accounts.open = next.accounts.open == id ? nil : id
       case .forgetAccount, .resetBrowser, .signOutAccount:
         break
       case .checkAgain, .gettingStarted, .showAppInFinder, .showAgentFile, .addApp:

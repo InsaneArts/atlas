@@ -23,8 +23,6 @@ struct SettingsSnapshot {
   var accountNoteRead: Double = 0
   /// Sign In to a Site…'s sheet, while it shows.
   var signIn: SignInSheetState?
-  /// The account whose row is open; nil for none.
-  var openAccount: String?
   /// Now, which tells the day an account was added.
   var now = Date()
   /// The calendar days are told in.

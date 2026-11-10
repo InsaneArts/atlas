@@ -45,7 +45,7 @@ struct SettingsAccountsTests {
     #expect(SettingsPage.accounts.group != SettingsPage.activity.group)
   }
 
-  @Test("each account says when it was added, an app saying it is one")
+  @Test("each account says its level and when it was added, an app saying it is one")
   @MainActor func eachAccountSaysWhenItWasAdded() throws {
     let status = try Self.reading([
       Self.account("site", "github.com", "github.com", added: Self.today),
@@ -55,7 +55,12 @@ struct SettingsAccountsTests {
     let controller = SettingsController.scripted(commands: ScriptedCommands([:]), status: status)
     let rows = try #require(Self.pane(controller).rows)
     #expect(rows.map(\.title) == ["github.com", "Slack", "acme.dev"])
-    #expect(rows.map(\.detail) == ["Added today", "App · added yesterday", "Added Nov 3"])
+    #expect(
+      rows.map(\.detail) == [
+        "Ask before sending · Added today", "Ask before sending · App · added yesterday",
+        "Ask before sending · Added Nov 3",
+      ]
+    )
     #expect(rows.map(\.letter) == ["G", "S", "A"])
   }
 

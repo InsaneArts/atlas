@@ -28,9 +28,6 @@ final class SettingsController {
   var accountNoteRead: Double = 0
   /// Sign In to a Site…'s sheet, while it shows. Written only by the controller's own files.
   var signIn: SignInSheetState?
-  /// The account whose row is open, showing what else can be done with it; nil for none. Written only by the
-  /// controller's own files.
-  var openAccount: String?
   /// Counts the times the window came forward and a choice was kept where no other window shows it, so what the
   /// links read is read again then.
   private(set) var revision = 0
@@ -88,8 +85,7 @@ final class SettingsController {
         version: dependencies.version
       ),
       accountNoteRead: accountNoteRead,
-      signIn: signIn,
-      openAccount: openAccount
+      signIn: signIn
     )
   }
 
@@ -130,7 +126,6 @@ final class SettingsController {
     case .editSignInSite(let site): editSignInSite(site)
     case .continueSignIn: Task { await continueSignIn() }
     case .cancelSignIn: cancelSignInSheet()
-    case .toggleAccount(let id): toggleAccount(id)
     case .signOutAccount(let id): Task { await holdFor(.signOut, account: id) }
     case .forgetAccount(let id): Task { await holdFor(.forget, account: id) }
     case .resetBrowser(let id): Task { await holdFor(.reset, account: id) }
