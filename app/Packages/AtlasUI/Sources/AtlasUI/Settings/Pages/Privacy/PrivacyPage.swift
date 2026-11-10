@@ -20,6 +20,14 @@ struct PrivacyPage: View {
           GroupedSection([home], title: "Your Files", notes: filesNotes(state)) { home in
             homeRow(home, canRun: home.canRun)
           }
+        } else if let status = state.status {
+          // Atlas couldn't say how the home folder stands: why, under the section's name, with no row to hold it.
+          VStack(alignment: .leading, spacing: .zero) {
+            SectionTitle(text: "Your Files")
+              .padding(.horizontal, ListRow.Size.compact.inset)
+            GroupedSectionNotes(notes: [status.sectionNote])
+          }
+          .transition(Self.noteTransition)
         }
         if let isOn = state.signInCopies {
           GroupedSection(
@@ -40,6 +48,12 @@ struct PrivacyPage: View {
       StatusLine(kind: .working, text: "Checking…", size: .small)
         .padding(.horizontal, ListRow.Size.compact.inset)
     }
+  }
+
+  /// How a failure's line comes and goes: fading on ``Motion/fade``, whatever moves around it.
+  static var noteTransition: AnyTransition {
+    AnyTransition.opacity
+      .animation(Motion.fade)
   }
 
   /// How the page's layout moves as rows and notes come and go: on ``Motion/state``, or at once under Reduce Motion.

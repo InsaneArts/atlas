@@ -64,7 +64,7 @@ extension SettingsController {
       say(SettingsWords.accountsFailed(error.localizedDescription), on: route, kind: .problem)
     }
     await dependencies.links.readStatus()
-    session.navigation = SettingsPresenter.navigation(snapshot)
+    keepListedAccounts()
     session.accountsWorking = false
   }
 }

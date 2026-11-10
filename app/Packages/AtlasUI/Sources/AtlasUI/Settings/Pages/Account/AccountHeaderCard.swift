@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The card at the top of an account's page: its first letter on a disc, its name over what it is.
+/// The card at the top of an account's page: its first letter on its name's tinted tile, its name over what it is.
 struct AccountHeaderCard: View {
-  /// The first letter of its name.
-  let letter: String
+  /// Its first letter on its tint.
+  let monogram: AppMonogram
   /// Its name.
   let title: String
   /// What it is and when it was added.
@@ -12,15 +12,9 @@ struct AccountHeaderCard: View {
   /// The disc and the words on the card.
   var body: some View {
     HStack(spacing: Spacing.m) {
-      Text(letter)
-        .font(Typography.font(.subheading, weight: .semibold))
-        .foregroundStyle(Color.textPrimary)
+      // The tile's body stands 34 across; its icon-grid margin overhangs, clear.
+      MonogramTile(monogram: monogram, side: IconSize.xl / IconGrid.bodyShare)
         .frame(width: IconSize.xl, height: IconSize.xl)
-        .background(
-          Circle()
-            .fill(Color.fillAvatar)
-        )
-        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: Spacing.hairline) {
         Text(title)
           .textStyle(.body, weight: .semibold)

@@ -13,7 +13,7 @@ struct AccountPage: View {
   /// What it draws, from its state.
   var body: some View {
     VStack(alignment: .leading, spacing: SettingsLayout.sectionGap) {
-      AccountHeaderCard(letter: state.letter, title: state.title, line: state.kindLine)
+      AccountHeaderCard(monogram: state.monogram, title: state.title, line: state.kindLine)
       if state.isUnreadable {
         AccountsEmptyCard(state: AccountsPage.unreadable)
       } else {

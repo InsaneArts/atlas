@@ -36,6 +36,14 @@
       return state
     }()
 
+    /// Your files: Atlas couldn't read how the home folder stands, so neither row shows, only why.
+    static let settingsFilesUnread = SettingsFilesState(
+      home: nil,
+      signInCopies: nil,
+      canChangeSignIns: true,
+      status: SettingsNote(text: "Atlas couldn't read your home folder's permissions.", kind: .problem)
+    )
+
     /// Your files: making the home folder private failed, saying the Terminal line that does it by hand.
     static let settingsFilesFailed: SettingsFilesState = {
       var state = settingsFilesOpen
@@ -72,6 +80,13 @@
     @MainActor static let settingsHelperCopiesAllowed: SettingsState = {
       var state = selecting(.privacy)
       state.privacy = settingsFilesCopiesAllowed
+      return state
+    }()
+
+    /// The Privacy page when Atlas couldn't read the person's files.
+    @MainActor static let settingsPrivacyUnread: SettingsState = {
+      var state = selecting(.privacy)
+      state.privacy = settingsFilesUnread
       return state
     }()
 

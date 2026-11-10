@@ -60,6 +60,17 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     }
     setFrameAutosaveName(Self.autosaveName)
     followTitle()
+    followAccounts()
+  }
+
+  /// Keeps the window's history to accounts Atlas lists, each time a reading changes the list.
+  private func followAccounts() {
+    StateTracking.follow { [weak self] () -> Set<String>?? in
+      guard let self else { return nil }
+      return .some(controller.listedAccounts)
+    } apply: { [weak self] (_: Set<String>?) in
+      self?.controller.keepListedAccounts()
+    }
   }
 
   /// Titles the window with the route shown, each time it changes.

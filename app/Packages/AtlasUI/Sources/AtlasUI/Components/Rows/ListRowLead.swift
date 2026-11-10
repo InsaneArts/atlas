@@ -39,6 +39,10 @@ struct ListRowLead: View {
             .fill(Color.fillAvatar)
         )
         .accessibilityHidden(true)
+    case .monogram(let monogram):
+      // The tile's body fills the lead; its icon-grid margin overhangs, clear.
+      MonogramTile(monogram: monogram, side: ListRow.leadWidth(lead, size: size) / IconGrid.bodyShare)
+        .frame(width: ListRow.leadWidth(lead, size: size), height: ListRow.leadWidth(lead, size: size))
     case .check(let state):
       OutcomeMark(kind: StatusLine.Kind(state), side: ListRow.leadWidth(lead, size: size))
         .id(state)

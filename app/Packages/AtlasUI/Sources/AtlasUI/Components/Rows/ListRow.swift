@@ -19,6 +19,8 @@ struct ListRow: View {
     case picture
     /// An account's first letter on an avatar disc.
     case letter(String)
+    /// A name's first letter on its own tint's tile, as an app without its own icon shows, such as an account's.
+    case monogram(AppMonogram)
     /// A check's mark: a spinner, a green check or an orange round "!".
     case check(CheckState)
     /// A check not run yet: an empty ring in a check mark's place.
@@ -265,7 +267,7 @@ struct ListRow: View {
     switch lead {
     case .none: 0
     case .check, .pending: IconSize.s
-    case .tile, .image, .mark, .picture, .letter: size == .compact ? IconSize.mPlus : IconSize.l
+    case .tile, .image, .mark, .picture, .letter, .monogram: size == .compact ? IconSize.mPlus : IconSize.l
     }
   }
 
@@ -280,7 +282,7 @@ struct ListRow: View {
     if size == .compact || size == .checklist { return .regular }
     switch lead {
     case .check, .pending: return .regular
-    case .none, .tile, .image, .mark, .picture, .letter: return .medium
+    case .none, .tile, .image, .mark, .picture, .letter, .monogram: return .medium
     }
   }
 }

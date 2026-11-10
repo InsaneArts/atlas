@@ -5,7 +5,7 @@
       account: SettingsHelperAccount(
         name: "Atlas",
         line: "The hidden helper login · 2560 × 1440",
-        status: StatusSummary(label: "Idle", tone: .quiet, mark: .dot)
+        status: StatusSummary(label: "Ready", tone: .ready, mark: .dot)
       ),
       ready: [
         SettingsReadyRow(item: ReadinessItem(name: "Helper is running", text: "", state: .ready)),
@@ -26,6 +26,12 @@
     @MainActor static let settingsHelperNotReady: SettingsState = {
       var state = selecting(.helper)
       state.helper.account.status = StatusSummary(label: "Needs you", tone: .attention, mark: .dot)
+      state.sidebar.rows[0] = SettingsSidebarRow(
+        page: .helper,
+        title: "Helper",
+        subtitle: "Needs you",
+        tone: .attention
+      )
       state.helper.ready[1] = SettingsReadyRow(
         item: ReadinessItem(name: "Mouse and keyboard", text: "Stopped in the helper.", state: .notReady),
         offersRecover: true,
@@ -76,6 +82,12 @@
     @MainActor static let settingsHelperStale: SettingsState = {
       var state = selecting(.helper)
       state.helper.account.status = StatusSummary(label: "Needs you", tone: .attention, mark: .dot)
+      state.sidebar.rows[0] = SettingsSidebarRow(
+        page: .helper,
+        title: "Helper",
+        subtitle: "Needs you",
+        tone: .attention
+      )
       state.helper.closeLogin = SettingsCloseLoginRow(
         title: "The helper is still logged in",
         detail: "Atlas isn't answering there, so log it out to start it again",

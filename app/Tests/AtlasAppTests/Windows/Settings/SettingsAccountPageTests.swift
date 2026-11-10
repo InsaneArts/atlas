@@ -1,17 +1,20 @@
+import AsyncSupportTesting
 import AtlasCommandsTesting
 import AtlasService
 import AtlasServiceTesting
 import Foundation
+import Observation
 import Testing
 
 @testable import AtlasApp
 @testable import AtlasUI
 
-@Suite("Settings account page")
+@Suite("Settings account page", .serialized, AppKitState())
 @MainActor
 struct SettingsAccountPageTests {
-  /// The status the controller reads, which a test changes as the list changes.
-  private final class Reading {
+  /// The status the controller reads, which a test changes as the list changes, and a window follows.
+  @Observable
+  final class Reading {
     /// The status now.
     var status: ViewerStatus
 
@@ -128,6 +131,49 @@ struct SettingsAccountPageTests {
     #expect(!controller.state.navigation.canGoForward)
     controller.send(.goBack)
     #expect(controller.state.route == .page(.helper), "Back skips the removed account's page")
+  }
+
+  @Test("an account removed by another window's reading stays out of the history once the list can't be read")
+  func aRemovalOutlivesAnUnreadableList() async throws {
+    let listed = try Self.listed()
+    let reading = Reading(listed)
+    let controller = Self.controller(reading)
+    let window = SettingsWindow(controller: controller) { _ in }
+    defer { window.close() }
+    let ids = try #require(listed.overview.accounts?.map(\.id))
+    controller.send(.select(.accounts))
+    controller.send(.openAccount(ids[0]))
+    controller.send(.goBack)
+    #expect(controller.session.navigation.forward == [.account(ids[0])])
+    reading.status = try SettingsAccountsTests.reading([
+      SettingsAccountsTests.account("app", "com.tinyspeck.slackmacgap", "Slack", added: SettingsAccountsTests.today)
+    ])
+    for _ in 0..<20 where controller.session.navigation.canGoForward {
+      await afterQueuedWork()
+    }
+    #expect(!controller.session.navigation.canGoForward, "the window kept the reading's removal in its history")
+    reading.status = try status(["overview": ["mode": "observing"]])
+    #expect(!controller.state.navigation.canGoForward, "an unreadable list never brings the route back")
+  }
+
+  @Test("while an alert or the sign-in sheet is up, the sidebar, Back and Forward wait")
+  func navigationWaitsUnderAModal() throws {
+    let reading = Reading(try Self.listed())
+    let controller = Self.controller(reading)
+    controller.send(.select(.about))
+    controller.send(.askRecover)
+    try #require(controller.state.alert != nil)
+    controller.send(.goBack)
+    controller.send(.select(.privacy))
+    #expect(controller.state.route == .page(.about), "under an alert")
+    controller.send(.alertCancel)
+    controller.send(.askSignIn(nil))
+    try #require(controller.state.signIn != nil)
+    controller.send(.goBack)
+    #expect(controller.state.route == .page(.about), "under the sheet")
+    controller.send(.cancelSignIn)
+    controller.send(.goBack)
+    #expect(controller.state.route == .page(.helper))
   }
 
   @Test("a level change that failed says why on the account's page, not on Accounts")

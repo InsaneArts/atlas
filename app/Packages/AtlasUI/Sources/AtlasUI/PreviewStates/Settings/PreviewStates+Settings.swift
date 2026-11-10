@@ -40,6 +40,7 @@
         PreviewState(name: "Privacy, home folder open", value: settingsHelperHomeOpen),
         PreviewState(name: "Privacy, home folder failed", value: settingsHelperHomeFailed),
         PreviewState(name: "Privacy, sign-in copies allowed", value: settingsHelperCopiesAllowed),
+        PreviewState(name: "Privacy, files unread", value: settingsPrivacyUnread),
         PreviewState(name: "Let the helper open the home folder", value: settingsOpenHome),
         PreviewState(name: "Let agents copy sign-ins", value: settingsAllowSignIns),
         PreviewState(name: "Accounts, none", value: settingsAccountsEmpty),

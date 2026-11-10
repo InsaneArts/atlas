@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// One account in the Accounts list, the whole row a button on a card row's inset fill (``CardRowStyle``) that opens
-/// its page: its first letter on a disc, its name over its level and when it was added, and a chevron.
+/// its page: its first letter on its name's tinted tile, its name over its level and when it was added, and a chevron.
 struct AccountListRow: View {
   /// The account.
   let row: SettingsAccountRow
@@ -11,7 +11,7 @@ struct AccountListRow: View {
   /// The row as a button.
   var body: some View {
     Button(action: open) {
-      ListRowBody(row.title, detail: row.detail, titleFit: .oneLine, lead: .letter(row.letter), size: .compact) {
+      ListRowBody(row.title, detail: row.detail, titleFit: .oneLine, lead: .monogram(row.monogram), size: .compact) {
         Image(systemName: SymbolName.next.rawValue)
           .font(Typography.font(.callout, weight: .semibold))
           .foregroundStyle(Color.textTertiary)
