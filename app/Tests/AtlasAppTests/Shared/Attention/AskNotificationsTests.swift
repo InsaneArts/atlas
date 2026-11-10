@@ -221,6 +221,26 @@ struct AskNotificationsTests {
     #expect(recorded.withdrawn == ["a1"])
   }
 
+  @Test(
+    "asked before and still undecided, as when macOS refused the request itself, macOS is asked again; never asked, it is not"
+  )
+  func anUndecidedAnswerIsAskedAgain() async {
+    for askedBefore in [true, false] {
+      let recorded = Recorded()
+      recorded.allows = true
+      var preferences = Self.preferences
+      preferences.loadAskConsentAsked = { askedBefore }
+      let signals = AskSignals(
+        notifications: recorded.notifications,
+        preferences: preferences,
+        store: AskStore(service: ScriptedService())
+      ) { nil }
+      await signals.readConsent()
+      #expect(recorded.asked == (askedBefore ? 1 : 0))
+      #expect(signals.consent == (askedBefore ? true : nil))
+    }
+  }
+
   @Test("macOS is asked once, when the first account joins the list")
   func consentIsAskedOnce() async throws {
     let recorded = Recorded()

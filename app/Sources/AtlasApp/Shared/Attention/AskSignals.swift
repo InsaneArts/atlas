@@ -44,11 +44,17 @@ final class AskSignals {
     self.inView = inView
   }
 
-  /// Reads whether the person let Atlas notify them, as macOS last said; once it says yes,
-  /// every question still up and not seen posts. Nothing is read while macOS is being asked.
+  /// Reads whether the person let Atlas notify them, as macOS last said; once it says yes, every question still up and
+  /// not seen posts. Nothing is read while macOS is being asked. Asked before and still undecided, as when macOS
+  /// refused the request itself, macOS is asked again: it shows its prompt only while the person hasn't answered.
   func readConsent() async {
     guard !asking else { return }
-    resolve(await notifications.consent())
+    let answer = await notifications.consent()
+    guard answer == nil, preferences.loadAskConsentAsked() else { return resolve(answer) }
+    asking = true
+    let allowed = await notifications.requestConsent()
+    asking = false
+    resolve(allowed)
   }
 
   /// Takes what macOS said: a yes posts every question still up and not seen.
