@@ -101,4 +101,18 @@ public enum SymbolName: String, CaseIterable, Sendable {
   case scrollArrow = "arrow.down"
   /// Show changes: what changed between two pictures.
   case changes = "square.grid.3x3.square"
+  /// Settings' Activity page: the time pictures are kept.
+  case clock
+  /// Settings' Integrations page: what Atlas connects to.
+  case link
+  /// Settings' About page: a lone "i".
+  case infoLetter = "info"
+  /// Settings' Accounts page with none listed.
+  case personCircle = "person.crop.circle"
+  /// Look Only: agents only look.
+  case eye
+  /// Ask Before Sending: agents ask first.
+  case askFirst = "questionmark.bubble"
+  /// Trusted: agents act without asking.
+  case trusted = "checkmark.shield"
 }

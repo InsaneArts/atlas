@@ -2,7 +2,7 @@ import AtlasStatus
 import AtlasUI
 
 extension SettingsPresenter {
-  /// The Helper pane: the helper's account with its status, a login Atlas can close while there is one, its
+  /// The Helper page: the helper's account with how it stands, as the sidebar's Helper row says it, a login Atlas can close while there is one, its
   /// readiness checks, and which commands can run now. Recover runs while the helper is there to recover, Log Out while its mode allows it, and each waits while it
   /// runs from any window; while another window's command runs, Switch, Recover and Log Out all wait under a line
   /// naming it. While Check Again reads, every check shows a spinner.
@@ -25,7 +25,7 @@ extension SettingsPresenter {
       account: SettingsHelperAccount(
         name: overview.title ?? Words.helper,
         line: SettingsWords.helperLine(display: Words.size(overview.display)),
-        status: mode.summary(line: "")
+        status: standing(facts)
       ),
       closeLogin: closeLogin(snapshot, canRun: !alertRunning && !waits),
       ready: ready(
@@ -43,8 +43,7 @@ extension SettingsPresenter {
       ),
       waiting: waits ? HelperWords.running(running) : nil,
       readyNote: notice(snapshot, in: .helper, busy: false, fromCheck: true),
-      notice: notice(snapshot, in: .helper, busy: false),
-      files: files(snapshot.files)
+      notice: notice(snapshot, in: .helper, busy: false)
     )
   }
 
@@ -112,23 +111,42 @@ extension SettingsPresenter {
       }
   }
 
-  /// What the last command said, if it ran in `tab` and in the place asked for: under "Ready to act" for what Check
-  /// Again found, else under the pane's last group. A note that waits on something running shows only while it runs,
-  /// so it never stays to say what is no longer true.
+  /// What the last command said, if it ran on `page` and in the place asked for: under "Ready to Act" for what Check
+  /// Again found, else under the page's notes. A note that waits on something running shows only while it runs, so it
+  /// never stays to say what is no longer true.
   ///
   /// - Parameters:
   ///   - snapshot: What the controller holds and reads.
-  ///   - tab: The pane asking.
+  ///   - page: The page asking.
   ///   - busy: Whether what a waiting note waits on runs now.
-  ///   - fromCheck: Whether the place asking is "Ready to act", where only Check Again's notes show; not by default.
+  ///   - fromCheck: Whether the place asking is "Ready to Act", where only Check Again's notes show; not by default.
   /// - Returns: The note, or nil.
   static func notice(
     _ snapshot: SettingsSnapshot,
-    in tab: SettingsTab,
+    in page: SettingsPage,
     busy: Bool,
     fromCheck: Bool = false
   ) -> SettingsNote? {
-    guard let notice = snapshot.session.notice, notice.tab == tab, notice.fromCheck == fromCheck else { return nil }
+    notice(snapshot, on: .page(page), busy: busy, fromCheck: fromCheck)
+  }
+
+  /// What the last command said, if it ran on `route`, such as an account's page.
+  ///
+  /// - Parameters:
+  ///   - snapshot: What the controller holds and reads.
+  ///   - route: The route asking.
+  ///   - busy: Whether what a waiting note waits on runs now.
+  ///   - fromCheck: Whether the place asking is "Ready to Act"; not by default.
+  /// - Returns: The note, or nil.
+  static func notice(
+    _ snapshot: SettingsSnapshot,
+    on route: SettingsRoute,
+    busy: Bool,
+    fromCheck: Bool = false
+  ) -> SettingsNote? {
+    guard let notice = snapshot.session.notice, notice.route == route, notice.fromCheck == fromCheck else {
+      return nil
+    }
     guard notice.kind != .working || busy else { return nil }
     return SettingsNote(text: notice.text, kind: notice.kind)
   }

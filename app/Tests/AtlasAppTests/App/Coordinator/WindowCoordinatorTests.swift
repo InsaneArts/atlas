@@ -422,15 +422,15 @@ struct WindowCoordinatorTests {
     #expect(links.status().connecting)
   }
 
-  @Test("the panel's Open Settings shows Helper even when another Settings tab was selected")
+  @Test("the panel's Open Settings shows Helper even when another Settings page was shown")
   func thePanelOpensHelperSettings() {
     let parts = StandInParts()
     let coordinator = parts.coordinator()
     coordinator.openSettings()
-    coordinator.settings?.controller.selectTab(.general)
+    coordinator.settings?.controller.select(.general)
     let links = coordinator.panelLinks()
     links.openSettings()
-    #expect(coordinator.settings?.controller.state.tabs.selected == .helper)
+    #expect(coordinator.settings?.controller.state.route == .page(.helper))
   }
 
   @Test("the Dock's menu offers the main window's control, agent and picture while it is open, and nothing else")

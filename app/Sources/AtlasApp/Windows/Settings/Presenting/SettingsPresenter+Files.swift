@@ -1,7 +1,7 @@
 import AtlasUI
 
 extension SettingsPresenter {
-  /// The Helper pane's "Your files" section: the home folder's row once read, private with Undo… or open with Make
+  /// The Privacy page: the home folder's row once read, private with Undo… or open with Make
   /// Private, its button holding the longer title's width and showing a spinner while its change runs, the sign-ins
   /// switch once known, and what failed; nil until Atlas has said anything.
   ///

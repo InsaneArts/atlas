@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// The Helper pane: the helper idle at 2560 × 1440, every check ready, every button free.
+    /// The Helper page: the helper idle at 2560 × 1440, every check ready, every button free.
     static let settingsHelperPane = SettingsHelperState(
       account: SettingsHelperAccount(
         name: "Atlas",
@@ -18,8 +18,7 @@
         canRecover: true,
         canLogOut: true,
         switchHelp: "Lock your screen so you can log in to the helper"
-      ),
-      files: settingsFilesPrivate
+      )
     )
 
     /// Mouse and keyboard stopped in the helper: its row says so in short and offers Recover… beside it, the one

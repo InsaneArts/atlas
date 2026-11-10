@@ -16,9 +16,6 @@ public struct SettingsHelperState: Equatable, Sendable {
   public var readyNote: SettingsNote?
   /// What the last command said, under the pane's last group; nil for nothing.
   public var notice: SettingsNote?
-  /// Whether the home folder is private from the helper and whether agents may copy sign-ins in; nil until Atlas
-  /// has looked.
-  public var files: SettingsFilesState?
 
   /// Creates the pane's state.
   ///
@@ -30,7 +27,6 @@ public struct SettingsHelperState: Equatable, Sendable {
   ///   - waiting: Why the buttons wait, while another action runs.
   ///   - readyNote: What Check Again found when something isn't ready.
   ///   - notice: What the last command said.
-  ///   - files: The "Your files" section; nil by default, until Atlas has looked.
   public init(
     account: SettingsHelperAccount,
     closeLogin: SettingsCloseLoginRow? = nil,
@@ -38,8 +34,7 @@ public struct SettingsHelperState: Equatable, Sendable {
     buttons: SettingsHelperButtons,
     waiting: String? = nil,
     readyNote: SettingsNote? = nil,
-    notice: SettingsNote? = nil,
-    files: SettingsFilesState? = nil
+    notice: SettingsNote? = nil
   ) {
     self.account = account
     self.closeLogin = closeLogin
@@ -48,6 +43,5 @@ public struct SettingsHelperState: Equatable, Sendable {
     self.waiting = waiting
     self.readyNote = readyNote
     self.notice = notice
-    self.files = files
   }
 }

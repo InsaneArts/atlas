@@ -6,10 +6,10 @@ enum ViewerLayout {
   static let paneInset = Spacing.s
   /// 8: a pane's corner, the window's less the pane's inset, so the two curves run side by side.
   static let paneRadius = Radius.nested(in: Radius.window, inset: paneInset)
-  /// 20: from the window's leading edge to the window buttons.
-  static let lightsInset: CGFloat = 20
-  /// 52: the three window buttons, 12 across and 8 apart.
-  static let lightsWidth: CGFloat = 52
+  /// 20: from the window's leading edge to the window buttons (``WindowChrome/lightsInset``).
+  static let lightsInset = WindowChrome.lightsInset
+  /// 52: the three window buttons, 12 across and 8 apart (``WindowChrome/lightsWidth``).
+  static let lightsWidth = WindowChrome.lightsWidth
   /// 1.5 by 12: the caret after the text being typed, on the footer's line.
   static let caret = CGSize(width: 1.5, height: 12)
   /// 4: how far the pointer moves on the mini screen before a press becomes a drag; less is a click, back to the

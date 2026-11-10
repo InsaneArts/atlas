@@ -8,57 +8,63 @@
     /// Each render's file name, in the order the previews list the samples (``PreviewStates/settings``): one for
     /// each sample. Kept apart from the states, which are the main actor's, so a test can list them as its arguments.
     nonisolated static let files = [
-      "01-general",
-      "02-helper",
-      "03-agents",
-      "04-about",
-      "05-helper-not-ready",
-      "06-agents-connecting",
-      "07-agents-no-projects",
-      "08-about-checking",
-      "09-about-up-to-date",
-      "10-about-newer",
-      "11-about-failed",
-      "12-recover",
-      "13-log-out",
-      "14-forget",
-      "15-install",
-      "16-switch",
-      "17-log-out-anyway",
-      "18-recovering",
-      "19-about-installing",
-      "20-about-install-failed",
-      "21-about-unpublished",
-      "22-helper-waiting",
-      "23-helper-leftover",
-      "24-helper-closing",
-      "25-helper-still-logged-in",
-      "26-claude-code-only",
-      "27-claude-app-only",
-      "28-claude-partly-connected",
-      "29-helper-home-open",
-      "30-helper-home-failed",
-      "31-helper-copies-allowed",
-      "32-open-home",
-      "33-allow-sign-ins",
-      "34-accounts",
-      "35-accounts-none",
-      "36-accounts-added",
-      "37-accounts-unread",
-      "38-remove-account",
-      "39-accounts-look-only",
-      "40-sign-in",
-      "41-sign-in-refused",
-      "42-account-opened",
-      "43-accounts-pictures-off",
+      "01-helper",
+      "02-general",
+      "03-activity",
+      "04-accounts",
+      "05-privacy",
+      "06-integrations",
+      "07-about",
+      "08-activity-custom",
+      "09-helper-not-ready",
+      "10-integrations-connecting",
+      "11-integrations-no-projects",
+      "12-about-checking",
+      "13-about-up-to-date",
+      "14-about-newer",
+      "15-about-failed",
+      "16-recover",
+      "17-log-out",
+      "18-forget",
+      "19-install",
+      "20-switch",
+      "21-log-out-anyway",
+      "22-recovering",
+      "23-about-installing",
+      "24-about-install-failed",
+      "25-about-unpublished",
+      "26-helper-waiting",
+      "27-helper-leftover",
+      "28-helper-closing",
+      "29-helper-still-logged-in",
+      "30-claude-code-only",
+      "31-claude-app-only",
+      "32-claude-partly-connected",
+      "33-privacy-home-open",
+      "34-privacy-home-failed",
+      "35-privacy-copies-allowed",
+      "36-open-home",
+      "37-allow-sign-ins",
+      "38-accounts-none",
+      "39-accounts-added",
+      "40-accounts-unread",
+      "41-remove-account",
+      "42-accounts-look-only",
+      "43-sign-in",
+      "44-sign-in-refused",
+      "45-account-opened",
+      "46-accounts-pictures-off",
     ]
+
+    /// The window's size: Settings' fixed 740 by 572.
+    nonisolated static let size = NSSize(width: SettingsLayout.width, height: SettingsLayout.height)
 
     /// Every Settings state drawn for visual checks, by file name.
     static var renders: [(file: String, state: SettingsState)] {
       Array(zip(files, PreviewStates.settings.map(\.value)))
     }
 
-    /// Draws every Settings state to PNGs in `directory`, at Retina scale (``PNG/scale``), each at its window's size.
+    /// Draws every Settings state to PNGs in `directory`, at Retina scale (``PNG/scale``), each at the window's size.
     ///
     /// - Parameters:
     ///   - directory: Where the PNGs go.
@@ -75,74 +81,35 @@
       let narrow = PreviewStates.settingsAboutSamples
         .enumerated()
         .map { index, sample in
-          draw(
-            "about-narrow-\(index + 1)",
-            sample.value,
-            to: folder,
-            appearance: appearance,
-            width: PreviewStates.settingsNarrowWidth
-          )
+          draw("about-\(index + 1)", sample.value, to: folder, appearance: appearance)
         }
       return (standard + narrow)
         .allSatisfy { $0 }
     }
 
-    /// Draws one Settings state to `file`.png in `folder`, at Retina scale, Settings' width and its pane's
-    /// height, as the window fits it.
+    /// Draws one Settings state to `file`.png in `folder`, at Retina scale and the window's size.
     ///
     /// - Parameters:
     ///   - file: The PNG's name, without its extension.
     ///   - state: The state.
     ///   - folder: Where the PNG goes.
     ///   - appearance: The appearance to draw it in, light or dark.
-    ///   - width: The window's width; the standard Settings width by default.
     /// - Returns: Whether it was drawn.
-    static func draw(
-      _ file: String,
-      _ state: SettingsState,
-      to folder: URL,
-      appearance: NSAppearance?,
-      width: CGFloat = SettingsLayout.width
-    ) -> Bool {
+    static func draw(_ file: String, _ state: SettingsState, to folder: URL, appearance: NSAppearance?) -> Bool {
       PNG.write(
-        view(state) { _ in },
-        size: size(of: state, width: width),
+        view(state),
+        size: size,
         to: folder.appendingPathComponent("\(file).png"),
         appearance: appearance
       )
     }
 
-    /// The window's size for a state: Settings' width, and the title and tabs over the pane as it draws, which the
-    /// pane reports as the window lays it out.
-    ///
-    /// - Parameters:
-    ///   - state: The state.
-    ///   - width: The available window width.
-    /// - Returns: The size.
-    static func size(of state: SettingsState, width: CGFloat = SettingsLayout.width) -> NSSize {
-      var pane: CGFloat?
-      let host = PNG.host(
-        view(state) { event in
-          if case .paneHeight(let tab, let height) = event, tab == state.tabs.selected { pane = height }
-        }
-      )
-      host.frame = NSRect(x: 0, y: 0, width: width, height: SettingsLayout.firstHeight)
-      host.layoutSubtreeIfNeeded()
-      let height = pane.map { SettingsLayout.header + $0 } ?? SettingsLayout.firstHeight
-      return NSSize(width: width, height: height.rounded(.up))
-    }
-
     /// The window's view for a render.
     ///
-    /// - Parameters:
-    ///   - state: The state.
-    ///   - send: Receives the view's events, such as its pane's height.
+    /// - Parameter state: The state.
     /// - Returns: The view, with the app's icon.
-    private static func view(
-      _ state: SettingsState,
-      send: @escaping @MainActor (SettingsEvent) -> Void
-    ) -> some View {
-      SettingsView(state: state, edit: { _ in }, send: send)
+    private static func view(_ state: SettingsState) -> some View {
+      SettingsView(state: state, edit: { _ in }, send: { _ in })
         .environment(\.appIcon, AppIconImage.image)
         .environment(\.accountPicture, AccountPictureImage.image)
     }

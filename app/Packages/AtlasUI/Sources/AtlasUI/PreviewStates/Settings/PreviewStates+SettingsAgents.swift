@@ -1,6 +1,6 @@
 #if DEBUG
   extension PreviewStates {
-    /// The Agents pane: Claude and Codex connected, Cursor configured, and two projects taught.
+    /// The Integrations page: Claude and Codex connected, Cursor configured, and two projects taught.
     static let settingsAgentsPane = SettingsAgentsState(
       agents: [
         SettingsAgentRow(
@@ -56,7 +56,7 @@
 
     /// Claude and Cursor connecting: Connect keeps its width with a spinner in its words' place.
     @MainActor static let settingsAgentsConnecting: SettingsState = {
-      var state = selecting(.agents)
+      var state = selecting(.integrations)
       state.agents.agents[0].connection = .connecting
       state.agents.agents[0].canDisconnect = false
       state.agents.agents[4].connection = .connecting
@@ -66,7 +66,7 @@
 
     /// Codex not on this Mac, no project taught yet, and a Connect that failed on the Claude app's settings file.
     @MainActor static let settingsAgentsEmpty: SettingsState = {
-      var state = selecting(.agents)
+      var state = selecting(.integrations)
       state.agents.agents[1].detail = "Not installed"
       state.agents.agents[1].connection = .missing
       state.agents.agents[0].problem = "The Claude app couldn't connect: its settings file has a mistake"

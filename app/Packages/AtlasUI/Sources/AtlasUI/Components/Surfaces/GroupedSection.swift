@@ -1,8 +1,12 @@
 import SwiftUI
 
-/// A section of a form, as System Settings sets one: its name above the group and its notes under it, each inset to
-/// where the rows' words start, and the rows in a compact ``GroupedList``. Sections stack in a ``FormColumn``.
+/// A section of a page of settings, as Settings' pages set one on their content card: its name above the group, 10
+/// over it, and its notes 8 under it, each inset to where the rows' words start, and the rows in a ``GroupedList`` on
+/// the card's quiet ground (``Color/fillGroupInset``).
 struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
+  /// 10: between the section's name and its group.
+  static var titleGap: CGFloat { Spacing.sPlus }
+
   /// The rows' items, in order.
   private let items: Items
   /// The section's name; empty for none.
@@ -33,16 +37,14 @@ struct GroupedSection<Items: RandomAccessCollection, Row: View>: View where Item
 
   /// The name, the group and the notes.
   var body: some View {
-    VStack(alignment: .leading, spacing: Spacing.sPlus) {
+    VStack(alignment: .leading, spacing: .zero) {
       if !title.isEmpty {
-        GroupLabel(text: title)
-          .padding(.horizontal, Spacing.m)
+        SectionTitle(text: title)
+          .padding(.horizontal, ListRow.Size.compact.inset)
+          .padding(.bottom, Self.titleGap)
       }
-      GroupedList(items, row: row)
-      ForEach(notes.indices, id: \.self) { index in
-        GroupedSectionNoteView(note: notes[index])
-          .padding(.horizontal, Spacing.m)
-      }
+      GroupedList(items, fill: .fillGroupInset, row: row)
+      GroupedSectionNotes(notes: notes)
     }
   }
 }

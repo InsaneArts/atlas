@@ -19,18 +19,18 @@ struct SettingsFilesTests {
   func wordsFollowTheHomeFolder() async {
     let commands = ScriptedCommands(["onboarding files": Self.open])
     let controller = SettingsController.scripted(commands: commands)
-    #expect(controller.state.helper.files == nil, "nothing shows before Atlas has looked")
+    #expect(controller.state.privacy == nil, "nothing shows before Atlas has looked")
 
     await controller.readFiles()
-    let open = controller.state.helper.files?.home
+    let open = controller.state.privacy?.home
     #expect(open?.title == "The helper can open 6 of your folders")
     #expect(open?.detail == "Such as dev and .config")
     #expect(open?.button == "Make Private")
-    #expect(controller.state.helper.files?.signInCopies == false)
+    #expect(controller.state.privacy?.signInCopies == false)
 
     commands.answer("onboarding files", Self.privateHome)
     await controller.changeHome(makePrivate: true)
-    let made = controller.state.helper.files?.home
+    let made = controller.state.privacy?.home
     #expect(made?.isPrivate == true)
     #expect(made?.title == "Your home folder is private from the helper")
     #expect(made?.detail == "Agents still open your builds: Atlas copies them in first")
@@ -52,9 +52,9 @@ struct SettingsFilesTests {
     }
     let controller = SettingsController.scripted(commands: commands)
     await controller.readFiles()
-    #expect(controller.state.helper.files?.home?.isPrivate == true)
+    #expect(controller.state.privacy?.home?.isPrivate == true)
     await controller.changeHome(makePrivate: false)
-    let files = controller.state.helper.files
+    let files = controller.state.privacy
     #expect(files?.home?.isPrivate == false, "never still private once Undo may have taken")
     #expect(files?.status?.kind == .problem)
     #expect(files?.status?.text.contains("chmod -a") == true)
@@ -68,7 +68,7 @@ struct SettingsFilesTests {
     await controller.readFiles()
     commands.answer("onboarding files", #"{"ok": false, "code": "io", "error": "Atlas couldn't"}"#)
     await controller.changeHome(makePrivate: true)
-    let files = controller.state.helper.files
+    let files = controller.state.privacy
     #expect(files?.home == nil)
     #expect(files?.status == SettingsNote(text: "Atlas couldn't.", kind: .problem))
   }
@@ -88,11 +88,11 @@ struct SettingsFilesTests {
     let older = Task { await controller.readFiles() }
     try await settle("the older reading never started") { commands.ran.contains(Action.homeFiles.arguments) }
     await controller.readFiles()
-    #expect(controller.state.helper.files?.home?.isPrivate == false)
+    #expect(controller.state.privacy?.home?.isPrivate == false)
     gate.open()
     await older.value
-    #expect(controller.state.helper.files?.home?.isPrivate == false, "the older reading failed")
-    #expect(controller.state.helper.files?.status == nil)
+    #expect(controller.state.privacy?.home?.isPrivate == false, "the older reading failed")
+    #expect(controller.state.privacy?.status == nil)
   }
 
   @Test("a reading a change overtook is dropped, so an older answer never undoes the change's")
@@ -111,10 +111,10 @@ struct SettingsFilesTests {
     let reading = Task { await controller.readFiles() }
     try await settle("the reading never started") { commands.ran.contains(Action.homeFiles.arguments) }
     await controller.changeHome(makePrivate: false)
-    #expect(controller.state.helper.files?.home?.isPrivate == false)
+    #expect(controller.state.privacy?.home?.isPrivate == false)
     gate.open()
     await reading.value
-    #expect(controller.state.helper.files?.home?.isPrivate == false, "the older reading said private")
+    #expect(controller.state.privacy?.home?.isPrivate == false, "the older reading said private")
   }
 
   @Test("a reading that failed leaves the home folder and the switch unknown, saying why under the section")
@@ -122,11 +122,11 @@ struct SettingsFilesTests {
     let commands = ScriptedCommands(["onboarding files": Self.privateHome])
     let controller = SettingsController.scripted(commands: commands)
     await controller.readFiles()
-    #expect(controller.state.helper.files?.home != nil)
+    #expect(controller.state.privacy?.home != nil)
     let missing = #"{"ok": false, "code": "identity", "error": "The helper account was not found"}"#
     commands.answer("onboarding files", missing)
     await controller.readFiles()
-    let files = controller.state.helper.files
+    let files = controller.state.privacy
     #expect(files?.home == nil)
     #expect(files?.signInCopies == nil)
     #expect(files?.status == SettingsNote(text: "The helper account was not found.", kind: .problem))
@@ -148,7 +148,7 @@ struct SettingsFilesTests {
     commands.answer("onboarding files", Self.open)
     await controller.confirmAlert()
     #expect(commands.ran.contains(Action.openHome.arguments))
-    #expect(controller.state.helper.files?.home?.isPrivate == false)
+    #expect(controller.state.privacy?.home?.isPrivate == false)
   }
 
   @Test("letting agents copy sign-ins in asks first with Don't Allow as the default; stopping them doesn't ask")
@@ -164,13 +164,13 @@ struct SettingsFilesTests {
     #expect(!commands.ran.contains(Action.copySignIns(true).arguments))
     await controller.confirmAlert()
     #expect(commands.ran.contains(Action.copySignIns(true).arguments))
-    #expect(controller.state.helper.files?.signInCopies == true)
+    #expect(controller.state.privacy?.signInCopies == true)
 
     commands.answer("onboarding sign-ins", #"{"ok": true, "signInCopies": false}"#)
     controller.send(.setSignInCopies(false))
     try await settle("turning copies off never ran") { commands.ran.contains(Action.copySignIns(false).arguments) }
     #expect(controller.state.alert == nil)
-    try await settle("the switch never turned off") { controller.state.helper.files?.signInCopies == false }
+    try await settle("the switch never turned off") { controller.state.privacy?.signInCopies == false }
   }
 
   @Test("the one-time offer asks only while the home folder is open and was never offered")

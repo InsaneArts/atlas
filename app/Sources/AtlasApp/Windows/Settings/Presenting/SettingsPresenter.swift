@@ -1,7 +1,7 @@
 import AtlasUI
 
 /// Decides what the Settings window shows from what its controller holds and reads: a pure function of the snapshot,
-/// in `SettingsPresenter+General`, `+Helper`, `+Accounts`, `+Agents`, `+About` and `+Alert`.
+/// in `SettingsPresenter+Sidebar`, `+General`, `+Helper`, `+Accounts`, `+Files`, `+Agents`, `+About` and `+Alert`.
 enum SettingsPresenter {
   /// The window as it should look.
   ///
@@ -9,41 +9,16 @@ enum SettingsPresenter {
   /// - Returns: The window's state.
   static func state(_ snapshot: SettingsSnapshot) -> SettingsState {
     SettingsState(
-      tabs: tabs(selected: snapshot.session.tab),
+      navigation: snapshot.session.navigation,
+      sidebar: sidebar(snapshot),
       general: general(snapshot),
       helper: helper(snapshot),
       accounts: accounts(snapshot),
+      privacy: files(snapshot.files),
       agents: agents(snapshot),
       about: about(snapshot),
       alert: alert(snapshot),
       signIn: snapshot.signIn
     )
-  }
-
-  /// The tab row: General, Helper, Accounts, Agents and About, each its symbol over its word, `selected` shown.
-  ///
-  /// - Parameter selected: The pane shown.
-  /// - Returns: The tab row.
-  static func tabs(selected: SettingsTab) -> CapsuleTabsState<SettingsTab> {
-    CapsuleTabsState(
-      tabs: SettingsTab.allCases.map { CapsuleTab(id: $0, title: SettingsWords.tab($0), symbol: symbol($0)) },
-      selected: selected,
-      label: SettingsWords.tabsLabel
-    )
-  }
-
-  /// A tab's symbol: a gear, a display, a key for the accounts, sparkles for the agents, and an info circle for About, where the orbit no
-  /// longer stands.
-  ///
-  /// - Parameter tab: The tab.
-  /// - Returns: Its symbol.
-  static func symbol(_ tab: SettingsTab) -> SymbolName {
-    switch tab {
-    case .general: .gear
-    case .helper: .display
-    case .accounts: .key
-    case .agents: .sparkles
-    case .about: .info
-    }
   }
 }

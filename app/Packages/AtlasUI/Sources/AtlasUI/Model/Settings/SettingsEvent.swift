@@ -1,12 +1,16 @@
-import CoreGraphics
-
-/// What the person does in the Settings window, other than the General pane's values, which its binding carries, and
-/// how tall a pane draws, so the window can fit it.
+/// What the person does in the Settings window, other than the General and Activity pages' values, which their binding
+/// carries.
 public enum SettingsEvent: Equatable, Sendable {
-  /// Shows a pane.
-  case selectTab(SettingsTab)
-  /// A pane drew at this height, its insets included and the tab row not.
-  case paneHeight(SettingsTab, CGFloat)
+  /// Shows a page from the sidebar.
+  case select(SettingsPage)
+  /// Shows the page of the account with this id.
+  case openAccount(String)
+  /// Returns to the route left last.
+  case goBack
+  /// Goes again to the route Back left.
+  case goForward
+  /// Filters the sidebar by what the person typed.
+  case search(String)
   /// Reads the helper's readiness again now.
   case checkAgain
   /// Asks to switch this Mac's screen to the helper.

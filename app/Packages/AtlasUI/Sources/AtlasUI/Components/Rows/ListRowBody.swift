@@ -123,8 +123,8 @@ struct ListRowBody<Detail: View, Trailing: View>: View {
 
   /// The lead, the title over its detail, and the trailing control, with the separator above.
   var body: some View {
-    HStack(spacing: ListRow.gap) {
-      ListRowLead(lead: lead)
+    HStack(spacing: size.gap) {
+      ListRowLead(lead: lead, size: size)
         .opacity(leadOpacity)
       VStack(alignment: .leading, spacing: Spacing.hairline) {
         HStack(spacing: Spacing.s) {

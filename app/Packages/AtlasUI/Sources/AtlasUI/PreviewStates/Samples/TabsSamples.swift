@@ -30,10 +30,6 @@
           face: .symbol
         ) { _ in }
         Tabs(
-          state: CapsuleTabsState(tabs: Self.tabs, selected: .activity, label: "What you see"),
-          style: .symbolOverWord
-        ) { _ in }
-        Tabs(
           state: CapsuleTabsState(tabs: Self.tabs, selected: .screen, label: "What you see"),
           style: .segment
         ) { _ in }

@@ -54,30 +54,30 @@
       return state
     }()
 
-    /// The Helper pane with the home folder open to the helper.
+    /// The Privacy page with the home folder open to the helper.
     @MainActor static let settingsHelperHomeOpen: SettingsState = {
-      var state = selecting(.helper)
-      state.helper.files = settingsFilesOpen
+      var state = selecting(.privacy)
+      state.privacy = settingsFilesOpen
       return state
     }()
 
-    /// The Helper pane after making the home folder private failed.
+    /// The Privacy page after making the home folder private failed.
     @MainActor static let settingsHelperHomeFailed: SettingsState = {
-      var state = selecting(.helper)
-      state.helper.files = settingsFilesFailed
+      var state = selecting(.privacy)
+      state.privacy = settingsFilesFailed
       return state
     }()
 
-    /// The Helper pane with sign-in copies allowed.
+    /// The Privacy page with sign-in copies allowed.
     @MainActor static let settingsHelperCopiesAllowed: SettingsState = {
-      var state = selecting(.helper)
-      state.helper.files = settingsFilesCopiesAllowed
+      var state = selecting(.privacy)
+      state.privacy = settingsFilesCopiesAllowed
       return state
     }()
 
     /// Undo… asked: Keep Private is the default.
     @MainActor static let settingsOpenHome: SettingsState = {
-      var state = selecting(.helper)
+      var state = selecting(.privacy)
       state.alert = AlertCardState(
         title: "Let the helper open your home folder again?",
         message: "Agents working in the helper could read the folders you made, such as your projects.",
@@ -91,7 +91,7 @@
 
     /// Copying sign-ins asked: Don't Allow is the default.
     @MainActor static let settingsAllowSignIns: SettingsState = {
-      var state = selecting(.helper)
+      var state = selecting(.privacy)
       state.alert = AlertCardState(
         title: "Let agents copy your sign-ins into the helper?",
         message: "An agent could sign the helper in to your accounts without you, by copying a browser's cookies.",

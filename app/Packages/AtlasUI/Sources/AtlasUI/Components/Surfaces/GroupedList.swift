@@ -7,6 +7,8 @@ import SwiftUI
 struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.Element: Identifiable {
   /// The rows' items, in order.
   private let items: Items
+  /// The group's ground: white on a window's ground, a quiet tint on a content card.
+  private let fill: Color
   /// The size of its rows when it scrolls past three and a half of them, or nil when it always grows.
   private let scrolling: ListRow.Size?
   /// Draws one item's row.
@@ -16,14 +18,17 @@ struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.E
   ///
   /// - Parameters:
   ///   - items: The rows' items, in order.
+  ///   - fill: The group's ground; ``Color/fillGroup``, for a window's ground, by default.
   ///   - scrolling: The size of its rows, when it scrolls past three and a half of them; nil, by default, grows.
   ///   - row: Draws one item's row, usually a ``ListRow``.
   init(
     _ items: Items,
+    fill: Color = .fillGroup,
     scrolling: ListRow.Size? = nil,
     @ViewBuilder row: @escaping (Items.Element) -> Row
   ) {
     self.items = items
+    self.fill = fill
     self.scrolling = scrolling
     self.row = row
   }
@@ -34,7 +39,7 @@ struct GroupedList<Items: RandomAccessCollection, Row: View>: View where Items.E
       .clipShape(shape)
       .background(
         shape
-          .fill(Color.fillGroup)
+          .fill(fill)
       )
   }
 

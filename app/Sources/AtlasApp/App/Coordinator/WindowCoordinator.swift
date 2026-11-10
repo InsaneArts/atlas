@@ -110,7 +110,7 @@ final class WindowCoordinator {
   /// Check for Updates: Settings opens on About and checks.
   func checkForUpdates() {
     openSettings()
-    settings?.controller.selectTab(.about)
+    settings?.controller.select(.about)
     settings?.controller.send(.checkForUpdates)
   }
 

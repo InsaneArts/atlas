@@ -9,8 +9,16 @@
     @MainActor public static func settings(_ state: SettingsState, applying event: SettingsEvent) -> SettingsState {
       var next = state
       switch event {
-      case .selectTab(let tab):
-        next.tabs.selected = tab
+      case .select(let page):
+        next.navigation.go(to: .page(page))
+      case .openAccount(let id):
+        next.navigation.go(to: .account(id))
+      case .goBack:
+        next.navigation.goBack()
+      case .goForward:
+        next.navigation.goForward()
+      case .search(let query):
+        next.sidebar.query = query
       case .askRecover:
         next.alert = settingsRecover.alert
       case .askLogOut:
@@ -49,11 +57,11 @@
       case .closeLeftovers, .closeHelper:
         next.helper.closeLogin = nil
       case .makeHomePrivate:
-        next.helper.files = settingsFilesPrivate
+        next.privacy = settingsFilesPrivate
       case .askOpenHome:
-        next.helper.files = settingsFilesOpen
+        next.privacy = settingsFilesOpen
       case .setSignInCopies(let on):
-        next.helper.files?.signInCopies = on
+        next.privacy?.signInCopies = on
       case .askRemoveAccount:
         next.alert = settingsRemoveAccount.alert
       case .setAccountLevel(let id, let level):
@@ -73,7 +81,7 @@
         next.accounts.open = next.accounts.open == id ? nil : id
       case .forgetAccount, .resetBrowser, .signOutAccount:
         break
-      case .checkAgain, .gettingStarted, .paneHeight, .showAppInFinder, .showAgentFile, .addApp:
+      case .checkAgain, .gettingStarted, .showAppInFinder, .showAgentFile, .addApp:
         break
       }
       return next

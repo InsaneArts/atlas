@@ -3,13 +3,13 @@ import SwiftUI
 
 @testable import AtlasUI
 
-/// An offscreen "Your files" section, drawn at Settings' width, reporting the home row's and its button's frames;
+/// An offscreen Privacy page, drawn at a page's width, reporting the home row's and its button's frames;
 /// nothing reaches the desktop.
 @MainActor
 final class FilesSectionHost {
   /// The window it draws in, never shown.
   private let window: NSWindow
-  /// The section's host.
+  /// The page's host.
   private let hosting = NSHostingView(rootView: AnyView(EmptyView()))
   /// Receives each reported frame.
   private var frameReport: LayoutFrameReport?
@@ -29,14 +29,14 @@ final class FilesSectionHost {
     frameReport = LayoutFrameReport { [weak self] id, frame in self?.frames[id] = frame }
   }
 
-  /// Shows the section in `state`.
+  /// Shows the page in `state`.
   ///
-  /// - Parameter state: The section.
+  /// - Parameter state: The page.
   func show(_ state: SettingsFilesState) {
     hosting.rootView = AnyView(
-      HelperFilesSection(state: state) { _ in }
+      PrivacyPage(state: state) { _ in }
         .environment(\.layoutFrameReport, frameReport)
-        .frame(width: SettingsLayout.width)
+        .frame(width: SettingsLayout.pageWidth)
     )
     render()
   }

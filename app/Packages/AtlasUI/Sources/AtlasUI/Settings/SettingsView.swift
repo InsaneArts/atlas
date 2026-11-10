@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// The Settings window: the pane's name and the tabs at the top, the selected pane under them, and an alert over the
-/// whole window when one is asked. It draws its state and sends what the person does, and how tall each pane draws, so
-/// the window can fit it; the General pane's values change through `edit`.
+/// The Settings window: the sidebar of pages on the window's recessed ground, and beside it the content card with back
+/// and forward, the route's title and its page; an alert or Sign In to a Site…'s sheet over the whole window when one
+/// is asked. It draws its state and sends what the person does; the General and Activity pages' values change through
+/// `edit`. What a command says, and what an alert asks, VoiceOver hears once, as it changes.
 public struct SettingsView: View {
   /// What the window shows.
   private let state: SettingsState
-  /// Receives the General pane as the person changed it; the controller writes each value where it belongs.
+  /// Receives the General and Activity pages as the person changed them; the controller writes each value where it
+  /// belongs.
   private let edit: @MainActor (SettingsGeneralState) -> Void
   /// Receives what the person does.
   private let send: @MainActor (SettingsEvent) -> Void
@@ -18,9 +20,9 @@ public struct SettingsView: View {
   ///
   /// - Parameters:
   ///   - state: What the window shows.
-  ///   - edit: Receives the General pane as the person changed it.
+  ///   - edit: Receives the General and Activity pages as the person changed them.
   ///   - announce: Posts explicit results and alerts to VoiceOver.
-  ///   - send: Receives what the person does, and each pane's height.
+  ///   - send: Receives what the person does.
   public init(
     state: SettingsState,
     edit: @escaping @MainActor (SettingsGeneralState) -> Void,
@@ -36,12 +38,14 @@ public struct SettingsView: View {
     self.announce = announce
   }
 
-  /// The header over the selected pane, and the alert over both when one is asked.
+  /// The sidebar beside the card, and the alert or the sheet over both when one is asked.
   public var body: some View {
     ZStack {
-      VStack(spacing: .zero) {
-        SettingsHeader(title: state.title, tabs: state.tabs) { send(.selectTab($0)) }
-        SettingsPane(state: state, edit: edit, send: send)
+      HStack(spacing: .zero) {
+        SettingsSidebar(state: state.sidebar, page: state.route.page, send: send)
+        SettingsCard(state: state, edit: edit, send: send)
+          .padding(.vertical, WindowChrome.cardInset)
+          .padding(.trailing, WindowChrome.cardInset)
       }
       // Under an alert or the sheet, nothing is reached by Tab or VoiceOver until it is answered.
       .disabled(state.alert != nil || state.signIn != nil)
@@ -49,8 +53,9 @@ public struct SettingsView: View {
       SignInSheetLayer(state: state.signIn, send: send)
       AlertLayer(state: state.alert) { send($0 == .confirm ? .alertConfirm : .alertCancel) }
     }
-    .windowSurface()
-    // The header sits in the title bar, beside the window buttons.
+    .background(Color.groundRecessed)
+    .foregroundStyle(Color.textPrimary)
+    // The sidebar and the bar sit in the title bar, beside the window buttons.
     .ignoresSafeArea(.container, edges: .top)
     // Each only when its words change, so a poll that reads the same says nothing.
     .onChange(of: state.alert?.shownTitle) { _, title in if let title { announce(title) } }
@@ -58,33 +63,31 @@ public struct SettingsView: View {
     .onChange(of: state.signIn?.refusal) { _, refusal in if let refusal { announce(refusal) } }
     .onChange(of: state.helper.waiting) { _, waiting in if let waiting { announce(waiting) } }
     .onChange(of: state.helper.notice) { _, notice in if let notice { announce(notice.text) } }
+    .onChange(of: state.general.notice) { _, notice in if let notice { announce(notice.text) } }
+    .onChange(of: state.accounts.notice) { _, notice in if let notice { announce(notice.text) } }
+    .onChange(of: state.privacy?.status) { _, status in if let status { announce(status.text) } }
     .onChange(of: state.agents.notice) { _, notice in if let notice { announce(notice.text) } }
     .onChange(of: state.about.status) { _, status in if let status { announce(status.text) } }
   }
-
 }
 
 #if DEBUG
-  #Preview("General") {
-    SettingsView(state: PreviewStates.settingsGeneral, edit: { _ in }, send: { _ in })
-      .frame(width: SettingsLayout.width, height: SettingsLayout.firstHeight)
-  }
-
   #Preview("Helper") {
     SettingsView(state: PreviewStates.settingsHelper, edit: { _ in }, send: { _ in })
-      .frame(width: SettingsLayout.width, height: SettingsLayout.firstHeight)
+      .frame(width: SettingsLayout.width, height: SettingsLayout.height)
   }
 
-  #Preview("Forget") {
-    SettingsView(state: PreviewStates.settingsForget, edit: { _ in }, send: { _ in })
-      .frame(width: SettingsLayout.width, height: SettingsLayout.firstHeight)
+  #Preview("General, dark") {
+    SettingsView(state: PreviewStates.settingsGeneral, edit: { _ in }, send: { _ in })
+      .frame(width: SettingsLayout.width, height: SettingsLayout.height)
+      .environment(\.colorScheme, .dark)
   }
 
   #Preview("Interactive") {
-    @Previewable @State var state = PreviewStates.settingsGeneral
+    @Previewable @State var state = PreviewStates.settingsHelper
     SettingsView(state: state, edit: { state.general = $0 }) { event in
       state = PreviewStates.settings(state, applying: event)
     }
-    .frame(width: SettingsLayout.width, height: SettingsLayout.firstHeight)
+    .frame(width: SettingsLayout.width, height: SettingsLayout.height)
   }
 #endif

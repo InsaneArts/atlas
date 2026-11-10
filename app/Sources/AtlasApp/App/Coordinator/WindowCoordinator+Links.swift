@@ -21,12 +21,12 @@ extension WindowCoordinator {
       openSettings: { [weak self] in
         self?.parts?.closePanel()
         self?.openSettings()
-        self?.settings?.controller.selectTab(.helper)
+        self?.settings?.controller.select(.helper)
       },
       openAccounts: { [weak self] in
         self?.parts?.closePanel()
         self?.openSettings()
-        self?.settings?.controller.selectTab(.accounts)
+        self?.settings?.controller.select(.accounts)
       },
       showAlert: { [weak self] alert in
         self?.parts?.closePanel()

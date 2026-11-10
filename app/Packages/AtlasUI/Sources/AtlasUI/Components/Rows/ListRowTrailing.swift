@@ -7,6 +7,8 @@ struct ListRowTrailing: View {
   let trailing: ListRow.Trailing
   /// The row's title, which names its switch for VoiceOver.
   var label = ""
+  /// How tall its row is: a button in a Settings group takes a settings row's capsule.
+  var size = ListRow.Size.regular
   /// What its switch or button does.
   let action: (@MainActor () -> Void)?
 
@@ -35,7 +37,7 @@ struct ListRowTrailing: View {
         .labelsHidden()
     case .button(let title):
       Button(title) { action?() }
-        .buttonStyle(.capsule(.secondary, size: .mini))
+        .buttonStyle(.capsule(.secondary, size: size == .compact ? .row : .mini))
     case .radio(let isOn):
       RadioMark(isOn: isOn)
     case .progress:

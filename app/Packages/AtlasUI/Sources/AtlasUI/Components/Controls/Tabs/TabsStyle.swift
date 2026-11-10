@@ -4,6 +4,4 @@ enum TabsStyle: Sendable {
   case track
   /// Side by side in a small rounded track, the selected one on a gliding thumb, as a pane's filters.
   case segment
-  /// Each its symbol over its word on a tile, the selected one filled.
-  case symbolOverWord
 }

@@ -65,4 +65,10 @@ public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
     self.showsFile = showsFile
     self.canDisconnect = canDisconnect
   }
+
+  /// Whether the agent is connected only in part: some of its parts use Atlas, and Connect can finish the rest.
+  public var isPartlyConnected: Bool {
+    guard case .connect = connection else { return false }
+    return canDisconnect
+  }
 }

@@ -1,12 +1,12 @@
 #if DEBUG
   extension PreviewStates {
-    /// What the Accounts pane says with no accounts listed.
+    /// What the Accounts page says with no accounts listed.
     static let settingsAccountsNone = EmptyMessageState(
       headline: "No accounts yet",
       message: "Agents work freely and nothing asks you. If a task needs an account, sign the helper in here."
     )
 
-    /// The Accounts pane with a site and an app listed.
+    /// The Accounts page with a site and an app listed.
     static let settingsAccountsPane = SettingsAccountsState(
       rows: [
         SettingsAccountRow(
@@ -29,17 +29,17 @@
       empty: settingsAccountsNone
     )
 
-    /// The Accounts pane, listing three accounts.
+    /// The Accounts page, listing three accounts.
     @MainActor static let settingsAccounts: SettingsState = selecting(.accounts)
 
-    /// The Accounts pane with none listed.
+    /// The Accounts page with none listed.
     @MainActor static let settingsAccountsEmpty: SettingsState = {
       var state = selecting(.accounts)
       state.accounts.rows = []
       return state
     }()
 
-    /// The Accounts pane just after Atlas added an account the person typed a password in.
+    /// The Accounts page just after Atlas added an account the person typed a password in.
     @MainActor static let settingsAccountsAdded: SettingsState = {
       var state = selecting(.accounts)
       state.accounts.note = "Added github.com after you typed a password there. Agents ask you before sending there."
@@ -47,14 +47,14 @@
       return state
     }()
 
-    /// The Accounts pane while General keeps no pictures of agent actions: the line under the list says so.
+    /// The Accounts page while General keeps no pictures of agent actions: the line under the list says so.
     @MainActor static let settingsAccountsPicturesOff: SettingsState = {
       var state = selecting(.accounts)
       state.accounts.picturesOff = "Activity won't keep pictures of what agents do here."
       return state
     }()
 
-    /// The Accounts pane with a bank agents may only look at.
+    /// The Accounts page with a bank agents may only look at.
     @MainActor static let settingsAccountsLookOnly: SettingsState = {
       var state = selecting(.accounts)
       state.accounts.rows = [
@@ -77,21 +77,21 @@
       return state
     }()
 
-    /// The Accounts pane when Atlas can't read its list.
+    /// The Accounts page when Atlas can't read its list.
     @MainActor static let settingsAccountsUnread: SettingsState = {
       var state = selecting(.accounts)
       state.accounts.rows = nil
       return state
     }()
 
-    /// The Accounts pane with github.com opened: signing out, forgetting it, resetting the browser and removing it.
+    /// The Accounts page with github.com opened: signing out, forgetting it, resetting the browser and removing it.
     @MainActor static let settingsAccountOpened: SettingsState = {
       var state = selecting(.accounts)
       state.accounts.open = "site\u{1F}github.com"
       return state
     }()
 
-    /// Sign In to a Site… over the Accounts pane, a site typed.
+    /// Sign In to a Site… over the Accounts page, a site typed.
     @MainActor static let settingsSignIn: SettingsState = {
       var state = selecting(.accounts)
       state.signIn = SignInSheetState(site: "github.com")

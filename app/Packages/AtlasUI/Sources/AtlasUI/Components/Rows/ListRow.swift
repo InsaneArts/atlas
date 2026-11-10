@@ -92,7 +92,7 @@ struct ListRow: View {
   enum Size: Sendable, CaseIterable {
     /// 48: a setup list.
     case regular
-    /// 44: a Settings group.
+    /// 39, or 44 with a detail: a Settings group.
     case compact
     /// 44: a setup checklist, at a setup list's inset.
     case checklist
@@ -101,19 +101,24 @@ struct ListRow: View {
     /// 34: a window under its app.
     case tight
 
-    /// The space above and below the row's content: 10 on a setup row, 7 in a Settings group; the tighter
-    /// rows and a checklist keep 4, so their least height sets their rhythm.
+    /// The space above and below the row's content: 10 on a setup row, 6 in a Settings group, so a title over its
+    /// detail stands 44; the tighter rows and a checklist keep 4, so their least height sets their rhythm.
     var verticalInset: CGFloat {
       switch self {
       case .regular: Spacing.sPlus
-      case .compact: ListRowLayout.compactVerticalInset
+      case .compact: Spacing.xsPlus
       case .dense, .tight, .checklist: Spacing.xs
       }
     }
 
-    /// The row's inset on each side: 14, or 12 in a Settings group.
+    /// The row's inset on each side: 14, or 10 in a Settings group.
     var inset: CGFloat {
-      self == .compact ? Spacing.m : Spacing.mPlus
+      self == .compact ? Spacing.sPlus : Spacing.mPlus
+    }
+
+    /// Between the lead, the text and the trailing control: ``ListRow/gap``, or 10 in a Settings group.
+    var gap: CGFloat {
+      self == .compact ? Spacing.sPlus : ListRow.gap
     }
 
     /// The detail's style: callout, or caption in a Settings group, its 11-point detail.
@@ -125,7 +130,8 @@ struct ListRow: View {
     var height: CGFloat {
       switch self {
       case .regular: ListRowLayout.regularHeight
-      case .compact, .checklist: ControlHeight.xl
+      case .compact: ListRowLayout.compactHeight
+      case .checklist: ControlHeight.xl
       case .dense: ListRowLayout.denseHeight
       case .tight: ControlHeight.mPlus
       }
@@ -213,7 +219,7 @@ struct ListRow: View {
       size: size,
       accessibilityChildren: accessibilityChildren
     ) {
-      ListRowTrailing(trailing: trailing, label: title, action: action)
+      ListRowTrailing(trailing: trailing, label: title, size: size, action: action)
     }
   }
 
@@ -236,27 +242,30 @@ struct ListRow: View {
   nonisolated static let gap = Spacing.m
 
   /// Where the separator above a row starts: where its title starts, past its inset, its lead and the gap
-  /// after it.
+  /// after it; in a Settings group, at the row's inset whatever leads it, as Settings' groups rule their rows.
   ///
   /// - Parameters:
   ///   - lead: What leads the row.
   ///   - size: How tall the row is, which sets its inset; a setup list's by default.
   /// - Returns: The separator's inset from the row's leading edge: 14 with nothing leading, 42 after a check's mark,
-  /// 56 after a tile, a picture or a letter; 2 less in a Settings group.
+  /// 56 after a tile, a picture or a letter; 10 in a Settings group.
   nonisolated static func separatorInset(_ lead: Lead, size: Size = .regular) -> CGFloat {
-    let width = leadWidth(lead)
-    return width == 0 ? size.inset : size.inset + width + gap
+    let width = leadWidth(lead, size: size)
+    return width == 0 || size == .compact ? size.inset : size.inset + width + size.gap
   }
 
   /// How wide a row's lead is.
   ///
-  /// - Parameter lead: What leads the row.
-  /// - Returns: None for nothing, 16 for a check's mark or a ring, 30 for a tile, an icon, a picture or a letter.
-  nonisolated static func leadWidth(_ lead: Lead) -> CGFloat {
+  /// - Parameters:
+  ///   - lead: What leads the row.
+  ///   - size: How tall the row is; a setup list's by default.
+  /// - Returns: None for nothing, 16 for a check's mark or a ring, 30 for a tile, an icon, a picture or a letter, or
+  /// 26 in a Settings group.
+  nonisolated static func leadWidth(_ lead: Lead, size: Size = .regular) -> CGFloat {
     switch lead {
     case .none: 0
     case .check, .pending: IconSize.s
-    case .tile, .image, .mark, .picture, .letter: IconSize.l
+    case .tile, .image, .mark, .picture, .letter: size == .compact ? IconSize.mPlus : IconSize.l
     }
   }
 

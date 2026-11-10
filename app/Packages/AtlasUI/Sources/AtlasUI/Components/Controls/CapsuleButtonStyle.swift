@@ -37,7 +37,9 @@ struct CapsuleButtonStyle: ButtonStyle {
 
   /// How large the capsule is.
   enum Size: Sendable {
-    /// 26 high, 13-point text: in a settings row.
+    /// 22 high, 13-point regular text: in a settings row.
+    case row
+    /// 26 high, 13-point text: beside a list's line, and a small circle.
     case mini
     /// 28 high, 13-point text: an alert's buttons.
     case compact

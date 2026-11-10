@@ -52,7 +52,7 @@
       .note("Atlas has no public release yet. Check [atlas.insanearts.io](https://atlas.insanearts.io) for news.")
     )
 
-    /// The About pane with its update action and row detail.
+    /// The About page with its update action and row detail.
     ///
     /// - Parameters:
     ///   - update: The update button.

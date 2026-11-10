@@ -2,27 +2,27 @@ import AppKit
 import AtlasUI
 import SwiftUI
 
-/// The Settings window: dark, 680 wide and as tall as its pane, its symbol tabs on the window's ground with no toolbar
-/// behind them. One at a time; it has a Dock icon while open, like any app window (``DockIcon``). It opens where it was
-/// left, its top-left corner kept under ``autosaveName``, centred only the first time; it cannot be minimised, as a
-/// settings window is closed instead, and it comes to the Space the person is on, full-screen apps included.
-///
-/// SwiftUI only reports how tall each pane draws; the window fits it here, in AppKit, keeping its top edge: easing
-/// over 0.35 seconds on (0.25, 0.1, 0.25, 1) while on screen, or at once while hidden or under Reduce Motion. A pane
-/// changed mid-resize eases on from wherever the window is.
+/// The Settings window: 740 by 572, as Rex's Settings stands, with the sidebar of pages under its window buttons and the
+/// content card beside it, titled with the route shown for the Window menu and VoiceOver. One at a time; it has a Dock
+/// icon while open, like any app window (``DockIcon``). It opens where it was left, kept whole on its screen
+/// (``SettingsWindowFrame``), centred only the first time; it cannot be resized or minimised, as a settings window is
+/// closed instead, and it comes to the Space the person is on, full-screen apps included. A press anywhere outside the
+/// search field takes the keyboard back from it (``FieldFocus``), and the mouse's back and forward buttons move
+/// through the window's history as ⌘[ and ⌘] do.
 final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
-  /// Moves a window to a frame, easing or at once.
-  typealias Mover = @MainActor (_ window: NSWindow, _ frame: NSRect, _ animated: Bool) -> Void
-
   /// The name its place is kept under in the app's defaults. Shipped, so it never changes.
   static let autosaveName = "AtlasSettings"
+  /// 3: the mouse's back button, as AppKit numbers it.
+  static let backButton = 3
+  /// 4: the mouse's forward button.
+  static let forwardButton = 4
 
   /// The window's controller.
   let controller: SettingsController
   /// Runs once the window has closed and its controller has stopped.
   let closed: @MainActor (SettingsWindow) -> Void
-  /// Moves the window to each new frame; ``move(_:to:animated:)`` outside tests.
-  private let mover: Mover
+  /// Takes the keyboard back from the search field on a press anywhere else in the window.
+  let fieldFocus = FieldFocus()
   /// Open until closed.
   private(set) var isPresented = false
 
@@ -30,54 +30,56 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   ///
   /// - Parameters:
   ///   - controller: The window's controller.
-  ///   - mover: Moves the window to each new frame; easing through AppKit's animator by default.
   ///   - closed: Runs once the window has closed and its controller has stopped.
-  init(
-    controller: SettingsController,
-    mover: @escaping Mover = SettingsWindow.move,
-    closed: @escaping @MainActor (SettingsWindow) -> Void
-  ) {
+  init(controller: SettingsController, closed: @escaping @MainActor (SettingsWindow) -> Void) {
     self.controller = controller
     self.closed = closed
-    self.mover = mover
     super.init(
-      contentRect: NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.firstHeight),
+      contentRect: NSRect(x: 0, y: 0, width: SettingsLayout.width, height: SettingsLayout.height),
       styleMask: [.titled, .closable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
-    // The title names the pane for the Window menu and VoiceOver; the view draws it in the title bar.
-    title = SettingsWords.tab(controller.session.tab)
+    // The title names the route for the Window menu and VoiceOver; the view draws it in its bar.
+    title = controller.state.title
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
     titlebarSeparatorStyle = .none
-    // An empty compact toolbar lowers the window buttons to 14 from the top, beside the pane's name.
+    // An empty unified toolbar gives the title bar its 52, so the window buttons centre with the sidebar's band and
+    // the back and forward capsule, as the main window's do.
     toolbar = NSToolbar(identifier: "settings")
-    toolbarStyle = .unifiedCompact
+    toolbarStyle = .unified
     isReleasedWhenClosed = false
     isMovableByWindowBackground = true
     collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
     delegate = self
+    let fieldReport = fieldFocus.report
     WindowShell.host(in: self) {
       SettingsView(state: controller.state, edit: controller.update, send: controller.send)
-    }
-    controller.reshape = { [weak self] title, height in
-      self?.reshape(title: title, contentHeight: height)
+        .environment(\.focusedFieldReport, fieldReport)
     }
     setFrameAutosaveName(Self.autosaveName)
+    followTitle()
   }
 
-  /// Brings the window forward at its pane's height: where it was left, its top edge kept, or centred the first time.
-  /// The app shows its Dock icon first.
+  /// Titles the window with the route shown, each time it changes.
+  private func followTitle() {
+    StateTracking.follow { [weak self] in
+      self?.controller.state.title
+    } apply: { [weak self] title in
+      if self?.title != title { self?.title = title }
+    }
+  }
+
+  /// Brings the window forward where it was left, kept whole on its screen, or centred the first time. The app shows
+  /// its Dock icon first.
   func present() {
     if !isPresented {
       let restored = setFrameUsingName(Self.autosaveName)
-      // Draws the pane once, so its height is known before the window shows.
-      contentView?.layoutSubtreeIfNeeded()
-      controller.reshapeWindow()
-      if !restored { center() }
+      if restored { keepOnScreen() } else { center() }
     }
     isPresented = true
+    fieldFocus.watch(self)
     makeKeyAndOrderFront(nil)
     NSApp.activate()
   }
@@ -85,46 +87,20 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
   /// Closes the window.
   func dismiss() { close() }
 
-  /// Names the pane shown and fits its height, when known.
-  ///
-  /// - Parameters:
-  ///   - title: The pane's name.
-  ///   - contentHeight: The title and tabs over the pane, or nil until the pane has drawn.
-  func reshape(title: String, contentHeight: CGFloat?) {
-    self.title = title
-    guard let contentHeight else { return }
-    fit(contentHeight: contentHeight)
+  /// Sets the window at its fixed size, moved just enough to stand whole on its screen.
+  func keepOnScreen() {
+    let target = SettingsWindowFrame.frame(current: frame, within: screen?.visibleFrame)
+    if target != frame { setFrame(target, display: true) }
   }
 
-  /// Fits a content height from the window's frame now, mid-resize included, keeping its top edge.
+  /// The mouse's back and forward buttons move through the window's history; any other button goes on as usual.
   ///
-  /// - Parameter contentHeight: The title and tabs over the pane.
-  func fit(contentHeight: CGFloat) {
-    let target = SettingsWindowFrame.frame(current: frame, contentHeight: contentHeight, within: screen?.visibleFrame)
-    guard target != frame else { return }
-    let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-    mover(self, target, SettingsWindowFrame.animates(isVisible: isVisible, reduceMotion: reduceMotion))
-  }
-
-  /// Moves a window to a frame: through AppKit's animator over ``AtlasUI/Motion/Duration/resize`` on
-  /// ``AtlasUI/Motion/resizeCurve``, which starts from wherever the window is, so a new frame mid-resize retargets;
-  /// or at once.
-  ///
-  /// - Parameters:
-  ///   - window: The window.
-  ///   - frame: Its new frame.
-  ///   - animated: Whether it eases there.
-  static func move(_ window: NSWindow, to frame: NSRect, animated: Bool) {
-    guard animated else {
-      window.setFrame(frame, display: true)
-      return
-    }
-    let curve = Motion.resizeCurve
-    NSAnimationContext.runAnimationGroup { context in
-      context.duration = Motion.Duration.resize.seconds
-      context.timingFunction = CAMediaTimingFunction(controlPoints: curve.x1, curve.y1, curve.x2, curve.y2)
-      window.animator()
-        .setFrame(frame, display: true)
+  /// - Parameter event: The press.
+  override func otherMouseDown(with event: NSEvent) {
+    switch event.buttonNumber {
+    case Self.backButton: controller.send(.goBack)
+    case Self.forwardButton: controller.send(.goForward)
+    default: super.otherMouseDown(with: event)
     }
   }
 
@@ -135,12 +111,13 @@ final class SettingsWindow: NSWindow, NSWindowDelegate, WindowPresenting {
     controller.cameForward()
   }
 
-  /// The window is closing: its controller stops, and the app settles its Dock icon once `closed` has run.
+  /// The window is closing: its controller stops, the search gives up watching presses, and the app settles its Dock
+  /// icon once `closed` has run.
   ///
   /// - Parameter notification: The window's notification.
   func windowWillClose(_ notification: Notification) {
     isPresented = false
-    controller.reshape = nil
+    fieldFocus.stop()
     controller.close()
     closed(self)
   }

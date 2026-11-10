@@ -38,11 +38,11 @@ struct SettingsAccountsTests {
     return SettingsPresenter.accounts(snapshot)
   }
 
-  @Test("the tab sits between Helper and Agents, with a key")
-  func theTabSitsBetweenHelperAndAgents() {
-    #expect(SettingsTab.allCases == [.general, .helper, .accounts, .agents, .about])
-    #expect(SettingsWords.tab(.accounts) == "Accounts")
-    #expect(SettingsPresenter.symbol(.accounts) == .key)
+  @Test("the page sits between Activity and Privacy, after the sidebar's gap")
+  func thePageSitsBetweenActivityAndPrivacy() {
+    #expect(SettingsPage.allCases == [.helper, .general, .activity, .accounts, .privacy, .integrations, .about])
+    #expect(SettingsWords.page(.accounts) == "Accounts")
+    #expect(SettingsPage.accounts.group != SettingsPage.activity.group)
   }
 
   @Test("each account says when it was added, an app saying it is one")

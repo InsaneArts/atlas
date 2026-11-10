@@ -188,10 +188,10 @@ struct SettingsPresenterTests {
   @Test("what Check Again found shows under Ready to act, and every other notice under the last section")
   func checkNoticesShowUnderReadyToAct() {
     var snapshot = SettingsSnapshot()
-    snapshot.session.notice = SettingsNotice(tab: .helper, text: "Not ready.", kind: .problem, fromCheck: true)
+    snapshot.session.notice = SettingsNotice(route: .page(.helper), text: "Not ready.", kind: .problem, fromCheck: true)
     #expect(SettingsPresenter.helper(snapshot).readyNote?.text == "Not ready.")
     #expect(SettingsPresenter.helper(snapshot).notice == nil)
-    snapshot.session.notice = SettingsNotice(tab: .helper, text: "The helper is logged out.")
+    snapshot.session.notice = SettingsNotice(route: .page(.helper), text: "The helper is logged out.")
     #expect(SettingsPresenter.helper(snapshot).readyNote == nil)
     #expect(SettingsPresenter.helper(snapshot).notice?.text == "The helper is logged out.")
   }

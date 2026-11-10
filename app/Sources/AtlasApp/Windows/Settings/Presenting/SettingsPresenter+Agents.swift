@@ -3,7 +3,7 @@ import AtlasUI
 import Foundation
 
 extension SettingsPresenter {
-  /// The Agents pane: Claude and Codex, each connected, ready to connect, not installed, or
+  /// The Integrations page: Claude and Codex, each connected, ready to connect, not installed, or
   /// saying why its last Connect failed; then each project taught.
   ///
   /// - Parameter snapshot: What the controller holds and reads.
@@ -38,7 +38,7 @@ extension SettingsPresenter {
     return SettingsAgentsState(
       agents: plugins,
       projects: snapshot.agents.projects.map(project),
-      notice: notice(snapshot, in: .agents, busy: !installing.isEmpty)
+      notice: notice(snapshot, in: .integrations, busy: !installing.isEmpty)
     )
   }
 

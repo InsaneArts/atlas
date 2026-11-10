@@ -1,9 +1,12 @@
 import AtlasUI
 
-/// What the Settings window is doing: the pane shown, the alert asked, what runs, and what the last command said.
+/// What the Settings window is doing: where it stands and has been, the sidebar's search, the alert asked, what runs,
+/// and what the last command said.
 struct SettingsSession: Equatable {
-  /// The pane shown.
-  var tab = SettingsTab.general
+  /// The route shown, with Back's and Forward's.
+  var navigation = SettingsNavigation()
+  /// What the person typed in the sidebar's search.
+  var query = ""
   /// The alert asked, if any.
   var alert: SettingsAlert?
   /// Whether the alert's command runs now, so its buttons wait.
@@ -20,7 +23,7 @@ struct SettingsSession: Equatable {
   var accountsWorking = false
   /// Where a check for updates stands.
   var update = SettingsUpdate.idle
-  /// What the last command said, in the pane that ran it.
+  /// What the last command said, on the page that ran it.
   var notice: SettingsNotice?
   /// Why each agent's last Connect or Disconnect failed, by id; cleared when status confirms the requested state.
   var connectFailures: [String: SettingsAgentFailure] = [:]

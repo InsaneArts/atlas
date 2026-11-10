@@ -3,10 +3,11 @@ import AtlasUI
 import Foundation
 import Observation
 
-/// The Settings window's one observed object: the pane shown, the alert asked, the agents and projects, and the
-/// person's choices. Values another window also shows (the helper's status, Open at Login, the picture) are read
+/// The Settings window's one observed object: where the window stands and has been, the alert asked, the agents and
+/// projects, and the person's choices. Values another window also shows (the helper's status, Open at Login, the picture) are read
 /// through ``SettingsLinks`` each time the window draws, so they stay one value; ``SettingsPresenter`` decides what
-/// the window shows. Its parts are in `SettingsController+Helper`, `+Agents`, `+Updates`, `+Alert` and `+Window`.
+/// the window shows. Its parts are in `SettingsController+Navigation`, `+Helper`, `+Agents`, `+Updates`, `+Alert` and
+/// the others beside them.
 @Observable
 final class SettingsController {
   /// What the window is doing. Written only by the controller's own files.
@@ -42,21 +43,14 @@ final class SettingsController {
   @ObservationIgnored var agentsReading: Task<Void, Never>?
   /// Numbers each agents reading, so only the newest one started is kept.
   @ObservationIgnored var agentsGeneration = 0
-  /// How tall each pane last drew, its insets included, by pane. Written only by the controller's own files.
-  @ObservationIgnored var paneHeights: [SettingsTab: CGFloat] = [:]
-  /// Shapes the window to the pane shown: its name for the title bar, and the window's content height, nil until
-  /// the pane has drawn. The window sets it.
-  @ObservationIgnored var reshape: (@MainActor (_ title: String, _ contentHeight: CGFloat?) -> Void)?
 
-  /// Creates the window's controller on the pane last shown, with the person's saved choices.
+  /// Creates the window's controller on the page last shown, with the person's saved choices.
   ///
   /// - Parameter dependencies: What it reaches outside itself.
   init(dependencies: SettingsDependencies) {
     self.dependencies = dependencies
     let preferences = dependencies.preferences
-    session.tab =
-      preferences.loadTab()
-      .flatMap(SettingsTab.init(rawValue:)) ?? .general
+    session.navigation = SettingsNavigation(.page(SettingsPage.saved(preferences.loadTab())))
     notify = preferences.loadNotify()
     accountNoteRead = preferences.loadAccountNoteRead()
     icons = AgentRowIcons.onThisMac(home: FileManager.default.homeDirectoryForCurrentUser) { path in
@@ -108,8 +102,11 @@ final class SettingsController {
   func send(_ event: SettingsEvent) {
     // Unstructured, as `send` is the view's synchronous callback: each async event runs in a task of its own.
     switch event {
-    case .selectTab(let tab): selectTab(tab)
-    case .paneHeight(let tab, let height): fit(tab, height: height)
+    case .select(let page): select(page)
+    case .openAccount(let id): navigate { $0.go(to: .account(id)) }
+    case .goBack: navigate { $0.goBack() }
+    case .goForward: navigate { $0.goForward() }
+    case .search(let query): session.query = query
     case .checkAgain: Task { await checkAgain() }
     case .askSwitch: ask(.helper(.switchToHelper))
     case .askRecover: ask(.helper(.recover))
@@ -172,18 +169,6 @@ final class SettingsController {
     }
   }
 
-  /// Shows a pane, remembered for the next time the window opens. The Agents pane reads the agents afresh.
-  ///
-  /// - Parameter tab: The pane.
-  func selectTab(_ tab: SettingsTab) {
-    guard tab != session.tab else { return }
-    session.tab = tab
-    dependencies.preferences.saveTab(tab.rawValue)
-    reshapeWindow()
-    if tab == .agents { readAgents() }
-    if tab == .helper { Task { await readFiles() } }
-  }
-
   /// The window came forward: what the links read is read again, and the agents, the projects, the helper's sound
   /// and the pictures of agent actions afresh.
   func cameForward() {
@@ -192,7 +177,7 @@ final class SettingsController {
     // Unstructured, as coming forward is synchronous: the readings run beside it.
     Task { await readHelperSound() }
     Task { await readPictures() }
-    if session.tab == .helper { Task { await readFiles() } }
+    if session.navigation.current == .page(.privacy) { Task { await readFiles() } }
   }
 
   /// The window closed: the agents reading under way stops. A command it started, such as a check for updates or a
@@ -203,14 +188,26 @@ final class SettingsController {
     agentsReading = nil
   }
 
-  /// One line about what a command just did, in the pane that ran it; it stays until the next.
+  /// One line about what a command just did, on the page that ran it; it stays until the next.
   ///
   /// - Parameters:
   ///   - text: The line, or nil to show none.
-  ///   - tab: The pane it shows in.
+  ///   - page: The page it shows on.
   ///   - kind: How it reads: quiet by default, a spinner while what it waits for runs, or the problem line.
-  ///   - fromCheck: Whether Check Again said it, which places it under "Ready to act"; not by default.
-  func say(_ text: String?, in tab: SettingsTab, kind: SettingsNote.Kind = .quiet, fromCheck: Bool = false) {
-    session.notice = text.map { SettingsNotice(tab: tab, text: $0, kind: kind, fromCheck: fromCheck) }
+  ///   - fromCheck: Whether Check Again said it, which places it under "Ready to Act"; not by default.
+  func say(_ text: String?, in page: SettingsPage, kind: SettingsNote.Kind = .quiet, fromCheck: Bool = false) {
+    say(text, on: .page(page), kind: kind, fromCheck: fromCheck)
+  }
+
+  /// One line about what a command just did, on the route that ran it, such as an account's page; it stays until the
+  /// next.
+  ///
+  /// - Parameters:
+  ///   - text: The line, or nil to show none.
+  ///   - route: The route it shows on.
+  ///   - kind: How it reads: quiet by default, a spinner while what it waits for runs, or the problem line.
+  ///   - fromCheck: Whether Check Again said it; not by default.
+  func say(_ text: String?, on route: SettingsRoute, kind: SettingsNote.Kind = .quiet, fromCheck: Bool = false) {
+    session.notice = text.map { SettingsNotice(route: route, text: $0, kind: kind, fromCheck: fromCheck) }
   }
 }
