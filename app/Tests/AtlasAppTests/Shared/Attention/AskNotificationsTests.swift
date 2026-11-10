@@ -38,18 +38,17 @@ struct AskNotificationsTests {
     }
   }
 
+  /// When the questions were asked, which the stores read as now.
+  static let asked = Date(timeIntervalSince1970: 1_762_600_000)
+
   /// A question.
   ///
   /// - Parameters:
   ///   - id: Its id.
   ///   - once: Whether Just This Once is offered.
   /// - Returns: The question.
-  /// When the questions were asked, which the stores read as now.
-  static let asked = Date(timeIntervalSince1970: 1_762_600_000)
-
   static func ask(_ id: String, once: Bool = true) -> Ask {
-    let asked = Date(timeIntervalSince1970: 1_762_600_000)
-    return Ask(
+    Ask(
       id: id,
       who: "Claude Code · ship-fix",
       task: "ship the setup fix",
@@ -60,6 +59,38 @@ struct AskNotificationsTests {
       asked: asked,
       ends: asked + 120
     )
+  }
+
+  /// Preferences that keep nothing.
+  static var preferences: SettingsPreferences {
+    SettingsPreferences(loadTab: { nil }, saveTab: { _ in }, loadNotify: { false }, saveNotify: { _ in })
+  }
+
+  /// A store that has read `asks` from its service, at the time they were asked.
+  ///
+  /// - Parameter asks: The questions its service lists.
+  /// - Returns: The store.
+  static func store(reading asks: [Ask]) async -> AskStore {
+    let service = ScriptedService()
+    service.askList = AskList(asks: asks)
+    let store = AskStore(service: service) { Self.asked }
+    await store.read()
+    return store
+  }
+
+  /// The signals of a store's questions.
+  ///
+  /// - Parameters:
+  ///   - notifications: Where they post and withdraw.
+  ///   - store: The questions; none by default.
+  ///   - inView: The question the person sees now; none by default.
+  /// - Returns: The signals.
+  static func signals(
+    _ notifications: AskNotifications,
+    store: AskStore = AskStore(service: ScriptedService()),
+    inView: @escaping @MainActor () -> String? = { nil }
+  ) -> AskSignals {
+    AskSignals(notifications: notifications, preferences: preferences, store: store, inView: inView)
   }
 
   @Test("a question's kind carries an action for each answer it offers, Allow for Task first")
@@ -90,17 +121,7 @@ struct AskNotificationsTests {
   func eachQuestionPostsOnce() {
     let recorded = Recorded()
     var seen: String?
-    let signals = AskSignals(
-      notifications: recorded.notifications,
-      preferences: SettingsPreferences(
-        loadTab: { nil },
-        saveTab: { _ in },
-        loadNotify: { false },
-        saveNotify: { _ in }
-      ),
-      store: AskStore(service: ScriptedService()),
-      inView: { seen }
-    )
+    let signals = Self.signals(recorded.notifications) { seen }
     signals.resolve(true)
     signals.asksChanged(AskList(asks: [Self.ask("a1")]))
     signals.asksChanged(AskList(asks: [Self.ask("a1")]))
@@ -121,21 +142,9 @@ struct AskNotificationsTests {
   @Test("a question seen in the panel posts once the panel closes, if it is still up")
   func aQuestionPostsOnceThePanelCloses() async {
     let recorded = Recorded()
-    let service = ScriptedService()
-    service.askList = AskList(asks: [Self.ask("a1")])
-    let store = AskStore(service: service) { Self.asked }
-    await store.read()
+    let store = await Self.store(reading: [Self.ask("a1")])
     var panelOpen = true
-    let signals = AskSignals(
-      notifications: recorded.notifications,
-      preferences: SettingsPreferences(
-        loadTab: { nil },
-        saveTab: { _ in },
-        loadNotify: { false },
-        saveNotify: { _ in }
-      ),
-      store: store
-    ) { panelOpen ? "a1" : nil }
+    let signals = Self.signals(recorded.notifications, store: store) { panelOpen ? "a1" : nil }
     signals.resolve(true)
     #expect(recorded.posted.isEmpty, "the open panel shows it")
     signals.lookedAway()
@@ -146,16 +155,7 @@ struct AskNotificationsTests {
     #expect(recorded.posted.map(\.id) == ["a1"], "posted once, as the panel closed")
 
     let answered = Recorded()
-    let quiet = AskSignals(
-      notifications: answered.notifications,
-      preferences: SettingsPreferences(
-        loadTab: { nil },
-        saveTab: { _ in },
-        loadNotify: { false },
-        saveNotify: { _ in }
-      ),
-      store: AskStore(service: ScriptedService())
-    ) { nil }
+    let quiet = Self.signals(answered.notifications)
     quiet.resolve(true)
     quiet.lookedAway()
     #expect(answered.posted.isEmpty, "a question answered before the panel closed posts nothing")
@@ -170,16 +170,7 @@ struct AskNotificationsTests {
     await store.read()
     var signals: AskSignals?
     let viewer = ViewerController.scripted(service, placeChanged: { signals?.lookedAway() })
-    signals = AskSignals(
-      notifications: recorded.notifications,
-      preferences: SettingsPreferences(
-        loadTab: { nil },
-        saveTab: { _ in },
-        loadNotify: { false },
-        saveNotify: { _ in }
-      ),
-      store: store
-    ) { viewer.session.place == .screen ? "a1" : nil }
+    signals = Self.signals(recorded.notifications, store: store) { viewer.session.place == .screen ? "a1" : nil }
     signals?.resolve(true)
     #expect(recorded.posted.isEmpty, "the Screen's banner shows it")
     viewer.send(.show(.activity))
@@ -192,20 +183,8 @@ struct AskNotificationsTests {
   @Test("nothing posts before macOS lets Atlas notify, and every question still up posts once it does")
   func questionsWaitForConsent() async {
     let recorded = Recorded()
-    let service = ScriptedService()
-    service.askList = AskList(asks: [Self.ask("a1")])
-    let store = AskStore(service: service) { Self.asked }
-    await store.read()
-    let signals = AskSignals(
-      notifications: recorded.notifications,
-      preferences: SettingsPreferences(
-        loadTab: { nil },
-        saveTab: { _ in },
-        loadNotify: { false },
-        saveNotify: { _ in }
-      ),
-      store: store
-    ) { nil }
+    let store = await Self.store(reading: [Self.ask("a1")])
+    let signals = Self.signals(recorded.notifications, store: store)
     signals.asksChanged(AskList(asks: [Self.ask("a1")]))
     #expect(recorded.posted.isEmpty && signals.posted.isEmpty, "undecided: nothing posts, nothing counts as posted")
     signals.resolve(false)
@@ -219,22 +198,10 @@ struct AskNotificationsTests {
   @Test("after the first reading, a notification an earlier launch left whose question is gone is withdrawn")
   func leftoverNotificationsAreWithdrawn() async throws {
     let recorded = Recorded()
-    let service = ScriptedService()
-    service.askList = AskList(asks: [Self.ask("a2")])
-    let store = AskStore(service: service) { Self.asked }
-    await store.read()
+    let store = await Self.store(reading: [Self.ask("a2")])
     var notifications = recorded.notifications
     notifications.delivered = { ["a1", "a2"] }
-    let signals = AskSignals(
-      notifications: notifications,
-      preferences: SettingsPreferences(
-        loadTab: { nil },
-        saveTab: { _ in },
-        loadNotify: { false },
-        saveNotify: { _ in }
-      ),
-      store: store
-    ) { nil }
+    let signals = Self.signals(notifications, store: store)
     signals.asksChanged(try #require(store.list))
     try await settle("the leftover was never withdrawn") { recorded.withdrawn == ["a1"] }
   }
@@ -242,22 +209,10 @@ struct AskNotificationsTests {
   @Test("a notification kept from an earlier launch is withdrawn once its question is answered")
   func aKeptNotificationIsWithdrawnLater() async throws {
     let recorded = Recorded()
-    let service = ScriptedService()
-    service.askList = AskList(asks: [Self.ask("a1")])
-    let store = AskStore(service: service) { Self.asked }
-    await store.read()
+    let store = await Self.store(reading: [Self.ask("a1")])
     var notifications = recorded.notifications
     notifications.delivered = { ["a1"] }
-    let signals = AskSignals(
-      notifications: notifications,
-      preferences: SettingsPreferences(
-        loadTab: { nil },
-        saveTab: { _ in },
-        loadNotify: { false },
-        saveNotify: { _ in }
-      ),
-      store: store
-    ) { "a1" }
+    let signals = Self.signals(notifications, store: store) { "a1" }
     signals.asksChanged(try #require(store.list))
     await signals.withdrawLeftovers()
     #expect(signals.posted.contains("a1"), "the kept notification is tracked")
@@ -271,12 +226,7 @@ struct AskNotificationsTests {
     let recorded = Recorded()
     var asked = false
     let store = AskStore(service: ScriptedService())
-    var preferences = SettingsPreferences(
-      loadTab: { nil },
-      saveTab: { _ in },
-      loadNotify: { false },
-      saveNotify: { _ in }
-    )
+    var preferences = Self.preferences
     preferences.loadAskConsentAsked = { asked }
     preferences.saveAskConsentAsked = { asked = true }
     let signals = AskSignals(notifications: recorded.notifications, preferences: preferences, store: store) { nil }

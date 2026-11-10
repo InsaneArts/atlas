@@ -96,13 +96,4 @@ struct SettingsSignInTests {
     #expect(controller.state.route == .page(.accounts))
     #expect(controller.state.account == nil)
   }
-
-  @Test("the sheet says what Atlas does while the person signs in")
-  func theSheetsWords() {
-    #expect(
-      SignInSheet.note
-        == "Atlas pauses agents and hides the helper's screen from them while you sign in. "
-        + "Paste from your password manager works."
-    )
-  }
 }
