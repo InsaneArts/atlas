@@ -58,6 +58,8 @@ fn rows(client: &Client) -> Vec<Value> {
 }
 
 fn pictures(client: &Client) -> Vec<String> {
+    // Pictures are saved on a thread of their own, off the action's path: wait for any still being saved.
+    before::settle(Duration::from_secs(10));
     let folder = client.output_dir().unwrap().join(before::FOLDER);
     let Ok(entries) = fs::read_dir(folder) else {
         return Vec::new();
