@@ -1,7 +1,7 @@
 import AtlasCommands
 import AtlasService
 
-/// The Helper pane's "Your files": the home folder is read when the pane opens and on Check Again; Make Private runs at
+/// The Privacy page: the home folder is read whenever the page shows and on Check Again; Make Private runs at
 /// once and Undo… asks first; letting agents copy sign-ins in asks first, stopping them runs at once.
 extension SettingsController {
   /// Reads how the home folder stands for the helper, and whether agents may copy sign-ins in. Only the newest reading

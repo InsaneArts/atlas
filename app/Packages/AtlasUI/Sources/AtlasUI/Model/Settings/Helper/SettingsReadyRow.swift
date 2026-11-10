@@ -1,4 +1,4 @@
-/// One readiness check in the Helper pane: its mark, its name, what to do while it is not ready, its place in the
+/// One readiness check on the Helper page: its mark, its name, what to do while it is not ready, its place in the
 /// list, whether Recover… stands on its row, and whether Check Again is checking it now.
 public struct SettingsReadyRow: Equatable, Sendable, Identifiable {
   /// The check, such as "Mouse and keyboard": its mark, name and what to do.

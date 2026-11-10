@@ -44,7 +44,7 @@ keep_days = 3                   # 7 unless set, at most 365
 typed_text_limit = 80           # all typed text unless set
 ```
 
-By default Atlas keeps a picture of the helper's screen right before each agent action, and one a second after it unless the next step's picture serves, with the few facts Atlas.app needs to mark where the action happened, for you to see in Atlas.app's Activity. Typed text is kept in full unless `typed_text_limit` is set; text typed into a password field is never kept, nor its length, nor is text with a tab, a return or another control character in it, which may move on to a password field, and neither are keys pressed one at a time that type text. They stay on your Mac in the `before` folder of `output_dir`, for `keep_days` and 500 MB in all; `atlas cleanup --apply` also removes the ones its session took. No agent is given one: agents' replies and `atlas activity` never name them. Atlas's **Settings > General** writes these settings, changing only that line of the file, and can delete every picture.
+By default Atlas keeps a picture of the helper's screen right before each agent action, and one a second after it unless the next step's picture serves, with the few facts Atlas.app needs to mark where the action happened, for you to see in Atlas.app's Activity. Typed text is kept in full unless `typed_text_limit` is set; text typed into a password field is never kept, nor its length, nor is text with a tab, a return or another control character in it, which may move on to a password field, and neither are keys pressed one at a time that type text. They stay on your Mac in the `before` folder of `output_dir`, for `keep_days` and 500 MB in all; `atlas cleanup --apply` also removes the ones its session took. No agent is given one: agents' replies and `atlas activity` never name them. Atlas's **Settings > Activity** writes these settings, changing only that line of the file, and can delete every picture.
 
 The [example configuration](../examples/config.toml) documents the keys for development. Its UID `502`, `/tmp` socket paths and local `runs` directory are examples, not universal installation defaults. Do not copy its helper identity into an existing installation. `atlas setup --helper NAME` can inspect a proposed setup for an existing account; replace `NAME` with that account's short name.
 
@@ -71,7 +71,7 @@ In this table, `~` means your own account unless the helper is named explicitly.
 | `<helper-home>/Library/LaunchAgents`       | The managed helper background-job definition.                                                                           |
 | `<helper-home>/.config/atlas`              | Selected environment values and file-provisioning records in the helper.                                                |
 
-Viewer and Settings preferences use macOS user defaults separately from the TOML file. These include picture rate, Details visibility, the mini-screen corner, the last Settings tab and notification preference.
+Viewer and Settings preferences use macOS user defaults separately from the TOML file. These include picture rate, Details visibility, the mini-screen corner, the last Settings page and notification preference.
 
 Do not clear control locks or pending-action records to get past a failure. They keep another process from acting before Atlas knows what happened. Use [recovery](troubleshooting.md), and check [maintenance](maintenance.md) before deleting installation data.
 

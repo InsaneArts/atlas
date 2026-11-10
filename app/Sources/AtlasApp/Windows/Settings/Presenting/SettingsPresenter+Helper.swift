@@ -75,7 +75,7 @@ extension SettingsPresenter {
     )
   }
 
-  /// Whether the Helper pane waits on another action: one of the helper's commands runs, from any window, while this
+  /// Whether the Helper page waits on another action: one of the helper's commands runs, from any window, while this
   /// window's own alert runs none (its alert covers the pane while it does).
   ///
   /// - Parameter snapshot: What the controller holds and reads.

@@ -104,7 +104,7 @@ public enum SymbolName: String, CaseIterable, Sendable {
   /// Settings' Activity page: what agents did, kept for a time.
   case history = "clock.arrow.circlepath"
   /// Settings' Integrations page: the agents Atlas plugs into.
-  case extensions = "puzzlepiece.extension"
+  case integrations = "square.grid.2x2"
   /// Something Atlas added, such as an account.
   case plus
   /// Settings' Accounts page with none listed.

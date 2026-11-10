@@ -4,7 +4,7 @@ import SwiftUI
 /// frame and is clipped round, never stretched. Where no picture is supplied, as in previews, the avatar disc
 /// stands in.
 struct AccountPicture: View {
-  /// The circle's side, in points, from its window's layout, such as Choose's 30 or the Helper pane's 40.
+  /// The circle's side, in points, from its window's layout, such as Choose's 30.
   let side: CGFloat
   @Environment(\.accountPicture) private var picture
 

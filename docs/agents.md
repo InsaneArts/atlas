@@ -4,7 +4,7 @@ Atlas connects supported agent hosts to the helper on your Mac. A connection giv
 
 ## Connect a host
 
-Install the host you want to use first. You can connect it in Atlas's **Settings > Agents**, or use the CLI:
+Install the host you want to use first. You can connect it in Atlas's **Settings > Integrations**, or use the CLI:
 
 ```sh
 atlas agents install
@@ -31,7 +31,7 @@ atlas agents status
 
 Claude Desktop reads its configuration when it starts, so a new chat without restarting the app may still use the old connection. Atlas preserves other settings and refuses to overwrite an unrelated MCP entry also named `atlas`.
 
-Atlas's Settings groups Claude Code and Claude Desktop into one **Claude** row. The CLI reports them separately as `claude` and `claude-app`. The combined row is connected when all installed parts are connected. Use `atlas agents status` when you need to see which part needs attention.
+Atlas's **Settings > Integrations** groups Claude Code and Claude Desktop into one **Claude** row. The CLI reports them separately as `claude` and `claude-app`. The row's switch is on while any installed part is connected; when only some are, it says **Partly connected** and offers **Connect** to finish. Use `atlas agents status` when you need to see which part needs attention.
 
 ### Cursor
 

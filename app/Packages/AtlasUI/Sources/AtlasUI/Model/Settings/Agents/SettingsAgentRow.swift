@@ -1,4 +1,4 @@
-/// One agent in the Agents pane: its tile, name and what Atlas does in it, then whether it is connected; and, when a
+/// One agent on the Integrations page: its tile, name and what Atlas does in it, then whether it is connected; and, when a
 /// Connect failed, why, in the row itself.
 public struct SettingsAgentRow: Equatable, Sendable, Identifiable {
   /// Where the agent stands, which the row's right side shows.

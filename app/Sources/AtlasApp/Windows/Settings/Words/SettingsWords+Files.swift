@@ -1,6 +1,6 @@
 import AtlasCommands
 
-/// The Helper tab's "Your files" words: whether the home folder is private from the helper, and the alerts that ask
+/// The Privacy page's words: whether the home folder is private from the helper, and the alerts that ask
 /// before opening it again or letting agents copy sign-ins in.
 extension SettingsWords {
   /// The home folder is private.

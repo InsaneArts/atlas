@@ -32,7 +32,7 @@ enum OnboardingWords {
   /// - Parameter message: What the command said.
   /// - Returns: The line.
   static func homeNotPrivate(_ message: String) -> String {
-    "\(Words.sentence(message)) You can make it private later in Settings › Helper."
+    "\(Words.sentence(message)) You can make it private later in Settings › Privacy."
   }
   /// While the helper allows the account that asked.
   static let settingUpHere = "Setting Atlas up in this account…"

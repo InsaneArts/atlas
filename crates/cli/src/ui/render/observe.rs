@@ -190,7 +190,7 @@ fn open_files(files: &Value) -> Vec<String> {
             "{} Your files: the helper can open {count} {folders} in your home{shown}.",
             style::warn()
         ),
-        "  Make them private in Atlas › Settings › Helper.".to_owned(),
+        "  Make them private in Atlas › Settings › Privacy.".to_owned(),
     ]
 }
 

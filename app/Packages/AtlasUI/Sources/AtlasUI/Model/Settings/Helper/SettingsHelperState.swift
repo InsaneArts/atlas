@@ -1,4 +1,4 @@
-/// The Helper pane: the helper's account, whether it is ready to act, and what to do when something goes wrong.
+/// The Helper page: the helper's account, whether it is ready to act, and what to do when something goes wrong.
 public struct SettingsHelperState: Equatable, Sendable {
   /// The helper's account, with its status.
   public var account: SettingsHelperAccount

@@ -39,7 +39,7 @@ pub(crate) fn set_in(home: &Path, allow: bool, by_person: bool) -> Result<bool> 
             return Err(Error::new(
                 Code::Stopped,
                 "Only the person lets agents copy sign-ins into the helper, from Atlas › Settings › \
-                 Helper",
+                 Privacy",
             ));
         }
         if let Some(parent) = record.parent() {

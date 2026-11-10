@@ -5,7 +5,7 @@
 //! person or an agent asks; only the person takes it away again.
 //!
 //! Every look runs `ls` under a time limit, so it happens only when the
-//! person asks (setup's last screen, Settings › Helper, `atlas doctor` in a
+//! person asks (setup's last screen, Settings › Privacy, `atlas doctor` in a
 //! terminal) and never on a status read or a poll.
 use atlas_core::error::{Code, Error, Result};
 use serde::Serialize;
@@ -102,7 +102,7 @@ pub fn open(helper_uid: u32, by_person: bool) -> Result<Files> {
     if !by_person {
         return Err(Error::new(
             Code::Stopped,
-            "Only the person lets the helper open your home folder, from Atlas › Settings › Helper",
+            "Only the person lets the helper open your home folder, from Atlas › Settings › Privacy",
         ));
     }
     let helper = Helper::of(helper_uid)?;

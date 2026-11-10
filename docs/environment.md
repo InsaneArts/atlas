@@ -14,7 +14,7 @@ Atlas refuses, with the `credentials` code, to copy a file or folder that holds 
 - secrets files anywhere: `.env` and `.env.*` (but `.env.example`, `.env.sample` and `.env.template`), and `.npmrc`;
 - a folder that holds any of the folders above, such as `~/Library` or your home folder.
 
-Names are compared ignoring case, as macOS does. A renamed copy, a hard link, or a store inside a folder selected whole is not recognized, and a profile's named `environment` variables are copied as you name them. The person can let agents copy these anyway with **Copy sign-ins into the helper** in Settings › Helper; only the person turns it on.
+Names are compared ignoring case, as macOS does. A renamed copy, a hard link, or a store inside a folder selected whole is not recognized, and a profile's named `environment` variables are copied as you name them. The person can let agents copy these anyway with **Copy sign-ins into the helper** in Settings › Privacy; only the person turns it on.
 
 ## Check what the task needs
 

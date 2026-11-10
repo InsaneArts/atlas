@@ -9,7 +9,7 @@
       /// The app icon at each tile size: Welcome 88, About 84, Done 80, alerts 52, pairing 48, then 32 and
       /// 16.
       case appIcon
-      /// The account picture at 64, the Helper pane's 40 and Choose's 30.
+      /// The account picture at 64, 40 and Choose's 30.
       case accountPicture
     }
 

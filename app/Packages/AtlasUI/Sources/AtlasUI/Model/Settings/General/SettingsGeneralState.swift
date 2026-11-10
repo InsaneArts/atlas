@@ -1,6 +1,6 @@
-/// The General pane: opening at login, the picture and muting the helper; pictures of agent actions, how long they are
-/// kept, how much typed text is kept and how many this Mac holds; and when Atlas tells the person it needs them. Its
-/// values are edited through a binding; the controller writes each change where it belongs.
+/// The General and Activity pages' values: opening at login, the picture and muting the helper; pictures of agent
+/// actions, how long they are kept, how much typed text is kept and how many this Mac holds; and when Atlas tells the
+/// person it needs them. Its values are edited through a binding; the controller writes each change where it belongs.
 public struct SettingsGeneralState: Equatable, Sendable {
   /// 1 to 365: the days a custom choice keeps pictures.
   public static let keepDaysRange = 1...365

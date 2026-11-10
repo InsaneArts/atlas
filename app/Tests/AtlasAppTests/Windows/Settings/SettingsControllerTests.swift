@@ -51,7 +51,7 @@ struct SettingsControllerTests {
     #expect(controller.session.alert == nil)
   }
 
-  @Test("a Forget that fails says why in the Agents pane")
+  @Test("a Forget that fails says why on the Integrations page")
   func aFailedForgetSaysWhy() async {
     let commands = ScriptedCommands([
       "agents status": Self.statusWithOpie,
@@ -152,7 +152,7 @@ struct SettingsControllerTests {
       status: try status(["checks": checks])
     )
     let before = controller.state.helper.ready
-    try #require(!before.isEmpty, "the Helper pane lists its checks")
+    try #require(!before.isEmpty, "the Helper page lists its checks")
     #expect(!before.contains { $0.spokenValue == "Checking" })
     controller.send(.checkAgain)
     try await settle("Check Again never started") { controller.state.helper.ready.allSatisfy(\.isChecking) }

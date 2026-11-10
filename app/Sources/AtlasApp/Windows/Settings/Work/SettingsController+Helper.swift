@@ -1,7 +1,7 @@
 import AtlasCommands
 import AtlasUI
 
-/// The Helper pane's commands: Check Again diagnoses the helper, and Recover, Switch and Log Out run through the
+/// The Helper page's commands: Check Again diagnoses the helper, and Recover, Switch and Log Out run through the
 /// helper's own commands, as the main window's do, each answered with a notice once it ends.
 extension SettingsController {
   /// Check Again: `atlas doctor --verbose` diagnoses the helper, once at a time, then the helper's status every window

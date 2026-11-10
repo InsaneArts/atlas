@@ -3,7 +3,7 @@ import AtlasOnboarding
 import AtlasService
 import Foundation
 
-/// The Agents pane's work: reading which agents are connected and which projects are taught, connecting one agent,
+/// The Integrations page's work: reading which agents are connected and which projects are taught, connecting one agent,
 /// and forgetting a project.
 extension SettingsController {
   /// Reads the agents afresh, replacing any reading still under way.

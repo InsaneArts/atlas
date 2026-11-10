@@ -8,7 +8,7 @@ extension SettingsPage {
     case .activity: .history
     case .accounts: .personCircle
     case .privacy: .lock
-    case .integrations: .extensions
+    case .integrations: .integrations
     case .about: .info
     }
   }

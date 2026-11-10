@@ -239,7 +239,7 @@ struct OnboardingControllerFinishingTests {
     await controller.complete()
     #expect(!controller.closeRequested)
     #expect(!controller.snapshot.keepsHomePrivate)
-    #expect(controller.snapshot.problem?.hasSuffix("You can make it private later in Settings › Helper.") == true)
+    #expect(controller.snapshot.problem?.hasSuffix("You can make it private later in Settings › Privacy.") == true)
     #expect(OnboardingPresenter.done(controller.snapshot).keepsHomePrivate == false)
     await controller.complete()
     #expect(controller.closeRequested)

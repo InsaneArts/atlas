@@ -11,16 +11,16 @@
       switch event {
       case .select(let page):
         next.navigation.go(to: .page(page))
-        next.account = settingsAccount(for: next.navigation.current)
+        next.account = settingsAccount(for: next.navigation.current, in: next.accounts.rows)
       case .openAccount(let id):
         next.navigation.go(to: .account(id))
-        next.account = settingsAccount(for: next.navigation.current)
+        next.account = settingsAccount(for: next.navigation.current, in: next.accounts.rows)
       case .goBack:
         next.navigation.goBack()
-        next.account = settingsAccount(for: next.navigation.current)
+        next.account = settingsAccount(for: next.navigation.current, in: next.accounts.rows)
       case .goForward:
         next.navigation.goForward()
-        next.account = settingsAccount(for: next.navigation.current)
+        next.account = settingsAccount(for: next.navigation.current, in: next.accounts.rows)
       case .askRecover:
         next.alert = settingsRecover.alert
       case .askLogOut:
@@ -76,7 +76,10 @@
         if let index = next.accounts.rows?.firstIndex(where: { $0.id == id }) {
           next.accounts.rows?[index].level = level
         }
-        if next.account?.id == id { next.account?.level = level }
+        if next.account?.id == id {
+          next.account?.level = level
+          next.account?.levelLine = settingsLevelLines[level] ?? ""
+        }
       case .dismissAccountNote:
         next.accounts.note = nil
       case .askSignIn(let site):
@@ -94,13 +97,40 @@
       return next
     }
 
-    /// The account page a route shows in the samples: the site's or the app's by id, none for a page.
+    /// The account page a route shows in the samples, built from that account's row: its letter, name, level and what
+    /// it is; none for a page or an account the sample doesn't list.
     ///
-    /// - Parameter route: The route.
+    /// - Parameters:
+    ///   - route: The route.
+    ///   - rows: The accounts the sample lists.
     /// - Returns: The page, or nil.
-    static func settingsAccount(for route: SettingsRoute) -> SettingsAccountPageState? {
-      guard let id = route.account else { return nil }
-      return [settingsAccountSitePage, settingsAccountAppPage].first { $0.id == id } ?? settingsAccountSitePage
+    static func settingsAccount(for route: SettingsRoute, in rows: [SettingsAccountRow]?) -> SettingsAccountPageState? {
+      guard let id = route.account, let row = rows?.first(where: { $0.id == id }) else { return nil }
+      // A row's line is its level, then when it was added; the page names what it is in its level's place.
+      let added =
+        row.detail
+        .split(separator: " · ", maxSplits: 1)
+        .last
+        .map(String.init) ?? row.detail
+      let first = added.prefix(1)
+        .lowercased()
+      return SettingsAccountPageState(
+        id: row.id,
+        letter: row.letter,
+        title: row.title,
+        kindLine: row.isSite ? "Website · \(first)\(added.dropFirst())" : added,
+        isSite: row.isSite,
+        level: row.level,
+        levelLine: settingsLevelLines[row.level] ?? "",
+        isEnabled: true
+      )
     }
+
+    /// What each level lets agents do, as the samples' account pages say it.
+    static let settingsLevelLines: [AccountLevelChoice: String] = [
+      .lookOnly: "Agents only look there.",
+      .ask: "Agents ask you before sending there.",
+      .trusted: "Agents act there without asking.",
+    ]
   }
 #endif

@@ -76,7 +76,7 @@ The viewer has two places:
 
 The viewer opens on Screen. Click a session in the sidebar to see its Activity, or **All sessions** to see every session's. **View > Screen** (⌘1) and **View > Activity** (⌘2) switch between them too.
 
-Activity lists sessions, then the runs of work each did in one app, then each run's steps. A folded run shows its problems and its newest screenshots; click **N pictures** to see all of them in place, or open the run to read its steps in order. A step with a picture of the helper just before it has a small picture button; it opens the picture in a sheet, marked where the agent clicked, typed or scrolled, with **Before** and **After** when there is a picture after it. Use the arrows to step through the run's pictures, and **Replay** on an open run to play its steps back. Pictures stay on your Mac for 7 days unless **Settings > General** says otherwise, where you can also turn them off, limit the typed text kept beside them, or delete them all. Text typed into a password field is never kept, and no agent is ever given a picture. The [configuration guide](configuration.md#settings-fields) has the details.
+Activity lists sessions, then the runs of work each did in one app, then each run's steps. A folded run shows its problems and its newest screenshots; click **N pictures** to see all of them in place, or open the run to read its steps in order. A step with a picture of the helper just before it has a small picture button; it opens the picture in a sheet, marked where the agent clicked, typed or scrolled, with **Before** and **After** when there is a picture after it. Use the arrows to step through the run's pictures, and **Replay** on an open run to play its steps back. Pictures stay on your Mac for 7 days unless **Settings > Activity** says otherwise, where you can also turn them off, limit the typed text kept beside them, or delete them all. Text typed into a password field is never kept, and no agent is ever given a picture. The [configuration guide](configuration.md#settings-fields) has the details.
 
 In the sidebar, each session is named by what it did and where, such as "Typing in TextEdit". Sessions that never acted in the helper are not listed. While Screen shows, no session is highlighted; the session Activity shows is.
 
@@ -146,7 +146,7 @@ The reply gives the path of the copy on your side. Nothing else comes back.
 
 Some places are readable by every account on your Mac, the helper included: `/Users/Shared`, most external drives, a disk image mounted in either account, and folders in your home that aren't private. Your Desktop, Documents, Downloads and Library are private; a folder you created yourself, such as `~/code`, usually isn't.
 
-**Keep your home folder private from the helper.** Setup's last screen has this switch, on unless you turned it off before, and **Settings › Helper › Your files** shows how your home folder stands, with **Make Private** or **Undo…**. It adds one access entry to your home folder that keeps the helper, and only the helper, from listing it or going into it. Nothing else changes: your apps and other accounts keep their access, and `/Users/Shared` and external drives keep their own permissions. `atlas doctor` in your terminal says how many of your folders the helper can open while it isn't private. Only you open it again; an agent can make it private, never undo it.
+**Keep your home folder private from the helper.** Setup's last screen has this switch, on unless you turned it off before, and **Settings › Privacy › Your Files** shows how your home folder stands, with **Make Private** or **Undo…**. It adds one access entry to your home folder that keeps the helper, and only the helper, from listing it or going into it. Nothing else changes: your apps and other accounts keep their access, and `/Users/Shared` and external drives keep their own permissions. `atlas doctor` in your terminal says how many of your folders the helper can open while it isn't private. Only you open it again; an agent can make it private, never undo it.
 
 While your home folder is private:
 
@@ -178,11 +178,19 @@ An account's **Forget…** and **Reset…** work the same way. Forget opens the 
 
 Atlas checks where a file is, not what is in it: a renamed copy of a store, or a project folder copied whole with a `.env` inside, is not recognized.
 
-If you want agents to copy such files in anyway, turn on **Copy sign-ins into the helper** in **Settings › Helper › Your files**. It is off unless you turn it on, it asks first, and only you can turn it on; anyone can turn it off. Like Stop, it holds against agents using Atlas's commands, not against a shell that edits Atlas's files itself.
+If you want agents to copy such files in anyway, turn on **Copy sign-ins into the helper** in **Settings › Privacy › Sign-Ins**. It is off unless you turn it on, it asks first, and only you can turn it on; anyone can turn it off. Like Stop, it holds against agents using Atlas's commands, not against a shell that edits Atlas's files itself.
 
 ## Settings and practical limits
 
-Open **Settings** to change picture behavior in **General**, check the account and readiness in **Helper**, manage connections in **Agents**, or view version information in **About**.
+Open **Settings** from the menu bar, or click the helper's line at the foot of the main window's sidebar to open it on **Helper**. Its pages are:
+
+- **Helper**: the helper account, whether it is ready to act with **Check Again**, and **Recover…** and **Log Out…** for when something goes wrong.
+- **General**: opening Atlas at login, how often the helper's screen updates, muting the helper, and notifications.
+- **Activity**: keeping pictures of agent actions, how long, how much typed text beside them, and the pictures stored on this Mac with **Delete All…**.
+- **Accounts**: the accounts agents act in, each with its own page for how freely they act there and its sign-in actions.
+- **Privacy**: keeping your home folder private from the helper, and whether agents may copy sign-ins in.
+- **Integrations**: connecting coding agents, and the projects whose `AGENTS.md` has Atlas's section.
+- **About**: the version, software updates and **Getting Started**.
 
 Keep these limits in mind when choosing a task:
 

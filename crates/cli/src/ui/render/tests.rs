@@ -105,7 +105,7 @@ fn a_doctor_in_the_terminal_says_what_the_helper_can_open_in_the_home_folder() {
     assert!(
         open.ends_with(
             "Your files: the helper can open 6 folders in your home (dev, .config and 4 more).\n  \
-             Make them private in Atlas › Settings › Helper."
+             Make them private in Atlas › Settings › Privacy."
         ),
         "{open}"
     );

@@ -137,7 +137,7 @@ final class SettingsController {
     }
   }
 
-  /// Writes what changed in the General pane where each value belongs: Open at Login through the panel's command,
+  /// Writes what changed on the General and Activity pages where each value belongs: Open at Login through the panel's command,
   /// the picture to the main window or its saved rate, muting the helper through `atlas sound`, the pictures of agent
   /// actions to Atlas's settings, and Notify me to the saved choices.
   ///
