@@ -324,3 +324,70 @@ fn account_names_show_only_to_the_person_in_text_on_a_terminal() {
         "an agent asking"
     );
 }
+
+#[test]
+fn another_account_named_at_the_persons_screen_warns_with_its_name_and_the_way_back() {
+    let mut report = warned();
+    named_report(
+        &mut report,
+        &Named::Another("atlas".to_owned()),
+        Asker::Person,
+    );
+
+    assert_eq!(report["ready"], true);
+    assert_eq!(report["checks"], json!([]));
+    let warning = report["warnings"][0].as_str().unwrap().to_owned();
+    assert!(warning.starts_with("macOS names atlas as the account at your screen, not you."));
+    assert!(warning.contains("choose Switch User, then log back in as yourself"));
+    assert_eq!(
+        atlas_client::capability::summary(report)["warnings"][0],
+        *warning
+    );
+}
+
+#[test]
+fn a_rightly_named_account_or_an_unknown_one_says_nothing() {
+    for named in [Named::This, Named::Unknown] {
+        let mut report = warned();
+        named_report(&mut report, &named, Asker::Person);
+        assert_eq!(report["warnings"], json!([]), "{named:?}");
+    }
+}
+
+#[test]
+fn an_agent_is_not_told_to_switch_to_the_login_window() {
+    let own = Key::of(Host::Claude, "own");
+    for asking in [
+        asker(Actor::Agent, Some(&own), true),
+        asker(Actor::Agent, None, false),
+    ] {
+        let mut report = warned();
+        named_report(&mut report, &Named::Another("atlas".to_owned()), asking);
+        assert_eq!(report["warnings"], json!([]), "{asking:?}");
+    }
+}
+
+#[tokio::test]
+async fn what_macos_answers_in_time_is_what_doctor_goes_by() {
+    let named = named_within(std::time::Duration::from_secs(60), || {
+        Named::Another("atlas".to_owned())
+    })
+    .await;
+
+    assert_eq!(named, Named::Another("atlas".to_owned()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_look_macos_never_answers_is_unknown_once_the_limit_has_passed() {
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let named = named_within(NAMED_LIMIT, move || {
+        // Held until the test lets go, as by a system service that never
+        // answers.
+        let _ = held.recv();
+        Named::Another("atlas".to_owned())
+    })
+    .await;
+
+    assert_eq!(named, Named::Unknown);
+    drop(release);
+}

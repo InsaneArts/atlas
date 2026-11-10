@@ -58,6 +58,7 @@ objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-image-io = { version = "0.3.2", default-features = false }
 objc2-screen-capture-kit = { version = "0.3.2", default-features = false }
 objc2-security = { version = "0.3.2", default-features = false }
+objc2-system-configuration = { version = "0.3.2", default-features = false }
 oslog = { version = "0.2", default-features = false }
 psl = "2"
 rand = { version = "0.9", default-features = false }

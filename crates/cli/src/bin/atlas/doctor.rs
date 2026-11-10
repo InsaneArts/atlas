@@ -3,6 +3,7 @@ use atlas_cli::ui;
 use atlas_client::{
     client::{Actor, Client},
     console_agents::{self, Restarting},
+    console_user::Named,
     host_session::{Asker, Recovery},
 };
 use atlas_core::host::{HostSession, Key};
@@ -22,6 +23,10 @@ const SLOWING: &str = "A macOS service in the helper restarted over and over, an
                        helper and switch back.";
 
 const GIGABYTE: u64 = 1 << 30;
+
+/// How long macOS may take to say which account it names at the screen
+/// before doctor goes on without the answer.
+const NAMED_LIMIT: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Warn once the helper has found its screen recorder too large this many
 /// times in a row, a minute or more apart, and could not restart it.
@@ -147,6 +152,8 @@ pub(super) async fn report(client: &Client, verbose: bool) -> Value {
     let asking = asker(client.actor, session, ui::interactive());
     recorder_report(&mut report, asking);
     restarting_report(&mut report, restarts.as_deref(), asking, verbose);
+    let named = named_within(NAMED_LIMIT, Named::now).await;
+    named_report(&mut report, &named, asking);
     pending_report(&mut report, causes, asking);
     if verbose || ui::human() {
         // What the helper can open in the person's home folder: for the
@@ -229,6 +236,50 @@ fn restarting_report(
     }
     if verbose && let Some(restarts) = restarts {
         report["restartingJobs"] = json!(restarts);
+    }
+}
+
+/// What `look` finds of the account macOS names, or unknown once `limit`
+/// has passed without an answer. macOS sets no limit of its own, so the
+/// look runs on a thread of its own that is left behind if a system service
+/// never answers. It is not a blocking task of the runtime, which would
+/// wait for it to end.
+async fn named_within(
+    limit: std::time::Duration,
+    look: impl FnOnce() -> Named + Send + 'static,
+) -> Named {
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    let looking = std::thread::Builder::new()
+        .name("console-user".to_owned())
+        .spawn(move || {
+            // Nobody is waiting once the limit has passed.
+            let _ = answer.send(look());
+        });
+    if looking.is_err() {
+        return Named::Unknown;
+    }
+    tokio::time::timeout(limit, answered)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or(Named::Unknown)
+}
+
+/// Doctor's warning while macOS names another account as the one at the
+/// person's screen: which account, what that can do to their own login,
+/// and the switch that puts it right. Only the person can switch, so an
+/// agent is not told.
+fn named_report(report: &mut Value, named: &Named, asking: Asker<'_>) {
+    if asking == Asker::Person
+        && let Named::Another(name) = named
+        && let Some(warnings) = report["warnings"].as_array_mut()
+    {
+        warnings.push(json!(format!(
+            "macOS names {name} as the account at your screen, not you. That can make a macOS \
+             service in your own login restart over and over, and a macOS bug makes that \
+             slowly slow your whole Mac. To fix it, lock your screen, choose Switch User, then \
+             log back in as yourself."
+        )));
     }
 }
 
