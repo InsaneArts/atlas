@@ -2,14 +2,14 @@ import AppKit
 import AtlasUI
 
 /// The menu bar item's badge: a shape layer over the status button's image, in the hole ``StatusGlyph`` knocks out of
-/// the orbit for it. Its shape and colour come from the look.
+/// the glyph for it. Its shape and colour come from the look.
 ///
 /// A disc or a square is filled; a ring is stroked, its fill clear, so the menu bar shows through its middle.
 ///
 /// A state change moves it: a badge arriving scales in from nothing on ``Motion/LayerSpring/pop``, and one badge giving
 /// way to another crossfades its fill, its stroke and its shape, disc to square or ring and back, over
 /// ``Motion/Duration/crossfade``, letting a pop that runs finish. A badge leaving goes at once, with the ring the
-/// orbit closes around it. While the look breathes, a Core Animation repeat fades it 100 → 50% and back over
+/// glyph closes around it. While the look breathes, a Core Animation repeat fades it 100 → 50% and back over
 /// ``Motion/Duration/breathe``, never a timer; the breath moves its opacity and the pop its scale, so neither
 /// stops the other, and when the breath stops its opacity settles back to whole over the crossfade. Under Reduce
 /// Motion a new state swaps in at once and nothing breathes; while a menu is open a new state swaps in at once, a
@@ -51,7 +51,7 @@ final class StatusBadge {
   ///
   /// - Parameters:
   ///   - look: The item's look.
-  ///   - image: Where the button draws its image, the item's square, in the host's coordinates.
+  ///   - image: Where the button draws its image, the item's box, in the host's coordinates.
   ///   - flipped: Whether the host runs top down.
   ///   - appearance: The menu bar's appearance, which settles the system colour.
   ///   - motion: What may move: everything, only a breath that runs while a menu is open, or nothing under Reduce
@@ -214,11 +214,11 @@ final class StatusBadge {
     return breath
   }
 
-  /// A badge's box in the host: the box in the item's square, moved to where the image is drawn, counted from the
+  /// A badge's box in the host: the box in the item's, moved to where the image is drawn, counted from the
   /// image's bottom edge when the host runs bottom up.
   ///
   /// - Parameters:
-  ///   - box: The badge's box in the item's square, top down.
+  ///   - box: The badge's box in the item's box, top down.
   ///   - image: Where the image is drawn in the host.
   ///   - flipped: Whether the host runs top down.
   /// - Returns: The layer's frame.

@@ -19,6 +19,7 @@ extension SettingsController {
   ///   - actions: The helper's commands it shares with another window; its own over `commands` when nil.
   ///   - fileIcon: The icon a file shows, by its path; none by default.
   ///   - status: The shared status it reads; an empty one by default.
+  ///   - menuBarIcon: The menu bar's glyph, which its links read and set; the Orbit by default.
   /// - Returns: The controller.
   static func scripted(
     commands: ScriptedCommands,
@@ -27,7 +28,8 @@ extension SettingsController {
     clock: ManualClock = ManualClock(),
     actions: HelperActions? = nil,
     fileIcon: @escaping @MainActor (String) -> CGImage? = { _ in nil },
-    status: ViewerStatus = ViewerStatus()
+    status: ViewerStatus = ViewerStatus(),
+    menuBarIcon: MenuBarIconChoice = MenuBarIconChoice()
   ) -> SettingsController {
     let service = ScriptedService()
     return SettingsController(
@@ -49,6 +51,8 @@ extension SettingsController {
           readStatus: { statusReads.count += 1 },
           opensAtLogin: { OpenAtLogin.State(isAvailable: true, isEnabled: false) },
           setOpenAtLogin: { _ in },
+          menuBarIcon: { menuBarIcon.icon },
+          chooseMenuBarIcon: { menuBarIcon.pick($0) },
           picture: { .live },
           canPause: { false },
           choosePicture: { _ in },

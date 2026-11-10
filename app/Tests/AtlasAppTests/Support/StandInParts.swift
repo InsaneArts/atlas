@@ -38,6 +38,8 @@ final class StandInParts: WindowParts {
   private(set) var terminations = 0
   /// How often the panel was asked to close, leaving its controller running.
   private(set) var panelClosures = 0
+  /// The glyph the menu bar item draws, as the links last set it.
+  private(set) var menuBarIcon = MenuBarIcon.orbit
   /// Every window made, in order.
   private(set) var windows: [WindowStandIn] = []
 
@@ -110,6 +112,11 @@ final class StandInParts: WindowParts {
 
   /// Records closing the panel, without stopping its controller.
   func closePanel() { panelClosures += 1 }
+
+  /// Records the glyph picked.
+  ///
+  /// - Parameter icon: The glyph.
+  func useMenuBarIcon(_ icon: MenuBarIcon) { menuBarIcon = icon }
 
   /// Records the quit, which no test performs, after what runs as it is asked.
   ///
