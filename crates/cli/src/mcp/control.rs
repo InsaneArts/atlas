@@ -2,7 +2,6 @@
 use super::{
     Server,
     presentation::{add_points, tool_result},
-    resources::FRAME_META,
 };
 use crate::viewer::{LeaseRefusal, SharedFrame};
 use atlas_client::helper_info::FRAME_LIMIT;
@@ -180,9 +179,6 @@ impl Server {
 
         let mut result = self.status_result().await?;
         add_points(&mut result, frame.display);
-        let mut picture = self.frame_of(frame.png).await?;
-        picture["key"] = json!(frame.key);
-        result["_meta"][FRAME_META] = picture;
         Ok(result)
     }
 

@@ -38,10 +38,39 @@ use std::{
 pub(super) const ACTIVITY_ROWS: usize = 200;
 const SHOTS: usize = 200;
 
-/// A picture the app may read, by the name that says which kind it is.
-enum Named {
+/// A picture the app and the view may read, by the name that says which
+/// kind it is: a picture taken before an agent's action, or a screenshot an
+/// agent took.
+pub(crate) enum Named {
     Before(before::Before),
     Capture(Capture),
+}
+
+impl Named {
+    /// The picture `name` names; none for any other name.
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        match (before::Before::parse(name), Capture::parse(name)) {
+            (Some(picture), _) => Some(Self::Before(picture)),
+            (None, Some(capture)) => Some(Self::Capture(capture)),
+            (None, None) => None,
+        }
+    }
+
+    /// The picture as kept in `output`, and its media type. A link or
+    /// anything but a plain file is not found.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when it is gone or can't be read.
+    pub(crate) fn read(&self, output: &Path) -> Result<(Vec<u8>, &'static str)> {
+        Ok(match self {
+            Self::Before(picture) => (before::read(output, picture)?, "image/jpeg"),
+            Self::Capture(capture) => (
+                helper_info::read_capture(output, capture.as_str())?,
+                "image/png",
+            ),
+        })
+    }
 }
 
 impl Viewer {
@@ -103,74 +132,7 @@ impl Viewer {
     /// all cleared. An empty key is Terminal's, the commands no host named.
     /// Reading it records nothing.
     pub(super) async fn activity(&self, query: Option<&str>) -> Result<Value> {
-        let whose = activity_session(query)?;
-        let client = self.client();
-        // A folder that can't be read is said, never shown as no activity.
-        let directory = client.output_dir()?.to_path_buf();
-        let unreadable = || Error::new(Code::Io, "The activity log could not be read.");
-        let (rows, cleared, pictures, records) = tokio::task::spawn_blocking(move || {
-            let records = Store::at(&directory).recent();
-            let (mut rows, cleared) = match &whose {
-                None => (
-                    atlas_client::activity_log::try_recent(&directory, ACTIVITY_ROWS)?,
-                    None,
-                ),
-                Some(whose) => {
-                    let found = activity_log::session_rows(&directory, whose, ACTIVITY_ROWS)?;
-                    let record = match whose {
-                        Whose::Host(key) => records
-                            .iter()
-                            .map(|seen| &seen.record)
-                            .find(|record| record.key == *key),
-                        Whose::Terminal => None,
-                    };
-                    let cleared = record.is_some_and(|record| found.cleared(record));
-                    (found.rows, Some(cleared))
-                }
-            };
-            let kept = atlas_client::before::Listing::of(&directory);
-            // A picture pruned or cleaned up since is no longer named. Each
-            // kept one comes with the picture after it and its facts.
-            let pictures = rows
-                .iter_mut()
-                .map(|row| {
-                    row.before = row.before.take().filter(|name| kept.has(name));
-                    row.before.as_deref().map(|before| {
-                        let after = row.at_ms().and_then(|ended| kept.after(before, ended));
-                        (after, atlas_client::before::facts(&directory, before))
-                    })
-                })
-                .collect::<Vec<_>>();
-            Ok::<_, std::io::Error>((rows, cleared, pictures, records))
-        })
-        .await
-        .map_err(|error| unreadable().with_source(error))?
-        .map_err(|error| unreadable().with_source(error))?;
-
-        let now = atlas_core::time::timestamp();
-        let rows = rows
-            .iter()
-            .zip(pictures)
-            .map(|(row, picture)| {
-                let mut shown = activity_row(row, now);
-                let (after, facts) = picture.unwrap_or_default();
-                let (after, after_at) = after.unzip();
-                shown["after"] = json!(after);
-                // When the picture after was taken, in milliseconds since 1970.
-                shown["afterAt"] = json!(after_at);
-                if let Some(facts) = facts {
-                    shown["facts"] = facts;
-                }
-                shown
-            })
-            .collect::<Vec<_>>();
-        let sessions =
-            sessions_named(&client, &records, rows.iter().map(|row| &row["session"])).await;
-        let mut reply = json!({"ok": true, "activity": rows, "sessions": sessions});
-        if let Some(cleared) = cleared {
-            reply["cleared"] = json!(cleared);
-        }
-        Ok(reply)
+        activity_of(&self.client(), activity_session(query)?, ACTIVITY_ROWS).await
     }
 
     /// The host sessions of the last days, live and ended, newest first:
@@ -321,22 +283,13 @@ impl Viewer {
             Some("full") => true,
             Some(_) => return refused(),
         };
-        let named = match name.map(|name| (before::Before::parse(name), Capture::parse(name))) {
-            Some((Some(picture), _)) => Named::Before(picture),
-            Some((None, Some(capture))) => Named::Capture(capture),
-            Some((None, None)) | None => return refused(),
+        let Some(named) = name.and_then(Named::parse) else {
+            return refused();
         };
 
         let client = self.client();
         let read = tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, &'static str)> {
-            let output = client.output_dir()?;
-            let (kept, mime) = match &named {
-                Named::Before(picture) => (before::read(output, picture)?, "image/jpeg"),
-                Named::Capture(capture) => (
-                    helper_info::read_capture(output, capture.as_str())?,
-                    "image/png",
-                ),
-            };
+            let (kept, mime) = named.read(client.output_dir()?)?;
             if full {
                 return Ok((kept, mime));
             }
@@ -475,6 +428,87 @@ async fn account_title(
 
     *unpoisoned(known) = Some((name.to_owned(), title.clone()));
     title.titled()
+}
+
+/// What was done in the helper lately, newest first, as the app and the
+/// view list it: every session's newest rows, or `whose` rows alone, from
+/// every file the log keeps, at most `most` rows, each with the pictures
+/// taken around it, and whether its rows were all cleared. Reading it
+/// records nothing.
+///
+/// # Errors
+///
+/// Returns an error when the log's folder can't be read.
+pub(crate) async fn activity_of(
+    client: &Client,
+    whose: Option<Whose>,
+    most: usize,
+) -> Result<Value> {
+    // A folder that can't be read is said, never shown as no activity.
+    let directory = client.output_dir()?.to_path_buf();
+    let unreadable = || Error::new(Code::Io, "The activity log could not be read.");
+    let (rows, cleared, pictures, records) = tokio::task::spawn_blocking(move || {
+        let records = Store::at(&directory).recent();
+        let (mut rows, cleared) = match &whose {
+            None => (
+                atlas_client::activity_log::try_recent(&directory, most)?,
+                None,
+            ),
+            Some(whose) => {
+                let found = activity_log::session_rows(&directory, whose, most)?;
+                let record = match whose {
+                    Whose::Host(key) => records
+                        .iter()
+                        .map(|seen| &seen.record)
+                        .find(|record| record.key == *key),
+                    Whose::Terminal => None,
+                };
+                let cleared = record.is_some_and(|record| found.cleared(record));
+                (found.rows, Some(cleared))
+            }
+        };
+        let kept = atlas_client::before::Listing::of(&directory);
+        // A picture pruned or cleaned up since is no longer named. Each
+        // kept one comes with the picture after it and its facts.
+        let pictures = rows
+            .iter_mut()
+            .map(|row| {
+                row.before = row.before.take().filter(|name| kept.has(name));
+                row.before.as_deref().map(|before| {
+                    let after = row.at_ms().and_then(|ended| kept.after(before, ended));
+                    (after, atlas_client::before::facts(&directory, before))
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok::<_, std::io::Error>((rows, cleared, pictures, records))
+    })
+    .await
+    .map_err(|error| unreadable().with_source(error))?
+    .map_err(|error| unreadable().with_source(error))?;
+
+    let now = atlas_core::time::timestamp();
+    let rows = rows
+        .iter()
+        .zip(pictures)
+        .map(|(row, picture)| {
+            let mut shown = activity_row(row, now);
+            let (after, facts) = picture.unwrap_or_default();
+            let (after, after_at) = after.unzip();
+            shown["after"] = json!(after);
+            // When the picture after was taken, in milliseconds since 1970.
+            shown["afterAt"] = json!(after_at);
+            if let Some(facts) = facts {
+                shown["facts"] = facts;
+            }
+            shown
+        })
+        .collect::<Vec<_>>();
+    let sessions = sessions_named(client, &records, rows.iter().map(|row| &row["session"])).await;
+    let mut reply = json!({"ok": true, "activity": rows, "sessions": sessions});
+    if let Some(cleared) = cleared {
+        reply["cleared"] = json!(cleared);
+    }
+    Ok(reply)
 }
 
 /// A logged row as the app's activity lists it: what was done in words, by
