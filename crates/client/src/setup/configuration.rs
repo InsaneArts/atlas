@@ -261,4 +261,5 @@ fn replaced(account: &account::Account) -> Result<bool> {
 }
 
 #[cfg(test)]
+#[path = "configuration_tests.rs"]
 mod tests;

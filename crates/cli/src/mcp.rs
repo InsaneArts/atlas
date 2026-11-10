@@ -518,4 +518,5 @@ impl Server {
 }
 
 #[cfg(test)]
+#[path = "mcp_tests.rs"]
 mod tests;

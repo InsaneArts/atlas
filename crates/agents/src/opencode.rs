@@ -141,4 +141,5 @@ fn collision(place: &str, connecting: bool) -> Result<Removal> {
 }
 
 #[cfg(test)]
+#[path = "opencode_tests.rs"]
 mod tests;

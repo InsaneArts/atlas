@@ -186,4 +186,5 @@ pub(super) fn pack(
 }
 
 #[cfg(test)]
+#[path = "raw_tests.rs"]
 mod tests;

@@ -299,4 +299,5 @@ impl Ring {
 }
 
 #[cfg(test)]
+#[path = "diagnostics_tests.rs"]
 mod tests;

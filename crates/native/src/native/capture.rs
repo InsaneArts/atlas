@@ -470,4 +470,5 @@ fn display_image(display: u32, area: Option<CGRect>) -> Result<(CFRetained<CGIma
 }
 
 #[cfg(test)]
+#[path = "capture_tests.rs"]
 mod tests;

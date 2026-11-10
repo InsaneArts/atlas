@@ -398,4 +398,5 @@ pub fn interrupted_executor(test: &str, mode: &str) -> tempfile::TempDir {
 }
 
 #[cfg(test)]
+#[path = "executor_tests.rs"]
 mod tests;

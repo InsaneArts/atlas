@@ -14,4 +14,5 @@ pub fn context<'a, E: Into<Error>>(
 }
 
 #[cfg(test)]
+#[path = "context_tests.rs"]
 mod tests;

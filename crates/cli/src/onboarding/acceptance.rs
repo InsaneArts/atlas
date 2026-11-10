@@ -445,4 +445,5 @@ async fn reconcile(
 }
 
 #[cfg(test)]
+#[path = "acceptance_tests.rs"]
 mod tests;

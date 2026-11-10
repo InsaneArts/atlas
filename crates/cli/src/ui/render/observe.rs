@@ -596,4 +596,5 @@ pub(super) fn readiness(value: &Value) -> String {
 }
 
 #[cfg(test)]
+#[path = "observe_tests.rs"]
 mod tests;

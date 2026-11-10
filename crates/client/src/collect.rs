@@ -774,4 +774,5 @@ fn private_folders(root: &Path, levels: &[&str]) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "collect_tests.rs"]
 mod tests;

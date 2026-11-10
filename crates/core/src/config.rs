@@ -524,4 +524,5 @@ pub(crate) fn resolve_path(path: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "config_tests.rs"]
 mod tests;

@@ -548,4 +548,5 @@ impl Pointer {
 }
 
 #[cfg(test)]
+#[path = "chrome_tests.rs"]
 mod tests;

@@ -1069,4 +1069,5 @@ async fn deliver<W: AsyncWrite + Unpin>(
 }
 
 #[cfg(test)]
+#[path = "serve_tests.rs"]
 pub(super) mod tests;

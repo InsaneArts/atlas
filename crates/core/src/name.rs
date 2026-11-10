@@ -146,4 +146,5 @@ pub fn same_text(a: &str, b: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "name_tests.rs"]
 mod tests;

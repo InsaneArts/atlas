@@ -313,4 +313,5 @@ impl Acquire for Live {
 }
 
 #[cfg(test)]
+#[path = "source_tests.rs"]
 mod tests;

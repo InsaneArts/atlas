@@ -437,4 +437,5 @@ pub fn frontmost_pid(windows: &[Window]) -> Option<i64> {
 }
 
 #[cfg(test)]
+#[path = "windows_tests.rs"]
 mod tests;

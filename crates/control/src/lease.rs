@@ -310,4 +310,5 @@ impl Drop for ActionPermit {
 }
 
 #[cfg(test)]
+#[path = "lease_tests.rs"]
 mod tests;

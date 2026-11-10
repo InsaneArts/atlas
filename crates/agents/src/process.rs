@@ -726,4 +726,5 @@ pub(super) fn run(agent: Agent, argv: &[String]) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "process_tests.rs"]
 mod tests;

@@ -17,6 +17,7 @@ mod service_change;
 mod session;
 mod stop;
 #[cfg(test)]
+#[path = "client_tests.rs"]
 mod tests;
 mod windows;
 

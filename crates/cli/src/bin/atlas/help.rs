@@ -525,4 +525,5 @@ fn reference_section(text: &mut String, title: &str, command: &mut clap::Command
 }
 
 #[cfg(test)]
+#[path = "help_tests.rs"]
 mod tests;

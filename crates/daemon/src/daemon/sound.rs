@@ -633,4 +633,5 @@ impl<A: Audio> Driver<A> {
 }
 
 #[cfg(test)]
+#[path = "sound_tests.rs"]
 mod tests;

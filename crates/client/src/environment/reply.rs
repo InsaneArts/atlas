@@ -341,4 +341,5 @@ pub(crate) struct SideEffect {
 }
 
 #[cfg(test)]
+#[path = "reply_tests.rs"]
 mod tests;

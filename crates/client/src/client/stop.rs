@@ -217,3 +217,7 @@ impl Client {
         self.config.input_socket.with_extension("stopped")
     }
 }
+
+#[cfg(test)]
+#[path = "stop_tests.rs"]
+mod tests;

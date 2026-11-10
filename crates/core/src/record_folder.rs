@@ -533,6 +533,7 @@ fn cleanup_read() -> Error {
 }
 
 #[cfg(test)]
+#[path = "record_folder_tests.rs"]
 mod tests;
 
 #[cfg(test)]

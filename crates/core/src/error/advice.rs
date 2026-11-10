@@ -336,4 +336,5 @@ pub fn fix(code: Code) -> Option<&'static str> {
 }
 
 #[cfg(test)]
+#[path = "advice_tests.rs"]
 mod tests;

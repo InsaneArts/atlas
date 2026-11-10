@@ -904,4 +904,5 @@ pub async fn preflight_apply(config_path: &Path, updated_program: &Path) -> Resu
 }
 
 #[cfg(test)]
+#[path = "migrate_tests.rs"]
 mod tests;

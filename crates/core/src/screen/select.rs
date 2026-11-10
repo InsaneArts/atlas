@@ -321,4 +321,5 @@ fn edits(a: &str, b: &str) -> usize {
 }
 
 #[cfg(test)]
+#[path = "select_tests.rs"]
 mod tests;

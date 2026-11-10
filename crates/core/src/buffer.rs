@@ -167,4 +167,5 @@ impl PartialEq<Vec<u8>> for Buffer {
 }
 
 #[cfg(test)]
+#[path = "buffer_tests.rs"]
 mod tests;

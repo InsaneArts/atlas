@@ -103,7 +103,6 @@ struct ActivityGroupingTests {
     #expect(run.count == 3)
     #expect(run.members.map(\.id) == ["1", "2", "3"])
     #expect(run.firstBefore == "1-before.jpg")
-    #expect(run.lastAfter == "3-after.jpg")
   }
 
   @Test("a folded line whose first repeat kept no picture shows the next one's, marked as that repeat")

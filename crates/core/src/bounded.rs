@@ -440,6 +440,7 @@ fn late() -> io::Error {
 }
 
 #[cfg(test)]
+#[path = "bounded_tests.rs"]
 mod tests;
 
 #[cfg(test)]

@@ -585,4 +585,5 @@ fn disabled() -> Error {
 }
 
 #[cfg(test)]
+#[path = "actions_tests.rs"]
 mod tests;

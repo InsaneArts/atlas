@@ -161,4 +161,5 @@ pub fn listed(mut reply: Value, all: bool) -> Value {
 }
 
 #[cfg(test)]
+#[path = "app_selection_tests.rs"]
 mod tests;

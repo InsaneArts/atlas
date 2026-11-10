@@ -181,4 +181,5 @@ fn store(path: &Path, held: &Held) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "journal_tests.rs"]
 mod tests;

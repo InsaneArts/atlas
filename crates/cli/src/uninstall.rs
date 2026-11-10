@@ -1211,4 +1211,5 @@ fn handed_over(shared_command: &Path) -> Vec<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "uninstall_tests.rs"]
 mod tests;

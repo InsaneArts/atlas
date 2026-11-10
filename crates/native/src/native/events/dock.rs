@@ -229,4 +229,5 @@ fn press_result(status: AXError) -> Result<()> {
 }
 
 #[cfg(test)]
+#[path = "dock_tests.rs"]
 mod tests;

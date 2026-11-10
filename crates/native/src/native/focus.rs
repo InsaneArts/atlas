@@ -1093,4 +1093,5 @@ fn refused_with(reason: Reason, fact: impl Display, found: Found) -> Error {
 }
 
 #[cfg(test)]
+#[path = "focus_tests.rs"]
 pub(super) mod tests;

@@ -17,6 +17,7 @@ pub use stage::WORKER_REFUSED;
 pub use stage::leftovers;
 use stage::*;
 #[cfg(test)]
+#[path = "environment_tests.rs"]
 mod tests;
 mod undo;
 mod worker;

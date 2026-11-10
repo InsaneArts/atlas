@@ -533,4 +533,5 @@ impl Client {
 }
 
 #[cfg(test)]
+#[path = "record_tests.rs"]
 mod tests;

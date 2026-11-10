@@ -52,4 +52,5 @@ pub fn skill() -> String {
 }
 
 #[cfg(test)]
+#[path = "guide_tests.rs"]
 mod tests;

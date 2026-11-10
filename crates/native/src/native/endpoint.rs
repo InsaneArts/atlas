@@ -256,4 +256,5 @@ pub async fn read_line<R: AsyncRead + Unpin>(stream: &mut R, limit: usize) -> Re
 }
 
 #[cfg(test)]
+#[path = "endpoint_tests.rs"]
 mod tests;

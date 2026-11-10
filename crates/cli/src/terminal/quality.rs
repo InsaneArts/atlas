@@ -36,4 +36,5 @@ fn dimension(terminal: (u16, u16, u16, u16), display: (f64, f64)) -> u32 {
 }
 
 #[cfg(test)]
+#[path = "quality_tests.rs"]
 mod tests;

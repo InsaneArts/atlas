@@ -318,4 +318,5 @@ pub async fn readiness(client: &Client, tools: &[String], apps: &[String]) -> Re
 }
 
 #[cfg(test)]
+#[path = "readiness_tests.rs"]
 mod tests;

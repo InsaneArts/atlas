@@ -372,4 +372,5 @@ pub fn sample_report(ready: bool, warnings: Value, native: &str) -> Value {
 }
 
 #[cfg(test)]
+#[path = "capability_tests.rs"]
 mod tests;

@@ -162,4 +162,5 @@ pub(super) fn remove_record(path: &Path) {
 }
 
 #[cfg(test)]
+#[path = "settings_tests.rs"]
 mod tests;

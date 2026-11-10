@@ -501,4 +501,5 @@ impl Client {
 }
 
 #[cfg(test)]
+#[path = "mutate_tests.rs"]
 mod tests;

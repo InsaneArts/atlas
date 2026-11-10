@@ -506,4 +506,5 @@ pub fn own_folder(folder: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[path = "files_tests.rs"]
 mod tests;

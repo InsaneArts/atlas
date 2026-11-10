@@ -273,4 +273,5 @@ fn caused_by(
 }
 
 #[cfg(test)]
+#[path = "explain_tests.rs"]
 mod tests;

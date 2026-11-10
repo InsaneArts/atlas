@@ -1100,4 +1100,5 @@ pub(crate) async fn render(program: &Program, url: &str, path: &Path, dark: bool
 }
 
 #[cfg(test)]
+#[path = "menubar_tests.rs"]
 mod tests;

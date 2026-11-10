@@ -365,4 +365,5 @@ fn screenshot_argv(arguments: &Value) -> Result<Vec<String>> {
 }
 
 #[cfg(test)]
+#[path = "reads_tests.rs"]
 mod tests;

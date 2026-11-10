@@ -510,4 +510,5 @@ impl Watch {
 }
 
 #[cfg(test)]
+#[path = "watch_tests.rs"]
 mod tests;

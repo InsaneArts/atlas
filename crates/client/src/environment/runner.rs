@@ -90,4 +90,5 @@ pub(super) fn execute(
 }
 
 #[cfg(test)]
+#[path = "runner_tests.rs"]
 mod tests;

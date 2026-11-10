@@ -780,4 +780,5 @@ fn outcome(text: &str) -> Result<(), Refusal> {
 }
 
 #[cfg(test)]
+#[path = "as_root_tests.rs"]
 mod tests;

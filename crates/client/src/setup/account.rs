@@ -149,4 +149,5 @@ fn available_uid(
 }
 
 #[cfg(test)]
+#[path = "account_tests.rs"]
 mod tests;

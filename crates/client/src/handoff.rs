@@ -1061,4 +1061,5 @@ fn root_if_owned_in(root: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+#[path = "handoff_tests.rs"]
 mod tests;
