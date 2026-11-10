@@ -33,7 +33,7 @@ struct SettingsSidebarRowView: View {
   @ViewBuilder private var lead: some View {
     Group {
       if row.page == .helper {
-        HelperMark(tone: row.tone, wash: isSelected ? .fillSelection : .clear)
+        HelperMark(tone: row.tone)
       } else {
         Image(systemName: row.page.symbol.rawValue)
           .font(Typography.font(size: SettingsLayout.pageSymbol, weight: .regular))

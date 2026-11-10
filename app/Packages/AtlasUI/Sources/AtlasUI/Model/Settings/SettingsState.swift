@@ -13,6 +13,9 @@ public struct SettingsState: Equatable, Sendable {
   public var accounts: SettingsAccountsState
   /// The page of the account shown; nil while no account's page shows.
   public var account: SettingsAccountPageState?
+  /// What the last change asked from an account's page said, whichever route shows now, so it is heard as it lands
+  /// even after the person left that page; its page shows it again on return. Nil for none.
+  public var accountNotice: SettingsNote?
   /// The Privacy page; nil until Atlas has looked at the person's files.
   public var privacy: SettingsFilesState?
   /// The Integrations page.
@@ -33,6 +36,7 @@ public struct SettingsState: Equatable, Sendable {
   ///   - helper: The Helper page.
   ///   - accounts: The Accounts page.
   ///   - account: The page of the account shown; none by default.
+  ///   - accountNotice: What the last change asked from an account's page said; none by default.
   ///   - privacy: The Privacy page; nil until Atlas has looked.
   ///   - agents: The Integrations page.
   ///   - about: The About page.
@@ -45,6 +49,7 @@ public struct SettingsState: Equatable, Sendable {
     helper: SettingsHelperState,
     accounts: SettingsAccountsState,
     account: SettingsAccountPageState? = nil,
+    accountNotice: SettingsNote? = nil,
     privacy: SettingsFilesState?,
     agents: SettingsAgentsState,
     about: SettingsAboutState,
@@ -57,6 +62,7 @@ public struct SettingsState: Equatable, Sendable {
     self.helper = helper
     self.accounts = accounts
     self.account = account
+    self.accountNotice = accountNotice
     self.privacy = privacy
     self.agents = agents
     self.about = about

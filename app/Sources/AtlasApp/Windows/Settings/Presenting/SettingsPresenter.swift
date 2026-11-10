@@ -15,6 +15,7 @@ enum SettingsPresenter {
       helper: helper(snapshot),
       accounts: accounts(snapshot),
       account: accountPage(snapshot),
+      accountNotice: accountNotice(snapshot),
       privacy: files(snapshot.files),
       agents: agents(snapshot),
       about: about(snapshot),

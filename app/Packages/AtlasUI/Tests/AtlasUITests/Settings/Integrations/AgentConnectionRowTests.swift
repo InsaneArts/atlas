@@ -34,7 +34,8 @@ struct AgentConnectionRowTests {
 
   @Test("a connection that runs shows its spinner beside the switch, and an agent not on this Mac shows no switch")
   func workingAndMissingAgents() {
-    #expect(AgentConnectionRow.trailing(Self.agent(.connecting)) == .working)
+    #expect(AgentConnectionRow.trailing(Self.agent(.connecting)) == .working(isConnecting: true))
+    #expect(AgentConnectionRow.trailing(Self.agent(.disconnecting)) == .working(isConnecting: false))
     #expect(AgentConnectionRow.trailing(Self.agent(.missing)) == AgentConnectionRow.Trailing.none)
   }
 
@@ -52,5 +53,20 @@ struct AgentConnectionRowTests {
     #expect(AgentConnectionRow.canConnect(partly.connection))
     #expect(!Self.agent(.connected, canDisconnect: true).isPartlyConnected)
     #expect(!Self.agent(.connect(isEnabled: true)).isPartlyConnected)
+  }
+
+  @Test("while another agent connects, a partly connected one keeps its switch on, waiting, and still says so")
+  func aPartialConnectionWaitsOn() {
+    var partly = Self.agent(.connect(isEnabled: false), canDisconnect: false)
+    partly.hasConnection = true
+    #expect(partly.isPartlyConnected)
+    #expect(AgentConnectionRow.trailing(partly) == .toggle(isOn: true, isEnabled: false))
+    #expect(!AgentConnectionRow.canConnect(partly.connection))
+  }
+
+  @Test("VoiceOver hears a switch whose change runs as connecting or disconnecting, never as one merely waiting")
+  func progressIsSpoken() {
+    #expect(AgentConnectionRow.progress("Claude", isConnecting: true) == "Connecting Claude…")
+    #expect(AgentConnectionRow.progress("Claude", isConnecting: false) == "Disconnecting Claude…")
   }
 }

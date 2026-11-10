@@ -6,8 +6,8 @@ import AtlasUI
 struct SettingsSession: Equatable {
   /// The route shown, with Back's and Forward's.
   var navigation = SettingsNavigation()
-  /// Each account whose page the window came to, as Atlas last listed it, by id, so its page keeps its name while
-  /// Atlas can't read its list.
+  /// Each account as Atlas last listed it, by id, so an account's page keeps its newest name while Atlas can't read
+  /// its list.
   var knownAccounts: [String: ViewerStatus.Account] = [:]
   /// The alert asked, if any.
   var alert: SettingsAlert?

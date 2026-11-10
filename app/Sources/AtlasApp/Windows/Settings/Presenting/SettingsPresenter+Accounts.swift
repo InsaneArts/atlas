@@ -67,6 +67,16 @@ extension SettingsPresenter {
     )
   }
 
+  /// What the last change asked from an account's page said, whichever route shows now, so VoiceOver hears it as it
+  /// lands even after the person left the page; a waiting note only while the change runs.
+  ///
+  /// - Parameter snapshot: What the controller holds and reads.
+  /// - Returns: The note, or nil.
+  static func accountNotice(_ snapshot: SettingsSnapshot) -> SettingsNote? {
+    guard let route = snapshot.session.notice?.route, route.account != nil else { return nil }
+    return notice(snapshot, on: route, busy: snapshot.session.accountsWorking)
+  }
+
   /// Where the window stands, with every route to an account Atlas no longer lists dropped from its history and an
   /// account's page shown for one gone back to Accounts. While Atlas can't read its list, the history stays as it is.
   ///

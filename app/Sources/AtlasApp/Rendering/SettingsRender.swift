@@ -57,7 +57,8 @@
       "47-account-app",
       "48-account-unreadable",
       "49-account-failed-unreadable",
-      "50-accounts-pictures-off",
+      "50-account-long-name",
+      "51-accounts-pictures-off",
     ]
 
     /// The window's size: Settings' fixed 740 by 572.

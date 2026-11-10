@@ -18,6 +18,8 @@ struct SettingsTopBar: View {
         .textStyle(.heading)
         .foregroundStyle(Color.textPrimary)
         .lineLimit(1)
+        .truncationMode(.middle)
+        .help(Text(verbatim: title))
         .swapsText(on: title)
         .accessibilityAddTraits(.isHeader)
       Spacer(minLength: .zero)

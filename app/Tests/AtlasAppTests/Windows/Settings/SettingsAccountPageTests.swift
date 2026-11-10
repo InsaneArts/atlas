@@ -158,6 +158,24 @@ struct SettingsAccountPageTests {
     #expect(!controller.state.navigation.canGoForward, "reopened on an unreadable list, the route stays gone")
   }
 
+  @Test("an account renamed by a reading keeps its new name on its page when the list then can't be read")
+  func aRenameOutlivesAnOutage() async throws {
+    let listed = try Self.listed()
+    let reading = Reading(listed)
+    let controller = Self.controller(reading)
+    let id = try #require(listed.overview.accounts?.first?.id)
+    controller.send(.openAccount(id))
+    reading.status = try SettingsAccountsTests.reading([
+      SettingsAccountsTests.account("site", "github.com", "GitHub", added: SettingsAccountsTests.today)
+    ])
+    for _ in 0..<20 where controller.session.knownAccounts[id]?.name != "GitHub" {
+      await afterQueuedWork()
+    }
+    reading.status = try status(["overview": ["mode": "observing"]])
+    #expect(Self.page(controller)?.title == "GitHub")
+    #expect(Self.page(controller)?.isUnreadable == true)
+  }
+
   @Test("while an alert or the sign-in sheet is up, the sidebar, Back and Forward wait")
   func navigationWaitsUnderAModal() throws {
     let reading = Reading(try Self.listed())
@@ -176,6 +194,24 @@ struct SettingsAccountPageTests {
     controller.send(.cancelSignIn)
     controller.send(.goBack)
     #expect(controller.state.route == .page(.helper))
+  }
+
+  @Test("a level change that fails after the person left its page is still heard, and shows again on return")
+  func aFailureAfterLeavingIsKept() async throws {
+    let listed = try Self.listed()
+    let reading = Reading(listed)
+    let controller = Self.controller(reading) { dependencies in
+      dependencies.links.setLevel = { _, _ in throw CocoaError(.fileWriteNoPermission) }
+    }
+    let id = try #require(listed.overview.accounts?.first?.id)
+    controller.send(.select(.accounts))
+    controller.send(.openAccount(id))
+    controller.send(.goBack)
+    await controller.setLevel(.trusted, of: id)
+    #expect(controller.state.account == nil)
+    #expect(controller.state.accountNotice?.kind == .problem, "the result is kept for VoiceOver whatever shows")
+    controller.send(.goForward)
+    #expect(controller.state.account?.notice == controller.state.accountNotice, "its page says it again")
   }
 
   @Test("a level change that failed says why on the account's page, not on Accounts")

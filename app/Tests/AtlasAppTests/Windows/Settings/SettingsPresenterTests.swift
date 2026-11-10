@@ -40,7 +40,7 @@ struct SettingsPresenterTests {
     snapshot.facts.isRemoving = isRemoving
 
     let row = try #require(SettingsPresenter.agents(snapshot).agents.first)
-    #expect(row.connection == (isRemoving ? .note("Disconnecting…") : .connecting))
+    #expect(row.connection == (isRemoving ? .disconnecting : .connecting))
     #expect(row.problem == (isRemoving ? failure : nil))
     #expect(row.showsFile == isRemoving)
     #expect(!row.canDisconnect)

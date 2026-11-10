@@ -21,30 +21,40 @@ struct AccountPage: View {
           GroupedSectionNotes(notes: notes)
         }
       } else {
-        levelSection
-        if state.isSite {
-          GroupedSection(AccountAction.signIn(of: state.id), title: "Sign-In") { action in
-            actionRow(action, look: .secondary)
+        if let level = state.level {
+          levelSection(level)
+        }
+        Group {
+          if state.isSite {
+            GroupedSection(AccountAction.signIn(of: state.id), title: "Sign-In") { action in
+              actionRow(action, look: .secondary)
+            }
+          }
+          GroupedSection([AccountAction.remove(state.id)], notes: notes) { action in
+            actionRow(action, look: .destructive)
           }
         }
-        GroupedSection([AccountAction.remove(state.id)], notes: notes) { action in
-          actionRow(action, look: .destructive)
-        }
+        // The level's picker stays enabled while a change runs, holding the keyboard's focus; it waits by itself.
+        .disabled(!state.isEnabled)
       }
     }
-    .disabled(!state.isEnabled)
   }
 
   /// The level's tiles over what it lets agents do.
-  private var levelSection: some View {
+  ///
+  /// - Parameter level: The level now.
+  /// - Returns: The section.
+  private func levelSection(_ level: AccountLevelChoice) -> some View {
     VStack(alignment: .leading, spacing: SettingsLayout.titleGap) {
       SectionTitle(text: "What Agents Can Do Here")
         .padding(.horizontal, ListRow.Size.compact.inset)
       VStack(spacing: .zero) {
-        AccountLevelPicker(account: state.title, level: state.level) { send(.setAccountLevel(state.id, $0)) }
-          .padding(.horizontal, ListRow.Size.compact.inset)
-          .padding(.top, Spacing.m)
-          .padding(.bottom, Spacing.sPlus)
+        AccountLevelPicker(account: state.title, level: level, isBusy: !state.isEnabled) {
+          send(.setAccountLevel(state.id, $0))
+        }
+        .padding(.horizontal, ListRow.Size.compact.inset)
+        .padding(.top, Spacing.m)
+        .padding(.bottom, Spacing.sPlus)
         Text(state.levelLine)
           .textStyle(.body)
           .foregroundStyle(Color.textSecondary)

@@ -36,6 +36,15 @@ struct SidebarHelperLine: View {
     }
   }
 
+  /// The sections its right-click menu lists: every fact about the helper, then its commands, as the window's
+  /// helper menu has them.
+  ///
+  /// - Parameter helper: The helper's health.
+  /// - Returns: The sections.
+  static func contextMenu(_ helper: ViewerHelperLine) -> [ViewerMenuSection] {
+    helper.menu
+  }
+
   /// `label` as a button that opens Settings, with the helper's menu as its context menu.
   ///
   /// - Parameter label: What a click opens Settings from.
@@ -48,7 +57,7 @@ struct SidebarHelperLine: View {
     }
     .buttonStyle(.pill)
     .contextMenu {
-      CommandMenu(sections: helper.menu) { send(.menu($0)) }
+      CommandMenu(sections: Self.contextMenu(helper)) { send(.menu($0)) }
     }
     .help(Text(verbatim: "Open Settings on Helper"))
     .accessibilityLabel(Text(verbatim: helper.line.isEmpty ? helper.title : "\(helper.title), \(helper.line)"))

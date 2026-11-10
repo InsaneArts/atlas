@@ -54,6 +54,7 @@
         PreviewState(name: "Account, an app", value: settingsAccountApp),
         PreviewState(name: "Account, list unreadable", value: settingsAccountUnreadable),
         PreviewState(name: "Account, a change failed, list unreadable", value: settingsAccountFailedUnreadable),
+        PreviewState(name: "Account, a long name", value: settingsAccountLongName),
         PreviewState(name: "Accounts, pictures off", value: settingsAccountsPicturesOff),
       ]
     }

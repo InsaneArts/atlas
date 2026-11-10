@@ -31,7 +31,8 @@ extension SettingsPresenter {
           installing: installing,
           isRemoving: snapshot.facts.isRemoving
         ),
-        canDisconnect: choice.hasConnection && installing.isEmpty
+        canDisconnect: choice.hasConnection && installing.isEmpty,
+        hasConnection: choice.hasConnection
       )
       return failing(row, failures[choice.id.rawValue]?.message ?? choice.problem)
     }
@@ -63,7 +64,7 @@ extension SettingsPresenter {
     installing: Set<String>,
     isRemoving: Bool = false
   ) -> SettingsAgentRow.Connection {
-    if installing.contains(id) { return isRemoving ? .note("Disconnecting…") : .connecting }
+    if installing.contains(id) { return isRemoving ? .disconnecting : .connecting }
     if connected { return id == AgentID.cursor.rawValue ? .configured : .connected }
     if !checked { return .note(failed ? SettingsWords.notChecked : SettingsWords.checking) }
     if !found { return .missing }

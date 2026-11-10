@@ -30,4 +30,12 @@ struct SettingsSidebarStateTests {
     #expect(!PillRowStyle(isSelected: false, hovers: false).hovers)
     #expect(PillRowStyle().hovers)
   }
+
+  @Test("a pill row hands its label the fill under it, so the helper's dot rings itself in the same colour")
+  func aPillRowHandsOnItsFill() {
+    #expect(PillRowBody.wash(isSelected: true, isPressed: true, isLit: true) == .fillSelection)
+    #expect(PillRowBody.wash(isSelected: false, isPressed: true, isLit: true) == .fillControlOn)
+    #expect(PillRowBody.wash(isSelected: false, isPressed: false, isLit: true) == .fillRowHover)
+    #expect(PillRowBody.wash(isSelected: false, isPressed: false, isLit: false) == .clear)
+  }
 }

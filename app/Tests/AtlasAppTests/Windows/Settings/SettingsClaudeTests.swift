@@ -62,6 +62,18 @@ struct SettingsClaudeTests {
     #expect(commands.ran.contains(["agents", "install", "--claude", "--app"]))
   }
 
+  @Test("a partly connected Claude stays partly connected, its switch on and waiting, while another agent connects")
+  func aPartialConnectionHoldsWhileAnotherInstalls() async throws {
+    let controller = SettingsController.scripted(commands: ScriptedCommands(["agents status": Self.partial]))
+    await controller.loadAgents()
+    var snapshot = controller.snapshot
+    snapshot.facts.installing = ["codex"]
+    let claude = try #require(SettingsPresenter.agents(snapshot).agents.first)
+    #expect(claude.hasConnection, "its connected part still counts")
+    #expect(!claude.canDisconnect, "but nothing changes while another install runs")
+    #expect(claude.isPartlyConnected)
+  }
+
   @Test("Disconnect removes both Claude connections")
   func disconnectsBothParts() async {
     let commands = ScriptedCommands(["agents status": Self.partial, "agents remove": #"{"ok":true}"#])

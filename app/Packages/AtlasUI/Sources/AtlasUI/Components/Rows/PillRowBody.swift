@@ -18,6 +18,7 @@ struct PillRowBody: View {
   /// The label over its capsule.
   var body: some View {
     configuration.label
+      .environment(\.pillWash, wash)
       .contentShape(Capsule())
       .background { highlight }
       .onHover { isHovered = $0 }
@@ -39,9 +40,27 @@ struct PillRowBody: View {
     .transaction(value: isSelected) { $0.animation = nil }
   }
 
+  /// What the capsule draws under the label now, which the label's marks ring themselves in.
+  private var wash: Color {
+    Self.wash(isSelected: isSelected, isPressed: configuration.isPressed, isLit: isLit)
+  }
+
   /// A row's fill while not chosen: the pressed one while pressed, the hover one under the pointer, else none.
   private var fill: Color {
-    if configuration.isPressed { return .fillControlOn }
+    Self.wash(isSelected: false, isPressed: configuration.isPressed, isLit: isLit)
+  }
+
+  /// What a pill row's capsule draws: the selection under the row chosen, else the pressed fill while pressed, the
+  /// hover fill under the pointer, or none.
+  ///
+  /// - Parameters:
+  ///   - isSelected: Whether the row is the one chosen.
+  ///   - isPressed: Whether it is pressed.
+  ///   - isLit: Whether the pointer's fill shows.
+  /// - Returns: The fill.
+  static func wash(isSelected: Bool, isPressed: Bool, isLit: Bool) -> Color {
+    if isSelected { return .fillSelection }
+    if isPressed { return .fillControlOn }
     return isLit ? .fillRowHover : .clear
   }
 

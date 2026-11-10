@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// One agent on the Integrations page: its icon, its name over what Atlas does in it, and its connection as a switch,
-/// on to connect and off to disconnect. While the connection runs a spinner stands beside the switch, which waits on.
+/// on to connect and off to disconnect. While a connection or a disconnection runs a spinner stands beside the switch,
+/// which waits on, and VoiceOver hears which runs.
 /// Partly connected, it says so and offers Connect beside the switch to finish. Not on this Mac, its icon fades and it
 /// says "Not installed", with no switch; while its state isn't known it says so in the switch's place. A change that
 /// failed says why in the row, in orange, with Show File where a file needs mending.
@@ -56,11 +57,12 @@ struct AgentConnectionRow: View {
     case .toggle(let isOn, let isEnabled):
       connectionSwitch(isOn: isOn)
         .disabled(!isEnabled)
-    case .working:
+    case .working(let isConnecting):
       Spinner()
         .transition(.opacity)
-      connectionSwitch(isOn: true)
+      connectionSwitch(isOn: isConnecting)
         .disabled(true)
+        .accessibilityValue(Text(Self.progress(agent.title, isConnecting: isConnecting)))
     case .none:
       EmptyView()
     case .note(let text):
@@ -100,11 +102,23 @@ struct AgentConnectionRow: View {
   nonisolated static func trailing(_ agent: SettingsAgentRow) -> Trailing {
     switch agent.connection {
     case .connected, .configured: .toggle(isOn: true, isEnabled: agent.canDisconnect)
-    case .connect(let isEnabled): .toggle(isOn: agent.canDisconnect, isEnabled: isEnabled || agent.canDisconnect)
-    case .connecting: .working
+    case .connect(let isEnabled):
+      .toggle(isOn: agent.hasConnection, isEnabled: agent.hasConnection ? agent.canDisconnect : isEnabled)
+    case .connecting: .working(isConnecting: true)
+    case .disconnecting: .working(isConnecting: false)
     case .missing: .none
     case .note(let text): .note(text)
     }
+  }
+
+  /// What VoiceOver hears of a switch whose change runs, so it never reads as one merely waiting on other work.
+  ///
+  /// - Parameters:
+  ///   - agent: The agent's name.
+  ///   - isConnecting: Whether it is being connected, rather than disconnected.
+  /// - Returns: "Connecting Claude…" or "Disconnecting Claude…".
+  nonisolated static func progress(_ agent: String, isConnecting: Bool) -> String {
+    isConnecting ? "Connecting \(agent)…" : "Disconnecting \(agent)…"
   }
 
   /// Whether Connect can run now: the agent is on this Mac and nothing else connects.

@@ -145,6 +145,15 @@
       return state
     }()
 
+    /// The page of a site with a very long name, which wraps whole on its card.
+    @MainActor static let settingsAccountLongName: SettingsState = {
+      var page = settingsAccountSitePage
+      page.id = "site\u{1F}production.customer-billing-administration.enterprise-services.example.com"
+      page.title = "production.customer-billing-administration.enterprise-services.example.com"
+      page.letter = "P"
+      return opening(page)
+    }()
+
     /// github.com's page after a change failed while Atlas can't read its list.
     @MainActor static let settingsAccountFailedUnreadable: SettingsState = {
       var state = opening(settingsAccountFailedUnreadablePage)

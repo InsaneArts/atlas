@@ -39,7 +39,7 @@ struct SettingsAnnouncementTests {
   @Test(
     "a failure on Activity, Privacy, Accounts or an account's page is heard once as it shows, not again as it stays",
     arguments: [
-      "pictures", "privacy", "accounts", "account",
+      "pictures", "privacy", "accounts", "account", "account, left",
     ]
   )
   func pageFailuresAnnounceOnce(page: String) async throws {
@@ -60,7 +60,12 @@ struct SettingsAnnouncementTests {
     switch page {
     case "pictures": state.general.notice = failure
     case "privacy": state.privacy?.status = failure
-    case "account": state.account?.notice = failure
+    case "account":
+      state.account?.notice = failure
+      state.accountNotice = failure
+    case "account, left":
+      // The change was asked on an account's page the person has since left.
+      state.accountNotice = failure
     default: state.accounts.notice = failure
     }
     for _ in 0..<2 {

@@ -16,11 +16,11 @@ struct AccountHeaderCard: View {
       MonogramTile(monogram: monogram, side: IconSize.xl / IconGrid.bodyShare)
         .frame(width: IconSize.xl, height: IconSize.xl)
       VStack(alignment: .leading, spacing: Spacing.hairline) {
+        // A long name wraps whole, the card growing to hold it.
         Text(title)
           .textStyle(.body, weight: .semibold)
           .foregroundStyle(Color.textPrimary)
-          .lineLimit(1)
-          .truncationMode(.middle)
+          .fixedSize(horizontal: false, vertical: true)
         Text(line)
           .textStyle(.caption)
           .foregroundStyle(Color.textSecondary)
@@ -29,6 +29,7 @@ struct AccountHeaderCard: View {
       .frame(maxWidth: .infinity, alignment: .leading)
     }
     .padding(.horizontal, ListRow.Size.compact.inset)
+    .padding(.vertical, Spacing.m)
     .frame(minHeight: SettingsLayout.headerRowHeight)
     .background(
       RoundedRectangle(cornerRadius: Radius.large, style: .continuous)

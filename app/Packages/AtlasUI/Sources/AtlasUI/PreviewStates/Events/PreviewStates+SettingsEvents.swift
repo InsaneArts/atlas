@@ -11,14 +11,16 @@
       switch event {
       case .select(let page):
         next.navigation.go(to: .page(page))
+        next.account = settingsAccount(for: next.navigation.current)
       case .openAccount(let id):
         next.navigation.go(to: .account(id))
-        next.account =
-          [settingsAccountSitePage, settingsAccountAppPage].first { $0.id == id } ?? settingsAccountSitePage
+        next.account = settingsAccount(for: next.navigation.current)
       case .goBack:
         next.navigation.goBack()
+        next.account = settingsAccount(for: next.navigation.current)
       case .goForward:
         next.navigation.goForward()
+        next.account = settingsAccount(for: next.navigation.current)
       case .askRecover:
         next.alert = settingsRecover.alert
       case .askLogOut:
@@ -35,11 +37,13 @@
         if let index = next.agents.agents.firstIndex(where: { $0.id == id }) {
           next.agents.agents[index].connection = .connected
           next.agents.agents[index].canDisconnect = true
+          next.agents.agents[index].hasConnection = true
         }
       case .disconnect(let id):
         if let index = next.agents.agents.firstIndex(where: { $0.id == id }) {
           next.agents.agents[index].connection = .connect(isEnabled: true)
           next.agents.agents[index].canDisconnect = false
+          next.agents.agents[index].hasConnection = false
         }
       case .alertConfirm:
         if next.alert == settingsForget.alert { next.agents.projects.removeFirst() }
@@ -88,6 +92,15 @@
         break
       }
       return next
+    }
+
+    /// The account page a route shows in the samples: the site's or the app's by id, none for a page.
+    ///
+    /// - Parameter route: The route.
+    /// - Returns: The page, or nil.
+    static func settingsAccount(for route: SettingsRoute) -> SettingsAccountPageState? {
+      guard let id = route.account else { return nil }
+      return [settingsAccountSitePage, settingsAccountAppPage].first { $0.id == id } ?? settingsAccountSitePage
     }
   }
 #endif

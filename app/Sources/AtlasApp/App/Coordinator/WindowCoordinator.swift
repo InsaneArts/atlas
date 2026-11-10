@@ -107,11 +107,22 @@ final class WindowCoordinator {
     )
   }
 
-  /// Check for Updates: Settings opens on About and checks.
+  /// Check for Updates: Settings opens on About and checks, only once About shows, so its answer is never hidden; while
+  /// Settings asks something in an alert or its sign-in sheet, it waits (``canCheckForUpdates``).
   func checkForUpdates() {
+    guard canCheckForUpdates else { return }
     openSettings()
-    settings?.controller.select(.about)
-    settings?.controller.send(.checkForUpdates)
+    guard let controller = settings?.controller else { return }
+    controller.select(.about)
+    guard controller.session.navigation.current == .page(.about) else { return }
+    controller.send(.checkForUpdates)
+  }
+
+  /// Whether Check for Updates can run: not while Settings asks something in an alert or its sign-in sheet, which
+  /// would keep About from showing its answer. Read from the controller, which keeps its question while its window is
+  /// closed and asks it again when it reopens.
+  var canCheckForUpdates: Bool {
+    settingsController?.isAsking != true
   }
 
   /// The setup window; brought forward when already open. Once it closes, the panel reads Open at Login and the

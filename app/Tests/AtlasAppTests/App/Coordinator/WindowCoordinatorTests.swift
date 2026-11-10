@@ -433,6 +433,44 @@ struct WindowCoordinatorTests {
     #expect(coordinator.settings?.controller.state.route == .page(.helper))
   }
 
+  @Test("Check for Updates waits while Settings asks something, so About's answer is never hidden behind it")
+  func checkForUpdatesWaitsForSettingsToAnswer() throws {
+    let parts = StandInParts()
+    let coordinator = parts.coordinator()
+    coordinator.openSettings()
+    let controller = try #require(coordinator.settings?.controller)
+    controller.send(.askRecover)
+    try #require(controller.state.alert != nil)
+    #expect(!coordinator.canCheckForUpdates, "the menu item waits")
+    coordinator.checkForUpdates()
+    #expect(controller.state.route != .page(.about))
+    #expect(controller.session.update == .idle, "no check runs while About can't show")
+    controller.send(.alertCancel)
+    #expect(coordinator.canCheckForUpdates)
+    coordinator.checkForUpdates()
+    #expect(controller.state.route == .page(.about))
+  }
+
+  @Test("Check for Updates waits on a sign-in sheet Settings keeps while its window is closed")
+  func checkForUpdatesWaitsForAClosedSettingsSheet() throws {
+    let parts = StandInParts()
+    let coordinator = parts.coordinator()
+    coordinator.openSettings()
+    let controller = try #require(coordinator.settings?.controller)
+    controller.send(.askSignIn(nil))
+    try #require(controller.state.signIn != nil)
+    try #require(parts.windows.last)
+      .dismiss()
+    #expect(coordinator.settings == nil, "Settings closed")
+    #expect(!coordinator.canCheckForUpdates, "the kept sheet still holds the menu item")
+    coordinator.checkForUpdates()
+    #expect(controller.session.update == .idle, "no check runs behind the sheet")
+    controller.send(.cancelSignIn)
+    #expect(coordinator.canCheckForUpdates)
+    coordinator.checkForUpdates()
+    #expect(coordinator.settings?.controller.state.route == .page(.about))
+  }
+
   @Test("the Dock's menu offers the main window's control, agent and picture while it is open, and nothing else")
   func theDockMenuFollowsTheMainWindow() throws {
     let parts = StandInParts()

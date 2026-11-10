@@ -1,3 +1,4 @@
+import AtlasService
 import AtlasUI
 
 /// Where the window stands: a page chosen in the sidebar, an account's page, Back and Forward, each going through
@@ -6,6 +7,11 @@ import AtlasUI
 /// came to it: Integrations its agents, Privacy the person's files. Each time Atlas reads its accounts list, routes to
 /// accounts it no longer lists leave the history for good.
 extension SettingsController {
+  /// Whether the window asks something now, in an alert or Sign In to a Site…'s sheet, which holds it where it stands.
+  var isAsking: Bool {
+    session.alert != nil || signIn != nil
+  }
+
   /// Shows a page from the sidebar, or from another window's link.
   ///
   /// - Parameter page: The page.
@@ -17,7 +23,7 @@ extension SettingsController {
   ///
   /// - Parameter move: The move.
   func navigate(_ move: (inout SettingsNavigation) -> Void) {
-    guard session.alert == nil, signIn == nil else { return }
+    guard !isAsking else { return }
     keepListedAccounts()
     let before = session.navigation.current
     move(&session.navigation)
@@ -26,36 +32,37 @@ extension SettingsController {
     arrived(at: route)
   }
 
-  /// The accounts Atlas lists now, by id; nil while it can't read its list.
-  var listedAccounts: Set<String>? {
+  /// The accounts Atlas lists now; nil while it can't read its list.
+  var listedAccounts: [ViewerStatus.Account]? {
     dependencies.links.status().status.overview.accounts
-      .map { Set($0.map(\.id)) }
   }
 
-  /// Drops every route to an account Atlas no longer lists from the history, kept so, for a list read later that
-  /// can't be read never brings them back; an account's page shown for one goes back to Accounts. While the list can't
-  /// be read, the history stays as it is.
+  /// Takes in an authoritative reading of the accounts list: every route to an account it no longer lists leaves the
+  /// history for good, so a list read later that can't be read never brings them back, and an account's page shown
+  /// for one goes back to Accounts; and each listed account is kept as listed, so its page keeps its newest name
+  /// should the list turn unreadable. While the list can't be read, nothing changes.
   func keepListedAccounts() {
     guard let listed = listedAccounts else { return }
     var navigation = session.navigation
-    navigation.keep(accounts: listed)
+    navigation.keep(accounts: Set(listed.map(\.id)))
     if navigation != session.navigation { session.navigation = navigation }
+    let known = Dictionary(listed.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+    if known != session.knownAccounts { session.knownAccounts = known }
   }
 
-  /// Keeps the history to accounts Atlas lists each time a reading changes the list, for the controller's whole life,
-  /// so a removal read while the window is closed still leaves the history the window reopens on.
+  /// Takes in each reading that changes the accounts list, for the controller's whole life, so a removal or a new name
+  /// read while the window is closed still holds when it reopens.
   func followAccounts() {
-    StateTracking.follow { [weak self] () -> Set<String>?? in
+    StateTracking.follow { [weak self] () -> [ViewerStatus.Account]?? in
       guard let self else { return nil }
       return .some(listedAccounts)
-    } apply: { [weak self] (_: Set<String>?) in
+    } apply: { [weak self] (_: [ViewerStatus.Account]?) in
       self?.keepListedAccounts()
     }
   }
 
   /// The window came to a route: its page is saved, an account's as Accounts, Integrations reads its agents and
-  /// Privacy the person's files, and an account's page keeps the account as listed now, so it keeps its name should
-  /// the list turn unreadable.
+  /// Privacy the person's files.
   ///
   /// - Parameter route: The route.
   func arrived(at route: SettingsRoute) {
@@ -63,10 +70,6 @@ extension SettingsController {
     switch route {
     case .page(.integrations): readAgents()
     case .page(.privacy): Task { await readFiles() }
-    case .account(let id):
-      let listed = dependencies.links.status().status.overview.accounts?
-        .first { $0.id == id }
-      if let listed { session.knownAccounts[id] = listed }
     default: break
     }
   }
