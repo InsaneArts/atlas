@@ -12,12 +12,15 @@ extension OnboardingController {
     await act(.allow(uid: uid, name: name), OnboardingWords.settingUpHere)
   }
 
-  /// Opens the permission's list in System Settings, with the permission panel beside it.
+  /// Opens the permission's list in System Settings, with the permission panel beside it. For ``panelWatch`` from now
+  /// the window watches closely while the panel stays open, so the switch shows its tick as soon as it is on.
   ///
   /// - Parameter permission: The permission to allow.
   func openSettings(_ permission: Permission) {
     if let url = permission.settingsURL { dependencies.openURL(url) }
     snapshot.guiding = permission
+    panelOpenedAt = opened()
+    watchClosely()
   }
 
   /// Once `permission`'s tick has shown, allows the next permission still off, opening its list in System Settings,

@@ -133,6 +133,17 @@ struct OnboardingControllerReadingTests {
     }
   }
 
+  @Test("in the person's account no job is timed as restarting, so no reading is asked for when a grace would end")
+  func thePersonsAccountTimesNoRestart() async throws {
+    let controller = OnboardingController.scripted(
+      ScriptedCommands(["onboarding status": OnboardingReplies.switchingMac])
+    )
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      #expect(controller.unknownSince == nil)
+    }
+  }
+
   @Test("a job restarting to pick up Screen Recording keeps its permissions and the permissions screen")
   func aRestartingJobKeepsItsPermissions() async throws {
     let commands = ScriptedCommands([

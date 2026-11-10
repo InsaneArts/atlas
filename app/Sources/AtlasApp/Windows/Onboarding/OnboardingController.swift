@@ -31,6 +31,9 @@ final class OnboardingController {
   /// How long a job may answer nothing before it counts as stopped: 30 s, longer than launchd waits to bring a job
   /// back.
   static let restartGrace: Duration = .seconds(30)
+  /// How long the window reads at the closest pace after the permission panel opens on a permission: 2 minutes, far
+  /// longer than allowing one takes, so a panel left open does not keep the readings close for good.
+  static let panelWatch: Duration = .seconds(120)
   /// How long a permission just turned on shows its tick before the next one is allowed: 1.2 s.
   static let tickShown: Duration = .milliseconds(1200)
   /// How long the passed check shows before its Continue lights up and takes presses: ``Motion/Duration/followUp``.
@@ -85,6 +88,8 @@ final class OnboardingController {
   @ObservationIgnored var onConsoleSince: Duration?
   /// The console's departures as that stay began (``SessionConsole/departures``): another since breaks the stay.
   @ObservationIgnored var departuresThen = 0
+  /// When the permission panel last opened on a permission; nil before it first has. See ``panelWatch``.
+  @ObservationIgnored var panelOpenedAt: Duration?
   /// Whether the reading loop is in its ``quietAfterSwitch`` pause, which a refresh does not cut short.
   @ObservationIgnored var settling = false
   /// In the helper: the account whose picture was read last, by its short name, so it is read once.
@@ -170,12 +175,13 @@ final class OnboardingController {
   /// the window's requests one at a time, until ``close()``.
   ///
   /// The window runs this once, from when it is first shown; a second call returns at once, and so does one after the
-  /// close. Its two lanes are the two children of one task group, so neither outlives it: the reading loop
-  /// (`readFacts()`) and the queue (`performRequests()`). Both run on the main actor and interleave only at their
-  /// awaits, so a reading lands while an action runs, and no action waits for a reading.
+  /// close. Its lanes are the children of one task group, so none outlives it: the reading loop (`readFacts()`), the
+  /// changes that call for a reading (`followChanges()`) and the queue (`performRequests()`). All run on the main
+  /// actor and interleave only at their awaits, so a reading lands while an action runs, and no action waits for a
+  /// reading.
   ///
-  /// It returns once the window has closed and the request under way, if any, has settled. Cancelling it stops both
-  /// lanes at once, the request under way included.
+  /// It returns once the window has closed and the request under way, if any, has settled. Cancelling it stops every
+  /// lane at once, the request under way included.
   func run() async {
     guard !started, !closed else { return }
     started = true

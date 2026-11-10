@@ -44,11 +44,13 @@ extension OnboardingController {
   }
 
   /// Waits, reading only who has the screen, until the person is back, then ``quietAfterSwitch`` more for the switch to
-  /// settle, after which the facts are read at once. A change (the screen changing hands) cuts the wait short, and
-  /// ``ReadingPace/fallbackEvery`` bounds it. The time this login has been on screen counts again from none.
+  /// settle, after which the facts are read at once. A change (the screen changing hands) cuts the wait short; who has
+  /// the screen is asked again every ``ReadingPace/minimumGap`` all the same, which starts no process: macOS reports
+  /// no change for an unlock, and may report the switch before this login reads as on screen. The time this login has
+  /// been on screen counts again from none.
   private func untilBack() async {
     leftScreen()
-    while isAway, !closed, !Task.isCancelled { await rest(for: ReadingPace.fallbackEvery) }
+    while isAway, !closed, !Task.isCancelled { await rest(for: ReadingPace.minimumGap) }
     guard !closed, !Task.isCancelled else { return }
     settling = true
     await rest(for: Self.quietAfterSwitch)
@@ -61,6 +63,14 @@ extension OnboardingController {
   func refresh() {
     guard !closed else { return }
     pace.ask(at: opened())
+    wake()
+  }
+
+  /// Watches closely from now, as after a change: the person is about to do something macOS may not report, such as
+  /// turning Screen Recording on in System Settings.
+  func watchClosely() {
+    guard !closed else { return }
+    pace.change(at: opened())
     wake()
   }
 
@@ -149,9 +159,10 @@ extension OnboardingController {
   }
 
   /// Whether a job whose permissions `facts` finds unknown may still be restarting: for ``restartGrace`` from the first
-  /// reading that found them so, with a reading asked for as the grace ends, which finds it stopped.
+  /// reading that found them so, with a reading asked for as the grace ends, which finds it stopped. Only the helper
+  /// reads its job's permissions, so in the person's account nothing is timed.
   private func restarting(_ facts: OnboardingFacts) -> Bool {
-    guard !facts.asker.permissionsKnown else {
+    guard facts.role == .helper, !facts.asker.permissionsKnown else {
       unknownSince = nil
       pace.drop(.restartGrace)
       return true
@@ -198,6 +209,11 @@ extension OnboardingController {
       } else if permission.granted(to: snapshot.facts.asker) {
         enqueue(.moveOn(from: permission))
       }
+    }
+    // While the panel is open its switch may turn on at any moment, and macOS says nothing for Screen Recording. A
+    // panel left open is no longer watched closely after ``panelWatch``.
+    if snapshot.guiding != nil, let panelOpenedAt, opened() - panelOpenedAt < Self.panelWatch {
+      pace.change(at: opened())
     }
     switch step {
     // In the helper the window marks itself open even when blocked: the opener waits for that mark.

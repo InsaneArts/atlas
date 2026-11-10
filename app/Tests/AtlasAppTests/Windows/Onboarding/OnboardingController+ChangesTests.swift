@@ -68,9 +68,9 @@ struct OnboardingControllerChangesTests {
       try await controller.untilLoaded()
       onScreen = false
       changes.change()
-      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the away wait never began")
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the away wait never began")
       changes.change()
-      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "a change while away read something")
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "a change while away read something")
       #expect(Self.readings(commands) == 1)
       onScreen = true
       changes.change()

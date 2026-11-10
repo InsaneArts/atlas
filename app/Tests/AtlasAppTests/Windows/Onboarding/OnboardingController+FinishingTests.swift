@@ -110,14 +110,15 @@ struct OnboardingControllerFinishingTests {
       onScreen = false
       try await clock.untilSleeping(for: OnboardingController.settledFor, "the first reading never paused")
       clock.advance(by: OnboardingController.settledFor)
-      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the away wait never paused")
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the away wait never paused")
       controller.refresh()
-      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "a refresh ended the away wait")
-      clock.advance(by: ReadingPace.fallbackEvery)
-      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the away wait never paused again")
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "a refresh ended the away wait")
+      clock.advance(by: ReadingPace.minimumGap)
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the away wait never paused again")
       #expect(readings() == 1, "a reading ran while the person was away")
+      // Back with no change reported, as after an unlock: the next look at the screen, a gap later, finds them.
       onScreen = true
-      clock.advance(by: ReadingPace.fallbackEvery)
+      clock.advance(by: ReadingPace.minimumGap)
       try await clock.untilSleeping(for: OnboardingController.quietAfterSwitch, "the return never settled")
       controller.refresh()
       clock.advance(by: .seconds(1))
