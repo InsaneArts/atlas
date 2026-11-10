@@ -218,7 +218,7 @@ fn window_number(pid: i64, window: &Element) -> Option<i64> {
 }
 
 /// The target in app `pid` that `aimed` reads, if anything did.
-pub(super) fn target(pid: i64, aimed: Option<Aimed>) -> Target {
+fn target(pid: i64, aimed: Option<Aimed>) -> Target {
     let app = crate::native::apps::bundle_id(pid);
     let browser = app.as_deref().is_some_and(|app| BROWSERS.contains(&app));
     let Some(aimed) = aimed else {

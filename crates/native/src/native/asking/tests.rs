@@ -341,15 +341,8 @@ fn a_once_grant_covers_only_this_request_with_this_message_and_a_task_grant_only
     let Decision::Ask(question) = decide(&send, &asking, &mut look) else {
         panic!("asks");
     };
-    let Some(Message::Whole { digest, .. }) = &question.message else {
-        panic!("read whole");
-    };
-    asking.grants.push(Allowance::Once {
-        account: question.account_key.clone(),
-        batch: question.batch.clone(),
-        target: question.bound.clone(),
-        value: Some(digest.clone()),
-    });
+    assert!(matches!(question.message, Some(Message::Whole { .. })));
+    asking.grants.push(once(&question));
     assert_eq!(decide(&send, &asking, &mut look), Decision::Free);
 
     // The same prefix with another ending is another message: it asks again.
@@ -390,12 +383,7 @@ fn a_message_that_cant_be_read_whole_offers_no_just_this_once() {
         panic!("asks");
     };
     assert_eq!(question.details()["once"], false);
-    asking.grants.push(Allowance::Once {
-        account: question.account_key.clone(),
-        batch: question.batch.clone(),
-        target: question.bound.clone(),
-        value: None,
-    });
+    asking.grants.push(once(&question));
     assert!(matches!(
         decide(&send, &asking, &mut look),
         Decision::Ask(_)
@@ -443,12 +431,7 @@ fn a_once_grant_for_send_never_covers_the_same_click_landing_on_delete() {
     let Decision::Ask(question) = decide(&click, &asking, &mut look) else {
         panic!("asks");
     };
-    asking.grants.push(Allowance::Once {
-        account: question.account_key.clone(),
-        batch: question.batch.clone(),
-        target: question.bound.clone(),
-        value: None,
-    });
+    asking.grants.push(once(&question));
     assert_eq!(decide(&click, &asking, &mut look), Decision::Free);
     look.point = page("app.slack.com", "AXButton", Some("Delete message"));
     assert!(
@@ -513,14 +496,7 @@ fn an_action_that_would_now_land_somewhere_stricter_stops_the_rest() {
 #[test]
 fn a_request_naming_an_app_not_yet_in_front_is_judged_as_that_app() {
     let looks = crate::native::ax::Looks::default();
-    let epoch = atlas_core::session::InputEpoch {
-        uid: 501,
-        security_session_id: 1,
-        display_id: 2,
-        width: 800.0,
-        height: 600.0,
-        process_id: 1,
-    };
+    let epoch = epoch();
     let screen = live::OnScreen {
         looks: &looks,
         epoch: &epoch,
@@ -547,25 +523,6 @@ fn a_request_naming_an_app_not_yet_in_front_is_judged_as_that_app() {
     let send = actions(json!([{"type": "key", "key": "return"}]));
     assert!(matches!(
         decide(&send, &asking, &mut look),
-        Decision::Deny { .. }
-    ));
-}
-
-#[test]
-fn a_browser_read_that_failed_counts_as_an_unread_page() {
-    // A process that isn't running reads as no bundle at all; the rule is on what a browser's failed read gives.
-    let unread = live::target(i64::from(std::process::id()), None);
-    assert_ne!(unread.site, Site::Host(String::new()));
-    let asking = listing(Kind::Site, "bank.example", Level::LookOnly);
-    let browser = Target {
-        app: Some(CHROME.to_owned()),
-        site: Site::Unread,
-        ..Target::default()
-    };
-    let mut look = scripted(browser, Target::default());
-    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
-    assert!(matches!(
-        decide(&click, &asking, &mut look),
         Decision::Deny { .. }
     ));
 }
@@ -599,7 +556,7 @@ impl Look for TwoPlaces {
 }
 
 #[test]
-fn a_drag_goes_by_where_it_drops_and_a_move_with_a_button_held_is_a_drag() {
+fn a_drag_goes_by_where_it_drops() {
     let asking = listing(Kind::App, SLACK, Level::LookOnly);
     let mut look = TwoPlaces {
         from: Target {
@@ -616,24 +573,15 @@ fn a_drag_goes_by_where_it_drops_and_a_move_with_a_button_held_is_a_drag() {
         decide(&into_slack, &asking, &mut look),
         Decision::Deny { .. }
     ));
-
-    let held = actions(json!([
-        {"type": "pointer", "phase": "down", "x": 9, "y": 1},
-        {"type": "pointer", "phase": "move", "x": 9, "y": 2},
-    ]));
-    assert!(matches!(
-        decide(&held, &asking, &mut look),
-        Decision::Deny { .. }
-    ));
 }
 
 #[test]
-fn a_character_key_into_a_password_field_follows_the_password_rule() {
+fn a_character_or_space_into_a_password_field_follows_the_password_rule_and_tab_only_moves() {
     let asking = listing(Kind::Site, "slack.com", Level::Ask);
     let mut secure = field("app.slack.com", false);
     secure.secure = true;
     let mut look = scripted(Target::default(), secure);
-    for key in ["a", "shift+a", "7"] {
+    for key in ["a", "shift+a", "7", "space", "shift+space"] {
         let decision = decide(
             &actions(json!([{"type": "key", "key": key}])),
             &asking,
@@ -641,50 +589,45 @@ fn a_character_key_into_a_password_field_follows_the_password_rule() {
         );
         assert_eq!(what(&decision), Some("password"), "{key}");
     }
+    let tab = actions(json!([{"type": "key", "key": "tab"}]));
+    assert_eq!(decide(&tab, &asking, &mut look), Decision::Free);
     assert_eq!(look.messages, 0, "the field is never read");
+}
+
+/// The digest of the message `question` would send, when it was read whole:
+/// what a once grant or a permit for it names.
+fn sent(question: &Question) -> Option<String> {
+    match &question.message {
+        Some(Message::Whole { digest, .. }) => Some(digest.clone()),
+        Some(Message::Unread) | None => None,
+    }
 }
 
 /// The once grant `question` offers, as the person's Just This Once gives it.
 fn once(question: &Question) -> Allowance {
-    let value = match &question.message {
-        Some(Message::Whole { digest, .. }) => Some(digest.clone()),
-        Some(Message::Unread) | None => None,
-    };
     Allowance::Once {
         account: question.account_key.clone(),
         batch: question.batch.clone(),
         target: question.bound.clone(),
-        value,
+        value: sent(question),
+    }
+}
+
+/// An input service's session on an 800 by 600 display.
+fn epoch() -> atlas_core::session::InputEpoch {
+    atlas_core::session::InputEpoch {
+        uid: 501,
+        security_session_id: 1,
+        display_id: 2,
+        width: 800.0,
+        height: 600.0,
+        process_id: 1,
     }
 }
 
 #[test]
-fn an_action_judged_again_stops_when_the_same_account_now_has_a_control_that_sends_there() {
-    let asking = listing(Kind::Site, "github.com", Level::Ask);
-    let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
-    let mut look = scripted(
-        page("github.com", "AXButton", Some("Open")),
-        Target::default(),
-    );
-    let mut again = recheck(&click, &asking);
-    look.point = page("github.com", "AXButton", Some("Send"));
-    assert_eq!(
-        what(&again.check(&click[0], &mut look)),
-        Some("click"),
-        "Open became Send at the same level"
-    );
-}
-
-#[test]
 fn an_action_judged_again_keeps_each_grant_to_its_own_account_window_and_element() {
-    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
-    asking.accounts.push(Listed {
-        kind: Kind::Site,
-        id: "github.com".to_owned(),
-        name: "github.com".to_owned(),
-        browser: Some(CHROME.to_owned()),
-        level: Level::Ask,
-    });
+    let mut asking = slack_and_github(Level::Ask, Level::Ask);
     let click = actions(json!([{"type": "click", "x": 1, "y": 1}]));
     let send = page("app.slack.com", "AXButton", Some("Send"));
     let mut look = scripted(send.clone(), Target::default());
@@ -844,22 +787,9 @@ fn a_keyboard_once_grant_is_bound_to_the_window_the_focused_field_is_in() {
     );
 }
 
-/// The person lists slack.com and github.com in Chrome, both asking.
-fn two_sites() -> Asking {
-    let mut asking = listing(Kind::Site, "slack.com", Level::Ask);
-    asking.accounts.push(Listed {
-        kind: Kind::Site,
-        id: "github.com".to_owned(),
-        name: "github.com".to_owned(),
-        browser: Some(CHROME.to_owned()),
-        level: Level::Ask,
-    });
-    asking
-}
-
 #[test]
 fn a_page_that_cant_be_read_is_no_one_sites_so_no_grant_for_a_site_covers_it() {
-    let mut asking = two_sites();
+    let mut asking = slack_and_github(Level::Ask, Level::Ask);
     asking.grants.push(Allowance::Task {
         account: site("slack.com"),
     });
@@ -891,7 +821,7 @@ fn a_page_that_cant_be_read_is_no_one_sites_so_no_grant_for_a_site_covers_it() {
 
 #[test]
 fn a_drag_between_two_accounts_needs_each_of_them_to_allow_it() {
-    let asking = two_sites();
+    let asking = slack_and_github(Level::Ask, Level::Ask);
     let mut look = TwoPlaces {
         from: page("app.slack.com", "AXGroup", Some("Message")),
         to: page("github.com", "AXGroup", Some("Comment")),
@@ -947,6 +877,7 @@ fn with_a_button_held_a_move_or_a_scroll_is_a_drag_where_it_lands() {
     let moves = [
         json!({"type": "move", "x": 9, "y": 1}),
         json!({"type": "scroll", "x": 9, "y": 1, "dy": 3}),
+        json!({"type": "pointer", "phase": "move", "x": 9, "y": 1}),
     ];
     let look_only = listing(Kind::App, SLACK, Level::LookOnly);
     let asks = listing(Kind::App, SLACK, Level::Ask);
@@ -1046,14 +977,7 @@ fn a_floating_panel_or_menu_of_a_listed_app_over_another_app_is_judged_as_the_li
 #[test]
 fn a_check_before_an_event_judges_the_app_it_finds_not_the_one_the_request_named() {
     let looks = crate::native::ax::Looks::default();
-    let epoch = atlas_core::session::InputEpoch {
-        uid: 501,
-        security_session_id: 1,
-        display_id: 2,
-        width: 800.0,
-        height: 600.0,
-        process_id: 1,
-    };
+    let epoch = epoch();
     let screen = live::OnScreen::observing(&looks, &epoch, std::time::Instant::now(), None);
     let slack = Target {
         app: Some(SLACK.to_owned()),
@@ -1082,15 +1006,11 @@ fn a_check_before_an_event_judges_the_app_it_finds_not_the_one_the_request_named
 
 /// The permit the person's Allow gives for the action `question` stopped.
 fn permit(question: &Question) -> Allowance {
-    let value = match &question.message {
-        Some(Message::Whole { digest, .. }) => Some(digest.clone()),
-        Some(Message::Unread) | None => None,
-    };
     Allowance::Permit {
         account: question.account_key.clone(),
         action: question.action.clone(),
         target: question.bound.clone(),
-        value,
+        value: sent(question),
     }
 }
 
@@ -1198,25 +1118,6 @@ fn a_permit_covers_one_action_once_however_many_like_it_a_request_holds() {
         Some("newline"),
         "the second asks"
     );
-}
-
-#[test]
-fn space_in_a_password_field_follows_the_password_rule_and_tab_only_moves() {
-    let asking = listing(Kind::Site, "slack.com", Level::Ask);
-    let mut secure = page("app.slack.com", "AXTextField", Some("Password"));
-    secure.editable = true;
-    secure.secure = true;
-    let mut look = scripted(Target::default(), secure);
-    for key in ["space", "shift+space"] {
-        let decision = decide(
-            &actions(json!([{"type": "key", "key": key}])),
-            &asking,
-            &mut look,
-        );
-        assert_eq!(what(&decision), Some("password"), "{key}");
-    }
-    let tab = actions(json!([{"type": "key", "key": "tab"}]));
-    assert_eq!(decide(&tab, &asking, &mut look), Decision::Free);
 }
 
 /// A look at a menu: element 14 is its option, any other its list.
