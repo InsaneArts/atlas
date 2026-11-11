@@ -46,6 +46,43 @@ extension ViewerPresenter {
     return ViewerWords.dotted([project.isEmpty ? "" : agent, when ?? ""])
   }
 
+  /// An ended session's line in the sidebar, which its one-line row draws at its trailing edge: when it started, such
+  /// as "12:46" today, "Wed" within the last six days, else "Nov 8"; empty while unknown.
+  ///
+  /// - Parameters:
+  ///   - started: When it started.
+  ///   - snapshot: What the controller holds.
+  /// - Returns: The line.
+  static func endedLine(started: Date?, _ snapshot: ViewerSnapshot) -> String {
+    guard let started else { return "" }
+    return Words.shortDay(
+      started,
+      now: snapshot.date,
+      locale: snapshot.locale,
+      calendar: snapshot.zonedCalendar,
+      timeZone: snapshot.timeZone
+    )
+  }
+
+  /// What an ended session's row leaves to its tooltip and VoiceOver: its agent and the day and time it started, such
+  /// as "Claude Code · Wed 11 Nov 22:20"; the day and time alone when its title is its agent already.
+  ///
+  /// - Parameters:
+  ///   - agent: Its agent's name.
+  ///   - project: Its project folder's name; empty for none.
+  ///   - started: When it started.
+  ///   - snapshot: What the controller holds.
+  /// - Returns: The line.
+  static func startedLine(agent: String, project: String, started: Date?, _ snapshot: ViewerSnapshot) -> String {
+    let when = started.map { date in
+      let calendar = snapshot.zonedCalendar
+      let day = Words.dayName(date, locale: snapshot.locale, calendar: calendar, timeZone: snapshot.timeZone)
+      let time = Words.clockMinute(date, locale: snapshot.locale, calendar: calendar, timeZone: snapshot.timeZone)
+      return "\(day) \(time)"
+    }
+    return ViewerWords.dotted([project.isEmpty ? "" : agent, when ?? ""])
+  }
+
   /// A session's rows in the log as last read that sent something: a row refused before anything was sent is no work.
   /// None while Activity has not been read.
   ///

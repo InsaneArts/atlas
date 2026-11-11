@@ -74,19 +74,18 @@ extension ViewerPresenter {
     )
   }
 
-  /// A session's tooltip: its name and line, then one fact a line, then what its last cleanup did, each step a line.
+  /// A session's tooltip: its name and lines, then one fact a line, then what its last cleanup did, each step a line.
   ///
   /// - Parameters:
   ///   - name: The session's name.
-  ///   - line: What it last did.
+  ///   - lines: What it last did, or an ended session's agent and start; an empty one is left out.
   ///   - facts: Every fact about it.
   ///   - receipt: What its last cleanup did; none before one ran.
   /// - Returns: The tooltip.
-  static func sessionHelp(name: String, line: String, facts: [Fact], receipt: [Fact]) -> String {
-    var lines = [name]
-    if !line.isEmpty { lines.append(line) }
-    lines += facts.map(ViewerWords.factLine)
-    if !receipt.isEmpty { lines += [ViewerWords.lastCleanup] + receipt.map(ViewerWords.factLine) }
-    return lines.joined(separator: "\n")
+  static func sessionHelp(name: String, lines: [String], facts: [Fact], receipt: [Fact]) -> String {
+    var help = [name] + lines.filter { !$0.isEmpty }
+    help += facts.map(ViewerWords.factLine)
+    if !receipt.isEmpty { help += [ViewerWords.lastCleanup] + receipt.map(ViewerWords.factLine) }
+    return help.joined(separator: "\n")
   }
 }

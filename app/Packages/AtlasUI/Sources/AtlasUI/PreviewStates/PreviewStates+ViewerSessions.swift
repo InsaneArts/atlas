@@ -38,6 +38,42 @@
       )
     }
 
+    /// An ended session's row as the window draws it: when it started on its one line, and its agent and the day and
+    /// time it started in its tooltip and for VoiceOver; "Cleaning up…" in place of when while its work is cleaned up.
+    ///
+    /// - Parameters:
+    ///   - id: The session's key.
+    ///   - icon: The host's icon.
+    ///   - name: The session's name.
+    ///   - when: When it started, as its row says it.
+    ///   - started: Its agent and the day and time it started.
+    ///   - facts: Every fact about it, one a line; none by default.
+    ///   - cleanup: Whether its menu offers Clean Up This Session's Work…, and whether that can be chosen.
+    ///   - isCleaningUp: Whether its work is being cleaned up now; not by default.
+    /// - Returns: The row.
+    static func viewerEndedRow(
+      _ id: String,
+      icon: RowIcon,
+      name: String,
+      when: String,
+      started: String,
+      facts: [String] = [],
+      cleanup: Bool? = nil,
+      isCleaningUp: Bool = false
+    ) -> ViewerSessionRow {
+      let told = [started] + (isCleaningUp ? ["Cleaning up…"] : [])
+      return ViewerSessionRow(
+        id: id,
+        icon: icon,
+        name: name,
+        line: isCleaningUp ? "Cleaning up…" : when,
+        isCleaningUp: isCleaningUp,
+        help: viewerSessionHelp(name, told.joined(separator: "\n"), facts: facts),
+        menu: viewerSessionMenu(id, facts: facts, cleanup: cleanup),
+        accessibilityLabel: ([name] + told).joined(separator: ", ")
+      )
+    }
+
     /// The live sessions in the service's order, each titled by its project folder, Terminal by its name: Claude
     /// Code with the helper, Codex waiting its turn, and Cursor and Terminal idle, Cursor's line naming its agent, as
     /// the status gives neither a start.
@@ -114,14 +150,51 @@
     /// Every session's work.
     static let allSessions = liveSessions(sessionRows)
 
-    /// Pi · notes-sync, which started at 09:40 in notes-sync and ended 20 minutes ago.
-    static let piEndedRow = viewerSessionRow(
+    /// Pi · notes-sync, which started at 09:40 today in notes-sync and ended 20 minutes ago.
+    static let piEndedRow = viewerEndedRow(
       SessionSamples.piKey,
       icon: SessionSamples.piIcon,
       name: SessionSamples.piTitle,
-      line: "Pi · 09:40",
+      when: "09:40",
+      started: "Pi · Do. 22. Okt. 09:40",
       facts: ["Host: Pi", "Folder: notes-sync", "Started: 09:40", "Ended: 20 min ago"]
     )
+
+    /// Ended sessions as their one-line rows draw them: started today, this week and weeks ago, a long name, a
+    /// one-letter one, and one whose work is being cleaned up.
+    static let endedRows = [
+      piEndedRow,
+      viewerEndedRow(
+        "ended-week",
+        icon: SessionSamples.codexIcon,
+        name: "atlas-t3-r3",
+        when: "Wed",
+        started: "Codex · Wed, Oct 21 22:20"
+      ),
+      viewerEndedRow(
+        "ended-long",
+        icon: SessionSamples.cursorIcon,
+        name: "~/Developer/clients/acme/really-deep/folder",
+        when: "Oct 8",
+        started: "Cursor · Thu, Oct 8 16:40"
+      ),
+      viewerEndedRow(
+        "ended-letter",
+        icon: SessionSamples.claudeIcon,
+        name: "q",
+        when: "Tue",
+        started: "Claude Code · Tue, Oct 20 23:59"
+      ),
+      viewerEndedRow(
+        "ended-cleaning",
+        icon: SessionSamples.codexIcon,
+        name: "atlas-landing",
+        when: "Tue",
+        started: "Codex · Tue, Oct 20 21:03",
+        cleanup: false,
+        isCleaningUp: true
+      ),
+    ]
 
     /// The sessions by state while the helper needs the person: Claude Code under Needs you, its click unfinished,
     /// Codex under Working, waiting until the person recovers, Cursor and Terminal under Idle, and Ended open on Pi ·

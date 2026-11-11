@@ -34,6 +34,34 @@ extension Words {
     return date.formatted(style)
   }
 
+  /// 6: the days before today that ``shortDay(_:now:locale:calendar:timeZone:)`` names by their weekday alone.
+  static let weekdayDays = 6
+
+  /// When something happened, as short as a list's trailing edge says it: the time of day today, the short weekday
+  /// alone within the last ``weekdayDays`` days, else the short month and day.
+  ///
+  /// - Parameters:
+  ///   - date: The moment.
+  ///   - now: The time it is now.
+  ///   - locale: The person's locale.
+  ///   - calendar: The calendar supplied by the snapshot.
+  ///   - timeZone: The person's time zone.
+  /// - Returns: "12:46", "Wed" or "Nov 8", in the locale's own order.
+  static func shortDay(_ date: Date, now: Date, locale: Locale, calendar: Calendar, timeZone: TimeZone) -> String {
+    let start = calendar.startOfDay(for: date)
+    let days = calendar.dateComponents([.day], from: start, to: calendar.startOfDay(for: now)).day
+    let style = Date.FormatStyle(locale: locale, calendar: calendar, timeZone: timeZone)
+    switch days {
+    case 0: return clockMinute(date, locale: locale, calendar: calendar, timeZone: timeZone)
+    case .some(1...weekdayDays): return date.formatted(style.weekday(.abbreviated))
+    default:
+      return date.formatted(
+        style.month(.abbreviated)
+          .day()
+      )
+    }
+  }
+
   /// A day before yesterday, as a group's label.
   ///
   /// - Parameters:

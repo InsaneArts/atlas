@@ -23,6 +23,24 @@
       return state
     }()
 
+    /// Ended open on its one-line rows (``endedRows``): one chosen, its Activity with nothing to show, and another's
+    /// work being cleaned up.
+    @MainActor public static let viewerSidebarEndedRows: ViewerState = {
+      var state = viewerActivityOneSessionEmpty
+      let chosen = endedRows[1]
+      state.sidebar.sessions = allSessions
+      state.sidebar.sessions.groups.append(ViewerSessionGroup(.ended, rows: endedRows))
+      state.sidebar.sessions.endedCount = endedRows.count
+      state.sidebar.sessions.endedShown = true
+      state.sidebar.sessions.chosen = .one(chosen.id)
+      var activity = oneSessionEmptyActivity
+      activity.title = chosen.name
+      activity.session = .one(chosen.id)
+      state.pane = .activity(activity)
+      state.header = ViewerHeaderState(who: chosen.name, what: "Codex")
+      return state
+    }()
+
     /// The sidebar's search open on "opie": Claude Code, whose line names Opie, under Working, and Cursor · opie under
     /// Idle; Terminal and Codex are filtered out.
     @MainActor public static let viewerSidebarSearch: ViewerState = {
@@ -67,16 +85,16 @@
         ("codex-c", codex, "checkout", "Codex · 10:40", nil),
         ("terminal-2", terminal, "Terminal", "10:31", nil),
       ]
-      let ended: [(String, RowIcon, String, String)] = [
-        ("pi-2", pi, "notes", "Pi · 09:12"),
-        ("codex-d", codex, "dashboard", "Codex · 08:50"),
-        ("cursor-old", cursor, "old-site", "Cursor · Wed 17:20"),
+      let ended: [(String, RowIcon, String, String, String)] = [
+        ("pi-2", pi, "notes", "09:12", "Pi · Thu, Oct 22 09:12"),
+        ("codex-d", codex, "dashboard", "08:50", "Codex · Thu, Oct 22 08:50"),
+        ("cursor-old", cursor, "old-site", "Wed", "Cursor · Wed, Oct 21 17:20"),
       ]
       let row = { (sample: (String, RowIcon, String, String, SessionBadge?)) in
         viewerSessionRow(sample.0, icon: sample.1, name: sample.2, line: sample.3, badge: sample.4, facts: [])
       }
-      let gone = { (sample: (String, RowIcon, String, String)) in
-        viewerSessionRow(sample.0, icon: sample.1, name: sample.2, line: sample.3, facts: [])
+      let gone = { (sample: (String, RowIcon, String, String, String)) in
+        viewerEndedRow(sample.0, icon: sample.1, name: sample.2, when: sample.3, started: sample.4)
       }
       state.sidebar.sessions = ViewerSessionsState(
         icons: sessionsByState.icons,
