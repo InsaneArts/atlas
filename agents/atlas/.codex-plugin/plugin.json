@@ -1,6 +1,6 @@
 {
   "name": "atlas",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Test and operate macOS GUI apps in a hidden second login, without touching the person's desktop; guides setup when Atlas is missing.",
   "author": {
     "name": "InsaneArts"
