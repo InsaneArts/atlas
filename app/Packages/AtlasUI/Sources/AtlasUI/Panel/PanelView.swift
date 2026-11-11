@@ -3,9 +3,8 @@ import SwiftUI
 /// The menu bar panel: the helper's status as its heading, its screen, the newest actions or, while two or more are
 /// live, the host sessions, and the actions on the agent. It draws its state and sends what the person does; it decides
 /// nothing. A state change moves every piece at once on ``PanelLayout/change``: the word, the line, the picture's look
-/// and the buttons ease together, so nothing ripples down the panel on every flip. It fills the popover that holds it,
-/// whose corners and shadow are the system's, on its own opaque ground, so nothing of the popover's material shows
-/// through; `panelCard()` draws the corners and shadow where no popover does.
+/// and the buttons ease together, so nothing ripples down the panel on every flip. It draws on its own opaque ground;
+/// `panelCard()` draws its corners and shadow, and `panelWindowCard(fits:)` the room its window keeps round them.
 public struct PanelView: View {
   /// What the panel shows.
   private let state: PanelState

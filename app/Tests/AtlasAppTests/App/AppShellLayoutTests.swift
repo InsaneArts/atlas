@@ -95,7 +95,7 @@ struct AppShellLayoutTests {
     #expect(dark.keys.sorted() == ["Shared/Windows/Appearance.swift"])
   }
 
-  @Test("no window, popover or menu sets its own appearance, so each follows the Mac's; only the renders name one")
+  @Test("no window or menu sets its own appearance, so each follows the Mac's; only the renders name one")
   func nothingOnScreenForcesAnAppearance() throws {
     let appearance = try Regex(#"\.appearance\s*=(?!=)"#)
     let forcing = try Self.code()

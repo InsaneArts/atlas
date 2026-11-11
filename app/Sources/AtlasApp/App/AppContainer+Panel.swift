@@ -4,7 +4,7 @@ import AtlasService
 import AtlasUI
 
 /// The menu bar item and its panel, built once at launch: the panel's controller, linked to the other windows by the
-/// coordinator, Atlas's item in the menu bar in the glyph last picked, and the popover it opens; helper discovery
+/// coordinator, Atlas's item in the menu bar in the glyph last picked, and the window it opens; helper discovery
 /// starts in its own task.
 extension AppContainer {
   /// Builds the panel and puts Atlas's item in the menu bar.
@@ -23,7 +23,7 @@ extension AppContainer {
         preferences: .stored(in: UserDefaults.standard)
       )
     )
-    menuBar = PanelPopover(
+    menuBar = PanelWindow(
       controller: controller,
       item: StatusItem(icon: menuBarPreferences.loadIcon()),
       openSettings: { [weak coordinator] in coordinator?.openSettings() },

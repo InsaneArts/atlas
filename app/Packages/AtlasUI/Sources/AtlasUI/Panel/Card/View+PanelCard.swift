@@ -1,8 +1,8 @@
 import SwiftUI
 
 extension View {
-  /// Draws the panel's surface where no popover holds it, as in a design render or a preview: its corners round the
-  /// panel's own opaque ground, a fine edge with a brighter 0.5-point highlight along the top, and its shadow.
+  /// Draws the panel's surface, in its window as in a design render or a preview: its corners round the panel's own
+  /// opaque ground, a fine edge with a brighter 0.5-point highlight along the top, and its shadow.
   ///
   /// - Returns: The panel on its card.
   public func panelCard() -> some View {

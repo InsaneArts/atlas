@@ -46,16 +46,16 @@ extension PanelPresenter {
     return more > 0 ? PanelWords.moreSessions(more) : nil
   }
 
-  /// The line under the heading while sessions show: whose action may not have finished while the helper needs the
-  /// person, else who has the helper while one does; nil keeps the status's own line.
+  /// The line under the heading: while the helper needs the person, whose action may not have finished while sessions
+  /// show; else who has the helper while one does, a lone session too; nil keeps the status's own line.
   ///
   /// - Parameters:
   ///   - reading: The status, read.
   ///   - mode: The helper's mode.
   /// - Returns: The line, or nil.
   static func sessionLine(_ reading: StatusReading, mode: Mode) -> String? {
-    guard reading.showsSessions, !hidesRecent(mode) else { return nil }
-    if mode.kind == .needsYou { return reading.causerLine }
-    return reading.holder.map { Words.holderLine($0.name) }
+    guard !hidesRecent(mode) else { return nil }
+    if mode.kind == .needsYou { return reading.showsSessions ? reading.causerLine : nil }
+    return reading.helperHolder.map { Words.holderLine($0.name) }
   }
 }

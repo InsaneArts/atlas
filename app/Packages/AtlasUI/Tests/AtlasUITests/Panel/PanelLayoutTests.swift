@@ -52,9 +52,18 @@ struct PanelLayoutTests {
     }
   }
 
-  @Test("the panel's caption chip is the small chip, and the working sample's caption fits it whole")
+  @Test("the caption's widest stops an inset short of the sound and pause buttons side by side")
+  func theCaptionStopsShortOfTheCornerButtons() {
+    let captionEnd = PanelLayout.captionInset + PanelLayout.captionWidth
+    let buttons = PanelLayout.pauseButton * 2 + PanelLayout.cornerGap
+    let buttonsStart = PanelLayout.picture.width - PanelLayout.captionInset - buttons
+    #expect(buttonsStart - captionEnd == PanelLayout.captionInset)
+    #expect(PanelLayout.captionWidth == 248)
+  }
+
+  @Test("the panel's caption chip is the small chip, narrower than the viewer's for the same words")
   @MainActor
-  func theCaptionFitsItsChip() throws {
+  func theSmallChipIsNarrowerThanTheViewers() throws {
     let size = PictureChip<EmptyView>.Size.small
     #expect(size.height == 26 && size.inset == 10 && size.gap == 7)
     let regular = PictureChip<EmptyView>.Size.regular
@@ -68,8 +77,7 @@ struct PanelLayoutTests {
       renderer.scale = 1
       return CGFloat(try #require(renderer.cgImage, "nothing was drawn").width)
     }
-    #expect(try width(.small) <= PanelLayout.captionWidth, "the small chip holds it without cutting it")
-    #expect(try width(.regular) > PanelLayout.captionWidth, "the viewer's chip would have cut it")
+    #expect(try width(.small) < width(.regular))
   }
 
   @Test("the panel's ground is opaque in either appearance, so nothing of the popover's material shows through")

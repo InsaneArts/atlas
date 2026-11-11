@@ -2,8 +2,8 @@ import AppKit
 import AtlasStatus
 import AtlasUI
 
-/// Atlas's item in the menu bar: it owns the system's status item and its button, which the panel's popover opens
-/// from (``PanelPopover``). One width in every state and for either icon, so the items to its left never move; the
+/// Atlas's item in the menu bar: it owns the system's status item and its button, which the panel's window opens
+/// from (``PanelWindow``). One width in every state and for either icon, so the items to its left never move; the
 /// button shows the glyph the person picked (``StatusGlyph``, ``MenuBarIcon``) and a ``StatusBadge`` layer over it.
 ///
 /// A state change moves: the badge pops and crossfades, and the glyph's dim fades over

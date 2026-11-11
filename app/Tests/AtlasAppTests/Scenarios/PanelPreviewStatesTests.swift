@@ -186,6 +186,7 @@
         "Waiting, a password": try asking(Self.ask("a4", kind: .password, account: "github.com", typed: 12)),
         "Waiting, for this task or not": try asking(Self.ask("a5", kind: .sendKey, message: message, once: false)),
         "Allowed for a task": grant,
+        "One session": try SessionReplies.snapshot([SessionReplies.claudeActing]),
         "Sessions": try SessionReplies.snapshot([SessionReplies.claudeActing, SessionReplies.cursorIdle]),
         "Sessions waiting": try SessionReplies.snapshot([
           SessionReplies.claudeActing, SessionReplies.codexWaiting(), SessionReplies.cursorIdle,

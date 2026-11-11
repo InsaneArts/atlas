@@ -32,10 +32,14 @@ extension StatusReading {
     return status.overview.hostSessions.filter { Self.isRelevant($0) && keys.insert($0.key).inserted }
   }
 
-  /// The session that has the helper now, while sessions show: the one the service names as the holder, else the one
-  /// that says it holds the helper.
+  /// The session that has the helper now, while sessions show: ``helperHolder``.
   public var holder: ViewerStatus.HostSession? {
-    guard showsSessions else { return nil }
+    showsSessions ? helperHolder : nil
+  }
+
+  /// The session that has the helper now, however many show, as the panel's line names it: the one the service names
+  /// as the holder, else the one that says it holds the helper.
+  public var helperHolder: ViewerStatus.HostSession? {
     if let key = status.overview.holder, let named = session(key), named.isLive, named.holdsHelper { return named }
     return liveSessions.first(where: \.holdsHelper)
   }

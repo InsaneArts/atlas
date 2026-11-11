@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The panel's buttons, the actions on the agent: Stop while an agent works, or Resume once the person stopped agents,
-/// in a secondary slot that grows in and out as the main action makes room, then the white main action filling the row.
+/// in a secondary slot that grows in and out as the main action makes room, then the main action filling the row, in
+/// the text's colour, or in the accent for Give Back as the main window's is.
 /// Each names its menu item and shortcut in its tooltip, as the main window's buttons do.
 struct PanelControlRow: View {
   /// The buttons' states.
@@ -38,7 +39,7 @@ struct PanelControlRow: View {
           Text(shown)
             .opacity(isDrawn ? 1 : 0)
         }
-        .buttonStyle(.capsule(size: .small, fill: true))
+        .buttonStyle(.capsule(controls.main.isAccent ? .accent : .primary, size: .small, fill: true))
         .disabled(!controls.main.isEnabled || !isReady)
         .help(controls.main.help)
         .accessibilityLabel(shown)
