@@ -53,4 +53,28 @@ struct SessionConsoleTests {
     #expect(visible.buttons.map(\.title) == ["Switch Back", "Stay Here"])
     #expect(visible.buttons.first?.keyEquivalent == "\r")
   }
+
+  @Test("each time this login is found off the screen after being on it counts as a departure, however soon it returns")
+  func departuresAreCounted() {
+    var onScreen = true
+    let console = SessionConsole(read: { onScreen })
+    #expect(console.departures == 0)
+    onScreen = false
+    console.refresh()
+    console.refresh()
+    #expect(console.departures == 1, "still off the screen is the same departure")
+    onScreen = true
+    console.refresh()
+    #expect(console.departures == 1, "coming back is no departure")
+    onScreen = false
+    console.refresh()
+    #expect(console.departures == 2)
+  }
+
+  @Test("a login never on the screen has made no departure")
+  func neverOnScreen() {
+    let console = SessionConsole(read: { false })
+    console.refresh()
+    #expect(console.departures == 0)
+  }
 }

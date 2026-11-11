@@ -53,8 +53,9 @@ struct OnboardingControllerAgentsTests {
     "a failed agents reading keeps the agents listed unchecked, lets Continue skip the step, and is asked again later"
   )
   func aFailedAgentsReadingIsAskedAgainLater() async throws {
+    let clock = ManualClock()
     let commands = ScriptedCommands(["onboarding status": OnboardingReplies.finishedMac])
-    let controller = OnboardingController.scripted(commands)
+    let controller = OnboardingController.scripted(commands, clock: clock)
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       try await settle("the failed agents reading was never shown") { controller.snapshot.agentsFailed }
@@ -70,10 +71,18 @@ struct OnboardingControllerAgentsTests {
         "not asked again with the very next reading"
       )
       commands.answer("agents status", Self.claudeFound)
-      try await settle("the agents were never asked for again") {
-        controller.refresh()
-        return controller.snapshot.agentsLoaded
+      // Through each pause the loop takes: one ends exactly as the retry is due, and none passes it.
+      var elapsed = Duration.zero
+      while elapsed < OnboardingController.agentsRetryAfter {
+        try await clock.untilSleeping(1, "the readings never paused")
+        let pause = try #require(clock.waiting.min())
+        #expect(elapsed + pause <= OnboardingController.agentsRetryAfter, "a pause ran past the retry")
+        #expect(commands.ran.count { $0 == ["agents", "status"] } == 1, "asked again before the retry was due")
+        clock.advance(by: pause)
+        elapsed += pause
       }
+      #expect(elapsed == OnboardingController.agentsRetryAfter)
+      try await settle("the agents were never asked for again") { controller.snapshot.agentsLoaded }
       #expect(controller.snapshot.agents.first { $0.id == .claude }?.found == true)
       #expect(controller.snapshot.problem == nil)
     }
@@ -239,7 +248,8 @@ struct OnboardingControllerAgentsTests {
     let commands = ScriptedCommands([
       "onboarding status": OnboardingReplies.finishedMac, "agents install": #"{"ok": true}"#,
     ])
-    let controller = OnboardingController.scripted(commands)
+    let clock = ManualClock()
+    let controller = OnboardingController.scripted(commands, clock: clock)
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       try await settle("the failed agents reading was never shown") { controller.snapshot.agentsFailed }
@@ -248,10 +258,11 @@ struct OnboardingControllerAgentsTests {
       commands.whileRunning { arguments in
         if arguments == Action.agentsStatus.arguments { await gate.wait() }
       }
-      // The readings since the failure count up to the retry.
+      // The reading asked for once the retry is due asks again.
+      try await clock.untilSleeping(1, "the readings never paused")
+      clock.advance(by: OnboardingController.agentsRetryAfter)
       try await settle("the agents were never asked for again") {
-        controller.refresh()
-        return commands.ran.count { $0 == Action.agentsStatus.arguments } == 2
+        commands.ran.count { $0 == Action.agentsStatus.arguments } == 2
       }
       #expect(controller.state.footer.next?.isEnabled == true, "Continue skips the step")
       controller.send(.connectAgents)

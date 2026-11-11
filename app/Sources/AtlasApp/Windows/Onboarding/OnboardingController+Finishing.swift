@@ -11,7 +11,7 @@ extension OnboardingController {
   }
 
   /// Try Again after a failed check: it starts as the first did, on the next reading, asked for at once, once this
-  /// login has been read on screen ``settledReadings`` times in a row.
+  /// login has been found on screen for ``settledFor``.
   func retryFinish() {
     guard !isQueued(.check) else { return }
     snapshot.finish = .idle

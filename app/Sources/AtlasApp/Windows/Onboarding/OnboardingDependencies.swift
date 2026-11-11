@@ -3,8 +3,8 @@ import AtlasCommands
 import AtlasUI
 
 /// What the setup window's controller reaches outside itself, handed in so tests can stand in for each: the `atlas`
-/// command line, opening a URL, the login item, the clock its waits run on, the login timing's log, the agents' and
-/// the asking account's pictures, and the Finder.
+/// command line, opening a URL, the login item, the clock its waits run on, what says when something may have changed,
+/// the login timing's log, the agents' and the asking account's pictures, and the Finder.
 struct OnboardingDependencies {
   /// The `atlas` command line every action runs.
   var commands: any CommandRunning
@@ -26,6 +26,10 @@ struct OnboardingDependencies {
   /// The clock every wait runs on: the pause between readings of the facts, a permission's tick before the panel
   /// moves on, and the permission panel following System Settings. A cancelled wait ends at once.
   var clock: any Clock<Duration>
+  /// Makes what says when something the window waits for may have changed, once, as the window's controller is made.
+  var changes: @MainActor () -> any SetupWatching = { SetupChanges() }
+  /// This account's home folder, under which the helper's job keeps its folder.
+  var home: String = NSHomeDirectory()
   /// Notes a marker in the login timing, in the unified log.
   var mark: @MainActor (String) -> Void = LoginLog.mark
   /// The icons of the agents whose apps are on this Mac, by agent id, as Settings reads them.

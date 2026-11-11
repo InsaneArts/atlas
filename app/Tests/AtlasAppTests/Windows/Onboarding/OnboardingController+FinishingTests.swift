@@ -1,6 +1,7 @@
 import AsyncSupportTesting
 import AtlasCommands
 import AtlasCommandsTesting
+import AtlasOnboarding
 import Testing
 
 @testable import AtlasApp
@@ -12,12 +13,13 @@ struct OnboardingControllerFinishingTests {
     let commands = ScriptedCommands([
       "onboarding status": OnboardingReplies.checkingMac, "onboarding finish": #"{"ok": true}"#,
     ])
-    let controller = OnboardingController.scripted(commands)
+    let clock = ManualClock()
+    let controller = OnboardingController.scripted(commands, clock: clock)
     commands.whileRunning { arguments in
       if arguments == Action.finishSetup.arguments { await controller.close() }
     }
     try await controller.whileOpen { running in
-      try await controller.untilSettled(commands)
+      try await controller.untilSettled(commands, clock: clock)
       try await settle("the check never ran") { commands.ran.contains(Action.finishSetup.arguments) }
       // run()'s own end is the sentinel: it ends once the check under way has done all it ever will.
       try await running.value("the check never ended")
@@ -31,12 +33,13 @@ struct OnboardingControllerFinishingTests {
       "onboarding status": OnboardingReplies.checkingMac,
       "onboarding finish": #"{"ok": false, "error": "The helper did not answer"}"#,
     ])
-    let controller = OnboardingController.scripted(commands)
+    let clock = ManualClock()
+    let controller = OnboardingController.scripted(commands, clock: clock)
     commands.whileRunning { arguments in
       if arguments == Action.finishSetup.arguments { controller.send(.retryFinish) }
     }
     try await controller.whileOpen { _ in
-      try await controller.untilSettled(commands)
+      try await controller.untilSettled(commands, clock: clock)
       try await settle("the check never ended") {
         controller.snapshot.finish == .failed("The helper did not answer")
       }
@@ -52,9 +55,10 @@ struct OnboardingControllerFinishingTests {
     let commands = ScriptedCommands([
       "onboarding status": OnboardingReplies.checkingMac, "onboarding finish": #"{"ok": false, "error": "no answer"}"#,
     ])
-    let controller = OnboardingController.scripted(commands)
+    let clock = ManualClock()
+    let controller = OnboardingController.scripted(commands, clock: clock)
     try await controller.whileOpen { _ in
-      try await controller.untilSettled(commands)
+      try await controller.untilSettled(commands, clock: clock)
       try await settle("the check never failed") {
         controller.snapshot.finish != .idle && controller.snapshot.finish != .running
       }
@@ -69,7 +73,7 @@ struct OnboardingControllerFinishingTests {
     }
   }
 
-  @Test("the check waits until this login has been read on screen twice in a row")
+  @Test("the check waits until this login has been read on screen for a moment, then starts on the reading asked for")
   func theCheckWaitsForTwoReadingsOnScreen() async throws {
     let commands = ScriptedCommands([
       "onboarding status": OnboardingReplies.checkingMac, "onboarding finish": #"{"ok": true}"#,
@@ -79,15 +83,15 @@ struct OnboardingControllerFinishingTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       // The pause follows the reading's whole outcome, a check it started included.
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the first reading never paused")
+      try await clock.untilSleeping(for: OnboardingController.settledFor, "the first reading never paused")
       #expect(controller.snapshot.step == .finishing)
       #expect(controller.snapshot.finish == .idle, "the check started on the first reading")
-      try await controller.untilSettled(commands)
+      try await controller.untilSettled(commands, clock: clock)
       try await settle("the check never ran") { commands.ran.contains(Action.finishSetup.arguments) }
     }
   }
 
-  @Test("while the person is away nothing is read, even on a refresh; back, the check waits two readings")
+  @Test("while the person is away nothing is read, even on a refresh; back, the check waits a moment on screen")
   func nothingIsReadWhileAway() async throws {
     let clock = ManualClock()
     var onScreen = true
@@ -104,18 +108,17 @@ struct OnboardingControllerFinishingTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       onScreen = false
-      for _ in 0..<3 {
-        try await clock.untilSleeping(for: OnboardingController.readEvery, "the readings never paused")
-        clock.advance(by: OnboardingController.readEvery)
-      }
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the away wait never paused")
+      try await clock.untilSleeping(for: OnboardingController.settledFor, "the first reading never paused")
+      clock.advance(by: OnboardingController.settledFor)
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the away wait never paused")
       controller.refresh()
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "a refresh ended the away wait")
-      clock.advance(by: OnboardingController.readEvery)
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the away wait never paused again")
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "a refresh ended the away wait")
+      clock.advance(by: ReadingPace.minimumGap)
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the away wait never paused again")
       #expect(readings() == 1, "a reading ran while the person was away")
+      // Back with no change reported, as after an unlock: the next look at the screen, a gap later, finds them.
       onScreen = true
-      clock.advance(by: OnboardingController.readEvery)
+      clock.advance(by: ReadingPace.minimumGap)
       try await clock.untilSleeping(for: OnboardingController.quietAfterSwitch, "the return never settled")
       controller.refresh()
       clock.advance(by: .seconds(1))
@@ -123,9 +126,9 @@ struct OnboardingControllerFinishingTests {
       #expect(readings() == 1, "a reading ran before the return settled")
       clock.advance(by: .seconds(2))
       try await settle("the first reading back never came") { readings() == 2 }
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the readings never paused")
+      try await clock.untilSleeping(for: OnboardingController.settledFor, "the readings never paused")
       #expect(controller.snapshot.finish == .idle, "the check started on the first reading back")
-      clock.advance(by: OnboardingController.readEvery)
+      clock.advance(by: OnboardingController.settledFor)
       try await settle("the check never ran once back") { commands.ran.contains(Action.finishSetup.arguments) }
     }
   }
@@ -144,8 +147,8 @@ struct OnboardingControllerFinishingTests {
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       for count in 2...3 {
-        try await clock.untilSleeping(for: OnboardingController.readEvery, "the readings never paused")
-        clock.advance(by: OnboardingController.readEvery)
+        try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the readings never paused")
+        clock.advance(by: ReadingPace.fallbackEvery)
         try await settle("reading \(count) never came") { readings() == count }
       }
       #expect(controller.snapshot.finish == .idle, "the check started while the helper had the screen")
@@ -160,7 +163,7 @@ struct OnboardingControllerFinishingTests {
     ])
     let controller = OnboardingController.scripted(commands, clock: clock)
     try await controller.whileOpen { _ in
-      try await controller.untilSettled(commands)
+      try await controller.untilSettled(commands, clock: clock)
       try await settle("the check never passed") { controller.snapshot.finish == .passed }
       #expect(controller.state.footer.next?.isEnabled == false, "Continue waits while the pass shows")
       try await clock.untilSleeping(for: OnboardingController.continueFollows, "Continue never waited")

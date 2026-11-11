@@ -1,6 +1,7 @@
 import AsyncSupportTesting
 import AtlasCommands
 import AtlasCommandsTesting
+import AtlasOnboarding
 import AtlasUI
 import Testing
 
@@ -116,19 +117,30 @@ struct OnboardingControllerReadingTests {
     }
   }
 
-  @Test("the setup window reads again after its interval, and not before")
+  @Test("with nothing changing, the setup window reads again only after its fallback interval, and not before")
   func theWindowReadsAgainAfterItsInterval() async throws {
     let clock = ManualClock()
     let commands = ScriptedCommands(["onboarding status": OnboardingReplies.freshMac])
     let controller = OnboardingController.scripted(commands, clock: clock)
     try await controller.whileOpen { _ in
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the first reading never paused")
+      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the first reading never paused")
       #expect(commands.ran == [Action.onboardingStatus.arguments])
-      #expect(clock.waiting == [OnboardingController.readEvery])
-      clock.advance(by: OnboardingController.readEvery - .milliseconds(1))
+      #expect(clock.waiting == [ReadingPace.fallbackEvery])
+      clock.advance(by: ReadingPace.fallbackEvery - .milliseconds(1))
       #expect(clock.waiting == [.milliseconds(1)], "the pause has not ended a moment before its interval")
       clock.advance(by: .milliseconds(1))
       try await settle("the facts were never read again") { commands.ran.count == 2 }
+    }
+  }
+
+  @Test("in the person's account no job is timed as restarting, so no reading is asked for when a grace would end")
+  func thePersonsAccountTimesNoRestart() async throws {
+    let controller = OnboardingController.scripted(
+      ScriptedCommands(["onboarding status": OnboardingReplies.switchingMac])
+    )
+    try await controller.whileOpen { _ in
+      try await controller.untilLoaded()
+      #expect(controller.unknownSince == nil)
     }
   }
 
@@ -152,22 +164,32 @@ struct OnboardingControllerReadingTests {
     }
   }
 
-  @Test("a job that answers nothing for too long counts as stopped")
+  @Test("a job that answers nothing for too long counts as stopped, on a reading asked for then, however few came")
   func aStoppedJobAsksForAllowAgain() async throws {
+    let clock = ManualClock()
     let commands = ScriptedCommands([
       "onboarding status": OnboardingReplies.helper(accessibility: true), "onboarding window": #"{"ok": true}"#,
     ])
-    let controller = OnboardingController.scripted(commands)
+    let controller = OnboardingController.scripted(commands, clock: clock)
+    let readings = { commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count }
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
       commands.answer("onboarding status", OnboardingReplies.restarting)
-      for reading in 2...(OnboardingController.restartReadings + 2) {
-        controller.refresh()
-        try await settle("the facts were never read again") {
-          commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == reading
-        }
+      controller.refresh()
+      try await settle("the facts were never read again") { readings() == 2 }
+      // Through each pause the loop takes, the job silent: one ends exactly as the grace does, and none passes it.
+      var waited = Duration.zero
+      while waited < OnboardingController.restartGrace {
+        try await clock.untilSleeping(1, "the readings never paused")
+        let pause = try #require(clock.waiting.min())
+        #expect(waited + pause <= OnboardingController.restartGrace, "a pause ran past the grace")
+        #expect(controller.snapshot.step != .allow, "the job counted as stopped within its grace")
+        clock.advance(by: pause)
+        waited += pause
       }
-      try await settle("the job never counted as stopped") { controller.snapshot.step == .allow }
+      #expect(waited == OnboardingController.restartGrace)
+      try await settle("the job never counted as stopped as its grace ended") { controller.snapshot.step == .allow }
+      #expect(readings() < 15, "readings came at the watching pace, then the fallback, not every moment")
     }
   }
 
@@ -185,7 +207,7 @@ struct OnboardingControllerReadingTests {
     let controller = OnboardingController.scripted(commands, clock: clock)
     try await controller.whileOpen { _ in
       try await controller.untilLoaded()
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the first reading never paused")
+      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the first reading never paused")
       controller.send(.lockAndSwitch)
       try await settle("Lock and Switch never ran") { controller.snapshot.working == Words.locking }
       commands.answer(
@@ -197,7 +219,7 @@ struct OnboardingControllerReadingTests {
       if let refresh {
         controller.send(refresh)
       } else {
-        clock.advance(by: OnboardingController.readEvery)
+        clock.advance(by: ReadingPace.fallbackEvery)
       }
       try await settle("the reading never landed while Lock and Switch ran") {
         controller.snapshot.facts.helper.signedIn
@@ -222,7 +244,7 @@ struct OnboardingControllerReadingTests {
     let controller = OnboardingController.scripted(commands, clock: clock)
     try await controller.whileOpen { running in
       try await controller.untilLoaded()
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the first reading never paused")
+      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the first reading never paused")
       controller.send(.chooseAnother)
       try await settle("Choose Another never started") { commands.ran.contains(Action.forgetHelper.arguments) }
       controller.send(.complete)

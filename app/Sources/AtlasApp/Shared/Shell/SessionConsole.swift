@@ -13,6 +13,9 @@ final class SessionConsole: NSObject {
 
   /// Whether the latest session evidence puts this login on the physical console.
   private(set) var isOnConsole = false
+  /// How many times this login was found off the screen after being on it, the moment macOS says so: a stay on
+  /// screen is unbroken while the count holds, however soon the login came back.
+  private(set) var departures = 0
   @ObservationIgnored private let read: @MainActor () -> Bool
 
   /// Tests supply the session reading; only the shared instance watches macOS session changes.
@@ -31,8 +34,10 @@ final class SessionConsole: NSObject {
   /// Rechecks immediately before an action, including after any asynchronous cleanup.
   @discardableResult
   func refresh() -> Bool {
-    isOnConsole = read()
-    return isOnConsole
+    let now = read()
+    if isOnConsole, !now { departures += 1 }
+    isOnConsole = now
+    return now
   }
 
   @objc private func sessionChanged(_ notification: Notification) {

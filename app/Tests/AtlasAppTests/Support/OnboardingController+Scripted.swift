@@ -16,6 +16,7 @@ extension OnboardingController {
   ///   - mark: Where its login timing's markers go; nowhere by default, never this Mac's log.
   ///   - console: The scripted session reading; on-console by default, independent of the test machine.
   ///   - consoleUser: Who has the Mac's screen; this login, `me`, by default.
+  ///   - changes: What says something may have changed; one that says nothing unless told, by default.
   /// - Returns: The controller, which reads no icon or picture from this Mac and reveals what it shows in the Finder
   ///   into `opened`.
   static func scripted(
@@ -26,7 +27,8 @@ extension OnboardingController {
     clock: ManualClock = ManualClock(),
     mark: @escaping @MainActor (String) -> Void = { _ in },
     console: SessionConsole = SessionConsole(read: { true }),
-    consoleUser: @escaping @MainActor () -> String? = { "me" }
+    consoleUser: @escaping @MainActor () -> String? = { "me" },
+    changes: ScriptedSetupChanges = ScriptedSetupChanges()
   ) -> OnboardingController {
     OnboardingController(
       dependencies: OnboardingDependencies(
@@ -37,6 +39,8 @@ extension OnboardingController {
         loginItem: loginItem.seam,
         installs: installs ?? AgentInstalls(commands: commands),
         clock: clock,
+        changes: { changes },
+        home: "/Users/me",
         mark: mark,
         agentIcons: { [:] },
         accountPicture: { _ in nil },
@@ -92,21 +96,29 @@ extension OnboardingController {
     try await settle("the facts were never read", sourceLocation: sourceLocation) { snapshot.loaded }
   }
 
-  /// Reads until this login has been found on screen ``OnboardingController/settledReadings`` times in a row, as the
-  /// end-to-end check waits for: each reading after the first is asked for at once, a bounded number of times.
+  /// Reads until this login has been found on screen for ``OnboardingController/settledFor``, as the end-to-end check
+  /// waits for: the clock is moved on to the reading the window asks for then.
   ///
   /// - Parameters:
   ///   - commands: The window's commands, whose readings are counted.
+  ///   - clock: The window's clock.
   ///   - sourceLocation: Where a failure is reported: the caller's line.
   /// - Throws: The failed requirement, when a reading never comes.
-  func untilSettled(_ commands: ScriptedCommands, sourceLocation: SourceLocation = #_sourceLocation) async throws {
+  func untilSettled(
+    _ commands: ScriptedCommands,
+    clock: ManualClock,
+    sourceLocation: SourceLocation = #_sourceLocation
+  ) async throws {
     try await untilLoaded(sourceLocation: sourceLocation)
-    for _ in 1..<Self.settledReadings {
-      let readings = commands.ran.count
-      refresh()
-      try await settle("the next reading never came", sourceLocation: sourceLocation) {
-        commands.ran.count > readings
-      }
+    let readings = commands.ran.count
+    try await clock.untilSleeping(
+      for: Self.settledFor,
+      "the window never waited to be settled",
+      sourceLocation: sourceLocation
+    )
+    clock.advance(by: Self.settledFor)
+    try await settle("the settled reading never came", sourceLocation: sourceLocation) {
+      commands.ran.count > readings
     }
   }
 

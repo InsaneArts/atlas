@@ -46,6 +46,64 @@ struct OnboardingControllerPermissionsTests {
     }
   }
 
+  @Test("while the panel is open the window reads at the gap with no change reported, and falls back once it closes")
+  func thePanelWatchesClosely() async throws {
+    let clock = ManualClock()
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.helper(accessibility: true), "onboarding window": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands, clock: clock)
+    let readings = { commands.ran.count { $0 == Action.onboardingStatus.arguments } }
+    /// Moves the clock on to the next reading, a gap after the last, and waits for it.
+    func nextReading() async throws {
+      let before = readings()
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the window did not wait a gap for its next reading")
+      clock.advance(by: ReadingPace.minimumGap)
+      try await settle("the next reading never came") { readings() == before + 1 }
+    }
+    try await controller.whileOpen { _ in
+      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the first reading never paused")
+      controller.send(.openSettings(id: Permission.screenRecording.id))
+      try await settle("the panel never opened") { controller.snapshot.guiding == .screenRecording }
+      // Well past the close watch a single change would bring: macOS says nothing when Screen Recording turns on.
+      for _ in 0..<10 { try await nextReading() }
+      // The last reading has landed once the window waits again: the next one finds the switch on.
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the window did not wait a gap after its last reading")
+      commands.answer("onboarding status", OnboardingReplies.helper(accessibility: true, screenCapture: true))
+      try await nextReading()
+      try await clock.untilSleeping(for: OnboardingController.tickShown, "the switch turned on was never noticed")
+      controller.send(.closePanel)
+      // The close watch runs out a little after the panel closes, and the window reads only now and then again.
+      for _ in 0..<7 { try await nextReading() }
+      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the window kept reading at the gap")
+    }
+  }
+
+  @Test("a panel left open is watched closely for its watch, then the window reads only now and then again")
+  func aPanelLeftOpenFallsBack() async throws {
+    let clock = ManualClock()
+    let commands = ScriptedCommands([
+      "onboarding status": OnboardingReplies.helper(accessibility: true), "onboarding window": #"{"ok": true}"#,
+    ])
+    let controller = OnboardingController.scripted(commands, clock: clock)
+    let readings = { commands.ran.count { $0 == Action.onboardingStatus.arguments } }
+    try await controller.whileOpen { _ in
+      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the first reading never paused")
+      controller.send(.openSettings(id: Permission.screenRecording.id))
+      try await settle("the panel never opened") { controller.snapshot.guiding == .screenRecording }
+      // A reading every gap through the panel's watch and the close watch after its last one.
+      let close = Int((OnboardingController.panelWatch + ReadingPace.closeWatch) / ReadingPace.minimumGap)
+      for _ in 0..<close {
+        let before = readings()
+        try await clock.untilSleeping(for: ReadingPace.minimumGap, "the window stopped watching closely too soon")
+        clock.advance(by: ReadingPace.minimumGap)
+        try await settle("the next reading never came") { readings() == before + 1 }
+      }
+      try await clock.untilSleeping(for: ReadingPace.fallbackEvery, "the window kept reading at the gap")
+      #expect(controller.snapshot.guiding == .screenRecording, "the panel is still open")
+    }
+  }
+
   @Test("the panel opens the next permission's page once its switch is on, and steps aside once both are")
   func thePanelMovesOn() async throws {
     let opened = OpenedURLs()
@@ -101,13 +159,13 @@ struct OnboardingControllerPermissionsTests {
         commands.ran.filter { $0 == Action.onboardingStatus.arguments }.count == 3
       }
       // The reading's own pause, once it has begun, says the third reading has moved the panel on all it will.
-      try await clock.untilSleeping(for: OnboardingController.readEvery, "the third reading never paused")
-      #expect(clock.waiting.sorted() == [OnboardingController.tickShown, OnboardingController.readEvery])
+      try await clock.untilSleeping(for: ReadingPace.minimumGap, "the third reading never paused")
+      #expect(clock.waiting.sorted() == [OnboardingController.tickShown, ReadingPace.minimumGap])
       #expect(controller.pending.isEmpty, "one tick however often the facts are read: no second one waits")
       let tick = try #require(controller.performing?.work, "the tick is under way")
       controller.send(.closePanel)
       controller.send(.openSettings(id: Permission.accessibility.id))
-      #expect(clock.waiting == [OnboardingController.readEvery], "Back ended the tick's wait")
+      #expect(clock.waiting == [ReadingPace.minimumGap], "Back ended the tick's wait")
       // The tick's own end is the sentinel: once it has ended, it has done all it ever will.
       try await tick.value("the stopped tick never ended")
       let accessibility = try #require(Permission.accessibility.settingsURL)

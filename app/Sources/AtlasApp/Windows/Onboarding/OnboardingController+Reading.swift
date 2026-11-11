@@ -3,11 +3,11 @@ import AtlasOnboarding
 import AtlasService
 import AtlasUI
 
-/// The reading loop: the facts read now and every ``OnboardingController/readEvery``, one reading at a time, beside the
-/// queue, so a reading never waits behind a command.
+/// The reading loop: the facts read now, then as ``ReadingPace`` says, one reading at a time, beside the queue, so a
+/// reading never waits behind a command.
 extension OnboardingController {
-  /// Reads the facts, then pauses ``readEvery``, until the window closes; a refresh cuts the pause short. While the
-  /// person is away, nothing is read until they are back.
+  /// Reads the facts when the pace says, until the window closes; a refresh cuts the pause short, but never brings a
+  /// reading closer than the pace allows. While the person is away, nothing is read until they are back.
   func readFacts() async {
     while !closed, !Task.isCancelled {
       // Every reading, a refresh's included, waits while the person is away.
@@ -15,11 +15,22 @@ extension OnboardingController {
         await untilBack()
         continue
       }
-      readAgain = false
+      let wait = pace.next - opened()
+      guard wait <= .zero else {
+        await rest(for: wait)
+        continue
+      }
+      pace.start(at: opened())
       await read()
-      // A close during the reading ends the loop here, with no pause first.
-      guard !readAgain, !closed else { continue }
-      await rest(for: Self.readEvery)
+    }
+  }
+
+  /// Notes each change the window's watcher reports, until the window closes: the reading comes as the pace allows.
+  func followChanges() async {
+    for await _ in changes.changes {
+      guard !closed else { return }
+      pace.change(at: opened())
+      wake()
     }
   }
 
@@ -33,22 +44,54 @@ extension OnboardingController {
   }
 
   /// Waits, reading only who has the screen, until the person is back, then ``quietAfterSwitch`` more for the switch to
-  /// settle; the loop asks again after that. The readings that found this login on screen count again from none.
+  /// settle, after which the facts are read at once. A change (the screen changing hands) cuts the wait short; who has
+  /// the screen is asked again every ``ReadingPace/minimumGap`` all the same, which starts no process: macOS reports
+  /// no change for an unlock, and may report the switch before this login reads as on screen. The time this login has
+  /// been on screen counts again from none.
   private func untilBack() async {
-    readingsOnConsole = 0
-    while isAway, !closed, !Task.isCancelled { await rest(for: Self.readEvery) }
+    leftScreen()
+    while isAway, !closed, !Task.isCancelled { await rest(for: ReadingPace.minimumGap) }
     guard !closed, !Task.isCancelled else { return }
     settling = true
     await rest(for: Self.quietAfterSwitch)
     settling = false
+    pace.ask(at: opened())
   }
 
   /// Reads the facts again soon: now, or right after the reading under way; once back from being away, only after
   /// ``quietAfterSwitch``, which a refresh never cuts short.
   func refresh() {
     guard !closed else { return }
-    readAgain = true
+    pace.ask(at: opened())
+    wake()
+  }
+
+  /// Watches closely from now, as after a change: the person is about to do something macOS may not report, such as
+  /// turning Screen Recording on in System Settings.
+  func watchClosely() {
+    guard !closed else { return }
+    pace.change(at: opened())
+    wake()
+  }
+
+  /// Cuts the loop's pause short so it works out its next reading again, unless it is settling after a switch. This
+  /// login off the screen now ends the time it has been found there.
+  private func wake() {
+    if !dependencies.console.refresh() { leftScreen() }
     if !settling { resting?.cancel() }
+  }
+
+  /// This login is not on screen: the time it has been found there counts again from none.
+  private func leftScreen() {
+    onConsoleSince = nil
+    pace.drop(.settled)
+  }
+
+  /// Whether this login has been on screen ``settledFor`` by the readings, and still is.
+  private var settledOnScreen: Bool {
+    guard let onConsoleSince else { return false }
+    let console = dependencies.console
+    return opened() - onConsoleSince >= Self.settledFor && console.refresh() && console.departures == departuresThen
   }
 
   /// A pause of `duration` on the clock, until it ends, a refresh or the close cuts it short, or the loop is cancelled.
@@ -69,14 +112,11 @@ extension OnboardingController {
     let outcome = await commands.run(.onboardingStatus)
     guard !closed else { return }
     if outcome.ok, var facts = OnboardingFacts(json: outcome.reply) {
-      readingsOnConsole = dependencies.console.refresh() ? readingsOnConsole + 1 : 0
+      noteScreen()
       // A job restarting (to pick up Screen Recording) leaves its permissions unknown, never off.
-      readingsUnknown = facts.asker.permissionsKnown ? 0 : readingsUnknown + 1
-      facts.asker = facts.asker.keepingLastKnown(
-        of: snapshot.facts.asker,
-        restarting: readingsUnknown <= Self.restartReadings
-      )
+      facts.asker = facts.asker.keepingLastKnown(of: snapshot.facts.asker, restarting: restarting(facts))
       snapshot.facts = facts
+      changes.watch(folders: facts.watchedFolders(home: dependencies.home))
       for permission in Permission.allCases where permission.granted(to: facts.asker) {
         snapshot.allowedBefore.insert(permission)
       }
@@ -97,9 +137,43 @@ extension OnboardingController {
       await advance()
     } else {
       // A reading that told nothing proves nothing about this login since the last one.
-      readingsOnConsole = 0
+      leftScreen()
       if !snapshot.loaded { snapshot.problem = Self.firstReadingProblem(outcome) }
     }
+  }
+
+  /// Notes whether this reading found this login on screen, and since when: a stay broken since, however briefly,
+  /// begins again now.
+  private func noteScreen() {
+    let console = dependencies.console
+    guard console.refresh() else { return leftScreen() }
+    guard onConsoleSince == nil || console.departures != departuresThen else { return }
+    onConsoleSince = opened()
+    departuresThen = console.departures
+  }
+
+  /// Starts the check once this login has been on screen ``settledFor``; until then, asks for the reading that finds
+  /// it so.
+  private func startWhenSettled() {
+    guard !settledOnScreen else { return runFinish() }
+    if let onConsoleSince { pace.read(.settled, at: onConsoleSince + Self.settledFor) }
+  }
+
+  /// Whether a job whose permissions `facts` finds unknown may still be restarting: for ``restartGrace`` from the first
+  /// reading that found them so, with a reading asked for as the grace ends, which finds it stopped. Only the helper
+  /// reads its job's permissions, so in the person's account nothing is timed.
+  private func restarting(_ facts: OnboardingFacts) -> Bool {
+    guard facts.role == .helper, !facts.asker.permissionsKnown else {
+      unknownSince = nil
+      pace.drop(.restartGrace)
+      return true
+    }
+    let now = opened()
+    if unknownSince == nil {
+      unknownSince = now
+      pace.read(.restartGrace, at: now + Self.restartGrace)
+    }
+    return now - (unknownSince ?? now) < Self.restartGrace
   }
 
   /// Why the first reading failed, in words: a reply this window does not understand; Atlas's command line that
@@ -119,11 +193,14 @@ extension OnboardingController {
     guard !closed else { return }
     let step = snapshot.step
     switch step {
-    case .finishing where snapshot.finish == .idle && readingsOnConsole >= Self.settledReadings: runFinish()
+    case .finishing where snapshot.finish == .idle: startWhenSettled()
     case .agents where snapshot.agents.isEmpty: loadAgents()
     case .agents where snapshot.agentsFailed: retryAgents()
     default: break
     }
+    // Off the agents step, nothing calls for asking them again; off the check, nothing waits to be settled.
+    if step != .agents { pace.drop(.agentsRetry) }
+    if step != .finishing { pace.drop(.settled) }
     // A check's outcome holds for this visit to the step alone: coming back runs it again.
     if step != .finishing, snapshot.finish != .running { snapshot.finish = .idle }
     if let permission = snapshot.guiding {
@@ -133,6 +210,11 @@ extension OnboardingController {
       } else if permission.granted(to: snapshot.facts.asker) {
         enqueue(.moveOn(from: permission))
       }
+    }
+    // While the panel is open its switch may turn on at any moment, and macOS says nothing for Screen Recording. A
+    // panel left open is no longer watched closely after ``panelWatch``.
+    if snapshot.guiding != nil, let panelOpenedAt, opened() - panelOpenedAt < Self.panelWatch {
+      pace.change(at: opened())
     }
     switch step {
     // In the helper the window marks itself open even when blocked: the opener waits for that mark.
