@@ -1,5 +1,11 @@
 name: Check
-on: [push, pull_request, workflow_dispatch]
+# A branch is checked through its pull request, merged with main, and main on
+# each push: checking a branch's pushes as well ran every change twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -25,11 +31,15 @@ jobs:
           cargo machete --skip-target-dir .
       - name: Compile the native fixture (desktop qualification is manual)
         run: swiftc tests/live/DesktopFixture.swift -o /tmp/AtlasFixture -framework AppKit -framework CoreGraphics
+      # The limits stop a hang well before the runner gives out, which it has
+      # done about 46 minutes in, losing the log; these steps take about 3 and
+      # at most 21 minutes.
       - name: Build the menu bar package
         run: swift build -c release --package-path app
+        timeout-minutes: 15
       - name: Rust, Node and Swift checks
         run: scripts/check.sh
-        timeout-minutes: 60
+        timeout-minutes: 35
   minimum-compiler:
     runs-on: macos-latest
     steps:

@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { packages, summaryLine } from '../scripts/check-swift.mjs';
+import { packages, summaryLine, unfinishedTests } from '../scripts/check-swift.mjs';
 import { violations as typeViolations } from '../scripts/check-swift-types.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -241,6 +241,71 @@ test('the Swift check exits 1 when one step fails, after running every other ste
     'Kit test',
     'Kit format lint -rs Sources Tests',
   ]);
+});
+
+test('a Swift step still running at its time limit is stopped with all it started, fails and names the tests that never finished, and the other steps still run', (t) => {
+  const base = swiftRepository(t);
+  const swift = path.join(base, 'swift');
+  const leftover = path.join(base, 'leftover.pid');
+  fs.writeFileSync(
+    swift,
+    [
+      '#!/bin/sh',
+      // Only app's tests hang, in a child of their own, as a test runner would.
+      '[ "${PWD##*/}" = app ] && [ "$1" = test ] || exit 0',
+      `echo '◇ Test "a quick test" started.'`,
+      `echo '◇ Test "a hung test" started.'`,
+      `echo '✔ Test "a quick test" passed after 0.001 seconds.'`,
+      'sleep 600 &',
+      `echo $! > "${leftover}"`,
+      'wait',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  const result = spawnSync(process.execPath, [path.join(root, 'scripts/check-swift.mjs')], {
+    encoding: 'utf8',
+    timeout: 60_000,
+    env: {
+      ...process.env,
+      CHECK_SWIFT_BASE: base,
+      CHECK_SWIFT_SWIFT: swift,
+      CHECK_SWIFT_STEP_SECONDS: '1',
+    },
+  });
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /^FAIL app: swift test \(stopped after 1 second\)$/m);
+  assert.match(result.stdout, /^ok   app\/Packages\/Kit: swift test$/m);
+  assert.match(
+    result.stderr,
+    /app: swift test was stopped after 1 second\. Tests still running:\n {2}"a hung test"$/m,
+  );
+  assert.doesNotMatch(result.stderr, / {2}"a quick test"/);
+  const pid = Number(fs.readFileSync(leftover, 'utf8'));
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' }, 'the hung step left a process');
+});
+
+test('the tests still running are those Swift Testing started and never ended, failed, skipped and parameterised ones included', () => {
+  const output = [
+    '◇ Test run started.',
+    '◇ Test "passes" started.',
+    '◇ Test "fails" started.',
+    '◇ Test "is skipped" started.',
+    '◇ Test aFunctionName() started.',
+    '◇ Test "each case" started.',
+    '◇ Test case passing 1 argument on → false to "each case" started.',
+    '◇ Test case passing 1 argument on → true to "each case" started.',
+    '◇ Test "hangs" started.',
+    '◇ Test "hangs per case" started.',
+    '◇ Test case passing 1 argument on → true to "hangs per case" started.',
+    '✔ Test "passes" passed after 0.001 seconds.',
+    '✘ Test "fails" recorded an issue at A.swift:3:5: Expectation failed',
+    '✘ Test "fails" failed after 0.002 seconds with 1 issue.',
+    '➜ Test "is skipped" skipped.',
+    '✔ Test aFunctionName() passed after 0.001 seconds.',
+    '✔ Test "each case" with 2 test cases passed after 0.001 seconds.',
+  ].join('\n');
+  assert.deepEqual(unfinishedTests(output), ['"hangs"', '"hangs per case"']);
 });
 
 test('the Swift check summary adds up the tests of every test product Swift Testing ran', () => {
