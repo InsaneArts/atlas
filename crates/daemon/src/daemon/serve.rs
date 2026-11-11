@@ -2,7 +2,9 @@
 //! protocol v1 replies.
 use super::capture::{Capture, Screen, screenshot};
 use crate::daemon::{
-    consent, facts,
+    consent,
+    console_agent::ConsoleAgent,
+    facts,
     job::{self, Jobs},
     preferences, proof, read,
     recorder::{self, Recorder},
@@ -192,6 +194,9 @@ pub struct Daemon {
     proof_worker: Mutex<Option<proof::Worker>>,
     /// Whether the helper's apps can be heard on the person's speakers.
     sound: Sound,
+    /// The Apple agent that would restart over and over while the helper
+    /// is hidden, kept paused.
+    agent: ConsoleAgent,
     /// The screen recorder, as each hello reports it; restarted only in the
     /// helper.
     recorder: Arc<Recorder>,
@@ -224,6 +229,7 @@ impl Daemon {
             source: Arc::new(capture::source::Source::new(capture::stop_display_stream)),
             proof_worker: Mutex::new(None),
             sound: Sound::detached(),
+            agent: ConsoleAgent::detached(),
             recorder: Arc::new(Recorder::new(recorder::System::real(), None)),
         }
     }
@@ -253,6 +259,7 @@ impl Daemon {
         // The helper's apps go silent before any agent acts, as the person
         // last chose.
         daemon.sound = Sound::start(uid, std::env::var_os("HOME").map(PathBuf::from));
+        daemon.agent = ConsoleAgent::of(uid, facts::on_console);
         // Only a daemon shown to run as the helper restarts its screen
         // recorder; one built any other way only reads it. A restart never
         // overlaps the input service's input, told beside its socket.
@@ -290,6 +297,7 @@ impl Daemon {
                 let mut hello =
                     facts::hello(&self.manager, census, self.recorder.report(&self.source));
                 hello["sound"] = self.sound.report().json();
+                hello["consoleAgent"] = self.agent.report().json();
                 hello
             }
             Err(error) => json!(error),
@@ -403,6 +411,9 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
         watcher.restarting.notify_one();
     }));
     let releasing = tokio::spawn(stream::release_kept_pictures(daemon.clone()));
+    // Kept paused from here until serving ends, however it ends: a daemon
+    // that is gone must not leave it paused.
+    let _keeping = daemon.agent.start();
     let mut serving = Serving {
         supervision: daemon.supervision(uid),
         daemon: daemon.clone(),
@@ -421,12 +432,18 @@ pub(crate) async fn serve(uid: u32, controller_uid: u32, socket: PathBuf) -> Res
     // go on: the next daemon finds them again by their records.
     daemon.stopping.send_replace(true);
     let deadline = tokio::time::Instant::now() + STOP;
+    // The agent runs again first, off the runtime, as the wait for it blocks.
+    let letting_go = daemon.clone();
+    let let_go = tokio::task::spawn_blocking(move || letting_go.agent.stop());
     let drained = drain_connections(&mut serving.tasks, &mut serving.connections, deadline).await;
     let runs = drain_runs(&daemon, deadline).await;
 
     asking.abort();
     recording.abort();
     releasing.abort();
+    // A keeper that has not ended by now is waited for once more as
+    // `_keeping` is dropped.
+    let _ = let_go.await;
     if let Some(supervision) = serving.supervision {
         let supervised = drain_supervision(supervision, deadline).await;
         if supervised.is_err() {

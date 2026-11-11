@@ -107,6 +107,8 @@ pub mod capture;
 #[cfg(target_os = "macos")]
 pub mod cf;
 #[cfg(target_os = "macos")]
+pub mod console_user;
+#[cfg(target_os = "macos")]
 pub mod endpoint;
 #[cfg(target_os = "macos")]
 mod events;
@@ -117,6 +119,10 @@ pub mod focus;
 mod journal;
 #[cfg(target_os = "macos")]
 mod lease;
+#[cfg(target_os = "macos")]
+pub mod process_token;
+#[cfg(target_os = "macos")]
+pub mod process_watch;
 #[cfg(target_os = "macos")]
 pub mod processes;
 #[cfg(target_os = "macos")]

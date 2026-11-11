@@ -67,6 +67,10 @@ An uncertain result means the action may or may not have happened. Do not repeat
 
 For a partial environment transaction, keep its plan ID and follow the [environment guide](environment.md#conflicts-and-interrupted-work). For an interrupted logout, do not assume the session is still logged in: the logout may finish after the reply is lost.
 
+## Doctor says macOS names another account as the one at your screen
+
+This happens after the helper was logged in through Screen Sharing instead of at the screen. macOS then treats the helper as the account at your screen, and a macOS service in your own login restarts over and over, which slowly slows your Mac. Logging the helper out does not change it back. Lock your screen, choose Switch User and log back in as yourself. From then on, log the helper in at the screen with `atlas switch`.
+
 ## A native dialog does not respond, or a browser is blank
 
 Native Save and Open panels can be inert without authenticated Screen Sharing. Compact `doctor` warns even when `ready` is true; `capabilities.nativeDialogs` in `doctor --verbose` reports a dated check, not the current connection. A definitely disabled named control returns `code: input`, `uncertain: false`, and sends no input. Cancel Save/Open with Escape and create files through `atlas run` or open them directly with `atlas open --app TextEdit PATH`. Use a fresh filename in the helper's writable home, outside Desktop/Documents/Downloads and the read-only `/Users/Shared/Atlas/Open`. Cmd+S can save an existing writable file in place; verify bytes with `run`. Raw coordinate clicks and Return can still report success while a panel ignores them: do not retry an inert confirmation or wait indefinitely. A file workaround does not qualify the panel flow.

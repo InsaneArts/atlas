@@ -25,7 +25,7 @@ public struct ViewerStatus: Decodable, Equatable, Sendable {
   /// Whether the helper is logged in with its desktop up while Atlas there stays silent, so only logging it out
   /// starts it again.
   public var helperStale = false
-  /// Whether a macOS service keeps restarting in the helper until it logs out and back in.
+  /// Whether a macOS service that slows the Mac restarted often in the helper in the last hour of launchd's log.
   public var restartingService = RestartingService.unknown
 
   /// Creates a status with every field at its safe default.

@@ -8,6 +8,8 @@ mod capture;
 #[cfg(target_os = "macos")]
 mod consent;
 #[cfg(target_os = "macos")]
+mod console_agent;
+#[cfg(target_os = "macos")]
 mod crop;
 #[cfg(target_os = "macos")]
 pub mod facts;
