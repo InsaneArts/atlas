@@ -147,8 +147,9 @@ extension ViewerPresenter {
     )
   }
 
-  /// An ended session's row: its icon, its title from its project or agent, its agent and when it started, with no
-  /// badge, its tooltip and its menu.
+  /// An ended session's row, which the sidebar draws on one line: its icon, its title from its project or agent, and
+  /// when it started, with no badge; its agent and the day and time it started in its tooltip and for VoiceOver; and
+  /// its menu.
   ///
   /// - Parameters:
   ///   - record: The session, as the list has it.
@@ -160,7 +161,8 @@ extension ViewerPresenter {
       record.key,
       icon: record.host.icon,
       name: sessionTitle(agent: agent, project: project),
-      line: quietLine(agent: agent, project: project, started: record.startedAt, snapshot),
+      line: endedLine(started: record.startedAt, snapshot),
+      started: startedLine(agent: agent, project: project, started: record.startedAt, snapshot),
       badge: nil,
       facts: sessionFacts(nil, record: record, snapshot),
       snapshot
@@ -168,13 +170,15 @@ extension ViewerPresenter {
   }
 
   /// A session's row from what it shows: while its work is cleaned up, "Cleaning up…" in place of its line and a
-  /// spinner in place of its badge; its tooltip with every fact and what its last cleanup did; and its menu.
+  /// spinner in place of its badge; its tooltip with every fact and what its last cleanup did; and its menu. An ended
+  /// row's tooltip and VoiceOver label give its agent and start in place of its short line.
   ///
   /// - Parameters:
   ///   - key: The session's key.
   ///   - icon: The host's icon.
   ///   - name: The session's name.
-  ///   - line: What it last did.
+  ///   - line: What it last did, or when it started once it ended.
+  ///   - started: An ended session's agent and the day and time it started; nil for a live one.
   ///   - badge: What it does now.
   ///   - facts: Every fact about it.
   ///   - snapshot: What the controller holds.
@@ -184,6 +188,7 @@ extension ViewerPresenter {
     icon: RowIcon,
     name: String,
     line: String,
+    started: String? = nil,
     badge: SessionBadge?,
     facts: [Fact],
     _ snapshot: ViewerSnapshot
@@ -191,6 +196,7 @@ extension ViewerPresenter {
     // Terminal's session has no key a cleanup can name.
     let cleaning = !key.isEmpty && snapshot.session.cleanup.isBusy(for: key)
     let shownLine = cleaning ? ViewerWords.cleaningUpLine : line
+    let told = started.map { [$0, cleaning ? ViewerWords.cleaningUpLine : ""] } ?? [shownLine]
     let receipt =
       snapshot.session.cleanup.receipts[key]
       .map(cleanupReceipt) ?? []
@@ -201,8 +207,11 @@ extension ViewerPresenter {
       line: shownLine,
       badge: cleaning ? nil : badge,
       isCleaningUp: cleaning,
-      help: sessionHelp(name: name, line: shownLine, facts: facts, receipt: receipt),
-      menu: sessionMenu(key: key, needsYou: badge == .needsYou, facts: facts, snapshot)
+      help: sessionHelp(name: name, lines: told, facts: facts, receipt: receipt),
+      menu: sessionMenu(key: key, needsYou: badge == .needsYou, facts: facts, snapshot),
+      accessibilityLabel: ([name] + told)
+        .filter { !$0.isEmpty }
+        .joined(separator: ", ")
     )
   }
 

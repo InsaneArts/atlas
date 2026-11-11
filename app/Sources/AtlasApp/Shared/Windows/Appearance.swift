@@ -2,7 +2,7 @@ import AppKit
 
 /// Atlas's appearance, and the person's display settings that AppKit motion reads.
 ///
-/// Every Atlas window, popover and menu follows the Mac's appearance, Light, Dark or Auto, and none sets its own, so
+/// Every Atlas window and menu follows the Mac's appearance, Light, Dark or Auto, and none sets its own, so
 /// its native title bar, controls and caret match the ground its colour tokens draw, and all of it changes while it is
 /// open. Only the design renders name an appearance, to draw each in turn: ``light`` and ``dark`` are the one place
 /// they are named. Reduce Motion is read as each transition starts, so a change in System Settings applies to the next

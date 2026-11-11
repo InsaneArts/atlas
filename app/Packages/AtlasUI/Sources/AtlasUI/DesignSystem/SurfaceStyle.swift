@@ -4,7 +4,7 @@ import SwiftUI
 /// behind it shows through and Reduce Transparency has nothing to change. Names describe the role so each fill can be
 /// shared by several surfaces.
 enum SurfaceStyle: Sendable, CaseIterable {
-  /// What floats over the stage or a picture: the large screenshot's bar, and the panel where no popover holds it.
+  /// What floats over the stage or a picture: the large screenshot's bar, and the menu bar panel.
   case floating
   /// A modal surface over the scrim, such as an alert.
   case modal

@@ -7,9 +7,9 @@ import Foundation
 /// the snapshot, the status table (`Mode+StatusSummary`) and AtlasStatus's rules (``Mode`` and ``StatusReading``). Its
 /// buttons and ⋯ menu are in `PanelPresenter+Controls`, and its host sessions in `PanelPresenter+Sessions`.
 enum PanelPresenter {
-  /// The panel as it should look now. While any session is live the sessions take Recent's place, and while two or
-  /// more show the line under the heading names who has the helper or whose action may not have finished; a notice
-  /// still wins over both.
+  /// The panel as it should look now. While any session is live the sessions take Recent's place; the line under the
+  /// heading names who has the helper while one does, or, while two or more show, whose action may not have finished;
+  /// a notice still wins over both.
   ///
   /// - Parameter snapshot: What the controller holds.
   /// - Returns: Everything the panel draws.

@@ -64,6 +64,15 @@ struct PanelPresenterTests {
     #expect(panel.controls.main.isEnabled)
   }
 
+  @Test("only Give Back is filled with the accent, as the main window's is")
+  func onlyGiveBackWearsTheAccent() throws {
+    for row in Self.rows {
+      let main = PanelPresenter.state(try Self.snapshot(row)).controls.main
+      #expect(main.isAccent == (main.event == .giveBack), "\(row)")
+    }
+    #expect(PanelPresenter.state(try Self.snapshot("You have control")).controls.main.isAccent)
+  }
+
   @Test("Recover… opens its alert while a recovery runs, which shows it running; Switch… waits while a switch runs")
   func theMainActionWaitsOnlyForASwitch() throws {
     var needsYou = try Self.snapshot("Needs you")

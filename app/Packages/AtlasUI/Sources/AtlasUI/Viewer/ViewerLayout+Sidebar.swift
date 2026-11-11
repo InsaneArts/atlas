@@ -23,12 +23,18 @@ extension ViewerLayout {
   static let toggleClearance = Spacing.s
   /// 44: a session's row, its 28-point icon and 8 above and below it.
   static let sidebarRowHeight = ControlHeight.xl
+  /// 30: an ended session's row, one line, its 18-point icon and 6 above and below it.
+  static let endedRowHeight = ControlHeight.sPlus
   /// 2: between the sidebar's rows.
   static let sidebarRowGap = Spacing.half
   /// 10: a row's content inset inside its capsule, before the icon and after the words or the count.
   static let sidebarRowInset = Spacing.sPlus
   /// 28: a host session's icon on its row.
   static let sidebarIcon = SessionIcon.rowSide
+  /// 18: an ended session's icon on its one-line row, centred on the same axis as the 28-point icons above it.
+  static let endedIcon = IconSize.sPlus
+  /// 5: before an ended session's icon, so its centre stands on the axis of the 28-point icons above it.
+  static let endedIconInset = (sidebarIcon - endedIcon) / 2
   /// 10: between a row's icon and its words.
   static let sidebarIconGap = Spacing.sPlus
   /// 1: between a session's name and its line under it.

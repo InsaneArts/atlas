@@ -3,7 +3,7 @@
 
   extension PreviewStates {
     /// Sessions as weeks of use leave them: a long folder name, one-letter and odd names, two sessions with the same
-    /// name, a long line, and twenty ended sessions under Ended, open.
+    /// name, a long line, and twenty ended sessions under Ended, open, started today, this week and weeks ago.
     static var realisticSessions: ViewerSessionsState {
       let claude = SessionSamples.claudeIcon
       let codex = SessionSamples.codexIcon
@@ -17,33 +17,33 @@
         ("cursor-x", cursor, "x", "Cursor", nil),
         ("terminal-1", SessionSamples.terminalIcon, "Terminal", "", nil),
       ]
-      let ended: [(String, RowIcon, String, String)] = [
-        ("e1", codex, "demo", "Codex · Thu 11:46"),
-        ("e2", claude, "understudy", "Claude Code · Tue 12:44"),
-        ("e3", codex, "atlas-t3-r3", "Codex · Wed 22:20"),
-        ("e4", codex, "atlas-t3-r3", "Codex · Wed 22:19"),
-        ("e5", codex, "atlas-t1-r3", "Codex · Wed 22:18"),
-        ("e6", claude, "Ünïcode café — Ω project", "Claude Code · Wed 18:02"),
-        ("e7", cursor, "~/Developer/clients/acme/really-deep/folder", "Cursor · Wed 16:40"),
-        ("e8", codex, "my project (copy 2)", "Codex · Wed 15:12"),
-        ("e9", SessionSamples.piIcon, "notes-sync", "Pi · Wed 09:40"),
-        ("e10", claude, "q", "Claude Code · Tue 23:59"),
-        ("e11", codex, "atlas-landing", "Codex · Tue 21:03"),
-        ("e12", codex, "atlas-landing", "Codex · Tue 20:47"),
-        ("e13", claude, "release-0.1.2-notes-and-changelog-draft", "Claude Code · Tue 19:30"),
-        ("e14", cursor, "opie", "Cursor · Mon 17:20"),
-        ("e15", codex, "billing", "Codex · Mon 15:05"),
-        ("e16", claude, "docs", "Claude Code · Mon 11:11"),
-        ("e17", SessionSamples.terminalIcon, "Terminal", "Sun 22:41"),
-        ("e18", codex, "checkout", "Codex · Sun 10:02"),
-        ("e19", claude, "api", "Claude Code · Sat 18:18"),
-        ("e20", codex, "dashboard", "Codex · Sat 08:50"),
+      let ended: [(String, RowIcon, String, String, String)] = [
+        ("e1", codex, "demo", "11:46", "Codex · Thu, Nov 5 11:46"),
+        ("e2", claude, "understudy", "Tue", "Claude Code · Tue, Nov 3 12:44"),
+        ("e3", codex, "atlas-t3-r3", "Wed", "Codex · Wed, Nov 4 22:20"),
+        ("e4", codex, "atlas-t3-r3", "Wed", "Codex · Wed, Nov 4 22:19"),
+        ("e5", codex, "atlas-t1-r3", "Wed", "Codex · Wed, Nov 4 22:18"),
+        ("e6", claude, "Ünïcode café — Ω project", "Wed", "Claude Code · Wed, Nov 4 18:02"),
+        ("e7", cursor, "~/Developer/clients/acme/really-deep/folder", "Wed", "Cursor · Wed, Nov 4 16:40"),
+        ("e8", codex, "my project (copy 2)", "Wed", "Codex · Wed, Nov 4 15:12"),
+        ("e9", SessionSamples.piIcon, "notes-sync", "Wed", "Pi · Wed, Nov 4 09:40"),
+        ("e10", claude, "q", "Tue", "Claude Code · Tue, Nov 3 23:59"),
+        ("e11", codex, "atlas-landing", "Tue", "Codex · Tue, Nov 3 21:03"),
+        ("e12", codex, "atlas-landing", "Tue", "Codex · Tue, Nov 3 20:47"),
+        ("e13", claude, "release-0.1.2-notes-and-changelog-draft", "Tue", "Claude Code · Tue, Nov 3 19:30"),
+        ("e14", cursor, "opie", "Mon", "Cursor · Mon, Nov 2 17:20"),
+        ("e15", codex, "billing", "Mon", "Codex · Mon, Nov 2 15:05"),
+        ("e16", claude, "docs", "Mon", "Claude Code · Mon, Nov 2 11:11"),
+        ("e17", SessionSamples.terminalIcon, "Terminal", "Sun", "Sun, Nov 1 22:41"),
+        ("e18", codex, "checkout", "Sun", "Codex · Sun, Nov 1 10:02"),
+        ("e19", claude, "api", "Oct 29", "Claude Code · Thu, Oct 29 18:18"),
+        ("e20", codex, "dashboard", "Oct 27", "Codex · Tue, Oct 27 08:50"),
       ]
       let row = { (sample: (String, RowIcon, String, String, SessionBadge?)) in
         viewerSessionRow(sample.0, icon: sample.1, name: sample.2, line: sample.3, badge: sample.4, facts: [])
       }
-      let gone = { (sample: (String, RowIcon, String, String)) in
-        viewerSessionRow(sample.0, icon: sample.1, name: sample.2, line: sample.3, facts: [])
+      let gone = { (sample: (String, RowIcon, String, String, String)) in
+        viewerEndedRow(sample.0, icon: sample.1, name: sample.2, when: sample.3, started: sample.4)
       }
       return ViewerSessionsState(
         icons: [claude, codex, cursor],

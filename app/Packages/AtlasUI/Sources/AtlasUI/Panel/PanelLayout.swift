@@ -51,12 +51,12 @@ enum PanelLayout {
   static let captionInset = Spacing.s
   /// 26: the round pause button on the picture, and the expand symbol's circle.
   static let pauseButton = ControlHeight.xsPlus
-  /// 4: between the sound button and the pause button under it on the picture.
+  /// 4: between the sound button and the pause button beside it on the picture.
   static let cornerGap = Spacing.xs
-  /// The room the caption leaves at its right for the pause button, the sound button standing above it: the button
-  /// and its inset on both sides.
-  static let captionTrailing = pauseButton + captionInset * 2
-  /// The widest the caption may run: the picture less its inset on the left and the pause button's room.
+  /// 72: the room the caption leaves at its right for the sound and pause buttons side by side: the two buttons, the
+  /// gap between them, and the inset on both sides.
+  static let captionTrailing = pauseButton * 2 + cornerGap + captionInset * 2
+  /// 248: the widest the caption may run: the picture less its inset on the left and the two buttons' room.
   static let captionWidth = picture.width - captionInset - captionTrailing
   /// About 10: the expand symbol's size, 0.38 of its circle, as the round buttons draw theirs.
   static let cornerSymbol = pauseButton * 0.38
@@ -90,11 +90,11 @@ enum PanelLayout {
   static let breathStill = 0.5
   /// 1: how long the live row's blue dot stays before it cools away, in seconds.
   static let liveHold: TimeInterval = 1
-  /// The panel's ground, #F6F6F8 under Light and rgb(30, 30, 33) under Dark, opaque, so the popover's own material
-  /// never shows through it.
+  /// The panel's ground, #F6F6F8 under Light and rgb(30, 30, 33) under Dark, opaque, so nothing behind the panel
+  /// shows through it.
   static let ground = Color(light: .rgb(0xF6F6F8), dark: .rgb(0x1E1E21))
-  /// 26: the panel's corners, where no popover holds it, a modal surface's: the panel's inset and the round
-  /// controls' half height inside it, so what sits at the inset nests in the corner.
+  /// 26: the panel's corners, a modal surface's: the panel's inset and the round controls' half height inside it, so
+  /// what sits at the inset nests in the corner.
   static let corner = Radius.extraLarge
   /// The panel's shadow, 0 20 50 in a surface's shadow colour (``Color/dropShadow``): its colour.
   static let shadowColor = Color.dropShadow
@@ -104,6 +104,8 @@ enum PanelLayout {
   static let shadowDrop: CGFloat = 20
   /// How far past the card its shadow may spread: twice its radius and its drop.
   static let shadowRoom = shadowRadius * 2 + shadowDrop
+  /// 6: between the menu bar and the top of the panel's card, as between ⋯ and the menu it opens.
+  static let barGap = Spacing.xsPlus
 
   /// How the panel moves to a new state: the word, the line, the picture's look and the buttons all together, easing
   /// out over ``Motion/Duration/fade``. Only colour, opacity and the rim's fade change, so Reduce Motion keeps it, and

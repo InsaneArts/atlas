@@ -7,7 +7,7 @@ public struct PanelControls: Equatable, Sendable {
   public var agent: ViewerAgentButton?
   /// Stop's or Resume's tooltip: the menu item's title and its shortcut, as the main window's button says it.
   public var agentHelp: String
-  /// The one thing to do next, in white.
+  /// The one thing to do next.
   public var main: PanelMainButton
 
   /// Creates the row.

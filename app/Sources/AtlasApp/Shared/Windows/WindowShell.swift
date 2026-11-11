@@ -1,11 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// The AppKit host of every SwiftUI view Atlas puts on screen: each window, the alert, the panel's popover
+/// The AppKit host of every SwiftUI view Atlas puts on screen: each window, the alert, the menu bar panel
 /// and the drag ghost's overlay call one of these, so the hosting view and ``ShellRoot`` are written once. None sets
 /// an appearance: each follows the Mac's Light, Dark or Auto setting, and changes with it while open. Atlas's windows
-/// are opaque on `NSColor.ground`, which follows it too; the alert and the ghost are the clear ones, drawing their
-/// own surface inside the window's frame.
+/// are opaque on `NSColor.ground`, which follows it too; the alert, the panel and the ghost are the clear ones,
+/// drawing their own surface inside the window's frame.
 enum WindowShell {
   /// Makes a SwiftUI view an opaque window's content: on the ground, so a resize never flashes another colour, in a
   /// hosting view that never resizes its window.
@@ -41,29 +41,8 @@ enum WindowShell {
     window.contentViewController = controller
   }
 
-  /// Makes a SwiftUI view a popover's content, in the Mac's appearance like Atlas's windows. The view sits at the top
-  /// of a container (``PopoverContent``) that hands each new size the view asks for to `follow`, which sets the
-  /// popover's size, so the owner decides whether a change eases or lands at once.
-  ///
-  /// - Parameters:
-  ///   - popover: The popover to fill.
-  ///   - label: What VoiceOver calls the popover, such as "Atlas".
-  ///   - follow: Receives each size the view asks for, the first one included.
-  ///   - content: Builds the popover's view from its controller; called inside ``ShellRoot``'s body.
-  static func host<Content: View>(
-    in popover: NSPopover,
-    label: String,
-    follow: @escaping @MainActor (NSSize) -> Void,
-    @ViewBuilder content: @escaping @MainActor () -> Content
-  ) {
-    let controller = NSHostingController(rootView: ShellRoot(content: content))
-    // The view tells the container the size it wants, and holds that height at the container's top.
-    controller.sizingOptions = [.preferredContentSize, .intrinsicContentSize]
-    popover.contentViewController = PopoverContent(content: controller, label: label, follow: follow)
-  }
-
   /// Makes a SwiftUI view a see-through overlay's content: a clear panel with no shadow, which its owner sizes and
-  /// places, as the drag ghost's overlay over System Settings is.
+  /// places, as the menu bar panel and the drag ghost's overlay over System Settings are.
   ///
   /// - Parameters:
   ///   - panel: The overlay.

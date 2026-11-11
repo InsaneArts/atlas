@@ -37,7 +37,7 @@ final class AppContainer {
   /// The panel's controller, which the viewer opens on; made at launch.
   var panel: PanelController?
   /// The menu bar item's panel; made at launch.
-  var menuBar: PanelPopover?
+  var menuBar: PanelWindow?
   /// The notification for when Atlas needs the person; made at launch.
   var signals: AttentionSignals?
   /// The notifications of the questions Atlas asks the person; made at launch.

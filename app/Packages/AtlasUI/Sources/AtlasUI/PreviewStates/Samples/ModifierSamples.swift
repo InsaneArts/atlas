@@ -10,6 +10,8 @@
       case windowSurface
       /// The panel's card.
       case panelCard
+      /// The panel's card as its window holds it, with the room round it.
+      case panelWindowCard
     }
 
     private let kind: Kind
@@ -34,6 +36,11 @@
             .padding(Spacing.xl)
             .frame(width: SampleWidth.narrow)
             .panelCard()
+        case .panelWindowCard:
+          Text(verbatim: "The panel's card in its window")
+            .padding(Spacing.xl)
+            .frame(width: PanelLayout.width)
+            .panelWindowCard { _ in }
         }
       }
       .sampleSurface()

@@ -63,7 +63,7 @@
         codex.line = "A click may not have finished"
       }
       claude.badge = claudeStep == 0 ? .acting : nil
-      let lines = ["Clicking Show Center in Opie", "Clicked Show Center in Opie · just now", "Ended just now"]
+      let lines = ["Clicking Show Center in Opie", "Clicked Show Center in Opie · just now", "09:12"]
       claude.line = lines[claudeStep]
       var groups: [ViewerSessionGroup] = []
       if codexNeedsYou { groups.append(ViewerSessionGroup(.needsYou, rows: [codex])) }

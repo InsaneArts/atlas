@@ -46,7 +46,6 @@ extension AppContainer {
   /// window leaving the Screen tells them through its own dependency.
   func watchLookAways() {
     let names: [Notification.Name] = [
-      NSPopover.didCloseNotification,
       NSWindow.didMiniaturizeNotification,
       NSWindow.didChangeOcclusionStateNotification,
       NSWindow.willCloseNotification,
@@ -78,7 +77,7 @@ extension AppContainer {
   /// - Returns: The question's id, or nil.
   func askInView() -> String? {
     guard let store = actions?.asks, let panel else { return nil }
-    let panelShows = menuBar?.popover.isShown == true
+    let panelShows = menuBar?.isOpen == true
     let window = coordinator.viewer?.window as? NSWindow
     let screenShows =
       NSApp.isActive && window?.isKeyWindow == true && viewerOnScreen()

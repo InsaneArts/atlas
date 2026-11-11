@@ -69,6 +69,7 @@ struct StatusReadingSessionsTests {
     let one = try reading(["sessionsShown": false, "holder": "claude", "hostSessions": [Self.three[0]]])
     #expect(one.listsSessions)
     #expect(!one.showsSessions && one.holder == nil)
+    #expect(one.helperHolder?.key == "claude", "the panel's line still names a lone holder")
     let ended = try reading([
       "hostSessions": [hostSession("pi", host: "pi", name: "Pi · notes-sync", state: "ended")]
     ])

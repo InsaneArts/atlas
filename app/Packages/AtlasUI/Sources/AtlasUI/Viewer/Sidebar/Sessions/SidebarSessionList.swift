@@ -3,12 +3,13 @@ import SwiftUI
 /// All sessions, then each section's heading and rows, as one flat list whose lines keep their identities
 /// (``SidebarSessionItem``): a session whose state changes glides from its section to its new one on ``Motion/state``
 /// as the rows between open and close the gap, and a heading that comes or goes fades as its room opens or closes. Only
-/// the list's order moves it, never a row's changing line. Ended's rows come in from under its heading and go back up
-/// under it. The selection moves to the row chosen at once; ↑ and ↓ step through the rows in the order they
-/// stand once one has the keyboard focus, moving the focus with the choice. While the Screen shows no row is selected,
-/// and choosing any row, the one Activity last showed included, opens its Activity. A right click on a session's row
-/// opens its menu: its Activity and screenshots, Send Key, Recover… and Clean Up This Session's Work… as they apply,
-/// and its facts. Under Reduce Motion rows and headings only fade, briefly.
+/// the list's order moves it, never a row's changing line. Ended's rows stand on one line each, lower than the live
+/// ones (``SidebarEndedLabel``), and come in from under its heading and go back up under it. The selection moves to
+/// the row chosen at once; ↑ and ↓ step through the rows in the order they stand once one has the keyboard focus,
+/// moving the focus with the choice. While the Screen shows no row is selected, and choosing any row, the one Activity
+/// last showed included, opens its Activity. A right click on a session's row opens its menu: its Activity and
+/// screenshots, Send Key, Recover… and Clean Up This Session's Work… as they apply, and its facts. Under Reduce Motion
+/// rows and headings only fade, briefly.
 struct SidebarSessionList: View {
   /// The sessions.
   let state: ViewerSessionsState
@@ -56,13 +57,18 @@ struct SidebarSessionList: View {
       SidebarSectionHeading(section: section)
         .transition(Self.arrival(rises: false, reduceMotion: reduceMotion))
     case .row(let session, let section, _):
-      row(.one(session.id)) { ground in
-        SidebarSessionLabel(row: session, ground: ground)
+      let isEnded = section == .ended
+      row(.one(session.id), height: isEnded ? ViewerLayout.endedRowHeight : ViewerLayout.sidebarRowHeight) { ground in
+        if isEnded {
+          SidebarEndedLabel(row: session, ground: ground)
+        } else {
+          SidebarSessionLabel(row: session, ground: ground)
+        }
       }
       .contextMenu {
         CommandMenu(sections: session.menu) { send(.menu($0)) }
       }
-      .transition(Self.arrival(rises: section == .ended, reduceMotion: reduceMotion))
+      .transition(Self.arrival(rises: isEnded, reduceMotion: reduceMotion))
     }
   }
 
@@ -70,11 +76,16 @@ struct SidebarSessionList: View {
   ///
   /// - Parameters:
   ///   - choice: Whose work the row shows.
+  ///   - height: The row's least height; a live session's 44 by default.
   ///   - content: What the row shows, given what it rests on.
   /// - Returns: The row.
-  private func row(_ choice: ViewerSessionChoice, @ViewBuilder content: (Color) -> some View) -> some View {
+  private func row(
+    _ choice: ViewerSessionChoice,
+    height: CGFloat = ViewerLayout.sidebarRowHeight,
+    @ViewBuilder content: (Color) -> some View
+  ) -> some View {
     let isSelected = state.chosen == choice
-    return SidebarRow(isSelected: isSelected) {
+    return SidebarRow(isSelected: isSelected, height: height) {
       send(.chooseSession(choice))
     } content: {
       // The badge's ring takes the pill's colour at once, as the pill comes, never easing on a white pill.

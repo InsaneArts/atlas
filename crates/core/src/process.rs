@@ -508,6 +508,43 @@ pub fn of_user(uid: u32) -> Result<Vec<Info>> {
         .collect())
 }
 
+/// The IDs of the processes whose parent is `pid` now, in no order. Only
+/// IDs are copied, so it is cheap enough to ask each time the parent starts
+/// one; each is still to be read with [`info`].
+///
+/// # Errors
+///
+/// Returns an error when the kernel refuses to list them.
+#[allow(unsafe_code, reason = "FFI: proc_listchildpids has no safe binding")]
+pub fn children(pid: i32) -> Result<Vec<i32>> {
+    let mut room = 1024_usize;
+    loop {
+        let mut pids: Vec<libc::pid_t> = vec![0; room];
+        let bytes = libc::c_int::try_from(std::mem::size_of_val(pids.as_slice()))
+            .map_err(|_| Error::new(Code::State, "The process has too many children to list"))?;
+        // The call answers 0 both for no children and for a failure, and
+        // only a failure sets the error number.
+        nix::errno::Errno::clear();
+        // SAFETY: the buffer is writable for the byte length passed, and the
+        // kernel writes whole process IDs into it.
+        let listed = unsafe { libc::proc_listchildpids(pid, pids.as_mut_ptr().cast(), bytes) };
+        let Ok(listed) = usize::try_from(listed) else {
+            return Err(std::io::Error::last_os_error().into());
+        };
+        if listed == 0 && nix::errno::Errno::last_raw() != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // A full buffer may have left some out: ask again with more room.
+        if listed >= room {
+            room = room.saturating_mul(2);
+            continue;
+        }
+        pids.truncate(listed);
+        pids.retain(|pid| *pid > 0);
+        return Ok(pids);
+    }
+}
+
 /// The session `pid` belongs to; None when it cannot be read, as for a
 /// process that has exited.
 pub fn session(pid: i32) -> Option<i32> {

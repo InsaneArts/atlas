@@ -1,12 +1,12 @@
 import AtlasUI
 import Foundation
 
-/// How the panel's popover takes a new height as Recent or the line come and go: easing over
+/// How the panel's window takes a new height as Recent or the line come and go: easing over
 /// ``Motion/Duration/resize`` while it shows, at once while it is closed or opening and under Reduce Motion.
 enum PanelResize: Equatable {
-  /// The popover takes its new size at once.
+  /// The window takes its new size at once.
   case instant
-  /// The popover eases to its new size over this many seconds.
+  /// The window eases to its new size over this many seconds.
   case eased(TimeInterval)
 
   /// How a new size lands.

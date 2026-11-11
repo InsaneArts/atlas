@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A host session's row in the sidebar: its host's icon with its badge, or a spinner while its work is cleaned up,
+/// A live host session's row in the sidebar: its host's icon with its badge, or a spinner while its work is cleaned up,
 /// beside its name over what it last did. A new line swaps in place with no overlap (``LineSwap``), the same under
 /// Reduce Motion. Its tooltip holds its name, its line and every fact about it.
 struct SidebarSessionLabel: View {
@@ -38,7 +38,6 @@ struct SidebarSessionLabel: View {
   #Preview("Samples") {
     VStack(alignment: .leading, spacing: Spacing.m) {
       ForEach(PreviewStates.sessionRows) { SidebarSessionLabel(row: $0, ground: Color.groundRecessed) }
-      SidebarSessionLabel(row: PreviewStates.piEndedRow, ground: Color.groundRecessed)
     }
     .frame(width: ViewerLayout.rowContentWidth)
     .sampleSurface()

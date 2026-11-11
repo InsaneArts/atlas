@@ -22,6 +22,7 @@ pub mod cleanup;
 pub mod client;
 pub mod collect;
 pub mod console_agents;
+pub mod console_user;
 mod credential_files;
 pub mod doing;
 pub mod environment;

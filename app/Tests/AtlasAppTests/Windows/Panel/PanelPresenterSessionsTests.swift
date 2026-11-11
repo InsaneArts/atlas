@@ -15,7 +15,6 @@ struct PanelPresenterSessionsTests {
     #expect(one.sessions.map(\.line) == ["Clicking Show Center in Opie"])
     #expect(one.sessions.map(\.icon) == [.app(AgentLogos.claude)])
     #expect(one.moreSessions == nil)
-    #expect(one.status.line == "Clicking Show Center in Opie · just now", "the line names no session")
     #expect(one.picture.caption?.icon == nil, "the caption keeps its blue dot")
     let older = PanelPresenter.state(
       PanelSnapshot(status: try status(["overview": ["mode": "agent", "state": "working"]]))
@@ -69,6 +68,28 @@ struct PanelPresenterSessionsTests {
     )
     #expect(panel.status.label == "Working")
     #expect(panel.status.line == "Claude Code · understudy has the helper")
+  }
+
+  @Test("with one session the heading's line still names who has the helper")
+  func withOneSessionTheLineNamesWhoHasTheHelper() throws {
+    let one = PanelPresenter.state(try SessionReplies.snapshot([SessionReplies.claudeActing]))
+    #expect(one.status.label == "Working")
+    #expect(one.status.line == "Claude Code · understudy has the helper")
+    var idle = SessionReplies.claudeActing
+    idle["state"] = "idle"
+    idle["holdsHelper"] = false
+    let quiet = PanelPresenter.state(try SessionReplies.snapshot([idle]))
+    #expect(quiet.status.line != Words.holderLine("Claude Code · understudy"), "with no holder the status's line stays")
+  }
+
+  @Test("with one session that needs the person the status's own line stays")
+  func withOneSessionNeedsYouKeepsTheStatussLine() throws {
+    let panel = PanelPresenter.state(
+      try SessionReplies.snapshot([SessionReplies.claudeNeedsYou], mode: "recovering", state: "needsYou", pending: 1)
+    )
+    #expect(panel.status.label == "Needs you")
+    #expect(!panel.status.line.contains("has the helper"))
+    #expect(!panel.status.line.contains("by Claude Code"), "only two or more sessions name the causer")
   }
 
   @Test("the line names whose action may not have finished")

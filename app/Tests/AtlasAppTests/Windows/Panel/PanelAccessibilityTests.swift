@@ -10,7 +10,7 @@ import Testing
 @Suite("Panel accessibility", .serialized, AppKitState())
 struct PanelAccessibilityTests {
   @Test("the panel is announced as Atlas")
-  func thePanelIsAnnouncedAsAtlas() throws {
+  func thePanelIsAnnouncedAsAtlas() {
     let service = ScriptedService()
     let commands = ScriptedCommands([:])
     let clock = ManualClock()
@@ -24,17 +24,16 @@ struct PanelAccessibilityTests {
       )
     )
     // A status bar of its own, which shows in no menu bar.
-    let panel = PanelPopover(
+    let panel = PanelWindow(
       controller: controller,
       item: StatusItem(bar: NSStatusBar()) { false },
       openSettings: {},
       gettingStarted: {}
     )
-    // Its heading is the status, not Atlas's name, so the popover carries the name itself.
+    // Its heading is the status, not Atlas's name, so the window carries the name itself.
     #expect(controller.state.status.label != "Atlas")
-    let content = try #require(panel.popover.contentViewController?.view)
-    #expect(content.isAccessibilityElement())
-    #expect(content.accessibilityLabel() == "Atlas")
+    #expect(panel.title == "Atlas")
+    #expect(panel.accessibilityTitle() == "Atlas")
     controller.watch(open: false)
   }
 }

@@ -580,6 +580,53 @@ struct ViewerPresenterSessionsTests {
     #expect(ViewerPresenter.quietLine(agent: "Claude Code", project: "", started: today, snapshot) == "12:46")
   }
 
+  @Test("an ended session's line says when it started: the time today, the weekday this week, else the month and day")
+  func anEndedLineSaysWhenItStarted() {
+    var snapshot = ViewerSnapshot.presenterSample
+    snapshot.locale = Locale(identifier: "en_GB")
+    snapshot.calendar.locale = snapshot.locale
+    let today = Date(timeIntervalSince1970: 1_793_277_960)
+    let day: TimeInterval = 86_400
+    #expect(ViewerPresenter.endedLine(started: today, snapshot) == "12:46")
+    #expect(ViewerPresenter.endedLine(started: today.addingTimeInterval(-day), snapshot) == "Wed")
+    #expect(ViewerPresenter.endedLine(started: today.addingTimeInterval(-6 * day), snapshot) == "Fri")
+    #expect(ViewerPresenter.endedLine(started: today.addingTimeInterval(-7 * day), snapshot) == "22 Oct")
+    #expect(ViewerPresenter.endedLine(started: nil, snapshot).isEmpty)
+    snapshot.locale = Locale(identifier: "en_US")
+    snapshot.calendar.locale = snapshot.locale
+    #expect(ViewerPresenter.endedLine(started: today.addingTimeInterval(-7 * day), snapshot) == "Oct 22")
+  }
+
+  @Test("an ended row is its title and when it started, its agent and full start in its tooltip and for VoiceOver")
+  func anEndedRowLeavesItsAgentToItsTooltip() throws {
+    var snapshot = try ViewerSnapshot.listing(Self.three)
+    snapshot.locale = Locale(identifier: "en_GB")
+    snapshot.calendar.locale = snapshot.locale
+    snapshot.panes.sessions.list = HostSessionList(sessions: [
+      HostSessionRecord(
+        key: "aaaa00000001",
+        name: "Claude Code · opie",
+        host: .claude,
+        hostLabel: "Claude Code",
+        folder: "opie",
+        startedAt: Date(timeIntervalSince1970: 1_793_277_960 - 86_400),
+        state: .ended,
+        actions: 1
+      )
+    ])
+    snapshot.session.endedShown = true
+    let row = try #require(ViewerPresenter.sessions(snapshot).rows(.ended).first)
+    #expect(row.name == "opie")
+    #expect(row.line == "Wed")
+    #expect(row.help.hasPrefix("opie\nClaude Code · Wed 28 Oct 12:46\n"))
+    #expect(row.accessibilityLabel == "opie, Claude Code · Wed 28 Oct 12:46")
+    snapshot.session.cleanup.running = "aaaa00000001"
+    let cleaning = try #require(ViewerPresenter.sessions(snapshot).rows(.ended).first)
+    #expect(cleaning.line == "Cleaning up…")
+    #expect(cleaning.isCleaningUp)
+    #expect(cleaning.accessibilityLabel == "opie, Claude Code · Wed 28 Oct 12:46, Cleaning up…")
+  }
+
   @Test("a working session's line stays what it does now, whatever its title")
   func aWorkingLineStaysWhatItDoesNow() throws {
     var claude = SessionReplies.claudeActing

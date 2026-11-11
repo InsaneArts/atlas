@@ -4,8 +4,8 @@ import SwiftUI
 /// Screen when clicked and shows the expand symbol under the pointer to say so. Its look tells its state: the blue rim
 /// of control, greyed and darkened under an orange badge while the helper needs the person, greyed and darkened
 /// alone while paused. The newest action floats over its corner on a solid chip while an agent works, orange when it
-/// failed, and the solid pause circle sits in the other corner, pausing the picture only. With no screen to show, the
-/// empty stage says why.
+/// failed, and the sound and pause circles sit side by side in the other corner, the pause button pausing the picture
+/// only. With no screen to show, the empty stage says why.
 struct PanelPicture: View {
   /// What the frame shows, and how.
   let state: PanelPictureState
@@ -101,10 +101,9 @@ struct PanelPicture: View {
     .allowsHitTesting(false)
   }
 
-  /// The sound button and the pause button under it in the picture's corner, one above the other, so the caption
-  /// keeps its room beside them.
+  /// The sound button and the pause button beside it in the picture's corner, the caption stopping short of both.
   private var cornerButtons: some View {
-    VStack(spacing: PanelLayout.cornerGap) {
+    HStack(spacing: PanelLayout.cornerGap) {
       soundButton
       pauseButton
     }

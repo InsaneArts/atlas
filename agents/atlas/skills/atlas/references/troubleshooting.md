@@ -51,7 +51,7 @@ follow the guide. Read `error` to the person when you stop.
 | `logout` | macOS refused or did not answer the log-out request. When `uncertain`, it may still happen. | Tell the person. When uncertain, take a screenshot and run `atlas restart` if the helper is still logged in. |
 | `logout-held` | The helper has not logged out yet: an app may be asking to save. It is uncertain; the log-out may still finish. | Take a screenshot and show the person; log out with `--force` only if they agree, since unsaved work is lost. |
 | `menubar` | The menu bar companion could not start. | Not needed for your task; continue with CLI commands. |
-| `native` | A native input or dialog check failed. | Read `error`; native Save/Open needs Screen Sharing (see the guide). |
+| `native` | A native input or dialog check failed. | Read `error`; cancel a Save/Open panel and use `atlas run` or `atlas open` instead (see the guide). |
 | `no-environment` | No helper environment profile is installed for `environment run`. | Use `atlas run`, or install a profile with `atlas environment profile`. |
 | `no-window` | `screenshot --app` found no window of the app on screen, so nothing was captured. | Open a window in the app, or take a full screenshot (its menu bar is still there). |
 | `not-ready` | Atlas won't switch to the helper yet: a deleted account is still logged in, another account is still logging in, or macOS is still setting up an account. A new login could hang now. Nothing was locked. | Stop and tell the person `error`. A deleted account's login is closed in Atlas › Settings › Helper (or `atlas init`), with their approval; otherwise wait a minute and try again. Never retry in a loop. |

@@ -17,6 +17,7 @@
         PreviewState(name: "Paused", value: panelPaused),
         PreviewState(name: "In use elsewhere", value: panelInUseElsewhere),
         PreviewState(name: "Stop refused", value: panelStopRefused),
+        PreviewState(name: "One session", value: panelOneSession),
         PreviewState(name: "Sessions", value: panelSessions),
         PreviewState(name: "Sessions waiting", value: panelSessionsWaiting),
         PreviewState(name: "Sessions need you", value: panelSessionsNeedsYou),
@@ -115,13 +116,18 @@
       controls: PanelControls(agent: .stop, agentHelp: "Stop Agent (⌘.)", main: openAtlas)
     )
 
-    /// The person holds control in Atlas's window: the blue rim, and Give Back.
+    /// The person holds control in Atlas's window: the blue rim, and Give Back in the accent.
     @MainActor static let panelControl = PanelState(
       status: StatusSummary(label: "You have control", tone: .link, mark: .dot, line: "The agent waits"),
       picture: screen(.control),
       recent: earlier,
       controls: PanelControls(
-        main: PanelMainButton(title: "Give Back", help: "Give control back to the agent", event: .giveBack)
+        main: PanelMainButton(
+          title: "Give Back",
+          help: "Give control back to the agent",
+          event: .giveBack,
+          isAccent: true
+        )
       )
     )
 
@@ -224,6 +230,14 @@
     @MainActor static let panelStopRefused: PanelState = {
       var state = panelWorking
       state.notice = "The agent could not be stopped. Try again."
+      return state
+    }()
+
+    /// One agent at work, Claude Code, with the helper: its row takes Recent's place, the line names it as having the
+    /// helper, and the caption keeps its blue dot, as no other session needs telling apart.
+    @MainActor static let panelOneSession: PanelState = {
+      var state = sessions([SessionSamples.claudeActing])
+      state.picture.caption?.icon = nil
       return state
     }()
 
