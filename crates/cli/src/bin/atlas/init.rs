@@ -17,6 +17,7 @@ use atlas_core::{
     error::{Code, Error, Result},
 };
 use atlas_daemon::helper_setup::{self, LABEL};
+use atlas_daemon::identity::Identity;
 use serde_json::{Value, json};
 use std::{
     path::Path,
@@ -43,7 +44,7 @@ fn attended(program: &str, args: &[&str], why: &str) -> Result<()> {
 
 /// Choose an existing standard account, or (only when asked for, and
 /// confirmed) create one.
-fn choose_helper() -> Result<(account::Account, helper_setup::identity::Identity)> {
+fn choose_helper() -> Result<(account::Account, Identity)> {
     let candidates = atlas_client::switch::standard_accounts()?;
     let mut items: Vec<String> = candidates
         .iter()
@@ -98,9 +99,7 @@ fn choose_helper() -> Result<(account::Account, helper_setup::identity::Identity
 }
 
 /// Capture the account and its permanent identity at selection time.
-fn selected(
-    helper: account::Account,
-) -> Result<(account::Account, helper_setup::identity::Identity)> {
+fn selected(helper: account::Account) -> Result<(account::Account, Identity)> {
     let identity = helper_setup::identity::current(&helper)
         .ok_or_else(|| problem("macOS could not identify the selected helper account"))?;
     Ok((helper, identity))
@@ -408,7 +407,7 @@ pub(super) async fn run(config_path: &Path, allow_disrupt: bool) -> Result<Value
 fn helper_step(
     config_path: &Path,
     rights: &mut setup::AdministratorRights,
-) -> Result<(Config, account::Account, helper_setup::identity::Identity)> {
+) -> Result<(Config, account::Account, Identity)> {
     let (config, helper, identity) = configure_helper(config_path, choose_helper, say)?;
     if close_attended(helper.uid, Some(&identity), || {
         heading("A deleted account is still logged in");
@@ -492,7 +491,7 @@ async fn start_helper(
     config: &Config,
     helper: &account::Account,
     done_steps: &mut Vec<Value>,
-    expected: &helper_setup::identity::Identity,
+    expected: &Identity,
     rights: &mut setup::AdministratorRights,
 ) -> Result<()> {
     // Set up before: the helper's job is installed and starts by itself
@@ -534,7 +533,7 @@ async fn start_helper(
 async fn log_in_once(
     client: &Client,
     helper: &account::Account,
-    expected: &helper_setup::identity::Identity,
+    expected: &Identity,
     installed: bool,
     done_steps: &mut Vec<Value>,
 ) -> Result<()> {
@@ -587,7 +586,7 @@ async fn install_job(
     client: &Client,
     config: &Config,
     helper: &account::Account,
-    expected: &helper_setup::identity::Identity,
+    expected: &Identity,
 ) -> Result<()> {
     // The rights may have lapsed during a long wait: ask again then.
     if !setup::administrator_rights_current() {

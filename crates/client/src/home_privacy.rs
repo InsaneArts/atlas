@@ -205,7 +205,7 @@ fn mark_offered_in(home: &Path, identity: &str) {
 /// The helper's GeneratedUID as Atlas recorded it when it was chosen: no
 /// later account gets it.
 fn recorded(helper_uid: u32) -> Option<String> {
-    use atlas_daemon::helper_setup::identity::{OnFile, on_file};
+    use atlas_daemon::{helper_setup::identity::on_file, identity::OnFile};
     match on_file(helper_uid) {
         OnFile::Recorded(identity) => Some(identity.generated_uid),
         OnFile::Nothing | OnFile::Unreadable => None,

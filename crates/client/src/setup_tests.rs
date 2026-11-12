@@ -75,7 +75,7 @@ fn the_dispatcher_removes_first_login_copies_on_success_and_failure() {
 #[test]
 fn the_privileged_dispatcher_checks_identity_before_entering_a_session() {
     use std::os::unix::fs::PermissionsExt;
-    let identity = identity::Identity {
+    let identity = atlas_daemon::identity::Identity {
         uid: 7001,
         name: "helper".into(),
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),

@@ -37,12 +37,12 @@ use atlas_daemon::{
     helper_setup,
     helper_setup::{
         Agent, LABEL, Layout,
-        identity::Identity,
         pairing::{
             MAX_RECORD, Pairing, REQUEST, WINDOW_MARKER, read_request, read_text, request,
             write_request,
         },
     },
+    identity::Identity,
 };
 use atlas_native::approval::Refusal;
 use serde_json::{Value, json};
@@ -261,11 +261,7 @@ pub fn choose(config_path: &Path, name: &str) -> Result<Value> {
 
 /// Make `helper` the helper: the shared executable, the request Atlas in
 /// the helper reads, and the settings.
-fn use_helper(
-    config_path: &Path,
-    helper: &account::Account,
-    expected: &helper_setup::identity::Identity,
-) -> Result<Value> {
+fn use_helper(config_path: &Path, helper: &account::Account, expected: &Identity) -> Result<Value> {
     let me = this_account()?;
     let executable = signed_executable()?;
     let previous = settings(config_path)?;

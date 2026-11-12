@@ -21,10 +21,10 @@ use atlas_core::{
     transport::run_output,
 };
 use atlas_daemon::helper_setup::{
-    Agent, Definition, JobReport, LABEL, Layout, Request, Unfinished, acknowledged,
-    identity::{self, Identity},
+    Agent, Definition, JobReport, LABEL, Layout, Request, Unfinished, acknowledged, identity,
     problem,
 };
+use atlas_daemon::identity::Identity;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{

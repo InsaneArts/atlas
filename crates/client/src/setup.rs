@@ -34,7 +34,7 @@ use atlas_core::{
     session::{require_hidden, validate_target_uid},
     transport::run_output,
 };
-use atlas_daemon::helper_setup::{self, identity, problem};
+use atlas_daemon::helper_setup::{self, problem};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{
@@ -89,7 +89,7 @@ pub fn request_as_helper(
     helper: &Account,
     request: &helper_setup::Request,
     invocation: Invocation,
-    expected: &identity::Identity,
+    expected: &atlas_daemon::identity::Identity,
 ) -> Result<std::result::Result<Value, helper_setup::Unfinished>> {
     let (cached_rights, mode, last) = match invocation {
         Invocation::CachedLogin => (true, "login", "--"),

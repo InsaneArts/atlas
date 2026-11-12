@@ -20,10 +20,8 @@ use atlas_core::{
 };
 use atlas_daemon::{
     helper_setup,
-    helper_setup::{
-        Agent, JobReport, LABEL, Layout, Request, Unfinished,
-        identity::{Identity, Standing},
-    },
+    helper_setup::{Agent, JobReport, LABEL, Layout, Request, Unfinished},
+    identity::{Identity, Standing},
 };
 use atlas_native::approval::Refusal;
 use serde_json::{Value, json};

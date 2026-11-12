@@ -54,7 +54,7 @@ fn pairing() -> Pairing {
         controller_name: "requester".into(),
         helper_uid: 7001,
         helper_name: "helper".into(),
-        helper_identity: helper_setup::identity::Identity {
+        helper_identity: atlas_daemon::identity::Identity {
             uid: 7001,
             name: "helper".into(),
             generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),

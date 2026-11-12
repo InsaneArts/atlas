@@ -5,5 +5,6 @@
 pub mod daemon;
 pub mod helper_paths;
 pub mod helper_setup;
+pub mod identity;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

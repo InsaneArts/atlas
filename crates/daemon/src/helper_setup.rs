@@ -12,13 +12,13 @@ mod launchd;
 pub mod pairing;
 
 use crate::helper_paths::HelperPaths;
+use crate::identity::Identity;
 use atlas_core::{
     account::{Account, account_named, account_with_uid},
     acl::{acl_lines, acl_policy},
     digest::file_sha256,
     error::{Code, Error, Result},
 };
-use identity::Identity;
 pub use launchd::{Definition, Job, JobReport, job_pid};
 use launchd::{as_loaded, job, launchctl, wait_for};
 use serde::{Deserialize, Serialize};

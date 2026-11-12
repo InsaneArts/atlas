@@ -6,6 +6,7 @@ use atlas_core::{
     error::Result,
 };
 use atlas_daemon::helper_setup::{self, Layout};
+use atlas_daemon::identity::{Identity, Standing};
 use std::{fs, io::Write, os::unix::fs::DirBuilderExt, path::Path};
 
 /// The configuration for `helper` in the managed private layout.
@@ -117,9 +118,9 @@ pub fn replace_config(path: &Path, previous: &Config, config: &Config) -> Result
 /// before recording it. The recorder also checks its permanent identity.
 fn record_selected(
     helper: &account::Account,
-    expected: &helper_setup::identity::Identity,
+    expected: &Identity,
     lookup: impl FnOnce(u32) -> Result<Option<account::Account>>,
-    record: impl FnOnce(&account::Account, &helper_setup::identity::Identity) -> Result<()>,
+    record: impl FnOnce(&account::Account, &Identity) -> Result<()>,
 ) -> Result<()> {
     if lookup(helper.uid)?.as_ref() != Some(helper) {
         return Err(problem(
@@ -139,9 +140,9 @@ fn record_selected(
 /// Configuration written earlier in the workflow can remain for supported recovery.
 pub fn configure_helper(
     config_path: &Path,
-    mut choose_helper: impl FnMut() -> Result<(account::Account, helper_setup::identity::Identity)>,
+    mut choose_helper: impl FnMut() -> Result<(account::Account, Identity)>,
     say: impl Fn(&str),
-) -> Result<(Config, account::Account, helper_setup::identity::Identity)> {
+) -> Result<(Config, account::Account, Identity)> {
     // The path is the one the command line resolved (the installed one by
     // default); a configuration is created only where none exists, and an
     // existing one that does not load is reported, never replaced.
@@ -194,10 +195,8 @@ pub fn configure_helper(
         None => {
             let helper = account.ok_or_else(|| problem("The helper account was not created"))?;
             let identity = match helper_setup::identity::standing_of(&helper) {
-                helper_setup::identity::Standing::Same(identity) => identity,
-                helper_setup::identity::Standing::Unrecorded(_)
-                | helper_setup::identity::Standing::Replaced
-                | helper_setup::identity::Standing::Unknown => {
+                Standing::Same(identity) => identity,
+                Standing::Unrecorded(_) | Standing::Replaced | Standing::Unknown => {
                     return Err(problem(
                         "Choose the helper account again before setting it up",
                     ));
@@ -248,7 +247,7 @@ pub fn configure_helper(
 /// recorded: another account took the user ID. A record that cannot be
 /// compared stops init before anything changes.
 fn replaced(account: &account::Account) -> Result<bool> {
-    use helper_setup::identity::{OnFile, Standing};
+    use atlas_daemon::identity::OnFile;
 
     match helper_setup::identity::standing_of(account) {
         Standing::Replaced | Standing::Unrecorded(_) => Ok(true),

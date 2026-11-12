@@ -20,7 +20,7 @@ use atlas_client::setup::{
     },
 };
 use atlas_core::app_bundle::signed_executable;
-use atlas_daemon::helper_setup::identity::Identity;
+use atlas_daemon::identity::Identity;
 use atlas_native::approval::{self, Refusal};
 use serde_json::Value;
 use std::{path::Path, process::Command, time::Instant};

@@ -7,7 +7,7 @@ fn a_selected_account_is_never_replaced_while_its_configuration_is_written() {
         name: "selected".into(),
         home: dir.path().join("selected"),
     };
-    let expected = helper_setup::identity::Identity {
+    let expected = atlas_daemon::identity::Identity {
         uid: helper.uid,
         name: helper.name.clone(),
         generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),
@@ -20,7 +20,7 @@ fn a_selected_account_is_never_replaced_while_its_configuration_is_written() {
         ..helper.clone()
     };
     let recorded = std::cell::RefCell::new(None);
-    let record = |_: &account::Account, identity: &helper_setup::identity::Identity| {
+    let record = |_: &account::Account, identity: &atlas_daemon::identity::Identity| {
         recorded.replace(Some(identity.clone()));
         Ok(())
     };

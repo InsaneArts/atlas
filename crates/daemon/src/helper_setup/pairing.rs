@@ -1,7 +1,7 @@
 //! What two accounts share while one asks the other to be its helper: the
 //! request naming them, and whether the onboarding window is open.
-use super::identity::Identity;
 use crate::helper_paths::ROOT;
+use crate::identity::Identity;
 use atlas_core::{account::account_with_uid, error::Result, files::read_limited};
 use serde_json::{Value, json};
 use std::{fs, os::unix::fs::MetadataExt, path::Path, process::Command};

@@ -282,7 +282,7 @@ fn pairing(controller: u32) -> Pairing {
         controller_name: "person".into(),
         helper_uid: controller + 1,
         helper_name: "helper".into(),
-        helper_identity: helper_setup::identity::Identity {
+        helper_identity: atlas_daemon::identity::Identity {
             uid: controller + 1,
             name: "helper".into(),
             generated_uid: "6DB4B7AF-BE3C-486C-BD46-1B4558946919".into(),

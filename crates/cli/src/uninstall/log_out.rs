@@ -5,7 +5,7 @@ use crate::onboarding::as_root::{self, Target, Via};
 use atlas_client::client::Client;
 use atlas_control::Ownership;
 use atlas_core::error::{Code, Error, Result};
-use atlas_daemon::helper_setup::identity::{Identity, Standing};
+use atlas_daemon::identity::{Identity, Standing};
 
 /// One way of logging the helper out, gentlest first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -7,7 +7,10 @@ use atlas_core::{
     app_bundle,
     error::{Error, Result},
 };
-use atlas_daemon::helper_setup::{Agent, JobReport, LABEL, Layout, Request, identity::Identity};
+use atlas_daemon::{
+    helper_setup::{Agent, JobReport, LABEL, Layout, Request},
+    identity::Identity,
+};
 use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
