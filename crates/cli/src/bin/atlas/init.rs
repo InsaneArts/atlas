@@ -41,7 +41,7 @@ fn attended(program: &str, args: &[&str], why: &str) -> Result<()> {
 /// Choose an existing standard account, or (only when asked for, and
 /// confirmed) create one.
 fn choose_helper() -> Result<(account::Account, Identity)> {
-    let candidates = atlas_client::switch::standard_accounts()?;
+    let candidates = atlas_client::user::switch::standard_accounts()?;
     let mut items: Vec<String> = candidates
         .iter()
         .map(|account| match &account.real_name {
@@ -251,21 +251,21 @@ fn ready() {
 /// the helper `name` (user ID `uid`); otherwise say how. Refused with
 /// `not-ready`, and nothing locked, while a new login could hang.
 fn offer_lock(name: &str, uid: u32) -> Result<()> {
-    let account = atlas_client::switch::Account {
+    let account = atlas_client::user::switch::Account {
         name: name.to_owned(),
         uid,
         real_name: None,
         helper: true,
     };
     // Checked before asking: a new login waits while another could hang it.
-    atlas_client::switch::check(&account)?;
+    atlas_client::user::switch::check(&account)?;
 
     if prompt::confirm(
         &format!("Lock the screen now so you can switch to {name}?"),
         true,
         "switch accounts yourself",
     )? {
-        match atlas_client::switch::to(&account) {
+        match atlas_client::user::switch::to(&account) {
             Ok(_) => {
                 let _ = LOCKED.set(std::time::Instant::now());
                 done(
@@ -636,7 +636,7 @@ async fn wait_until_back(client: &Client, uid: u32, status: &Value) -> Result<()
         mark_since_lock("hidden");
     }
 
-    atlas_client::switch::until_back(PATIENCE).await
+    atlas_client::user::switch::until_back(PATIENCE).await
 }
 
 /// Screen Recording and Accessibility for Atlas in the helper: already

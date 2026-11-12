@@ -1030,7 +1030,7 @@ pub async fn finish(config_path: &Path) -> Result<Value> {
     let client = Client::new(config.clone())?;
     client.bootstrap_probe()?;
     ready_to_finish(&client.status().await, config.desktop().user().uid)?;
-    atlas_client::switch::until_back(BACK_WITHIN).await?;
+    atlas_client::user::switch::until_back(BACK_WITHIN).await?;
     // Places this check against the switch in a report's unified log.
     atlas_core::user::login_log::mark("onboarding.finish");
     ready_to_finish(&client.status().await, config.desktop().user().uid)?;
@@ -1116,21 +1116,19 @@ pub enum HomeChange {
 /// to open the home folder, and `io` with the Terminal line when a change
 /// fails.
 pub fn files(config_path: &Path, change: Option<HomeChange>, by_person: bool) -> Result<Value> {
-    use atlas_client::home_privacy;
-
     let uid = Config::load(config_path)?.desktop().user().uid;
     let files = match change {
-        None => home_privacy::status(uid)?,
-        Some(HomeChange::Private) => home_privacy::make_private(uid)?,
-        Some(HomeChange::Open) => home_privacy::open(uid, by_person)?,
+        None => atlas_client::user::home_privacy::status(uid)?,
+        Some(HomeChange::Private) => atlas_client::user::home_privacy::make_private(uid)?,
+        Some(HomeChange::Open) => atlas_client::user::home_privacy::open(uid, by_person)?,
         Some(HomeChange::Offered) => {
-            home_privacy::mark_offered(uid);
-            home_privacy::status(uid)?
+            atlas_client::user::home_privacy::mark_offered(uid);
+            atlas_client::user::home_privacy::status(uid)?
         }
     };
     let mut reply = json!(files);
     reply["ok"] = json!(true);
-    reply["offered"] = json!(home_privacy::offered_now(uid));
+    reply["offered"] = json!(atlas_client::user::home_privacy::offered_now(uid));
     reply["signInCopies"] = json!(atlas_client::sign_in_copies::allowed());
     Ok(reply)
 }

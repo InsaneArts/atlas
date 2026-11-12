@@ -342,7 +342,7 @@ pub async fn run(
     if let Some(name) = &found.helper {
         for line in home_note(
             name,
-            atlas_client::home_privacy::entry_index(name),
+            atlas_client::user::home_privacy::entry_index(name),
             remove_helper,
         ) {
             progress(Progress::Say(&line));
@@ -986,7 +986,7 @@ fn confirm(
 /// folder, and how to open it. Once the account is deleted its name no longer
 /// works in `chmod`, so the entry's place is given too.
 fn home_note(name: &str, index: Result<Option<usize>>, remove_helper: bool) -> Vec<String> {
-    let undo = atlas_client::home_privacy::undo_line(name);
+    let undo = atlas_client::user::home_privacy::undo_line(name);
     let index = match index {
         Ok(None) => return Vec::new(),
         Ok(Some(index)) => index,

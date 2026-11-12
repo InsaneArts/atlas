@@ -1202,11 +1202,13 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "install_job",
             "log_in_once",
             "mark_since_lock",
+            "offer_lock",
             "permissions_step",
             "run",
             "selected",
             "start_helper",
             "verify_step",
+            "wait_until_back",
         ],
         "pending: setting the user up from the terminal",
     ),
@@ -1294,6 +1296,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
     (
         "crates/cli/src/onboarding/status.rs",
         &[
+            "candidates",
             "configured",
             "helper_job_here",
             "helper_side",
@@ -1311,6 +1314,7 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
             "<Live<'_> as Teardown>::retire",
             "Live<'_>::forget_requested_opener",
             "Live<'_>::trash",
+            "home_note",
             "retire_helper_job",
             "retirement_request",
             "run",
@@ -1493,20 +1497,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "pending: the user's shared copies folder",
     ),
     (
-        "crates/client/src/home_privacy.rs",
-        &[
-            "identity_now",
-            "make_private",
-            "mark_offered",
-            "offered",
-            "offered_now",
-            "open",
-            "recorded",
-            "status",
-        ],
-        "pending: what the user's account may reach of the person's home",
-    ),
-    (
         "crates/client/src/host_session.rs",
         &["from_env_verified"],
         "owner: who proves which agent host a command came from",
@@ -1535,19 +1525,6 @@ const ALLOWED: &[(&str, &[&str], &str)] = &[
         "crates/client/src/overview.rs",
         &["logins", "user_report"],
         "pending: the report of the user's readiness",
-    ),
-    (
-        "crates/client/src/switch.rs",
-        &[
-            "accounts",
-            "check",
-            "person_of_this_helper",
-            "ready_to_switch",
-            "standard_accounts",
-            "target",
-            "to",
-        ],
-        "pending: the account to come back to",
     ),
     (
         "crates/core/src/config.rs",
@@ -1744,7 +1721,7 @@ const KEPT: &[(&str, &str, &str)] = &[
 ];
 
 /// How many pending entries are left. Each move lowers it; none raises it.
-const PENDING_LIMIT: usize = 31;
+const PENDING_LIMIT: usize = 29;
 
 /// The roots of a member's targets: its library, its main binary and the
 /// binaries Cargo finds under `src/bin`.

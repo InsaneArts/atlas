@@ -483,11 +483,11 @@ impl Server {
     /// second login `login` there.
     async fn switch_to_user(login: atlas_core::user::User) -> Result<Value> {
         tokio::task::spawn_blocking(move || {
-            let account = atlas_client::switch::accounts(Some(login.uid))?
+            let account = atlas_client::user::switch::accounts(Some(login.uid))?
                 .into_iter()
                 .find(|account| account.helper)
                 .ok_or_else(|| Error::new(Code::Switch, "The helper's account wasn't found"))?;
-            atlas_client::switch::to(&account)
+            atlas_client::user::switch::to(&account)
         })
         .await
         .map_err(|error| Error::new(Code::Switch, "The screen didn't lock").with_source(error))??;

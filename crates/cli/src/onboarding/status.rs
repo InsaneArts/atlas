@@ -139,7 +139,7 @@ async fn configured(config_path: &Path, uid: u32, me: Value, app: Value) -> Resu
         "acceptance": acceptance,
         "finished": finished,
         "menubarLogin": crate::menubar::login_decided(),
-        "homePrivacyOffered": atlas_client::home_privacy::offered(helper.uid),
+        "homePrivacyOffered": atlas_client::user::home_privacy::offered(helper.uid),
         "leftoverLogins": leftovers,
         "blockers": blockers,
     }))
@@ -241,7 +241,7 @@ pub(super) fn permissions_from(hello: Option<&Value>) -> Value {
 
 /// Standard accounts that could be the helper: only user ID `only`, if given.
 fn candidates(only: Option<u32>) -> Result<Vec<Value>> {
-    Ok(atlas_client::switch::standard_accounts()?
+    Ok(atlas_client::user::switch::standard_accounts()?
         .into_iter()
         .filter(|account| only.is_none_or(|uid| account.uid == uid))
         .map(|account| {

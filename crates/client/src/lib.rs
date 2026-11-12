@@ -28,7 +28,6 @@ pub mod doing;
 pub mod environment;
 pub mod handoff;
 pub mod helper_info;
-pub mod home_privacy;
 pub mod host_session;
 pub mod idle_time;
 pub mod install_app;
@@ -42,7 +41,6 @@ pub mod setup;
 pub mod sign_in_copies;
 pub mod sign_ins;
 pub mod sound;
-pub mod switch;
 pub mod task;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;

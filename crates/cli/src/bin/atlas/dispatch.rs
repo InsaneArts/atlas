@@ -939,9 +939,7 @@ fn switch(config: &Path, args: cli::Switch) -> Result<Value> {
 /// [`switch`] among this Mac's accounts, the second login `login` among
 /// them when there is one, and the one chosen when none is named.
 fn switch_on_this_mac(login: Option<&atlas_core::user::User>, args: cli::Switch) -> Result<Value> {
-    use atlas_client::switch;
-
-    let accounts = switch::accounts(login.map(|login| login.uid))?;
+    let accounts = atlas_client::user::switch::accounts(login.map(|login| login.uid))?;
 
     if args.list {
         return Ok(json!({"ok": true, "accounts": accounts}));
@@ -979,8 +977,8 @@ fn switch_on_this_mac(login: Option<&atlas_core::user::User>, args: cli::Switch)
     }
 
     match target {
-        Some(account) => switch::to(&account),
-        None => switch::lock_screen(),
+        Some(account) => atlas_client::user::switch::to(&account),
+        None => atlas_client::user::switch::lock_screen(),
     }
 }
 

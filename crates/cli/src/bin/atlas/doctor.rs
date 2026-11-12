@@ -179,7 +179,7 @@ async fn user_report(client: &Client, login: &atlas_core::user::User, verbose: b
         // What the helper can open in the person's home folder: for the
         // person, never in an agent's compact reply.
         if let Ok(Ok(files)) =
-            tokio::task::spawn_blocking(move || atlas_client::home_privacy::status(uid)).await
+            tokio::task::spawn_blocking(move || atlas_client::user::home_privacy::status(uid)).await
         {
             report["files"] = json!(files);
         }
