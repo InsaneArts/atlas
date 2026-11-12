@@ -42,7 +42,10 @@ pub async fn install(client: &Client, path: &Path) -> Result<Value> {
     // given or the bundle it leads to.
     let target = Target::Path(bundle);
     crate::credential_files::refuse([path])?;
-    handoff::refuse_targets(std::slice::from_ref(&target))?;
+    handoff::refuse_targets(
+        std::slice::from_ref(&target),
+        &handoff::Copies::of(&client.desktop()),
+    )?;
     let app = atlas_core::name::bounded(name.trim_end_matches(".app"));
     let output = client.output_dir()?;
     let claims = Claims::in_store(Tasks::at(output), task.clone());

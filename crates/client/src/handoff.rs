@@ -140,6 +140,14 @@ impl Copies {
         }
     }
 
+    /// Whether `path` lies in one of these copies: a path Atlas made, which
+    /// needs no check of the person's own files.
+    pub(crate) fn holds(&self, path: &Path) -> bool {
+        match &self.0 {
+            Place::SharedFolder(root) => path.starts_with(root),
+        }
+    }
+
     /// Remove the copies older than a week that no app in `running` may
     /// use: see [`prune_in`]. The tokens of those removed come back.
     pub(crate) fn prune(&self, running: &[AppRow]) -> Vec<Token> {
@@ -318,18 +326,17 @@ done"#;
 }
 
 /// Refuses `targets` when one is, or holds, the person's sign-ins or secrets: a path here, or a local `file:` URL
-/// to one, copied or opened in place alike. Copies already made for the helper are its own. Callers check before
+/// to one, copied or opened in place alike. Copies already made for the helper (in `copies`) are its own. Callers check before
 /// anything else, so nothing of theirs is done first.
 ///
 /// # Errors
 ///
 /// Returns the `credentials` refusal for the first such target.
-pub(crate) fn refuse_targets(targets: &[Target]) -> Result<()> {
-    let root = Path::new(ROOT);
+pub(crate) fn refuse_targets(targets: &[Target], copies: &Copies) -> Result<()> {
     let mut paths = Vec::new();
     for target in targets {
         match target {
-            Target::Path(path) if !path.starts_with(root) => paths.push(path.clone()),
+            Target::Path(path) if !copies.holds(path) => paths.push(path.clone()),
             Target::Name(name) if is_file_url(name) => {
                 // A file URL Atlas cannot read is never handed on unchecked.
                 paths.push(local_file(name).ok_or_else(|| {
@@ -465,7 +472,7 @@ pub(crate) async fn hand_over(
     targets: Vec<Target>,
     running: &[AppRow],
 ) -> Result<Handed> {
-    refuse_targets(&targets)?;
+    refuse_targets(&targets, &Copies::of(&client.desktop()))?;
     match client.desktop().kind() {
         Kind::User(login) => hand_over_to(client, login, ownership, targets, running).await,
     }
@@ -551,7 +558,7 @@ impl Handing {
     ) -> Result<Handed> {
         // Checked again here, after the helper was asked what it can read: a path replaced by a link to a store since
         // the first check is refused before anything is made for it.
-        refuse_targets(&self.targets)?;
+        refuse_targets(&self.targets, &Copies::in_shared_folder())?;
         // The app the targets open with: its copies go when it is closed.
         let opened_with: Vec<String> = match self.targets.first() {
             Some(Target::Name(name)) if self.targets.len() > 1 => vec![name.clone()],

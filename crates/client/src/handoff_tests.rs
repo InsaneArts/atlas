@@ -1078,9 +1078,19 @@ fn a_source_replaced_by_a_link_to_a_store_is_refused_as_it_is_copied_and_leaves_
 
 #[test]
 fn a_file_url_naming_no_file_is_refused_rather_than_handed_on() {
-    let error = refuse_targets(&[Target::Name("file://host-without-path".into())]).unwrap_err();
+    let error = refuse_targets(
+        &[Target::Name("file://host-without-path".into())],
+        &Copies::in_shared_folder(),
+    )
+    .unwrap_err();
     assert_eq!(error.code, Code::Usage);
-    assert!(refuse_targets(&[Target::Name("https://example.com".into())]).is_ok());
+    assert!(
+        refuse_targets(
+            &[Target::Name("https://example.com".into())],
+            &Copies::in_shared_folder()
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -1089,7 +1099,11 @@ fn a_file_url_with_an_escaped_slash_in_a_name_is_refused_rather_than_judged_as_a
         local_file("file:///Users/person/.ssh/key%2F..%2Fconfig"),
         None
     );
-    let error = refuse_targets(&[Target::Name("file:///tmp/a%2Fb".into())]).unwrap_err();
+    let error = refuse_targets(
+        &[Target::Name("file:///tmp/a%2Fb".into())],
+        &Copies::in_shared_folder(),
+    )
+    .unwrap_err();
     assert_eq!(error.code, Code::Usage);
 }
 
